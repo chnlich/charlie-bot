@@ -35,6 +35,7 @@ from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
+    init_repo_with_origin,
     install_backends,
     result_event,
 )
@@ -820,6 +821,60 @@ async def test_unbound_prompt_task_fires_once_through_a_legacy_cron_session(
     await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
     assert len(tree.runs.list_run_records_sync(leaf_id)) == 1
     assert len(wakes) == 1
+
+
+@pytest.mark.asyncio
+async def test_unbound_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
+    bound_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A repo-bound prompt task's leaf carries no task_type, yet its work Run
+  renders the implement worktree bindings and spawns its process; the
+  type-less success then closes without review and removes the worktree.
+
+  Regression: the leaf's None type reached render_worktree_bindings, whose
+  section lookup raised KeyError before any process spawned."""
+  cfg, session_mgr, tree = bound_env
+  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  cron_session = await _legacy_cron_session(session_mgr, "repo-sweep")
+  backend = SpawningScriptedBackend([result_event("sweep done")])
+  install_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
+    pass
+
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
+  task_cfg = ScheduledTaskConfig(
+      name="repo-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake", repo=str(repo))
+  scheduler = Scheduler(cfg, session_mgr)
+  result = await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
+
+  leaf_id = result["leaf_session_id"]
+  leaf = await tree.load_meta(leaf_id)
+  assert leaf is not None and leaf.task is not None and leaf.task.task_type is None
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the repo-bound cron leaf's report never reached the legacy cron session")
+  assert [r["outcome"] for r in reports] == ["completed"]
+  assert tree.task_state(leaf_id) == "completed"
+  # One work Run, spawned, whose launch text carries the implement bindings
+  # of the worktree recorded on the Run.
+  runs = tree.runs.list_run_records_sync(leaf_id)
+  assert [r.kind for r in runs] == ["work"]
+  work = runs[0]
+  assert backend.prompt is not None
+  assert work.pid is not None
+  assert work.worktree_path is not None and work.branch_name is not None
+  launch_text = (tree.runs.run_dir(leaf_id, work.id) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert "## Worktree Workflow" in launch_text
+  assert work.branch_name in launch_text and work.worktree_path in launch_text
+  assert "Do the sweep." in launch_text
+  # The type-less delivery: no review Run, and the delivered worktree is gone.
+  assert not Path(work.worktree_path).exists()
 
 
 @pytest.mark.asyncio

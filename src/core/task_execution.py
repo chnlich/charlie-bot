@@ -880,8 +880,7 @@ class TaskExecutionAdapter:
         run_dir = self._tree.runs.run_dir(session_id, run_id)
         events_log = run_dir / RUN_EVENTS_NAME
 
-        task = meta.task
-        task_type = task.task_type if task is not None else TaskType.IMPLEMENT
+        task_type = task_prompts.prompt_task_type(meta.task)
         review_worktree: str | None = None
         if run.kind == "review":
             work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")

@@ -21,11 +21,12 @@ from src.core.memory import (
     select_master_memory,
     select_worker_memory,
 )
-from src.core.models import PatchSessionTaskRequest, TaskSpec
+from src.core.models import PatchSessionTaskRequest, TaskSpec, TaskType
 from src.core.run_token import CallerIdentity
 from src.core.task_prompts import (
     PromptSnapshot,
     preview_snapshot,
+    prompt_task_type,
 )
 from src.core.task_sessions import TaskTreeManager
 
@@ -172,6 +173,12 @@ async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/verify.md" in refs
   assert "prompts/worker.md" not in refs
+
+
+async def test_type_less_task_renders_the_implement_contract() -> None:
+  assert prompt_task_type(None) == TaskType.IMPLEMENT
+  assert prompt_task_type(TaskSpec(goal="sweep")) == TaskType.IMPLEMENT
+  assert prompt_task_type(TaskSpec(goal="bump", task_type="quick-edit")) == TaskType.QUICK_EDIT
 
 
 # ---------------------------------------------------------------------------

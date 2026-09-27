@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
@@ -27,6 +28,26 @@ if TYPE_CHECKING:
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
   sys.path.insert(0, str(ROOT))
+
+# ---------------------------------------------------------------------------
+# Hermetic test environment. Conftest import time (not a fixture): it must run
+# before collection (some modules parametrize from the environment at import)
+# and before the src imports below. Subprocesses the tests spawn inherit it.
+# ---------------------------------------------------------------------------
+# HOME points at a fresh throwaway home, so the suite can never read or write
+# the live ~/.charliebot (real sessions, credentials, cron config) and the
+# collection count is the same on the host and in CI.
+os.environ["HOME"] = tempfile.mkdtemp(prefix="charliebot-test-home-")
+# A CharlieBot session's own identity leaks into CLI/API tests and flips them to
+# 'ambiguous session' refusals; the suite always starts unauthenticated.
+for _leaked in ("CHARLIEBOT_RUN_TOKEN", "CHARLIEBOT_HOME", "CHARLIEBOT_SESSION_ID"):
+  os.environ.pop(_leaked, None)
+# Subprocess probes (`python -c` import checks, the restart-recovery drivers)
+# must import the tree UNDER TEST: the venv's editable install is a meta-path
+# finder pinning `src` to the main checkout for any process started outside this
+# tree, and it sits BEHIND the path finder, so a PYTHONPATH prepend wins.
+if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != str(ROOT):
+  os.environ["PYTHONPATH"] = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)
 
 # The two Gemini-503 error channels, verbatim shapes: the failed
 # invocation's structured error event (the real failure) and the stderr tail

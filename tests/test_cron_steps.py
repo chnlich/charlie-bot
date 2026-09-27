@@ -14,11 +14,6 @@ from conftest import build_scheduler_cfg
 
 from src.core.config import _load_cron_file
 
-SELECTOR_BODY = "Select memory candidates.\n"
-REVIEWER_BODY = "Review the memory diff.\n"
-SELECTOR_RESULT = "revise entries/workflow/focus.md plus three proof lines"
-REVIEWER_RESULT = "report written to the session artifacts"
-
 # --- (a) loader --------------------------------------------------------------
 
 

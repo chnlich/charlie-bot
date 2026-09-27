@@ -51,7 +51,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.pytest.ini_options]
 # Print the slowest tests on every run (CI included) so budget drift stays visible without a workflow change.
-addopts = "--durations=20"
+addopts = "--durations=0 --durations-min=0.3"
 markers = [
     "local_only: requires host-local resources (GPU, tailnet, local services, installed local binaries); CI runs -m 'not local_only'",
     "integration: needs real processes or real time; per-test budget 10s (unit default 1s) and at most 50 collected - tests/conftest.py enforces all three",

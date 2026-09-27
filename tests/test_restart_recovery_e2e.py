@@ -1109,6 +1109,7 @@ async def test_restart_reattaches_running_run(tmp_path: Path, monkeypatch: pytes
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real bare origin, clones, and a reviewer shim subprocess that really pushes
 async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Drive the reconcile N (>=3) times over the same terminal,
   review-needing thread and assert the finalize effects — terminal worker_summary,
@@ -1247,6 +1248,7 @@ async def test_finalize_idempotent_across_repeated_restarts(tmp_path: Path, monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, spawned twice through the quota-retry respawn
 async def test_fresh_spawn_rotates_stale_raw_log_so_verify_retry_quota_not_replayed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The VERIFY quota-retry fallback (src/core/spawner_lifecycle.py::spawn_worker) respawns a
@@ -1408,6 +1410,7 @@ async def test_graceful_shutdown_winds_down_improve_iteration_with_reason(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # a real worker driver subprocess, cancelled through the endpoint
 async def test_ui_cancel_endpoint_still_finalizes_cancelled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Regression: the cancel endpoint (SIGTERM + CANCELLED status, no task
   cancellation) is untouched by the shutdown change — the spawn task finishes
@@ -1681,6 +1684,7 @@ async def test_uncovered_transport_turn_cleared_not_drained(
     [(999999, "1"), (None, None)],
     ids=["legacy-raw-missing", "never-started"],
 )
+@pytest.mark.integration  # the replay pass spawns a real agent subprocess
 async def test_undrainable_dead_turn_replayed_with_marker(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pid: int | None, pid_start: str | None) -> None:
   """Raw log missing (pre-transport record) or turn never spawned: nothing is

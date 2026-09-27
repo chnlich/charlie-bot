@@ -1199,8 +1199,6 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await reveal_row(cdp, session_id, live_parent)
                 await wait_for(cdp, session_id, f"JSON.stringify({parent_icons}) === '[\"worker-indicator\"]'",
                                timeout=12, label="the collapsed parent's gear stands in for the running worker")
-                results.record("(a) the parent's gear is identical expanded and collapsed", ok=True,
-                               detail=f"gear shown in both states ({shot_collapsed})", screenshot=None)
                 shot_collapsed = await screenshot(cdp, session_id, results, "s21a_parent_collapsed_gear")
                 await expand_to(cdp, session_id, [live_parent])
                 results.record("(a) parent sees the running worker (spinner, gear in both states, live Delegated card)", ok=True,
@@ -1373,18 +1371,26 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # until ITS list reports the flip: from then on the page's
                 # first paint and its 3 s status poll agree, and the mark
                 # cannot flap back off mid-assertion.
-                deadline = time.monotonic() + 90
+                deadline = time.monotonic() + 120
                 while True:
                     status, rows = await asyncio.to_thread(
                         api_request, base, access_key, "GET", "/api/sessions/", timeout=10.0)
-                    if status != 200:
-                        fail(f"list fetch failed: {status} {rows}")
+                    status_code, states = await asyncio.to_thread(
+                        api_request, base, access_key, "GET",
+                        f"/api/sessions/status?ids={ids['feature']}", timeout=10.0)
+                    if status != 200 or status_code != 200:
+                        fail(f"serving fetch failed: list {status}, status {status_code}")
                     row = next((r for r in rows if r.get("id") == ids["feature"]), None)
-                    if row and row.get("has_unread"):
+                    state = states.get(ids["feature"], {})
+                    if row and row.get("has_unread") and state.get("has_unread"):
                         break
                     if time.monotonic() > deadline:
-                        fail("the serving list never reported the seeded unread reply")
+                        fail("the serving list/status never reported the seeded unread reply "
+                             f"(list={row and row.get('has_unread')}, status={state.get('has_unread')})")
                     await asyncio.sleep(1.0)
+                # One row's icon table: the kinds whose element lacks the
+                # hidden class. Probes exist before the navigation so the
+                # failure path can dump them.
                 root_icons = f"""
                     ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread']
                       .filter(k => !document.getElementById(k + '-{ids['root']}').classList.contains('hidden'))
@@ -1410,8 +1416,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 # Opening the child (the SPA switch's real read path) clears its
                 # dot and the root's mark in one paint.
                 await evaluate(cdp, session_id,
-                    "[...document.querySelectorAll('a[href^=\"/?session=\"]')]"
-                    + f".find(a => a.getAttribute('href') === '/?session={ids['feature']}').click()")
+                               f"document.getElementById('session-{ids['feature']}').click()")
                 await wait_for(cdp, session_id,
                                f"location.search === '?session={ids['feature']}' && SESSION_ID === '{ids['feature']}'",
                                timeout=12, label="the child manager's chat opened")
@@ -1425,9 +1430,22 @@ async def run_harness(args: argparse.Namespace) -> None:
                                       "opening the child clears both without a reload",
                                screenshot=shot)
             except Exception as exc:
+                diag = ""
+                try:
+                    diag = str(await evaluate(cdp, session_id, f"""
+                        JSON.stringify({{
+                          rootIcons: {root_icons},
+                          featureIcons: {feature_icons},
+                          rootMarkEl: !!document.getElementById('subtree-unread-{ids['root']}'),
+                          featureDotEl: !!document.getElementById('unread-{ids['feature']}'),
+                          rootExpanded: Sidebar.isTreeNodeExpanded('{ids['root']}'),
+                        }})
+                    """))
+                except Exception as diag_exc:
+                    diag = repr(diag_exc)
                 shot = await screenshot(cdp, session_id, results, "s23_FAILED")
                 results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
-                               ok=False, detail=repr(exc), screenshot=shot)
+                               ok=False, detail=repr(exc) + " | " + diag, screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

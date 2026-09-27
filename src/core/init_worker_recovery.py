@@ -70,12 +70,6 @@ RUNNING_SCAN_WINDOW = timedelta(days=30)
 _THREAD_META_MEMO_LIMIT = 1024
 _thread_meta_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_THREAD_META_MEMO_LIMIT)
 
-
-def _reset_thread_meta_memo_for_tests() -> None:
-  """Clear the thread-metadata scan memo, restoring the process-start state."""
-  _thread_meta_memo.clear()
-
-
 # Boot-scoped once-key for "alive but silent" reports: at most one recovery
 # event per thread per boot, shared by the boot STALLED report and the
 # follow-time silence recheck (whichever emits first claims the key). Process

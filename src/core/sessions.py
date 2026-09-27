@@ -308,12 +308,6 @@ _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
                                                 datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
 
 
-def _reset_trigger_meta_memo_for_tests() -> None:
-  """Clear the trigger-file scan memo, restoring the process-start state."""
-  _trigger_meta_memo.clear()
-  _trigger_state_verdicts.clear()
-
-
 def _iter_trigger_stats(triggers_dir: str) -> list[tuple[str, os.stat_result]]:
   """The shared trigger-dir stat walk (src.core.triggers.iter_trigger_file_stats).
 

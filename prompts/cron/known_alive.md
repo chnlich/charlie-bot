@@ -110,11 +110,6 @@ Known-alive symbols:
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
   exactly one whole-repo match (its definition), so vulture flags them as unused methods.
-- `chrome`, `art` (`tests/core/test_artifact_check.py`, the lambda in `_patch_height`) — the
-  two parameters of the stub installed for `artifact_check._measure_page_height(chrome_bin,
-  artifact)` via `monkeypatch.setattr`; the replaced signature fixes the arity, so deleting
-  either parameter makes the stub raise TypeError when the gate calls it. Vulture flags the
-  unused parameter at 100% confidence as an unused variable.
 - The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
   `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
   `tests/test_worker_diagnostics.py` are flagged as
@@ -156,29 +151,13 @@ Known-alive symbols:
   with three positional arguments, so the stubs' replaced
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
-  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`. Same class as the `chrome`/`art` stub-parameter entry above.
+  confidence as an unused variable at every stub site in `tests/test_ext_usage.py`.
 - `format` (`tests/test_cli_restart_contract.py`, the `log_message` override's second
   parameter) — signature-mirror parameter kept deliberately, not fixed by any call: the
   stdlib invokes `log_message(format, *args)` positionally into the override's trailing
   `*args`, so deleting the parameter stays green; it keeps the override a faithful mirror
   of the stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature.
   Vulture flags it at 100% confidence as an unused variable.
-- `interrupt_reason` (`tests/test_worktree_quarantine.py`, keyword parameter of the
-  `fake_resume_worker` stub installed for `spawner.resume_worker` via `monkeypatch.setattr`)
-  — every production call site (`src/core/init_worker_recovery.py`)
-  passes `interrupt_reason=` by keyword, and the stalled-run test asserts the fake ran
-  (`resume_calls == [True]`), so deleting the parameter makes the stub raise TypeError on
-  the unexpected keyword. Vulture flags it at 100% confidence as an unused variable. Same
-  class as the `dir_path` stub-parameter entry above.
-- `sig` (`tests/test_worktree_quarantine.py`, second parameter of the
-  three identical `lambda pid, sig: killed.append(pid)` stubs installed for
-  `worker_recovery_module.kill_process_group` via `monkeypatch.setattr`) — signature-mirror
-  parameter kept deliberately: all three tests assert the recorded list stays empty (no
-  tested recovery path reaches `kill_process_group`), so deleting `sig` stays green, but it
-  keeps the lambda a drop-in mirror of `kill_process_group(pid, sig=signal.SIGTERM)`
-  (src/core/process.py), which `src/core/init_worker_recovery.py` already calls with
-  two positional arguments. Vulture flags each site at 100% confidence as an unused
-  variable. Same class as the `format` signature-mirror entry above.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
   `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
@@ -244,28 +223,14 @@ Known-alive symbols:
   inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
   the repo reads the name, so vulture flags the write as an unused attribute. Same class
   as the sherpa-onnx `vad_config` attribute-write entry above.
-- `base_html`, `new_html` (`tests/test_files_artifact_injection.py`, parameters of the `explode`
-  stub installed for `plan_diff.annotate` via `monkeypatch.setattr`) — signature-mirror
-  parameters of the stub that guards the annotate memo: the replaced `annotate`
-  (src/core/plan_diff.py) is called with two positional arguments by its one production call
-  site (src/api/files.py), so the stub keeps both parameters to stay a drop-in mirror, and a
-  memo regression that reaches the stub fails with the stub's own assertion message rather
-  than a TypeError. A tests-only vulture scan flags both at 100% confidence as unused
-  variables (a combined src+tests scan does not: the production `annotate` parameters carry
-  the same names, so the names are not zero-match repo-wide — the flags only appear in a
-  tests-only scan). Same class as the `format` signature-mirror entry above. The
-  same file's `html_text` (first parameter of the `explode` stub installed for
-  `files_api._inject_artifact_ui`) joins this class: the replaced function is called with
-  two positional arguments at both production call sites (src/api/files.py), so the stub
-  keeps both parameters, and a tests-only vulture scan flags the unused first one.
 - `isolated_config` (`tests/test_absolute_filepath_prefix.py`) — pytest fixture (owns the config
   and credentials the file router reads: sessions root under tmp_path, empty access key so the
-  gate is a no-op), requested by name in three tests' parameter lists; the bodies never reference
-  the parameter, so vulture flags it as an unused variable at each request site. Same
+  gate is a no-op), requested by name in one test's parameter list; the body never references
+  the parameter, so vulture flags it as an unused variable at that request site. Same
   fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
   `src.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
-  instead of the host profile), requested by name in five tests' parameter lists; the bodies
+  instead of the host profile), requested by name in three tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
   Same fixture-name-discovery class as `isolated_config` above.
 - `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
@@ -273,7 +238,7 @@ Known-alive symbols:
   positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
   the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
   100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
-  `chrome`/`art` entry above.
+  `dir_path` entry above.
 - `_isolate_profile` (`tests/conftest.py`) — `@pytest.fixture(autouse=True)` in conftest,
   so pytest applies it to every test in the tree with no in-file reference: it pins
   `CHARLIEBOT_HOME` at a fresh temp profile and resets the config caches around each
@@ -287,8 +252,10 @@ Known-alive symbols:
 - `require_model` (`src/core/backend_models.py`) — pydantic `@model_validator(mode='after')`
   method on `BackendBase`, registered with pydantic at class-definition time and invoked during
   model validation: it rejects a backend config entry whose type requires a `model` but declares
-none. The only exact-name match outside the definition is this list, so vulture flags it as
-  an unused method. Same framework-registered class as the `check_sources_and_mode` entry above.
+  none. The only exact-name matches outside the definition are this list and the
+  `option_default_model` docstring's reference (`src/core/backend_models.py`), so vulture
+  flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
 - `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
@@ -332,7 +299,7 @@ none. The only exact-name match outside the definition is this list, so vulture 
   split and on random chunkings; the framer's docstring names it the semantics home. No
   production code calls it, so a production-scope vulture scan flags it as an unused function.
 - `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/chat.py`,
-  `src/core/autonamer.py`, `src/core/master_trigger.py`)
+  `src/core/master_trigger.py`)
   — the PEP 562 lazy-import hooks; same class as the `src/core/artifact_wrap.py` hook entry
   above. All but the opencode hook are one-line delegates to the shared `deferred_module_getattr`
   (`src/core/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
@@ -341,11 +308,9 @@ none. The only exact-name match outside the definition is this list, so vulture 
   (`tests/test_opencode_backend.py`), the `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling
   `src.agents.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
   spelling `src.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in
-  `tests/conftest.py`), the `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling
-  `src.core.master_trigger.run_message`
-  (`tests/test_session_anchor_guard.py` and `tests/test_spawner_trigger_master_resume_recovery.py`,
-  constant defined in `tests/conftest.py`), and `src.core.autonamer.build_backend`
-  (`AUTONAMER_BUILD_BACKEND_PATCH_TARGET`, constant defined in `tests/conftest.py`).
+  `tests/conftest.py`), and the `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling
+  `src.core.master_trigger.run_message` (`tests/test_spawner_trigger_master_resume_recovery.py`,
+  constant defined in `tests/conftest.py`).
   Vulture flags each hook as an unused function at 60% confidence.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
@@ -409,8 +374,7 @@ none. The only exact-name match outside the definition is this list, so vulture 
 - `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
   a production module-global write from test setup, read in `src/api/host_auth.py`. A tests-only
   vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
-  and stays silent, the `base_html`/`new_html` case. Same class as the `_cron_snapshot` entry
-  above.
+  and stays silent. Same class as the `_cron_snapshot` entry above.
 - `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the

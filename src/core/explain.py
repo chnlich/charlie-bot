@@ -40,7 +40,6 @@ log = structlog.get_logger()
 
 
 def __getattr__(name: str) -> Any:
-  # The "src.core.explain.build_backend" and ".base_one_shot_text" patch targets resolve here.
   if name == "base_one_shot_text":
     return deferred_module_getattr(name, __name__, globals(), "base_one_shot_text", _load_base_one_shot_text)
   return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)

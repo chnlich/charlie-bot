@@ -58,6 +58,7 @@ if str(REPO_ROOT) not in sys.path:
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
+import atexit  # noqa: E402
 import base64  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
@@ -74,6 +75,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     Results,
     api_request,
     connect_cdp,
+    devtools_ws_url,
     evaluate,
     launch_chrome,
     log,
@@ -82,6 +84,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     screenshot,
     wait_for,
 )
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -414,6 +417,58 @@ def preview_instance_env(source_home: Path) -> dict[str, str]:
     return env
 
 
+def trial_home_root(prefix: str, *, keep: bool) -> Path:
+    """The trial's temp root, purged at process exit unless *keep*.
+
+    Every trial artifact (source home, trial home, chrome profile, console
+    logs) lives inside the returned directory, so one purge clears the trial.
+    """
+    tmp_path = Path(tempfile.mkdtemp(prefix=prefix))
+    if keep:
+        log(f"kept for inspection: {tmp_path}")
+    else:
+        atexit.register(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+    return tmp_path
+
+
+async def open_authenticated_page(
+    chrome: str, profile: Path, *, port: int, access_key: str, domains: tuple[str, ...],
+    fail: Callable[[str], None],
+) -> tuple[CDP, str, subprocess.Popen]:
+    """Launch Chrome and open one page pre-seeded for the trial at *port*.
+
+    The access key reaches the page twice before the first navigation - the
+    bootstrap writes it to localStorage, the cookie jar gets the session
+    cookie - and the same bootstrap installs the window.__errs collectors the
+    harnesses read at the end. The viewport is the shared 1440x900 desktop
+    capture shape. Returns (cdp, session_id, chrome_proc); the caller owns the
+    process and drives the page itself.
+    """
+    chrome_proc = launch_chrome(chrome, profile, pick_free_port(),
+                                ["--no-first-run", "--no-default-browser-check"])
+    ws_url = await devtools_ws_url(chrome_proc, 30, fail)
+    cdp = await connect_cdp(ws_url)
+    session_id, _target_id = await open_cdp_page(cdp, domains)
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
+        (function () {{
+          try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}
+          window.__errs = [];
+          window.addEventListener('error', (e) => window.__errs.push(String(e.message).slice(0, 160)));
+          window.addEventListener('unhandledrejection',
+              (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 160)));
+        }})();
+    """}, session_id=session_id)
+    await cdp.send("Network.setCookie", {
+        "name": "charliebot_access_key", "value": access_key,
+        "url": f"http://127.0.0.1:{port}/",
+    }, session_id=session_id)
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+        "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
+    }, session_id=session_id)
+    await cdp.send("Page.enable", {}, session_id=session_id)
+    return cdp, session_id, chrome_proc
+
+
 async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console: Path,
                              fail: Callable[[str], None], timeout_s: float) -> dict:
     """Poll the preview instance's ready record; return it once ready.
@@ -458,8 +513,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         build_source_home(source, backends)
         # The harness process itself must keep production identities out of any
         # child it spawns; the preview CLI clears its own in addition.
-        for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN",
-                    "CHARLIE_CODE_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
+        for var in INHERITED_IDENTITY_ENV_VARS:
             os.environ.pop(var, None)
         home = tmp_path / "preview-home"
         port = pick_free_port()

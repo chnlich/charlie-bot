@@ -84,7 +84,7 @@ from src.core.config import (
     load_config,
     load_credentials,
 )
-from src.core.constants import REPO_ROOT, BackendType
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS, REPO_ROOT, BackendType
 from src.core.home_writer_fence import (
     FENCE_IDENTITY_NAME,
     FENCE_LOCK_NAME,
@@ -113,18 +113,6 @@ PREVIEW_WORKTREES_DIRNAME = "worktrees"
 # The trial config contract: exactly these top-level sections. Anything else is
 # an unrelated configuration and refuses instead of being carried into a trial.
 _ALLOWED_CONFIG_TOP_KEYS = frozenset({"server", "paths", "backends"})
-
-# Inherited CharlieBot identity/credential environment that must never reach the
-# preview process or its children: children get preview-owned identities and this
-# instance's credentials (task_execution._child_env), and a charlie-code child
-# gets only the key the preview config references.
-_INHERITED_IDENTITY_ENV_VARS = (
-    "CHARLIEBOT_SESSION_ID",
-    "CHARLIEBOT_RUN_TOKEN",
-    "CHARLIE_CODE_API_KEY",
-    "CLAUDE_CODE_OAUTH_TOKEN",
-    "ANTHROPIC_API_KEY",
-)
 
 # Reachable mechanisms the preview does not run. Startup never starts them AND
 # the request boundary refuses them, so a clicked legacy route cannot act on
@@ -766,7 +754,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
 def activate_preview_environment(setup: PreviewSetup) -> None:
   """Select the preview profile before any cached config or singleton binds to the old home."""
   os.environ[CHARLIEBOT_HOME_ENV] = str(setup.home)
-  for var in _INHERITED_IDENTITY_ENV_VARS:
+  for var in INHERITED_IDENTITY_ENV_VARS:
     os.environ.pop(var, None)
   resolved = charliebot_home_dir()
   if resolved != setup.home:

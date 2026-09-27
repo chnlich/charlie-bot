@@ -27,7 +27,6 @@ def test_server_config_zero_disables_cgroup() -> None:
 # ---------------------------------------------------------------------------
 # Cgroup directory naming
 
-
 # ---------------------------------------------------------------------------
 # Ensure: creation, refresh, degradation
 # ---------------------------------------------------------------------------
@@ -57,7 +56,6 @@ def test_ensure_session_cgroup_degrades_when_base_missing(monkeypatch: pytest.Mo
 
 # ---------------------------------------------------------------------------
 # preexec construction and composition
-
 
 # ---------------------------------------------------------------------------
 # memory.events reading and exit attribution

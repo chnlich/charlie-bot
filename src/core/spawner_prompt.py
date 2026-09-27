@@ -57,6 +57,7 @@ def workflow_rule_section_ids(task_type: TaskType, *, repo_less: bool) -> tuple[
       return (*ids, REPO_LESS_SOURCE_FILES_SECTION)
   return (*WORKFLOW_PROMPT_SECTION[task_type][1:], "task_spec_source_files")
 
+
 _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "session_info",
     "coding_principles",

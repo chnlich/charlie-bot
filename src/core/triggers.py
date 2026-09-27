@@ -88,7 +88,6 @@ _TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
 # metadata, so a faster cadence buys nothing. Tests shrink this constant to drive the clock.
 _DORMANCY_CHECK_SECONDS = 60
 
-
 # A session holds at most this many pending triggers. One trigger can watch
 # every parallel job through repeated --watch specs, so the bound only caps
 # genuine wake debt; it lives in code, not config, because there is one user

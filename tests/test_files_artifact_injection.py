@@ -108,10 +108,8 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
 
 # --- clean views: the injected-page memo serves repeat views without re-reading ---
 
-
 # --- clean views: the gzip form ships pre-compressed so the server's gzip
 # middleware skips its own whole-body deflate ---
-
 
 # --- diff requests: ?diff=<base artifact path> serves the annotated page ---
 
@@ -155,7 +153,6 @@ def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: Pa
 
 
 # --- diff requests: the annotate memo serves repeat views without re-annotating ---
-
 
 # --- diff requests: the gzip form ships pre-compressed so the server's gzip
 # middleware skips its own whole-body deflate ---

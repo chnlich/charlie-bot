@@ -23,9 +23,7 @@ from src.agents import master_cc_state
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    SessionMetadata,
-)
+from src.core.models import SessionMetadata
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 SONNET = "claude-sonnet-5"
@@ -77,7 +75,6 @@ def test_every_cc_claude_entry_is_pooled_when_the_pool_is_declared(tmp_path: Pat
 # ---------------------------------------------------------------------------
 # Health
 
-
 # ---------------------------------------------------------------------------
 # Headroom
 # ---------------------------------------------------------------------------
@@ -107,7 +104,6 @@ def _event(status: str, five_hour: float, seven_day: float, resets_at: float | N
 
 # ---------------------------------------------------------------------------
 # Panel expiry: the shared predicate and the pool fold that drops expired windows
-
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -151,14 +147,11 @@ def test_move_transcript_copies_conversation_and_sidecar_into_the_same_slug(tmp_
 # ---------------------------------------------------------------------------
 # Resume resolution through the pool
 
-
 # ---------------------------------------------------------------------------
 # Backend-switch domain
 
-
 # ---------------------------------------------------------------------------
 # Directory derivations: usage panel, token tally, cold storage
-
 
 # ---------------------------------------------------------------------------
 # Metadata persistence
@@ -214,7 +207,6 @@ def test_move_transcript_refuses_to_overwrite_a_strictly_newer_destination(tmp_p
 
 # ---------------------------------------------------------------------------
 # Copy retirement after a sound round
-
 
 # ---------------------------------------------------------------------------
 # The placement probe's lineage helpers

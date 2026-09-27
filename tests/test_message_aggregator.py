@@ -9,9 +9,7 @@ from conftest import queued_user_reorder_events as _reorder_events
 
 from src.api.message_utils import events_to_messages, events_to_view
 from src.core import event_types as ET
-from src.core.message_aggregator import (
-    MessageAggregator,
-)
+from src.core.message_aggregator import MessageAggregator
 
 VOICE_KEY = "is_voice"
 

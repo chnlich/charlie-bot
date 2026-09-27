@@ -15,9 +15,7 @@ from conftest import (
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_credentials
-from src.core.models import (
-    SessionMetadata,
-)
+from src.core.models import SessionMetadata
 
 
 def test_config_without_slack_keys_yields_defaults() -> None:

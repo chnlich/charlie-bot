@@ -22,7 +22,6 @@ from src.core.threads import thread_events_log_path
 
 log = LazyStructlogLogger()
 
-
 # The reviewer contract's stable parts, shared verbatim by the v1 review prompt
 # (build_review_prompt) and the v2 managed instruction block (review_rules_text).
 # One maintained home: src/core/review.py owns the review rules; prompts/ owns

@@ -6,9 +6,7 @@ and the weekly recycle clears the anchor through its channel."""
 from pathlib import Path
 
 import pytest
-from conftest import (
-    build_sessions_cfg,
-)
+from conftest import build_sessions_cfg
 from structlog.testing import capture_logs
 
 from src.core.models import CreateSessionRequest

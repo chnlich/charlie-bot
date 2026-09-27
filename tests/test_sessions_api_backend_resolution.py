@@ -19,9 +19,7 @@ from conftest import session_dir_names as _session_dir_names
 
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, SessionMetadata
-from src.core.sessions import (
-    SessionManager,
-)
+from src.core.sessions import SessionManager
 
 
 async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKEND_ID) -> str:
@@ -125,7 +123,6 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
 
 
 # --------------------------------------------------------- store-level property
-
 
 # ---------------------------------------- regression: documented default carve-out
 

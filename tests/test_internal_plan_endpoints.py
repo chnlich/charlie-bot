@@ -173,10 +173,8 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Session view payload carries no plans
 
-
 # ---------------------------------------------------------------------------
 # plan_updated broadcast: emitted on mutation, absent from chat_events.jsonl
-
 
 # ---------------------------------------------------------------------------
 # ThreadMetadata.task_type is set on delegate-created threads

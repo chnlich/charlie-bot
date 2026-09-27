@@ -50,7 +50,14 @@ with gc_off(collect=False):
   from src.api.deps import session_manager, set_trigger_manager, task_manager, thread_manager
   from src.core import timeouts
   from src.core.buildinfo import init_build_info
-  from src.core.config import CharlieBotConfig, configured_access_key, get_config, get_credentials, require_backends
+  from src.core.config import (
+      CharlieBotConfig,
+      configured_access_key,
+      get_config,
+      get_credentials,
+      get_scheduled_tasks,
+      require_backends,
+  )
   from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
   from src.core.http import close_http_client
   from src.core.init import (
@@ -787,7 +794,7 @@ if __name__ == "__main__":
   import uvicorn
 
   cfg = get_config()
-  require_backends(cfg)
+  require_backends(cfg, get_scheduled_tasks())
   uvicorn.run(
       "server:app",
       host=cfg.server.host,

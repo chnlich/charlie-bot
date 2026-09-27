@@ -94,7 +94,6 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M82 worker events-log append, per event | M82 collector below | seconds per append of one probe event to a scratch worker log, the run's held-handle shape | median < 0.0002 s | — (introduced with its first history row) |
 | M83 versioned static-asset revalidation, warm page load | M83 collector below | seconds per revalidation request (If-None-Match) per asset over the dashboard's template-referenced asset set; the warm-cache revalidation-request count the page load issues | revalidate median < 0.002 s per asset; 0 revalidation requests per warm page load | — (introduced with its first history row) |
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < max(0.060 s, bytes ÷ 250 MB/s) (recalibrated from bytes ÷ 200 MB/s with the 2026-09-18 drain-copy removal: the drain splits its lines from a read-only mapping instead of a whole-backlog readall copy, so both funnels share the orjson+translate parse floor the 250 MB/s figure prices — the after readings sit 344-378 MB/s on the 1051.1 MB corpus — see the 2026-09-18 history row); stdout-stream median < max(0.040 s, bytes ÷ 250 MB/s) (recalibrated from the absolute 0.060/0.040 s lines: the worst on-disk raw log is now a 1050.9 MB / 150-line master-run log whose orjson+translate replay floor measures 2874-3455 ms, 304-366 MB/s, so the line tracks the corpus's own floor; the 0.060/0.040 s max() floors keep the small-corpus watch verbatim — see the 2026-09-16 history row) | — (introduced with its first history row) |
-| M85 verify-finalize report read, steady state | M85 collector below | seconds per `read_verify_final_report` call, worst on-disk worker log | median < 0.005 s | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended; the blocked-round repeat (the corpus-as-it-stands shape — nine steady-state calls on an unchanged corpus, the parity witness) | median < 0.001 s; blocked-round median < 0.0005 s | — (introduced with its first history row) |
 | M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST over the shared outbound client — the run-start attempt client keeps its own per-attempt construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
 | M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validation parse + parallel gzip subprocess over the original bytes), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 3.5 s (recalibrated from < 6 s: the compress now overlaps the parse in a gzip subprocess, landing at 2.79-2.85 s on the 307.3 MB / 1,068,461-event corpus; the validation parse is the floor — 2.72 s measured standalone — and grows with the corpus) | — (introduced with its first history row) |
@@ -6245,56 +6244,6 @@ try:
     asyncio.run(main())
 finally:
     shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
-EOF
-```
-
-M85 — verify-finalize report read, steady state. Every verify worker's finalize chain
-(`spawner_finalize._verify_report_for_task`, on the worker finalize and again on the
-startup-reconcile replay) runs `read_verify_final_report` over the verify thread's events
-log, and the pre-fix reader full-parsed the whole log (`parse_ndjson_file`) to scan its
-last events — ~13.5 ms on the 6.7 MB worst on-disk log — although the RESULT event the
-report quotes sits at the log tail on every on-disk verify thread. The fixed reader walks
-512 KiB segments from the end through `iter_ndjson_events_from_end` (the M31
-`parse_ndjson_tail_parseable` mechanics, now the shared generator under it), stopping once
-both judgments settle — the last result event's payload, or the first non-empty assistant
-text from the end; identical output, blank and malformed lines never counting in
-either form. The cost is finalize-path thread time invisible to HTTP probes, so the
-collector times the function the finalize chain awaits over the largest on-disk worker
-log (read-only), from the checkout under test: one cold pass, as at first finalize after
-a server start, then five timed calls. Evidence while the live server runs older code
-points the same collector at the branch checkout (`CHECKOUT` at the worktree root), the
-same shape as the M7 protocol:
-
-```bash
-CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio, os, sys, time
-from pathlib import Path
-sys.path.insert(0, os.environ["CHECKOUT"])
-from src.core.config import CharlieBotConfig
-from src.core.threads import ThreadManager
-from src.core.verify_trailer import read_verify_final_report
-
-root = Path.home() / ".charliebot" / "sessions"
-best, best_n = None, -1
-for p in root.glob("*/threads/*/data/events.jsonl"):
-    n = p.stat().st_size
-    if n > best_n:
-        best, best_n = p, n
-SID, TID = best.parts[-5], best.parts[-3]
-
-async def main():
-    thread_mgr = ThreadManager(CharlieBotConfig(charliebot_home=Path.home() / ".charliebot"))
-    report = await read_verify_final_report(SID, TID, thread_mgr)  # cold pass, as at first finalize after a server start; not timed
-    times = []
-    for _ in range(5):
-        t0 = time.perf_counter()
-        report = await read_verify_final_report(SID, TID, thread_mgr)
-        times.append(time.perf_counter() - t0)
-    times.sort()
-    print(f"{best_n / 1e6:.1f} MB worker log, report {len(report)} chars; "
-          f"read_verify_final_report median {times[2]*1000:.1f} ms, max {times[-1]*1000:.1f} ms over 5")
-
-asyncio.run(main())
 EOF
 ```
 

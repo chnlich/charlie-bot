@@ -139,6 +139,56 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_path: Path) -> None:
+  mgr = make_session_mgr(tmp_path)
+  await _add_session(mgr, "quiet", status=SessionStatus.ACTIVE, minutes=1)
+  carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=2)
+
+  first, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                include_pending_trigger_status=False)
+  assert first == []
+  repeat, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                 include_pending_trigger_status=False)
+  assert repeat is first  # the unchanged corpus serves the stored rows
+
+  # A chat file moves without touching any metadata.json: the append must
+  # re-key the derivation or the new hit stays invisible until the next
+  # metadata write.
+  await mgr.save_chat_event(carrier.id, user_event("needle in the events"))
+  grown, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                include_pending_trigger_status=False)
+  assert [r.id for r in grown] == [carrier.id]
+
+  renamed = await _add_session(mgr, "needle-name", minutes=3)
+  named, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                include_pending_trigger_status=False)
+  assert {r.id for r in named} == {carrier.id, renamed.id}
+
+
+@pytest.mark.asyncio
+async def test_search_match_memo_stores_nothing_after_an_errored_scan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  import src.core.sessions as sessions_module
+
+  mgr = make_session_mgr(tmp_path)
+  carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
+  await mgr.save_chat_event(carrier.id, user_event("nothing relevant here"))
+
+  real_scan = sessions_module._scan_content_for_hit
+  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", lambda *a, **k: None)
+  errored, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                  include_pending_trigger_status=False)
+  assert errored == []  # the errored scan proves no absence, so the rows stay undetermined
+  assert mgr._search_match_memo.get("needle") is None  # an errored round stores nothing
+
+  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", real_scan)
+  retried, _ = await mgr.search_sessions_readonly("needle", include_running_status=False,
+                                                  include_pending_trigger_status=False)
+  assert retried == []  # the retry re-scans instead of serving the errored rows
+  assert mgr._search_match_memo.get("needle") is not None  # the clean round stores
+
+
+@pytest.mark.asyncio
 async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)
   archived = await _add_session(mgr, "cold-archived", minutes=0)

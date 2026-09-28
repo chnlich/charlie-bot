@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.cli.help_formatter import CliHelpFormatter
-from src.core import memory, memory_proposal
+from src.core import memory
 from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
 
@@ -243,6 +243,11 @@ def _cmd_lint(args: argparse.Namespace) -> None:
 
 
 def _cmd_proposal(args: argparse.Namespace) -> None:
+  # Deferred off the module wall: only the proposal verbs import the store's PR
+  # machinery (tarfile + subprocess ride its import chain); query/add/lint never
+  # touch it.
+  from src.core import memory_proposal
+
   live = _memory_dir()
   try:
     if args.proposal_command == "open":

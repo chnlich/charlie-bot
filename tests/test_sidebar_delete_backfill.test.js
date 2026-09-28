@@ -20,14 +20,14 @@ function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
 }
 
-function makeCronSession(id, overrides = {}) {
+function makeBoundNode(id, overrides = {}) {
   return makeSession(id, {
-    group: null,
-    schedule_project: 'CronProj',
-    scheduled_task: `task-${id}`,
+    profile: 'manager',
+    schedule_task: `task-${id}`,
     schedule_cron: '0 9 * * *',
     schedule_timezone: 'America/Los_Angeles',
     schedule_next_run: '2026-04-03T04:00:00Z',
+    schedule_enabled: true,
     ...overrides,
   });
 }
@@ -93,9 +93,9 @@ async function paintGrouped(context, sessions) {
   await settle();
 }
 
-async function paintScheduled(context, sessions, options = {}) {
-  context.currentFilter = 'scheduled';
-  context.renderSessionList(sessions, 'scheduled', options);
+async function paintGroupedWithBadge(context, sessions, options = {}) {
+  context.currentFilter = 'all';
+  context.renderSessionList(sessions, 'all', options);
   await settle();
 }
 
@@ -196,34 +196,8 @@ test('an expanded preview stays expanded across the delete repaint', async () =>
   assert.ok(nav.innerHTML.includes('ml-auto">6</span>'));
 });
 
-test('archiving on the scheduled tab backfills cron groups the same way', async () => {
-  const sessions = Array.from({length: 6}, (_, i) => makeCronSession(`c${i + 1}`));
-  const {context, nav, fetchCalls} = buildContext();
-  await paintScheduled(context, sessions,
-      {brokenTasks: [{name: 'z-broken', error: 'boom', broken: true, path: '/h/z.yaml', enabled: null}]});
-
-  assert.equal(countRows(nav.innerHTML), 6);
-  assert.match(nav.innerHTML, /cron-group-limit-extra hidden/);
-  assert.match(nav.innerHTML, /Show all/);
-  assert.ok(nav.innerHTML.includes('ml-auto">6/6 enabled</span>'));
-  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
-
-  const baseline = fetchCalls.length;
-  await context.archiveSession('c2');
-  await settle();
-
-  assert.equal(countRows(nav.innerHTML), 5);
-  assert.doesNotMatch(nav.innerHTML, /cron-group-limit-extra/);
-  assert.doesNotMatch(nav.innerHTML, /cron-group-limit-toggle/);
-  assert.doesNotMatch(nav.innerHTML, /Show all/);
-  assert.ok(nav.innerHTML.includes('ml-auto">5/5 enabled</span>'));
-  // The in-place repaint carries the badge's broken tasks through unchanged.
-  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
-  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2']);
-});
-
-test('entering the scheduled tab paints badge and list from one parallel fetch pair', async () => {
-  const sessions = [makeCronSession('c1'), makeCronSession('c2')];
+test('entering Workspace paints the badge and the list from one parallel fetch pair', async () => {
+  const sessions = [makeSession('c1', {group: null}), makeSession('c2', {group: null})];
   const cronTasks = [
     {name: 'a-ok', cron: '0 9 * * *', prompt: 'p'},
     {name: 'z-broken', error: 'boom z', broken: true, path: '/h/z.yaml', enabled: null},
@@ -231,16 +205,16 @@ test('entering the scheduled tab paints badge and list from one parallel fetch p
   ];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/scheduled') return {ok: true, json: async () => sessions};
+      if (url === '/api/sessions/') return {ok: true, json: async () => sessions};
       if (url === '/api/cron/tasks') return {ok: true, json: async () => cronTasks};
       throw new Error('unexpected fetch ' + url);
     },
   });
 
-  context.switchSidebarFilter('scheduled');
+  context.switchSidebarFilter('all');
   await settle();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/scheduled', '/api/cron/tasks']);
+  assert.deepEqual(fetchCalls, ['/api/sessions/', '/api/cron/tasks']);
   assert.equal(countRows(nav.innerHTML), 2);
   // Broken entries reach the badge name-ordered; the click opens the first.
   assert.ok(nav.innerHTML.includes('2 scheduled tasks failed to load'), nav.innerHTML);
@@ -249,24 +223,50 @@ test('entering the scheduled tab paints badge and list from one parallel fetch p
   assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);
 });
 
-test('a failed cron pull still paints the scheduled list, with no badge', async () => {
-  const sessions = [makeCronSession('c1'), makeCronSession('c2')];
+test('a failed cron pull still paints the Workspace list, with no badge', async () => {
+  const sessions = [makeSession('c1', {group: null}), makeSession('c2', {group: null})];
   const {context, nav, fetchCalls} = buildContext({
     fetchHandler: async (url) => {
-      if (url === '/api/sessions/scheduled') return {ok: true, json: async () => sessions};
+      if (url === '/api/sessions/') return {ok: true, json: async () => sessions};
       if (url === '/api/cron/tasks') throw new Error('cron endpoint down');
       throw new Error('unexpected fetch ' + url);
     },
   });
 
-  context.switchSidebarFilter('scheduled');
+  context.switchSidebarFilter('all');
   await settle();
 
-  assert.deepEqual(fetchCalls, ['/api/sessions/scheduled', '/api/cron/tasks']);
+  assert.deepEqual(fetchCalls, ['/api/sessions/', '/api/cron/tasks']);
   assert.equal(countRows(nav.innerHTML), 2);
   assert.ok(nav.innerHTML.includes('Session c1'), nav.innerHTML);
   assert.ok(nav.innerHTML.includes('Session c2'), nav.innerHTML);
   assert.ok(!nav.innerHTML.includes('scheduled tasks failed to load'), nav.innerHTML);
+});
+
+test('an in-place delete repaint carries the badge\u2019s broken tasks through unchanged', async () => {
+  const sessions = Array.from({length: 6}, (_, i) => makeSession(`c${i + 1}`, {group: null}));
+  const {context, nav, fetchCalls} = buildContext();
+  await paintGroupedWithBadge(context, sessions,
+      {brokenTasks: [{name: 'z-broken', error: 'boom', broken: true, path: '/h/z.yaml', enabled: null}]});
+
+  assert.equal(countRows(nav.innerHTML), 6);
+  assert.match(nav.innerHTML, /session-group-limit-extra hidden/);
+  assert.match(nav.innerHTML, /Show all/);
+  assert.ok(nav.innerHTML.includes('ml-auto">6</span>'));
+  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
+
+  const baseline = fetchCalls.length;
+  await context.archiveSession('c2');
+  await settle();
+
+  assert.equal(countRows(nav.innerHTML), 5);
+  assert.doesNotMatch(nav.innerHTML, /session-group-limit-extra/);
+  assert.doesNotMatch(nav.innerHTML, /session-group-limit-toggle/);
+  assert.doesNotMatch(nav.innerHTML, /Show all/);
+  assert.ok(nav.innerHTML.includes('ml-auto">5</span>'));
+  // The in-place repaint carries the badge's broken tasks through unchanged.
+  assert.ok(nav.innerHTML.includes('1 scheduled tasks failed to load'), nav.innerHTML);
+  assert.deepEqual(fetchCalls.slice(baseline), ['/api/sessions/c2']);
 });
 
 test('deleting from the search overlay removes only the row node', async () => {
@@ -403,19 +403,18 @@ test('archiving the viewed legacy parent switches to a row outside its subtree',
   assert.deepEqual(switches, ['r1']);
 });
 
-test('archiving a scheduled legacy parent takes its projected leaf with it', async () => {
-  const parent = makeCronSession('cp1', {profile: null, updated_at: at(10)});
+test('archiving a legacy parent takes its projected leaf with it', async () => {
+  const parent = makeSession('cp1', {profile: null, updated_at: at(10)});
   const leaf = makeSession('cleaf', {
     profile: 'worker',
     task_parent_id: 'cp1',
     updated_at: at(9),
     worker_thread: {session_id: 'cp1', thread_id: 'ct1'},
-    schedule_project: 'CronProj',
   });
   const {context, nav, fetchCalls} = buildContext();
-  await paintScheduled(context, [parent, leaf, makeCronSession('cr1', {updated_at: at(8)})]);
+  await paintGrouped(context, [parent, leaf, makeSession('cr1', {updated_at: at(8)})]);
 
-  // The scheduled list paints flat, leaf included.
+  // The grouped list nests the leaf under its parent.
   assert.deepEqual(anchorIdsInOrder(nav.innerHTML), ['cp1', 'cleaf', 'cr1']);
 
   const baseline = fetchCalls.length;

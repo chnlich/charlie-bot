@@ -102,6 +102,10 @@ function initSidebarResize() {
 // ---------------------------------------------------------------------------
 let cronEditMode = null; // 'edit' or 'add'
 let cronOriginalName = null;
+// The node a create-mode editor binds: set by Add schedule / New scheduled
+// task, saved with the task, and cleared by any other open path. An edit-mode
+// save never sends it (the PUT body leaves the task's binding untouched).
+let cronAddSessionId = null;
 
 // Fields (besides the always-readonly name) that a broken task locks down: a
 // broken file's truth is the raw yaml on disk, never an edit form.
@@ -132,6 +136,7 @@ function applyCronBrokenView(task) {
 }
 
 async function openCronEditor(taskName) {
+  cronAddSessionId = null;
   let task;
   try {
     const res = await fetch('/api/cron/tasks');
@@ -164,9 +169,10 @@ async function openCronEditor(taskName) {
   document.getElementById('cron-modal').classList.remove('hidden');
 }
 
-function openCronAdder() {
+function openCronAdder(options = {}) {
   cronEditMode = 'add';
   cronOriginalName = null;
+  cronAddSessionId = options.sessionId || null;
   document.getElementById('cron-modal-title').textContent = 'New Scheduled Task';
   document.getElementById('cron-name').value = '';
   document.getElementById('cron-name').readOnly = false;
@@ -174,7 +180,7 @@ function openCronAdder() {
   document.getElementById('cron-prompt-file').value = '';
   document.getElementById('cron-repo').value = '';
   document.getElementById('cron-backend').value = '';
-  document.getElementById('cron-project').value = '';
+  document.getElementById('cron-project').value = options.project || '';
   document.getElementById('cron-timezone').value = 'America/Los_Angeles';
   document.getElementById('cron-enabled').checked = true;
   applyCronBrokenView(null);
@@ -225,12 +231,17 @@ async function saveCronTask() {
     promise = fetch('/api/cron/tasks', {
       method: 'POST',
       headers: JSON_HEADERS,
-      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled}),
+      // A created task with a prefilled binding is born bound (its node
+      // exists); a null binding drops out of the body and the scheduler's
+      // auto-bind creates the node.
+      body: JSON.stringify({name, cron, prompt_file, repo, backend, project, timezone, enabled, session_id: cronAddSessionId}),
     });
   }
   if ((await cronModalRequest(promise)) === null) return;
   closeCronModal();
-  switchSidebarFilter('scheduled');
+  // The saved schedule shows on its node row in the view the editor was
+  // opened from (the Scheduled view is gone).
+  switchSidebarFilter(currentFilter);
 }
 
 async function deleteCronTask() {
@@ -239,7 +250,8 @@ async function deleteCronTask() {
   const promise = fetch(`/api/cron/tasks/${encodeURIComponent(name)}`, {method: 'DELETE'});
   if ((await cronModalRequest(promise)) === null) return;
   closeCronModal();
-  switchSidebarFilter('scheduled');
+  // Deletion archives nothing: the node stays, its clock row goes.
+  switchSidebarFilter(currentFilter);
 }
 
 // ---------------------------------------------------------------------------

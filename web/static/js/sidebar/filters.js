@@ -20,10 +20,9 @@ function registerSidebarFilter(filter) {
   sidebarFiltersByName[normalized.name] = normalized;
 }
 
-registerSidebarFilter({name: 'all', label: 'All', url: '/api/sessions/', restoreFromUrl: false});
-registerSidebarFilter({name: 'starred', label: 'Starred', url: '/api/sessions/starred'});
-registerSidebarFilter({name: 'archived', label: 'Archived', url: '/api/sessions/archived'});
-registerSidebarFilter({name: 'scheduled', label: 'Scheduled', url: '/api/sessions/scheduled'});
+registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/', restoreFromUrl: false});
+registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
+registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 
 function getSidebarFilter(filter) {
   return sidebarFiltersByName[filter] || null;
@@ -44,14 +43,12 @@ function filterPillClass(active) {
 function renderSidebarFilterPills() {
   const container = document.getElementById('sidebar-filter-pills');
   if (!container) return;
-  const addBtn = document.getElementById('cron-add-btn');
   const buttons = sidebarFilters.map(filter => {
     const active = filter.name === currentFilter;
     const cls = filterPillClass(active);
     return `<button onclick="enterSidebarFilter('${filter.name}')" id="filter-${filter.name}" class="${cls}">${filter.label}</button>`;
   }).join('');
   container.innerHTML = buttons;
-  if (addBtn) container.appendChild(addBtn);
 }
 
 // Inline removal shared by archive / unarchive / delete: the list never
@@ -204,12 +201,10 @@ function setSidebarFilterPill(filter) {
     active.classList.add('bg-blue-600/20', 'text-blue-300');
     active.classList.remove('text-slate-400');
   }
-  const addBtn = document.getElementById('cron-add-btn');
-  if (addBtn) addBtn.classList.toggle('hidden', filter !== 'scheduled');
 }
 
-// The Scheduled tab's broken-task badge rides this fetch: a failed cron pull
-// yields no badge ([]) but never hides the session list.
+// The Workspace error badge rides this fetch: a failed cron pull yields no
+// badge ([]) but never hides the session list.
 async function fetchBrokenCronTasks() {
   try {
     const res = await fetch('/api/cron/tasks');
@@ -226,16 +221,16 @@ function switchSidebarFilter(filter) {
   setSidebarFilterPill(filter);
   if (filter === 'archived') {
     // The archived view owns its fetch: keyset pagination with a group filter
-    // strip (archived.js) instead of the one-shot array the other tabs use.
+    // strip (archived.js) instead of the one-shot array the other views use.
     loadArchivedView();
     return;
   }
   // Fetch sessions for this filter
   const registeredFilter = getSidebarFilter(filter);
   if (!registeredFilter) throw new Error('Unknown sidebar filter: ' + filter);
-  if (filter === 'scheduled') {
-    // The badge's broken tasks and the session list load in parallel, so badge
-    // and list paint together in the one render call.
+  if (filter === 'all') {
+    // The error badge's broken tasks and the session list load in parallel, so
+    // badge and list paint together in the one render call.
     Promise.all([
       fetch(registeredFilter.url).then(res => {
         if (!res.ok) throw new Error(`Filter fetch failed: ${res.status}`);
@@ -287,6 +282,9 @@ function restoreSidebarFromUrl() {
       renderSidebarLoadErrors(INITIAL_LOAD_ERRORS);
     } else {
       renderSessionList(INITIAL_SESSIONS, 'all');
+      // The error badge rides its own cron pull so the first paint never waits
+      // for it; the repaint discards itself when the view has moved on.
+      fetchBrokenCronTasks().then(paintWorkspaceBadge);
     }
   }
 }
@@ -299,7 +297,6 @@ let searchDebounceTimer = null;
 function handleSidebarSearch(query) {
   clearTimeout(searchDebounceTimer);
   const pills = document.querySelector('.filter-pill')?.parentElement;
-  const addBtn = document.getElementById('cron-add-btn');
   if (query.trim()) {
     // Hide filter pills while searching
     if (pills) pills.style.display = 'none';

@@ -2,12 +2,15 @@
   const Sidebar = globalThis.Sidebar;
 
 // ---------------------------------------------------------------------------
-// Archived view: a flat keyset-paginated list with a group filter strip.
-// Pages append as sibling containers, so rows already on screen are never
-// rewritten; ordering, membership, and group aggregates come from
-// GET /api/sessions/archived (src/api/sessions.py), and in-list operations
-// (unarchive / delete / set group) update rows and strip counts in place
-// with no refetch.
+// Archived view: a keyset-paginated project-grouped tree with a group filter
+// strip — the same tree format the Workspace view builds. Pages merge into one
+// row list (first delivery wins; the server re-delivers a context ancestor a
+// previous page already carried); ordering, membership, and group aggregates
+// come from GET /api/sessions/archived (src/api/sessions.py), and in-list
+// operations (unarchive / delete / set group) update the merged list and the
+// strip counts in place with no refetch. The rendered cap and Load more count
+// archived rows only: a context row is the tree's scaffolding, never part of
+// the user's archived list.
 // ---------------------------------------------------------------------------
 
 const ARCHIVED_PAGE_LIMIT = 100;
@@ -24,7 +27,9 @@ const archivedState = {
   nextBeforeId: null,
   hasMore: false,
   renderedCount: 0,
-  rowGroups: {},   // session id -> group ('' = ungrouped) for every rendered row
+  rows: [],        // every delivered row in first-delivery order: archived rows plus context ancestors
+  rowIds: {},      // delivered row id -> true, the merge's dedup key
+  rowGroups: {},   // archived row id -> group ('' = ungrouped) for the strip's in-place updates
   loading: false,
   pillsEl: null,
   rowsEl: null,
@@ -70,23 +75,48 @@ function renderArchivedFoot() {
   }
 }
 
+// Merge one page into the tree's row list and repaint the whole tree: the
+// archived view's one render form, so a delivered firing always nests under
+// its scheduled node whatever page each arrived on.
 function appendArchivedRows(sessions) {
   if (!archivedState.rowsEl) return;
-  if (!sessions.length) {
-    if (!archivedState.renderedCount) {
-      archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
-    }
+  const fresh = sessions.filter(s => !archivedState.rowIds[s.id]);
+  fresh.forEach(s => {
+    archivedState.rowIds[s.id] = true;
+    archivedState.rows.push(s);
+    if (!s.context_only) archivedState.rowGroups[s.id] = s.group || '';
+  });
+  archivedState.renderedCount += fresh.filter(s => !s.context_only).length;
+  if (!archivedState.rows.length) {
+    archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
     return;
   }
-  const pageEl = document.createElement('div');
-  pageEl.className = 'space-y-1';
-  pageEl.innerHTML = sessions.map(s => {
-    archivedState.rowGroups[s.id] = s.group || '';
-    return renderSessionItem(s, 'archived', {staticTime: true});
-  }).join('');
-  archivedState.rowsEl.appendChild(pageEl);
-  archivedState.renderedCount += sessions.length;
-  Sidebar.resyncSessionUnread(sessions);
+  Sidebar.renderGroupedSessionList(archivedState.rows, 'archived', {
+    container: archivedState.rowsEl,
+    staticTime: true,
+    groupActions: false,
+  });
+}
+
+// Drop rows from the merged list and repaint: an in-list operation's node-only
+// row removal becomes a tree repaint, so the removed row's children promote
+// instead of vanishing inside its subtree container.
+function repaintWithoutRows(doomedIds) {
+  const doomed = new Set(doomedIds);
+  doomed.forEach(id => {
+    delete archivedState.rowIds[id];
+    delete archivedState.rowGroups[id];
+  });
+  archivedState.rows = archivedState.rows.filter(s => !doomed.has(s.id));
+  if (!archivedState.rows.length) {
+    archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
+    return;
+  }
+  Sidebar.renderGroupedSessionList(archivedState.rows, 'archived', {
+    container: archivedState.rowsEl,
+    staticTime: true,
+    groupActions: false,
+  });
 }
 
 async function fetchArchivedPage() {
@@ -135,6 +165,8 @@ function resetArchivedList() {
   archivedState.nextBeforeId = null;
   archivedState.hasMore = false;
   archivedState.renderedCount = 0;
+  archivedState.rows = [];
+  archivedState.rowIds = {};
   archivedState.rowGroups = {};
   archivedState.loading = false;
   const nav = document.getElementById('session-list');
@@ -189,20 +221,21 @@ function adjustArchivedGroupCount(group, delta) {
 }
 
 // A session left the archived set (unarchive / permanent delete): drop its
-// bookkeeping and decrement the strip counts. Row removal itself is the
-// caller's removeSessionRowInline.
+// bookkeeping and decrement the strip counts, then repaint the tree without
+// its row.
 function archivedForgetSession(sessionId) {
   const group = archivedState.rowGroups[sessionId];
   if (group === undefined) return;
-  delete archivedState.rowGroups[sessionId];
   archivedState.renderedCount = Math.max(0, archivedState.renderedCount - 1);
   adjustArchivedGroupCount(group || null, -1);
+  repaintWithoutRows([sessionId]);
   renderArchivedPills();
 }
 
-// Set group on an archived row: move the strip counts, update the row's group
-// button, and remove the row only when it no longer matches the active strip
-// filter (under "All" it stays in place). No refetch, no rewrite of other rows.
+// Set group on an archived row: move the strip counts, and drop the row from
+// the tree only when it no longer matches the active strip filter (under
+// "All" it stays). No refetch; the repaint re-derives the nesting, so the
+// dropped row's children promote instead of vanishing with it.
 function applyArchivedGroupChange(sessionId, group) {
   const oldGroup = archivedState.rowGroups[sessionId];
   if (oldGroup === undefined) return;
@@ -215,11 +248,10 @@ function applyArchivedGroupChange(sessionId, group) {
   if (row) {
     const btn = typeof row.querySelector === 'function' ? row.querySelector('[data-current-group]') : null;
     if (btn && btn.dataset) btn.dataset.currentGroup = next;
-    if (archivedState.group !== null && archivedState.group !== next) {
-      row.remove();
-      delete archivedState.rowGroups[sessionId];
-      archivedState.renderedCount = Math.max(0, archivedState.renderedCount - 1);
-    }
+  }
+  if (archivedState.group !== null && archivedState.group !== next) {
+    archivedState.renderedCount = Math.max(0, archivedState.renderedCount - 1);
+    repaintWithoutRows([sessionId]);
   }
   renderArchivedPills();
 }

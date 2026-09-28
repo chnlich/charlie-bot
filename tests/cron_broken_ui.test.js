@@ -32,7 +32,7 @@ function makeEl() {
 }
 
 // groups.js is an IIFE over globals defined by the other sidebar modules; the
-// sandbox supplies the ones the scheduled-list badge path reaches for.
+// sandbox supplies the ones the Workspace badge path reaches for.
 function loadGroups() {
   const elements = {'session-list': makeEl()};
   const context = {
@@ -44,7 +44,7 @@ function loadGroups() {
     escapeHtml: escapeHtmlText,
     escapeHtmlAttr: (value) => escapeHtml(value == null ? '' : String(value)),
     SESSION_ID: 'other-session',
-    currentFilter: 'scheduled',
+    currentFilter: 'all',
     sessionUnread: {},
     updateRelativeTimes: () => {},
     refreshTuiDots: () => {},
@@ -62,9 +62,9 @@ function loadGroups() {
 }
 
 
-test('the scheduled list shows the global failure badge from the broken tasks the fetch hands it', () => {
+test('the Workspace view shows the global failure badge from the broken tasks the fetch hands it', () => {
   const {context, elements} = loadGroups();
-  context.Sidebar.renderGroupedScheduledList([], {brokenTasks: [
+  context.Sidebar.renderGroupedSessionList([], 'all', {brokenTasks: [
     {name: 'a-broken', error: 'boom a', broken: true, path: '/h/config.d/cron.d/a-broken.yaml', enabled: false},
     {name: 'z-broken', error: 'boom z', broken: true, path: '/h/config.d/cron.d/z-broken.yaml', enabled: null},
   ]});
@@ -74,12 +74,12 @@ test('the scheduled list shows the global failure badge from the broken tasks th
   // Clicking opens the cron editor on the first broken task by name order.
   assert.ok(html.includes("openCronEditor('a-broken')"), html);
   // Even with zero sessions the badge pages the maintainer.
-  assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No scheduled sessions'), html);
+  assert.ok(html.indexOf('2 scheduled tasks failed to load') < html.indexOf('No sessions yet'), html);
 });
 
 test('no badge when nothing is broken', () => {
   const {context, elements} = loadGroups();
-  context.Sidebar.renderGroupedScheduledList([]);
+  context.Sidebar.renderGroupedSessionList([], 'all');
 
   assert.ok(!elements['session-list'].innerHTML.includes('scheduled tasks failed to load'), elements['session-list'].innerHTML);
 });

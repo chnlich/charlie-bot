@@ -73,17 +73,16 @@ function legacy(id, hour, overrides = {}) {
   return meta(id, {profile: null, updated_at: at(hour), ...overrides});
 }
 
-// A cron session row: the chat a cron task wakes, carrying the schedule
-// fields the /api/sessions/scheduled payload overlays onto it (project P).
-function cronSession(id, hour, overrides = {}) {
+// A bound node row: the task-tree manager a scheduled task fires against,
+// carrying the schedule fields the row join stamps onto it.
+function boundNode(id, hour, overrides = {}) {
   return meta(id, {
     group: null,
-    profile: null,
-    scheduled_task: `task-${id}`,
+    profile: 'manager',
+    schedule_task: `task-${id}`,
     schedule_cron: '0 9 * * *',
     schedule_timezone: 'America/Los_Angeles',
     schedule_next_run: '2026-04-03T04:00:00Z',
-    schedule_project: 'P',
     schedule_enabled: true,
     updated_at: at(hour),
     ...overrides,
@@ -435,115 +434,116 @@ test('a legacy session row keeps its actions but shows no Task & context button'
 });
 
 // ---------------------------------------------------------------------------
-// The Scheduled tab: the same tree the All tab builds, grouped by
-// schedule_project at root level, with the cron row form for roots.
+// A bound node in the Workspace tree: the same tree the All tab builds, with
+// the bound row form — schedule lines, clock badge, Edit schedule gear — and
+// its firing leaves nested collapsed under it.
 // ---------------------------------------------------------------------------
 
-test('the scheduled tab nests a cron session\u2019s projected leaves under it, collapsed, with no (No project) group', () => {
+test('a bound node nests its firing leaves under it, collapsed, and keeps the bound row form', () => {
   const {context, nav} = buildContext();
 
   context.renderSessionList([
-    cronSession('cron1', 10),
+    boundNode('cron1', 10),
     projectedLeaf('t1', 'cron1', 9),
     projectedLeaf('t2', 'cron1', 8),
     projectedLeaf('t3', 'cron1', 7),
-  ], 'scheduled');
+  ], 'all');
 
   const html = nav.innerHTML;
-  // The three leaves sit inside the root's subtree container, collapsed.
+  // The three leaves sit inside the bound node's subtree container, collapsed.
   const container = html.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/);
-  assert.ok(container, 'the cron root row is followed by its children container');
+  assert.ok(container, 'the bound row is followed by its children container');
   assert.match(container[0], / hidden"/);
   assert.ok(html.indexOf('data-tree-children="cron1"') < html.indexOf('id="session-t1"'));
-  // No leafless bucket: the project-less leaves belong to the cron row now.
-  assert.doesNotMatch(html, /\(No project\)/);
-  // The root row keeps the cron form: schedule line, chevron with the count.
+  // The bound row keeps its form: schedule line, chevron with the count, and
+  // the clock badge naming its task.
   assert.match(rowHtml(html, 'cron1'), /0 9 \* \* \*/);
+  assert.match(rowHtml(html, 'cron1'), /Next: /);
   assert.match(anchorOpenTag(html, 'cron1') + rowHtml(html, 'cron1'),
       /data-tree-toggle="cron1"[^>]*aria-expanded="false"/);
-  // A projected leaf stays read-only: no star, rename, archive or gear button,
-  // and its click opens that thread's transcript in the main chat view.
+  assert.match(rowHtml(html, 'cron1'), /Scheduled: task-cron1/);
+  assert.match(rowHtml(html, 'cron1'), /title="Edit schedule"/);
+  // A projected leaf stays read-only: no star, rename, archive or schedule
+  // button, and its click opens that thread's transcript in the main chat view.
   for (const t of ['t1', 't2', 't3']) {
     const row = rowHtml(html, t);
-    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Archive"|title="Edit task config"/);
+    assert.doesNotMatch(row, /star-btn|title="Rename"|title="Archive"|title="Edit schedule"|title="Add schedule"/);
     assert.match(anchorOpenTag(html, t), /openThreadView\('cron1',/);
   }
-  // The group header counts the cron root alone, never its leaves.
-  assert.match(html, /1\/1 enabled/);
+  // The group header counts every rendered row, roots and descendants.
+  assert.match(html, /<span class="text-xs text-slate-500 ml-auto">4<\/span>/);
   assert.deepEqual(anchorIdsInOrder(html), ['cron1', 't1', 't2', 't3']);
-  // The Scheduled render recorded the tree maps itself.
+  // The grouped render recorded the tree maps itself.
   assert.deepEqual([...context.Sidebar.treeChildIds('cron1')], ['t1', 't2', 't3']);
   assert.equal(context.Sidebar.treeParentId('t1'), 'cron1');
 });
 
-test('the scheduled tab\u2019s preview cap counts roots only and hides a capped root with its subtree', () => {
+test('a bound node’s clock and lines follow the task state: disabled goes grey and stops naming a next run', () => {
   const {context, nav} = buildContext();
-  const rows = [];
-  for (let i = 1; i <= 6; i++) rows.push(cronSession(`cron-${i}`, 20 - i));
-  for (let i = 1; i <= 3; i++) rows.push(projectedLeaf(`t1-${i}`, 'cron-1', i));
-  rows.push(projectedLeaf('t6-1', 'cron-6', 1));
 
-  context.renderSessionList(rows, 'scheduled');
+  context.renderSessionList([
+    boundNode('cron1', 10),
+    boundNode('cron2', 9, {schedule_enabled: false}),
+  ], 'all');
 
   const html = nav.innerHTML;
-  assert.match(html, />Show all<\/button>/);
-  assert.equal(anchorOpenTag(html, 'cron-5').includes('cron-group-limit-extra'), false);
-  assert.equal(anchorOpenTag(html, 'cron-6').includes('cron-group-limit-extra hidden'), true);
-  // Leaves render inside their root's subtree and never spend the row budget.
-  for (const leaf of ['t1-1', 't1-2', 't1-3', 't6-1']) {
-    assert.equal(anchorOpenTag(html, leaf).includes('cron-group-limit-extra'), false);
-  }
-  // The capped root's subtree hides with it through the wrapper.
-  assert.match(html, /<div class="tree-subtree cron-group-limit-extra hidden[^"]*" data-cron-group-limit-extra="P">/);
-  // The header counts the six roots, not the four leaves.
-  assert.match(html, /6\/6 enabled/);
+  assert.match(rowHtml(html, 'cron1'), /text-blue-400[^>]*viewBox="0 0 24 24" title="Scheduled: task-cron1"/s);
+  assert.match(rowHtml(html, 'cron1'), /Next: /);
+  assert.match(rowHtml(html, 'cron2'), /text-slate-500[^>]*viewBox="0 0 24 24" title="Scheduled: task-cron2"/s);
+  assert.match(rowHtml(html, 'cron2'), /Disabled/);
+  assert.doesNotMatch(rowHtml(html, 'cron2'), /Next: /);
 });
 
-test('a scheduled paint records the tree maps, refreshes tree indicators, and shares expand state with the All tab', () => {
+test('an unbound manager row carries the Add schedule hover button, a bound row the Edit one', () => {
   const {context, nav} = buildContext();
-  const rows = [cronSession('cron1', 10), projectedLeaf('t1', 'cron1', 9)];
+
+  context.renderSessionList([boundNode('cron1', 10), manager('mgr', null, 9)], 'all');
+
+  assert.match(rowHtml(nav.innerHTML, 'cron1'), /title="Edit schedule"/);
+  assert.match(rowHtml(nav.innerHTML, 'mgr'), /title="Add schedule"/);
+  assert.match(rowHtml(nav.innerHTML, 'mgr'), /openCronAdder\(\{sessionId: 'mgr'\}\)/);
+});
+
+test('a grouped paint records the tree maps, refreshes tree indicators, and keeps expand state across repaints', () => {
+  const {context, nav} = buildContext();
+  const rows = [boundNode('cron1', 10), projectedLeaf('t1', 'cron1', 9)];
   let indicatorRefreshes = 0;
   context.Sidebar.refreshTreeIndicators = () => { indicatorRefreshes += 1; };
 
-  context.renderSessionList(rows, 'scheduled');
+  context.renderSessionList(rows, 'all');
 
-  assert.equal(indicatorRefreshes, 1, 'the collapsed cron row takes its leaves\u2019 stand-in state');
+  assert.equal(indicatorRefreshes, 1, 'the collapsed parent takes its leaves\u2019 stand-in state');
   assert.equal(context.Sidebar.treeParentId('t1'), 'cron1');
 
-  // Expanding here keeps the subtree open on the next repaint of either tab.
+  // Expanding here keeps the subtree open on the next repaint.
   context.toggleTreeNode('cron1');
-  context.renderSessionList(rows, 'scheduled');
-  assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
-
   context.renderSessionList(rows, 'all');
   assert.doesNotMatch(nav.innerHTML.match(/<div class="tree-children[^"]*"[^>]*data-tree-children="cron1">/)[0], /hidden/);
 });
 
-test('a Scheduled-tab cron row’s gear and subtree mark survive expand and collapse', () => {
+test('a collapsed bound row\u2019s gear and subtree mark survive expand and collapse', () => {
   const {context, shown} = buildContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
   context.renderSessionList([
-    cronSession('cron1', 10),
+    boundNode('cron1', 10),
     projectedLeaf('leaf1', 'cron1', 9, {has_running_tasks: true}),
-    cronSession('cron2', 8),
+    boundNode('cron2', 8),
     projectedLeaf('leaf2', 'cron2', 7, {has_unread: true}),
-  ], 'scheduled');
-  // The scheduled renderer records only leaf rows, so the cron rows' own state
-  // lands through the status poll's seam — which repaints the row and its
-  // ancestors, exactly as production's first poll does.
+  ], 'all');
   context.setSessionIndicator('cron1', 'idle');
   context.setSessionIndicator('cron2', 'idle');
 
   const gearRow = shown('cron1');
-  assert.equal(gearRow.gear, true, 'the running leaf lights the cron row’s gear');
+  assert.equal(gearRow.gear, true, 'the running leaf lights the parent row\u2019s gear');
   const markRow = shown('cron2');
-  assert.equal(markRow.subtreeMark, true, 'the unread leaf lights the cron row’s subtree mark');
+  assert.equal(markRow.subtreeMark, true, 'the unread leaf lights the parent row\u2019s subtree mark');
 
   context.Sidebar.expandTreeNode('cron1');
   context.Sidebar.expandTreeNode('cron2');
-  assert.deepEqual(shown('cron1'), gearRow, 'expansion never changes the cron row’s icon');
-  assert.deepEqual(shown('cron2'), markRow, 'expansion never changes the cron row’s icon');
+  assert.deepEqual(shown('cron1'), gearRow, 'expansion never changes the row\u2019s icon');
+  assert.deepEqual(shown('cron2'), markRow, 'expansion never changes the row\u2019s icon');
   context.Sidebar.toggleTreeNode('cron1');
   context.Sidebar.toggleTreeNode('cron2');
-  assert.deepEqual(shown('cron1'), gearRow, 'collapse never changes the cron row’s icon');
-  assert.deepEqual(shown('cron2'), markRow, 'collapse never changes the cron row’s icon');
+  assert.deepEqual(shown('cron1'), gearRow, 'collapse never changes the row\u2019s icon');
+  assert.deepEqual(shown('cron2'), markRow, 'collapse never changes the row\u2019s icon');
 });
+

@@ -51,14 +51,20 @@ test('.session-time holds only the timestamp, so the time refresh cannot erase t
   assert.equal(sessionTimeInnerHtml(html), 'Jul 29, 5:12 PM');
 });
 
-test('scheduled rows keep their cron lines untouched', () => {
+test('a bound node row shows its cron lines in place of the time line, in every view', () => {
   const html = row({backend: 'claude-opus-5', schedule_cron: '0 9 * * *', schedule_timezone: 'PT'});
-  const scheduled = loadGroups().Sidebar.renderSessionItem(
+  const bound = loadGroups().Sidebar.renderSessionItem(
     {id: 's1', name: 'demo', updated_at: '2026-07-29T17:12:00Z', backend: 'claude-opus-5',
-     schedule_cron: '0 9 * * *', schedule_timezone: 'PT'},
-    'scheduled'
+     schedule_task: 'nightly', schedule_cron: '0 9 * * *', schedule_timezone: 'PT',
+     schedule_enabled: true, schedule_next_run: '2026-07-30T09:00:00Z'},
+    'all'
   );
-  assert.ok(html.includes('session-backend'), 'non-scheduled row should show the model');
-  assert.ok(scheduled.includes('0 9 * * *'));
-  assert.equal(modelSpan(scheduled), null);
+  assert.ok(html.includes('session-backend'), 'an unbound row should show the model');
+  assert.ok(bound.includes('0 9 * * *'));
+  assert.equal(modelSpan(bound), null);
+  // The same bound row form rides the Later and Archive views.
+  assert.equal(modelSpan(loadGroups().Sidebar.renderSessionItem(
+    {id: 's1', name: 'demo', updated_at: '2026-07-29T17:12:00Z',
+     schedule_task: 'nightly', schedule_cron: '0 9 * * *', schedule_timezone: 'PT',
+     schedule_enabled: true, schedule_next_run: '2026-07-30T09:00:00Z'}, 'starred')), null);
 });

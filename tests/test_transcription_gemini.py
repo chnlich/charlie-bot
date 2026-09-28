@@ -8,12 +8,16 @@ fake websocket (connect and the credential lookup patched) to prove both event
 kinds come out normalized. Every sentence here is synthetic.
 """
 
+import asyncio
+import contextlib
 import json
+import time
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Self
 
 import pytest
+from conftest import WsServerNeverAnswersClose
 
 from src.agents.transcription import gemini
 from src.agents.transcription.gemini import GeminiTranscriptionBackend, _normalize_transcript
@@ -167,3 +171,69 @@ async def test_transcribe_normalizes_both_the_spaced_interim_and_the_spaced_fina
       ("final", NORMALIZED_FINAL),
   ]
   assert socket.closed  # the backend session closed with the transcription
+
+
+# --- Close wait ---------------------------------------------------------------
+#
+# The cancel of a transcription in progress exits `connect(...)`, whose close
+# handshake waits close_timeout for the peer's close frame. The stand-in never
+# answers one, so the wait used to be websockets' 10 s default on every stop
+# that had a transcription open.
+
+
+class _PendingAudio:
+  """An audio stream that never delivers a chunk: the transcription stays open."""
+
+  def __aiter__(self) -> Self:
+    return self
+
+  async def __anext__(self) -> bytes:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable: the pending audio never yields")
+
+
+@pytest.mark.asyncio
+async def test_transcribe_cancel_waits_only_the_configured_close_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Cancelling a transcription in progress waits WS_CLIENT_CLOSE_TIMEOUT for the
+  peer's close frame, not websockets' 10 s default (synthetic credentials only)."""
+  from src.core import timeouts
+
+  monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
+  stand_in = WsServerNeverAnswersClose([{"setupComplete": {}}])
+  url = await stand_in.start()
+  monkeypatch.setattr(
+      gemini,
+      "get_credentials",
+      lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections={"gemini": {
+          "api_key": "test-key"
+      }}),
+  )
+  backend = GeminiTranscriptionBackend(CharlieBotConfig(charliebot_home=Path("/tmp/fake-home")), endpoint_url=url)
+
+  async def consume() -> None:
+    async for _event in backend.transcribe(_PendingAudio(), vocabulary=[], languages=["zh"]):
+      pass
+
+  task = asyncio.create_task(consume(), name="transcribe-under-test")
+  try:
+    async with asyncio.timeout(5):
+      while stand_in.received_chunks < 1:
+        await asyncio.sleep(0.02)
+    # The setupComplete reply was already on the wire when the stand-in saw the
+    # client's setup frame, so by now the handshake is consumed and the
+    # transcription is in progress (the client's own frames coalesce into one
+    # TCP read, so the read count alone cannot say which ones arrived).
+    await asyncio.sleep(0.1)
+    started = time.perf_counter()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    elapsed = time.perf_counter() - started
+    assert elapsed < timeouts.WS_CLIENT_CLOSE_TIMEOUT + 0.5, (
+        f"transcription cancel took {elapsed:.3f}s; the close wait did not honor "
+        f"WS_CLIENT_CLOSE_TIMEOUT={timeouts.WS_CLIENT_CLOSE_TIMEOUT}")
+  finally:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    await stand_in.stop()

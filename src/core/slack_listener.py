@@ -49,6 +49,7 @@ from zoneinfo import ZoneInfo
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
+from src.core import timeouts
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.http import get_http_client
@@ -1252,7 +1253,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
     backoff = 1.0
 
     try:
-      async with websockets.connect(url, max_size=None) as ws:
+      async with websockets.connect(url, max_size=None, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as ws:
         await _expect_hello(ws)
         logger.info("slack_listener_connected")
         await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)

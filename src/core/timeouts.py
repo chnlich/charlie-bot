@@ -304,6 +304,17 @@ KILL_ESCALATION_POLL_SECONDS = 0.2  # seconds between liveness probes during the
 MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds
 
 # ---------------------------------------------------------------------------
+# WebSocket client close wait
+# ---------------------------------------------------------------------------
+
+# How long a WebSocket this server opens as a client waits for the peer's close
+# frame after sending its own. Slack's Socket Mode endpoint never answers a
+# client close frame, so websockets' 10 s default added 10 s to every server
+# stop and every refresh reconnect; the other client connections (the two voice
+# transcription relays) take the same bound so a stop has a definite ceiling.
+WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
+
+# ---------------------------------------------------------------------------
 # Uvicorn shutdown
 # ---------------------------------------------------------------------------
 

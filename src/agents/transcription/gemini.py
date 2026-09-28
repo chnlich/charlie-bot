@@ -22,6 +22,7 @@ from src.agents.transcription.base import (
     TranscriptionBackend,
     TranscriptionRejected,
 )
+from src.core import timeouts
 from src.core.config import CharlieBotConfig
 from src.core.credentials import get_credentials
 
@@ -128,7 +129,11 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
     # The key rides the query string like the public endpoint expects; it is
     # never logged and never reaches an event.
     async with connect(
-        f"{self._endpoint_url}?key={api_key}", max_size=None, open_timeout=SETUP_TIMEOUT_S) as socket:
+        f"{self._endpoint_url}?key={api_key}",
+        max_size=None,
+        open_timeout=SETUP_TIMEOUT_S,
+        close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT,
+    ) as socket:
       await socket.send(json.dumps(self._setup_frame(vocabulary, languages)))
       reply = json.loads(await asyncio.wait_for(socket.recv(), SETUP_TIMEOUT_S))
       if "setupComplete" not in reply:

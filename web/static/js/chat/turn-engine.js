@@ -244,11 +244,25 @@
         return {segment: {kind: 'flat', entries: span.slice(), pending: false}, carried: []};
       }
       const carriedSet = new Set(turn.carried);
+      const entries = span.filter((entry) => !carriedSet.has(entry));
+      const foldEntries = turn.fold.slice();
+      // The fold counts and folds this segment's own entries: installTurnFold
+      // uses the first fold entry as its insertion reference inside the wrap
+      // being built, so an entry outside `entries` would point at a node
+      // another segment owns and throw only when the turn opens. The shared
+      // rule guarantees the fold is disjoint from the carry — a rule change
+      // that breaks that fails here, at derivation, not deep in buildTurnWrap.
+      for (const entry of foldEntries) {
+        if (!entries.includes(entry)) {
+          throw new Error(
+              'fold entry ' + entry.msg.id + ' is outside segment ' + turnKeyOf(turn));
+        }
+      }
       const segment = {
         kind: 'turn',
         key: turnKeyOf(turn),
-        entries: span.filter((entry) => !carriedSet.has(entry)),
-        foldEntries: turn.fold.slice(),
+        entries,
+        foldEntries,
         separatorEntry: turn.separator,
         rowSpec: rowSpecOf(turn),
       };

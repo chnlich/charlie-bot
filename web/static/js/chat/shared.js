@@ -41,11 +41,13 @@ function splitTurnSpan(items, roleOf) {
   });
   // Head: today's priority over the span's inputs, carried-in ones included —
   // the last user input, else the last input of any stimulus role, else
-  // body[0]. Without a stimulus the fold keeps today's shape too: it starts
-  // after body[0]. With inputs the fold holds the span's work — from the
-  // first assistant message to the conclusion, minus the carried stimuli —
-  // so notices between the last input and the first assistant message (a
-  // model switch, say) stay outside the fold next to the inputs.
+  // body[0]. The fold holds the span's work and never a carried stimulus: a
+  // carried stimulus has left this span for the next one, in every branch.
+  // With own inputs it runs from the first assistant message to the
+  // conclusion, so notices between the last input and the first assistant
+  // message (a model switch, say) stay outside the fold next to the inputs;
+  // without own inputs it keeps today's shape — it starts after body[0] —
+  // again minus the carried stimuli.
   let head = null;
   for (let i = ownInputs.length - 1; i >= 0; i--) {
     if (roleOf(ownInputs[i]) === 'user') { head = ownInputs[i]; break; }
@@ -55,13 +57,10 @@ function splitTurnSpan(items, roleOf) {
   if (!head) return {ownInputs, carried, head: null, conclusion: null, fold: []};
   let fold = [];
   if (conclusion) {
-    if (ownInputs.length) {
-      const queued = new Set(carried);
-      for (let i = firstAssistantIdx; i < conclusionIdx; i++) {
-        if (!queued.has(items[i])) fold.push(items[i]);
-      }
-    } else {
-      fold = items.slice(1, conclusionIdx);
+    const queued = new Set(carried);
+    const foldStart = ownInputs.length ? firstAssistantIdx : 1;
+    for (let i = foldStart; i < conclusionIdx; i++) {
+      if (!queued.has(items[i])) fold.push(items[i]);
     }
   }
   return {ownInputs, carried, head, conclusion, fold};

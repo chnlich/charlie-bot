@@ -24,13 +24,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
 from src.core import event_types as ET
-from src.core.memo import BoundedMemo
+from src.core.memo import BoundedMemo, stat_signature
 from src.core.message_projection import MessageProjection
 from src.core.models import RunRecord, ThreadMetadata, utc_now_iso
 from src.core.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
@@ -215,14 +214,6 @@ def _read_events(path: Path) -> list[dict]:
   return [event for event in parse_raw_lines(raw) if event.get("type") not in _TRANSCRIPT_SKIP_TYPES]
 
 
-def _file_signature(path: Path) -> tuple[int, int] | None:
-  try:
-    st = os.stat(path)
-  except OSError:
-    return None
-  return (st.st_mtime_ns, st.st_size)
-
-
 # ---------------------------------------------------------------------------
 # Worker node (v2): data/runs/<run_id>/events.jsonl per Run
 # ---------------------------------------------------------------------------
@@ -236,8 +227,8 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
     for entry in sorted(root.iterdir(), key=lambda e: e.name):
       if not entry.is_dir():
         continue
-      parts.append((entry.name, _file_signature(entry / RUN_METADATA_NAME), _file_signature(entry / RUN_EVENTS_NAME)))
-  parts.append(("chat", _file_signature(tree.sessions.get_chat_events_path(session_id))))
+      parts.append((entry.name, stat_signature(entry / RUN_METADATA_NAME), stat_signature(entry / RUN_EVENTS_NAME)))
+  parts.append(("chat", stat_signature(tree.sessions.get_chat_events_path(session_id))))
   return tuple(parts)
 
 
@@ -327,7 +318,7 @@ def _thread_dir(session_dir: Path, thread_id: str) -> Path:
 def thread_signature_sync(session_dir: Path, thread_id: str) -> tuple:
   """Stat-only identity of one legacy thread's metadata and events files."""
   thread_dir = _thread_dir(session_dir, thread_id)
-  return (_file_signature(thread_dir / METADATA_NAME), _file_signature(thread_dir / "data" / EVENTS_LOG_NAME))
+  return (stat_signature(thread_dir / METADATA_NAME), stat_signature(thread_dir / "data" / EVENTS_LOG_NAME))
 
 
 def _thread_state(meta: ThreadMetadata) -> str:

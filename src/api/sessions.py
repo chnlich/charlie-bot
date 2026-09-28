@@ -176,7 +176,7 @@ def _bootstrap_tool_previews(messages: list[dict]) -> list[dict]:
 
 def _bootstrap_payload(bootstrap: SessionBootstrapData, cfg: CharlieBotConfig) -> dict:
   payload = {
-      "session": bootstrap.session.model_dump(mode="json"),
+      "session": bootstrap.session.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
       "messages": _bootstrap_tool_previews(bootstrap.messages),
       "pending_draft": bootstrap.pending_draft,
       "event_count": bootstrap.total_event_count,
@@ -293,6 +293,12 @@ _PROJECTED_ROW_MEMO_LIMIT = 8192
 _projected_row_memo: BoundedMemo[tuple[str, str], tuple[SessionMetadata, dict,
                                                         SessionMetadata]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
 _projected_row_dumps: BoundedMemo[int, tuple[SessionMetadata, dict]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
+
+# TaskSpec.goal is the task's prompt prose — tens of KB per task node — and its
+# one reader is the task-context modal through GET /{session_id}, so every
+# poll, switch, and listing payload ships the spec without the body; the detail
+# render keeps it.
+_RESPONSE_ROW_EXCLUDE = {"task": {"goal"}}
 
 
 def _projected_row_payload(row: SessionMetadata) -> dict:
@@ -421,7 +427,7 @@ async def list_sessions(
     return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
   payload = []
   for row, state in zip(list_rows, list_states, strict=True):
-    dump = row.model_dump(mode="json")
+    dump = row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
     if state:
       (
           dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"], dump["pending_trigger_count"],
@@ -597,7 +603,7 @@ async def list_scheduled_sessions(
     if s.worker_thread is not None:
       payload.append(_projected_row_payload(s))
       continue
-    d = s.model_dump(mode="json")
+    d = s.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
     for key, value in (derived.get(s.id) or {}).items():
       d[key] = (
           _UTC_DATETIME_JSON.dump_python(value, mode="json")
@@ -829,7 +835,7 @@ def _search_row_static_segments(meta: SessionMetadata) -> tuple[bytes | str, ...
   cached = _search_row_fragments.get(id(meta))
   if cached is not None and cached[0] is meta:
     return cached[1]
-  row = meta.model_dump(mode="json")
+  row = meta.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
   segments: list[bytes | str] = []
   static: dict = {}
   for key, value in row.items():
@@ -1159,7 +1165,7 @@ async def get_session_view(
   # list's truncation contract), so the view ships the same prefixed rows — the
   # worst session's whole-row dumps measured 2.6 MB of body per session open.
   payload = {
-      "session": meta.model_dump(mode="json"),
+      "session": meta.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
       "messages": view.messages,
       "pending_draft": view.pending_draft,
       "threads": view.threads,
@@ -1246,7 +1252,7 @@ async def get_session_usage(
   else:
     usage = await session_mgr.resolve_session_usage(session_id, meta)
   payload = {
-      "session": meta.model_dump(mode="json"),
+      "session": meta.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
       "usage": usage,
   }
   if meta.profile == "worker":

@@ -294,8 +294,7 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   """
   base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
   shared = _read_source_file(
-      cfg.charlie_bot_repo / "prompts" / "master.md",
-      what="shared manager rules").replace("{{session_id}}", meta.id)
+      cfg.charlie_bot_repo / "prompts" / "master.md", what="shared manager rules").replace("{{session_id}}", meta.id)
   contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries"))
   segments = [
       RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),)),
@@ -349,8 +348,7 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
     repo_less = not (meta.task is not None and meta.task.repo_path)
     workflow = _sections_text(cfg, "worker.md", workflow_rule_section_ids(task_type, repo_less=repo_less))
     segments.append(
-        RuleSegment(
-            text="\n".join((worker, workflow)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
+        RuleSegment(text="\n".join((worker, workflow)), sources=(PromptSource(SCOPE_BASE, "prompts/worker.md"),)))
   return segments
 
 
@@ -578,8 +576,9 @@ def repo_less_review_task_context(
   """
   from src.core.review import review_log_pointer
   spec = spec_text if spec_text and spec_text.strip() else "(the task spec text was not recorded)"
-  report = (work_report if work_report and work_report.strip()
-            else "(the work Run left no final report; judge the paths the task names)")
+  report = (
+      work_report
+      if work_report and work_report.strip() else "(the work Run left no final report; judge the paths the task names)")
   return (
       f"## Context\n"
       f"This task changed host paths directly; it has no repository, so there is no diff to read and\n"

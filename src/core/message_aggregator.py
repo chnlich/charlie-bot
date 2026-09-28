@@ -384,8 +384,13 @@ def _task_delegated_msg(ev: dict) -> dict:
 # Each handler returns a message dict (role + content + any extras) or None to
 # skip the event.  The aggregator adds event_index and a default timestamp.
 _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
+    # Every round end renders a separator, still_thinking included: each
+    # separator-terminated span then holds exactly one round, so the chat JS
+    # span rule (splitTurnSpan) can carry a mid-round input into the turn that
+    # answers it. A still_thinking round carries no thinking_seconds, so its
+    # separator gets None and renders no seconds.
     ET.MASTER_DONE:
-        lambda ev: None if ev.get(ET.STILL_THINKING) else {
+        lambda ev: {
             'role': 'separator',
             ET.THINKING_SECONDS: ev.get(ET.THINKING_SECONDS),
         },

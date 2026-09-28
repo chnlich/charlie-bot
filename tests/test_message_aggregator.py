@@ -67,6 +67,58 @@ def test_assistant_text_then_master_done_commits_message() -> None:
   assert agg.pending_draft_message() is None
 
 
+def test_still_thinking_master_done_yields_separator_without_seconds() -> None:
+  agg = MessageAggregator()
+  deltas = list(agg.feed({"type": "master_done", "still_thinking": True, "timestamp": "t1"}))
+
+  assert deltas == [
+      {
+          "type": "message",
+          "message": {
+              "role": "separator",
+              "thinking_seconds": None,
+              "event_index": 0,
+              "id": "legacy:0",
+              "timestamp": "t1",
+          },
+      }
+  ]
+
+
+def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
+  # Claude-Code shape: no session_attached marker anywhere, so the stable-history
+  # projection leaves the mid-round user in place. The still_thinking round end
+  # renders its separator like any other, so the queued user sits in the span
+  # the answering round closes instead of below the final separator.
+  events = [
+      {"type": ET.USER, "content": "first question", "timestamp": "t1"},
+      {**_assistant_text_event("first answer"), "timestamp": "t2"},
+      {"type": ET.USER, "content": "second question", "timestamp": "t3"},
+      {**_assistant_text_event("mid-round answer"), "timestamp": "t4"},
+      {"type": ET.MASTER_DONE, "still_thinking": True, "timestamp": "t5"},
+      {**_assistant_text_event("second answer"), "timestamp": "t6"},
+      {"type": ET.MASTER_DONE, "thinking_seconds": 7, "timestamp": "t7"},
+  ]
+
+  messages = events_to_messages(events)
+  view_messages, pending = events_to_view(events)
+
+  assert [message["role"] for message in messages] == [
+      "user",
+      "assistant",
+      "user",
+      "assistant",
+      "separator",
+      "assistant",
+      "separator",
+  ]
+  assert [message["id"] for message in messages] == [f"legacy:{index}" for index in range(7)]
+  assert messages[4]["thinking_seconds"] is None
+  assert messages[6]["thinking_seconds"] == 7
+  assert view_messages == messages
+  assert pending is None
+
+
 def test_task_delegated_message_exposes_metadata_without_full_description_body() -> None:
   agg = MessageAggregator()
   long_description = "## Goal\nDo a long task spec that belongs in Workers."

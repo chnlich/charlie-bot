@@ -34,7 +34,6 @@ from conftest import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api import cron as cron_api
 from src.api import deps
 from src.api.cron import router as cron_router
 from src.api.deps import get_session_manager, get_task_manager
@@ -44,6 +43,7 @@ from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
+from tests.test_cron_backend import _patch_cron_d
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
@@ -57,12 +57,6 @@ from tests.test_task_execution import (
 )
 
 _NIGHTLY_PROMPT_MD = "run nightly\n"
-
-
-def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
-  """Redirect the cron API's host-file IO at *cron_dir* (see test_cron_backend)."""
-  monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
-  monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")
 
 
 def _write_nightly_task(

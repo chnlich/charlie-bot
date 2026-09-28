@@ -9,7 +9,7 @@ noticing.
 
 This module owns the pure/queryable parts of that contract:
 
-- path derivation for every per-run file;
+- the per-run file names;
 - process liveness (``pid`` + ``/proc/<pid>/stat`` field 22 + host boot time);
 - the outcome table mapping on-disk facts to a ``RunOutcome``;
 - the pure raw-line -> translated-event projection shared by the live read
@@ -115,18 +115,6 @@ class RunResolution:
 # ---------------------------------------------------------------------------
 # Path derivation
 # ---------------------------------------------------------------------------
-
-
-def raw_log_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / RAW_LOG_NAME
-
-
-def stderr_log_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / STDERR_LOG_NAME
-
-
-def cursor_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / CURSOR_NAME
 
 
 def master_run_log_dir(session_dir: Path, started_at: datetime) -> Path:

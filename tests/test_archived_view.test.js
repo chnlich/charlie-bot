@@ -243,6 +243,12 @@ test('set group updates the strip counts; the row leaves only a mismatched filte
   assert.match(pills.innerHTML, /Personal <span[^>]*>1<\/span>/);
   assert.doesNotMatch(pills.innerHTML, /Work <span[^>]*>1<\/span>/);
 
+  // The stored row moved with the counts: the repaint an unarchive brings
+  // lands arch-a under its new group header instead of reverting it to Work.
+  context.archivedForgetSession('arch-b');
+  assert.match(rows.innerHTML, /data-sgroup-key="Personal"[\s\S]*id="session-arch-a"/);
+  assert.doesNotMatch(rows.innerHTML, /data-sgroup-key="Work"/);
+
   // Under a named strip filter, a row moved elsewhere leaves the tree: the
   // repaint drops it and re-derives the nesting for the rows that stay. A
   // strip-filter change rebuilds the view's three containers, so re-read.
@@ -254,6 +260,40 @@ test('set group updates the strip counts; the row leaves only a mismatched filte
   // arch-a was the filter's only row, so its departure empties the tree.
   assert.doesNotMatch(rows.innerHTML, /id="session-arch-a"/);
   assert.match(rows.innerHTML, /No archived sessions/);
+});
+
+test('a star toggle survives the repaint a page append brings', async () => {
+  const pages = [
+    makePage([makeArchivedSession('arch-a'), makeArchivedSession('arch-b')], {hasMore: true}),
+    makePage([makeArchivedSession('arch-c')]),
+  ];
+  const nav = createElement();
+  let call = 0;
+  const {context} = buildContext({
+    elements: new Map([
+      ['session-list', nav],
+      ...buildSidebarFilterElements(),
+    ]),
+    fetch: async (url) => {
+      if (url.startsWith('/api/sessions/arch-a/star')) return {ok: true, async json() { return {}; }};
+      assert.match(url, /^\/api\/sessions\/archived\?limit=100/);
+      const page = pages[Math.min(call, pages.length - 1)];
+      call += 1;
+      return {ok: true, async json() { return page; }};
+    },
+  });
+
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const rows = nav.children[1];
+  assert.match(rowHtml(rows.innerHTML, 'arch-a'), /fill="none"/);
+
+  await context.toggleSessionStar('arch-a', false);
+  // The append repaints the whole tree from the merged list; the stored row
+  // carries the flip, so the star stays painted.
+  context.loadArchivedNextPage();
+  await new Promise(setImmediate);
+  assert.match(rowHtml(rows.innerHTML, 'arch-a'), /fill="currentColor"/);
 });
 
 test('unarchive/delete bookkeeping decrements the strip counts and repaints the tree', async () => {

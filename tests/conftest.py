@@ -2699,11 +2699,11 @@ def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
   return fake_create_logged_task
 
 
-# Restart-recovery e2e helpers, single-homed here for test_restart_recovery_e2e.py
-# and its sibling files. The A/B protocol's driver side (fake `claude` shim,
-# driver template, launcher) stays in test_restart_recovery_e2e.py; these are
-# the waits, readers, and the startup-crash-recovery entry the sibling files
-# share.
+# Shared test helpers, single-homed here: the waits, readers, and the
+# startup-crash-recovery entry, imported across the restart-recovery and
+# task-tree execution/recovery test files. The A/B protocol's driver side
+# (fake `claude` shim, driver template, launcher) stays in
+# test_restart_recovery_e2e.py.
 def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
@@ -2734,7 +2734,8 @@ async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: s
   raise TimeoutError(what)
 
 
-async def _settle_parent(tree: TaskTreeManager, manager: SessionManager, *, timeout: float, poll: float) -> None:
+async def _settle_parent(
+    tree: TaskTreeManager, manager: models.SessionMetadata, *, timeout: float, poll: float) -> None:
   # Shared by the task-tree execution and recovery files, whose report-delivery
   # assertions must wait out the parent's report turn without pinning a sleep.
   # Settled: the dispatch queue is drained and no run on the parent lacks a

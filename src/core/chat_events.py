@@ -9,7 +9,7 @@ from pathlib import Path
 import orjson
 
 from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
-from src.core.json_utils import atomic_write_stream
+from src.core.json_utils import atomic_write_stream, atomic_write_text
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now_iso
@@ -49,6 +49,72 @@ _WALK_CHUNK_BYTES = _TAIL_WINDOW_SIZE
 def chat_events_path(session_dir: Path) -> Path:
   """Return the path to a session's chat_events.jsonl under its session directory."""
   return session_dir / "data" / "chat_events.jsonl"
+
+
+def _archive_old_chat_events_legacy(live_path: Path, session_dir: Path, session_id: str, cutoff_utc: datetime) -> dict:
+  """The pre-streaming split walk, kept verbatim for the corpora the byte-range
+  pass cannot serve: any ``\r`` in the file (``\r\n`` pairs, lone ``\r``
+  separators) rode text mode's universal-newline translation, which both
+  normalizes every re-emitted line to LF and splits lines the binary walk sees
+  as one — a lone-``\r`` corpus archives nothing under the fast path, every
+  weekly pass, forever. The append funnel writes LF, so production files take
+  the fast path; this walk is the \r shape's owner, at its old cost.
+  """
+  archived_raw: list[str] = []
+  kept_raw: list[str] = []
+  split_reached = False
+  with open(live_path, encoding="utf-8") as f:
+    for line in f:
+      raw = line.rstrip("\n")
+      if split_reached:
+        kept_raw.append(raw)
+        continue
+      stripped = raw.strip()
+      if not stripped:
+        continue
+      try:
+        event = orjson.loads(stripped)
+      except ValueError as e:
+        log.debug("chat_event_archive_parse_skip", session_id=session_id, error=str(e))
+        split_reached = True
+        kept_raw.append(raw)
+        continue
+      ts_raw = event.get("timestamp")
+      if not ts_raw:
+        split_reached = True
+        kept_raw.append(raw)
+        continue
+      try:
+        ts = parse_utc_datetime(ts_raw)
+      except ValueError as e:
+        log.debug("chat_event_archive_ts_parse_skip", session_id=session_id, error=str(e))
+        split_reached = True
+        kept_raw.append(raw)
+        continue
+      if ts < cutoff_utc:
+        archived_raw.append(raw)
+      else:
+        split_reached = True
+        kept_raw.append(raw)
+
+  if not archived_raw:
+    log.info("chat_events_archive_noop", session_id=session_id)
+    return {"events_archived": 0, "archive_file": None}
+
+  iso = cutoff_utc.isocalendar()
+  archives_dir = chat_event_archives_dir(session_dir)
+  archives_dir.mkdir(parents=True, exist_ok=True)
+  archive_path = archives_dir / f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
+  with open(archive_path, "a", encoding="utf-8") as f:
+    for raw in archived_raw:
+      f.write(raw + "\n")
+
+  atomic_write_text(live_path, "".join(raw + "\n" for raw in kept_raw))
+
+  return {
+      "events_archived": len(archived_raw),
+      "archive_file": str(archive_path),
+  }
 
 
 _ARCHIVE_COPY_CHUNK = 8 * 1024 * 1024
@@ -623,7 +689,10 @@ class ChatEventStore:
     pre-split non-blank runs, the atomic live rewrite streams the kept tail
     straight off the source handle. The corpus never materializes as Python
     strings: the gigabyte-class live files paid a transient heap at the
-    corpus's size plus a full-corpus join on the old list-and-join shape.
+    corpus's size plus a full-corpus join on the old list-and-join shape. A
+    corpus carrying any ``\r`` rides the preserved text-mode walk (the
+    ``_archive_old_chat_events_legacy`` owner of the universal-newline
+    semantics); the fast path serves the LF shape the append funnel writes.
     """
     live_path = self._chat_events_path(session_id)
     if not live_path.exists():
@@ -631,6 +700,7 @@ class ChatEventStore:
 
     file_size = live_path.stat().st_size
     runs: list[tuple[int, int]] = []
+    saw_cr = False
     run_start: int | None = None
     run_end = 0
     archived_count = 0
@@ -639,6 +709,8 @@ class ChatEventStore:
       pos = 0
       for line in f:
         line_end = pos + len(line)
+        if b"\r" in line:
+          return _archive_old_chat_events_legacy(live_path, self._session_dir(session_id), session_id, cutoff_utc)
         raw = line[:-1] if line.endswith(b"\n") else line
         stripped = raw.strip()
         if not stripped or not raw.isascii():
@@ -685,6 +757,22 @@ class ChatEventStore:
     if not runs:
       log.info("chat_events_archive_noop", session_id=session_id)
       return {"events_archived": 0, "archive_file": None}
+
+    if kept_start is not None:
+      # The kept tail copies blind, so its bytes need the same \r proof the
+      # walk gave the pre-split lines; the scan rides memory bandwidth, not a
+      # decode.
+      with open(live_path, "rb") as f:
+        f.seek(kept_start)
+        remaining = file_size - kept_start
+        while remaining and not saw_cr:
+          chunk = f.read(min(remaining, _ARCHIVE_COPY_CHUNK))
+          if not chunk:
+            break
+          saw_cr = b"\r" in chunk
+          remaining -= len(chunk)
+    if saw_cr:
+      return _archive_old_chat_events_legacy(live_path, self._session_dir(session_id), session_id, cutoff_utc)
 
     # The text-mode walk re-emitted every raw line with exactly one trailing
     # newline; a corpus's final unterminated line gains one on either output.

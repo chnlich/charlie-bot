@@ -16,15 +16,11 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 # re-exports keep the established src.core.models import path working.
 from src.core.backend_models import (  # noqa: F401  (re-export)
     BACKEND_OPTION_ADAPTER,
-    MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,
     BackendOption,
     CcClaudeBackend,
-    CharlieCodeBackend,
     ClaudeAccount,
     ClaudeCompactionConfig,
-    CodexBackend,
-    OpencodeBackend,
     TuiCliBackend,
     backend_type_allows_missing_model,
     option_default_model,

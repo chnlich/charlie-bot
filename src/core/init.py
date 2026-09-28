@@ -16,14 +16,12 @@ import src.core.init_worker_recovery as _init_worker_recovery
 from src.core.init_master_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
     reconcile_master_identity,
     run_crash_recovery,
-    unanswered_input_events,
 )
 from src.core.init_seed import (  # noqa: F401  # re-export: facade import list (see module docstring)
     init_charliebot_home,
     seed_default_cron_tasks,
 )
 from src.core.init_worker_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-    _liveness_probe,
     _quarantine_stale_failed_worktrees,
     _report_recovery_event,
     iter_recent_thread_metas,

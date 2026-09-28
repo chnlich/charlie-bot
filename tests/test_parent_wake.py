@@ -159,8 +159,10 @@ async def drain_legacy_wakes() -> None:
   must be drained before the count assertion reads it; gathering the named
   tasks is deterministic where a bounded sleep is not.
   """
-  pending = [t for t in asyncio.all_tasks()
-             if t is not asyncio.current_task() and t.get_name().startswith("legacy-parent-wake")]
+  pending = [
+      t for t in asyncio.all_tasks()
+      if t is not asyncio.current_task() and t.get_name().startswith("legacy-parent-wake")
+  ]
   if pending:
     await asyncio.gather(*pending)
 

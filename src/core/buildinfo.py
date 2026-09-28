@@ -18,8 +18,9 @@ def init_build_info() -> None:
 
   Idempotent — re-calling overwrites the previously captured values (used by tests).
   """
-  # Lazy: src.cli.common loads this module on the CLI import floor, so the
-  # pydantic model stack stays off the import path; the startup caller pays it.
+  # Lazy: this module stays stdlib-only (src.cli.common lazy-imports
+  # read_repo_head_sha to keep buildinfo off its import floor), so the pydantic
+  # stack loads only here, inside the startup caller that already carries it.
   from src.core.models import utc_now_iso
 
   global _sha, _started_at

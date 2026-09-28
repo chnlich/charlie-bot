@@ -6,9 +6,16 @@ env-resolved (src.core.home) and no config key can move it, so the verbs read
 no config file — a broken config.yaml must not block the store's own verbs.
 See ``src/core/memory.py`` for the store contract.
 
-  charliebot memory query --topic <t> [--audience A] [--index] [--resident]
+  charliebot memory query --topic <t> [--audience A] [--index] [--resident] [--dir D]
   charliebot memory add [--file F]
-  charliebot memory lint
+  charliebot memory lint [--dir D]
+
+  charliebot memory proposal open | status | commit <path> --message-file F | land <sha>
+
+The ``proposal`` verbs drive the store's PR flow (``src/core/memory_proposal.py``):
+the ``proposal`` branch, worked in the sibling ``memory-proposal`` worktree,
+holds the drafted curation as commits, and only ``land`` — one approved
+version — fast-forwards the live checkout the sessions read.
 
 A present CHARLIEBOT_RUN_TOKEN fixes the query's audience from the verified,
 active owning Run's role: omitted or contradictory --audience cannot broaden
@@ -24,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.cli.help_formatter import CliHelpFormatter
-from src.core import memory
+from src.core import memory, memory_proposal
 from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
 
@@ -59,12 +66,38 @@ def main() -> None:
       "--audience", default=None, choices=["master", "worker"], help="Only entries whose audience contains this")
   p_query.add_argument("--index", action="store_true", help="Print index lines only")
   p_query.add_argument("--resident", action="store_true", help="Only entries in resident topics")
+  p_query.add_argument(
+      "--dir",
+      default=None,
+      help=
+      "Store root to read (default: the live store at ~/.charliebot/memory); the PR worktree's path reads its drafted entries)",
+  )
 
   p_add = sub.add_parser(
       "add", help="Stage a free-form capture (never touches entries/)", formatter_class=CliHelpFormatter)
   p_add.add_argument("--file", default=None, help="Read body from file (default: stdin)")
 
-  sub.add_parser("lint", help="Validate the store; exit nonzero on violations", formatter_class=CliHelpFormatter)
+  p_lint = sub.add_parser(
+      "lint", help="Validate the store; exit nonzero on violations", formatter_class=CliHelpFormatter)
+  p_lint.add_argument("--dir", default=None, help="Store root to validate (default: the live store)")
+
+  p_proposal = sub.add_parser(
+      "proposal",
+      help="Drive the store's PR flow: open, status, commit one path, land one version",
+      formatter_class=CliHelpFormatter)
+  proposal_sub = p_proposal.add_subparsers(dest="proposal_command", required=True)
+  proposal_sub.add_parser(
+      "open",
+      help="Ensure the proposal branch and worktree exist, aligned with the base branch",
+      formatter_class=CliHelpFormatter)
+  proposal_sub.add_parser("status", help="Print the PR state (read-only)", formatter_class=CliHelpFormatter)
+  p_pcommit = proposal_sub.add_parser(
+      "commit", help="Commit exactly one store-relative path on the proposal branch", formatter_class=CliHelpFormatter)
+  p_pcommit.add_argument("path", help="Store-relative path: an entry file or topics")
+  p_pcommit.add_argument("--message-file", required=True, help="File holding the commit message")
+  p_pland = proposal_sub.add_parser(
+      "land", help="Fast-forward the live checkout to one approved proposal commit", formatter_class=CliHelpFormatter)
+  p_pland.add_argument("sha", help="The approved proposal commit SHA")
 
   args = parser.parse_args()
   if args.command == "query":
@@ -72,7 +105,9 @@ def main() -> None:
   elif args.command == "add":
     _cmd_add(args)
   elif args.command == "lint":
-    _cmd_lint()
+    _cmd_lint(args)
+  elif args.command == "proposal":
+    _cmd_proposal(args)
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
@@ -87,7 +122,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
           file=sys.stderr)
       sys.exit(1)
     args.audience = audience
-  store = memory.load_store(_memory_dir())
+  store = memory.load_store(_store_root(args))
   unknown = [t for t in args.topic if t not in store.topics]
   if unknown:
     for value in unknown:
@@ -191,13 +226,39 @@ def _cmd_add(args: argparse.Namespace) -> None:
   print(str(target))
 
 
-def _cmd_lint() -> None:
-  violations = memory.lint(_memory_dir())
+def _store_root(args: argparse.Namespace) -> Path:
+  """The store root this invocation reads: --dir when given, else the live store."""
+  if getattr(args, "dir", None):
+    return Path(args.dir).expanduser()
+  return _memory_dir()
+
+
+def _cmd_lint(args: argparse.Namespace) -> None:
+  violations = memory.lint(_store_root(args))
   if violations:
     for v in violations:
       print(v)
     sys.exit(1)
   print("clean")
+
+
+def _cmd_proposal(args: argparse.Namespace) -> None:
+  live = _memory_dir()
+  try:
+    if args.proposal_command == "open":
+      fields = memory_proposal.open_proposal(live)
+    elif args.proposal_command == "status":
+      fields = memory_proposal.status(live)
+    elif args.proposal_command == "commit":
+      sha = memory_proposal.commit(live, args.path, Path(args.message_file).expanduser())
+      fields = {"committed": sha}
+    else:
+      fields = memory_proposal.land(live, args.sha)
+  except memory_proposal.ProposalRefusalError as e:
+    print(f"error: {e}", file=sys.stderr)
+    sys.exit(1)
+  for key, value in fields.items():
+    print(f"{key}: {value}")
 
 
 def _slugify(text: str) -> str:

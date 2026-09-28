@@ -323,7 +323,14 @@ async def run_firing_steps(
   failure and keeps the leaf open with its evidence.
   """
   steps = task_cfg.steps or []
-  executed: list[tuple[int, str, str, str]] = []  # (position, run_id, name, outcome)
+  conflict = distinct_backend_conflict(task_cfg, tree)
+  if conflict is not None:
+    # No step launches — not even the Run the admission already registered —
+    # and the failure report names both steps and the shared backend.
+    summary = f"Scheduled task '{task_cfg.name}' stopped before its first step: {conflict}."
+    await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "failed", summary)
+    return
+  executed: list[tuple[int, str, str, str, str]] = []  # (position, run_id, name, backend, result)
   failed_at: int | None = None
   for position, step in enumerate(steps):
     backend, model = resolved_backend_model(task_cfg, tree, step.backend or task_cfg.backend)
@@ -333,7 +340,7 @@ async def run_firing_steps(
     if outcome is None:
       prompt = step.prompt or ""
       if position > 0:
-        previous = executed[-1][3] if executed else ""
+        previous = executed[-1][4] if executed else ""
         prompt = chain_step_prompt(prompt, steps[position - 1].name, previous)
       observation = await launch_and_settle(tree, leaf_id, run.id, prompt)
       if observation.withheld is not None:
@@ -346,12 +353,14 @@ async def run_firing_steps(
       outcome = observation.outcome
       assert outcome is not None
     result = await run_result_text(tree, leaf_id, run.id)
-    executed.append((position, run.id, step.name, result))
+    executed.append((position, run.id, step.name, backend, result))
     if outcome != "success" or not await step_advanced(tree, leaf_id, run.id):
       failed_at = position
       break
 
-  blocks = [f"**{name} result:**\n{result or '(no result)'}" for _pos, _rid, name, result in executed]
+  blocks = [
+      f"**{name} result ({backend}):**\n{result or '(no result)'}" for _pos, _rid, name, backend, result in executed
+  ]
   if failed_at is None:
     last_run_id = executed[-1][1]
     summary = f"Scheduled task '{task_cfg.name}' completed all {len(executed)} step(s).\n\n" + "\n\n".join(blocks)
@@ -360,7 +369,7 @@ async def run_firing_steps(
           leaf_id,
           run_id=last_run_id,
           summary=summary,
-          result_refs=[f"{RUN_REF_PREFIX}{rid}" for _pos, rid, _n, _r in executed],
+          result_refs=[f"{RUN_REF_PREFIX}{rid}" for _pos, rid, _n, _b, _r in executed],
           request_id=f"auto:{firing_ref(task_cfg, firing)}",
       )
       return  # the close delivered the report to the bound manager
@@ -407,8 +416,13 @@ async def deliver_boundary_report(
   if created:
     await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
     await tree.dispatch.wake_parent(recipient, report=report)
-  log.info("cron_sequence_report_delivered", task=task_cfg.name, leaf=leaf_id, firing=firing,
-           outcome=outcome, created=created)
+  log.info(
+      "cron_sequence_report_delivered",
+      task=task_cfg.name,
+      leaf=leaf_id,
+      firing=firing,
+      outcome=outcome,
+      created=created)
 
 
 async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
@@ -454,6 +468,19 @@ def effective_backend(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> s
   return effective_scheduled_task_backend(task_cfg, tree._cfg)
 
 
+def resolved_backend_option(
+    task_cfg: ScheduledTaskConfig,
+    tree: TaskTreeManager,
+    backend_id: str | None,
+):
+  """The configured BackendOption one fire's backend id resolves to, strictly."""
+  effective = backend_id or effective_backend(task_cfg, tree)
+  option = tree._cfg.get_backend_option(effective)
+  if option is None:
+    raise ValueError(f"scheduled task '{task_cfg.name}' backend '{effective}' is not configured")
+  return option
+
+
 def resolved_backend_model(
     task_cfg: ScheduledTaskConfig,
     tree: TaskTreeManager,
@@ -464,11 +491,39 @@ def resolved_backend_model(
   scheduled worker spawn rode)."""
   from src.core.backend_models import option_default_model
 
-  effective = backend_id or effective_backend(task_cfg, tree)
-  option = tree._cfg.get_backend_option(effective)
-  if option is None:
-    raise ValueError(f"scheduled task '{task_cfg.name}' backend '{effective}' is not configured")
+  option = resolved_backend_option(task_cfg, tree, backend_id)
   return option.id, option_default_model(option, subject="scheduled task backend ")
+
+
+def distinct_backend_conflict(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> str | None:
+  """The first ``distinct_backend_from`` pair whose resolved (type, model) matches, as a
+  report sentence; None when every declared pair stays distinct.
+
+  Load time validated only the written ids (an unset effective backend loads);
+  this resolves each pair exactly as a launch would and compares the option's
+  routing type with its default model — an Antigravity-style backend that picks
+  its own model is told apart by type alone.
+  """
+  from src.core.backend_models import option_default_model
+
+  steps = task_cfg.steps or []
+  positions = {step.name: i for i, step in enumerate(steps)}
+  for step in steps:
+    if step.distinct_backend_from is None:
+      continue
+    prior = steps[positions[step.distinct_backend_from]]
+    option = resolved_backend_option(task_cfg, tree, step.backend or task_cfg.backend)
+    prior_option = resolved_backend_option(task_cfg, tree, prior.backend or task_cfg.backend)
+    signature = (option.type, option_default_model(option, subject="scheduled task backend "))
+    prior_signature = (prior_option.type, option_default_model(prior_option, subject="scheduled task backend "))
+    if signature == prior_signature:
+      backend_note = (
+          f"backend '{option.id}'"
+          if option.id == prior_option.id else f"backends '{prior_option.id}' and '{option.id}'")
+      return (
+          f"steps '{prior.name}' and '{step.name}' declare distinct_backend_from but both resolve to "
+          f"{backend_note} (type {signature[0]}, model {signature[1]})")
+  return None
 
 
 def _adapter_of(tree: TaskTreeManager) -> object:
@@ -560,6 +615,13 @@ async def reconcile_bound_firings(
     queued_run = by_position[pos]
     if queued_run.pid is not None:
       return  # a live recovered process; its own finish chain re-drives
+    conflict = distinct_backend_conflict(task_cfg, tree)
+    if conflict is not None:
+      summary = (
+          f"Scheduled task '{task_cfg.name}' stopped before relaunching step '{steps[pos].name}': "
+          f"{conflict}.")
+      await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "failed", summary)
+      return
     backend, model = resolved_backend_model(task_cfg, tree, steps[pos].backend or task_cfg.backend)
     run = await register_leaf_run(
         tree, leaf_id, task_cfg, firing, kind="scheduled_step", position=pos, backend=backend, model=model)
@@ -583,6 +645,13 @@ async def reconcile_bound_firings(
   last_outcome = tree.runs.terminal_outcome(events, by_position[last_pos].id)
   if (last_pos < len(steps) - 1 and last_outcome == "success" and
       await step_advanced(tree, leaf_id, by_position[last_pos].id)):
+    conflict = distinct_backend_conflict(task_cfg, tree)
+    if conflict is not None:
+      summary = (
+          f"Scheduled task '{task_cfg.name}' stopped before launching step '{steps[last_pos + 1].name}': "
+          f"{conflict}.")
+      await deliver_boundary_report(tree, leaf_id, meta.id, task_cfg, firing, "failed", summary)
+      return
     # The chain is mid-flight: launch the next position through the same
     # controller semantics (idempotent by stable run id).
     backend, model = resolved_backend_model(task_cfg, tree, steps[last_pos + 1].backend or task_cfg.backend)
@@ -641,7 +710,8 @@ async def run_firing_steps_boundary_report(
     position = run.sequence_ref.position if run.sequence_ref else 0
     steps = task_cfg.steps or []
     name = steps[position].name if position < len(steps) else f"step {position}"
-    blocks.append(f"**{name} result:**\n{await run_result_text(tree, leaf_id, run.id) or '(no result)'}")
+    blocks.append(
+        f"**{name} result ({run.backend}):**\n{await run_result_text(tree, leaf_id, run.id) or '(no result)'}")
   summary = f"Scheduled task '{task_cfg.name}' completed all {len(chain)} step(s).\n\n" + "\n\n".join(blocks)
 
   async def _deliver_blocked_close(e: Exception) -> None:

@@ -79,6 +79,7 @@ def test_seed_idempotence(temp_home: Path) -> None:
               {
                   "name": "reviewer",
                   "prompt_file": "prompts/cron/memory_curator/memory_reviewer.md",
+                  "distinct_backend_from": "selector",
               },
           ],
   }

@@ -19,6 +19,11 @@ scheduled_tasks:
         prompt_file: prompts/cron/memory_curator/memory_selector.md
       - name: reviewer
         prompt_file: prompts/cron/memory_curator/memory_reviewer.md
+        # The reviewer must not ride the same backend as the drafter it
+        # reviews. The repo default names no backend ids (they are
+        # host-local); the firing-time check stops the task until this host's
+        # file writes two different ones.
+        distinct_backend_from: selector
   - name: storage-cool
     cron: "30 4 * * *"
     timezone: local

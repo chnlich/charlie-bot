@@ -545,49 +545,45 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
 
 FIRING = "2026-01-01T03:00:00+00:00"
 
+
 # ---------------------------------------------------------------------------
 # Recovered boundaries deliver without a new tick; replay stays idempotent
 # ---------------------------------------------------------------------------
-
-
 async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
   """A leaf whose two steps ran to durable success (no close attempted)."""
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   # The leaf's work runs re-judge the nearest-user gate at launch: authorize
   # the manager so the repair run below launches.
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
   install_backends(
-      monkeypatch,
-      [SpawningScriptedBackend([result_event("step zero done")]),
-       SpawningScriptedBackend([result_event("step one done")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [
+          SpawningScriptedBackend([result_event("step zero done")]),
+          SpawningScriptedBackend([result_event("step one done")])
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The boundary close dispatches the parent's report-consuming turn through
   # the registry builder: script it so no external process starts here.
   _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
-      "recovered-boundary", manager.id,
+      "recovered-boundary",
+      manager.id,
       steps=[StepConfig(name="zero", prompt="Zero."),
              StepConfig(name="one", prompt="One.")])
   from src.core import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
-      task_cfg, meta, tree, FIRING, "recovered boundary steps", backend="fake",
-      model="fake-model")
+      task_cfg, meta, tree, FIRING, "recovered boundary steps", backend="fake", model="fake-model")
   leaf_meta = await tree.load_meta(leaf.id)
-  for position, (_name, _outcome_text) in enumerate([("zero", "step zero done"),
-                                                   ("one", "step one done")]):
+  for position, (_name, _outcome_text) in enumerate([("zero", "step zero done"), ("one", "step one done")]):
     run = await cron_sequence.register_leaf_run(
-        tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=position,
-        backend="fake", model="fake-model")
+        tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=position, backend="fake", model="fake-model")
     await tree.runs.record_finish(leaf.id, run.id, outcome="success")
   return cfg, session_mgr, tree, manager, task_cfg, meta, leaf, leaf_meta
 
 
 @pytest.mark.asyncio
 async def test_recovered_successful_final_step_close_blocked_delivers_one_blocked_report(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """A recovered chain whose final close is blocked leaves the leaf open with
   its evidence intact and delivers the SAME stable blocked report the fresh
   chain delivers; repeated recovery is idempotent; the repaired close later
@@ -596,8 +592,12 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
       await _successful_two_step_leaf(bound_env, monkeypatch))
   # The blocker: an unclaimed pending input on the leaf.
   await tree.dispatch.admit_input(
-      leaf.id, event_type=ET.AGENT_MESSAGE, content="one more thing", actor="agent",
-      from_session=manager.id, from_session_name="Manager")
+      leaf.id,
+      event_type=ET.AGENT_MESSAGE,
+      content="one more thing",
+      actor="agent",
+      from_session=manager.id,
+      from_session_name="Manager")
 
   from src.core import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
@@ -611,16 +611,13 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   # Repeated recovery at the blocked-close window adds nothing.
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
-  assert len([e for e in tree.events.load_events(manager.id)
-              if e.get("type") == ET.CHILD_REPORT]) == 1
-  assert len([e for e in tree.events.load_events(leaf.id)
-              if e.get("type") == ET.TASK_CLOSED]) == 0
+  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 0
 
   # The repaired close: consume the pending input with a successful run; the
   # normal completion owner closes and delivers the completed report.
   builds = install_backends(
-      monkeypatch, [SpawningScriptedBackend([result_event("answered")])],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      monkeypatch, [SpawningScriptedBackend([result_event("answered")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
   deadline = asyncio.get_event_loop().time() + 15
@@ -631,8 +628,11 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   else:
     pytest.fail("the repaired close never landed")
   assert len(builds) == 1
-  kinds = [(e.get("outcome"), str(e.get("summary"))[:60])
-           for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  kinds = [
+      (e.get("outcome"), str(e.get("summary"))[:60])
+      for e in tree.events.load_events(manager.id)
+      if e.get("type") == ET.CHILD_REPORT
+  ]
   assert len(kinds) == 2
   assert sorted(o for o, _ in kinds) == ["blocked", "completed"]
   assert tree.task_state(leaf.id) == "completed"
@@ -641,7 +641,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
 
 @pytest.mark.asyncio
 async def test_recovered_final_step_boundary_settles_without_a_new_tick(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Recovery redrives a finished chain's boundary directly: the close and the
   ONE report land in the same pass, with no scheduler tick or restart."""
   _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
@@ -657,7 +657,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
 
 @pytest.mark.asyncio
 async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """Two concurrent follow-ups at the frontier (a repeated recovery scan) land
   one next step, one process, one close, one report."""
   _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
@@ -668,17 +668,15 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
       cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id),
   )
   # Both scans converge on the same boundary product (stable close/report ids).
-  assert len([e for e in tree.events.load_events(manager.id)
-              if e.get("type") == ET.CHILD_REPORT]) == 1
-  assert len([e for e in tree.events.load_events(leaf.id)
-              if e.get("type") == ET.TASK_CLOSED]) == 1
+  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
   await _drain_manager_turns(tree, manager.id)
 
 
 @pytest.mark.asyncio
 async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_report(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """A close whose parent wake fails after the close fact and report landed
   keeps the completed boundary (never a blocked report over a landed close).
 
@@ -700,8 +698,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   async def failing_call(self, session_id, pending, *, launch_run_id=None):
     assert session_id == manager.id
     calls["n"] += 1
-    raise RuntimeError(
-        "dispatch reserved run x against a batch that vanished within one lock hold")
+    raise RuntimeError("dispatch reserved run x against a batch that vanished within one lock hold")
 
   monkeypatch.setattr(TaskExecutionAdapter, "__call__", failing_call)
   from src.core import cron_sequence
@@ -712,8 +709,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
   assert reports[0]["outcome"] == "completed"
-  assert len([e for e in tree.events.load_events(leaf.id)
-              if e.get("type") == ET.TASK_CLOSED]) == 1
+  assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
 
   # The wake is re-drivable: the delivered report is the parent's durable
   # input, and the next dispatch consumes it through the scripted turn.
@@ -721,14 +717,13 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   await _drain_manager_turns(tree, manager.id)
-  assert len([e for e in tree.events.load_events(manager.id)
-              if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
 
 
 @pytest.mark.asyncio
 async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """The loop's no-op decision consumes the occurrence: the checkpoint still
   advances (or the same occurrence would refire every tick), with the same
   last_run_status bookkeeping as before."""
@@ -736,13 +731,21 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
   manager = await make_manager(tree)
   install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task(
-      "noop-loop", manager.id, repo=str(cfg.charliebot_home),
-      loop={"backlog": "backlog.yaml", "role": "tester", "scope_files": ["x"],
-            "max_pending": 3})
+      "noop-loop",
+      manager.id,
+      repo=str(cfg.charliebot_home),
+      loop={
+          "backlog": "backlog.yaml",
+          "role": "tester",
+          "scope_files": ["x"],
+          "max_pending": 3
+      })
   scheduler = Scheduler(cfg, session_mgr)
   from src.core import backlog_loop
+
   async def noop_action(*args, **kwargs):
     return "noop", ""
+
   monkeypatch.setattr(backlog_loop, "determine_action", noop_action)
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=FIRING)
   assert result["skipped"] == "noop"
@@ -758,69 +761,69 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
 
 
 async def _legacy_cron_session(session_mgr: SessionManager, task_name: str) -> SessionMetadata:
-    """One pre-plan legacy cron session (profile None) dedicated to *task_name*."""
-    from src.core.models import CreateSessionRequest
-    return await session_mgr.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name),
-        backend="fake")
+  """One pre-plan legacy cron session (profile None) dedicated to *task_name*."""
+  from src.core.models import CreateSessionRequest
+  return await session_mgr.create_session(
+      CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend="fake")
 
 
 @pytest.mark.asyncio
 async def test_unbound_prompt_task_fires_once_through_a_legacy_cron_session(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unbound prompt task still finds its cron session and runs the bound
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An unbound prompt task still finds its cron session and runs the bound
     code with it as the parent: one worker leaf under the (legacy) session,
     which completes, reports, and wakes the parent once through trigger_master."""
-    cfg, session_mgr, tree = bound_env
-    # The unbound path finds-or-creates its session through the scheduler's
-    # reloaded process config; pin it to the synthetic home's cfg.
-    monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
-    cron_session = await _legacy_cron_session(session_mgr, "nightly-sweep")
-    install_backends(monkeypatch, [
-        SpawningScriptedBackend([result_event("sweep done")]),
-    ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-    wakes: list[tuple[str, str]] = []
+  cfg, session_mgr, tree = bound_env
+  # The unbound path finds-or-creates its session through the scheduler's
+  # reloaded process config; pin it to the synthetic home's cfg.
+  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  cron_session = await _legacy_cron_session(session_mgr, "nightly-sweep")
+  install_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([result_event("sweep done")]),
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  wakes: list[tuple[str, str]] = []
 
-    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
-        wakes.append((session_id, text))
+  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
+    wakes.append((session_id, text))
 
-    monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-    task_cfg = ScheduledTaskConfig(name="nightly-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake")
-    scheduler = Scheduler(cfg, session_mgr)
-    firing = "2026-01-01T03:00:00+00:00"
-    result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
+  task_cfg = ScheduledTaskConfig(name="nightly-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake")
+  scheduler = Scheduler(cfg, session_mgr)
+  firing = "2026-01-01T03:00:00+00:00"
+  result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
 
-    leaf_id = result["leaf_session_id"]
-    assert leaf_id != cron_session.id
-    leaf = await tree.load_meta(leaf_id)
-    assert leaf is not None and leaf.task_parent_id == cron_session.id
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
-        if reports:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the cron leaf's report never reached the legacy cron session")
-    # One worker leaf under the legacy session; it closed on success.
-    children = [
-        SessionMetadata.model_validate_json(p.read_text()).id
-        for p in sorted((cfg.sessions_dir).glob("*/metadata.json"))
-        if SessionMetadata.model_validate_json(p.read_text()).task_parent_id == cron_session.id
-    ]
-    assert children == [leaf_id]
-    assert tree.task_state(leaf_id) == "completed"
-    # One report, and one legacy wake carrying it.
+  leaf_id = result["leaf_session_id"]
+  assert leaf_id != cron_session.id
+  leaf = await tree.load_meta(leaf_id)
+  assert leaf is not None and leaf.task_parent_id == cron_session.id
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
-    assert len(reports) == 1
-    assert len(wakes) == 1 and wakes[0][0] == cron_session.id
-    # The firing's bookkeeping landed on the cron session itself.
-    fresh = await session_mgr.get_session(cron_session.id)
-    assert fresh is not None and fresh.last_scheduled_run is not None
-    # A replayed fire at the same firing identity creates nothing new.
-    await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
-    assert len(tree.runs.list_run_records_sync(leaf_id)) == 1
-    assert len(wakes) == 1
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the cron leaf's report never reached the legacy cron session")
+  # One worker leaf under the legacy session; it closed on success.
+  children = [
+      SessionMetadata.model_validate_json(p.read_text()).id
+      for p in sorted((cfg.sessions_dir).glob("*/metadata.json"))
+      if SessionMetadata.model_validate_json(p.read_text()).task_parent_id == cron_session.id
+  ]
+  assert children == [leaf_id]
+  assert tree.task_state(leaf_id) == "completed"
+  # One report, and one legacy wake carrying it.
+  reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+  assert len(reports) == 1
+  assert len(wakes) == 1 and wakes[0][0] == cron_session.id
+  # The firing's bookkeeping landed on the cron session itself.
+  fresh = await session_mgr.get_session(cron_session.id)
+  assert fresh is not None and fresh.last_scheduled_run is not None
+  # A replayed fire at the same firing identity creates nothing new.
+  await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  assert len(tree.runs.list_run_records_sync(leaf_id)) == 1
+  assert len(wakes) == 1
 
 
 @pytest.mark.asyncio
@@ -879,55 +882,218 @@ async def test_unbound_repo_prompt_task_launches_its_type_less_leaf_in_a_worktre
 
 @pytest.mark.asyncio
 async def test_unbound_steps_task_advances_step_by_step_through_a_legacy_cron_session(
-        bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unbound steps task runs its chain on one leaf under the legacy cron
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An unbound steps task runs its chain on one leaf under the legacy cron
     session: step 0, then step 1 fed the previous result, then ONE boundary
     report and one parent wake."""
-    cfg, session_mgr, tree = bound_env
-    # The unbound path finds-or-creates its session through the scheduler's
-    # reloaded process config; pin it to the synthetic home's cfg.
-    monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
-    cron_session = await _legacy_cron_session(session_mgr, "chained-legacy")
-    builds = install_backends(monkeypatch, [
-        SpawningScriptedBackend([result_event("selector says pick three")]),
-        SpawningScriptedBackend([result_event("reviewer wrote the report")]),
-    ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-    wakes: list[tuple[str, str]] = []
+  cfg, session_mgr, tree = bound_env
+  # The unbound path finds-or-creates its session through the scheduler's
+  # reloaded process config; pin it to the synthetic home's cfg.
+  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  cron_session = await _legacy_cron_session(session_mgr, "chained-legacy")
+  builds = install_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([result_event("selector says pick three")]),
+          SpawningScriptedBackend([result_event("reviewer wrote the report")]),
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  wakes: list[tuple[str, str]] = []
 
-    async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
-        wakes.append((session_id, text))
+  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
+    wakes.append((session_id, text))
 
-    monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
-    task_cfg = ScheduledTaskConfig(
-        name="chained-legacy",
-        cron="0 3 * * *",
-        backend="fake",
-        steps=[
-            StepConfig(name="selector", prompt="Select candidates."),
-            StepConfig(name="reviewer", prompt="Review the diff.", backend="codex-o3"),
-        ])
-    scheduler = Scheduler(cfg, session_mgr)
-    firing = "2026-01-01T03:00:00+00:00"
-    result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
-    leaf_id = result["leaf_session_id"]
-    deadline = asyncio.get_event_loop().time() + 20
-    while asyncio.get_event_loop().time() < deadline:
-        records = tree.runs.list_run_records_sync(leaf_id)
-        reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
-        if len(records) == 2 and reports:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail(f"the chain never finished: {[(r.id, r.kind) for r in tree.runs.list_run_records_sync(leaf_id)]}")
-    assert [r.kind for r in records] == ["scheduled_step", "scheduled_step"]
-    assert [r.sequence_ref.position for r in records] == [0, 1]
-    # The second step's prompt carried the previous result under the legacy heading.
-    assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
-    assert "selector says pick three" in builds[1]["backend"].prompt
-    # ONE report at the boundary; the successful chain closed the leaf, whose
-    # close woke the legacy parent exactly once.
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
+  task_cfg = ScheduledTaskConfig(
+      name="chained-legacy",
+      cron="0 3 * * *",
+      backend="fake",
+      steps=[
+          StepConfig(name="selector", prompt="Select candidates."),
+          StepConfig(name="reviewer", prompt="Review the diff.", backend="codex-o3"),
+      ])
+  scheduler = Scheduler(cfg, session_mgr)
+  firing = "2026-01-01T03:00:00+00:00"
+  result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  leaf_id = result["leaf_session_id"]
+  deadline = asyncio.get_event_loop().time() + 20
+  while asyncio.get_event_loop().time() < deadline:
+    records = tree.runs.list_run_records_sync(leaf_id)
     reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
-    assert len(reports) == 1
-    assert "completed all 2 step(s)" in str(reports[0].get("summary"))
-    assert tree.task_state(leaf_id) == "completed"
-    assert len(wakes) == 1 and wakes[0][0] == cron_session.id
+    if len(records) == 2 and reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail(f"the chain never finished: {[(r.id, r.kind) for r in tree.runs.list_run_records_sync(leaf_id)]}")
+  assert [r.kind for r in records] == ["scheduled_step", "scheduled_step"]
+  assert [r.sequence_ref.position for r in records] == [0, 1]
+  # The second step's prompt carried the previous result under the legacy heading.
+  assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
+  assert "selector says pick three" in builds[1]["backend"].prompt
+  # ONE report at the boundary; the successful chain closed the leaf, whose
+  # close woke the legacy parent exactly once.
+  reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+  assert len(reports) == 1
+  assert "completed all 2 step(s)" in str(reports[0].get("summary"))
+  assert tree.task_state(leaf_id) == "completed"
+  assert len(wakes) == 1 and wakes[0][0] == cron_session.id
+
+
+# ---------------------------------------------------------------------------
+# distinct_backend_from: the firing-time (type, model) check
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Linked steps resolving to the same (type, model) stop the firing before
+  any step launches: the failure report names both steps and the shared
+  backend, and no scripted process ever starts."""
+  cfg, session_mgr, tree = bound_env
+  manager = await make_manager(tree)
+  builds = install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # No backend written anywhere: the config loads (the repo default's shape),
+  # and both steps resolve to the first configured option.
+  task_cfg = _bound_task(
+      "distinct",
+      manager.id,
+      backend=None,
+      steps=[
+          StepConfig(name="selector", prompt="Select."),
+          StepConfig(name="reviewer", prompt="Review.", distinct_backend_from="selector"),
+      ])
+  scheduler = Scheduler(cfg, session_mgr)
+  firing = "2026-01-01T03:00:00+00:00"
+  result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  leaf_id = result["leaf_session_id"]
+  deadline = asyncio.get_event_loop().time() + 20
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the distinct-backend failure report never arrived")
+  # Nothing launched: the scripted backend was never built, and the admitted
+  # position-0 Run stays registered but pid-less and terminal-less.
+  assert builds == []
+  records = tree.runs.list_run_records_sync(leaf_id)
+  assert [r.sequence_ref.position for r in records] == [0]
+  assert records[0].pid is None
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), records[0].id) is None
+  assert tree.task_state(leaf_id) != "completed"
+  # The report names both steps and the shared backend.
+  summary = str(reports[0].get("summary"))
+  assert "stopped before its first step" in summary
+  assert "steps 'selector' and 'reviewer'" in summary
+  assert OPUS_BACKEND_ID in summary
+
+
+@pytest.mark.asyncio
+async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The same check fires on the recovery path: a mid-chain firing whose next
+  launch now resolves to a shared backend stops before that launch and reports."""
+  from src.core.task_recovery import reconcile_task_tree
+  cfg, session_mgr, tree = bound_env
+  manager = await make_manager(tree)
+  install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  task_cfg = _bound_task(
+      "distinct",
+      manager.id,
+      backend=None,
+      steps=[
+          StepConfig(name="selector", prompt="Select."),
+          StepConfig(name="reviewer", prompt="Review.", distinct_backend_from="selector"),
+      ])
+  # The recovery reads the binding from the durable cron.d file; the file
+  # loads (no backend written) and its steps resolve to the same backend.
+  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
+  cron_d.mkdir(parents=True, exist_ok=True)
+  sel_md = cron_d / "selector.md"
+  rev_md = cron_d / "reviewer.md"
+  sel_md.write_text("Select the target.\n", encoding="utf-8")
+  rev_md.write_text("Review the result.\n", encoding="utf-8")
+  (cron_d / "distinct.yaml").write_text(
+      yaml.safe_dump(
+          {
+              "cron":
+                  "0 3 * * *",
+              "session_id":
+                  manager.id,
+              "steps":
+                  [
+                      {
+                          "name": "selector",
+                          "prompt_file": str(sel_md)
+                      },
+                      {
+                          "name": "reviewer",
+                          "prompt_file": str(rev_md),
+                          "distinct_backend_from": "selector",
+                      },
+                  ],
+          }),
+      encoding="utf-8")
+  # The durable mid-chain facts: step 0 terminally successful, nothing after.
+  from src.core import cron_sequence
+  meta = await tree.load_meta(manager.id)
+  leaf = await cron_sequence.ensure_firing_leaf(
+      task_cfg, meta, tree, FIRING, "distinct steps", backend=None, model=None)
+  leaf_id = leaf.id
+  run0 = await cron_sequence.register_leaf_run(
+      tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend=None, model=None)
+  await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
+
+  await reconcile_task_tree(cfg, tree, session_mgr)
+  deadline = asyncio.get_event_loop().time() + 20
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the recovery's distinct-backend failure report never arrived")
+  # The next position never launched: no step-1 Run exists, no process started.
+  records = tree.runs.list_run_records_sync(leaf_id)
+  assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0]
+  assert tree.task_state(leaf_id) != "completed"
+  summary = str(reports[0].get("summary"))
+  assert "stopped before launching step 'reviewer'" in summary
+  assert "steps 'selector' and 'reviewer'" in summary
+  assert OPUS_BACKEND_ID in summary
+
+
+@pytest.mark.asyncio
+async def test_boundary_report_headings_carry_each_step_backend(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The completion report's per-step headings carry the backend each step ran."""
+  cfg, session_mgr, tree = bound_env
+  manager = await make_manager(tree)
+  install_backends(
+      monkeypatch, [
+          SpawningScriptedBackend([result_event("picked three")]),
+          SpawningScriptedBackend([result_event("reviewed the picks")]),
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  task_cfg = _bound_task(
+      "chained",
+      manager.id,
+      steps=[
+          StepConfig(name="selector", prompt="Select."),
+          StepConfig(name="reviewer", prompt="Review.", backend="codex-o3"),
+      ])
+  scheduler = Scheduler(cfg, session_mgr)
+  firing = "2026-01-01T03:00:00+00:00"
+  await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  deadline = asyncio.get_event_loop().time() + 20
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the completion report never arrived")
+  summary = str(reports[0].get("summary"))
+  assert "**selector result (fake):**" in summary
+  assert "**reviewer result (codex-o3):**" in summary
+  await _drain_manager_turns(tree, manager.id)

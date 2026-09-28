@@ -90,6 +90,12 @@ class StepConfig(BaseModel):
   prompt_file: str | None = None
   prompt: str | None = None
   backend: str | None = None
+  # Name of a step listed earlier in the same task whose backend must stay
+  # distinct from this one's: a reviewer must not ride the same backend as the
+  # drafter it reviews. Load time validates the written ids; firing time
+  # re-resolves both (src/core/cron_sequence.py) and stops the firing when the
+  # resolved backend type and model still match.
+  distinct_backend_from: str | None = None
 
 
 class ScheduledTaskFields(BaseModel):
@@ -172,9 +178,39 @@ class ScheduledTaskConfig(ScheduledTaskFields):
           raise ValueError(
               f"step '{step.name}' has no prompt body; the loader resolves each step's "
               "'prompt_file' before validation")
+      self._check_distinct_backends()
     if self.notify and self.notify != 'telegram':
       raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
     return self
+
+  def _check_distinct_backends(self) -> None:
+    """Every ``distinct_backend_from`` names an earlier step, and written backends differ.
+
+    Only the *written* ids are compared here: an effective backend left unset
+    is allowed at load time (the repo default names no host-local backend ids,
+    and ``seed_default_cron_tasks`` validates every default entry before
+    seeding); the firing-time check in ``src/core/cron_sequence.py`` covers the
+    unset case by resolving what each step actually runs.
+    """
+    positions = {step.name: i for i, step in enumerate(self.steps or [])}
+    for i, step in enumerate(self.steps or []):
+      if step.distinct_backend_from is None:
+        continue
+      source = positions.get(step.distinct_backend_from)
+      if source is None:
+        raise ValueError(
+            f"step '{step.name}' declares distinct_backend_from '{step.distinct_backend_from}', "
+            "which is not a step of this task")
+      if source >= i:
+        raise ValueError(
+            f"step '{step.name}' declares distinct_backend_from '{step.distinct_backend_from}', "
+            "which must name a step listed earlier in the same task")
+      own = step.backend or self.backend
+      prior = self.steps[source].backend or self.backend
+      if own is not None and prior is not None and own == prior:
+        raise ValueError(
+            f"step '{step.name}' and its distinct_backend_from source '{self.steps[source].name}' "
+            f"both declare backend '{own}'; the two steps must name different backends")
 
 
 class ScheduledTaskError(BaseModel):

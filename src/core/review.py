@@ -37,8 +37,8 @@ _REVIEW_CHECKLIST_INTRO = (
     "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
     "on tests.")
 
-# The checklist heading and intro ride both renderings (the managed instruction
-# block and the numbered steps); one spelling of that contract here.
+# The checklist heading and intro render only in the managed instruction block
+# (review_rules_text); only the judgment rules below ride the numbered steps too.
 _REVIEW_CHECKLIST_BLOCK = f"## Review Checklist\n{_REVIEW_CHECKLIST_INTRO}\n\n"
 
 # The checklist's stable judgment rules; the volatile cd/fetch/diff/push steps

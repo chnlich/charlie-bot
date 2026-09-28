@@ -1,4 +1,4 @@
-"""Tests for master_cc._session_consumer cc_session_id relay and thinking_state ownership."""
+"""Tests for master_cc_queue._session_consumer cc_session_id relay and thinking_state ownership."""
 
 from __future__ import annotations
 

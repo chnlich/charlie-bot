@@ -20,9 +20,22 @@ from conftest import (
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
+from src.core.models import SessionMetadata
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
+
+
+async def _bound_node(tree: TaskTreeManager, task_name: str) -> SessionMetadata:
+  """The task's manager node, created the way the auto-bind creates it."""
+  return await tree.create_task(
+      request_id=f"scheduled-node:{task_name}",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name=task_name,
+      backend=OPUS_BACKEND_ID,
+      caller="system")
 
 
 def _count_event_lines(path: Path) -> int:
@@ -40,8 +53,10 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       charliebot_home=home,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(home / "worktrees")})
-  core_config._credentials_cache.seed(core_config.Credentials(
-      path=home / "credentials.yaml", sections={"charliebot": {"access_key": "shared-key"}}))
+  core_config._credentials_cache.seed(
+      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
+          "access_key": "shared-key"
+      }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
@@ -56,14 +71,12 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
-async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(
-    scheduler_env,
-) -> None:
+async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(scheduler_env,) -> None:
   """The fire's durable bookkeeping (last_scheduled_run) and its event land on
   the injected instance, so the read paths' cache sees them."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
-  meta = await tree.create_scheduled_generation("nightly", OPUS_BACKEND_ID)
-  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe")
+  meta = await _bound_node(tree, "nightly")
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe", session_id=meta.id)
 
   from unittest.mock import patch
   with patch.dict(TASK_HANDLERS, {"probe": AsyncMock(return_value="done")}):
@@ -83,9 +96,9 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(
 async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> None:
   """After a scheduled round, the read-path cache must still match the file on disk."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
-  meta = await tree.create_scheduled_generation("probe", OPUS_BACKEND_ID)
+  meta = await _bound_node(tree, "probe")
 
-  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe")
+  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe", session_id=meta.id)
   from unittest.mock import patch
   with patch.dict(TASK_HANDLERS, {"probe": AsyncMock(return_value="done")}):
     await scheduler._execute_task(task_cfg)

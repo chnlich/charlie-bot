@@ -30,8 +30,10 @@ from src.core.config import (
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import SessionMetadata
+from src.core.scheduled_sessions import ScheduledSessionBusyError
 from src.core.scheduler import effective_scheduled_task_backend, load_croniter
-from src.core.sessions import ScheduledSessionBusyError, SessionManager
+from src.core.sessions import SessionManager
+from src.core.thinking_state import busy_since
 from src.core.yaml_utils import load_yaml, save_yaml
 
 log = LazyStructlogLogger()
@@ -126,13 +128,43 @@ async def _ensure_backend_update_session(
     cfg: CharlieBotConfig,
     session_mgr: SessionManager,
 ) -> SessionMetadata | None:
+  """The backend change's session effect: the bound node switches in place.
+
+  A bound task's node follows the task config: the editor switches the node's
+  backend in place — never by creating a session — and keeps the
+  409-before-write contract when the switch cannot happen now (the node's own
+  work is in flight). An unbound task has no session to switch: the write
+  alone lands, and the next tick's auto-bind creates the node on the new
+  backend.
+  """
   if 'backend' not in req.model_fields_set:
     return None
   backend = effective_scheduled_task_backend(cand_model, cfg)
-  try:
-    return await session_mgr.ensure_scheduled_session_backend(name, backend)
-  except ScheduledSessionBusyError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
+  if not cand_model.session_id:
+    return None
+  node = await session_mgr.get_session(cand_model.session_id)
+  if node is None or node.backend == backend:
+    return None
+  if await _scheduled_node_busy(session_mgr, node):
+    raise ScheduledSessionBusyError(
+        f"scheduled task '{name}' backend switch from '{node.backend}' to '{backend}' is blocked "
+        f"because node '{node.id}' has running work; retry when it is idle")
+  return await session_mgr.switch_backend(node.id, backend)
+
+
+async def _scheduled_node_busy(session_mgr: SessionManager, node: SessionMetadata) -> bool:
+  """Whether the bound node's own work is in flight.
+
+  The rotation busy check's successor: the node's busy interval (the master
+  queue's or a worker Run's, per thinking_state) plus a legacy session's
+  running threads. An in-flight round resolved its backend at launch, so the
+  editor's switch waits for it instead of splitting the round's identity.
+  """
+  if busy_since(node.id):
+    return True
+  if node.profile is None:
+    return await session_mgr._has_running_tasks(node.id)
+  return False
 
 
 class TaskUpdate(BaseModel):
@@ -260,7 +292,12 @@ async def apply_task_yaml_update(
     raise HTTPException(status_code=409, detail=str(e)) from e
 
   rotated: SessionMetadata | None = None
-  rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
+  try:
+    rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
+  except ScheduledSessionBusyError as e:
+    # The 409 lands before any yaml write: the file keeps its current backend
+    # when the node's switch cannot happen now.
+    raise HTTPException(status_code=409, detail=str(e)) from e
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
   return candidate, rotated
@@ -310,15 +347,16 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
 
 @router.delete('/tasks/{name}')
 async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
-  """Remove a job by archiving its dedicated sessions, then unlinking its config.d/cron.d/<name>.yaml."""
+  """Remove a job by unlinking its config.d/cron.d/<name>.yaml; it archives nothing.
+
+  The task's bound node is the user's task-tree node, not the deletion's
+  product: it stays exactly as it is. (A stale active legacy cron session, if
+  one ever re-activates, is archived by the next tick's sweep.)
+  """
   _validate_cron_name(name)
   path = cron_path(name)
   if not path.exists():
     raise HTTPException(status_code=404, detail=_TASK_NOT_FOUND_DETAIL.format(name))
-  # Archive before unlink, mirroring the PUT route's rotate-then-write order: a
-  # failed unlink leaves the task alive and the next tick's get-or-create
-  # self-heals a fresh generation.
-  archived_sessions = await session_mgr.archive_scheduled_sessions(name)
   path.unlink()
-  log.debug('cron_task_deleted', name=name, archived_sessions=archived_sessions)
-  return {'ok': True, 'archived_sessions': archived_sessions}
+  log.debug('cron_task_deleted', name=name)
+  return {'ok': True}

@@ -8,7 +8,7 @@ the leaf under its cron session — a legacy (profile None) session's included.
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import make_home_config, make_legacy_cron_session
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -25,15 +25,23 @@ async def test_scheduled_list_nests_task_children_under_their_cron_session(tmp_p
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
-  cron_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly-sweep", scheduled_task="nightly-sweep"),
-      backend="opus")
+  cron_session = await make_legacy_cron_session(session_mgr, "nightly-sweep", backend="opus")
   leaf = await tree.create_task(
-      request_id="leaf-1", task_parent_id=cron_session.id, profile="worker",
-      task=TaskSpec(goal="sweep"), name="nightly-sweep · firing-1", backend=None, caller="system")
+      request_id="leaf-1",
+      task_parent_id=cron_session.id,
+      profile="worker",
+      task=TaskSpec(goal="sweep"),
+      name="nightly-sweep · firing-1",
+      backend=None,
+      caller="system")
   await tree.create_task(
-      request_id="root-other", task_parent_id=None, profile="manager",
-      task=TaskSpec(goal="unrelated"), name="Unrelated root", backend=None, caller="system")
+      request_id="root-other",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="unrelated"),
+      name="Unrelated root",
+      backend=None,
+      caller="system")
 
   app = FastAPI()
   app.include_router(sessions_router, prefix="/api/sessions")

@@ -728,28 +728,32 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
 
 
 # ---------------------------------------------------------------------------
-# Unbound tasks: the cron session parents the firings' leaves
+# Unbound tasks: auto-bind creates the node, and it parents the firings' leaves
 # ---------------------------------------------------------------------------
 
 
-async def _legacy_cron_session(session_mgr: SessionManager, task_name: str) -> SessionMetadata:
-  """One pre-plan legacy cron session (profile None) dedicated to *task_name*."""
-  from src.core.models import CreateSessionRequest
-  return await session_mgr.create_session(
-      CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend="fake")
+def _persist_unbound_cron_d(cfg, name: str, body: dict) -> None:
+  """Persist one unbound task's durable cron.d binding under this home.
+
+  Auto-bind writes the ``session_id`` key back through the single-key write, so
+  the host file must exist before the fire, exactly as production files do.
+  """
+  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
+  cron_d.mkdir(parents=True, exist_ok=True)
+  (cron_d / f"{name}.yaml").write_text(yaml.safe_dump(body), encoding="utf-8")
 
 
 @pytest.mark.asyncio
-async def test_unbound_prompt_task_fires_once_through_a_legacy_cron_session(
+async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An unbound prompt task still finds its cron session and runs the bound
-    code with it as the parent: one worker leaf under the (legacy) session,
-    which completes, reports, and wakes the parent once through trigger_master."""
+  """An unbound prompt task binds on its first fire (auto-bind): the scheduler
+  creates the task-named manager node, writes the ``session_id`` back, and
+  runs the bound code against it -- one worker leaf under the NODE, which
+  completes and reports to it. A replayed fire creates nothing new."""
   cfg, session_mgr, tree = bound_env
-  # The unbound path finds-or-creates its session through the scheduler's
-  # reloaded process config; pin it to the synthetic home's cfg.
+  # The unbound path binds through the scheduler's reloaded process config;
+  # pin it to the synthetic home's cfg.
   monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
-  cron_session = await _legacy_cron_session(session_mgr, "nightly-sweep")
   install_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("sweep done")]),
@@ -760,64 +764,59 @@ async def test_unbound_prompt_task_fires_once_through_a_legacy_cron_session(
     wakes.append((session_id, text))
 
   monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
+  _persist_unbound_cron_d(cfg, "nightly-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   task_cfg = ScheduledTaskConfig(name="nightly-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake")
   scheduler = Scheduler(cfg, session_mgr)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
 
+  # The binding exists in memory and on disk, and names the new manager node.
+  node_id = task_cfg.session_id
+  assert node_id is not None
+  node = await tree.load_meta(node_id)
+  assert node is not None and node.profile == "manager"
+  assert node.name == "nightly-sweep"
+  persisted = yaml.safe_load((cfg.charliebot_home / "config.d" / "cron.d" / "nightly-sweep.yaml").read_text())
+  assert persisted["session_id"] == node_id
+  # The firing's leaf parents under the node.
   leaf_id = result["leaf_session_id"]
-  assert leaf_id != cron_session.id
+  assert leaf_id != node_id
   leaf = await tree.load_meta(leaf_id)
-  assert leaf is not None and leaf.task_parent_id == cron_session.id
+  assert leaf is not None and leaf.task_parent_id == node_id
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
     if reports:
       break
     await asyncio.sleep(0.1)
   else:
-    pytest.fail("the cron leaf's report never reached the legacy cron session")
-  # One worker leaf under the legacy session; it closed on success.
-  children = [
-      SessionMetadata.model_validate_json(p.read_text()).id
-      for p in sorted((cfg.sessions_dir).glob("*/metadata.json"))
-      if SessionMetadata.model_validate_json(p.read_text()).task_parent_id == cron_session.id
-  ]
-  assert children == [leaf_id]
+    pytest.fail("the leaf's report never reached the bound node")
   assert tree.task_state(leaf_id) == "completed"
-  # One report, and one legacy wake carrying it.
-  reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
-  assert len(reports) == 1
-  assert len(wakes) == 1 and wakes[0][0] == cron_session.id
-  # The firing's bookkeeping landed on the cron session itself.
-  fresh = await session_mgr.get_session(cron_session.id)
-  assert fresh is not None and fresh.last_scheduled_run is not None
+  # The node is a task-tree manager: no legacy wake ever fires for it.
+  assert wakes == []
   # A replayed fire at the same firing identity creates nothing new.
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 1
-  assert len(wakes) == 1
 
 
 @pytest.mark.asyncio
-async def test_unbound_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
+async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
     bound_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A repo-bound prompt task's leaf carries no task_type, yet its work Run
   renders the implement worktree bindings and spawns its process; the
   type-less success then closes without review and removes the worktree.
 
-  Regression: the leaf's None type reached render_worktree_bindings, whose
-  section lookup raised KeyError before any process spawned."""
+  Regression (2026-09-26): the leaf's None type reached render_worktree_bindings,
+  whose section lookup raised KeyError. The parity bound path owes here: the
+  leaf must actually launch through it (auto-bind first, then the fire).
+  """
   cfg, session_mgr, tree = bound_env
   monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
   repo, _origin = init_repo_with_origin(tmp_path)
-  cron_session = await _legacy_cron_session(session_mgr, "repo-sweep")
+  _persist_unbound_cron_d(cfg, "repo-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   backend = SpawningScriptedBackend([result_event("sweep done")])
   install_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
-    pass
-
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
   task_cfg = ScheduledTaskConfig(
       name="repo-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake", repo=str(repo))
   scheduler = Scheduler(cfg, session_mgr)
@@ -828,12 +827,12 @@ async def test_unbound_repo_prompt_task_launches_its_type_less_leaf_in_a_worktre
   assert leaf is not None and leaf.task is not None and leaf.task.task_type is None
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = [e for e in tree.events.load_events(task_cfg.session_id) if e.get("type") == ET.CHILD_REPORT]
     if reports:
       break
     await asyncio.sleep(0.1)
   else:
-    pytest.fail("the repo-bound cron leaf's report never reached the legacy cron session")
+    pytest.fail("the repo-bound leaf's report never reached the bound node")
   assert [r["outcome"] for r in reports] == ["completed"]
   assert tree.task_state(leaf_id) == "completed"
   # One work Run, spawned, whose launch text carries the implement bindings
@@ -853,27 +852,36 @@ async def test_unbound_repo_prompt_task_launches_its_type_less_leaf_in_a_worktre
 
 
 @pytest.mark.asyncio
-async def test_unbound_steps_task_advances_step_by_step_through_a_legacy_cron_session(
-    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """An unbound steps task runs its chain on one leaf under the legacy cron
-    session: step 0, then step 1 fed the previous result, then ONE boundary
-    report and one parent wake."""
+async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An unbound steps task binds on its first fire, then runs its chain on one
+  leaf under the new node: step 0, then step 1 fed the previous result, then
+  ONE boundary report to the node."""
   cfg, session_mgr, tree = bound_env
-  # The unbound path finds-or-creates its session through the scheduler's
-  # reloaded process config; pin it to the synthetic home's cfg.
   monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
-  cron_session = await _legacy_cron_session(session_mgr, "chained-legacy")
+  _persist_unbound_cron_d(
+      cfg, "chained-legacy", {
+          "cron":
+              "0 3 * * *",
+          "backend":
+              "fake",
+          "steps":
+              [
+                  {
+                      "name": "selector",
+                      "prompt": "Select candidates."
+                  },
+                  {
+                      "name": "reviewer",
+                      "prompt": "Review the diff.",
+                      "backend": "codex-o3"
+                  },
+              ],
+      })
   builds = install_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("selector says pick three")]),
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  wakes: list[tuple[str, str]] = []
-
-  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
-    wakes.append((session_id, text))
-
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
   task_cfg = ScheduledTaskConfig(
       name="chained-legacy",
       cron="0 3 * * *",
@@ -885,11 +893,13 @@ async def test_unbound_steps_task_advances_step_by_step_through_a_legacy_cron_se
   scheduler = Scheduler(cfg, session_mgr)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
+  node_id = task_cfg.session_id
+  assert node_id is not None
   leaf_id = result["leaf_session_id"]
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
-    reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
     if len(records) == 2 and reports:
       break
     await asyncio.sleep(0.1)
@@ -900,13 +910,11 @@ async def test_unbound_steps_task_advances_step_by_step_through_a_legacy_cron_se
   # The second step's prompt carried the previous result under the legacy heading.
   assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
   assert "selector says pick three" in builds[1]["backend"].prompt
-  # ONE report at the boundary; the successful chain closed the leaf, whose
-  # close woke the legacy parent exactly once.
-  reports = [e for e in tree.events.load_events(cron_session.id) if e.get("type") == ET.CHILD_REPORT]
+  # ONE report at the boundary, delivered to the node the task now binds.
+  reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   assert tree.task_state(leaf_id) == "completed"
-  assert len(wakes) == 1 and wakes[0][0] == cron_session.id
 
 
 # ---------------------------------------------------------------------------

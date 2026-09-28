@@ -92,14 +92,12 @@ from src.core.models import (
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
-from src.core.scheduled_sessions import cron_subtree_roots
+from src.core.scheduled_sessions import cron_subtree_roots, write_cron_key
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
     HISTORY_LOCATION_NOTE,
-    ScheduledSessionBusyError,
     SessionManager,
-    SuccessionRefusedError,
 )
 from src.core.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.core.takeoff_gate import DelegationBlockedError
@@ -138,12 +136,16 @@ def _default_backend_id(cfg: CharlieBotConfig) -> str:
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
+  from src.core.cron_sequence import bound_task_name
   active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
-      "active_backend": active_backend,
-      "active_backend_type": active_backend_opt.type if active_backend_opt else "",
-      "switchable_backends": _switchable_backend_ids(active_backend, cfg, dedicated=bool(meta.scheduled_task)),
+      "active_backend":
+          active_backend,
+      "active_backend_type":
+          active_backend_opt.type if active_backend_opt else "",
+      "switchable_backends":
+          _switchable_backend_ids(active_backend, cfg, dedicated=bound_task_name(meta.id) is not None),
   }
 
 
@@ -197,11 +199,11 @@ def _switchable_backend_ids(
 
   An ordinary session accepts every configured option: a cross-family target
   starts its own native conversation and catches up from the session's chat
-  log. A cron-dedicated session keeps the in-domain restriction — the
-  scheduler re-aligns it to its task config on every trigger, so only the ids
-  in its continuation domain (``claude_accounts.continuation_domain``) are
-  offered; a dedicated non-Claude session therefore lists only itself. The
-  list is empty when the effective backend is missing from config.
+  log. A task-bound node keeps the in-domain restriction — the scheduler
+  re-aligns it to its task config on every tick, so only the ids in its
+  continuation domain (``claude_accounts.continuation_domain``) are offered; a
+  bound non-Claude node therefore lists only itself. The list is empty when
+  the effective backend is missing from config.
   """
   active_option = cfg.get_backend_option(active_backend)
   if active_option is None:
@@ -1546,10 +1548,6 @@ async def elone_session(
     meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
-  except ScheduledSessionBusyError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
-  except SuccessionRefusedError as e:
-    raise HTTPException(status_code=409, detail=str(e)) from e
   except ValueError as e:
     raise bad_request(e) from e
 
@@ -1598,15 +1596,16 @@ async def switch_session_backend(
   if body.backend == effective_current:
     return parent
 
-  if parent.scheduled_task and not claude_accounts.same_continuation_domain(effective_current, body.backend, cfg):
+  from src.core.cron_sequence import bound_task_name
+  bound_task = bound_task_name(parent.id)
+  if bound_task is not None and not claude_accounts.same_continuation_domain(effective_current, body.backend, cfg):
     raise HTTPException(
         status_code=400,
         detail=(
-            f"backend '{body.backend}' cannot be switched to in place: this session is dedicated to "
-            "scheduled task "
-            f"'{parent.scheduled_task}', whose cron config decides its backend and whose scheduler "
-            "re-aligns the session to that config on every trigger. Edit the task's config or "
-            "clone/fork the session with the target backend instead."),
+            f"backend '{body.backend}' cannot be switched to in place: this session is the bound node "
+            f"of scheduled task '{bound_task}', whose cron config decides its backend and whose "
+            "scheduler re-aligns the node to that config on every tick. Edit the task's config in the "
+            "cron editor, or clone/fork the session with the target backend instead."),
     )
 
   # The pre-rule backfill: record the effective current backend as the held
@@ -1661,12 +1660,20 @@ async def archive_session(
 
   On a v2 task this becomes the explicit presentation=hidden preference — the
   closed/open fact is untouched, so archiving can never silently reopen or
-  close a task — and requires operator scope.
+  close a task — and requires operator scope. Archiving a task-bound node
+  also stops its task: the single-key write flips only ``enabled`` in the
+  task's cron yaml (the binding itself stays — re-enabling the task
+  re-arms the same node).
   """
   if meta.profile is not None:
     if not caller.is_operator:
       raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
-    return require_found(await task_mgr.set_presentation(session_id, "hidden"))
+    archived = require_found(await task_mgr.set_presentation(session_id, "hidden"))
+    from src.core.cron_sequence import bound_task_name
+    bound_task = bound_task_name(session_id)
+    if bound_task is not None:
+      await asyncio.to_thread(write_cron_key, bound_task, "enabled", value=False)
+    return archived
   event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
   if event_count == 0:
     await session_mgr.delete_session_permanently(session_id)

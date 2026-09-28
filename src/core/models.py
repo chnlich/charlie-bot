@@ -485,7 +485,6 @@ class WorkerEvent(BaseModel):
 
 class CreateSessionRequest(BaseModel):
   name: str | None = None
-  scheduled_task: str | None = None
   backend: str | None = None
   session_id: str | None = None
   slack_origin: SlackOrigin | None = None

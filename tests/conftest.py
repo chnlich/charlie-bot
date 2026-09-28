@@ -1931,6 +1931,24 @@ def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
   reset_config_caches()
 
 
+async def make_legacy_cron_session(
+    session_mgr: SessionManager,
+    task_name: str,
+    backend: str = OPUS_BACKEND_ID,
+) -> models.SessionMetadata:
+  """One legacy cron session (profile None, ``scheduled_task`` stamped), for the
+  read-path and migration tests.
+
+  No creation path mints these any more (the scheduler's auto-bind binds tasks
+  to task-tree nodes), so the stamp is written directly through the metadata
+  owner's own persistence.
+  """
+  meta = models.SessionMetadata(name=f"Scheduled: {task_name}", scheduled_task=task_name, backend=backend)
+  session_mgr._create_session_dirs(session_mgr._session_dir(meta.id))
+  await session_mgr.save_metadata(meta)
+  return meta
+
+
 def cron_d_dir(home: Path) -> Path:
   """The per-job cron dir under a HOME-rooted test dir; once the temp_home fixture points HOME at
   ``home``, this is the dir ``get_scheduled_tasks`` scans for per-job host files."""

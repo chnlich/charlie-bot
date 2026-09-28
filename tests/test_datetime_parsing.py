@@ -11,8 +11,10 @@ from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, make_home_co
 
 from src.core.backlog_loop import _handle_stale
 from src.core.config import ImprovementLoopConfig, ScheduledTaskConfig
-from src.core.models import SessionMetadata, parse_utc_datetime
+from src.core.models import parse_utc_datetime
 from src.core.scheduler import Scheduler
+from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
 
 
 def test_parse_utc_datetime_accepts_z_and_normalizes_naive() -> None:
@@ -64,22 +66,35 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
     tmp_path: Path,
 ) -> None:
   cfg = make_home_config(tmp_path)
-  scheduler = Scheduler(cfg, AsyncMock())
-  session = SessionMetadata(name="Backup session")
+  session_mgr = SessionManager(cfg)
+  tree = TaskTreeManager(cfg, session_mgr)
+  from src.api import deps
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  scheduler = Scheduler(cfg, session_mgr)
+  session = await tree.create_task(
+      request_id="scheduled-node:backup",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="backup",
+      backend=None,
+      caller="system")
   # Base is in the future so croniter's next fire is always after now, removing the minute-boundary
   # race a past base had: with cron "* * * * *" it fired whenever the test ran just after a boundary.
   session.last_scheduled_run = (datetime.now(UTC) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()
+  await session_mgr.save_metadata(session)
   task_cfg = ScheduledTaskConfig(
       name="backup",
       cron="* * * * *",
       handler="backup",
       timezone="UTC",
+      session_id=session.id,
   )
   execute_task = AsyncMock()
 
-  monkeypatch.setattr(scheduler, "_get_or_create_session", AsyncMock(return_value=session))
   monkeypatch.setattr(scheduler, "_execute_task", execute_task)
 
-  await scheduler._maybe_run(task_cfg, AsyncMock(), {}, None)
+  await scheduler._maybe_run(task_cfg, session_mgr, {}, cfg)
 
   execute_task.assert_not_awaited()

@@ -2945,11 +2945,41 @@ class SessionManager:
     with no snapshot entry (cold boot, new session) is probed like a dirty
     one, so an empty snapshot is a full probe. Archived sessions keep the
     constant-False shortcut.
+
+    A poll whose probed-state generation (:func:`sidebar_state.derived_generation`)
+    still matches the last fold's serves that fold's map whole, so between
+    state bumps every caller — and every concurrent poll — reads the same
+    entry dicts. The map and its entries are read-only to callers, the
+    contract every consumer here already holds.
     """
     if not sessions:
       return {}
     if not (include_running_status or include_pending_trigger_status or include_pending_plan_approval):
       return {meta.id: {} for meta in sessions}
+
+    # Every input the fold below reads sits behind sidebar_state's generation:
+    # the probe snapshot (store bumps), the busy map (thinking_state marks
+    # through mark_sidebar_dirty), and the metadata fields partitioned on
+    # (save_metadata's funnel mark). An unchanged generation therefore proves
+    # the last fold's map current, and the poll serves it whole — the
+    # per-session rebuild is the /status poll's largest handler term. Keyed on
+    # the id tuple, not the metas: the read-only loaders hand fresh copies per
+    # poll, so a list-identity key (the listings memo's ground) never hits.
+    # force keeps its deep-probe teeth and bypasses the read; its fresh fold
+    # still lands in the memo for the polls that follow.
+    ids = tuple(meta.id for meta in sessions)
+    flags = (include_running_status, include_pending_trigger_status, include_pending_plan_approval)
+    generation = sidebar_state.derived_generation()
+    force_full = sidebar_state.register_poll(force)
+    if not force:
+      cached = sidebar_state.peek_derived_map((ids, flags, generation))
+      if cached is not None:
+        if force_full:
+          # The every-10th sweep serves the polls that follow it: its stores
+          # bump the generation and the next poll re-derives with its results.
+          self._schedule_sidebar_sweep(
+              [m for m in sessions if m.status != SessionStatus.ARCHIVED])
+        return cached
 
     # Archived sessions cannot have running tasks or pending triggers, so skip
     # the per-session filesystem work for them.
@@ -2970,7 +3000,6 @@ class SessionManager:
     if not active_sessions:
       return derived
 
-    force_full = sidebar_state.register_poll(force)
     if force_full and not force:
       # The self-heal sweep serves the polls that follow it, not this request:
       # it runs detached (single-flight), so the poll's wall stays at the
@@ -3021,6 +3050,10 @@ class SessionManager:
           plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
           task_activity=probed.get(sidebar_state.TASK_TREE_ACTIVITY),
       )
+    # Keyed at the generation read before the probe: a mark landing inside the
+    # probe's await bumps past it, so a raced round can never be served for the
+    # state it raced — the next poll re-derives and drains the mark.
+    sidebar_state.store_derived_map((ids, flags, generation), derived)
     return derived
 
   def _schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:

@@ -1708,7 +1708,9 @@ class TaskExecutionAdapter:
         The source event is the Run's durable run_finished fact and the
         recipient is the close-time fixed parent, so the stable report id
         dedups across recovery and repeated finalize without ever relying on
-        the legacy master_woke_after_summary judgment.
+        the legacy master_woke_after_summary judgment. Only a freshly created
+        report wakes the parent, so a recovery re-delivery of an already
+        delivered report never wakes twice.
         """
     from src.core.task_completion import RUN_REF_PREFIX
     meta = await self._tree.load_meta(session_id)
@@ -1720,7 +1722,7 @@ class TaskExecutionAdapter:
       return
     if summary is None:
       summary = await self._worker_failure_summary(session_id, run)
-    report = await self._tree.dispatch.deliver_child_report(
+    report, created = await self._tree.dispatch.deliver_child_report(
         session_id,
         source_event=source,
         outcome=outcome,
@@ -1728,11 +1730,12 @@ class TaskExecutionAdapter:
         result_refs=[f"{RUN_REF_PREFIX}{run.id}"],
         recipient=meta.task_parent_id,
     )
-    if report is None:
+    if not created:
       return
-    # The delivered failure report is the parent's new durable input: wake
-    # its next serialized turn (dispatcher for a task-tree parent, the
-    # legacy master wake for a legacy parent; deduped replays included).
+    # The freshly created failure report is the parent's new durable input:
+    # wake its next serialized turn (dispatcher for a task-tree parent, the
+    # legacy master wake for a legacy parent). Only a freshly created report
+    # wakes, so a recovery re-delivery never wakes twice.
     await self._tree.dispatch.wake_parent(meta.task_parent_id, report=report)
 
   async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:

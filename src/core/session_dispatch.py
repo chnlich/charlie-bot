@@ -544,7 +544,7 @@ class TaskInputDispatcher:
         result_refs: list[str] | None = None,
         recipient: str | None,
         actor: str = ACTOR_AGENT,
-    ) -> dict | None:
+    ) -> tuple[dict, bool]:
         """Persist one child_report fact to the fixed recipient's log.
 
         The report id derives from the child event and the recipient, so a
@@ -552,10 +552,16 @@ class TaskInputDispatcher:
         the already-delivered report instead of duplicating it. Parent log
         persistence IS delivery — the parent model consuming it is a separate,
         later concern. A root task (recipient None) requires no receipt.
+
+        Returns (report, created) exactly like deliver_child_report_locked:
+        created is True only when this call appended the report, and a None
+        recipient returns (None, False). Only a freshly created report is the
+        parent's new durable input, so a wake decision reads created, never
+        the report's presence.
         """
 
         if recipient is None:
-            return None
+            return None, False
         tree = self._tree
         epoch = await tree.sessions.prime_aggregator(recipient)
         async with tree.control_lock:
@@ -564,7 +570,7 @@ class TaskInputDispatcher:
                 result_refs=result_refs, recipient=recipient, actor=actor)
         if created:
             await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
-        return report
+        return report, created
 
     async def deliver_child_report_locked(
         self,
@@ -646,7 +652,7 @@ class TaskInputDispatcher:
             if already is not None:
                 continue  # already delivered: a repeat pass never re-reports it
             outcome = str(close.get("outcome") or "completed")
-            report = await self.deliver_child_report(
+            report, created = await self.deliver_child_report(
                 session_id,
                 source_event=close,
                 outcome=outcome,
@@ -655,7 +661,7 @@ class TaskInputDispatcher:
                 recipient=str(recipient),
                 actor=ACTOR_SYSTEM,
             )
-            if report is not None:
+            if created:
                 delivered.append(report)
         return delivered
 

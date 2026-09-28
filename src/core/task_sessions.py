@@ -138,7 +138,7 @@ class _TaskFacts:
 
   The fold is the single derived-fact owner for the tree projection, the
   input dispatcher, and the completion owner: task lifecycle, run outcomes,
-  input candidacy with its boundary, close/reopen/close-request facts, and
+  input candidacy with its boundary, close and close-request facts, and
   delivered child reports all come from this one pass over the durable
   events (archived segments included).
   """
@@ -157,7 +157,6 @@ class _TaskFacts:
   # before either fact exists.
   boundary_index: int | None = None
   close_events: list[dict] = field(default_factory=list)
-  reopen_events: list[dict] = field(default_factory=list)
   close_requests: list[dict] = field(default_factory=list)
   # (child_session_id, child_event_id) pairs this session's log has received.
   delivered_reports: set[tuple[str, str]] = field(default_factory=set)
@@ -208,7 +207,6 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       facts.close_events.append(event)
     elif etype == ET.TASK_REOPENED:
       facts.task_state = "open"
-      facts.reopen_events.append(event)
     elif etype == ET.TASK_CLOSE_REQUESTED:
       facts.close_requests.append(event)
     elif etype == ET.RUN_FINISHED:

@@ -24,7 +24,13 @@ BACKEND = "local"
 DECODED_TEXT = "synthetic decoded words"
 DEVICES = {
     "input_device": "Test Microphone",
-    "capture_settings": {"echoCancellation": True, "noiseSuppression": False, "autoGainControl": True, "sampleRate": 16000},
+    "capture_settings":
+        {
+            "echoCancellation": True,
+            "noiseSuppression": False,
+            "autoGainControl": True,
+            "sampleRate": 16000
+        },
     "output_device": "Test Speakers",
     "communications_output_device": "Test Comms Headset",
     "device_error": None,

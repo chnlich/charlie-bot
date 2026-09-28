@@ -30,7 +30,13 @@ _END_FRAME = {"type": "end"}
 # The end frame's device object: the five keys voice_transcribed logs.
 DEVICES = {
     "input_device": "Test Microphone",
-    "capture_settings": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True, "sampleRate": 16000},
+    "capture_settings":
+        {
+            "echoCancellation": True,
+            "noiseSuppression": True,
+            "autoGainControl": True,
+            "sampleRate": 16000
+        },
     "output_device": "Test Speakers",
     "communications_output_device": None,
     "device_error": None,

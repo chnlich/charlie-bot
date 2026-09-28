@@ -26,8 +26,8 @@ SPACED_FINAL = "任 务 完 成 了 , 还 要 继 续 ?"
 NORMALIZED_INTERIM = "请查一下任务"
 NORMALIZED_FINAL = "任务完成了，还要继续？"
 
-
 # --- The normalization rules, one test per rule ------------------------------
+
 
 def test_spaces_between_two_cjk_characters_go() -> None:
   assert _normalize_transcript("请 帮 我 查 一 下") == "请帮我查一下"
@@ -90,6 +90,7 @@ def test_already_normal_text_is_returned_unchanged() -> None:
 
 # --- Both yield sites normalize ----------------------------------------------
 
+
 class _FakeSocket:
   """The websocket transcribe talks to: a scripted setup reply and server frames."""
 
@@ -126,13 +127,25 @@ async def _one_chunk_audio() -> AsyncIterator[bytes]:
 
 @pytest.mark.asyncio
 async def test_transcribe_normalizes_both_the_spaced_interim_and_the_spaced_final(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  socket = _FakeSocket([
-      SETUP_REPLY,
-      {"serverContent": {"interimInputTranscription": {"text": SPACED_INTERIM}}},
-      {"serverContent": {"inputTranscription": {"text": SPACED_FINAL}}},
-  ])
+    monkeypatch: pytest.MonkeyPatch,) -> None:
+  socket = _FakeSocket(
+      [
+          SETUP_REPLY,
+          {
+              "serverContent": {
+                  "interimInputTranscription": {
+                      "text": SPACED_INTERIM
+                  }
+              }
+          },
+          {
+              "serverContent": {
+                  "inputTranscription": {
+                      "text": SPACED_FINAL
+                  }
+              }
+          },
+      ])
 
   def fake_connect(url: str, **kwargs: object) -> _FakeSocket:
     return socket
@@ -141,7 +154,9 @@ async def test_transcribe_normalizes_both_the_spaced_interim_and_the_spaced_fina
   monkeypatch.setattr(
       gemini,
       "get_credentials",
-      lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections={"gemini": {"api_key": "test-key"}}),
+      lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections={"gemini": {
+          "api_key": "test-key"
+      }}),
   )
 
   backend = GeminiTranscriptionBackend(CharlieBotConfig(charliebot_home=Path("/tmp/fake-home")))

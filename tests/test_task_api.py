@@ -8,16 +8,12 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from conftest import stub_credentials
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api import sessions as sessions_api
-from src.api import threads as threads_api
-from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 from src.core.models import RunRecord, utc_now_iso
 from src.core.run_token import RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
+from tests.test_task_execution import make_api_client
 
 
 @pytest_asyncio.fixture
@@ -27,18 +23,6 @@ async def task_env(tmp_path: Path):
   session_mgr = SessionManager(cfg)
   task_mgr = TaskTreeManager(cfg, session_mgr)
   return cfg, session_mgr, task_mgr
-
-
-def make_client(cfg, session_mgr, task_mgr) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.include_router(threads_api.router, prefix="/api/threads")
-  app.dependency_overrides[get_config] = lambda: cfg
-  app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: task_mgr
-  app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
-  return TestClient(app)
 
 
 async def seed_tree(task_mgr: TaskTreeManager) -> dict[str, str]:
@@ -64,7 +48,7 @@ async def seed_tree(task_mgr: TaskTreeManager) -> dict[str, str]:
 async def test_v2_create_tree_detail_and_runs(task_env) -> None:
   cfg, session_mgr, task_mgr = task_env
   ids = await seed_tree(task_mgr)
-  with make_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_mgr, task_mgr) as client:
     # v2 create requires request_id.
     assert client.post("/api/sessions/", json={"task_parent_id": ids["root"], "profile": "worker"}).status_code == 400
 
@@ -135,7 +119,7 @@ async def test_activity_tracks_a_finish_that_lands_after_a_warm_derivation(task_
 async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
   cfg, session_mgr, task_mgr = task_env
   ids = await seed_tree(task_mgr)
-  with make_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_mgr, task_mgr) as client:
     # Name-only PATCH keeps the legacy rename contract.
     renamed = client.patch(f"/api/sessions/{ids['worker']}", json={"name": "Renamed"})
     assert renamed.status_code == 200 and renamed.json()["name"] == "Renamed"
@@ -248,7 +232,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
           "content": "take off",
       })
 
-  with make_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_mgr, task_mgr) as client:
     # A valid active-Run token may create a worker directly under its own manager task.
     ok = client.post(
         "/api/sessions/",
@@ -336,7 +320,7 @@ async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env)
       root.id,
       build_control_event(AGENT_MESSAGE, actor="agent", source_session_id=root.id, content="take off now please"))
 
-  with make_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_mgr, task_mgr) as client:
     blocked = client.post(
         "/api/sessions/",
         json={

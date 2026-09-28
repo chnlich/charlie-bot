@@ -76,6 +76,17 @@ FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
 HISTORY_LOCATION_NOTE = "Earlier turns' history remains readable in this session's chat log, data/chat_events.jsonl in the working directory."
 
+
+def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
+  """The reset note's reason when the backend change itself forces the fresh conversation.
+
+  The v1 (master-cc) and v2 (task-tree) turn-start rules share this one home,
+  so their notes cannot drift apart.
+  """
+  return (f"this session switched from backend {native_backend} to {option_id}, "
+          "which starts its own conversation")
+
+
 _METADATA_CACHE_TTL = 30.0  # seconds
 # Sweep bound for the listings memo. In-process writes bump the revision and
 # surface immediately; an out-of-band metadata edit moves neither, and is

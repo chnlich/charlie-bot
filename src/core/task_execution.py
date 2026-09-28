@@ -69,7 +69,7 @@ from src.core.models import (
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.session_dispatch import child_report_text
-from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
+from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager, backend_switch_reset_reason
 from src.core.spawner_backends import resolve_backend_option
 from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
@@ -814,12 +814,9 @@ class TaskExecutionAdapter:
       # A reset, not a first turn: name the task and where the earlier
       # history lives, so the fresh native context can catch up without
       # the old conversation being copied or destroyed. A backend change
-      # names the switch (the same sentence shape the v1 turn-start rule
-      # uses); every other change keeps the standing reason.
+      # names the switch; every other change keeps the standing reason.
       if meta.native_backend and meta.native_backend != option.id:
-        reason = (
-            f"this session switched from backend {meta.native_backend} to {option.id}, "
-            f"which starts its own conversation")
+        reason = backend_switch_reset_reason(meta.native_backend, option.id)
       else:
         reason = (
             "this task's managed instructions or sources changed since the "

@@ -54,7 +54,6 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M41 git diff/files repeat view, steady state | M41 collector below | seconds per repeat `diff_files` call over the charlie-bot root..HEAD range | median < 0.02 s | — (introduced with its first history row) |
 | M42 scheduler tick, steady state | M42 collector below | seconds of loop lag per 60 s tick with no task due, live config + session corpus (loop lag reads the 5 ms ticker floor like M14) | median < 0.01 s | — (introduced with its first history row) |
 | M43 git diff/file repeat expand, steady state | M43 collector below | seconds per repeat `diff_file` call over the heaviest file of the charlie-bot root..HEAD manifest | median < 0.02 s | — (introduced with its first history row) |
-| M44 scheduled-list next-run resolution, steady state | M44 collector below | seconds per `GET /api/sessions/scheduled` request, live session + cron corpus | median < max(0.002 s, rows × 0.000025 s) (recalibrated from the fixed < 0.002 s: the row count is the cron fleet's own churn — cron sessions plus their active task-tree leaves — and grew 106 → 128 across the 2026-09-27/28 rounds while the per-row band read 14.6-16.6 µs, so the fixed line sat ~1 day from tripping at a healthy per-row cost; the rows term prices 1.5× over the band's top, the M119 convention, and still trips a per-row regression — an unmemoized croniter resolution adds ~12 µs/row and crosses; the 0.002 s floor keeps the small-corpus line; the earlier < 0.004 s recalibration's history is the 2026-09-15 repair row) | — (introduced with its first history row) |
 | M45 session-WS catchup replay event-loop lag, stale-cursor reconnect | M45 collector below | seconds of loop lag + wall per `_replay_aggregated_catchup` run, worst on-disk live chat corpus, cursor 50 events behind (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.05 s | — (introduced with its first history row) |
 | M46 cron tasks list payload and handler time, steady state | M46 collector below | seconds per request + response body bytes, live cron corpus | median < 0.02 s; body < 20 KB | — (introduced with its first history row) |
 | M47 claude declared-window warning stream, steady state | M47 collector below | warnings per 60 steady-state declared-window resolutions | 0 warnings after the first sighting per process | — (introduced with its first history row) |
@@ -3028,130 +3027,6 @@ asyncio.run(main())
 EOF
 ```
 
-M44 — scheduled-list next-run resolution, steady state. Every grouped sidebar
-render pairs ``GET /api/sessions/scheduled`` with ``GET /api/cron/tasks`` (the
-project-manager refresh fires on every list render), and the handler resolved
-each scheduled row's next fire with one ``croniter(...).get_next`` expand per
-row per request (~248 µs each measured, ~3 ms at the 12-task live corpus) — a
-pure function of (cron, timezone, now) whose answer stays valid until the fire
-time it names, so every repeat request inside that window recomputed an
-identical string. The fixed handler serves rows from a memo keyed on (cron,
-timezone), entries valid until their named fire time passes; a fire that went
-by recomputes on the next request. The cost is a sidebar-render latency
-invisible to the standing HTTP probes, so the collector drives the endpoint
-raw-ASGI — the served path the middleware and route actually run; a TestClient
-drive adds ~1.5 ms of httpx harness per request and skips the gzip middleware
-whose deflate the browser's fetch always pays (the vacuous-read class the
-M57/M70/M72 repairs called out) — over the live session + cron corpora
-(read-only), managers built once as the server's dependency singletons are:
-one cold pass, as at first scheduled-tab open after a server start, then nine
-timed requests, asserting the body is repeat-identical. Evidence while the
-live server runs older code points the same collector at the branch checkout
-(``CHECKOUT`` at the worktree root), the same shape as the M18 protocol:
-
-```bash
-CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
-import asyncio
-import gzip
-import hashlib
-import json
-import os
-import sys
-import time
-
-sys.path.insert(0, os.environ["CHECKOUT"])
-from pathlib import Path
-
-from fastapi import FastAPI
-from server import _CharlieBotGZipMiddleware
-
-from src.api.deps import get_config, get_session_manager, get_thread_manager, get_trigger_manager
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
-from src.core.triggers import TriggerManager
-
-
-async def main():
-  # Scratch wiring against the live home: managers built once, as the server's
-  # dependency singletons are; read-only over the live session + cron corpus.
-  import src.api.deps as deps
-  cfg = CharlieBotConfig(charliebot_home=Path.home() / ".charliebot")
-  mgr = SessionManager(cfg)
-  deps._trigger_manager = TriggerManager(cfg, mgr)
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_session_manager] = lambda: mgr
-  app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
-  app.dependency_overrides[get_trigger_manager] = lambda: deps._trigger_manager
-  app.dependency_overrides[get_config] = lambda: cfg
-  # The production middleware chain: the browser's fetch always sends
-  # Accept-Encoding: gzip, so the body's deflate is part of the served
-  # shape — a bare app reads the handler floor alone.
-  app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
-
-  url = "/api/sessions/scheduled"
-
-  def scope():
-    return {
-        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1", "method": "GET", "scheme": "http",
-        "path": url, "raw_path": url.encode(), "query_string": b"", "root_path": "",
-        "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
-        "client": ("test", 123), "server": ("test", 80),
-    }
-
-  async def drive():
-    body = b""
-    out = {"status": 0, "encoding": b""}
-
-    async def receive():
-      return {"type": "http.request", "body": b"", "more_body": False}
-
-    async def send(msg):
-      nonlocal body
-      if msg["type"] == "http.response.start":
-        out["status"] = msg["status"]
-        out["encoding"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
-      elif msg["type"] == "http.response.body":
-        body += msg.get("body", b"")
-
-    t0 = time.perf_counter()
-    await app(scope(), receive, send)
-    return time.perf_counter() - t0, body, out
-
-  def decoded_body(body, encoding):
-    return gzip.decompress(body) if encoding == b"gzip" else body
-
-  _, cold_body, cold_out = await drive()  # cold pass, as at first scheduled-tab open after a server start; not timed
-  assert cold_out["status"] == 200, (cold_out["status"],)
-  times = []
-  digests = set()
-  for _ in range(9):
-    dt, body, out = await drive()
-    times.append(dt)
-    decoded = decoded_body(body, out["encoding"])
-    digests.add(hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12])
-  times.sort()
-  # A body changing between repeats is live churn, not determinism (a next-fire
-  # rollover changes content at the same length): re-measure rather than
-  # compare noise across arms.
-  if len(digests) != 1:
-    print("live churn during measurement; re-run")
-    raise SystemExit(1)
-  wire = len(body)
-  decoded = decoded_body(body, out["encoding"])
-  digest = hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
-  rows = len(json.loads(decoded))
-  print(f"{rows} scheduled rows, wire {wire} B, decoded {len(decoded)} B, digest {digest}; "
-        f"served /scheduled median {times[4]*1000:.2f} ms, max {times[-1]*1000:.2f} ms over 9")
-
-
-asyncio.run(main())
-EOF
-```
-
 M45 — session-WS catchup replay event-loop lag, stale-cursor reconnect. When a session
 WebSocket (re)connects behind the live event count (a mid-turn reconnect after a network
 flap), `_send_session_catchup` replays the events past the cursor through
@@ -3268,15 +3143,15 @@ carried it. The cost rides the sidebar render path, so the collector drives the
 endpoint raw-ASGI — the served path the middleware and route actually run; a
 TestClient drive adds ~1.5 ms of httpx harness per request and skips the gzip
 middleware whose deflate the browser's fetch always pays (the vacuous-read
-class the M44/M56 repair called out) — over the live cron corpus (read-only:
+class the M56 repair called out) — over the live cron corpus (read-only:
 ``get_scheduled_tasks`` serves the fingerprint-cached snapshot; nothing is
 written), one cold pass, as at first sidebar render after a server start, then
 nine timed requests, with a parsed-body digest so a corpus change between arms
 cannot masquerade as a payload difference (a digest changing between repeats is
-the live config's own churn — re-run rather than compare noise, the M44
-guard's shape). Evidence while the live server runs older code points the same
+the live config's own churn — re-run rather than compare noise, the
+repeat-digest guard's shape). Evidence while the live server runs older code points the same
 collector at the branch checkout (``CHECKOUT`` at the worktree root), the same
-shape as the M44 protocol:
+shape the raw-ASGI collectors share:
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -3942,7 +3817,7 @@ out) — over the live corpus (read-only), ids resolved from the active-session 
 checkout under test: one cold pass, as at first sidebar paint after a server start, then nine
 timed requests, with a parsed-body digest so a corpus change between arms cannot masquerade as a
 payload difference (a digest changing between repeats is the sidebar's own live churn — the
-assert re-runs the round, the M44 guard's shape).
+assert re-runs the round, the repeat-digest guard's shape).
 
 ```bash
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
@@ -9058,3 +8933,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-26 | this PR | M18 collector repaired: the standing collector's `workers.js` load reads ENOENT since the worker-card panel's removal landed on main (the frontend consolidation deleted the file; this round's sweep reports M18 unmeasured — the one failed collector of 121). The collector retargets the invariant's subject at its new home — the main chat column's transcript poll (`setWorkerTranscriptMode` over `sidebar/session-view.js`, loaded through `sidebar/namespace.js` in the page's script order) — and reads 0 poll fetches per simulated 10 hidden min (1 bootstrap fetch excluded), 5 fetches in the 10 s visible re-check, identical over the branch-worktree and main-checkout arms (the repair touches no page js), at load 0.15-1.93 one-minute; the invariant and the 0-fetches range are unchanged | the poll the collector was following moved with the worker transcript into the main chat column; a collector pinned to a deleted file measures nothing, so the retarget rides the same file the sweep reads its commands from |
 | 2026-09-26 | this PR | M108 claude-sub launch floor: fresh-process `claude-sub --<unsupported-probe-flag>` wall median 0.109/0.101/0.122 → 0.069/0.060/0.081 s (−34 % to −41 %), maxima 0.114-0.149 → 0.076-0.090 s, every paired round faster over three interleaved rounds of the verbatim collector — main checkout before vs branch worktree after back-to-back, arm order alternating, at load 10.29-10.94 one-minute (a sibling cron's pytest sweep running throughout); component attribution, `-X importtime` fresh-process: the module-level graph dragged asyncio ~67 ms cumulative (its concurrent.futures ~30, logging ~28, traceback ~25 nested) through pty_common/tui and the bridge, plus json_utils' own module-level asyncio; the imports ride their call sites now (the src.core.process shape _terminate_foreground already used), json_utils defers asyncio to its one async writer, and the bridge defers it to its methods — the argv-parse probe reaches none of them, and a real launch pays the same imports at first use inside its own process; witnesses: the CLAUDE_SUB_HEAVY_MODULES ban set gains asyncio + pty_common + tui (25-passed import-weight suite), the 38-passed claude-sub suite (its tmux patches retarget pty_common, the name's owner), full suite green before push |
 | 2026-09-27 | #2179 | M44 scheduled-list serve tripped its 2 ms line and the fix landed: the standing sweep (121 collectors measured; the four two-block collectors the round's harness tore re-ran in one shell per the doc's eval-first rule — M35/M55/M70/M71/M120; M97 re-run with CHARLIEBOT_SESSION_ID unset, this run's own session id tripping the plan CLI's ambiguity guard) read /scheduled 1.69 ms mid-sweep and 2.16/1.64/2.37 ms at the 106-row corpus post-merge-of-a38dee0b, over the line with the new cron-subtree walk as the profile's top term (~0.3-0.4 ms of 2.2, one by_id build plus parent-chain walk per listing per poll); fix: SessionManager memoizes the derived map on the metas list identity the listings memo already bounds (write bumps the revision, create/delete moves the root signature, the sweep re-walks — each rebuilds the list object, so the identity check re-derives exactly when the inputs can have moved); interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector, load 1.32-1.80: /scheduled 2.16/1.64/2.37 → 1.76/2.30/1.75 ms (median-of-medians 2.16 → 1.76, −19 %; the round-2 arm inversion is host-load noise, rounds 1 and 3 pair clean 2.16→1.76 and 2.37→1.75), M119 root list 1.65/1.73/1.64 → 1.15/1.10/1.11 ms (−33 %, every paired round faster), body digests identical across arms in the stable-corpus rounds; post-merge standing reads 1.76 ms (/scheduled) and 1.11 ms (root list), both inside their lines; same-round watch: M120 tree-page read 10.78 ms vs its max(10 ms, 1550×6 µs) line — the task-node share of the corpus tripled since the #2098 landing (71→210 event corpora; plain-meta per-meta cost unchanged at the 2.4 µs band), the topic sits in #2098's 1-day skip window, next round owns it (recalibration to a task-node term or the one-pass activity derivation) | the walk a38dee0b (direct push, not a latency-perf PR) added to every sidebar listing re-derived per request although its input is the listings memo's own list; the round's history row records the missed row this docs PR appends (#2179 landed without it) |
+| 2026-09-28 | this PR | M44 retired, the sweep's one unmeasured metric: the collector's raw-ASGI drive of ``GET /api/sessions/scheduled`` asserted ``(404,)`` — 5babc6ce deleted the endpoint and its row-payload memo, moving the schedule fields onto every sidebar row through the ``row_schedule_fields`` join (root list, starred, archived, homepage render); the sweep re-ran the collector twice on fresh scratch wiring, both reads the same 404, the route gone from ``src/api/sessions.py``'s router. The next-run resolution the metric watched now rides the join inside listings the standing sweep already drives with corpus-scaled lines: M119 root list 1.38 ms vs max(0.002 s, 305 × 0.000008 s) (4.5 µs/row, under the 4.8-5.8 after band), M61 archived page 1.34 ms vs 0.003 s and all-sessions 8.66 ms vs max(0.008 s, 1618 × 0.000008 s), M40 starred 0.22 ms, M103 homepage 1.18 ms vs 0.003 s — a join or croniter regression crosses those lines. The definition row and collector block are removed and the four standing cross-references to the M44 protocol/guard reworded to name the technique; history rows untouched | the deletion was deliberate (the sidebar's three views render one project-grouped tree, so a dedicated scheduled listing had no reader), and the metric's subject is gone rather than moved: the serve two standing collectors already price is where the cost now lives, so a retarget would double-cover M119 |

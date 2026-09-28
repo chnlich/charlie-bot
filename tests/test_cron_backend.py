@@ -1,6 +1,6 @@
 """Tests for scheduled task backend overrides."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -20,11 +20,6 @@ from src.core.config import (
     CharlieBotConfig,
     ScheduledTaskConfig,
     _load_cron_file,
-)
-from src.core.models import (
-    CreateSessionRequest,
-    LastRunStatus,
-    SessionStatus,
 )
 from src.core.sessions import SessionManager
 

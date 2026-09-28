@@ -23,7 +23,7 @@ from src.api.cron import router as cron_router
 from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, SessionStatus
+from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 
 
@@ -61,7 +61,7 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   """Deleting a task archives nothing: the yaml goes, the task's bound node
   stays exactly as it is (it is the user's task-tree node, not the deletion's
   product), and no legacy cron session is archived either."""
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
+  cfg, session_mgr, _scheduler = make_scheduler_setup(tmp_path)
   from src.api import deps
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)

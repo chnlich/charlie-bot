@@ -6,15 +6,10 @@ import json
 from pathlib import Path
 
 import pytest
-from conftest import (
-    user_event,)
 from conftest import make_parent as _make_parent
 
 from src.core.config import CharlieBotConfig
-from src.core.models import (
-    SessionMetadata,
-    SessionStatus,
-)
+from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 
 

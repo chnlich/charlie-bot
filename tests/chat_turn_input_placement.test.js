@@ -11,6 +11,8 @@ const {
   settle,
   engineDebug,
   assertEngineInvariants,
+  wrapsByKey,
+  messageIdsUnder,
 } = require('./turn_engine_harness');
 
 // ---------------------------------------------------------------------------
@@ -65,13 +67,93 @@ function sequenceB() {
   ];
 }
 
+// The plan's model-switch boundary: a notice between the last input and the
+// first assistant message.
+function sequenceNotice() {
+  return [
+    m('user', 'a', 'the ask'),
+    m('system', 'notice', 'model switched to the pinned one'),
+    m('assistant', 's1', 'step one'),
+    m('assistant', 's2', 'step two'),
+    m('assistant', 'final', 'done'),
+    sep('sep1'),
+  ];
+}
+
+// (c): a carry whose handling round never closes — no later separator.
+function sequenceC() {
+  return [
+    m('user', 'a', 'the ask'),
+    m('assistant', 's1', 'working'),
+    m('agent_message', 'mid1', 'relay: one more thing'),
+    m('assistant', 'final', 'the answer'),
+    sep('sep1'),
+  ];
+}
+
+// (g): two adjacent rounds each receive one mid-round input, then a fourth
+// round with no carry closes the run.
+function sequenceG() {
+  const turn = (head, mid, tag) => [
+    m('user', head, `ask ${head}`),
+    m('assistant', `s-${tag}1`, 'step one'),
+    m('agent_message', mid, `relay ${mid}`),
+    m('assistant', `s-${tag}2`, 'step two'),
+    m('assistant', `c-${tag}`, `done ${head}`),
+    sep(`sep-${tag}`),
+  ];
+  return [
+    ...turn('a1', 'mid1', 't1'),
+    ...turn('b1', 'mid2', 't2'),
+    ...turn('c1', 'mid3', 't3'),
+    m('user', 'd1', 'ask d1'),
+    m('assistant', 's-t41', 'step one'),
+    m('assistant', 'c-t4', 'done d1'),
+    sep('sep-t4'),
+  ];
+}
+
+// (h)/(i): a round with no own input — no stimulus before its first assistant
+// message (a cron or resume round) — that receives one stimulus mid-round.
+// The stimulus is queued for the next round: the closed round's fold excludes
+// it and it opens the next turn.
+function sequenceNoInput(role, id = 'mid1') {
+  return [
+    m('assistant', 's1', 'cron round step one'),
+    m(role, id, `mid-round ${role} ${id}`),
+    m('assistant', 's2', 'cron round step two'),
+    m('assistant', 'final', 'cron round done'),
+    sep('sep1'),
+    m('assistant', 'r1', 'handling it'),
+    m('assistant', 'r2', 'handled'),
+    sep('sep2'),
+  ];
+}
+
+// Every sequence the suite pins, one factory each: the property check (j)
+// walks this list, so a sequence added to the suite joins the check with no
+// extra wiring.
+const SUITE_SEQUENCES = [
+  ['(a)', sequenceA],
+  ['(b)', sequenceB],
+  ['notice', sequenceNotice],
+  ['(c)', sequenceC],
+  ['(g)', sequenceG],
+  ['(h) agent_message', () => sequenceNoInput('agent_message')],
+  ['(i) worker_summary', () => sequenceNoInput('worker_summary', 'mid-ws')],
+  ['(i) scheduled_trigger', () => sequenceNoInput('scheduled_trigger', 'mid-trg')],
+  ['(i) child_report', () => sequenceNoInput('child_report', 'mid-rep')],
+  ['(i) user', () => sequenceNoInput('user', 'mid-user')],
+];
+
 // --- independent expectations -----------------------------------------------
 // The turn layout recomputed from the message list alone, mirroring the rule
 // the suites pin: own inputs sit before the span's first assistant message,
 // later stimuli carry to the next span, the head keeps the user-over-stimulus
 // priority over the inputs, and the fold holds the work from the first
-// assistant message to the conclusion (body[0] head and fold in a span with
-// no inputs at all).
+// assistant message to the conclusion — never a carried stimulus, in every
+// branch (in a span with no own inputs it still starts after body[0], minus
+// the carried stimuli).
 function expectedTurns(msgs) {
   const spans = [];
   let span = [];
@@ -111,7 +193,8 @@ function expectedTurns(msgs) {
       const queued = new Set(carried);
       fold = body.slice(assistantAt, conclusionAt).filter((message) => !queued.has(message));
     } else {
-      fold = body.slice(1, conclusionAt);
+      const queued = new Set(carried);
+      fold = body.slice(1, conclusionAt).filter((message) => !queued.has(message));
     }
     turns.push({
       // The turn holds the carried-in inputs plus the span's own messages,
@@ -279,14 +362,7 @@ test('(b) one round consuming two inputs keeps both outside the fold', () => {
 // A notice between the last input and the first assistant message stays
 // outside the fold with the inputs (the plan's model-switch boundary).
 test('a notice between the last input and the first assistant message stays outside the fold', () => {
-  const msgs = [
-    m('user', 'a', 'the ask'),
-    m('system', 'notice', 'model switched to the pinned one'),
-    m('assistant', 's1', 'step one'),
-    m('assistant', 's2', 'step two'),
-    m('assistant', 'final', 'done'),
-    sep('sep1'),
-  ];
+  const msgs = sequenceNotice();
   const {context, root, timers, engine} = mountEngine(msgs);
   settle(timers);
   assertEngineMatchesExpected(engine, msgs, 'engine mount');
@@ -295,13 +371,7 @@ test('a notice between the last input and the first assistant message stays outs
 
 // --- (c) a carry with no handling round yet -----------------------------------
 test('(c) a carried input with no later separator waits in the pending tail, rendered', () => {
-  const msgs = [
-    m('user', 'a', 'the ask'),
-    m('assistant', 's1', 'working'),
-    m('agent_message', 'mid1', 'relay: one more thing'),
-    m('assistant', 'final', 'the answer'),
-    sep('sep1'),
-  ];
+  const msgs = sequenceC();
   const {context, root, timers, engine} = mountEngine(msgs);
   settle(timers);
 
@@ -365,23 +435,7 @@ test('(g) carries cascade across settled segments when a page boundary precedes 
   // settled segment — its first assistant now arrives from the page, so its
   // mid-round input becomes a carry — and that carry re-derives the fourth
   // settled segment in turn.
-  const turn = (head, mid, tag) => [
-    m('user', head, `ask ${head}`),
-    m('assistant', `s-${tag}1`, 'step one'),
-    m('agent_message', mid, `relay ${mid}`),
-    m('assistant', `s-${tag}2`, 'step two'),
-    m('assistant', `c-${tag}`, `done ${head}`),
-    sep(`sep-${tag}`),
-  ];
-  const msgs = [
-    ...turn('a1', 'mid1', 't1'),
-    ...turn('b1', 'mid2', 't2'),
-    ...turn('c1', 'mid3', 't3'),
-    m('user', 'd1', 'ask d1'),
-    m('assistant', 's-t41', 'step one'),
-    m('assistant', 'c-t4', 'done d1'),
-    sep('sep-t4'),
-  ];
+  const msgs = sequenceG();
   // The mounted page starts at turn 3's mid-round input — after the span's
   // first assistant message. Everything earlier rides the prepended page.
   const boundary = msgs.findIndex((message) => message.id === 'mid3');
@@ -402,6 +456,135 @@ test('(g) carries cascade across settled segments when a page boundary precedes 
   const mounted = mountEngine(msgs);
   settle(mounted.timers);
   assert.deepEqual(engineTurns(engine), engineTurns(mounted.engine), 'segments equal the mount');
+});
+
+// --- (h) a no-input round that receives a stimulus mid-round -------------------
+// The production shape behind the carried-fold defect: a round with no chat
+// input (cron, resume) that receives a stimulus mid-round — most often a
+// worker_summary. The stimulus is queued for the next round, so the closed
+// round's fold must hold only its own steps and its row must count only
+// them; with the carry still in the fold, opening the closed turn pointed
+// installTurnFold's insertion reference at a node the next turn owns and
+// threw ("reference child not found").
+test('(h) a no-input round folds only its own steps, on both paths', () => {
+  const msgs = sequenceNoInput('agent_message');
+
+  const {context, root, timers, engine} = mountEngine(msgs);
+  settle(timers);
+  assertEngineMatchesExpected(engine, msgs, 'engine mount');
+  const turns = engineTurns(engine);
+  assert.deepEqual(turns.map((turn) => turn.key), ['s1|final|sep1', 'mid1|r2|sep2'],
+      'segment keys');
+  assert.equal(turns[0].headRole, 'assistant', 'turn 1 keeps its head with no input');
+  assert.equal(turns[0].headText, 'cron round step one');
+  assert.deepEqual(turns[0].foldIds, ['s2'], 'turn 1 folds only its own step');
+  assert.equal(turns[0].entryIds.includes('mid1'), false, 'mid1 left turn 1');
+  assert.equal(turns[1].headRole, 'agent_message', 'mid1 heads turn 2');
+  assertEngineInvariants(context, root, root.children[root.children.length - 1], 'engine mount');
+
+  // The closed round's row counts its own steps only.
+  const foldedWrap = wrapsByKey(root).get('s1|final|sep1');
+  assert.ok(foldedWrap, 'turn 1 wrap is in the DOM');
+  assert.equal(rowField(foldedWrap.querySelector('.turn-row'), 'turn-row-steps'), '1 step',
+      'turn 1 row step count');
+
+  // Opening turn 1 and expanding its N-steps band must not throw, and the
+  // carry's node stays inside turn 2's wrap.
+  engine.setOverride('s1|final|sep1', true);
+  settle(timers);
+  const openWrap = wrapsByKey(root).get('s1|final|sep1');
+  const bar = openWrap.querySelector('.turn-fold-bar');
+  assert.ok(bar, 'turn 1 shows its N-steps band');
+  bar.onclick.call(bar);
+  settle(timers);
+  const expandedWrap = wrapsByKey(root).get('s1|final|sep1');
+  const expandedBar = expandedWrap.querySelector('.turn-fold-bar');
+  assert.equal(expandedBar.getAttribute('aria-expanded'), 'true', 'turn 1 band expanded');
+  assert.deepEqual(
+      messageChildren(expandedWrap.querySelector('.turn-fold-content'))
+          .map((el) => el.dataset.messageId),
+      ['s2'], 'turn 1 band holds only its own step');
+  const wrap2 = wrapsByKey(root).get('mid1|r2|sep2');
+  assert.ok(wrap2, 'turn 2 wrap is in the DOM');
+  assert.ok(messageIdsUnder(wrap2).includes('mid1'), 'mid1 still lives in turn 2');
+
+  // The DOM path agrees without a second copy of the rule.
+  const dom = mountCase(msgs.map(messageItem));
+  dom.context.applyTurnOutline(dom.root);
+  assertDomMatchesExpected(dom.root, msgs, 'dom mount');
+  const domWrap1 = wrappers(dom.root)[0];
+  assert.equal(rowField(domWrap1.querySelector('.turn-row'), 'turn-row-steps'), '1 step',
+      'dom turn 1 row step count');
+  const domWrap2 = wrappers(dom.root)[1];
+  assert.equal(directIdsOf(domWrap2)[0], 'mid1', 'dom turn 2 opens with mid1');
+});
+
+// --- (i) the same shape for every stimulus role --------------------------------
+// Any stimulus role can arrive mid-round in a no-input round (a worker
+// summary, a scheduled trigger, a child report, a user message during a cron
+// round); the placement must not depend on the role.
+test('(i) every stimulus role arriving mid-round in a no-input round carries out of the fold', () => {
+  for (const role of ['worker_summary', 'scheduled_trigger', 'child_report', 'user']) {
+    const msgs = sequenceNoInput(role, `mid-${role}`);
+
+    const {context, root, timers, engine} = mountEngine(msgs);
+    settle(timers);
+    assertEngineMatchesExpected(engine, msgs, `${role}: engine mount`);
+    const turns = engineTurns(engine);
+    assert.deepEqual(turns.map((turn) => turn.key),
+        [`s1|final|sep1`, `mid-${role}|r2|sep2`], `${role}: segment keys`);
+    assert.equal(turns[0].headRole, 'assistant', `${role}: turn 1 keeps its head`);
+    assert.deepEqual(turns[0].foldIds, ['s2'], `${role}: turn 1 folds only its own step`);
+    assert.equal(turns[0].entryIds.includes(`mid-${role}`), false,
+        `${role}: the carry left turn 1`);
+    assert.equal(turns[1].headRole, role, `${role}: the carry heads turn 2`);
+    assertEngineInvariants(context, root, root.children[root.children.length - 1],
+        `${role}: engine mount`);
+
+    // Opening turn 1 does not throw with the carry out of its fold.
+    engine.setOverride('s1|final|sep1', true);
+    settle(timers);
+    assert.ok(messageIdsUnder(wrapsByKey(root).get(`mid-${role}|r2|sep2`))
+        .includes(`mid-${role}`), `${role}: the carry still lives in turn 2`);
+
+    const dom = mountCase(msgs.map(messageItem));
+    dom.context.applyTurnOutline(dom.root);
+    assertDomMatchesExpected(dom.root, msgs, `${role}: dom mount`);
+  }
+});
+
+// --- (j) the fold/carried property over every sequence the suite pins ----------
+test('(j) every closed segment folds only its own entries, and no stimulus lands in two segments', () => {
+  for (const [name, factory] of SUITE_SEQUENCES) {
+    const msgs = factory();
+    const {context, root, timers, engine} = mountEngine(msgs);
+    settle(timers);
+    // The oracle agrees with the engine on the whole layout, fold lists
+    // included.
+    assertEngineMatchesExpected(engine, msgs, `${name}: oracle`);
+
+    const segments = [...engine.segments].map((seg) => ({
+      kind: seg.kind,
+      entryIds: [...seg.entries].map((entry) => entry.msg.id),
+      foldIds: seg.kind === 'turn' ? [...seg.foldEntries].map((entry) => entry.msg.id) : [],
+      stimulusIds: [...seg.entries]
+          .filter((entry) => STIMULUS_ROLES.includes(entry.msg.role))
+          .map((entry) => entry.msg.id),
+    }));
+    for (const seg of segments) {
+      if (seg.kind !== 'turn') continue;
+      for (const id of seg.foldIds) {
+        assert.ok(seg.entryIds.includes(id), `${name}: fold entry ${id} outside its segment`);
+      }
+    }
+    const seen = new Set();
+    for (const seg of segments) {
+      for (const id of seg.stimulusIds) {
+        assert.equal(seen.has(id), false, `${name}: stimulus ${id} lands in two segments`);
+        seen.add(id);
+      }
+    }
+  }
 });
 
 // --- (f) DOM parity with the engine -------------------------------------------

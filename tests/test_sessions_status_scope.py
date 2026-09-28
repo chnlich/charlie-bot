@@ -11,7 +11,7 @@ import pytest
 from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
-from src.core import sidebar_state
+from src.core import sidebar_state, thinking_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
@@ -93,3 +93,33 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
       })
   fifth = await session_mgr.resolve_sidebar_state([session], **flags)
   assert fifth is not fourth
+
+
+@pytest.mark.asyncio
+async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,) -> None:
+  """Every listing row leaves the manager stamped and derived, as its own copy.
+
+  The row build folds the thinking stamp and resolve_sidebar_state's derived
+  fields into the one model_copy; a future edit that drops either half would
+  serve unstamped rows or stale sidebar verdicts silently, and a row that
+  aliased the shared cache object would let a caller's mutation corrupt every
+  later listing.
+  """
+  sidebar_state.reset_for_tests()
+  cfg = build_tui_sessions_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Stamped"))
+  thinking_state.mark_busy(session.id)
+  flags = {
+      "include_running_status": True,
+      "include_pending_trigger_status": True,
+      "include_pending_plan_approval": True,
+  }
+  rows = await session_mgr.list_sessions(**flags)
+  row = next(r for r in rows if r.id == session.id)
+  assert row.thinking_since == thinking_state.busy_since(session.id) is not None
+  assert row.has_running_tasks is True  # the live busy state's derived verdict
+  assert row.has_pending_trigger is False
+  assert row.has_pending_plan_approval is False
+  row.has_unread = True  # a caller mutation must never reach the shared cache
+  assert (await session_mgr.list_sessions(**flags))[0].has_unread is False

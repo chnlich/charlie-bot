@@ -1262,20 +1262,34 @@ class SessionManager:
     """List sessions, newest first. Optionally filter by status, starred, and/or scheduled.
 
     The starred/scheduled filters run against the shared cached metas (read-only),
-    so only surviving rows pay the model_copy and thinking stamp that mark a meta
-    as having left the manager.
+    so only surviving rows pay the model_copy that marks a meta as having left
+    the manager. The thinking stamp and resolve_sidebar_state's derived fields
+    ride that one copy's ``update`` dict: pydantic writes update keys straight
+    into ``__dict__``, so the row build stays one copy instead of a copy plus a
+    per-field setattr chain (the M61 listing's dominant term at corpus scale).
     """
     metas = await self._with_derived_archive(await self._load_session_metas(status), status)
-    sessions = [
-        _stamp_thinking_since(meta.model_copy()) for meta in metas if (starred is None or meta.starred == starred) and
+    rows = [
+        meta for meta in metas if (starred is None or meta.starred == starred) and
         (scheduled is None or bool(meta.scheduled_task) == scheduled)
     ]
-    return await self._enrich_and_sort(
-        sessions,
+    derived = await self.resolve_sidebar_state(
+        rows,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
         include_pending_plan_approval=include_pending_plan_approval,
+        force=False,
     )
+    sessions = [
+        meta.model_copy(
+            update={
+                "thinking_since": busy_since(meta.id),
+                "run_backend": run_backend(meta.id),
+                **derived[meta.id],
+            }) for meta in rows
+    ]
+    sessions.sort(key=lambda s: s.updated_at, reverse=True)
+    return sessions
 
   async def list_sessions_readonly(
       self,
@@ -2928,23 +2942,6 @@ class SessionManager:
         meta.id, self._threads_dir(meta.id),
         self._session_dir(meta.id) / "triggers",
         self._session_dir(meta.id) / "plans.json", self._session_dir(meta.id), is_task_node, recheck_liveness)
-
-  async def _enrich_and_sort(
-      self,
-      sessions: list[SessionMetadata],
-      include_running_status: bool,
-      include_pending_trigger_status: bool,
-      include_pending_plan_approval: bool,
-  ) -> list[SessionMetadata]:
-    """Populate sidebar state and sort newest first."""
-    await self.populate_sidebar_state(
-        sessions,
-        include_running_status=include_running_status,
-        include_pending_trigger_status=include_pending_trigger_status,
-        include_pending_plan_approval=include_pending_plan_approval,
-    )
-    sessions.sort(key=lambda s: s.updated_at, reverse=True)
-    return sessions
 
   async def resolve_sidebar_state(
       self,

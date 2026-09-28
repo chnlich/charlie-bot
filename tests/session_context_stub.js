@@ -264,6 +264,47 @@ function buildSidebarFilterElements() {
   ]);
 }
 
+// The five indicator element kinds web/static/js/sidebar paints per row, one
+// hidden element each as `<kind>-<id>`; an id or kind rename on either side
+// breaks the shown() lookup below.
+const SIDEBAR_ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
+
+function buildSidebarIndicatorElements(ids) {
+  const els = new Map();
+  ids.forEach((id) => {
+    SIDEBAR_ICON_KINDS.forEach((kind) => {
+      els.set(kind + '-' + id, createElement({className: 'hidden'}));
+    });
+  });
+  return els;
+}
+
+// A sidebar context whose document resolves only the session list, the filter
+// pills, and ids' indicator elements; shown(id) reports which indicator
+// elements are visible on that row.
+function buildSidebarIndicatorContext(ids) {
+  const nav = createElement();
+  const elements = new Map([['session-list', nav], ...buildSidebarFilterElements(), ...buildSidebarIndicatorElements(ids)]);
+  const {context} = baseSessionContext({elements});
+  context.SESSION_ID = 'none';
+  context.INITIAL_SESSIONS = [];
+  context.INITIAL_LOAD_ERRORS = [];
+  inlinePageTimers(context);
+  context.document.getElementById = (id) => elements.get(id) || null;
+  context.document.querySelectorAll = () => [];
+  context.document.querySelector = () => null;
+  context.fetch = async (url) => { throw new Error('unexpected fetch ' + url); };
+  createChatSidebarContext(context);
+  const shown = (id) => ({
+    spinner: !elements.get('spinner-' + id).classList.contains('hidden'),
+    gear: !elements.get('worker-indicator-' + id).classList.contains('hidden'),
+    clock: !elements.get('waiting-indicator-' + id).classList.contains('hidden'),
+    dot: !elements.get('unread-' + id).classList.contains('hidden'),
+    subtreeMark: !elements.get('subtree-unread-' + id).classList.contains('hidden'),
+  });
+  return {context, nav, shown};
+}
+
 // Map keys are the element ids renderUsageFromData looks up in
 // web/static/js/sidebar/session-view.js; an id rename on either side breaks the lookup.
 function buildUsageElements() {
@@ -278,6 +319,7 @@ function buildUsageElements() {
 
 module.exports = {
   baseSessionContext,
+  buildSidebarIndicatorContext,
   createChatSidebarContext,
   buildSidebarFilterElements,
   buildUsageElements,

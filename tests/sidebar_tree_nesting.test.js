@@ -4,47 +4,14 @@
 // five-row preview cap counts root rows only; a worker leaf carries the leaf
 // icon and the archive action alone. The Scheduled tab nests the same way:
 // its cron rows group by project at root level with the projected worker
-// leaves collapsed under them. Harness follows
-// test_sidebar_delete_backfill.test.js (session_context_stub +
-// createChatSidebarContext, timers inline).
+// leaves collapsed under them. Harness: session_context_stub's
+// buildSidebarIndicatorContext.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
-
-const ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
-
-function buildContext(indicatorIds = []) {
-  const nav = createElement();
-  const indicatorEls = new Map();
-  indicatorIds.forEach((id) => {
-    ICON_KINDS.forEach((kind) => {
-      indicatorEls.set(kind + '-' + id, createElement({className: 'hidden'}));
-    });
-  });
-  const elements = new Map([['session-list', nav], ...buildSidebarFilterElements(), ...indicatorEls]);
-  const {context} = baseSessionContext({elements});
-  context.SESSION_ID = 'none';
-  context.INITIAL_SESSIONS = [];
-  context.INITIAL_LOAD_ERRORS = [];
-  inlinePageTimers(context);
-  context.document.getElementById = (id) => elements.get(id) || null;
-  context.document.querySelectorAll = () => [];
-  context.document.querySelector = () => null;
-  context.fetch = async (url) => { throw new Error('unexpected fetch ' + url); };
-  createChatSidebarContext(context);
-  const shown = (id) => ({
-    spinner: !elements.get('spinner-' + id).classList.contains('hidden'),
-    gear: !elements.get('worker-indicator-' + id).classList.contains('hidden'),
-    clock: !elements.get('waiting-indicator-' + id).classList.contains('hidden'),
-    dot: !elements.get('unread-' + id).classList.contains('hidden'),
-    subtreeMark: !elements.get('subtree-unread-' + id).classList.contains('hidden'),
-  });
-  return {context, nav, shown};
-}
+const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
@@ -119,7 +86,7 @@ function rowHtml(html, id) {
 }
 
 test('child task rows nest under their parent, collapsed by default', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList(familyRows(), 'all');
 
@@ -135,7 +102,7 @@ test('child task rows nest under their parent, collapsed by default', () => {
 });
 
 test('children order logical sessions before worker leaves, newest first, grandchildren under their parent', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList(familyRows(), 'all');
 
@@ -147,7 +114,7 @@ test('children order logical sessions before worker leaves, newest first, grandc
 });
 
 test('a row whose parent is absent from the list renders as a root', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([worker('orphan', 'archived-parent', 5), meta('legacy')], 'all');
 
@@ -160,7 +127,7 @@ test('a row whose parent is absent from the list renders as a root', () => {
 });
 
 test('a childless logical tree row leads with a chevron and no children container', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([meta('legacy')], 'all');
 
@@ -171,7 +138,7 @@ test('a childless logical tree row leads with a chevron and no children containe
 });
 
 test('toggleTreeNode turns a childless row\u2019s chevron and records it, with nothing to reveal', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   const chevron = createElement({className: 'tree-chevron'});
   context.document.querySelectorAll = (selector) => {
     if (selector === '[data-tree-toggle="legacy"]') return [chevron];
@@ -192,7 +159,7 @@ test('toggleTreeNode turns a childless row\u2019s chevron and records it, with n
 });
 
 test('a worker tree row leads with the worker glyph instead of a chevron', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11)], 'all');
 
@@ -205,7 +172,7 @@ test('a worker tree row leads with the worker glyph instead of a chevron', () =>
 });
 
 test('a starred paint renders the childless chevron like the All paint', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([meta('legacy', {starred: true})], 'starred');
 
@@ -214,7 +181,7 @@ test('a starred paint renders the childless chevron like the All paint', () => {
 });
 
 test('the five-row preview counts root rows only and hides a capped root with its subtree', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [];
   for (let i = 1; i <= 6; i++) rows.push(manager(`work-${i}`, null, 20 - i));
   for (let i = 1; i <= 3; i++) rows.push(worker(`w1-${i}`, 'work-1', i));
@@ -234,7 +201,7 @@ test('the five-row preview counts root rows only and hides a capped root with it
 });
 
 test('four roots with many children stay under the preview cap', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [];
   for (let i = 1; i <= 4; i++) rows.push(manager(`work-${i}`, null, 20 - i));
   for (let i = 1; i <= 8; i++) rows.push(worker(`w1-${i}`, 'work-1', i));
@@ -246,7 +213,7 @@ test('four roots with many children stay under the preview cap', () => {
 });
 
 test('toggleTreeNode flips the in-memory state, the rendered subtree and the chevron', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   const container = createElement({className: 'tree-children hidden'});
   const chevron = createElement({className: 'tree-chevron'});
   context.document.querySelectorAll = (selector) => {
@@ -276,7 +243,7 @@ test('toggleTreeNode flips the in-memory state, the rendered subtree and the che
 });
 
 test('a worker leaf row shows the leaf icon and keeps the archive action alone', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11)], 'all');
 
@@ -291,7 +258,7 @@ test('a worker leaf row shows the leaf icon and keeps the archive action alone',
 });
 
 test('search results stay flat: no nesting, no chevron', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList(familyRows(), 'search');
 
@@ -300,7 +267,7 @@ test('search results stay flat: no nesting, no chevron', () => {
 });
 
 test('a logical row offers New child session; a worker leaf does not', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
 
@@ -310,7 +277,7 @@ test('a logical row offers New child session; a worker leaf does not', () => {
 });
 
 test('a logical row offers Task & context between New child session and Archive; a worker leaf does not', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
 
@@ -323,7 +290,7 @@ test('a logical row offers Task & context between New child session and Archive;
 });
 
 test('the active session’s ancestors open once per switch and a manual collapse then holds', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   context.SESSION_ID = 'g1';
 
   context.renderSessionList(familyRows(), 'all');
@@ -349,7 +316,7 @@ test('the active session’s ancestors open once per switch and a manual collaps
 });
 
 test('expandTreeNode opens a collapsed parent and is a no-op on an open one', () => {
-  const {context} = buildContext();
+  const {context} = buildSidebarIndicatorContext([]);
   const container = createElement({className: 'tree-children hidden'});
   const chevron = createElement({className: 'tree-chevron'});
   context.document.querySelectorAll = (selector) => {
@@ -369,7 +336,7 @@ test('expandTreeNode opens a collapsed parent and is a no-op on an open one', ()
 });
 
 test('an archived worker row shows the delivered check in place of the leaf icon', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   context.renderSessionList([
     manager('r1', null, 10, {name: 'Root'}),
     worker('w1', 'r1', 9, {name: 'Live worker'}),
@@ -385,7 +352,7 @@ test('an archived worker row shows the delivered check in place of the leaf icon
 });
 
 test('the projected worker threads of a legacy session nest under it, collapsed by default', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([
     legacy('old1', 10),
@@ -407,7 +374,7 @@ test('the projected worker threads of a legacy session nest under it, collapsed 
 });
 
 test('a projected leaf click opens the thread view and never switches sessions', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([legacy('old1', 10), projectedLeaf('t1', 'old1', 9)], 'all');
 
@@ -421,7 +388,7 @@ test('a projected leaf click opens the thread view and never switches sessions',
 });
 
 test('a legacy session row keeps its actions but shows no Task & context button', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([legacy('old1', 10), manager('mgr', null, 9)], 'all');
 
@@ -440,7 +407,7 @@ test('a legacy session row keeps its actions but shows no Task & context button'
 // ---------------------------------------------------------------------------
 
 test('a bound node nests its firing leaves under it, collapsed, and keeps the bound row form', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([
     boundNode('cron1', 10),
@@ -479,7 +446,7 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
 });
 
 test('a bound node’s clock and lines follow the task state: disabled goes grey and stops naming a next run', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([
     boundNode('cron1', 10),
@@ -495,7 +462,7 @@ test('a bound node’s clock and lines follow the task state: disabled goes grey
 });
 
 test('an unbound manager row carries the Add schedule hover button, a bound row the Edit one', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([boundNode('cron1', 10), manager('mgr', null, 9)], 'all');
 
@@ -505,7 +472,7 @@ test('an unbound manager row carries the Add schedule hover button, a bound row 
 });
 
 test('a grouped paint records the tree maps, refreshes tree indicators, and keeps expand state across repaints', () => {
-  const {context, nav} = buildContext();
+  const {context, nav} = buildSidebarIndicatorContext([]);
   const rows = [boundNode('cron1', 10), projectedLeaf('t1', 'cron1', 9)];
   let indicatorRefreshes = 0;
   context.Sidebar.refreshTreeIndicators = () => { indicatorRefreshes += 1; };
@@ -522,7 +489,7 @@ test('a grouped paint records the tree maps, refreshes tree indicators, and keep
 });
 
 test('a collapsed bound row\u2019s gear and subtree mark survive expand and collapse', () => {
-  const {context, shown} = buildContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
+  const {context, shown} = buildSidebarIndicatorContext(['cron1', 'cron2', 'leaf1', 'leaf2']);
   context.renderSessionList([
     boundNode('cron1', 10),
     projectedLeaf('leaf1', 'cron1', 9, {has_running_tasks: true}),

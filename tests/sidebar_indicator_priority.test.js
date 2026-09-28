@@ -11,45 +11,9 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
+const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
-const ICON_KINDS = ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread'];
-
-function indicatorElements(ids) {
-  const els = new Map();
-  ids.forEach((id) => {
-    ICON_KINDS.forEach((kind) => {
-      els.set(kind + '-' + id, createElement({className: 'hidden'}));
-    });
-  });
-  return els;
-}
-
-function buildContext(ids) {
-  const nav = createElement();
-  const elements = new Map([['session-list', nav], ...buildSidebarFilterElements(), ...indicatorElements(ids)]);
-  const {context} = baseSessionContext({elements});
-  context.SESSION_ID = 'none';
-  context.INITIAL_SESSIONS = [];
-  context.INITIAL_LOAD_ERRORS = [];
-  inlinePageTimers(context);
-  context.document.getElementById = (id) => elements.get(id) || null;
-  context.document.querySelectorAll = () => [];
-  context.document.querySelector = () => null;
-  context.fetch = async (url) => { throw new Error('unexpected fetch ' + url); };
-  createChatSidebarContext(context);
-  const shown = (id) => ({
-    spinner: !elements.get('spinner-' + id).classList.contains('hidden'),
-    gear: !elements.get('worker-indicator-' + id).classList.contains('hidden'),
-    clock: !elements.get('waiting-indicator-' + id).classList.contains('hidden'),
-    dot: !elements.get('unread-' + id).classList.contains('hidden'),
-    subtreeMark: !elements.get('subtree-unread-' + id).classList.contains('hidden'),
-  });
-  return {context, nav, elements, shown};
-}
 
 function row(id, parent, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', profile: parent ? 'worker' : 'manager',
@@ -59,7 +23,7 @@ function row(id, parent, overrides = {}) {
 const IDLE_ICONS = {spinner: false, gear: false, clock: false, dot: false, subtreeMark: false};
 
 test('a parent shows the gear for a running descendant; without unread facts no mark shows', () => {
-  const {context, shown} = buildContext(['p', 'c', 'g']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
   context.renderSessionList([
     row('p', null), row('c', 'p', {profile: 'manager'}), row('g', 'c', {has_running_tasks: true}),
   ], 'all');
@@ -70,7 +34,7 @@ test('a parent shows the gear for a running descendant; without unread facts no 
 });
 
 test('an expanded parent keeps the gear: expansion never changes the icon', () => {
-  const {context, shown} = buildContext(['p', 'c']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c']);
   context.renderSessionList([row('p', null), row('c', 'p', {has_running_tasks: true})], 'all');
   assert.equal(shown('p').gear, true);
 
@@ -83,7 +47,7 @@ test('an expanded parent keeps the gear: expansion never changes the icon', () =
 });
 
 test('icons are identical before and after expand and collapse', () => {
-  const {context, shown} = buildContext(['p', 'c', 'g']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
   context.renderSessionList([
     row('p', null),
     row('c', 'p', {profile: 'manager', has_unread: true}),
@@ -106,7 +70,7 @@ test('icons are identical before and after expand and collapse', () => {
 });
 
 test('a parent’s own dot shows beside the stand-in gear and outranks the subtree mark', () => {
-  const {context, shown} = buildContext(['p', 'a', 'b']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'a', 'b']);
   context.renderSessionList([
     row('p', null, {has_unread: true}),
     row('a', 'p', {has_running_tasks: true}),
@@ -124,7 +88,7 @@ test('a parent’s own dot shows beside the stand-in gear and outranks the subtr
 });
 
 test('an unread child manager gives the parent the subtree mark, not the dot, collapsed and expanded', () => {
-  const {context, nav, shown} = buildContext(['p', 'c']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['p', 'c']);
   context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager', has_unread: true})], 'all');
 
   assert.deepEqual(shown('p'), {...IDLE_ICONS, subtreeMark: true});
@@ -141,7 +105,7 @@ test('an unread child manager gives the parent the subtree mark, not the dot, co
 });
 
 test('a running child and an unread sibling light the gear and the subtree mark together', () => {
-  const {context, shown} = buildContext(['p', 'a', 'b']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'a', 'b']);
   context.renderSessionList([
     row('p', null),
     row('a', 'p', {has_running_tasks: true}),
@@ -158,7 +122,7 @@ test('a running child and an unread sibling light the gear and the subtree mark 
 });
 
 test('the row’s own dot outranks the subtree mark', () => {
-  const {context, shown} = buildContext(['p', 'c']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c']);
   context.renderSessionList([
     row('p', null, {has_unread: true}), row('c', 'p', {profile: 'manager', has_unread: true}),
   ], 'all');
@@ -173,7 +137,7 @@ test('the row’s own dot outranks the subtree mark', () => {
 });
 
 test('opening an unread child clears every ancestor’s mark in the same paint', () => {
-  const {context, shown} = buildContext(['root', 'mid', 'leaf']);
+  const {context, shown} = buildSidebarIndicatorContext(['root', 'mid', 'leaf']);
   context.renderSessionList([
     row('root', null),
     row('mid', 'root', {profile: 'manager', has_unread: true}),
@@ -192,7 +156,7 @@ test('opening an unread child clears every ancestor’s mark in the same paint',
 });
 
 test('a thinking descendant lights the parent’s gear', () => {
-  const {context, shown} = buildContext(['p', 'w']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {profile: 'worker'})], 'all');
   assert.deepEqual(shown('p'), IDLE_ICONS);
 
@@ -208,7 +172,7 @@ test('a thinking descendant lights the parent’s gear', () => {
 });
 
 test('a row’s own thinking spinner outranks its subtree', () => {
-  const {context, shown} = buildContext(['p', 'c']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c']);
   context.renderSessionList([row('p', null), row('c', 'p', {has_running_tasks: true})], 'all');
 
   context.setSessionIndicator('p', 'thinking');
@@ -219,7 +183,7 @@ test('a row’s own thinking spinner outranks its subtree', () => {
 });
 
 test('a status-poll reply for a leaf repaints its ancestors', async () => {
-  const {context, shown} = buildContext(['p', 'c', 'g']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'c', 'g']);
   context.renderSessionList([row('p', null), row('c', 'p', {profile: 'manager'}), row('g', 'c')], 'all');
   assert.deepEqual(shown('p'), IDLE_ICONS);
 
@@ -244,7 +208,7 @@ test('a status-poll reply for a leaf repaints its ancestors', async () => {
 });
 
 test('a childless legacy row keeps main’s behavior: its own state and unread flag only', () => {
-  const {context, nav, shown} = buildContext(['solo']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['solo']);
   // profile null: a legacy session. Its own running state (running worker
   // threads) stays the legacy delegated-work gear, byte for byte.
   context.renderSessionList([row('solo', null, {profile: null, has_unread: true})], 'all');
@@ -262,7 +226,7 @@ test('a childless legacy row keeps main’s behavior: its own state and unread f
 });
 
 test('a task-tree row’s own running Run paints the spinner, not the gear', () => {
-  const {context, nav, shown} = buildContext(['root']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['root']);
   // profile manager: a task-tree node. Its own live Run (has_running_tasks
   // from the task-tree derivation) is its own work: the spinner, whatever the
   // row's profile — the gear is a stand-in's icon, never an own one.
@@ -283,7 +247,7 @@ test('a task-tree row’s own running Run paints the spinner, not the gear', () 
 });
 
 test('a running worker leaf paints the spinner, not the delegated-work gear', () => {
-  const {context, nav, shown} = buildContext(['p', 'w']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {has_running_tasks: true})], 'all');
   const spinnerClass = nav.innerHTML.match(/<svg id="spinner-w"[^>]*class="([^"]*)"/)[1];
   const gearClass = nav.innerHTML.match(/<svg id="worker-indicator-w"[^>]*class="([^"]*)"/)[1];
@@ -310,7 +274,7 @@ test('a running worker leaf paints the spinner, not the delegated-work gear', ()
 // ---------------------------------------------------------------------------
 
 test('no state paints an alert-indicator element; a failed child reads idle', () => {
-  const {context, nav, shown} = buildContext(['w']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['w']);
   // A failed Run's work verdict is idle (the derivation emits only running
   // and waiting), and no render path emits the retired alert element in any
   // state: the paint, the poll seam, and the stand-in all agree.
@@ -336,7 +300,7 @@ test('no state paints an alert-indicator element; a failed child reads idle', ()
 });
 
 test('a task-tree row’s own waiting (queued) paints the muted clock beside its unread dot', () => {
-  const {context, nav, shown} = buildContext(['w']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['w']);
   context.renderSessionList([row('w', null, {work_state: 'waiting', has_unread: true})], 'all');
   const clockClass = nav.innerHTML.match(/<svg id="waiting-indicator-w"[^>]*class="([^"]*)"/)[1];
   assert.equal(/\bhidden\b/.test(clockClass), false, 'own waiting paints the clock at paint');
@@ -349,7 +313,7 @@ test('a task-tree row’s own waiting (queued) paints the muted clock beside its
 });
 
 test('a parent over a failed (idle) child shows no activity icon', () => {
-  const {context, shown} = buildContext(['p', 'w']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {work_state: 'idle'})], 'all');
   assert.deepEqual(shown('p'), IDLE_ICONS,
       'a failed child is no activity: the parent paints nothing');
@@ -360,7 +324,7 @@ test('a parent over a failed (idle) child shows no activity icon', () => {
 });
 
 test('a waiting child gives the parent no clock; the queued row keeps its own', () => {
-  const {context, nav, shown} = buildContext(['p', 'w']);
+  const {context, nav, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {work_state: 'waiting'})], 'all');
   assert.deepEqual(shown('p'), IDLE_ICONS, 'the clock never stands in for a subtree');
   // The queued row's own clock renders at paint; only parent rows get a post-paint pass.
@@ -372,7 +336,7 @@ test('a waiting child gives the parent no clock; the queued row keeps its own', 
 });
 
 test('the subtree stand-in is the gear alone: waiting descendants contribute nothing', () => {
-  const {context, shown} = buildContext(['p', 'a', 'b']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'a', 'b']);
   context.renderSessionList([
     row('p', null),
     row('a', 'p', {work_state: 'waiting'}),
@@ -386,7 +350,7 @@ test('the subtree stand-in is the gear alone: waiting descendants contribute not
 });
 
 test('the waiting clock and the descendant’s own dot show together; the mark reads the subtree', () => {
-  const {context, shown} = buildContext(['p', 'w']);
+  const {context, shown} = buildSidebarIndicatorContext(['p', 'w']);
   context.renderSessionList([row('p', null), row('w', 'p', {work_state: 'waiting'})], 'all');
   context.recordUnreadFact('w', true);
   context.refreshSessionIndicator('w');

@@ -22,7 +22,7 @@ from src.core.http import get_http_client
 from src.core.json_utils import write_json_atomically
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.memo import StatSignatureMemo
-from src.core.models import ClaudeAccount
+from src.core.models import ClaudeAccount, utc_now_iso
 from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
 from src.core.tasks import SingleTaskPoller
 from src.core.timeouts import (
@@ -299,7 +299,7 @@ class CodexUsageProvider:
       self.last_error = f"no plan-quota reading in {_CODEX_USAGE_SCAN_WINDOW_HOURS}h"
       return None
     chosen = max(events, key=lambda event: _parse_codex_timestamp(event["timestamp"]))
-    return _transform_codex_response(chosen, fetched_at=datetime.now(UTC).isoformat(), account=self.label)
+    return _transform_codex_response(chosen, fetched_at=utc_now_iso(), account=self.label)
 
   def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
     # A changed file is re-read from the start, never tail-only: a token_count
@@ -932,7 +932,7 @@ def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, 
   Claude reports its two windows under fixed field names, so their lengths are
   known here; everything downstream still reads them off ``window_minutes``.
   """
-  now = datetime.now(UTC).isoformat()
+  now = utc_now_iso()
 
   windows: list[dict[str, Any]] = []
   for camel, snake, window_minutes in CLAUDE_WINDOW_FIELDS:

@@ -120,10 +120,11 @@ def derive_state_str(plan: dict) -> str:
 
 
 def _utc_now_iso() -> str:
-  # Lazy: utc_now lives in the model stack (pydantic); only the verb paths stamp times.
-  from src.core.models import utc_now
+  # Lazy: the model stack (pydantic) stays off this module's import path; only
+  # the verb paths stamp times. The stamp form itself lives on utc_now_iso.
+  from src.core.models import utc_now_iso
 
-  return utc_now().isoformat()
+  return utc_now_iso()
 
 
 def require_plan(plans: list[dict], plan_id: int) -> dict:

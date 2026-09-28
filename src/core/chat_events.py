@@ -12,7 +12,7 @@ from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_
 from src.core.json_utils import atomic_write_text
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.models import SessionMetadata, parse_utc_datetime, utc_now
+from src.core.models import SessionMetadata, parse_utc_datetime, utc_now_iso
 from src.core.ndjson import (
     _TAIL_WINDOW_SIZE,
     append_ndjson,
@@ -280,7 +280,7 @@ class ChatEventStore:
     if 'id' not in event:
       event['id'] = str(uuid.uuid4())
     if 'timestamp' not in event:
-      event['timestamp'] = utc_now().isoformat()
+      event['timestamp'] = utc_now_iso()
     await append_ndjson(self._chat_events_path(session_id), event)
     # Keep in-memory cache in sync
     if session_id in self._events_cache:

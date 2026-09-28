@@ -867,15 +867,8 @@
           });
           break;
         }
-        // The region's carried entries may already sit at the head of this
-        // segment — seeded there when it was derived from the page that also
-        // produced the span carrying them. They live in the region now, so
-        // the re-derivation must not see them twice.
-        const carriedIds = new Set(region.map((entry) => String(entry.msg.id)));
         const settled = this.segments[boundaryIndex];
-        const boundary = this.deriveSegments(
-          region.concat(settled.entries.filter(
-            (entry) => !carriedIds.has(String(entry.msg.id)))));
+        const boundary = this.deriveSegments(region.concat(settled.entries));
         this.segments.splice(boundaryIndex, 1, ...boundary.segments);
         this.stats.rederivesOfSettledTurns++;
         if (!boundary.tailSpan.length) break;

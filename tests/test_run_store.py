@@ -17,7 +17,7 @@ from conftest import build_env as build_task_tree_env
 
 from src.core import event_types as ET
 from src.core import runs
-from src.core.models import RunRecord
+from src.core.models import RunRecord, utc_now_iso
 from src.core.runs import (
     RunIdentityConflictError,
     RunStore,
@@ -134,7 +134,7 @@ async def test_record_finish_is_the_one_terminal_writer(tmp_path: Path) -> None:
       session_id, {
           "id": "e1",
           "type": ET.USER,
-          "timestamp": datetime.now(UTC).isoformat(),
+          "timestamp": utc_now_iso(),
           "content": "real input event"
       })
   await store.record_finish(session_id, "r1", "success", input_event_ids=["e1"], exit_code=0)

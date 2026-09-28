@@ -11,7 +11,7 @@ auto-bind archives at migration.
 import asyncio
 import functools
 import traceback
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -31,6 +31,7 @@ from src.core.models import (
     SessionStatus,
     TaskType,
     parse_utc_datetime,
+    utc_now_iso,
 )
 from src.core.scheduled_sessions import write_cron_key
 from src.core.sessions import SessionManager
@@ -137,7 +138,7 @@ class Scheduler:
       raise ValueError(f"No scheduled task named '{task_name}'")
     # A manual run is an intentional new firing: its identity (the fire time)
     # is distinct from every cron occurrence's due-time identity.
-    return await self._execute_task(task_cfg, firing=datetime.now(UTC).isoformat())
+    return await self._execute_task(task_cfg, firing=utc_now_iso())
 
   # ---------------------------------------------------------------------------
   # Main loop
@@ -412,8 +413,7 @@ class Scheduler:
     """
     if not task_cfg.session_id:
       await self._auto_bind(task_cfg, self._reload_config())
-    return await self._execute_bound_task(
-        task_cfg, record_handle=record_handle, firing=firing or datetime.now(UTC).isoformat())
+    return await self._execute_bound_task(task_cfg, record_handle=record_handle, firing=firing or utc_now_iso())
 
   # ---------------------------------------------------------------------------
   # Bound (task-tree) execution — the v2 path

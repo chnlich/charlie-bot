@@ -24,7 +24,7 @@ from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.deferred import deferred_module_getattr
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, ClaudeAccount, ThreadMetadata
+from src.core.models import BackendOption, ClaudeAccount, ThreadMetadata, utc_now_iso
 from src.core.ndjson import append_ndjson
 from src.core.ndjson import write_all as _write_all
 from src.core.process import kill_group_escalating
@@ -376,7 +376,7 @@ class Worker:
 
   async def _persist_and_broadcast(self, fd: int, event: dict) -> None:
     if not event.get("timestamp"):
-      event["timestamp"] = datetime.now(UTC).isoformat()
+      event["timestamp"] = utc_now_iso()
     await _append_event_line(fd, _event_line(event))
     await streaming_manager.broadcast(self._thread.id, event)
 
@@ -461,7 +461,7 @@ class Worker:
     # subscriber reads it, so the broadcast frame is pure waste.
     if event_data.get("type") == ET.SESSION_ATTACHED:
       if not event_data.get("timestamp"):
-        event_data["timestamp"] = datetime.now(UTC).isoformat()
+        event_data["timestamp"] = utc_now_iso()
       await _append_event_line(fd, _event_line(event_data))
       return
     # Detect quota exhaustion errors. The payload copies ride only the type the
@@ -475,7 +475,7 @@ class Worker:
 
     # Ensure all persisted events carry a stable event-time.
     if not event_data.get("timestamp"):
-      event_data["timestamp"] = datetime.now(UTC).isoformat()
+      event_data["timestamp"] = utc_now_iso()
 
     # A pooled task folds every event into its relay decision; a rejection ends
     # the process on its own and the relay follows in run(), so the event is

@@ -40,7 +40,7 @@ from src.api.cron import router as cron_router
 from src.api.deps import get_session_manager, get_task_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus
+from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -323,7 +323,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
   # A just-ran anchor: the next occurrence is always ahead, so no replayed tick
   # fires and the copied bookkeeping is observable verbatim.
-  copied_run = datetime.now(UTC).isoformat()
+  copied_run = utc_now_iso()
   cron_session.last_scheduled_run = copied_run
   await session_mgr.save_metadata(cron_session)
 

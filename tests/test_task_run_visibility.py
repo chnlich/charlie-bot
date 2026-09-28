@@ -21,7 +21,7 @@ from conftest import patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core import thinking_state
-from src.core.models import CreateSessionRequest, RunRecord, TaskSpec
+from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
 from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
@@ -165,7 +165,7 @@ async def test_failed_run_header_reads_failed_with_its_error(tmp_path: Path, mon
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": datetime.now(UTC).isoformat()
+              "timestamp": utc_now_iso()
           },
       ])
   await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed", exit_code=-1)
@@ -213,7 +213,7 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": datetime.now(UTC).isoformat()
+              "timestamp": utc_now_iso()
           },
       ])
   await tree.runs.record_finish(worker.id, "run-s", "failed")
@@ -250,7 +250,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": datetime.now(UTC).isoformat()
+              "timestamp": utc_now_iso()
           },
       ])
 

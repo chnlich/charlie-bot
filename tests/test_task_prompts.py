@@ -25,7 +25,8 @@ from src.core.models import PatchSessionTaskRequest, TaskSpec, TaskType
 from src.core.run_token import CallerIdentity
 from src.core.task_prompts import (
     PromptSnapshot,
-    preview_snapshot,
+    assemble_snapshot,
+    build_segments,
     prompt_task_type,
 )
 from src.core.task_sessions import TaskTreeManager
@@ -96,7 +97,8 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
   snapshots = {}
   for label in ("root", "mid", "low"):
     meta = await mgr.load_meta(ids[label])
-    snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    snapshot = assemble_snapshot(segments)
     snapshots[label] = snapshot
   for label, snapshot in snapshots.items():
     # The one manager contract from the shared template, at every depth.
@@ -118,7 +120,8 @@ async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) ->
   cfg, _sm, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["root"])
-  snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+  segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+  snapshot = assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/master.md" in refs
   assert "prompts/task_base.md" in refs
@@ -137,7 +140,8 @@ async def test_default_empty_local_rules_launch_cleanly(tmp_path: Path) -> None:
   for label in ("root", "worker1"):
     meta = await mgr.load_meta(ids[label])
     assert meta.subtree_prompt_ref is None and meta.node_prompt_ref is None
-    snapshot, _err = preview_snapshot(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    segments, _err = build_segments(cfg, meta, "manager_turn", chain=(), node_ref=None, overlay=None)
+    snapshot = assemble_snapshot(segments)
     assert snapshot.blocks  # rules and common blocks exist without any local rule
     assert not [s for s in sources_of(snapshot) if s[0] in ("subtree", "node")]
 
@@ -148,7 +152,8 @@ async def test_worker_kinds_get_their_applicable_contracts(tmp_path: Path, kind:
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["worker1"])
   assert meta is not None and meta.task is not None
-  snapshot, _err = preview_snapshot(cfg, meta, kind, chain=(), node_ref=None, overlay=None)
+  segments, _err = build_segments(cfg, meta, kind, chain=(), node_ref=None, overlay=None)
+  snapshot = assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/task_base.md" in refs
   if kind == "review":
@@ -169,7 +174,8 @@ async def test_verify_task_gets_the_verify_contract(tmp_path: Path) -> None:
       name="V",
       task=TaskSpec(goal="verify goal", task_type="verify"))
   meta = await mgr.load_meta(task.id)
-  snapshot, _err = preview_snapshot(cfg, meta, "work", chain=(), node_ref=None, overlay=None)
+  segments, _err = build_segments(cfg, meta, "work", chain=(), node_ref=None, overlay=None)
+  snapshot = assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/verify.md" in refs
   assert "prompts/worker.md" not in refs
@@ -198,7 +204,8 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
     index = await mgr._get_index()
     from src.core.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
-    snapshot, _err = preview_snapshot(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
+    segments, _err = build_segments(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
+    snapshot = assemble_snapshot(segments)
     return snapshot
 
   # The worker sees exactly root+mid subtree rules then its own node rule.

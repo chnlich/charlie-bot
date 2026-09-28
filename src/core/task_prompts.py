@@ -474,25 +474,6 @@ def build_segments(
   return segments, overlay_error
 
 
-def preview_snapshot(
-    cfg: CharlieBotConfig,
-    meta: SessionMetadata,
-    kind: str,
-    *,
-    chain: tuple[tuple[str, str | None], ...],
-    node_ref: str | None,
-    overlay: str | None,
-) -> tuple[PromptSnapshot, OSError | None]:
-  """The next-start snapshot-shaped preview: the same builder the launch path uses.
-
-  A preview is the current configuration — never a separately assembled
-  approximation. The returned overlay error (a declared-but-unreadable overlay)
-  rides to the caller exactly as at launch.
-  """
-  segments, overlay_error = build_segments(cfg, meta, kind, overlay=overlay, chain=chain, node_ref=node_ref)
-  return assemble_snapshot(segments), overlay_error
-
-
 # ---------------------------------------------------------------------------
 # Task/input context rendering (NOT part of the instruction hash)
 #

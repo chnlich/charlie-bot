@@ -1706,12 +1706,12 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
 
     # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
     from src.core.task_execution import capture_prompt_chain
-    from src.core.task_prompts import preview_snapshot
+    from src.core.task_prompts import assemble_snapshot, build_segments
     meta = await tree.load_meta(manager.id)
     index = await tree._get_index()
     chain, node_ref = capture_prompt_chain(tree, index, meta)
-    preview, _err = preview_snapshot(
-        cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    preview = assemble_snapshot(segments)
     assert preview.to_json_dict() == stored
 
     # Editing the own subtree rule: the next-start preview changes for the node
@@ -1722,15 +1722,15 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     meta = await tree.load_meta(manager.id)
     index = await tree._get_index()
     chain, node_ref = capture_prompt_chain(tree, index, meta)
-    next_preview, _err = preview_snapshot(
-        cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    next_preview = assemble_snapshot(segments)
     assert next_preview.prompt_hash != stored["prompt_hash"]
     assert "program-wide rule v2" in "\n\n".join(b.text for b in next_preview.blocks)
 
     child_meta = await tree.load_meta(child.id)
     chain, node_ref = capture_prompt_chain(tree, index, child_meta)
-    child_preview, _err = preview_snapshot(
-        cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    segments, _err = build_segments(cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+    child_preview = assemble_snapshot(segments)
     assert "program-wide rule v2" in "\n\n".join(b.text for b in child_preview.blocks)
     # The finished Run's evidence is immutable history.
     assert _snapshot_of(run) == stored

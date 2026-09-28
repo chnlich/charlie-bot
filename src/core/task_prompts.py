@@ -550,8 +550,7 @@ def review_task_context(
 ) -> str:
   """The review run's volatile half: context, log paths, and this run's git steps.
 
-  The same pieces build_review_prompt composes for v1 — one maintained source
-  (src/core/review.py), two callers.
+  The pieces come from one maintained source (src/core/review.py).
   """
   from src.core.review import review_git_venue, review_log_pointer, review_numbered_steps
   return (

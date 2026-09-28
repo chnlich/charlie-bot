@@ -247,7 +247,9 @@ A raw log that stops growing while the process is still alive is what the server
 ### 10.2 Worker Instructions
 Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt
 itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/core/spawner_prompt.py`) for
-workers, `build_review_prompt` (`src/core/review.py`) for reviewers. No instruction file is written into a
+workers, `review_rules_text` (`src/core/review.py`) for reviewers, rendered into the managed instructions by
+`_worker_kind_rule_segments` (`src/core/task_prompts.py`) beside the volatile review context that
+`_build_review_context` (`src/core/task_execution.py`) assembles. No instruction file is written into a
 worker's worktree, so the checked-out repo's own AGENTS.md/CLAUDE.md stays in effect. Master sessions are the
 only path that writes one: `_build_instructions_content` (`src/agents/master_cc_run.py`) assembles the
 git-shared base prompt, the per-host override, the memory block, and the project layer, and the backend writes

@@ -9,6 +9,7 @@ paths.
 import asyncio
 import json
 import os
+from itertools import islice
 from pathlib import Path
 from typing import IO, Any
 
@@ -18,9 +19,9 @@ from src.core.ndjson import (
     append_ndjson,
     count_ndjson_lines,
     iter_ndjson_events,
+    iter_ndjson_events_from_end,
     parse_ndjson_file,
     parse_ndjson_line,
-    parse_ndjson_tail_parseable,
 )
 
 
@@ -105,7 +106,7 @@ def test_parse_ndjson_file_matches_the_from_end_walk_over_mixed_corpora(tmp_path
     f.write(b'{"i": 2, "hard": "ok\xff\n')
     f.write(giant.encode() + b"\n")
     f.write(b'{"i": 3}')
-  assert parse_ndjson_file(target) == parse_ndjson_tail_parseable(target, 10**6)
+  assert parse_ndjson_file(target) == list(iter_ndjson_events_from_end(target, log_event="t", log_fields={}))[::-1]
 
 
 def test_parse_ndjson_file_multi_megabyte_lines_parse_whole(tmp_path: Path) -> None:
@@ -124,10 +125,10 @@ def _write_mixed(path: Path, chunks: list[str], trailing_newline: bool = True) -
   path.write_text(body, encoding="utf-8")
 
 
-def test_parse_ndjson_tail_parseable_crosses_window_boundary(tmp_path: Path) -> None:
-  # 300 lines of ~3 KB each: the 512 KiB window holds fewer than the requested
-  # 200 parseable events only when malformed lines eat the slice, so this file
-  # also forces the growth path with a malformed band across the boundary.
+def test_iter_ndjson_events_from_end_tail_limit_skips_a_malformed_band(tmp_path: Path) -> None:
+  # 300 lines of ~3 KB each with a malformed band in the middle: the newest
+  # 200 parseable events the walk answers equal the whole-file parse's last
+  # 200, so lines the parser rejects never count toward the consumer's limit.
   target = tmp_path / "events.jsonl"
   chunks = []
   for i in range(300):
@@ -135,8 +136,9 @@ def test_parse_ndjson_tail_parseable_crosses_window_boundary(tmp_path: Path) -> 
     if 100 <= i < 150:
       chunks.append('{"malformed": ' + "y" * 3000)
   _write_mixed(target, chunks)
-  assert parse_ndjson_tail_parseable(target, 200) == parse_ndjson_file(target)[-200:]
-  assert [e["i"] for e in parse_ndjson_tail_parseable(target, 200)] == list(range(100, 300))
+  newest_first = list(islice(iter_ndjson_events_from_end(target, log_event="t", log_fields={}), 200))
+  assert newest_first[::-1] == parse_ndjson_file(target)[-200:]
+  assert [e["i"] for e in newest_first[::-1]] == list(range(100, 300))
 
 
 def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:

@@ -14,6 +14,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 import pytest
+from conftest import _async_wait_for
 from structlog.testing import capture_logs
 
 from src.agents.transcription import registry as transcription_registry
@@ -164,14 +165,6 @@ def _start_relay(
   return asyncio.create_task(voice.voice_preview_relay(socket, SESSION_ID, BACKEND_ID))
 
 
-async def _wait_until(predicate: object, *, timeout_s: float = 1.0) -> None:
-  loop = asyncio.get_running_loop()
-  deadline = loop.time() + timeout_s
-  while not predicate():
-    assert loop.time() < deadline, "condition not reached in time"
-    await asyncio.sleep(0.001)
-
-
 @pytest.mark.asyncio
 async def test_final_after_end_archives_the_pair_then_pushes_the_final(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -303,7 +296,7 @@ async def test_a_final_before_the_end_frame_is_a_failure_with_no_archive(
   socket = FakePreviewSocket([FRAME_A, _HOLD, _END_FRAME])
   backend = FakeLiveBackend(FINAL_TEXT, early_after_chunks=1)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  await _wait_until(lambda: socket.sent)
+  await _async_wait_for(lambda: socket.sent, 1.0, "the preview relay never sent its first frame")
 
   assert [frame["type"] for frame in socket.sent] == ["error"]
   assert "end frame" in socket.sent[0]["message"]

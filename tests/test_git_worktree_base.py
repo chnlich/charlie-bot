@@ -26,10 +26,10 @@ from pathlib import Path
 import pytest
 
 from src.core.git import (
-  BaseBranchResolutionError,
-  BaseResolution,
-  git_create_worktree,
-  git_current_branch,
+    BaseBranchResolutionError,
+    BaseResolution,
+    git_create_worktree,
+    git_current_branch,
 )
 
 

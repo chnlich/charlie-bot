@@ -56,6 +56,13 @@ def stable_close_request_event_id(session_id: str, request_id: str) -> str:
   return str(uuid.uuid5(TASK_ID_NAMESPACE, f"close-request:{session_id}:{request_id}"))
 
 
+def stable_close_blocked_notice_id(session_id: str, request_id: str) -> str:
+  """The input id of the one notice telling a requester its (session, request_id)
+  close request stayed blocked: recovery replays of the same request re-derive it
+  and admit nothing new."""
+  return str(uuid.uuid5(TASK_ID_NAMESPACE, f"close-blocked-notice:{session_id}:{request_id}"))
+
+
 def stable_close_event_id(session_id: str, request_id: str) -> str:
   """The event id one (session, request_id) close binds to: a duplicate close
   operation id replays the original task_closed fact instead of a new transition,

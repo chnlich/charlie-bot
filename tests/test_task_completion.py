@@ -256,6 +256,90 @@ async def test_implement_completion_requires_review_and_landing_evidence(tmp_pat
 # Own-manager close: 202 pending_run_finish
 # ---------------------------------------------------------------------------
 
+
+async def live_manager_caller(tree: TaskTreeManager, session_id: str, run_id: str) -> CallerIdentity:
+  """Register one live manager_turn Run and return the agent caller its token binds."""
+  pid, pid_start, started_at = live_identity()
+  await tree.runs.register_run(
+      RunRecord(id=run_id, session_id=session_id, kind="manager_turn", pid=pid, pid_start=pid_start,
+                started_at=started_at))
+  return CallerIdentity(kind="agent", claims=RunTokenClaims(run_id=run_id, session_id=session_id, agent="manager"))
+
+
+def close_requests_of(tree: TaskTreeManager, session_id: str) -> list[dict]:
+  return [e for e in tree.events.load_events(session_id) if e["type"] == ET.TASK_CLOSE_REQUESTED]
+
+
+@pytest.mark.asyncio
+async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp_path: Path) -> None:
+  """A run id that is not a Run of the task or its children (the 9/27 shape: a
+  backend's own run id) is refused at request time instead of a 202 the
+  re-evaluation could only block."""
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  agent = await live_manager_caller(tree, manager.id, "run-mgr")
+
+  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr", "rollout-1"])
+  with pytest.raises(TaskConflictError) as refused:
+    await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
+  assert any("rollout-1 is not a Run of task" in b for b in refused.value.blockers)
+  # The caller's own still-active Run is no blocker: it is judged as the success it must become.
+  assert not any("run-mgr" in b for b in refused.value.blockers)
+  assert close_requests_of(tree, manager.id) == []
+  assert tree.task_state(manager.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_path: Path) -> None:
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
+  agent = await live_manager_caller(tree, manager.id, "run-mgr")
+
+  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
+  with pytest.raises(TaskConflictError) as refused:
+    await tree.completion.complete_task(manager.id, request_id="close-1", evidence=evidence, caller=agent)
+  assert f"has open descendant task {child.id}" in refused.value.blockers
+  assert close_requests_of(tree, manager.id) == []
+  assert tree.task_state(manager.id) == "open"
+
+
+@pytest.mark.asyncio
+async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_path: Path) -> None:
+  """A valid request is saved; input arriving during the requesting Run blocks
+  the close after that Run succeeds. The requester gets one wake input naming
+  the request and its blockers — never a user event — and a recovery replay of
+  the same request adds no second notice."""
+  from src.core.task_recovery import reconcile_task_tree
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root")
+  manager = await create_task(tree, parent=root.id, request_id="mgr")
+  agent = await live_manager_caller(tree, manager.id, "run-mgr")
+
+  evidence = CompletionEvidence(summary="done", result_refs=["report:done"], run_ids=["run-mgr"])
+  status, payload = await tree.completion.complete_task(
+      manager.id, request_id="close-1", evidence=evidence, caller=agent)
+  assert (status, payload["status"]) == (202, "pending_run_finish")
+  assert len(close_requests_of(tree, manager.id)) == 1
+
+  late = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="one more thing", actor="user")
+  await tree.dispatch.finish_run(manager.id, "run-mgr", outcome="success")
+  assert tree.task_state(manager.id) == "open"
+
+  new_inputs = [e for e in tree.dispatch.pending_inputs(manager.id) if e["id"] != late["id"]]
+  assert len(new_inputs) == 1
+  notice = new_inputs[0]
+  assert notice["type"] not in (ET.USER, ET.AGENT_MESSAGE)
+  assert "close-1" in notice["content"]
+  assert f"has unprocessed input: {late['id']}" in notice["content"]
+
+  await reconcile_task_tree(cfg, tree, session_mgr)
+  assert tree.task_state(manager.id) == "open"
+  assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
+
 # ---------------------------------------------------------------------------
 # Cancel and reopen
 # ---------------------------------------------------------------------------

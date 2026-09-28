@@ -85,7 +85,7 @@ charlie-bot/
 |------|------|------------------|
 | **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
 | **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
-| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, pushes the branch to the base (git rejects a non-fast-forward push), and cleans up the worktree. Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
+| **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
 **Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/constants.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
@@ -103,7 +103,7 @@ charlie-bot/
 ### 4.3 Git Isolation Strategy
 - **Thread Branch Isolation**: Each Worker operates on its own branch in an isolated git worktree to prevent conflicts
 - **Reviewer Merge-Back**: The review agent rebases the worker's branch onto the remote base branch and pushes it there; git rejects a non-fast-forward push, so the base only fast-forwards
-- **Worktree Cleanup**: The reviewer removes the worktree after the branch lands on the base
+- **Worktree Cleanup**: The executor removes the worktree once the task actually delivers; failed, blocked and unproven outcomes keep it, and `keep_worktree` pins it
 
 ---
 
@@ -116,7 +116,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
    - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/cli/delegate.py`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
-   - The CLI POSTs to `/api/internal/delegate`, which creates a thread and spawns a Worker via `spawn_worker()` (`src/core/spawner.py`)
+   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`_delegate_task_tree` in `src/api/internal.py`); the tree's executor launches it (`execute_run` in `src/core/task_execution.py`)
 
 2. **Worker Execution** (Phase 1 — Implement):
    - Spawner creates an isolated git worktree on a new branch (`charliebot/task-{ts}-{id}`)
@@ -126,7 +126,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - Events are streamed via WebSocket and persisted to `events.jsonl`
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
-   - On successful worker completion, `spawn_review_worker()` (`src/core/review.py`) automatically spawns a Review Agent
+   - On successful work-run completion, `_maybe_spawn_review` (`src/core/task_execution.py`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`src/core/review.py`)
    - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `backends.preference` config
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`

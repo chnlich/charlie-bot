@@ -417,7 +417,6 @@ class PreviewSetup:
   # fence. Empty unless the caller asked for them.
   backend_additions: list[tuple[dict, tuple[str, str] | None]]
   credential_section: tuple[str, str] | None
-  fresh_hint: bool
   source_branch: str
   source_sha: str
   started_at: str
@@ -497,7 +496,6 @@ def _prepare_preview(
       backend_entry=entry,
       backend_additions=additions,
       credential_section=credential,
-      fresh_hint=fresh,
       source_branch=branch,
       source_sha=sha,
       started_at=datetime.now(UTC).isoformat(),

@@ -105,13 +105,8 @@ class TuiCliBackend(BackendBase):
 
 
 # One class per type: a config entry validates against the subclass its ``type``
-# names, so illegal field/type combinations are unconstructable (the same
-# discriminated-union pattern as src.core.models' WatchTarget).
-BACKEND_CLASSES = (
-    CcClaudeBackend, CcKimiBackend, CcOpenAICompatibleBackend, CodexBackend, CharlieCodeBackend, GeminiBackend,
-    OpencodeBackend, AntigravityBackend, TuiCliBackend)
-
-# Discriminated union on `type`: config.yaml entries dispatch on their type tag.
+# names, so illegal field/type combinations are unconstructable, and config.yaml
+# entries dispatch on their type tag (the same pattern as src.core.models' WatchTarget).
 BackendOption = Annotated[
     CcClaudeBackend | CcKimiBackend | CcOpenAICompatibleBackend | CodexBackend | CharlieCodeBackend | GeminiBackend |
     OpencodeBackend | AntigravityBackend | TuiCliBackend,

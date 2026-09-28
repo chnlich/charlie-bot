@@ -15,7 +15,6 @@ from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_valida
 # invocation's get_config) skips constructing the session/API models; these
 # re-exports keep the established src.core.models import path working.
 from src.core.backend_models import (  # noqa: F401  (re-export)
-    BACKEND_CLASSES,
     BACKEND_OPTION_ADAPTER,
     MODEL_OPTIONAL_ROUTING_BACKEND_TYPES,
     BackendBase,

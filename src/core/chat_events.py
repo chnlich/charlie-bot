@@ -9,7 +9,7 @@ from pathlib import Path
 import orjson
 
 from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
-from src.core.json_utils import atomic_write_text
+from src.core.json_utils import atomic_write_stream
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.models import SessionMetadata, parse_utc_datetime, utc_now_iso
@@ -49,6 +49,27 @@ _WALK_CHUNK_BYTES = _TAIL_WINDOW_SIZE
 def chat_events_path(session_dir: Path) -> Path:
   """Return the path to a session's chat_events.jsonl under its session directory."""
   return session_dir / "data" / "chat_events.jsonl"
+
+
+_ARCHIVE_COPY_CHUNK = 8 * 1024 * 1024
+
+
+def _last_byte(path: Path, size: int) -> int:
+  with path.open("rb") as f:
+    f.seek(size - 1)
+    return f.read(1)[0]
+
+
+def _copy_range(src, dst, start: int, end: int) -> None:
+  """Copy the source's byte range [start, end) at its current write position."""
+  src.seek(start)
+  remaining = end - start
+  while remaining:
+    chunk = src.read(min(remaining, _ARCHIVE_COPY_CHUNK))
+    if not chunk:
+      raise OSError(f"source shortened under the archive copy: {remaining} bytes missing at offset {src.tell()}")
+    dst.write(chunk)
+    remaining -= len(chunk)
 
 
 def chat_event_archives_dir(session_dir: Path) -> Path:
@@ -594,63 +615,108 @@ class ChatEventStore:
     return chat_events_path(self._session_dir(session_id))
 
   def archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
-    """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
+    """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive.
+
+    One binary pass finds the split point — the split semantics only need the
+    pre-cutoff candidates decoded, and the walk stops at the first keep — then
+    the two outputs copy the source's own byte ranges: the archive rides the
+    pre-split non-blank runs, the atomic live rewrite streams the kept tail
+    straight off the source handle. The corpus never materializes as Python
+    strings: the gigabyte-class live files paid a transient heap at the
+    corpus's size plus a full-corpus join on the old list-and-join shape.
+    """
     live_path = self._chat_events_path(session_id)
     if not live_path.exists():
       return {"events_archived": 0, "archive_file": None}
 
-    archived_raw: list[str] = []
-    kept_raw: list[str] = []
-    split_reached = False
-    with open(live_path, encoding="utf-8") as f:
+    file_size = live_path.stat().st_size
+    runs: list[tuple[int, int]] = []
+    run_start: int | None = None
+    run_end = 0
+    archived_count = 0
+    kept_start: int | None = None
+    with open(live_path, "rb") as f:
+      pos = 0
       for line in f:
-        raw = line.rstrip("\n")
-        if split_reached:
-          kept_raw.append(raw)
-          continue
+        line_end = pos + len(line)
+        raw = line[:-1] if line.endswith(b"\n") else line
         stripped = raw.strip()
-        if not stripped:
-          continue
+        if not stripped or not raw.isascii():
+          # ASCII bytes answer the blank rule str.strip() applies; a non-ASCII
+          # line decodes for the same test, and undecodable pre-split bytes
+          # fail loud here exactly as the text-mode walk's decode did.
+          if not raw.isascii():
+            stripped = raw.decode("utf-8").strip()
+          if not stripped:
+            if run_start is not None:
+              runs.append((run_start, run_end))
+              run_start = None
+            pos = line_end
+            continue
         try:
           event = orjson.loads(stripped)
         except ValueError as e:
           log.debug("chat_event_archive_parse_skip", session_id=session_id, error=str(e))
-          split_reached = True
-          kept_raw.append(raw)
-          continue
+          kept_start = pos
+          break
         ts_raw = event.get("timestamp")
         if not ts_raw:
-          split_reached = True
-          kept_raw.append(raw)
-          continue
+          log.debug("chat_event_archive_ts_missing_skip", session_id=session_id)
+          kept_start = pos
+          break
         try:
           ts = parse_utc_datetime(ts_raw)
         except ValueError as e:
           log.debug("chat_event_archive_ts_parse_skip", session_id=session_id, error=str(e))
-          split_reached = True
-          kept_raw.append(raw)
-          continue
+          kept_start = pos
+          break
         if ts < cutoff_utc:
-          archived_raw.append(raw)
+          if run_start is None:
+            run_start = pos
+          run_end = line_end
+          archived_count += 1
         else:
-          split_reached = True
-          kept_raw.append(raw)
+          kept_start = pos
+          break
+        pos = line_end
+      if run_start is not None:
+        runs.append((run_start, run_end))
 
-    if not archived_raw:
+    if not runs:
       log.info("chat_events_archive_noop", session_id=session_id)
       return {"events_archived": 0, "archive_file": None}
 
+    # The text-mode walk re-emitted every raw line with exactly one trailing
+    # newline; a corpus's final unterminated line gains one on either output.
+    ends_with_newline = file_size > 0 and _last_byte(live_path, file_size) == 0x0A
     iso = cutoff_utc.isocalendar()
     archives_dir = chat_event_archives_dir(self._session_dir(session_id))
     archives_dir.mkdir(parents=True, exist_ok=True)
     archive_path = archives_dir / f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
-    with open(archive_path, "a", encoding="utf-8") as f:
-      for raw in archived_raw:
-        f.write(raw + "\n")
+    with open(live_path, "rb") as src, open(archive_path, "ab") as archive:
+      for start, end in runs:
+        _copy_range(src, archive, start, end)
+      if runs[-1][1] == file_size and not ends_with_newline:
+        archive.write(b"\n")
 
-    atomic_write_text(live_path, "".join(raw + "\n" for raw in kept_raw))
+    def _write_kept(stream) -> None:
+      if kept_start is None:
+        return  # every line pre-split: the live file empties
+      with open(live_path, "rb") as src:
+        src.seek(kept_start)
+        remaining = file_size - kept_start
+        while remaining:
+          chunk = src.read(min(remaining, _ARCHIVE_COPY_CHUNK))
+          if not chunk:
+            break
+          stream.write(chunk)
+          remaining -= len(chunk)
+      if not ends_with_newline:
+        stream.write(b"\n")
+
+    atomic_write_stream(live_path, _write_kept)
 
     return {
-        "events_archived": len(archived_raw),
+        "events_archived": archived_count,
         "archive_file": str(archive_path),
     }

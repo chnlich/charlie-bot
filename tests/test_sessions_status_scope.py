@@ -55,9 +55,7 @@ async def test_status_returns_exactly_the_requested_ids(
 
 
 @pytest.mark.asyncio
-async def test_status_derived_map_serves_whole_between_state_bumps(
-    tmp_path: Path,
-) -> None:
+async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Path,) -> None:
   """A clean poll serves the last fold's map; any state bump forces a re-derive.
 
   The memo is the /status poll's freshness boundary: a bump that failed to
@@ -86,11 +84,12 @@ async def test_status_derived_map_serves_whole_between_state_bumps(
   fourth = await session_mgr.resolve_sidebar_state([session], **flags)
   assert fourth is not second
 
-  sidebar_state.store_snapshot_entry(session.id, {
-      sidebar_state.THREAD_RUNNING: False,
-      sidebar_state.PENDING_TRIGGER_COUNT: 0,
-      sidebar_state.NEXT_TRIGGER_AT: None,
-      sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
-  })
+  sidebar_state.store_snapshot_entry(
+      session.id, {
+          sidebar_state.THREAD_RUNNING: False,
+          sidebar_state.PENDING_TRIGGER_COUNT: 0,
+          sidebar_state.NEXT_TRIGGER_AT: None,
+          sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
+      })
   fifth = await session_mgr.resolve_sidebar_state([session], **flags)
   assert fifth is not fourth

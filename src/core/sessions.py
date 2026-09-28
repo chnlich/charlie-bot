@@ -2977,8 +2977,7 @@ class SessionManager:
         if force_full:
           # The every-10th sweep serves the polls that follow it: its stores
           # bump the generation and the next poll re-derives with its results.
-          self._schedule_sidebar_sweep(
-              [m for m in sessions if m.status != SessionStatus.ARCHIVED])
+          self._schedule_sidebar_sweep([m for m in sessions if m.status != SessionStatus.ARCHIVED])
         return cached
 
     # Archived sessions cannot have running tasks or pending triggers, so skip

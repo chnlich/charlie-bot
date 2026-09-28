@@ -501,6 +501,7 @@ import src.core.token_tally as tt
 
 CACHE = Path.home() / ".charliebot" / "cache" / "token_tally.json"
 SCRATCH = Path("/tmp/opencode/m7-changed-round.json")
+SCRATCH.parent.mkdir(parents=True, exist_ok=True)  # a wiped /tmp must not zero the changed-round reading
 
 def changed_round():
     # The changed-round shape: the walk ran, the aggregate memo is gone, the document's
@@ -660,6 +661,7 @@ import src.core.token_tally as tt
 
 CACHE = Path.home() / ".charliebot" / "cache" / "token_tally.json"
 SCRATCH = Path("/tmp/opencode/m7-restart-cold.json")
+SCRATCH.parent.mkdir(parents=True, exist_ok=True)  # the changed-round block must not be this block's dir creator
 shutil.copy2(CACHE, SCRATCH)  # live home read once for the copy, never written
 SIDECAR = CACHE.parent / tt._rows_sidecar_name(tt.DEFAULT_OPENCODE_DB)
 corpus_mb = (CACHE.stat().st_size + SIDECAR.stat().st_size) / 1e6
@@ -5820,7 +5822,9 @@ initials (`$`, `\(`, `\[`), and any character reference (which the browser decod
 walk's text nodes) forces it, so the skip is byte-identical. The cost is client-side, invisible
 to every HTTP probe, so the collector loads the checkout's real renderer code with the page's
 CDN-pinned katex 0.16.21 build over a jsdom DOM (one-time scratch install
-`npm i --prefix /tmp jsdom@24`, resolved through `JSDOM_HOME`, default /tmp/node_modules) and
+`npm i --prefix /tmp jsdom@24`, resolved through `JSDOM_HOME`, default /tmp/node_modules —
+the block re-creates that install itself when the scratch home is missing, so a wiped /tmp
+cannot leave the walk unmeasured) and
 times the walk through the page's own call shapes over the live corpora (read-only): the worst
 message page (the M60 corpus — the 40 largest assistant bodies of the live chat file carrying
 the most bytes) and the largest math-free streamed draft at the coalesced paint cadence. Evidence
@@ -5828,6 +5832,15 @@ points the collector at the before and after checkouts (`CHECKOUT` at each root)
 as the M33 protocol:
 
 ```bash
+# The scratch jsdom home dies with /tmp; the one-time install the preflight message names is
+# re-created here instead of leaving the walk unmeasured until an operator notices. A custom
+# JSDOM_HOME stays its operator's setup. npm itself rides a pinned registry tarball when the
+# host has no npm binary; a failed install surfaces through node's jsdom preflight, rc != 0.
+if [ "${JSDOM_HOME:-/tmp/node_modules}" = /tmp/node_modules ] && [ ! -d /tmp/node_modules/jsdom ]; then
+  curl -sL -o /tmp/npm-cli.tgz https://registry.npmjs.org/npm/-/npm-10.9.0.tgz
+  rm -rf /tmp/npm-cli && mkdir -p /tmp/npm-cli && tar -xzf /tmp/npm-cli.tgz -C /tmp/npm-cli --strip-components=1
+  node /tmp/npm-cli/bin/npm-cli.js i --prefix /tmp jsdom@24 --silent
+fi
 CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot}; node "$CHECKOUT/tests/katex_walk_collector.js"
 ```
 
@@ -8385,6 +8398,7 @@ from src.agents.backends.base import tail_follow_events, _TAIL_POLL_INTERVAL
 
 SCRATCH = Path("/tmp/lp_m122/probe.jsonl")
 IDLE = Path("/tmp/lp_m122/idle.jsonl")
+SCRATCH.parent.mkdir(parents=True, exist_ok=True)  # a wiped /tmp must not zero the discovery-delay reading
 LINES = 24
 PACE = 0.25
 IDLE_WINDOW = 2.0
@@ -8719,6 +8733,7 @@ EOF
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this PR | M7 changed-round / M7 restart-cold / M81 / M122 collectors repaired, the sweep's own machinery (no product-code change): a same-day /tmp wipe (2026-09-28 ~12:36, deleter unidentified — tmpfiles' 30-day age bound does not fire same-day) deleted every scratch state the standing collectors assume — /tmp/charliebot-logs (the live server's tee still writes its deleted fd, so M2, M11's log-grep half and M93 read nothing this round and stay host-state unmeasured until a server restart), /tmp/opencode, /tmp/lp_m122, /tmp/node_modules. As printed, the M7 changed-round block failed rc=1 (copy2 into the missing /tmp/opencode — the restart-cold block beside it only passed because the warm-gate block's own mkdir runs one block earlier, a pure ordering artifact), M122 failed rc=1 (nothing in the sweep creates /tmp/lp_m122), and M81 exited on its jsdom preflight with the install left to an operator. Fix: the three scratch-file blocks create their parent dir the way the warm-gate and M107 blocks already do, and the M81 block re-creates the one-time jsdom install its own preflight message names (npm itself rides a pinned registry tarball — the host has no npm binary). Verified on the wiped state, the four blocks verbatim back-to-back: M7 changed-round 0.114 s (line < 0.5 s), restart-cold 0.299 s (line < max(0.5 s, 1.63 s)), M122 discovery median 10.2 ms max 10.4 ms (line median < 0.015 s, max < 0.030 s), M81 re-render 30.60 ms (line 60 ms at 2 delimiter-bearing bodies) — the same bands the earlier same-day sweep read (0.111 s / 0.285 s / 8.2 ms / 31.04 ms) at load 1.9-2.4 one-minute; no product code moves, so every other standing reading carries over unchanged | every round a collector fails is a round that metric's regression watch does not run; the M97 repair (2026-09-28) pinned the same rule for its own collector |
 | 2026-09-28 | this commit | M126 introduced with its landing fix: the verbatim collector, three interleaved rounds, base checkout before vs branch worktree after back-to-back, arm order alternating (before→after, after→before, before→after), load 2.3-5.0 one-minute — before 18.2/24.3/19.3 ms per closed node median (maxima 20.7/31.4/19.6 ms) with git fetches per pass [100, 100, 100, 100, 100] in every round, tripping both lines (median < 0.005 s per closed node; 0 fetches) — the local bare origin prices only the four git subprocesses, while the live host's network fetch read the same shape at ~1.18 s per closed node (62 closed tasks, ~73 s of a 79 s startup); after 1.5/1.7/1.8 ms (maxima 1.6/1.7/1.9 ms) with [0, 0, 0, 0, 0] in every round, ~3× under the line | fix: `_after_review_run` reads the task's derived state first — a task that is not open skips the landing proof and the automatic-completion call (whose recorded close replays inside it anyway) and keeps only the worktree cleanup; a reopened task derives "open" again and gets the full proof, and the open-task path and the failed-review branch are unchanged |
 | 2026-09-28 | this PR | M97 collector repaired, the sweep's own machinery (no product-code change): the verbatim collector failed every round — the invoking cron shell's own ``CHARLIEBOT_SESSION_ID`` rides the timed subprocess, and the plan CLI's session-ambiguity guard refuses the collector's ``--session`` (the worst plans corpus, session a9bb2346) as contradicting it, so the sweep read rc=2 unmeasured (2026-09-27's round documented the same refusal and re-ran by hand; this round's sweep reproduced it before the repair). The repair strips that one variable from the timed child's environment — the probe's session identity is the explicit ``--session`` argument, the cron session's own id is not the probe's; the run token and profile home ride unchanged (the authed live-GET shape the M98 line documents as the sweep's normal). Repaired collector, verbatim, three back-to-back rounds on the quiet host (load 0.48 one-minute): median 0.058/0.058/0.059 s, max 0.059-0.061 s over 7 each, against the < 0.15 s line — the 09-25 post-fix band read 0.059-0.066 s under the then-cron's load, so the wall sits at its import-plus-GET floor | every round the collector fails is a round the plan-CLI wall's regression watch does not run; the 2026-09-17 landing's 0.088-0.091 s band and the 09-25 fix's 0.059-0.066 s band were both read through manual env-unset re-runs, which is the repair this row pins into the collector itself |
 | 2026-09-28 | this PR | M56 /status served median 1.17/1.18/1.19 → 1.02/0.86/0.89 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, arm order alternating, load 1.17-1.52; median-of-medians 1.18 → 0.89, −25 %, every paired round faster), body digest 135fec1cf7ae identical across arms; witnesses riding the same fold: M119 root list 1.23 → 0.92 ms (−25 %) and M71 capped search 1.05 → 0.89 ms (−15 %), digests 2b2fc48505af / c26a9dd674be identical; M44 /scheduled 1.86 → 1.85 ms and M21 sweep 8.3 → 7.9 ms unchanged (paths off the fold) | every /status poll rebuilt one derived entry per requested session — the 296-entry fold was the route's largest handler term (0.36 ms of the 1.1 ms drive by stage timers) — although between state bumps it is a pure function of the probed-state snapshot, the busy map, and the metadata partition; all three sit behind two writer funnels (mark_sidebar_dirty, store_snapshot_entry), so a process-global generation bumped at both makes an unchanged generation the whole staleness contract: a clean poll serves the last fold's map whole, a raced round stores under its pre-probe generation so a mark landing inside the probe's await can never be served for the state it raced, and the every-10th sweep's stores re-derive the next poll; keyed on the id tuple because the read-only loaders hand fresh copies per poll, so a list-identity key (the listings memo's ground) never hits |

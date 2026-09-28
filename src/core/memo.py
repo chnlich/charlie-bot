@@ -11,6 +11,7 @@ import os
 import threading
 from collections import OrderedDict
 from collections.abc import Callable, Hashable, Iterator
+from pathlib import Path
 from typing import Generic, TypeVar
 
 K = TypeVar("K", bound=Hashable)
@@ -94,6 +95,24 @@ class BoundedMemo(Generic[K, V]):
     """Return the number of resident entries."""
     with self._lock:
       return len(self._entries)
+
+
+def stat_signature(path: str | Path) -> tuple[int, int] | None:
+  """(mtime_ns, size) of *path*, or None when the stat fails.
+
+  The signature StatSignatureMemo entries carry and the paired reads re-stat:
+  stat before the read, then a later same-signature stat proves the parsed
+  bytes unchanged, because the repo's file writers publish whole files by
+  atomic tmp rename and a rename always moves st_mtime_ns. None (a vanished
+  file) is the never-provable signature — the reader re-reads instead of
+  serving. Accepts the joined str path hot callers already build, so neither
+  side pays a Path round-trip.
+  """
+  try:
+    st = os.stat(path)
+  except OSError:
+    return None
+  return (st.st_mtime_ns, st.st_size)
 
 
 class StatSignatureMemo(BoundedMemo[K, tuple[int, int, S]], Generic[K, S]):

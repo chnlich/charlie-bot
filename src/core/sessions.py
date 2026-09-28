@@ -35,7 +35,7 @@ from src.core.json_utils import (
 )
 from src.core.locks import lock_for
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.memo import BoundedMemo, StatSignatureMemo
+from src.core.memo import BoundedMemo, StatSignatureMemo, stat_signature
 from src.core.message_aggregator import MessageAggregator
 from src.core.message_projection import MessageProjection
 from src.core.models import (
@@ -94,23 +94,6 @@ _METADATA_CACHE_TTL = 30.0  # seconds
 # at worst _METADATA_CACHE_TTL plus one interval, against the TTL-plus-one-call
 # bound the per-call walk gave it.
 _LISTINGS_SWEEP_INTERVAL = 10.0  # seconds
-
-
-def _stat_metadata_signature(path: Path) -> tuple[int, int] | None:
-  """(st_mtime_ns, st_size) of *path*, or None when it cannot be stat'ed.
-
-  The metadata cache's revalidation key, taken before the read that parses the
-  file: a later same-signature stat proves the parsed bytes unchanged, because
-  every metadata writer publishes through the atomic tmp rename and a rename
-  always moves st_mtime_ns. A vanished file (OSError) returns None, the
-  never-provable signature, so the entry re-reads instead of serving.
-  """
-  try:
-    st = os.stat(path)
-  except OSError:
-    return None
-  return (st.st_mtime_ns, st.st_size)
-
 
 _SEARCH_RESULT_LIMIT = 200  # newest rows a name/content search returns; keeps the render bounded
 # The window must cover the tabs' session rotation, so a re-entry never re-pays
@@ -597,15 +580,6 @@ class SidebarProbeSpec(NamedTuple):
   recheck_liveness: bool = False
 
 
-def _stat_signature(path_str: str) -> tuple[int, int] | None:
-  """(mtime_ns, size) of one file, or None when it does not exist."""
-  try:
-    st = os.stat(path_str)
-  except OSError:
-    return None
-  return (st.st_mtime_ns, st.st_size)
-
-
 def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   """Stat-only identity of every file the task-tree activity derivation reads.
 
@@ -615,9 +589,9 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   derivation's inputs unchanged, so a fresh-signature poll never hides a
   changed state — and never pays the derivation's reads either.
   """
-  metadata_sig = _stat_signature(session_dir_str + "/metadata.json")
-  events_sig = _stat_signature(session_dir_str + "/data/chat_events.jsonl")
-  archives_sig = _stat_signature(session_dir_str + "/data/archives")
+  metadata_sig = stat_signature(session_dir_str + "/metadata.json")
+  events_sig = stat_signature(session_dir_str + "/data/chat_events.jsonl")
+  archives_sig = stat_signature(session_dir_str + "/data/archives")
   runs_sig: list[tuple[str, int, int]] = []
   runs_dir_str = session_dir_str + "/data/runs"
   try:
@@ -625,7 +599,7 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
   except OSError:
     run_names = []
   for name in run_names:
-    run_meta = _stat_signature(runs_dir_str + "/" + name + "/metadata.json")
+    run_meta = stat_signature(runs_dir_str + "/" + name + "/metadata.json")
     if run_meta is not None:
       runs_sig.append((name, run_meta[0], run_meta[1]))
   return (metadata_sig, events_sig, archives_sig, tuple(runs_sig))
@@ -1118,7 +1092,7 @@ class SessionManager:
       # The signature is taken before the read: a write landing between the two
       # keys the entry under the older signature, which the next expiry stat
       # mismatches — an entry can never be served for bytes it did not parse.
-      sig = _stat_metadata_signature(self._metadata_path(session_id))
+      sig = stat_signature(self._metadata_path(session_id))
       raw = await self._read_metadata_raw(session_id)
       if raw is None:
         return None
@@ -2290,7 +2264,7 @@ class SessionManager:
       if not meta_path.exists():
         continue
       try:
-        sig = _stat_metadata_signature(meta_path)  # before the read, the cache revalidation key
+        sig = stat_signature(meta_path)  # before the read, the cache revalidation key
         raw = meta_path.read_text(encoding="utf-8")
         meta = SessionMetadata.model_validate_json(raw)
         self._metadata_cache[d.name] = (meta, now, sig)
@@ -2859,7 +2833,7 @@ class SessionManager:
           # Signature before the read, per file: an entry keys only the bytes
           # it parsed (see get_session's same rule), so a write landing between
           # the two is re-read at the next expiry stat instead of served stale.
-          sig = _stat_metadata_signature(path)
+          sig = stat_signature(path)
           try:
             if not path.exists():
               continue

@@ -691,6 +691,11 @@ class RunStore:
     # after the durable write. Best-effort by contract: a notification failure
     # is logged and never fails the durable operation.
     self._liveness_notifier: Callable[[str, RunRecord, bool], Awaitable[None]] | None = None
+    # Bumped after every record-mirror write below; every mutation of a record
+    # a reader can observe funnels through write_record, so an unchanged
+    # generation is the whole staleness contract for a reader memo keyed on it
+    # (the same writer-funnel shape the sidebar fold's generation uses).
+    self.records_generation = 0
 
   def set_fact_history_loader(self, loader: Callable[[str], list[dict]]) -> None:
     """Install the tree owner's full-history reader (archived segments included)."""
@@ -729,6 +734,17 @@ class RunStore:
 
   def task_spec_path(self, session_id: str, run_id: str) -> Path:
     return self.run_dir(session_id, run_id) / RUN_TASK_SPEC_NAME
+
+  async def write_record(self, session_id: str, run: RunRecord) -> None:
+    """The one record-mirror write funnel: the durable write, then the bump.
+
+    Every mutation of a record observable through :meth:`read_run_sync` must
+    ride this method, or a reader memo keyed on ``records_generation`` serves
+    a stale record. The bump lands after the awaited write, on the same loop
+    pass a later reader's synchronous derivation runs in.
+    """
+    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run.id), run.model_dump_json(indent=2))
+    self.records_generation += 1
 
   # -- reads ---------------------------------------------------------------
 
@@ -928,8 +944,7 @@ class RunStore:
       record.task_spec_ref = str(spec_path)
       record.task_spec_hash = sha256_hex(task_spec_text)
     run_dir.mkdir(parents=True, exist_ok=True)
-    path = self.metadata_path(record.session_id, record.id)
-    await asyncio.to_thread(atomic_write_text, path, record.model_dump_json(indent=2))
+    await self.write_record(record.session_id, record)
     self._aliases.register_run_thread(record.session_id, record.id)
     # A registered Run is a new fact transition (queued work exists where none
     # did): the node's sidebar state must re-probe on the next poll. No path
@@ -984,7 +999,7 @@ class RunStore:
         run.started_at = utc_now()
       run.pid = pid
       run.pid_start = pid_start
-      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await self.write_record(session_id, run)
       # The launch fact flipped the derived state (queued -> running): the next
       # poll must re-probe (same contract as the terminal fact below). No path
       # rides the mark: a run metadata file is not a workers-panel row source.
@@ -1038,7 +1053,7 @@ class RunStore:
       ):
         if value is not None:
           setattr(run, field, value)
-      await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+      await self.write_record(session_id, run)
       return run
 
   # -- terminal facts ------------------------------------------------------
@@ -1145,8 +1160,7 @@ class RunStore:
       if run.input_event_ids != existing_payload or run.ended_at is None:
         run.input_event_ids = existing_payload
         run.ended_at = run.ended_at or utc_now()
-        await asyncio.to_thread(
-            atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+        await self.write_record(session_id, run)
       return run
     payload = self._finish_payload(run, input_event_ids)
     event = build_control_event(
@@ -1161,7 +1175,7 @@ class RunStore:
     run.ended_at = ended_at or utc_now()
     run.exit_code = exit_code
     run.input_event_ids = payload
-    await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run_id), run.model_dump_json(indent=2))
+    await self.write_record(session_id, run)
     # The terminal fact flipped the derived state (running/waiting -> idle):
     # the next poll must re-probe. No path rides
     # the mark: a run metadata file is not a workers-panel row source.

@@ -1077,7 +1077,17 @@ async def test_repo_less_implement_delivers_after_review_passes(
         await asyncio.sleep(0.1)
     else:
         pytest.fail("the repo-less implement task never closed after its review passed")
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    # The close and the report land in separate awaits of the delivery chain;
+    # a loaded runner's poll can see the closed task before the report
+    # append, so the report gets the same bounded wait the review did.
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline:
+        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+        if reports:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        pytest.fail("the repo-less implement task never reported to its parent")
     assert reports[-1]["outcome"] == "completed"
 
     await _settle_parent(tree, manager, timeout=30.0, poll=0.2)

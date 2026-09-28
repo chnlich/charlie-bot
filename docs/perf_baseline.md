@@ -133,6 +133,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M125 sibling-verb dispatch floor, help path | M125 collector below | seconds per fresh-process `<verb> --help` wall (the M92 protocol's import+dispatch floor) for the five sibling verbs the M124 round left pinned by their core modules' eager chains (improve, publish, storage, gc-trash, remote-launch) | median < 0.10 s per verb (the M92 line's shape — the after band reads 29-45 ms across the five, the src.cli.config deferral shape's deferred-module band; the pre-fix shape reads 0.157-0.382 s, the publish/storage/trash/sequence/config chains' own eager cost) | — (introduced with its first history row) |
 | M126 startup task-tree reconcile, closed reviewed nodes | M126 collector below | seconds per closed node of one reconcile_task_tree pass; git fetch invocations per pass | median < 0.005 s per closed node; 0 fetches | — (introduced with its first history row) |
 | M127 server stop latency, unanswered Socket Mode close | M127 collector below | seconds from SIGINT to server process exit with the Slack listener connected to an endpoint that never answers a close frame; slack_listener_ms from the charliebot_shutdown line as the mechanism witness | median < 2.0 s | — (introduced with its first history row) |
+| M128 tree-page activity derivation, warm-index repeat over the runs-bearing corpus | M128 collector below | seconds per repeat `GET /api/sessions/tree` request (warm index, warm caches) over the live corpus's task nodes with their run records (the record's metadata.json only — the derivation reads the record, never a run's raw log or events file); the first timed round is reported, not the metric — the cold pass just derived every node, so it reads the post-bump rebuild, not the repeat | repeat median < max(0.005 s, task nodes × 0.000025 s) (the after band reads 2.52-6.07 ms at 355-366 task nodes — 7-9.5 µs/node quiet, 16.6 µs/node in the load-3.46 round — over the memo-key checks; the line sits ~1.5× over the band top, the M119 line's convention, so a new per-node disk term trips it while host-load noise stays inside) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8925,9 +8926,100 @@ finally:
 EOF
 ```
 
+M128 — tree-page activity derivation, warm-index repeat, runs-bearing corpus. The standing M120 corpus omits every run record the row
+derivation reads (its export block ignores `data/runs`), so the served repeat request's dominant term is invisible to the M120 line.
+The M128 collector copies the same corpus plus each run's metadata.json (the record is the only run file the derivation reads), drives
+the same `tree_page` roots call with a warm index, and times the repeat request — the shape that re-derived every node's activity per
+click before the memo. Scratch home under /tmp, removed on every exit path; live home read once for the copy, never written.
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, json, os, shutil, statistics, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
+
+# Worst activity corpus: the live home's task nodes with their run records.
+# The record's metadata.json is the only run file the derivation reads, so the
+# copy carries it alone; the live home is read once for the copy, never written.
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m128-activity-home-", dir="/tmp"))
+dst = home / "sessions"
+dst.mkdir(parents=True)
+n_meta = n_task = n_runs = 0
+try:
+    for d in sorted(root.iterdir()):
+        m = d / "metadata.json"
+        if not m.is_file():
+            continue
+        sd = dst / d.name
+        sd.mkdir()
+        shutil.copy2(m, sd / "metadata.json")
+        n_meta += 1
+        try:
+            meta = json.loads(m.read_text())
+        except ValueError:
+            continue
+        if meta.get("profile") is None:
+            continue
+        n_task += 1
+        data = d / "data"
+        if not data.is_dir():
+            continue
+        (sd / "data").mkdir()
+        for name in ("chat_events.jsonl", "archives"):
+            src = data / name
+            if src.is_file():
+                shutil.copy2(src, sd / "data" / name)
+            elif src.is_dir():
+                shutil.copytree(src, sd / "data" / name)
+        runs = data / "runs"
+        if not runs.is_dir():
+            continue
+        for r in runs.iterdir():
+            f = r / "metadata.json"
+            if f.is_file():
+                (sd / "data" / "runs" / r.name).mkdir(parents=True, exist_ok=True)
+                shutil.copy2(f, sd / "data" / "runs" / r.name / "metadata.json")
+                n_runs += 1
+
+    cfg = CharlieBotConfig(charliebot_home=home)
+    session_mgr = SessionManager(cfg)
+    tree = TaskTreeManager(cfg, session_mgr)
+
+    async def main():
+        # The hours-running server's shared caches: one authoritative read per
+        # session (the same populate path the server's own readers use). The
+        # scratch copy takes any migration write the warm-up triggers.
+        for sid in sorted(p.name for p in dst.iterdir()):
+            await session_mgr.get_session(sid)
+        await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)  # cold pass; not timed
+        rounds = []
+        page = None
+        for _ in range(9):
+            t0 = time.perf_counter()
+            page = await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)
+            rounds.append(time.perf_counter() - t0)
+        body = json.dumps(page, sort_keys=True, default=str)
+        repeat = rounds[1:]
+        print(f"checkout {os.path.basename(os.environ['CHECKOUT'])}: {n_meta} metadata files, {n_task} task nodes, "
+              f"{n_runs} run records; tree-page roots (warm index) first round {rounds[0] * 1000:.2f} ms, "
+              f"repeat-request median {statistics.median(repeat) * 1000:.2f} ms, max {max(repeat) * 1000:.2f} ms over {len(repeat)}; "
+              f"rows {len(page['items'])}, body sha1 {hashlib.sha1(body.encode()).hexdigest()[:12]}")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home, ignore_errors=True)  # every exit path removes the scratch copy
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this PR | M128 introduced with its landing fix: the standing M120 corpus omits every run record the tree page's row derivation reads (its export block ignores ``data/runs``), so the served repeat request re-read all 841 run records per click — invisible to the M120 line (9.48 ms) while the served shape read 65 ms. The new collector copies the M120 corpus shape plus each run's metadata.json (355-366 task nodes, 841-871 records as the fleet churned; the record is the only run file the derivation reads), interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds at load 1.9-3.5 one-minute: repeat-request median 61.01/66.30/65.43 → 3.36/3.30/3.42 ms, re-measured after the review round's memo-key repair 2.52/6.07/3.51 ms at 366 nodes (median-of-medians 65.43 → 3.51, −94.6 %, every paired round faster; maxima 62.91-78.86 → 3.01-6.72 ms — the 6.07/6.72 pair rode load 3.46 one-minute; first timed rounds 62.96-68.45 → 3.06-6.72 ms — the cold pass derives, the timed rounds ride the memo), body sha1 identical within each paired round (bec7fda252e2 ×6 in the first series, ef9af8c4f2b2 ×4 in the second; the between-series sha move is the corpus's own churn — 841 → 871 records between the series). Fix: ``activity_of`` memoizes per node on (records generation, live events identity, covered length, archived extent) — every record mutation funnels through one ``RunStore.write_record`` whose post-write generation bump is the whole staleness contract (the M56 fold's writer-funnel shape; the outside-funnel writer in session_dispatch rides the funnel now), and the covered length is in the key because the events cache takes an append in place: identity and archived extent survive a new fact, and a chat-only fact transition with no record write (a stop request on a queued run, a close/reopen) moves only the length — the identity-only key the first draft shipped served a stale waiting verdict through the reviewer's live repro (queued → request_stop → still waiting), the covered-length key + its regression test is the repair the review round landed; a runless node's cell rides the generation alone so the no-event-load guard keeps its one-stat shape, a verdict that consulted /proc is never stored (a process death moves it with no record write to bump the key, so that node re-derives until its runs settle — the sidebar probe's recheck_liveness contract, unchanged), and ``delete_permanently`` pops the cell next to its sibling memos. No-regression witnesses, interleaved rounds, digests/revision identical across arms: M120 invalidated-index 10.74/9.54 → 8.37/9.36 ms, M121 burst 4.57/4.40 → 4.07/4.19 ms, M56 /status 1.03 → 1.06 ms (digest 741ac0d15f79 identical), M126 reconcile 1.54 → 1.76 ms (both inside lines); three tests ride the finish-staleness test's family (a launch after a warm derivation moves the verdict; a stop request after a warm derivation moves the verdict through the covered length — the test fails against the identity-only key; a /proc-judged verdict is never stored, so a crashed run's death still shows) | every ``session_row`` derived the row's and each descendant's work state by re-reading every run record from disk — the live-home profile put 0.117 of 0.142 s in ``list_run_records_sync`` (804 record reads per request over 307 derivations) — so every tree click paid ~65 ms of repeat reads for records that move only at create/launch/finish; the memo turns the repeat into key checks |
 | 2026-09-28 | this commit | M127 server stop latency introduced with its landing fix: the verbatim collector, four interleaved collector runs (three rounds each), branch worktree after vs base checkout before back-to-back, arm order alternating (after→before ×3, before→after ×1), load 1.07-5.29 one-minute — before (main@51c85bf0, the branch's base) medians 10.43/10.39/10.39/10.48 s, maxima 10.43/10.49/10.43/11.30 s, failing the line (median < 2.0 s) at about 10.5 s, and the pre-fix charliebot_shutdown line carries no slack_listener_ms (the collector prints n/a — the mechanism witness does not exist yet) — after medians 1.42/1.42/1.47/1.37 s, maxima 1.42/1.42/1.47/1.38 s, with slack_listener_ms 1000-1006 ms in every round, ~7x under the line | fix: every WebSocket the server opens as a client passes close_timeout=WS_CLIENT_CLOSE_TIMEOUT (1.0 s, src/core/timeouts.py) — Slack's Socket Mode endpoint never answers a client close frame, so websockets' 10 s default was paid on every stop and every refresh reconnect; the launcher's tee now ignores SIGINT so the shutdown lines survive Ctrl-C, and the lifespan shutdown times each step into the charliebot_shutdown line |
 | 2026-09-28 | this PR | M7 changed-round / M7 restart-cold / M81 / M122 collectors repaired, the sweep's own machinery (no product-code change): a same-day /tmp wipe (2026-09-28 ~12:36, deleter unidentified — tmpfiles' 30-day age bound does not fire same-day) deleted every scratch state the standing collectors assume — /tmp/charliebot-logs (the live server's tee still writes its deleted fd, so M2, M11's log-grep half and M93 read nothing this round and stay host-state unmeasured until a server restart), /tmp/opencode, /tmp/lp_m122, /tmp/node_modules. As printed, the M7 changed-round block failed rc=1 (copy2 into the missing /tmp/opencode — the restart-cold block beside it only passed because the warm-gate block's own mkdir runs one block earlier, a pure ordering artifact), M122 failed rc=1 (nothing in the sweep creates /tmp/lp_m122), and M81 exited on its jsdom preflight with the install left to an operator. Fix: the three scratch-file blocks create their parent dir the way the warm-gate and M107 blocks already do, and the M81 block re-creates the one-time jsdom install its own preflight message names (npm itself rides a pinned registry tarball — the host has no npm binary). Verified on the wiped state, the four blocks verbatim back-to-back: M7 changed-round 0.114 s (line < 0.5 s), restart-cold 0.299 s (line < max(0.5 s, 1.63 s)), M122 discovery median 10.2 ms max 10.4 ms (line median < 0.015 s, max < 0.030 s), M81 re-render 30.60 ms (line 60 ms at 2 delimiter-bearing bodies) — the same bands the earlier same-day sweep read (0.111 s / 0.285 s / 8.2 ms / 31.04 ms) at load 1.9-2.4 one-minute; no product code moves, so every other standing reading carries over unchanged | every round a collector fails is a round that metric's regression watch does not run; the M97 repair (2026-09-28) pinned the same rule for its own collector |
 | 2026-09-28 | this PR | M98 memory-CLI invocation wall, the module wall's dataclasses chain and the store's PR machinery priced off it: the entry/topic/store/selection classes become plain ``__slots__`` classes (the credentials.py and run_token.py precedents) and ``memory_proposal``'s import rides its one command — the query path no longer pays the dataclasses→inspect chain (~9 ms) or tarfile+subprocess (~10 ms). Verbatim collector, ABBA interleaved, 12 paired rounds over two series (7+5), main checkout before vs branch worktree after back-to-back, load 0.9-3.9 one-minute across the readings: token-shape medians 273-303 → 271-309 ms (median-of-medians 288.0 → 282.5, −5.5 ms; 8/12 rounds faster, 1 tie, 3 load-wave inversions); no-token witness (same command, ``CHARLIEBOT_RUN_TOKEN`` unset) 72.9 → 48.9 ms median (−33 %), min/max fully separated (67.4-77.5 → 47.2-51.5); in-process chain attribution src.cli.memory 28.4 → 10.7 ms (−62 %, 16 alternating ABBA samples); query output 165 B identical across every arm, load_store parity 3.9/4.2 ms, 1068-passed suite plus the documented 7-failure vfork/antigravity/frontend-js environmental set identical on the clean base | the memory CLI verbs are fresh processes; the served token shape's net is bounded by the config-model import re-paying the shared dependencies (prewarming the removed modules in the after arm restores main() to the before arm's 183-193 ms band), so the residual ~283 ms wall is the documented config+runs model stack — the structural item, out of one run's budget |

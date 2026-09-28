@@ -310,9 +310,8 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
 def prompt_task_type(task: TaskSpec | None) -> TaskType:
   """The task type whose workflow contract a worker's prompt renders.
 
-  A type-less task (a scheduled firing's leaf) renders the implement contract,
-  as the legacy scheduled worker did. Delivery reads the raw type instead: a
-  type-less success closes without review.
+  A type-less task (a scheduled firing's leaf) renders the implement contract.
+  Delivery reads the raw type: a type-less success closes without review.
   """
   return task.task_type if (task is not None and task.task_type) else TaskType.IMPLEMENT
 

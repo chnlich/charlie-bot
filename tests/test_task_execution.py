@@ -1490,8 +1490,8 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
     # The stale anchor was cleared at spawn (the fresh native context's own
     # conversation replaces it); the old transcript's history is untouched.
     assert meta3.cc_session_id is None or meta3.cc_session_id != anchor_id
-    # The reset notice carried the standing reason and where earlier history
-    # lives (HISTORY_LOCATION_NOTE — the note no longer names the session id).
+    # The reset notice carries the standing reason and where earlier history
+    # lives (HISTORY_LOCATION_NOTE).
     launch_text = (tree.runs.run_dir(manager.id, run3) / "launch_prompt.md").read_text(encoding="utf-8")
     assert launch_text.startswith(
         "[Context reset: this task's managed instructions or sources changed since the "

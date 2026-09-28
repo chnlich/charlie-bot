@@ -112,7 +112,7 @@ def iter_recent_thread_metas(
   with zero content reads, as are dirs with missing/unreadable metadata. In-window
   parses are memoized on (mtime_ns, size) (see the memo above the scan's callers),
   so a repeat scan over unchanged files costs one stat per file. Shared by
-  ``_scan_interrupted_runs`` (init) and ``has_running_tasks_sync`` (sessions) so the
+  ``_scan_thread_metas`` (init) and ``has_running_tasks_sync`` (sessions) so the
   stat-before-read scan stays identical at both sites.
 
   *walked* replaces the scandir+stat phase with stat results a caller already

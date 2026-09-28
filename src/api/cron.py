@@ -213,8 +213,8 @@ async def list_cron_tasks(request: Request) -> Response:
   return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
 
 
-# The grouped sidebar render pairs this poll with /api/sessions/scheduled every
-# 3 s, and the browser's fetch always accepts gzip. The rendered bytes and
+# The sidebar's Workspace view fetches this list on every view load, and the
+# browser's fetch always accepts gzip. The rendered bytes and
 # their level-1 gzip form cache on the snapshot's own generation: the identity
 # of the tasks list get_scheduled_tasks returns — stable between config
 # changes, rebuilt by any reload, and pinned by the cache's own reference so a

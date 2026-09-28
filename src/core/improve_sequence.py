@@ -107,7 +107,7 @@ async def create_improve_child(
 
 
 def _compose_iteration_description(goal: str, plan: str | None, previous_summaries: list[str]) -> str:
-    """The iteration description, composed exactly as the legacy controller's."""
+    """The iteration description: goal, then the plan, then the previous summaries."""
     parts = [goal]
     if plan is not None:
         parts.append(f"Plan:\n{plan}")
@@ -289,8 +289,7 @@ async def run_improve_sequence(
                                 iteration=i, reason=blocker_reason)
                     blocked = (i, blocker_reason, failed_summary)
                     break
-                # A non-quota failure is recorded and the loop continues, as
-                # the legacy controller did.
+                # A non-quota failure is recorded and the loop continues.
 
             summary = await _judge_iteration(
                 tree, child_id, run.id, i, wt_path, loop_dir, tip_before)
@@ -422,14 +421,14 @@ async def _judge_iteration(
 ) -> str:
     """The mechanical iteration judgment: report validity over the git delta.
 
-    Same rules as the legacy controller (report file + commit count over the
-    worktree tip this iteration started from), sourced from the Run's shared
-    worktree and the loop's report file.
+    The report file and the commit count over the worktree tip this iteration
+    started from, sourced from the Run's shared worktree and the loop's report
+    file.
     """
     report_path = loop_dir / f'iter_{iteration:04d}.md'
     if not await asyncio.to_thread(report_path.exists):
-        # The worker wrote no report: fall back to its own closing words, as
-        # the legacy controller did, and leave the same marked fallback file.
+        # The worker wrote no report: fall back to its own closing words and
+        # leave the marked fallback file.
         events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
         fallback = f"Iteration {iteration} finished without a report file."
         if events_path.is_file():

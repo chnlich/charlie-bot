@@ -1,9 +1,9 @@
 """Scheduled-session read paths, the cron-yaml single-key write, and the
 scheduler-bookkeeping migration the auto-bind uses.
 
-The dedicated cron session is no longer created: every scheduled task binds a
-task-tree manager node (the scheduler's auto-bind), and the sessions that still
-carry a ``scheduled_task`` stamp are the legacy ones, archived at migration.
+No scheduled task creates a dedicated cron session: every scheduled task binds
+a task-tree manager node (the scheduler's auto-bind); sessions that still carry
+a ``scheduled_task`` stamp are the legacy ones, archived at migration.
 What remains here serves them: the cron-subtree membership rule the sidebar
 lists share, the one field list a migration copies, and the one write rule that
 changes a single cron-yaml key.

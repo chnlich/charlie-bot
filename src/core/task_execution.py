@@ -911,7 +911,7 @@ class TaskExecutionAdapter:
         system-instruction seam — while the controllers keep owning their task /
         step input: this adapter renders only the task/input context (bindings,
         pinned spec, claimed batch, sequence positions) from the same maintained
-        template sections. A scheduled prompt override no longer bypasses the
+        template sections. A scheduled prompt override does not bypass the
         assembly.
         """
     session_id, run_id = meta.id, run.id
@@ -930,9 +930,8 @@ class TaskExecutionAdapter:
     elif run.kind == "iteration":
       context = await self._build_iteration_context(meta, run, launch_prompt)
     elif launch_prompt is not None:
-      # The sequence controllers' explicit launch text (a cron step's
-      # prompt rides verbatim, exactly as the legacy scheduled worker's
-      # prompt_override did). The controller owns the composition; the
+      # The sequence controllers' explicit launch text: a cron step's
+      # prompt rides verbatim. The controller owns the composition; the
       # adapter renders it as the task/input context of the assembled
       # instructions.
       context = await self._build_step_context(meta, run, launch_prompt, task_type)

@@ -10,9 +10,9 @@ stable task-tree node:
 - worker mode (the default) creates ONE worker leaf per distinct
   firing under the bound manager. Steps share that leaf as ``scheduled_step``
   Runs with ``sequence_ref=(cron_steps, owner_ref=<firing>, position=<i>)``;
-  the chain advances on a step's success and stops on its failure, exactly as
-  the legacy steps controller did, and ONE report is delivered at the sequence
-  boundary. Single-prompt and loop firings ride the ordinary work-Run delivery
+  the chain advances on a step's success and stops on its failure, and ONE
+  report is delivered at the sequence boundary. Single-prompt and loop firings
+  ride the ordinary work-Run delivery
   chain: a successful run auto-closes the leaf and reports to the manager
   through the common completion owner.
 

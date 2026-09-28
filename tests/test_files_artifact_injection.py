@@ -19,9 +19,9 @@ def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
   files.py imports ``get_config`` by name, so the patch lands on the module. A
   real app carries the auth middleware, which owns the credential gate; these
-  tests cover the file server alone, where the tray injection no longer reads
-  the request at all — no credential is stubbed or sent unless a test wants to
-  pin that the router ignores it.
+  tests cover the file server alone, where the tray injection reads no request
+  field — no credential is stubbed or sent unless a test wants to pin that the
+  router ignores it.
   """
   monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path))
   return tmp_path

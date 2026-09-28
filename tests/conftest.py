@@ -11,7 +11,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Itera
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Self
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1564,6 +1564,62 @@ def _ws_text_frame(payload: str) -> bytes:
   data = payload.encode()
   assert len(data) < 126
   return bytes([0x81, len(data)]) + data
+
+
+class _PendingAudio:
+  """An audio stream that never delivers a chunk: the transcription stays open."""
+
+  def __aiter__(self) -> Self:
+    return self
+
+  async def __anext__(self) -> bytes:
+    await asyncio.Event().wait()
+    raise AssertionError("unreachable: the pending audio never yields")
+
+
+async def assert_transcribe_cancel_honors_close_timeout(
+    build_backend: Callable[[str], Any], handshake_reply: list[dict]) -> None:
+  """Cancel a transcription driven into its open state against a stand-in that
+  never answers the close frame, and assert the cancel waited only the pinned
+  `timeouts.WS_CLIENT_CLOSE_TIMEOUT`, not websockets' 10 s default.
+
+  build_backend receives the stand-in's ws: URL and returns a backend whose
+  transcribe() consumes `_PendingAudio`; the caller stubs the backend's
+  credentials seam and pins WS_CLIENT_CLOSE_TIMEOUT before calling.
+  """
+  from src.core import timeouts
+
+  stand_in = WsServerNeverAnswersClose(handshake_reply)
+  url = await stand_in.start()
+  backend = build_backend(url)
+
+  async def consume() -> None:
+    async for _event in backend.transcribe(_PendingAudio(), vocabulary=[], languages=["zh"]):
+      pass
+
+  task = asyncio.create_task(consume(), name="transcribe-under-test")
+  try:
+    async with asyncio.timeout(5):
+      while stand_in.received_chunks < 1:
+        await asyncio.sleep(0.02)
+    # The handshake reply was already on the wire when the stand-in saw the
+    # client's first frame, so by now the handshake is consumed and the
+    # transcription is in progress (the client's own frames coalesce into one
+    # TCP read, so the read count alone cannot say which ones arrived).
+    await asyncio.sleep(0.1)
+    started = time.perf_counter()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    elapsed = time.perf_counter() - started
+    assert elapsed < timeouts.WS_CLIENT_CLOSE_TIMEOUT + 0.5, (
+        f"transcription cancel took {elapsed:.3f}s; the close wait did not honor "
+        f"WS_CLIENT_CLOSE_TIMEOUT={timeouts.WS_CLIENT_CLOSE_TIMEOUT}")
+  finally:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    await stand_in.stop()
 
 
 class FakeSlackClient:

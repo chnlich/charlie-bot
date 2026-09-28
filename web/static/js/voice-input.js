@@ -68,7 +68,7 @@ class VoiceCaptureProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.inputRate = options.processorOptions.inputSampleRate;
-    this.outputRate = 16000;
+    this.outputRate = ${VOICE_SAMPLE_RATE};
     this.ratio = this.inputRate / this.outputRate;
     this.sourceRemainder = new Float32Array(0);
     this.sourcePosition = 0;

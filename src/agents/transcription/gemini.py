@@ -15,12 +15,16 @@ import base64
 import json
 from collections.abc import AsyncIterator, Sequence
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend, TranscriptionRejected
+from src.agents.transcription.base import (
+    SAMPLE_RATE,
+    TranscriptEvent,
+    TranscriptionBackend,
+    TranscriptionRejected,
+)
 from src.core.config import CharlieBotConfig
 from src.core.credentials import get_credentials
 
 MODEL = "models/gemini-3.5-transcribe-live"
-SAMPLE_RATE = 16_000
 DEFAULT_ENDPOINT_URL = (
     "wss://generativelanguage.googleapis.com/ws/"
     "google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent")

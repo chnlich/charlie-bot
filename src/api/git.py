@@ -106,13 +106,20 @@ _NOT_A_GIT_REPO_DETAIL = "Not a git repo: {}"
 
 
 def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
-  """Validate repo path and return resolved Path; raise HTTPException(400) otherwise."""
+  """Validate repo path and return resolved Path; raise HTTPException(400) otherwise.
+
+  Besides the ``paths.workspace_dirs`` roots, the one extra repo outside them
+  is the memory store (``cfg.memory_dir``): its PR flow serves its proposal
+  diff through this same /diff page.
+  """
   repo_path = Path(repo).expanduser().resolve()
   if not (repo_path / ".git").exists():
     raise HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
-  workspace_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
-  if not any(repo_path.is_relative_to(root) for root in workspace_roots):
-    raise HTTPException(status_code=400, detail="repo must be under configured paths.workspace_dirs")
+  allowed_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
+  allowed_roots.append(cfg.memory_dir.resolve())
+  if not any(repo_path.is_relative_to(root) for root in allowed_roots):
+    raise HTTPException(
+        status_code=400, detail="repo must be under configured paths.workspace_dirs or the memory store")
   return repo_path
 
 

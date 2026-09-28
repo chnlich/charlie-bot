@@ -162,6 +162,42 @@ def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: 
     assert "+third" in second["diff"]
 
 
+def test_memory_store_repo_accepted_outside_workspace_dirs(tmp_path: Path) -> None:
+  """The memory store (cfg.memory_dir) is a diff-able repo even though it sits
+  outside paths.workspace_dirs: the PR flow serves its proposal diff here."""
+  workspace = tmp_path / "workspace"
+  workspace.mkdir()
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      paths={"workspace_dirs": [str(workspace)]},
+  )
+  repo = _build_repo(cfg.memory_dir)
+  app = FastAPI()
+  app.include_router(git_api.router, prefix="/api/git")
+  apply_config_overrides(app, cfg)
+  client = TestClient(app)
+
+  resp = _get_diff(client, "files", repo, "main", "feature")
+  assert resp.status_code == 200
+  assert {f["path"] for f in resp.json()["files"]} >= {"added.txt", "renamed.txt"}
+
+
+def test_other_repo_outside_workspace_and_memory_rejected(tmp_path: Path) -> None:
+  """A repo outside both the workspace roots and the memory store stays refused."""
+  repo = _build_repo(tmp_path / "stray-repo")
+  cfg = CharlieBotConfig(
+      charliebot_home=tmp_path / "charliebot-home",
+      paths={"workspace_dirs": [str(tmp_path / "elsewhere")]},
+  )
+  app = FastAPI()
+  app.include_router(git_api.router, prefix="/api/git")
+  apply_config_overrides(app, cfg)
+  client = TestClient(app)
+
+  resp = _get_diff(client, "files", repo, "main", "feature")
+  assert resp.status_code == 400
+
+
 def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
   repo = _build_repo(tmp_path)
   # Point the workspace somewhere else so the repo fails the under-workspace check.

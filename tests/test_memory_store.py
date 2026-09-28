@@ -182,3 +182,44 @@ def test_cli_query_audience_filter_is_membership(
   out = capsys.readouterr().out
   assert "bbody" in out
   assert "mbody" not in out
+
+
+# --- CLI --dir: lint and query read the given store root ----------------------
+
+
+def test_cli_lint_dir_reads_given_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """Without --dir lint reads the live store; with --dir it reads the given root."""
+  _patch_cli_cfg(monkeypatch, tmp_path)
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
+  cli.main()
+  assert capsys.readouterr().out.strip() == "clean"
+
+  # A second store root whose entry breaks the strict v2 rules.
+  other = tmp_path / "memory-proposal"
+  _write_topics(other)
+  _write_entry(other, "profile", "legacy", legacy=True)
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "lint", "--dir", str(other)])
+  with pytest.raises(SystemExit) as exc_info:
+    cli.main()
+  assert exc_info.value.code == 1
+  # The violations name the given root's entry (the CLI prints them on stdout).
+  out = capsys.readouterr().out
+  assert "entries/profile/legacy.md" in out and "'created' is forbidden" in out
+
+
+def test_cli_query_dir_reads_given_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  """query --dir reads entries from the given root, not the live store."""
+  cfg = _patch_cli_cfg(monkeypatch, tmp_path)
+  _write_entry(cfg.memory_dir, "profile", "live-only", body="live body\n")
+  other = tmp_path / "memory-proposal"
+  _write_topics(other)
+  _write_entry(other, "profile", "pr-only", body="pr body\n")
+  import src.cli.memory as cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--dir", str(other)])
+  cli.main()
+  out = capsys.readouterr().out
+  assert "pr body" in out
+  assert "live body" not in out

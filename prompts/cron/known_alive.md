@@ -111,8 +111,9 @@ Known-alive symbols:
   appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).
 - `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
-  string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
-  exactly one whole-repo match (its definition), so vulture flags them as unused methods.
+  string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each
+  as an unused method; the only other whole-repo matches are the perf doc's embedded collector
+  and the handler docstring's own `log_message` mention.
 - The `if False: yield {}` lines in `tests/test_master_cc_consumer.py`,
   `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
   `tests/test_worker_diagnostics.py` are flagged as
@@ -145,7 +146,7 @@ Known-alive symbols:
   on `self` under their contract-fixed names while `_parse_dom` builds the DOM. Nothing in
   the repo calls them, each name has exactly zero whole-repo matches outside its own
   definition, and vulture flags each as an unused method. Same class as the
-  `do_GET`/`do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
+  `do_POST`/`log_message` `BaseHTTPRequestHandler` entry above, with base-class
   virtual dispatch in place of stdlib string dispatch.
 - `dir_path` (the `create_provider(provider, label, dir_path)` stubs in
   `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
@@ -204,7 +205,7 @@ Known-alive symbols:
   matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
   an unused method; a whole-repo grep is noisier — `render` is also ordinary web-JS DOM code
   (`plan-panel.js` `function render()`, `backlogPanel.render()`, pdf.js `page.render(...)`)
-  that names unrelated methods. Same class as the `do_GET`/`do_POST`/`log_message`
+  that names unrelated methods. Same class as the `do_POST`/`log_message`
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
   `handle_charref` (`_Parser` — all six — and `handle_starttag`/`handle_startendtag`/

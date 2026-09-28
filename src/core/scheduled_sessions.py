@@ -1,26 +1,21 @@
-"""Scheduled-session backend rotation, succession bookkeeping, task-yaml backend persistence,
-and the cron-subtree membership rule the sidebar lists share."""
+"""Scheduled-session read paths, the cron-yaml single-key write, and the
+scheduler-bookkeeping migration the auto-bind uses.
+
+The dedicated cron session is no longer created: every scheduled task binds a
+task-tree manager node (the scheduler's auto-bind), and the sessions that still
+carry a ``scheduled_task`` stamp are the legacy ones, archived at migration.
+What remains here serves them: the cron-subtree membership rule the sidebar
+lists share, the one field list a migration copies, and the one write rule that
+changes a single cron-yaml key.
+"""
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Iterable
-from typing import TYPE_CHECKING
 
 from src.core.config import cron_path
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import (
-    CreateSessionRequest,
-    SessionMetadata,
-    SessionStatus,
-    utc_now,
-)
+from src.core.models import SessionMetadata
 from src.core.yaml_utils import load_yaml, save_yaml
-
-if TYPE_CHECKING:
-  from src.core.sessions import SessionManager
-
-log = LazyStructlogLogger()
 
 
 def cron_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
@@ -64,167 +59,34 @@ def cron_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
 
 
 class ScheduledSessionBusyError(RuntimeError):
-  """Raised when a scheduled session cannot rotate backends because it is busy."""
+  """Raised when a scheduled node's backend cannot switch in place because its
+  own work is in flight."""
 
 
-class ScheduledSessionStore:
-  """Scheduled-session rotation operations."""
+def migrate_scheduler_bookkeeping(old_session: SessionMetadata, new_session: SessionMetadata) -> None:
+  """Carry scheduler bookkeeping fields from *old_session* onto *new_session*.
 
-  def __init__(self, session_manager: SessionManager) -> None:
-    self._session_manager = session_manager
+  The single home of the migration field list: the auto-bind's migration step
+  (src/core/scheduler.py) calls it, so what migrates onto a task's node is
+  defined exactly once.
+  """
+  new_session.last_scheduled_run = old_session.last_scheduled_run
+  new_session.last_scheduled_cron = old_session.last_scheduled_cron
+  new_session.last_run_status = old_session.last_run_status
 
-  async def _create_generation(
-      self,
-      task_name: str,
-      backend: str,
-  ) -> SessionMetadata:
-    """Create the task's next scheduled-session generation under the canonical name.
 
-    Single home of the generation request: the first-creation and rotation paths
-    must produce identically shaped sessions (name, scheduled_task).
+def write_cron_key(task_name: str, key: str, value: str | bool) -> None:
+  """Write one key of *task_name*'s cron yaml, preserving every other key.
 
-    With the task tree wired (the server's shape), the generation is created
-    through the tree's own factory — a task-tree root manager node, so the
-    unbound task's firings parent their worker leaves to a real manager. The
-    profile-None create_session shape remains only for a SessionManager built
-    without a tree consumer (no factory installed).
-    """
-    factory = self._session_manager.scheduled_generation_factory
-    if factory is not None:
-      return await factory(task_name, backend)
-    return await self._session_manager.create_session(
-        CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
-
-  async def ensure_scheduled_session_backend(
-      self,
-      task_name: str,
-      backend: str,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
-      skip_if_busy: bool = False,
-  ) -> SessionMetadata | None:
-    """Return the active scheduled session for task_name/backend, rotating history if needed.
-
-    Backend changes are generation changes: the old active session is archived and a new
-    scheduled session is created with only scheduler bookkeeping copied over.
-    """
-    active_sessions = await self._active_scheduled_sessions(task_name, session_cache)
-    for session in active_sessions:
-      if session.backend == backend:
-        return session
-
-    old_session = active_sessions[0] if active_sessions else None
-    if old_session is None:
-      meta = await self._create_generation(task_name, backend)
-      log.info("scheduled_session_created", task=task_name, session=meta.id, backend=backend)
-      if session_cache is not None:
-        session_cache.setdefault(task_name, []).insert(0, meta)
-      return meta
-
-    if await self._scheduled_session_busy(old_session):
-      message = (
-          f"scheduled task '{task_name}' backend switch from '{old_session.backend}' to '{backend}' is blocked "
-          f"because session '{old_session.id}' has running work")
-      if skip_if_busy:
-        log.warning(
-            "scheduled_session_rotation_busy",
-            task=task_name,
-            session=old_session.id,
-            old_backend=old_session.backend,
-            backend=backend,
-        )
-        return None
-      raise ScheduledSessionBusyError(message)
-
-    await self._session_manager.archive_session(old_session.id)
-    meta = await self._create_generation(task_name, backend)
-    self.migrate_scheduler_bookkeeping(old_session, meta)
-    meta.updated_at = utc_now()
-    await self._session_manager.save_metadata(meta)
-    if session_cache is not None:
-      cached_sessions = session_cache.setdefault(task_name, [])
-      for cached in cached_sessions:
-        if cached.id == old_session.id:
-          cached.status = SessionStatus.ARCHIVED
-      cached_sessions.insert(0, meta)
-    log.info(
-        "scheduled_session_rotated",
-        task=task_name,
-        old_session=old_session.id,
-        new_session=meta.id,
-        old_backend=old_session.backend,
-        backend=backend,
-    )
-    return meta
-
-  async def archive_sessions_for_task(self, task_name: str) -> list[str]:
-    """Archive every active session dedicated to task_name and return the archived ids.
-
-    Deletion-time counterpart of rotation: the sessions flip to the same archived
-    status with history kept on disk, so unarchive can restore them.
-    """
-    active_sessions = await self._active_scheduled_sessions(task_name)
-    archived_ids: list[str] = []
-    for session in active_sessions:
-      await self._session_manager.archive_session(session.id)
-      archived_ids.append(session.id)
-    return archived_ids
-
-  async def _active_scheduled_sessions(
-      self,
-      task_name: str,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
-  ) -> list[SessionMetadata]:
-    """Return active scheduled sessions for task_name, newest first."""
-    if session_cache is not None:
-      candidates = session_cache.get(task_name, [])
-    else:
-      candidates = await self._session_manager.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
-    sessions = [
-        session for session in candidates
-        if session.scheduled_task == task_name and session.status == SessionStatus.ACTIVE
-    ]
-    # Sort by creation time, not updated_at: unarchiving refreshes updated_at
-    # (sessions.py _update_field), so a pulled-back old generation would
-    # otherwise rank newest and capture the task's next cron fire. created_at
-    # names the newest generation, and no wake path rewrites it.
-    sessions.sort(key=lambda session: session.created_at, reverse=True)
-    return sessions
-
-  async def _scheduled_session_busy(self, session: SessionMetadata) -> bool:
-    """Return whether a scheduled session has active master thinking or worker threads."""
-    return bool(session.thinking_since) or await self._session_manager._has_running_tasks(session.id)
-
-  def migrate_scheduler_bookkeeping(self, old_session: SessionMetadata, new_session: SessionMetadata) -> None:
-    """Carry scheduler bookkeeping fields onto the task's next generation.
-
-    The single home of the migration field list: both the rotation body above
-    and the elone succession branch (src/core/sessions.py) call it, so what
-    migrates on a generation change is defined exactly once.
-    """
-    new_session.last_scheduled_run = old_session.last_scheduled_run
-    new_session.last_scheduled_cron = old_session.last_scheduled_cron
-    new_session.last_run_status = old_session.last_run_status
-
-  async def write_scheduled_task_backend(self, task_name: str, backend: str) -> None:
-    """Write only the ``backend`` key of *task_name*'s cron yaml, preserving every other key.
-
-    Persistence rides :meth:`_write_cron_key`'s contract.
-    """
-    await asyncio.to_thread(self._write_cron_key, task_name, "backend", backend)
-
-  @staticmethod
-  def _write_cron_key(task_name: str, key: str, value: str | bool) -> None:
-    """Write one key of *task_name*'s cron yaml, preserving every other key.
-
-    Single home of the single-key write rule: full-file rewrite via save_yaml —
-    the same persistence form as the cron editor's whole-record update. Path
-    resolution comes from the canonical helper (src.core.config.cron_path); a
-    missing, empty, or non-mapping task file fails loud instead of silently
-    recreating one.
-    """
-    path = cron_path(task_name)
-    data = load_yaml(path, default=None)
-    if not isinstance(data, dict):
-      raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
-    data[key] = value
-    save_yaml(path, data)
+  Single home of the single-key write rule: full-file rewrite via save_yaml —
+  the same persistence form as the cron editor's whole-record update. Path
+  resolution comes from the canonical helper (src.core.config.cron_path); a
+  missing, empty, or non-mapping task file fails loud instead of silently
+  recreating one.
+  """
+  path = cron_path(task_name)
+  data = load_yaml(path, default=None)
+  if not isinstance(data, dict):
+    raise FileNotFoundError(f"scheduled task '{task_name}' has no readable cron yaml at {path}")
+  data[key] = value
+  save_yaml(path, data)

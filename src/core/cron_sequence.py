@@ -41,7 +41,7 @@ from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
 from src.core import review
-from src.core.config import ScheduledTaskConfig
+from src.core.config import ScheduledTaskConfig, get_scheduled_tasks
 from src.core.control_events import stable_run_id
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
@@ -95,6 +95,20 @@ def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
         "cron_sequence_task_config_unreadable", task=task_name, path=str(path), error=str(exc))
     return None
   return task
+
+
+def bound_task_name(session_id: str) -> str | None:
+  """The loaded scheduled task whose ``session_id`` binding names *session_id*.
+
+  The one "is this node bound by a task" judgment, derived from the loaded task
+  configs' ``session_id`` and never from a session's ``scheduled_task`` stamp:
+  every duty that moves from the legacy cron session to the bound node keys on
+  this one implementation.
+  """
+  for task_cfg in get_scheduled_tasks():
+    if task_cfg.session_id == session_id:
+      return task_cfg.name
+  return None
 
 
 def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> str:

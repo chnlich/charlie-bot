@@ -68,74 +68,89 @@ def _cron_api_rig(
 
 
 @pytest.mark.asyncio
-async def test_scheduler_rotates_scheduled_session_backend_and_copies_bookkeeping(tmp_path: Path) -> None:
+async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A bound task's node follows the task config: the tick's alignment switches
+  the node's backend in place and leaves the scheduler bookkeeping untouched."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  old_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+  from src.api import deps
+  from src.core.task_sessions import TaskTreeManager
+  tree = TaskTreeManager(cfg, session_mgr)
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  node = await tree.create_task(
+      request_id="scheduled-node:nightly",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="nightly",
       backend=OPUS_BACKEND_ID,
-  )
-  old_session.last_scheduled_run = "2026-06-07T02:00:00-07:00"
-  old_session.last_scheduled_cron = "0 2 * * *"
-  old_session.last_run_status = LastRunStatus.SUCCESS
-  old_session.cc_session_id = "old-backend-conversation"
-  old_session.cc_session_started_at = datetime(2026, 6, 7, 9, 0, tzinfo=UTC)
-  await session_mgr.save_metadata(old_session)
+      caller="system")
+  node.last_scheduled_run = "2026-06-07T09:00:00+00:00"
+  node.last_scheduled_cron = "0 2 * * *"
+  await session_mgr.save_metadata(node)
 
   task_cfg = ScheduledTaskConfig(
       name="nightly",
       cron="0 2 * * *",
       prompt="nightly prompt",
       backend="codex-o3",
+      session_id=node.id,
   )
+  await scheduler._align_bound_backend(task_cfg, cfg)
 
-  new_session = await scheduler._get_or_create_session(task_cfg, cfg, session_mgr)
-
-  assert new_session is not None
-  assert new_session.id != old_session.id
-  assert new_session.backend == "codex-o3"
-  assert new_session.scheduled_task == "nightly"
-  assert new_session.last_scheduled_run == old_session.last_scheduled_run
-  assert new_session.last_scheduled_cron == old_session.last_scheduled_cron
-  assert new_session.last_run_status == old_session.last_run_status
-  assert new_session.cc_session_id is None
-  assert new_session.cc_session_started_at is None
-  archived_old = await session_mgr.get_session(old_session.id)
-  assert archived_old is not None
-  assert archived_old.status == SessionStatus.ARCHIVED
+  fresh = await session_mgr.get_session(node.id)
+  assert fresh is not None
+  assert fresh.backend == "codex-o3"
+  assert fresh.scheduled_task is None  # the node is a task-tree node, never re-stamped
+  assert fresh.last_scheduled_run == "2026-06-07T09:00:00+00:00"
+  assert fresh.last_scheduled_cron == "0 2 * * *"
+  # Idempotent: a second alignment on the now-current backend writes nothing.
+  await scheduler._align_bound_backend(task_cfg, cfg)
+  sessions = await session_mgr.list_sessions()
+  assert len(sessions) == 1
 
 
 @pytest.mark.asyncio
-async def test_scheduler_backend_rotation_preserves_last_run_to_avoid_duplicate_fire(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A hand-edited yaml backend seen by the tick switches the node in place and
+  preserves its last_scheduled_run: the next fire is computed from the true last
+  occurrence, not from a rotated generation's empty bookkeeping."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  old_session = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+  from src.api import deps
+  from src.core.task_sessions import TaskTreeManager
+  tree = TaskTreeManager(cfg, session_mgr)
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  node = await tree.create_task(
+      request_id="scheduled-node:nightly",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="nightly",
       backend=OPUS_BACKEND_ID,
-  )
+      caller="system")
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
-  old_session.last_scheduled_run = now.isoformat()
-  old_session.last_scheduled_cron = "* * * * *"
-  old_session.last_run_status = LastRunStatus.SUCCESS
-  await session_mgr.save_metadata(old_session)
+  await tree.record_scheduled_fire(node.id, last_scheduled_run=now.isoformat(), cron="* * * * *")
   task_cfg = ScheduledTaskConfig(
       name="nightly",
       cron="* * * * *",
       prompt="nightly prompt",
       backend="codex-o3",
+      session_id=node.id,
   )
   execute_task = AsyncMock()
-  monkeypatch.setattr(scheduler, "_execute_task", execute_task)
+  scheduler._execute_task = execute_task
 
-  await scheduler._maybe_run(task_cfg, session_mgr, {"nightly": [old_session]}, cfg)
+  await scheduler._align_bound_backend(task_cfg, cfg)
+  await scheduler._maybe_run(task_cfg, session_mgr, {}, cfg)
 
   execute_task.assert_not_awaited()
-  active_sessions = await session_mgr.list_sessions(status=SessionStatus.ACTIVE, scheduled=True)
-  assert len(active_sessions) == 1
-  assert active_sessions[0].backend == "codex-o3"
-  assert active_sessions[0].last_scheduled_run == now.isoformat()
-  assert active_sessions[0].last_scheduled_cron == "* * * * *"
+  fresh = await session_mgr.get_session(node.id)
+  assert fresh is not None
+  assert fresh.backend == "codex-o3"
+  assert fresh.last_scheduled_run == now.isoformat()
+  assert fresh.last_scheduled_cron == "* * * * *"
 
 
 def test_cron_api_persists_and_clears_backend(

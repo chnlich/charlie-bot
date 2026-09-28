@@ -371,12 +371,6 @@ class TaskTreeManager:
     # metadata writes — so a tree page read after the flip never serves the
     # stale flag a missed broadcast would have left standing.
     session_mgr.tree_index_invalidator = self.invalidate_tree_index
-    # Scheduled-session generations created while this tree is wired are
-    # task-tree root manager nodes (create_scheduled_generation), so an
-    # unbound cron task's firings parent their worker leaves to a real
-    # manager. The factory receives this process's own tree instance — never
-    # a reconstructed one, which would read a foreign sessions root.
-    session_mgr.scheduled_generation_factory = self.create_scheduled_generation
     # The session lists read stored status; the archive of a task node is a
     # derived fact (archived_of, subtree inheritance included). The overlay
     # lets the sidebar's active list drop a delivered worker — and, with it,
@@ -740,8 +734,7 @@ class TaskTreeManager:
     events = self.runs.load_events_sync(session_id)
     task_open = self._facts_of(session_id).task_state == "open"
     return derive_task_tree_activity(
-        runs, events, self._host_boot_time, task_open,
-        outcomes=self._run_outcomes_of(session_id, live, archived_count))
+        runs, events, self._host_boot_time, task_open, outcomes=self._run_outcomes_of(session_id, live, archived_count))
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.
@@ -949,26 +942,24 @@ class TaskTreeManager:
   # Create
   # ------------------------------------------------------------------
 
-  async def create_scheduled_generation(self, task_name: str, backend: str) -> SessionMetadata:
-    """One scheduled task's cron generation as a task-tree root manager node.
+  async def adopt_scheduled_bookkeeping(self, session_id: str, old: SessionMetadata) -> SessionMetadata:
+    """Copy one old cron session's scheduler bookkeeping onto this node.
 
-    The scheduled-session rotation's factory (installed on the SessionManager
-    at wiring time): a generation created while this tree is wired parents its
-    task's worker leaves to a real manager. The request id is generation-local
-    (never stable across generations — a backend rotation must be able to
-    create a fresh node), and discovery re-reads the sessions root, so a crash
-    between create and use finds the node by its ``scheduled_task`` stamp.
+    The auto-bind's migration step (src/core/scheduler.py): the write re-reads
+    the node under the control lock through the tree metadata owner, and the
+    field list stays :func:`migrate_scheduler_bookkeeping`'s — the single
+    home — so what migrates is defined exactly once.
     """
-    return await self.create_task(
-        request_id=f"scheduled-generation:{uuid4_hex()}",
-        task_parent_id=None,
-        profile="manager",
-        task=None,
-        name=f"Scheduled: {task_name}",
-        backend=backend,
-        caller="system",
-        scheduled_task=task_name,
-    )
+    from src.core.scheduled_sessions import migrate_scheduler_bookkeeping
+
+    async with self.control_lock:
+      meta = await self.load_meta(session_id)
+      if meta is None:
+        raise TaskNotFoundError(f"session {session_id} not found")
+      migrate_scheduler_bookkeeping(old, meta)
+      meta.updated_at = utc_now()
+      await self._save_meta(meta)
+      return meta
 
   async def create_task(
       self,
@@ -981,16 +972,12 @@ class TaskTreeManager:
       backend: str | None,
       group: str | None = None,
       caller: object,
-      scheduled_task: str | None = None,
   ) -> SessionMetadata:
     """Create one task node; a replayed request returns the original product.
 
     The node id is (parent, request_id)-stable. Metadata plus the task_created
     fact are written into a temp directory and published with one rename, so a
-    crash leaves either no node or a complete one. ``scheduled_task`` stamps
-    the node as one scheduled task's dedicated cron generation (the scheduler's
-    session discovery reads it); it is metadata bookkeeping only and never
-    part of the stable id.
+    crash leaves either no node or a complete one.
     """
     if not request_id:
       raise TaskInvalidError(TASK_CREATE_REQUEST_ID_REQUIRED)
@@ -1044,7 +1031,6 @@ class TaskTreeManager:
           group=group,
           parent_meta=parent_meta,
           actor=_create_actor_for(caller),
-          scheduled_task=scheduled_task,
       )
     self._invalidate_index()
     # The publish rename took the node out from under any cached entry.
@@ -1126,7 +1112,6 @@ class TaskTreeManager:
       group: str | None,
       parent_meta: SessionMetadata | None,
       actor: str,
-      scheduled_task: str | None = None,
   ) -> SessionMetadata:
     sessions_dir = self._cfg.sessions_dir
     sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -1141,7 +1126,6 @@ class TaskTreeManager:
         task_parent_id=task_parent_id,
         backend=backend or (parent_meta.backend if parent_meta else "") or self._cfg.backends.options[0].id,
         group=group,
-        scheduled_task=scheduled_task,
     )
     try:
       (temp_dir / "data").mkdir(parents=True)

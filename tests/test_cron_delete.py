@@ -1,4 +1,4 @@
-"""Tests for cron-task deletion archiving the task's dedicated scheduled sessions."""
+"""Tests for cron-task deletion: the yaml goes, everything else stays."""
 
 from pathlib import Path
 
@@ -9,6 +9,7 @@ from conftest import (
     apply_config_overrides,
     cron_d_dir,
     dump_yaml,
+    make_legacy_cron_session,
     make_scheduler_setup,
     read_chat_events,
     user_event,
@@ -22,7 +23,7 @@ from src.api.cron import router as cron_router
 from src.api.deps import get_session_manager
 from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
+from src.core.models import SessionMetadata, SessionStatus
 from src.core.sessions import SessionManager
 
 
@@ -54,48 +55,66 @@ def write_nightly_task(home: Path) -> Path:
   )
 
 
-async def make_scheduled_session(session_mgr: SessionManager, task_name: str) -> SessionMetadata:
-  """One active session dedicated to task_name, created through the real manager."""
-  return await session_mgr.create_session(
-      CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=OPUS_BACKEND_ID)
-
-
 @pytest.mark.asyncio
-async def test_delete_archives_task_session_and_drops_it_from_scheduled(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
+    tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Deleting a task archives nothing: the yaml goes, the task's bound node
+  stays exactly as it is (it is the user's task-tree node, not the deletion's
+  product), and no legacy cron session is archived either."""
+  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
+  from src.api import deps
+  from src.core.task_sessions import TaskTreeManager
+  tree = TaskTreeManager(cfg, session_mgr)
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
   write_nightly_task(temp_home)
-  session = await make_scheduled_session(session_mgr, "nightly")
+  node = await tree.create_task(
+      request_id="scheduled-node:nightly",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="nightly",
+      backend=OPUS_BACKEND_ID,
+      caller="system")
+  cron_session = await make_legacy_cron_session(session_mgr, "nightly")
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
-    before = client.get("/api/sessions/scheduled")
     response = client.delete("/api/cron/tasks/nightly")
-    scheduled = client.get("/api/sessions/scheduled")
 
-  assert before.status_code == 200
-  assert [s["id"] for s in before.json()] == [session.id]
   assert response.status_code == 200
-  assert response.json() == {"ok": True, "archived_sessions": [session.id]}
+  assert response.json() == {"ok": True}
   assert not (cron_d_dir(temp_home) / "nightly.yaml").exists()
-  stored = await session_mgr.get_session(session.id)
-  assert stored is not None
-  assert stored.status == SessionStatus.ARCHIVED
-  assert scheduled.status_code == 200
-  assert scheduled.json() == []
+  fresh_node = await session_mgr.get_session(node.id)
+  assert fresh_node is not None
+  assert fresh_node.status == SessionStatus.ACTIVE
+  fresh_cron = await session_mgr.get_session(cron_session.id)
+  assert fresh_cron is not None
+  assert fresh_cron.status == SessionStatus.ACTIVE
 
 
 @pytest.mark.asyncio
-async def test_delete_keeps_session_dir_and_history_and_unarchive_restores(tmp_path: Path, temp_home: Path) -> None:
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
+async def test_delete_keeps_the_node_dir_and_history(tmp_path: Path, temp_home: Path) -> None:
+  """The delete removes only the config file: the bound node's directory and
+  chat history stay on disk."""
+  cfg, session_mgr, _scheduler = make_scheduler_setup(tmp_path)
+  from src.core.task_sessions import TaskTreeManager
+  tree = TaskTreeManager(cfg, session_mgr)
   write_nightly_task(temp_home)
-  session = await make_scheduled_session(session_mgr, "nightly")
-  events_path = session_mgr.get_chat_events_path(session.id)
+  node = await tree.create_task(
+      request_id="scheduled-node:nightly",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="nightly",
+      backend=OPUS_BACKEND_ID,
+      caller="system")
+  events_path = session_mgr.get_chat_events_path(node.id)
   append_events(events_path, [user_event("e0")])
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
-    client.delete("/api/cron/tasks/nightly")
-    restore = client.post(f"/api/sessions/{session.id}/unarchive")
+    response = client.delete("/api/cron/tasks/nightly")
 
-  assert cfg.sessions_dir.joinpath(session.id).is_dir()
-  assert read_chat_events(tmp_path / "charliebot-home", session.id) == [user_event("e0")]
-  assert restore.status_code == 200
-  assert restore.json()["status"] == SessionStatus.ACTIVE
+  assert response.status_code == 200
+  assert cfg.sessions_dir.joinpath(node.id).is_dir()
+  events = read_chat_events(temp_home / "charliebot-home", node.id)
+  assert user_event("e0") in events  # the node's history is intact

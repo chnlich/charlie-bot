@@ -52,13 +52,7 @@ from src.core.models import (
 )
 from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
-from src.core.scheduled_sessions import (
-    # re-export: src/api/cron.py and src/api/sessions.py import
-    # ScheduledSessionBusyError from this module
-    ScheduledSessionBusyError,
-    ScheduledSessionStore,
-    cron_subtree_roots,
-)
+from src.core.scheduled_sessions import cron_subtree_roots
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.tasks import create_logged_task
@@ -952,16 +946,6 @@ def _stream_reference_file(out: BinaryIO, source: Path, take: int) -> tuple[int,
       mapping.close()
 
 
-class SuccessionRefusedError(ValueError):
-  """An elone was refused because a scheduler-owned parent cannot take a new successor.
-
-  Only a scheduler-owned parent (``scheduled_task`` set) that already has a
-  successor refuses; ordinary parents re-elone freely. Carries the
-  successor-already-set rejection so the API can answer 409 while other
-  ValueErrors keep answering 400.
-  """
-
-
 class SessionManager:
   """CRUD operations for CharlieBot sessions."""
 
@@ -999,15 +983,6 @@ class SessionManager:
     # row's state is the tree's own verdict, never a second copy of the rules.
     # None only before that wiring exists (no tree consumer in this process).
     self.task_tree_activity: Callable[[str], tuple[bool, str]] | None = None
-    # The task-tree owner registers its cron-generation creator here at wiring
-    # time (TaskTreeManager.__init__): (task_name, backend) -> the new
-    # generation's node. A scheduled session created by a wired manager is a
-    # task-tree root manager node, so its firings' worker leaves parent under
-    # a real manager; the factory receives the process's own tree and never a
-    # reconstructed one. None only before that wiring exists (no tree
-    # consumer in this process) — then the generation falls back to the
-    # profile-None session shape the tree cannot provide.
-    self.scheduled_generation_factory: Callable[[str, str], Awaitable[SessionMetadata]] | None = None
     # Listing-preamble memo: ((mtime_ns, size) of the sessions root, its subdirectory names).
     # The root's own mtime moves exactly when a session entry is created or removed (metadata
     # writes land one level below), so an unchanged signature proves the name set current.
@@ -1034,7 +1009,6 @@ class SessionManager:
         self.get_chat_events_path,
         self.load_chat_events_sync,
     )
-    self._scheduled_sessions = ScheduledSessionStore(self)
     # Per-session MessageAggregator instance carrying live streaming state
     # (assistant_buf, tools_buf). Lazy-initialized from disk on first
     # persist_and_broadcast for a session after server start, then maintained
@@ -1077,7 +1051,6 @@ class SessionManager:
       overrides["id"] = req.session_id
     meta = SessionMetadata(
         name=name,
-        scheduled_task=req.scheduled_task,
         backend=backend or self._cfg.backends.options[0].id,
         slack_origin=req.slack_origin,
         group=req.group,
@@ -1096,31 +1069,6 @@ class SessionManager:
 
     log.info("session_created", session_id=meta.id, name=meta.name)
     return _stamp_thinking_since(meta)
-
-  async def ensure_scheduled_session_backend(
-      self,
-      task_name: str,
-      backend: str,
-      session_cache: dict[str, list[SessionMetadata]] | None = None,
-      skip_if_busy: bool = False,
-  ) -> SessionMetadata | None:
-    """Return the active scheduled session for task_name/backend, rotating history if needed.
-
-    See ``src/core/scheduled_sessions.py`` for the rotation contract.
-    """
-    return await self._scheduled_sessions.ensure_scheduled_session_backend(
-        task_name,
-        backend,
-        session_cache,
-        skip_if_busy,
-    )
-
-  async def archive_scheduled_sessions(self, task_name: str) -> list[str]:
-    """Archive every active scheduled session dedicated to task_name, returning the archived ids.
-
-    See ``src/core/scheduled_sessions.py`` for the lifecycle contract.
-    """
-    return await self._scheduled_sessions.archive_sessions_for_task(task_name)
 
   def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
     # Only tui-cli backends carry tmux lifecycle state, and the create and
@@ -1514,8 +1462,7 @@ class SessionManager:
     query_lower = query.lower()
     all_meta = await self._load_session_metas()
     cached = self._search_match_memo.get(query_lower)
-    if (cached is not None and cached[0] is all_meta
-            and _search_content_sigs_hold(cached[1], cached[2])):
+    if (cached is not None and cached[0] is all_meta and _search_content_sigs_hold(cached[1], cached[2])):
       derived = await self.resolve_sidebar_state(
           cached[3],
           include_running_status=include_running_status,
@@ -1590,8 +1537,7 @@ class SessionManager:
     rows = rows[:_SEARCH_RESULT_LIMIT]
     if scan_failures == 0:
       self._search_match_memo.store(
-          query_lower,
-          (all_meta, [path for _meta, path in content_candidates], tuple(content_sigs), rows))
+          query_lower, (all_meta, [path for _meta, path in content_candidates], tuple(content_sigs), rows))
     derived = await self.resolve_sidebar_state(
         rows,
         include_running_status=include_running_status,
@@ -1649,34 +1595,22 @@ class SessionManager:
     """Create an Elon-e session: the child's log opens with the parent's raw
     event lines, the parent is archived.
 
-    Runs the succession rejection BEFORE any child session is created, so a
-    refused call mutates nothing on disk. The per-parent invariant: each elone
-    overwrites ``successor_session_id`` so the pointer names the parent's most
-    recent elone child. Ordinary parents re-elone freely; scheduler-owned
-    parents refuse once they already have a successor. Consumers (chain
+    The per-parent invariant: each elone overwrites ``successor_session_id`` so
+    the pointer names the parent's most recent elone child, and consumers (chain
     resolution, delivery, trigger redirect) follow the pointer and therefore
-    land at the most recent takeover. A scheduler-owned parent takes an
-    inheriting succession: the child carries the scheduling identity and
-    bookkeeping, and the task yaml's backend is written back before the parent
-    is archived, so the alignment scan never has rotation work to do.
+    land at the most recent takeover. Scheduled tasks have no succession here:
+    their bound node is the task's stable binding, and an elone of it is an
+    ordinary fork — the task keeps firing on the original node.
     """
     fresh_parent = await self.read_metadata_fresh(parent_id)
     if fresh_parent is None:
       raise FileNotFoundError(f"parent session not found: {parent_id}")
-    if fresh_parent.successor_session_id is not None and fresh_parent.scheduled_task is not None:
-      raise SuccessionRefusedError(
-          f"session {parent_id} already has a successor "
-          f"({fresh_parent.successor_session_id}); elone that successor or fork for a separate branch")
-    if fresh_parent.scheduled_task is not None:
-      meta = await self._elone_scheduled_successor(fresh_parent, event_index, backend)
-    else:
-      meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
+    meta = await self._spawn_with_history(parent_id, event_index, backend, "E")
 
     # Auto-archive the parent, and record the elone successor
     # pointer (re-read under lock so concurrent mutations to the parent aren't
-    # clobbered). Latest-wins: an ordinary parent's pointer is overwritten to
-    # name each new child, so the pointer always names the most recent elone.
-    # Scheduler-owned parents refuse re-elone, so their pointer stays write-once.
+    # clobbered). Latest-wins: a parent's pointer is overwritten to name each
+    # new child, so the pointer always names the most recent elone.
     async with self._lock_for(parent_id):
       fresh_parent = await self.get_session(parent_id)
       if fresh_parent:
@@ -1689,45 +1623,12 @@ class SessionManager:
     self._log_spawn("session_eloned", meta, parent_id, event_index)
     return meta
 
-  async def _elone_scheduled_successor(
-      self,
-      parent: SessionMetadata,
-      event_index: int,
-      backend: str | None,
-  ) -> SessionMetadata:
-    """Spawn the inheriting successor for a scheduler-owned elone parent.
-
-    Step order keeps one active session matching the task yaml at every
-    instant, so a scheduler alignment scan landing mid-succession has no
-    rotation work to do: busy check -> inheriting spawn -> backend write-back;
-    the parent is archived afterwards by the shared elone flow. A busy parent
-    refuses with the same exception type the rotation path raises. A failed
-    write-back archives the successor just created, leaves the parent
-    untouched, and re-raises the original error, returning to pre-succession
-    state.
-    """
-    # read_metadata_fresh carries no thinking_since (a derived runtime fact);
-    # stamp it so the shared busy predicate sees the live busy state, exactly
-    # as the stamped metas the rotation path consults do.
-    if await self._scheduled_sessions._scheduled_session_busy(_stamp_thinking_since(parent)):
-      raise ScheduledSessionBusyError(
-          f"scheduled task '{parent.scheduled_task}' elone is blocked because session "
-          f"'{parent.id}' has running work; retry when it is idle")
-    meta = await self._spawn_with_history(parent.id, event_index, backend, "E", inherit_scheduling=True)
-    try:
-      await self._scheduled_sessions.write_scheduled_task_backend(parent.scheduled_task, meta.backend)
-    except Exception:
-      await self.archive_session(meta.id)
-      raise
-    return meta
-
   async def _spawn_with_history(
       self,
       parent_id: str,
       event_index: int | None,
       backend: str | None,
       name_prefix: str,
-      inherit_scheduling: bool = False,
   ) -> SessionMetadata:
     """Create a child session whose chat log opens with the parent's raw event lines.
 
@@ -1736,10 +1637,6 @@ class SessionManager:
     the parent's event count), then the ``clone_start`` marker; the child
     appends its own events after it. One history per session, in the file the
     model reads in place — the same log the parent grepped.
-    ``inherit_scheduling`` marks an inheriting scheduler succession: the child
-    keeps the parent name verbatim (name_prefix goes unused), takes over
-    scheduled_task, and receives the scheduler bookkeeping so the next cron
-    tick sees an unbroken cadence.
     """
     parent = await self.get_session(parent_id)
     if not parent:
@@ -1754,14 +1651,11 @@ class SessionManager:
       end = event_index + 1
 
     meta = SessionMetadata(
-        name=parent.name if inherit_scheduling else f"{name_prefix}{parent.name}",
+        name=f"{name_prefix}{parent.name}",
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
     )
-    if inherit_scheduling:
-      meta.scheduled_task = parent.scheduled_task
-      self._scheduled_sessions.migrate_scheduler_bookkeeping(parent, meta)
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
@@ -3320,7 +3214,7 @@ class SessionManager:
       # entry re-reads at its next expiry and re-keys from that read's own stat.
       self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
       # The single funnel for every session-metadata write (35+ call sites, plus
-      # the ScheduledSessionStore delegate): status transitions (archive/unarchive)
+      # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.
       sidebar_state.mark_sidebar_dirty(meta.id)
       self._listings_revision += 1

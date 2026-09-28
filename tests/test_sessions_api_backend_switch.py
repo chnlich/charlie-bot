@@ -123,15 +123,47 @@ async def test_switch_cross_family_switches_in_place(tmp_path: Path, monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_switch_dedicated_session_cross_family_is_400(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A cron-dedicated session keeps the in-domain rule: a cross-family target
-  earns the cron-config 400, no event, backend unchanged."""
+async def test_switch_bound_node_cross_family_is_400(
+    tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A task-bound node keeps the in-domain rule: a cross-family target earns
+  the cron-config 400 pointing at the task's config, no event, backend
+  unchanged. The judgment reads the binding (the loaded task configs'
+  session_id), never a scheduled_task stamp."""
   cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  rl = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
+  from src.core.task_sessions import TaskTreeManager
+  tree = TaskTreeManager(cfg, session_mgr)
+  from src.api import deps
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  rl = await tree.create_task(
+      request_id="scheduled-node:nightly",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="nightly",
       backend="claude-opus-5",
-  )
+      caller="system")
+  # temp_home points HOME (and so cron_dir()) at tmp_path: the binding file the
+  # loaded task configs read lives under the same synthetic home.
+  assert cfg.charliebot_home == Path(temp_home) / ".charliebot"
+  # A host file carries the path to its prompt source, never the inline body.
+  prompts = cfg.charliebot_home / "prompts"
+  prompts.mkdir(parents=True, exist_ok=True)
+  prompt_path = prompts / "nightly.md"
+  prompt_path.write_text("run nightly", encoding="utf-8")
+  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
+  cron_d.mkdir(parents=True, exist_ok=True)
+  import yaml as yaml_mod
+  (cron_d / "nightly.yaml").write_text(
+      yaml_mod.safe_dump(
+          {
+              "cron": "0 3 * * *",
+              "prompt_file": str(prompt_path),
+              "session_id": rl.id,
+              "backend": "claude-opus-5",
+          }),
+      encoding="utf-8")
 
   captured = _capture_persisted_events(monkeypatch, session_mgr)
 
@@ -140,7 +172,7 @@ async def test_switch_dedicated_session_cross_family_is_400(tmp_path: Path, monk
 
   assert response.status_code == 400
   detail = response.json()["detail"]
-  assert "cron config" in detail
+  assert "cron" in detail
   assert "codex-o3" in detail
   assert not captured
   on_disk = await session_mgr.get_session(rl.id)

@@ -17,7 +17,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, apply_config_overrides, build_env, create_task, seed_thread
+from conftest import (
+    OPUS_BACKEND_ID,
+    apply_config_overrides,
+    build_env,
+    create_task,
+    make_legacy_cron_session,
+    seed_thread,
+)
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -45,75 +52,76 @@ class Fixture:
   session_mgr: SessionManager
   tree: TaskTreeManager
   thread_mgr: ThreadManager
-  cron: SessionMetadata                   # active cron session (scheduled_task set)
-  manager: SessionMetadata                # active manager child of the cron session
-  worker: SessionMetadata                 # active direct worker child of the cron session
-  grandchild: SessionMetadata             # active worker under the manager child
-  delivered: SessionMetadata              # worker under the manager child, archived by derivation
-  cron_archived: SessionMetadata          # archived cron session with a legacy worker thread
-  cron_archived_thread: ThreadMetadata    # its projected leaf row (excluded from Archived)
-  plain_archived: SessionMetadata         # archived non-cron session with a legacy worker thread
-  plain_archived_thread: ThreadMetadata   # its projected leaf row (stays in Archived)
-  plain_active: SessionMetadata           # active non-cron session with a legacy worker thread
-  plain_active_thread: ThreadMetadata     # its projected leaf row (stays in All)
-  ordinary: SessionMetadata               # active plain session
-  fillers: list[SessionMetadata]          # archived plain sessions padding the keyset walk
+  cron: SessionMetadata  # active cron session (scheduled_task set)
+  manager: SessionMetadata  # active manager child of the cron session
+  worker: SessionMetadata  # active direct worker child of the cron session
+  grandchild: SessionMetadata  # active worker under the manager child
+  delivered: SessionMetadata  # worker under the manager child, archived by derivation
+  cron_archived: SessionMetadata  # archived cron session with a legacy worker thread
+  cron_archived_thread: ThreadMetadata  # its projected leaf row (excluded from Archived)
+  plain_archived: SessionMetadata  # archived non-cron session with a legacy worker thread
+  plain_archived_thread: ThreadMetadata  # its projected leaf row (stays in Archived)
+  plain_active: SessionMetadata  # active non-cron session with a legacy worker thread
+  plain_active_thread: ThreadMetadata  # its projected leaf row (stays in All)
+  ordinary: SessionMetadata  # active plain session
+  fillers: list[SessionMetadata]  # archived plain sessions padding the keyset walk
 
 
 async def _build_fixture(tmp_path: Path) -> Fixture:
   cfg, session_mgr, tree = build_env(tmp_path)
   thread_mgr = ThreadManager(cfg)
-  cron = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: nightly", scheduled_task="nightly"),
-      backend=OPUS_BACKEND_ID)
-  manager = await create_task(tree, parent=cron.id, request_id="mgr-1", profile="manager",
-                              name="nightly · manager")
-  worker = await create_task(tree, parent=cron.id, request_id="leaf-42", profile="worker",
-                             name="nightly · firing-42")
-  grandchild = await create_task(tree, parent=manager.id, request_id="leaf-43", profile="worker",
-                                 name="nightly · firing-43")
+  cron = await make_legacy_cron_session(session_mgr, "nightly")
+  manager = await create_task(tree, parent=cron.id, request_id="mgr-1", profile="manager", name="nightly · manager")
+  worker = await create_task(tree, parent=cron.id, request_id="leaf-42", profile="worker", name="nightly · firing-42")
+  grandchild = await create_task(
+      tree, parent=manager.id, request_id="leaf-43", profile="worker", name="nightly · firing-43")
   # The delivered leaf parents under the manager child: a legacy parent's wake
   # launches its master turn (a real backend spawn), a task-tree parent's wake
   # rides the dispatcher. The leaf stays a cron-subtree row — its chain still
   # reaches the cron session through the manager.
-  delivered = await create_task(tree, parent=manager.id, request_id="leaf-44", profile="worker",
-                                name="nightly · firing-44")
+  delivered = await create_task(
+      tree, parent=manager.id, request_id="leaf-44", profile="worker", name="nightly · firing-44")
   await tree.runs.register_run(RunRecord(id="run-44", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-44", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # the derived archive hides it while active
 
-  cron_archived = await session_mgr.create_session(
-      CreateSessionRequest(name="Scheduled: legacy-task", scheduled_task="legacy-task"),
-      backend=OPUS_BACKEND_ID)
+  cron_archived = await make_legacy_cron_session(session_mgr, "legacy-task")
   cron_archived_thread = await seed_thread(thread_mgr, cron_archived, "legacy cron thread")
   await session_mgr.archive_session(cron_archived.id)
   plain_archived = await session_mgr.create_session(
       CreateSessionRequest(name="Plain archived"), backend=OPUS_BACKEND_ID)
   plain_archived_thread = await seed_thread(thread_mgr, plain_archived, "plain archived thread")
   await session_mgr.archive_session(plain_archived.id)
-  plain_active = await session_mgr.create_session(
-      CreateSessionRequest(name="Plain active"), backend=OPUS_BACKEND_ID)
+  plain_active = await session_mgr.create_session(CreateSessionRequest(name="Plain active"), backend=OPUS_BACKEND_ID)
   plain_active_thread = await seed_thread(thread_mgr, plain_active, "plain active thread")
-  ordinary = await session_mgr.create_session(
-      CreateSessionRequest(name="Ordinary"), backend=OPUS_BACKEND_ID)
+  ordinary = await session_mgr.create_session(CreateSessionRequest(name="Ordinary"), backend=OPUS_BACKEND_ID)
   fillers = []
   for i in range(3):
-    filler = await session_mgr.create_session(
-        CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
+    filler = await session_mgr.create_session(CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
     await session_mgr.archive_session(filler.id)
     fillers.append(filler)
   return Fixture(
-      cfg=cfg, session_mgr=session_mgr, tree=tree, thread_mgr=thread_mgr,
-      cron=cron, manager=manager, worker=worker, grandchild=grandchild, delivered=delivered,
-      cron_archived=cron_archived, cron_archived_thread=cron_archived_thread,
-      plain_archived=plain_archived, plain_archived_thread=plain_archived_thread,
-      plain_active=plain_active, plain_active_thread=plain_active_thread,
-      ordinary=ordinary, fillers=fillers)
+      cfg=cfg,
+      session_mgr=session_mgr,
+      tree=tree,
+      thread_mgr=thread_mgr,
+      cron=cron,
+      manager=manager,
+      worker=worker,
+      grandchild=grandchild,
+      delivered=delivered,
+      cron_archived=cron_archived,
+      cron_archived_thread=cron_archived_thread,
+      plain_archived=plain_archived,
+      plain_archived_thread=plain_archived_thread,
+      plain_active=plain_active,
+      plain_active_thread=plain_active_thread,
+      ordinary=ordinary,
+      fillers=fillers)
 
 
 # Every row the cron-subtree rule excludes from All and Archived, by fixture name.
-_CRON_SUBTREE_ROWS = ("cron", "manager", "worker", "grandchild", "delivered",
-                      "cron_archived", "cron_archived_thread")
+_CRON_SUBTREE_ROWS = ("cron", "manager", "worker", "grandchild", "delivered", "cron_archived", "cron_archived_thread")
 
 
 def _subtree_ids(fx: Fixture) -> set[str]:
@@ -213,8 +221,8 @@ async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: 
   # A small-limit walk returns every non-excluded archived row exactly once,
   # with every page but the last full.
   expected = {
-      fx.cron_archived.id, fx.plain_archived.id, fx.plain_archived_thread.id,
-      *(filler.id for filler in fx.fillers)}
+      fx.cron_archived.id, fx.plain_archived.id, fx.plain_archived_thread.id, *(filler.id for filler in fx.fillers)
+  }
   walk: list[str] = []
   before = None
   before_id = None

@@ -2,10 +2,12 @@
 
 import asyncio
 import contextlib
+import inspect
 import io
 import json
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
+from typing import Any
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -460,20 +462,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
     yield
 
+    # Each step keeps its exact call and its order; the timing only wraps it.
+    # An exception from a step propagates as before — the charliebot_shutdown
+    # line below is then skipped, never a fallback value.
+    shutdown_started = time.monotonic()
+    step_ms: dict[str, int] = {}
+
+    async def timed_step(name: str, run: Callable[[], Any]) -> None:
+      started = time.monotonic()
+      result = run()
+      if inspect.isawaitable(result):
+        await result
+      step_ms[name] = round((time.monotonic() - started) * 1000)
+
     speech_model_task = getattr(app.state, "speech_model_task", None)
-    await cancel_and_wait(speech_model_task)
-    for attr in ("slack_listener_task", "slack_backfill_task"):
-      await cancel_and_wait(getattr(app.state, attr, None))
-    await ext_usage.stop_poller()
-    await host_auth.stop_poller()
-    await close_http_client()
-    await scheduler.stop()
-    await streaming_manager.close_all()
-    pages.shutdown_merge_executor()
+    await timed_step("speech_ms", lambda: cancel_and_wait(speech_model_task))
+    await timed_step("slack_listener_ms", lambda: cancel_and_wait(getattr(app.state, "slack_listener_task", None)))
+    await timed_step("slack_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "slack_backfill_task", None)))
+    await timed_step("ext_usage_ms", ext_usage.stop_poller)
+    await timed_step("host_auth_ms", host_auth.stop_poller)
+    await timed_step("http_client_ms", close_http_client)
+    await timed_step("scheduler_ms", scheduler.stop)
+    await timed_step("ws_close_ms", streaming_manager.close_all)
+    await timed_step("merge_pool_ms", pages.shutdown_merge_executor)
   finally:
     if writer_fence is not None:
       writer_fence.release()
-  log.info("charliebot_shutdown")
+  log.info("charliebot_shutdown", shutdown_ms=round((time.monotonic() - shutdown_started) * 1000), **step_ms)
 
 
 # The app assembly is the import's second bulk build: FastAPI's route
@@ -790,7 +805,9 @@ if _static_dir.exists():
 # Entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+
+def main() -> None:
+  """Run the server. The uvicorn arguments have their one definition here."""
   import uvicorn
 
   cfg = get_config()
@@ -807,3 +824,7 @@ if __name__ == "__main__":
       log_level="warning",
       timeout_graceful_shutdown=timeouts.SERVER_GRACEFUL_SHUTDOWN_TIMEOUT,
   )
+
+
+if __name__ == "__main__":
+  main()

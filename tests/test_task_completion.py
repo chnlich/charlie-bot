@@ -261,8 +261,8 @@ async def live_manager_caller(tree: TaskTreeManager, session_id: str, run_id: st
   """Register one live manager_turn Run and return the agent caller its token binds."""
   pid, pid_start, started_at = live_identity()
   await tree.runs.register_run(
-      RunRecord(id=run_id, session_id=session_id, kind="manager_turn", pid=pid, pid_start=pid_start,
-                started_at=started_at))
+      RunRecord(
+          id=run_id, session_id=session_id, kind="manager_turn", pid=pid, pid_start=pid_start, started_at=started_at))
   return CallerIdentity(kind="agent", claims=RunTokenClaims(run_id=run_id, session_id=session_id, agent="manager"))
 
 
@@ -339,6 +339,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   await reconcile_task_tree(cfg, tree, session_mgr)
   assert tree.task_state(manager.id) == "open"
   assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
+
 
 # ---------------------------------------------------------------------------
 # Cancel and reopen

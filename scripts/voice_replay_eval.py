@@ -44,6 +44,7 @@ from src.agents.transcription import registry  # noqa: E402
 from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
 from src.agents.transcription.local import LocalTranscriptionBackend  # noqa: E402
 from src.core.config import CharlieBotConfig, load_config  # noqa: E402
+from src.core.models import utc_now_iso  # noqa: E402
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 # A voice recording pairs with the first voice-flagged user message sent within
@@ -317,7 +318,7 @@ def write_outputs(
       entry.update(record)
       clip_records.append(entry)
   payload = {
-      "generated_at": datetime.now(UTC).isoformat(),
+      "generated_at": utc_now_iso(),
       "engines": engines,
       "terms": terms,
       "clips": clip_records,
@@ -366,7 +367,7 @@ def write_outputs(
   lines = [
       "# Voice replay evaluation",
       "",
-      f"Generated {datetime.now(UTC).isoformat()}; engines: {', '.join(engines)}; " + f"terms: {', '.join(terms)}",
+      f"Generated {utc_now_iso()}; engines: {', '.join(engines)}; " + f"terms: {', '.join(terms)}",
       "",
       "| " + " | ".join(SUMMARY_COLUMNS) + " |",
       "|" + "---|" * len(SUMMARY_COLUMNS),

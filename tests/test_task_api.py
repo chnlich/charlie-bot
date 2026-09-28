@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -15,7 +14,7 @@ from fastapi.testclient import TestClient
 from src.api import sessions as sessions_api
 from src.api import threads as threads_api
 from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-from src.core.models import RunRecord
+from src.core.models import RunRecord, utc_now_iso
 from src.core.run_token import RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -243,7 +242,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
       ids["root"], {
           "id": "user-1",
           "type": "user",
-          "timestamp": datetime.now(UTC).isoformat(),
+          "timestamp": utc_now_iso(),
           "actor": "user",
           "source_session_id": ids["root"],
           "content": "take off",

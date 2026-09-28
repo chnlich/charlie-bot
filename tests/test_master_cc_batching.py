@@ -29,7 +29,7 @@ from conftest import (
 
 from src.agents import master_cc_queue, master_cc_run, master_cc_state
 from src.core import event_types as ET
-from src.core.models import MasterRunRecord, SessionCallbacks, SessionMetadata
+from src.core.models import MasterRunRecord, SessionCallbacks, SessionMetadata, utc_now_iso
 from src.core.session_dispatch import INPUT_EVENT_TYPES
 
 
@@ -458,7 +458,7 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
         sid, {
             "type": ET.SCHEDULED_TRIGGER,
             "content": f"[Scheduled trigger fired] wake {i}",
-            "timestamp": datetime.now(UTC).isoformat(),
+            "timestamp": utc_now_iso(),
         })
     events = session_mgr.load_chat_events_sync(sid)
     wake_ids.append(events[-1]["id"])

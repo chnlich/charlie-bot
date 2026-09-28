@@ -11,7 +11,6 @@ the durable record either way.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import AsyncMock
 
@@ -19,7 +18,7 @@ import pytest
 from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, make_home_config
 
 from src.core import event_types as ET
-from src.core.models import CreateSessionRequest
+from src.core.models import CreateSessionRequest, utc_now_iso
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
@@ -41,7 +40,7 @@ def child_report(child_session_id: str, *, outcome: str, summary: str, event_id:
   return {
       "id": event_id,
       "type": ET.CHILD_REPORT,
-      "timestamp": datetime.now(UTC).isoformat(),
+      "timestamp": utc_now_iso(),
       "actor": "system",
       "source_session_id": child_session_id,
       "child_session_id": child_session_id,

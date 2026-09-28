@@ -19,6 +19,7 @@ from src.core.models import (
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
+    utc_now_iso,
 )
 from src.core.process import kill_group_escalating
 from src.core.session_dispatch import INPUT_EVENT_TYPES
@@ -537,7 +538,7 @@ async def run_message(
     user_event = {
         "type": ET.USER,
         "content": user_content if display_content is None else display_content,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": utc_now_iso(),
         "is_voice": is_voice,
     }
     if uploaded_files:

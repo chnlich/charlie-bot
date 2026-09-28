@@ -94,7 +94,7 @@ from src.core.home_writer_fence import (
 from src.core.init import init_charliebot_home
 from src.core.json_utils import atomic_write_text, load_json_meta
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now
+from src.core.models import utc_now, utc_now_iso
 from src.core.runs import read_pid_stat
 from src.core.session_aliases import ALIASES_FILE_NAME
 from src.core.task_recovery import reconcile_task_tree
@@ -498,7 +498,7 @@ def _prepare_preview(
       credential_section=credential,
       source_branch=branch,
       source_sha=sha,
-      started_at=datetime.now(UTC).isoformat(),
+      started_at=utc_now_iso(),
       log_path=home / PREVIEW_LOG_DIRNAME / f"preview-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}.log",
       native_sessions_dir=home / PREVIEW_NATIVE_DIRNAME,
       access_key=access_key,
@@ -656,9 +656,9 @@ def write_instance_record(setup: PreviewSetup, *, ready: bool, stopped: bool = F
       "ready": ready,
   }
   if ready:
-    record["ready_at"] = datetime.now(UTC).isoformat()
+    record["ready_at"] = utc_now_iso()
   if stopped:
-    record["stopped_at"] = datetime.now(UTC).isoformat()
+    record["stopped_at"] = utc_now_iso()
   record_path = preview_record_path(setup.home)
   record_path.parent.mkdir(parents=True, exist_ok=True)
   atomic_write_text(record_path, json.dumps(record, indent=2, sort_keys=True))

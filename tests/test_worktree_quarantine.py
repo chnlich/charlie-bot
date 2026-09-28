@@ -16,7 +16,7 @@ from src.core import git as git_module
 from src.core import init as init_module
 from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, utc_now
+from src.core.models import CreateSessionRequest, utc_now, utc_now_iso
 from src.core.sessions import SessionManager
 
 
@@ -256,7 +256,7 @@ async def test_scan_skips_archived_session_threads(tmp_path: Path) -> None:
   cfg = build_worktree_cfg(tmp_path)
   await _make_session(cfg, "live")
   await _make_session(cfg, "done")
-  started_at = utc_now().isoformat()
+  started_at = utc_now_iso()
   for session_id, thread_id in (("live", "live-thread"), ("done", "archived-thread")):
     _write_thread_meta(cfg, session_id, {"id": thread_id, "status": "running", "pid": 4242, "started_at": started_at})
   await SessionManager(cfg).archive_session("done")

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -10,7 +9,7 @@ from conftest import build_env, create_task, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
-from src.core.models import RunRecord
+from src.core.models import RunRecord, utc_now_iso
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
@@ -133,7 +132,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   close_event = {
       "id": "close-child",
       "type": ET.TASK_CLOSED,
-      "timestamp": datetime.now(UTC).isoformat(),
+      "timestamp": utc_now_iso(),
       "actor": "system",
       "source_session_id": child.id,
       "request_id": "auto:run-1",

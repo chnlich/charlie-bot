@@ -29,6 +29,7 @@ from src.agents.backends.spawn import SpawnedProcess, spawn_subprocess
 from src.core import event_types as ET
 from src.core import runs
 from src.core.log_once import LazyStructlogLogger
+from src.core.models import utc_now_iso
 from src.core.ndjson import parse_ndjson_line, write_all
 from src.core.process import (
     SessionCgroup,
@@ -109,7 +110,7 @@ _TAIL_POLL_INTERVAL = 0.02
 
 async def _capture_proc_diagnostics(pid: int) -> dict:
   """Best-effort snapshot of a hung subprocess: pgid, ps tree, /proc state, fds, children."""
-  out: dict = {"captured_at": datetime.now(UTC).isoformat(), "pid": pid}
+  out: dict = {"captured_at": utc_now_iso(), "pid": pid}
   try:
     out["pgid"] = os.getpgid(pid)
   except Exception as e:

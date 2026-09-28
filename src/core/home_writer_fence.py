@@ -29,11 +29,11 @@ from __future__ import annotations
 import fcntl
 import os
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from pathlib import Path
 
 from src.core.json_utils import atomic_write_text, load_json_meta
 from src.core.log_once import LazyStructlogLogger
+from src.core.models import utc_now_iso
 from src.core.runs import read_pid_stat
 
 log = LazyStructlogLogger()
@@ -183,7 +183,7 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   holder = FenceHolder(
       pid=os.getpid(),
       pid_start=_pid_start_of(os.getpid()),
-      started_at=datetime.now(UTC).isoformat(),
+      started_at=utc_now_iso(),
       purpose=purpose,
       argv=" ".join(os.sys.argv),
       home=str(home),

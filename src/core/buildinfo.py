@@ -5,7 +5,6 @@ server's build identity without re-running git on every request.
 """
 
 import subprocess
-from datetime import UTC, datetime
 
 from src.core.constants import REPO_ROOT
 from src.core.timeouts import SUBPROCESS_GIT_SHA_TIMEOUT
@@ -19,9 +18,14 @@ def init_build_info() -> None:
 
   Idempotent — re-calling overwrites the previously captured values (used by tests).
   """
+  # Lazy: this module stays stdlib-only (src.cli.common lazy-imports
+  # read_repo_head_sha to keep buildinfo off its import floor), so the pydantic
+  # stack loads only here, inside the startup caller that already carries it.
+  from src.core.models import utc_now_iso
+
   global _sha, _started_at
   _sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT) or "unknown"
-  _started_at = datetime.now(UTC).isoformat()
+  _started_at = utc_now_iso()
 
 
 def read_repo_head_sha(timeout: float) -> str | None:

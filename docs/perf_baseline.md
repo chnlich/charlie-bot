@@ -132,6 +132,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M123 hook-helper import floor, per hook event | M123 collector below | seconds per fresh-process registered hook-command wall (the collector runs the exact argv `claude_sub._write_hook_plugin` writes for the PreToolUse gate event, stdin `{}`, absent socket, `--gate` so the fail path returns rc 2 without signalling the parent group; the wall every Claude Code hook event pays before the bridge round-trip — the gate events UserPromptSubmit/PreToolUse/PermissionRequest sit on the turn's critical path) | median < 0.030 s, max < 0.030 s (the after band reads 23.2-23.5 ms median, 23.6-24.2 ms max — interpreter base, the json/re import chain, and the transport modules; the pre-fix shape pays site's editable finder for pathlib/glob/re the helper never imports plus argparse for a three-flag argv and reads 34.6-36.4 ms median with maxima to 50.4, tripping both lines) | — (introduced with its first history row) |
 | M124 config-verb dispatch wall, help path | M124 collector below | seconds per fresh-process `config --help` wall (the import+dispatch floor every config-verb invocation pays before argparse prints — the M92 protocol) and per `config get <key>` round (the verb's own reading; the model stack it needs either way is why its wall is not this line's subject) | help median < 0.10 s (the M92 line's shape: the deferred-module verbs' help floors read 26-57 ms, and the pre-fix config verb reads 151-173 ms — the eager `src.core.config` import pricing the pydantic model build into discovery; the other config-importing verb modules' floors sit higher on their core modules' own eager chains — see the history row); get median < 0.25 s (the M115 line's shape — the get round is the cold config resolution plus argparse) | — (introduced with its first history row) |
 | M125 sibling-verb dispatch floor, help path | M125 collector below | seconds per fresh-process `<verb> --help` wall (the M92 protocol's import+dispatch floor) for the five sibling verbs the M124 round left pinned by their core modules' eager chains (improve, publish, storage, gc-trash, remote-launch) | median < 0.10 s per verb (the M92 line's shape — the after band reads 29-45 ms across the five, the src.cli.config deferral shape's deferred-module band; the pre-fix shape reads 0.157-0.382 s, the publish/storage/trash/sequence/config chains' own eager cost) | — (introduced with its first history row) |
+| M126 recycle archive pass | M126 collector below | seconds per `archive_old_chat_events_sync` over the synthetic 25k-event × 8KB corpus split at 20k (the weekly scheduled-session recycle's split pass; scratch home, fresh random ids — the pass writes, so the live home is never touched) | median < max(0.010 s, events × 0.0000140 s) (the after band reads 9.6-9.9 µs/event — the split-search parse is the floor both shapes share; the pre-fix list-and-join shape reads 18-19 µs/event and trips; a tripped reading is read as host load first — the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8687,9 +8688,84 @@ for verb in VERBS:
 EOF
 ```
 
+M126 — recycle archive pass. The weekly scheduled-session recycle
+(``recycle_scheduled_session``, fired from the master trigger's cc-session-expiry wake) splits a
+cron session's live ``chat_events.jsonl`` at the cutoff: the pre-fix pass walked the whole file in
+text mode — every line decoded, every pre-cutoff line orjson-parsed, the corpus held twice as
+Python str lists, and the kept tail re-joined into one full-corpus string before the atomic
+rewrite — so the pass cost scales with the whole corpus and spikes the server-executor heap at the
+corpus's size. The fixed pass walks binary lines only to the split point (the kept tail is the
+contiguous range from the split line on), copies the pre-split non-blank runs to the archive
+append at the byte level, streams the kept tail straight off the source handle, and decodes only
+the ambiguous non-ASCII lines the blank rule needs. The cost sits on a weekly write path no
+standing HTTP probe reaches, so the collector builds the corpus synthetically in one scratch
+``CHARLIEBOT_HOME`` (fresh random ids; the pass writes, so the live home is never touched) and
+times the real ``archive_old_chat_events_sync``, one warm pass then five timed rounds, each
+round's corpus rebuilt and its session removed before the next. Evidence points the same collector
+at the before and after checkouts (``CHECKOUT`` at each root):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, os, shutil, sys, tempfile, time, uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.chat_events import ChatEventStore
+from src.core.config import CharlieBotConfig
+
+N_EVENTS = 25000
+BODY_BYTES = 8000
+SPLIT_AT = 20000
+
+home = Path(tempfile.mkdtemp(prefix="m126-recycle-home-", dir="/tmp"))
+try:
+    cfg = CharlieBotConfig(charliebot_home=home)
+    store = ChatEventStore(lambda sid: cfg.sessions_dir / sid, lambda sid: cfg.sessions_dir / sid / "metadata.json", {})
+    base = datetime(2026, 9, 1, tzinfo=UTC)
+
+    def build():
+        # Scratch home, fresh random id: the recycle writes, so the live home is never touched.
+        sid = str(uuid.uuid4())
+        data = cfg.sessions_dir / sid / "data"
+        data.mkdir(parents=True)
+        with open(data / "chat_events.jsonl", "w", encoding="utf-8") as f:
+            for i in range(N_EVENTS):
+                event = {"type": "message", "role": "assistant",
+                         "content": f"event {i} " + "x" * BODY_BYTES,
+                         "timestamp": (base + timedelta(seconds=i)).isoformat()}
+                f.write(json.dumps(event) + "\n")
+        return sid, base + timedelta(seconds=SPLIT_AT)
+
+    def round_once():
+        sid, cutoff = build()
+        try:
+            t0 = time.perf_counter()
+            result = store.archive_old_chat_events_sync(sid, cutoff)
+            return time.perf_counter() - t0, result
+        finally:
+            shutil.rmtree(cfg.sessions_dir / sid)
+
+    _, warm = round_once()  # warm pass, as at the first recycle after a server start; not timed
+    assert warm["events_archived"] == SPLIT_AT, warm
+    times = []
+    for _ in range(5):
+        dt, result = round_once()
+        assert result["events_archived"] == SPLIT_AT, result
+        times.append(dt)
+    times.sort()
+    print(f"checkout {os.path.basename(os.environ['CHECKOUT'])}: recycle archive pass "
+          f"{N_EVENTS // 1000}k-event x8KB corpus ({N_EVENTS * (BODY_BYTES + 90) // 1000000} MB, split at "
+          f"{SPLIT_AT // 1000}k) median {times[2]:.3f} s, max {times[-1]:.3f} s over 5")
+finally:
+    shutil.rmtree(home)
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this PR | M126 recycle archive pass, introduced with this PR: the weekly scheduled-session recycle's ``archive_old_chat_events_sync`` walked the whole live file in text mode — every line decoded, every pre-split line orjson-parsed, the corpus held twice as Python str lists, and the kept tail re-joined into one full-corpus string before the atomic rewrite; the fixed pass walks binary lines only to the split point (the kept tail is the contiguous range from the split line on, copied straight off the source handle through ``atomic_write_stream``), copies the pre-split non-blank runs to the archive append at the byte level, and decodes only the ambiguous non-ASCII lines the blank rule needs, so the corpus never materializes as Python strings; interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, six rounds of the 50k × 2KB corpus then six of the standing 25k × 8KB corpus, load 0.94-1.13 one-minute: 0.240/0.233/0.238/0.234/0.235/0.236 → 0.162/0.166/0.163/0.168/0.170/0.167 s (−29 % to −31 %, every paired round faster) and 0.454/0.466/0.464 → 0.239/0.246/0.247 s (−46 % to −47 %, every paired round faster); scale witness: the 1.00 GB × 2 MB-body shape (the M17 heaviest-fork corpus's class) reads 2.917 → 1.710 s and the pass's transient heap collapses +1383 → +2.8 MB peak RSS — the corpus-sized executor heap spike the M114 row prices at 55 µs/MB of fork cost leaves this path; differential harness: 18 edge corpora (blank runs, blank at the split, CRLF, corrupt/missing-ts/bad-ts pre-split lines, non-ASCII, unicode-whitespace-only lines, missing trailing newline on either side of the split, noop, empty, blank-only, all-old) byte-identical archive + live outputs and equal counters old vs new; recycle suite 6-passed, full suite 1051-passed with the 2 pre-existing node-dep js failures identical on main, ruff and yapf clean | every cron session's weekly recycle paid the whole-corpus walk and the corpus-sized heap spike in the server's executor thread — the gigabyte-class live files a runaway turn leaves behind made it a multi-second stall with a corpus-sized heap spike; the M126 definition, collector, healthy range, and history row land with this PR |
 | 2026-09-28 | this PR | M56 /status served median 1.17/1.18/1.19 → 1.02/0.86/0.89 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, arm order alternating, load 1.17-1.52; median-of-medians 1.18 → 0.89, −25 %, every paired round faster), body digest 135fec1cf7ae identical across arms; witnesses riding the same fold: M119 root list 1.23 → 0.92 ms (−25 %) and M71 capped search 1.05 → 0.89 ms (−15 %), digests 2b2fc48505af / c26a9dd674be identical; M44 /scheduled 1.86 → 1.85 ms and M21 sweep 8.3 → 7.9 ms unchanged (paths off the fold) | every /status poll rebuilt one derived entry per requested session — the 296-entry fold was the route's largest handler term (0.36 ms of the 1.1 ms drive by stage timers) — although between state bumps it is a pure function of the probed-state snapshot, the busy map, and the metadata partition; all three sit behind two writer funnels (mark_sidebar_dirty, store_snapshot_entry), so a process-global generation bumped at both makes an unchanged generation the whole staleness contract: a clean poll serves the last fold's map whole, a raced round stores under its pre-probe generation so a mark landing inside the probe's await can never be served for the state it raced, and the every-10th sweep's stores re-derive the next poll; keyed on the id tuple because the read-only loaders hand fresh copies per poll, so a list-identity key (the listings memo's ground) never hits |
 | 2026-09-28 | this PR | M44 healthy range recalibrated to the listing's row count, docs-only (no code change): the fixed < 0.002 s line priced the 2026-09-15 corpus, but the /scheduled listing's rows are the cron fleet's own active churn — cron sessions plus their task-tree leaves — and the standing sweep read 106 rows at 2.16/1.64/2.37 ms (pre-#2179), 1.78/1.75/1.76 ms after #2179, and 1.87 ms median / 2.30 ms max over 9 at 128 rows this round, load 0.30-0.46 one-minute — per-row 16.6 → 14.6 µs across the same landings that cut the payload bytes (#2193) and memoized the cron-subtree walk (#2179); at the observed +22 rows / 12 h the fixed line trips at ~137 rows within ~1 day with the per-row cost healthy, a false regression trip the rows term removes: the line reads max(0.002 s, rows × 0.000025 s), 1.5× over the band's top (the M119 line's convention), so a per-row regression — an unmemoized croniter resolution at ~12 µs/row — still crosses it; today's reading sits at 58 % of the 3.20 ms the 128-row term prices; no-regression: the 0.002 s floor and the collector are unchanged (the standing collector prints the row count, so the term is self-verifying) | the line's shape, not the serve, was the defect: every other corpus-scaled serve line (M116/M119/M120/M121) carries the corpus term, and the row count is host workload — the cron fleet's firing leaves — not code health |
 | 2026-09-27 | this PR | M71/M119/M44/M35 listing and switch payloads, TaskSpec.goal dropped at the render boundary: every sidebar/search/scheduled payload dumped each row's whole SessionMetadata, so every task-node row shipped its prompt prose — the task spec's goal body, up to 37 KB on disk, median 6.2 KB across the live corpus's 224 task-node sessions — on every poll, keystroke, and SPA switch, although its one reader is the task-context modal through the detail endpoint (no web/static/js consumer reads .task off a listing or switch payload; the tree page already rides the slim SessionRow); fix: the six payload sites — root list, /scheduled, /search row fragments, /view, /bootstrap, the 3 s /usage poll — dump with exclude={"task": {"goal"}}, while GET /{session_id} (the modal's source), the /archived and /starred response_model renders, and the mutation responses keep the full spec; interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collectors, digests stable across rounds within each arm: M71 capped search decoded 1380404 → 462172 B, wire 330510 → 42667 B (−66% / −87%), serve median 1.09/1.20/1.11 → 1.13/1.11/1.08 ms (band parity — the memo-bound serve is unchanged, the bytes are the win); M119 root list decoded 1381837 → 401882 B, wire 384956 → 41035 B (−71% / −89%), serve 1.19/1.20/1.13 → 1.18/1.15/1.13 ms (band parity); M44 /scheduled decoded 483027 → 173936 B, wire 68965 → 11528 B (−64% / −83%), serve 1.93/1.83/2.07 → 1.78/1.75/1.76 ms (median-of-medians 1.94 → 1.76, −9%); byte parity driven raw-ASGI on one shared corpus: every after body equals its before body minus task.goal (180/44/167 goals stripped across root/scheduled/search, row dicts and key order identical; the task-node switch pair view 5038 → 2518 B, bootstrap 4475 → 1955 B, session payload minus goal equal); regression watch: M35 view+bootstrap digests identical across arms on the no-task corpus session, M6 standing poll 1 ms and append-round parity True | the goal is the task tree's prompt prose and its only fetch path is the modal's detail call; /archived and /starred still render response_model rows and keep the body — a follow-up if a round measures those pages hot |

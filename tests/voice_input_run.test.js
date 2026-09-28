@@ -17,11 +17,29 @@ const CONFIRM_SAMPLES = 5 * RATE;
 const MAX_SAMPLES = 5 * 60 * RATE;
 const UPLOAD_TIMEOUT_MS = 60 * 1000;
 
+// The devices object the fake mic and fake device list produce: the five keys
+// the end frame and the upload form carry, exactly as the server logs them.
+const FAKE_DEVICES = {
+  input_device: 'Fake Mic',
+  capture_settings: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000},
+  output_device: 'Fake Speakers',
+  communications_output_device: 'Fake Comms Headset',
+  device_error: null,
+};
+
 function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   const state = {
     toasts: [],
     micCalls: 0,
     streams: [],
+    deviceList: [
+      {kind: 'audioinput', deviceId: 'mic-device', label: 'Fake Mic'},
+      {kind: 'audiooutput', deviceId: 'default', label: 'Fake Speakers'},
+      {kind: 'audiooutput', deviceId: 'communications', label: 'Fake Comms Headset'},
+    ],
+    enumerateCalls: 0,
+    enumerateError: null,
+    enumeratePending: null,
     xhrs: [],
     workletNodes: [],
     sockets: [],
@@ -40,10 +58,15 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
   class FakeStream {
     constructor() {
       this.stopped = false;
-      this.tracks = [{stop: () => { this.stopped = true; }}];
+      this.tracks = [{
+        label: 'Fake Mic',
+        getSettings: () => ({echoCancellation: true, noiseSuppression: true, autoGainControl: true, sampleRate: 48000}),
+        stop: () => { this.stopped = true; },
+      }];
       state.streams.push(this);
     }
     getTracks() { return this.tracks; }
+    getAudioTracks() { return this.tracks; }
   }
 
   class FakeXHR {
@@ -219,6 +242,12 @@ function buildHarness({sessionId = 'session-a', micError = null} = {}) {
           if (micError) throw micError;
           return new FakeStream();
         },
+        enumerateDevices: () => {
+          state.enumerateCalls += 1;
+          if (state.enumeratePending) return state.enumeratePending;
+          if (state.enumerateError) return Promise.reject(state.enumerateError);
+          return Promise.resolve(state.deviceList);
+        },
       },
     },
     window: {
@@ -350,6 +379,7 @@ test('arming claims the slot, lights the button, and paints the zeroed indicator
 
   assert.deepEqual([...state.buttonClasses].sort(), ['bg-red-600', 'border-red-500']);
   assert.equal(state.micCalls, 1);
+  assert.equal(state.enumerateCalls, 1); // device collection starts at recording start
   const ui = state.voiceUi();
   assert.equal(ui.fill.style.width, undefined); // no chunk yet: level untouched
   assert.equal(ui.timer.textContent, '0:00');
@@ -510,7 +540,9 @@ test('an HTTP error keeps the buffer and the next click retries the same audio',
   assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
   assert.equal(state.beforeunloadCount, 0);
 
-  context.toggleVoice();
+  context.toggleVoice(); // retry — startUpload awaits the settled devices first
+  await tick();
+  await tick();
   const retry = state.xhrs[state.xhrs.length - 1];
   assert.notEqual(retry, upload);
   assert.equal(retry.url, '/api/voice/session-a');
@@ -534,7 +566,9 @@ test('a network error and a 60 s upload timeout both land in the retry state', a
   assert.deepEqual(state.toasts, [{msg: 'Voice request failed: network error', isError: true}]);
   assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
 
-  context.toggleVoice(); // retry
+  context.toggleVoice(); // retry — startUpload awaits the settled devices first
+  await tick();
+  await tick();
   upload = state.xhrs[state.xhrs.length - 1];
   const timeoutTimer = state.timers.find((timer) => timer.ms === UPLOAD_TIMEOUT_MS && !timer.cleared);
   assert.ok(timeoutTimer, 'the upload arms a 60 s timeout');
@@ -559,7 +593,9 @@ test('a server 400 or 503 on the upload lands in the retry state with the server
   assert.equal(state.voiceUi().hint.textContent, 'Upload failed — click to retry');
   assert.equal(state.beforeunloadCount, 0);
 
-  context.toggleVoice(); // retry with the same buffer
+  context.toggleVoice(); // retry with the same buffer — the settled devices await first
+  await tick();
+  await tick();
   const second = state.xhrs[state.xhrs.length - 1];
   second.respond(503, {error: 'speech models are still downloading'});
   await tick();
@@ -702,6 +738,61 @@ test('live partials render as grey not-yet-final text and the hint names the bac
   assert.equal(state.input.value, ''); // partials never touch the input box
 });
 
+test('the end frame waits for the device enumeration without delaying recording start', async () => {
+  const {context, state} = buildHarness();
+  let releaseEnumeration;
+  state.enumeratePending = new Promise((resolve) => { releaseEnumeration = resolve; });
+  const {worklet, socket} = await armLive(state);
+
+  assert.equal(state.enumerateCalls, 1); // collection started at recording start
+  assert.equal(state.voiceUi().hint.textContent, 'Listening \u00b7 Gemini 3.5 Transcribe Live'); // already live
+
+  socket.openSocket();
+  worklet.emitPcmCount(RATE);
+  context.toggleVoice();
+  const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
+  worklet.replyFlushed(flush.id);
+  await tick();
+  await tick();
+  assert.deepEqual(socket.sentText(), []); // the enumeration is pending: no end frame yet
+
+  releaseEnumeration(state.deviceList);
+  await tick();
+  await tick();
+  assert.deepEqual(socket.sentText().map((frame) => JSON.parse(frame).type), ['end']);
+});
+
+test('an enumerateDevices rejection rides the end frame and the recording still completes', async () => {
+  const {context, state} = buildHarness();
+  state.enumerateError = new Error('permission denied');
+  const {worklet, socket} = await armLive(state);
+  socket.openSocket();
+  worklet.emitPcmCount(2 * RATE);
+
+  context.toggleVoice();
+  const flush = worklet.postMessageCalls[worklet.postMessageCalls.length - 1];
+  worklet.replyFlushed(flush.id);
+  await tick();
+  await tick();
+
+  assert.deepEqual(socket.sentText().map((frame) => JSON.parse(frame)), [{
+    type: 'end',
+    devices: {
+      input_device: 'Fake Mic', // the mic facts survive the enumeration failure
+      capture_settings: FAKE_DEVICES.capture_settings,
+      output_device: null,
+      communications_output_device: null,
+      device_error: 'permission denied',
+    },
+  }]);
+
+  socket.receiveMessage({type: 'final', text: '\u5b8c\u6210'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, '\u5b8c\u6210'); // the recording still completes
+  assert.equal(state.xhrs.length, 0); // the relay archived it; no upload
+});
+
 test('a final inside the budget inserts once and ends the run with no upload', async () => {
   const {context, state} = buildHarness();
   const {worklet, socket} = await armLive(state);
@@ -714,7 +805,9 @@ test('a final inside the budget inserts once and ends the run with no upload', a
   worklet.replyFlushed(flush.id);
   await tick();
   await tick();
-  assert.deepEqual(socket.sentText(), ['{"type":"end"}']); // the relay is sealed
+  assert.deepEqual(socket.sentText().map((frame) => JSON.parse(frame)), [
+    {type: 'end', devices: FAKE_DEVICES},
+  ]); // the relay is sealed, the devices ride the end frame
   assert.equal(state.xhrs.length, 0); // the recording waits for the final
   assert.equal(state.beforeunloadCount, 1); // the guard stays engaged through the wait
 
@@ -816,6 +909,21 @@ test('a preview error mid-recording only stops the preview; the recording contin
   await tick();
   assert.equal(state.input.value, 'after error');
   assert.equal(state.beforeunloadCount, 0);
+});
+
+test('the upload form carries the devices object beside the backend', async () => {
+  const {state} = buildHarness();
+  const worklet = await state.arm();
+  worklet.emitPcmCount(RATE);
+
+  const upload = await state.stopWithFlush();
+  assert.equal(upload.sentBody.get('backend'), 'local');
+  assert.deepEqual(JSON.parse(upload.sentBody.get('devices')), FAKE_DEVICES);
+
+  upload.respond(200, {text: 'words'});
+  await tick();
+  await tick();
+  assert.equal(state.input.value, 'words');
 });
 
 test('the local backend opens no relay, fires the probe, and uploads as the fallback', async () => {

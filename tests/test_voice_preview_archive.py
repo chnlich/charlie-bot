@@ -27,6 +27,15 @@ FINAL_TEXT = "synthetic final words"
 FRAME_A = bytes(range(256)) * 8  # 2048 bytes = 1024 PCM16 samples
 FRAME_B = b"\x07\x00" * 2048  # 4096 bytes = 2048 PCM16 samples
 _END_FRAME = {"type": "end"}
+# The end frame's device object: the five keys voice_transcribed logs.
+DEVICES = {
+    "input_device": "Test Microphone",
+    "capture_settings": {"echoCancellation": True, "noiseSuppression": True, "autoGainControl": True, "sampleRate": 16000},
+    "output_device": "Test Speakers",
+    "communications_output_device": None,
+    "device_error": None,
+}
+_END_FRAME_WITH_DEVICES = {"type": "end", "devices": DEVICES}
 _DISCONNECT = {"type": "websocket.disconnect"}
 # Parks the browser's next receive until the test releases it, so the test
 # decides which side of a server-side race the handler sees first.
@@ -192,6 +201,69 @@ async def test_final_after_end_archives_the_pair_then_pushes_the_final(
   assert transcribed[0]["transcription_preview"] == FINAL_TEXT
   assert transcribed[0]["backend"] == BACKEND_ID
   assert transcribed[0]["selected_backend"] == BACKEND_ID
+  # A bare end frame is the pre-devices page still open across a restart: all
+  # five device fields log as None.
+  assert transcribed[0]["input_device"] is None
+  assert transcribed[0]["capture_settings"] is None
+  assert transcribed[0]["output_device"] is None
+  assert transcribed[0]["communications_output_device"] is None
+  assert transcribed[0]["device_error"] is None
+
+
+@pytest.mark.asyncio
+async def test_an_end_frame_with_devices_logs_the_five_device_fields(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  socket = FakePreviewSocket([FRAME_A, _END_FRAME_WITH_DEVICES], hang_when_script_ends=True)
+  backend = FakeLiveBackend(FINAL_TEXT)
+  relay = _start_relay(monkeypatch, tmp_path, socket, backend)
+  with capture_logs() as logs:
+    await asyncio.wait_for(relay, timeout=2)
+
+  transcribed = [entry for entry in logs if entry["event"] == "voice_transcribed"]
+  assert len(transcribed) == 1
+  assert transcribed[0]["input_device"] == "Test Microphone"
+  assert transcribed[0]["capture_settings"] == DEVICES["capture_settings"]
+  assert transcribed[0]["output_device"] == "Test Speakers"
+  assert transcribed[0]["communications_output_device"] is None
+  assert transcribed[0]["device_error"] is None
+  # The device fields joined the log line; the existing fields are unchanged.
+  assert transcribed[0]["session_id"] == SESSION_ID
+  assert transcribed[0]["audio_bytes_size"] == len(FRAME_A)
+  assert transcribed[0]["backend"] == BACKEND_ID
+  assert transcribed[0]["selected_backend"] == BACKEND_ID
+
+
+@pytest.mark.asyncio
+async def test_an_end_frame_with_a_missing_device_key_takes_the_protocol_error_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  short = {key: value for key, value in DEVICES.items() if key != "output_device"}
+  await _assert_devices_protocol_error(monkeypatch, tmp_path, short)
+
+
+@pytest.mark.asyncio
+async def test_an_end_frame_with_an_extra_device_key_takes_the_protocol_error_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  extra = {**DEVICES, "microphone_label": "one key too many"}
+  await _assert_devices_protocol_error(monkeypatch, tmp_path, extra)
+
+
+async def _assert_devices_protocol_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    devices: dict,
+) -> None:
+  """A devices object without exactly the five keys ends the preview as the
+  protocol error it is: one error frame, no archive, no log line."""
+  socket = FakePreviewSocket([FRAME_A, {"type": "end", "devices": devices}])
+  backend = FakeLiveBackend(FINAL_TEXT)
+  relay = _start_relay(monkeypatch, tmp_path, socket, backend)
+  with capture_logs() as logs:
+    await asyncio.wait_for(relay, timeout=2)
+
+  assert [frame["type"] for frame in socket.sent] == ["error"]
+  assert "devices" in socket.sent[0]["message"]
+  assert not [entry for entry in logs if entry["event"] == "voice_transcribed"]
+  assert list(_voice_dir(tmp_path).glob("*")) == []
 
 
 @pytest.mark.asyncio

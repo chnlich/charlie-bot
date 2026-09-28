@@ -135,8 +135,7 @@ def _devices_form_field(raw: str | None) -> dict | None:
   except ValueError as exc:
     raise _VoiceRequestError(400, f"malformed devices form field: {exc}") from exc
   if not isinstance(parsed, dict) or set(parsed) != set(_VOICE_DEVICE_FIELDS):
-    raise _VoiceRequestError(
-        400, f"devices form field must carry exactly {list(_VOICE_DEVICE_FIELDS)}")
+    raise _VoiceRequestError(400, f"devices form field must carry exactly {list(_VOICE_DEVICE_FIELDS)}")
   return parsed
 
 
@@ -428,8 +427,7 @@ def _preview_end_frame_devices(text: object) -> dict | None:
     return None
   devices = control["devices"]
   if not isinstance(devices, dict) or set(devices) != set(_VOICE_DEVICE_FIELDS):
-    raise _PreviewProtocolError(
-        f"end frame devices must carry exactly {list(_VOICE_DEVICE_FIELDS)}: {devices!r}")
+    raise _PreviewProtocolError(f"end frame devices must carry exactly {list(_VOICE_DEVICE_FIELDS)}: {devices!r}")
   return devices
 
 
@@ -500,8 +498,7 @@ async def _archive_then_push_final(
     with suppress(_PreviewSocketLost):
       await _push_preview_frame(websocket, {"type": "error", "message": "recording archive failed"})
     return
-  _log_voice_transcribed(
-      session_id, audio_path, pcm_bytes, event.text, backend_id, backend_id, queue.devices)
+  _log_voice_transcribed(session_id, audio_path, pcm_bytes, event.text, backend_id, backend_id, queue.devices)
   await _push_preview_frame(websocket, {"type": "final", "text": event.text})
 
 

@@ -588,13 +588,10 @@ class TaskInputDispatcher:
         if recipient is None:
             return {}, False
         tree = self._tree
-        report_id = stable_child_report_id(
-            child_session_id, str(source_event.get("id")), recipient)
         parent_meta = await tree.load_meta(recipient)
         if parent_meta is None:
             raise TaskNotFoundError(f"report recipient task {recipient} not found")
-        parent_events = tree.fact_history(recipient)
-        existing = next((e for e in parent_events if e.get("id") == report_id), None)
+        report_id, existing = self._child_report_delivery(child_session_id, str(source_event.get("id")), recipient)
         if existing is not None:
             return existing, False
         report = build_control_event(
@@ -610,6 +607,22 @@ class TaskInputDispatcher:
         )
         await tree.events.append(recipient, report)
         return report, True
+
+    def _child_report_delivery(
+        self, child_session_id: str, source_event_id: str, recipient: str
+    ) -> tuple[str, dict | None]:
+        """The pair's stable report id and the fact already delivered under it, or None.
+
+        One home for report-delivery identity. The id derives from (child
+        session, source event, recipient) via ``stable_child_report_id``; a
+        report counts as delivered exactly when that id sits in the
+        recipient's full fact history. The delivery path, the recovery scan,
+        and the reparent guard read this, so the three cannot disagree about
+        which reports are still owed.
+        """
+        report_id = stable_child_report_id(child_session_id, source_event_id, recipient)
+        delivered = next((e for e in self._tree.fact_history(recipient) if e.get("id") == report_id), None)
+        return report_id, delivered
 
     async def recover_pending_reports(self, session_id: str) -> list[dict]:
         """Repair the crash window *child result saved before parent append*.
@@ -629,9 +642,8 @@ class TaskInputDispatcher:
             recipient = close.get("report_to")
             if not recipient:
                 continue
-            report_id = stable_child_report_id(session_id, str(close.get("id")), str(recipient))
-            parent_events = tree.fact_history(str(recipient))
-            if any(e.get("id") == report_id for e in parent_events):
+            _report_id, already = self._child_report_delivery(session_id, str(close.get("id")), str(recipient))
+            if already is not None:
                 continue  # already delivered: a repeat pass never re-reports it
             outcome = str(close.get("outcome") or "completed")
             report = await self.deliver_child_report(
@@ -658,9 +670,8 @@ class TaskInputDispatcher:
             recipient = close.get("report_to")
             if not recipient:
                 continue
-            report_id = stable_child_report_id(session_id, str(close.get("id")), str(recipient))
-            parent_events = tree.fact_history(str(recipient))
-            if not any(e.get("id") == report_id for e in parent_events):
+            _report_id, already = self._child_report_delivery(session_id, str(close.get("id")), str(recipient))
+            if already is None:
                 blockers.append(
                     f"has an undelivered parent report for close event {close.get('id')}")
         return blockers

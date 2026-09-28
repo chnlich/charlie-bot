@@ -1501,6 +1501,71 @@ def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
+class WsServerNeverAnswersClose:
+  """A raw-TCP WebSocket endpoint that behaves like Slack at close time.
+
+  It completes the upgrade, sends the given envelopes once per connection, then
+  reads and discards everything - close frames included - never answering a
+  close frame. Raw TCP on purpose: every WebSocket server library answers the
+  close handshake automatically, and the behavior under test is the client
+  waiting for an answer that never comes.
+  """
+
+  _GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+  def __init__(self, envelopes_per_connection: list[dict]) -> None:
+    self._envelopes = envelopes_per_connection
+    self.upgrade_times: list[float] = []
+    self.received_chunks = 0
+    self._server: asyncio.AbstractServer | None = None
+    self._writers: list[asyncio.StreamWriter] = []
+
+  async def start(self) -> str:
+    """Bind an ephemeral loopback port; return the ws: URL."""
+    self._server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+    port = self._server.sockets[0].getsockname()[1]
+    return f"ws://127.0.0.1:{port}/"
+
+  async def stop(self) -> None:
+    assert self._server is not None
+    self._server.close()
+    for writer in self._writers:
+      # End the handler's read loop even when the client side leaked its
+      # transport (a cancel landing inside the close handshake skips the
+      # transport abort, so no FIN reaches the handler on its own).
+      writer.close()
+    await self._server.wait_closed()
+
+  async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    import base64
+    import hashlib
+
+    request = (await reader.readuntil(b"\r\n\r\n")).decode()
+    key = next(
+        line.split(":", 1)[1].strip()
+        for line in request.split("\r\n")
+        if line.lower().startswith("sec-websocket-key:"))
+    accept = base64.b64encode(hashlib.sha1((key + self._GUID).encode()).digest()).decode()
+    writer.write(
+        (
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Accept: {accept}\r\n\r\n").encode())
+    for envelope in self._envelopes:
+      writer.write(_ws_text_frame(json.dumps(envelope)))
+    await writer.drain()
+    self.upgrade_times.append(time.monotonic())
+    self._writers.append(writer)
+    while await reader.read(4096):
+      self.received_chunks += 1  # read and discard everything
+
+
+def _ws_text_frame(payload: str) -> bytes:
+  """One unmasked server-to-client text frame carrying a small JSON envelope."""
+  data = payload.encode()
+  assert len(data) < 126
+  return bytes([0x81, len(data)]) + data
+
+
 class FakeSlackClient:
   """Recording Slack Web API double for slack_listener tests; never touches the network.
 

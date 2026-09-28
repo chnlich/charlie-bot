@@ -22,6 +22,7 @@ from src.agents.transcription.base import (
     TranscriptionBackend,
     TranscriptionRejected,
 )
+from src.core import timeouts
 from src.core.config import CharlieBotConfig
 from src.core.credentials import get_credentials
 
@@ -88,7 +89,7 @@ class MuseTranscriptionBackend(TranscriptionBackend):
     from websockets.asyncio.client import connect
     from websockets.exceptions import ConnectionClosed
 
-    async with connect(self._endpoint_url) as socket:
+    async with connect(self._endpoint_url, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as socket:
       # Never logs or returns the handshake, so the access token cannot reach
       # any output.
       await socket.send(json.dumps(self._handshake(access_token, vocabulary, languages)))

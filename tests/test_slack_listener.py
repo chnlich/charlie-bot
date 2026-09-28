@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -14,6 +15,7 @@ from conftest import (
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
+    WsServerNeverAnswersClose,
     build_slack_cfg,
     make_task_spawner,
 )
@@ -198,3 +200,92 @@ async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
   assert run_mock.call_count == 2
   assert run_mock.await_args_list[0].kwargs["user_event_id"] == "evt-1"
   assert run_mock.await_args_list[1].kwargs["user_event_id"] is None
+
+
+# --- Socket Mode close wait ---------------------------------------------------
+#
+# The listener's cancel exits `websockets.connect(...)`, whose close handshake
+# waits close_timeout for the peer's close frame. Slack's Socket Mode endpoint
+# never answers one, so the wait used to be websockets' 10 s default on every
+# server stop and every refresh reconnect. Both tests here drive the real
+# run_listener against the conftest stand-in (WsServerNeverAnswersClose) with
+# the SlackClient.open_connection seam pointed at it and the thread backfill
+# stubbed.
+
+_WS_HELLO = [{"type": "hello"}]
+
+
+async def _run_listener_against(
+    stand_in: WsServerNeverAnswersClose, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> asyncio.Task:
+  """Start the stand-in and run the real run_listener with its Slack Web API side
+  pointed at it; the caller stops the stand-in when the listener task is done."""
+  from src.core import slack_listener
+
+  cfg, session_mgr, _ = _rig(tmp_path)
+  url = await stand_in.start()
+
+  async def open_stand_in(self: object) -> str:
+    return url
+
+  async def no_backfill(*args: object, **kwargs: object) -> int:
+    return 0
+
+  monkeypatch.setattr(slack_listener.SlackClient, "open_connection", open_stand_in)
+  monkeypatch.setattr(slack_listener, "_backfill_followed_threads", no_backfill)
+  # The listener never issues an HTTP request once open_connection is the seam
+  # under stub; keep it off the shared httpx client other tests may have faked.
+  monkeypatch.setattr(slack_listener, "get_http_client", lambda: object())
+  return asyncio.create_task(slack_listener.run_listener(cfg, session_mgr), name="slack-listener-under-test")
+
+
+async def _await_listener_cancel(task: asyncio.Task) -> float:
+  """Cancel the listener and return the seconds its cancellation took."""
+  started = time.perf_counter()
+  task.cancel()
+  with contextlib.suppress(asyncio.CancelledError):
+    await task
+  return time.perf_counter() - started
+
+
+@pytest.mark.asyncio
+async def test_listener_cancel_waits_only_the_configured_close_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Cancelling the listener waits WS_CLIENT_CLOSE_TIMEOUT for the peer's close
+  frame, not websockets' 10 s default: the stand-in never answers one."""
+  from src.core import timeouts
+
+  monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
+  stand_in = WsServerNeverAnswersClose(_WS_HELLO)
+  try:
+    task = await _run_listener_against(stand_in, tmp_path, monkeypatch)
+    async with asyncio.timeout(5):
+      while not stand_in.upgrade_times:
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.05)  # hello round trip: the listener parks in its receive await
+    elapsed = await _await_listener_cancel(task)
+    assert elapsed < timeouts.WS_CLIENT_CLOSE_TIMEOUT + 0.5, (
+        f"listener cancel took {elapsed:.3f}s; the close wait did not honor "
+        f"WS_CLIENT_CLOSE_TIMEOUT={timeouts.WS_CLIENT_CLOSE_TIMEOUT}")
+  finally:
+    await stand_in.stop()
+
+
+@pytest.mark.asyncio
+@pytest.mark.integration
+async def test_listener_reconnects_within_three_seconds_after_disconnect(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A Socket Mode refresh (the server-sent disconnect) has the listener's next
+  connection on the wire within 3 s: close wait plus reconnect backoff."""
+  stand_in = WsServerNeverAnswersClose([*_WS_HELLO, {"type": "disconnect"}])
+  try:
+    task = await _run_listener_against(stand_in, tmp_path, monkeypatch)
+    async with asyncio.timeout(9):
+      while len(stand_in.upgrade_times) < 2:
+        await asyncio.sleep(0.02)
+    gap = stand_in.upgrade_times[1] - stand_in.upgrade_times[0]
+    assert gap < 3.0, f"reconnect after disconnect took {gap:.2f}s"
+  finally:
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await task
+    await stand_in.stop()

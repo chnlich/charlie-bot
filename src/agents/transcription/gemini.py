@@ -13,6 +13,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import re
 from collections.abc import AsyncIterator, Sequence
 
 from src.agents.transcription.base import (
@@ -34,9 +35,11 @@ SETUP_TIMEOUT_S = 15.0
 # an empty list leaves the model auto-detecting.
 LANGUAGE_CODES = {"zh": "cmn-Hans-CN", "en": "en-US"}
 
-# Interim transcriptions carry spaces between CJK characters that the final
-# drops (probe interims read "我 记 得 在 这 句"); strips exactly those, keeping
-# every space next to Latin text.
+# The Live API's text arrives in two shapes this backend flattens: interims
+# always arrive character-split with spaces (probe interims read
+# "我 记 得 在 这 句"), and finals occasionally arrive in that same form, there
+# with ASCII punctuation around the marks. One normalizer owns the transcript
+# shape and both yield sites call it; every space next to Latin text survives.
 _CJK_RANGES = (
     (0x3000, 0x303F),  # CJK symbols and punctuation
     (0x3040, 0x30FF),  # kana
@@ -61,6 +64,38 @@ def _strip_cjk_spaces(text: str) -> str:
       continue
     kept.append(char)
   return "".join(kept)
+
+
+# The clause marks a spaced-out transcript puts spaces around: the ASCII set
+# plus the fullwidth forms the space can still sit beside (the mark preceded by
+# non-CJK text). Rule 4 converts only the ASCII ones, so the dot stays a dot.
+_CLAUSE_MARKS = ",?!;:.、。，？！；："
+_FULLWIDTH_OF = {",": "，", "?": "？", "!": "！", ";": "；", ":": "："}
+
+# A run of spaces before a mark that itself closes a clause — the mark is
+# followed by whitespace, the text's end, or non-ASCII text — goes; "cd ./dir"
+# keeps its space because its dot is followed by a slash.
+_SPACE_BEFORE_CLAUSE_MARK = re.compile(r" +(?=[" + _CLAUSE_MARKS + r"](?:\s|$|[^\x00-\x7f]))")
+# One space between an ASCII mark and non-ASCII text goes.
+_SPACE_AFTER_ASCII_MARK = re.compile(r"(?<=[,?!;:.]) (?=[^\x00-\x7f])")
+
+
+def _normalize_transcript(text: str) -> str:
+  """The one transcript shape both yield sites pass through.
+
+  Rules, in order: spaces between two CJK characters go; the spaces before a
+  clause mark go when the mark itself ends a clause; one space between an ASCII
+  mark and non-ASCII text goes; an ASCII mark directly after CJK text becomes
+  fullwidth. Spaces between Latin and CJK text stay ("cron job 的 session").
+  """
+  out = _strip_cjk_spaces(text)
+  out = _SPACE_BEFORE_CLAUSE_MARK.sub("", out)
+  out = _SPACE_AFTER_ASCII_MARK.sub("", out)
+  chars = list(out)
+  for index, char in enumerate(chars):
+    if char in _FULLWIDTH_OF and index > 0 and _is_cjk(chars[index - 1]):
+      chars[index] = _FULLWIDTH_OF[char]
+  return "".join(chars)
 
 
 class GeminiTranscriptionBackend(TranscriptionBackend):
@@ -121,12 +156,12 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
           content = json.loads(raw).get("serverContent", {})
           interim = content.get("interimInputTranscription", {}).get("text")
           if interim is not None:
-            yield TranscriptEvent(kind="partial", text=_strip_cjk_spaces(interim))
+            yield TranscriptEvent(kind="partial", text=_normalize_transcript(interim))
             continue
           final_text = content.get("inputTranscription", {}).get("text")
           if final_text is not None:
             # The generationComplete arriving with it says no text follows.
-            yield TranscriptEvent(kind="final", text=final_text)
+            yield TranscriptEvent(kind="final", text=_normalize_transcript(final_text))
             return
       finally:
         sender.cancel()

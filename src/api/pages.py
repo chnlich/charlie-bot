@@ -32,7 +32,13 @@ from src.api.deps import (
     get_thread_manager,
 )
 from src.api.message_utils import build_session_bootstrap_data
-from src.api.sessions import _bootstrap_payload, _default_backend_id, project_worker_threads
+from src.api.sessions import (
+    _bootstrap_payload,
+    _default_backend_id,
+    apply_row_schedule,
+    project_worker_threads,
+    row_schedule_fields,
+)
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import (
@@ -876,8 +882,8 @@ async def index(
         include_pending_trigger_status=True,
     )
     # The first-paint list shares the All endpoint's membership: cron-subtree
-    # rows ride only the scheduled listing, so a firing leaf neither flattens
-    # into a top-level sidebar row nor becomes the auto-redirect target.
+    # rows ride no listing, so a firing leaf neither flattens into a top-level
+    # sidebar row nor becomes the auto-redirect target.
     cron_subtree = await session_mgr.cron_subtree_roots()
     sessions = [s for s in sessions if s.id not in cron_subtree]
   except Exception:
@@ -953,8 +959,11 @@ async def index(
 
   # The first-paint sidebar list carries the legacy worker-thread leaves too;
   # projected after the redirect check so a thread row can never become the
-  # auto-redirect target.
+  # auto-redirect target. Row shape matches GET /api/sessions/: the schedule
+  # join stamps every row, so the first paint shows a scheduled node's clock.
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)
+  schedule_fields = row_schedule_fields((s.id for s in sessions), dt.datetime.now(dt.UTC))
+  initial_sessions = [apply_row_schedule(s.model_dump(mode="json"), schedule_fields[s.id]) for s in sessions]
 
   if thread_view is not None:
     active_backend = thread_view.get("backend") or _default_backend_id(cfg)
@@ -969,7 +978,7 @@ async def index(
       request,
       "index.html",
       context={
-          "initial_sessions": [s.model_dump(mode="json") for s in sessions],
+          "initial_sessions": initial_sessions,
           "active_session": active_session,
           "thread_view": thread_view,
           "thread_thinking": thread_thinking,

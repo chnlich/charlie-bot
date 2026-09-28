@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
@@ -46,6 +47,7 @@ from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
+from src.core.cron_sequence import bound_task_name
 from src.core.config import (
     CharlieBotConfig,
     get_config,
@@ -294,29 +296,12 @@ def _resolve_requested_backend(
 _PROJECTED_ROW_MEMO_LIMIT = 8192
 _projected_row_memo: BoundedMemo[tuple[str, str], tuple[SessionMetadata, dict,
                                                         SessionMetadata]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
-_projected_row_dumps: BoundedMemo[int, tuple[SessionMetadata, dict]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
 
 # TaskSpec.goal is the task's prompt prose — tens of KB per task node — and its
 # one reader is the task-context modal through GET /{session_id}, so every
 # poll, switch, and listing payload ships the spec without the body; the detail
 # render keeps it.
 _RESPONSE_ROW_EXCLUDE = {"task": {"goal"}}
-
-
-def _projected_row_payload(row: SessionMetadata) -> dict:
-  """One projected leaf row's rendered payload, memoized on the row object.
-
-  The projection pins each leaf row's object to its (parent, thread) identity
-  and never mutates it afterward, so the payload is a pure function of the
-  object; the identity check prices out a freed row's reused id (the search
-  route's row-body memo stands on the same check).
-  """
-  hit = _projected_row_dumps.get(id(row))
-  if hit is not None and hit[0] is row:
-    return hit[1]
-  payload = row.model_dump(mode="json")
-  _projected_row_dumps.store(id(row), (row, payload))
-  return payload
 
 
 def _datetime_from_epoch_ms(ms: int) -> datetime:
@@ -368,6 +353,65 @@ async def project_worker_threads(
   return out
 
 
+# The model's transient schedule fields ride every row dump as nulls (they were
+# the deleted Scheduled listing's overlay slots); the join's answer replaces
+# them wholesale, so an unbound row carries none of them.
+_SCHEDULE_MODEL_NULLS = (
+    "schedule_cron",
+    "schedule_timezone",
+    "schedule_enabled",
+    "schedule_next_run",
+    "schedule_project",
+    "schedule_allow_failure",
+)
+
+
+def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
+  """The schedule payload per listed row, keyed on ``bound_task_name`` (plan 4.1).
+
+  The one join every sidebar list producer calls: a node a loaded task binds —
+  ``bound_task_name``, the loaded task whose ``session_id`` names the node —
+  carries ``schedule_task`` plus the four schedule fields computed from that
+  config the way the deleted Scheduled listing computed them; an unbound node
+  carries ``schedule_task: null`` and none of the four. ``next_run_iso`` serves
+  each occurrence until it passes, so a delivered next run never goes stale.
+  One snapshot of the task configs feeds both the predicate and the field
+  values, so a hot reload between the two reads cannot split the answer.
+  """
+  tasks = get_scheduled_tasks()
+  out: dict[str, dict] = {}
+  for session_id in set(session_ids):
+    task_name = bound_task_name(session_id, tasks)
+    if task_name is None:
+      out[session_id] = {"schedule_task": None}
+      continue
+    # bound_task_name answered from this same snapshot, so the config exists.
+    task = next(t for t in tasks if t.name == task_name)
+    out[session_id] = {
+        "schedule_task": task.name,
+        "schedule_cron": task.cron,
+        "schedule_timezone": task.timezone,
+        "schedule_enabled": task.enabled,
+        "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
+        "schedule_allow_failure": task.allow_failure,
+    }
+  return out
+
+
+def apply_row_schedule(dump: dict, fields: dict) -> dict:
+  """One listed row's payload: the model dump with the join's schedule fields.
+
+  Drops the model's always-null schedule slots first, so an unbound row carries
+  ``schedule_task: null`` and none of the four (the "unbound carries none"
+  half of the plan 4.1 table), then applies the bound overlay. Mutates *dump*
+  in place and returns it.
+  """
+  for key in _SCHEDULE_MODEL_NULLS:
+    dump.pop(key, None)
+  dump.update(fields)
+  return dump
+
+
 @router.get("/")
 async def list_sessions(
     request: Request,
@@ -377,9 +421,9 @@ async def list_sessions(
 ) -> Response:
   """List active sessions newest first, each legacy row followed by its worker-leaf rows.
 
-  Cron-subtree rows ride only the scheduled listing: a firing leaf whose parent
-  chain reaches a cron session stays out, so a parentless leaf never flattens
-  into a top-level row.
+  Cron-subtree rows ride no listing: a firing leaf whose parent chain reaches a
+  cron session stays out, so a parentless leaf never flattens into a top-level
+  row. Every row's schedule fields come from the one join (row_schedule_fields).
   """
   global _sessions_list_whole_body
   rows, derived = await session_mgr.list_sessions_readonly(
@@ -392,16 +436,20 @@ async def list_sessions(
   cron_subtree = await session_mgr.cron_subtree_roots()
   rows = [row for row in rows if row.id not in cron_subtree]
   projected = await project_worker_threads(rows, cfg, thread_mgr)
+  schedule_fields = row_schedule_fields((row.id for row in projected), datetime.now(UTC))
   # The readonly rows and the memoized leaves are identity-stable across
   # requests, so the rendered body keys on the row identities plus the overlay
   # states: a repeat of an unchanged corpus re-runs zero dumps (the search
   # route's whole-body memo mechanism) and a reloaded meta or moved overlay
-  # state re-renders. A worker_thread row's fields are construction-fixed, so
-  # only the parent rows carry overlay state.
-  rendered: list[tuple[SessionMetadata, tuple]] = []
+  # state re-renders. The schedule join rides the same key, so a cron config
+  # change or a passing next-run re-renders the bound rows. A worker_thread
+  # row's fields are construction-fixed, so only the parent rows carry overlay
+  # state.
+  rendered: list[tuple[SessionMetadata, tuple, tuple]] = []
   for row in projected:
+    schedule_state = tuple(schedule_fields[row.id].items())
     if row.worker_thread is not None:
-      rendered.append((row, ()))
+      rendered.append((row, (), schedule_state))
       continue
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
@@ -420,15 +468,16 @@ async def list_sessions(
                 entry[sidebar_state.HAS_RUNNING_TASKS],
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
                 _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
-                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend, entry.get(sidebar_state.WORK_STATE))))
-  list_rows = tuple(row for row, _s in rendered)
-  list_states = tuple(state for _row, state in rendered)
+                entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend, entry.get(sidebar_state.WORK_STATE)),
+            schedule_state))
+  list_rows = tuple(row for row, _s, _sched in rendered)
+  list_states = tuple((state, schedule_state) for _row, state, schedule_state in rendered)
   cached = _sessions_list_whole_body
   if (cached is not None and len(cached[0]) == len(list_rows) and
       all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and cached[1] == list_states):
     return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
   payload = []
-  for row, state in zip(list_rows, list_states, strict=True):
+  for row, (state, schedule_state) in zip(list_rows, list_states, strict=True):
     dump = row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
     if state:
       (
@@ -440,7 +489,7 @@ async def list_sessions(
         # running/waiting icons without a poll. A legacy row's key
         # set stays byte-identical (the dump already carries the field's null).
         dump[sidebar_state.WORK_STATE] = work_state
-    payload.append(dump)
+    payload.append(apply_row_schedule(dump, dict(schedule_state)))
   body = fast_json_bytes(payload)
   _sessions_list_whole_body = (list_rows, list_states, body)
   # The Response return skips response_model's jsonable_encoder pass over every
@@ -499,7 +548,7 @@ class ArchivedGroupCount(BaseModel):
 
 
 class ArchivedSessionsPage(BaseModel):
-  sessions: list[SessionMetadata]
+  sessions: list[dict]
   has_more: bool
   next_before: str | None
   next_before_id: str | None
@@ -516,34 +565,66 @@ async def list_archived_sessions(
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> dict:
-  """One keyset page of archived sessions, newest first, with group aggregates for the filter strip."""
+  """One keyset page of archived sessions, newest first, with group aggregates for the filter strip.
+
+  Page size, cursor, and the group aggregates count archived rows only. Each
+  page also carries its rows' unarchived ancestors as ``context_only`` rows
+  (the one walk on the manager, archived_context_rows), merged into the page's
+  one newest-first list, so the client merges pages into a single
+  project-grouped tree where a delivered firing nests under its still-active
+  scheduled node without a second fetch.
+  """
   try:
     page = await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
   except ValueError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
-  page["sessions"] = await project_worker_threads(page["sessions"], cfg, thread_mgr)
+  rows = await project_worker_threads(page["sessions"], cfg, thread_mgr)
   # The projection above appends each legacy row's worker-thread leaves; under
   # an archived cron session those leaves are cron-subtree rows and stay out.
   # Every leaf's parent rides the page, so the membership walk classifies the
   # projected rows from the page's own rows.
-  cron_subtree = cron_subtree_roots(page["sessions"])
-  page["sessions"] = [row for row in page["sessions"] if row.id not in cron_subtree]
+  cron_subtree = cron_subtree_roots(rows)
+  rows = [row for row in rows if row.id not in cron_subtree]
+  context = await session_mgr.archived_context_rows(rows)
+  # One page list, newest first: the stable sort keeps the archived rows in
+  # their keyset order and interleaves the context rows by the same key.
+  merged = sorted(
+      [*((False, row) for row in rows), *((True, row) for row in context)],
+      key=lambda pair: (pair[1].updated_at, pair[1].id),
+      reverse=True)
+  schedule_fields = row_schedule_fields((row.id for _context_only, row in merged), datetime.now(UTC))
+  page["sessions"] = []
+  for context_only, row in merged:
+    dump = apply_row_schedule(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), schedule_fields[row.id])
+    if context_only:
+      dump["context_only"] = True
+    page["sessions"].append(dump)
   return page
 
 
-@router.get("/starred", response_model=list[SessionMetadata])
+@router.get("/starred")
 async def list_starred_sessions(
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     thread_mgr: ThreadManager = Depends(get_thread_manager),
-) -> list[SessionMetadata]:
-  """List starred sessions, newest first, with their legacy worker-thread leaves."""
+) -> list[dict]:
+  """List starred sessions, newest first, with their legacy worker-thread leaves.
+
+  Row shape matches the other sidebar lists: the model dump with the schedule
+  join's fields, so a starred row the client has also archived later renders
+  the archived row form without a second endpoint.
+  """
   sessions = await session_mgr.list_sessions(
       starred=True,
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  return await project_worker_threads(sessions, cfg, thread_mgr)
+  projected = await project_worker_threads(sessions, cfg, thread_mgr)
+  schedule_fields = row_schedule_fields((row.id for row in projected), datetime.now(UTC))
+  return [
+      apply_row_schedule(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), schedule_fields[row.id])
+      for row in projected
+  ]
 
 
 @router.get("/groups")
@@ -564,66 +645,6 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
   """Remove a group from all sessions (sets group to null)."""
   count = await session_mgr.delete_group(req.group)
   return {"updated": count}
-
-
-@router.get("/scheduled")
-async def list_scheduled_sessions(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-) -> Response:
-  """List sessions with a scheduled task, newest first, each followed by its task children."""
-  sessions, derived = await session_mgr.list_sessions_readonly(
-      status=SessionStatus.ACTIVE,
-      scheduled=True,
-      include_running_status=True,
-      include_pending_trigger_status=True,
-  )
-  # The firings' worker leaves: real task-tree nodes whose parent chain reaches
-  # the cron session, at any depth. They ride the payload after their subtree's
-  # cron session so the grouped render's tree nesting shows each leaf under it —
-  # a legacy session's included (its leaves keep the legacy parent).
-  all_rows, _all_derived = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
-  cron_ids = {s.id for s in sessions}
-  cron_subtree = await session_mgr.cron_subtree_roots()
-  sessions = [*sessions, *(r for r in all_rows if cron_subtree.get(r.id) in cron_ids)]
-  task_map = {t.name: t for t in get_scheduled_tasks()}
-  now_utc = datetime.now(UTC)
-  sessions = await project_worker_threads(sessions, cfg, thread_mgr)
-  # The grouped sidebar render pairs this poll with /api/cron/tasks; the gzip
-  # form rides the body-keyed memo (_switch_payload_response). model_dump's
-  # mode="json" is the encoder-free render the /tasks route's comment
-  # documents; orjson raises loudly on the models themselves.
-  # A leaf row's payload rides its pinned object's memo. A parent row renders
-  # per poll from its shared reference — the route must not mutate it, so the
-  # fields the copy path wrote onto the row (derived state, thinking_since,
-  # the six schedule fields) overlay the dump's own keys in the model's field
-  # order, and the served dicts match the copied-row render byte for byte.
-  payload: list[dict] = []
-  for s in sessions:
-    if s.worker_thread is not None:
-      payload.append(_projected_row_payload(s))
-      continue
-    d = s.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
-    for key, value in (derived.get(s.id) or {}).items():
-      d[key] = (
-          _UTC_DATETIME_JSON.dump_python(value, mode="json")
-          if key == sidebar_state.NEXT_TRIGGER_AT and value is not None else value)
-    busy = thinking_state.busy_since(s.id)
-    d["thinking_since"] = (_UTC_DATETIME_JSON.dump_python(busy, mode="json") if busy is not None else None)
-    task = task_map.get(s.scheduled_task)
-    d.update(
-        {
-            "schedule_cron": task.cron,
-            "schedule_enabled": task.enabled,
-            "schedule_timezone": task.timezone,
-            "schedule_project": task.project,
-            "schedule_allow_failure": task.allow_failure,
-            "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
-        } if task else {"schedule_enabled": False})
-    payload.append(d)
-  return await _switch_payload_response(request, payload)
 
 
 def _parse_session_ids(ids: str) -> list[str]:
@@ -1108,8 +1129,8 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
   return body
 
 
-# The switch fetches (view, bootstrap) and the sidebar's poll and scheduled
-# list (/status, /scheduled) rebuild their payload per request, so unlike the
+# The switch fetches (view, bootstrap) and the sidebar's status poll (/status)
+# rebuild their payload per request, so unlike the
 # events page there is no projection generation to key a gzip form on; the
 # rendered body bytes are their own invalidation ground — a memo hit proves
 # byte equality because the dict key IS the body. Without it every

@@ -11,9 +11,9 @@ import pytest
 from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
+from src.core import sidebar_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
-from src.core import sidebar_state
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:

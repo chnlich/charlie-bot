@@ -19,7 +19,7 @@ log = LazyStructlogLogger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
 
-# Both tail readers bound their trailing reads to this one window.
+# The tail reader bounds its trailing read to this one window.
 _TAIL_WINDOW_SIZE = 512 * 1024
 
 # Bound on _count_memo in files, not bytes: the chat tail page (archived
@@ -61,8 +61,8 @@ def _count_lines(f: BinaryIO) -> int:
 
 
 # The one skip label for the readers that consume a whole file or an in-memory
-# line stream. The windowed readers (tail, tail_parseable, range) name their
-# own windows, so a debug log still says which reader skipped the line.
+# line stream. The other readers (tail, range) name their own skip label, so
+# a debug log still says which reader skipped the line.
 PARSE_SKIP_LOG_EVENT = "ndjson_parse_skip"
 
 # orjson names its invalid-UTF-8 class with this message prefix at every
@@ -458,26 +458,6 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
     return rest[1:end].decode("utf-8", errors="replace") in types
 
   return HeadProvableFilter(keep)
-
-
-def parse_ndjson_tail_parseable(path: Path, limit: int) -> list[dict]:
-  """Return the last *limit* parseable events of an NDJSON file, in file order.
-
-  Same result as ``parse_ndjson_file(path)[-limit:]`` — blank and malformed
-  lines are skipped and never count toward *limit* — but reads only as many
-  trailing bytes as the limit needs (the from-the-end walk of
-  :func:`iter_ndjson_events_from_end`, stopped by *limit*). Callers that must
-  see every line (exact prefixes, global ordinals) keep ``parse_ndjson_file``;
-  this reader is for the "last N of whatever parsed" budget the worker-summary
-  readers carry. A missing file returns ``[]`` and *limit* <= 0 returns
-  ``[]``.
-  """
-  if limit <= 0:
-    return []
-  collected = list(
-      islice(iter_ndjson_events_from_end(path, log_event="ndjson_tail_parseable_skip", log_fields={}), limit))
-  collected.reverse()
-  return collected
 
 
 def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bool]:

@@ -124,7 +124,9 @@ function expectedTurns(msgs) {
     });
     carriedIn = carried;
   }
-  return {turns, tail: span.concat(carriedIn)};
+  // The pending tail opens with the last span's carried inputs, ahead of
+  // the trailing unclosed messages — the order both consumers produce.
+  return {turns, tail: [...carriedIn, ...span]};
 }
 
 const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary', 'child_report'];

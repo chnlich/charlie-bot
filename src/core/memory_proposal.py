@@ -66,11 +66,8 @@ def _ensure_branch(memory_dir: Path, base: str) -> None:
     _git(memory_dir, "branch", PROPOSAL_BRANCH, base_sha)
 
 
-def _ensure_worktree(memory_dir: Path, worktree: Path) -> None:
-  """Create the worktree when absent; a present one must be this repo's, on ``proposal``."""
-  if not worktree.exists():
-    _git(memory_dir, "worktree", "add", str(worktree), PROPOSAL_BRANCH)
-    return
+def _validate_worktree(memory_dir: Path, worktree: Path) -> None:
+  """A present worktree must be this repo's, checked out on ``proposal``."""
   head_ref = _git(worktree, "symbolic-ref", "--short", "HEAD").strip()
   if head_ref != PROPOSAL_BRANCH:
     raise ProposalRefusalError(f"{worktree} is a worktree on '{head_ref}', not '{PROPOSAL_BRANCH}'")
@@ -78,6 +75,12 @@ def _ensure_worktree(memory_dir: Path, worktree: Path) -> None:
   live_common = (memory_dir / _git(memory_dir, "rev-parse", "--git-common-dir").strip()).resolve()
   if worktree_common != live_common:
     raise ProposalRefusalError(f"{worktree} exists but is not a worktree of the memory repo at {memory_dir}")
+
+
+def _ensure_worktree(memory_dir: Path, worktree: Path) -> None:
+  """Create the worktree when absent; a present one is validated first."""
+  if not worktree.exists():
+    _git(memory_dir, "worktree", "add", str(worktree), PROPOSAL_BRANCH)
 
 
 def _ahead_count(memory_dir: Path, base: str) -> int:
@@ -100,6 +103,9 @@ def open_proposal(memory_dir: Path) -> dict[str, str]:
         f"the live memory checkout has uncommitted changes; commit or discard them first:\n"
         f"{uncommitted.stdout.rstrip()}")
   base = _base_branch(memory_dir)
+  if worktree.exists():
+    # Validate before anything is created, so a refusal leaves the repo as it was.
+    _validate_worktree(memory_dir, worktree)
   _ensure_branch(memory_dir, base)
   _ensure_worktree(memory_dir, worktree)
   ahead = _ahead_count(memory_dir, base)

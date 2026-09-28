@@ -198,6 +198,25 @@ def test_open_refuses_detached_live_checkout(tmp_path: Path, monkeypatch, capsys
   assert not memory_proposal.proposal_worktree(store).exists()
 
 
+def test_open_foreign_worktree_refuses_and_creates_no_branch(store: Path, monkeypatch, capsys) -> None:
+  """A directory at the worktree path that is not this repo's worktree refuses
+  before anything is created: no proposal branch, the stranger repo untouched."""
+  worktree = memory_proposal.proposal_worktree(store)
+  worktree.mkdir()
+  _git(worktree, "init", "-q", "-b", "main")
+  _git(worktree, "config", "user.email", "t@t.t")
+  _git(worktree, "config", "user.name", "t")
+  (worktree / "foreign.txt").write_text("mine\n", encoding="utf-8")
+  _git(worktree, "add", "-A")
+  _git(worktree, "commit", "-qm", "foreign")
+  code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
+  assert code == 1
+  # The refusal fires on the worktree validation, before the branch is created.
+  assert "is a worktree on 'main', not 'proposal'" in err
+  assert _git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
+  assert (worktree / "foreign.txt").read_text(encoding="utf-8") == "mine\n"
+
+
 # --- commit -------------------------------------------------------------------
 
 

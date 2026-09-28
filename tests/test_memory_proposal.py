@@ -250,6 +250,23 @@ def test_commit_accepts_existing_pr_entry_with_lines_appended(store: Path, monke
   assert "second line" in (worktree / rel).read_text(encoding="utf-8")
 
 
+def test_commit_resolves_a_relative_message_file_against_the_caller_cwd(
+    store: Path, monkeypatch, capsys, tmp_path: Path) -> None:
+  """A relative --message-file names a file in the caller's cwd, not the worktree's."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/relative-message.md")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("relative-message", "body\n"), encoding="utf-8")
+  caller_cwd = tmp_path / "caller"
+  caller_cwd.mkdir()
+  (caller_cwd / "message.txt").write_text("admit via a relative message file\n", encoding="utf-8")
+  monkeypatch.chdir(caller_cwd)
+  code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", "message.txt")
+  assert code == 0, err
+  assert _git(worktree, "log", "-1", "--format=%B").strip() == "admit via a relative message file"
+
+
 def test_commit_refuses_reworded_pr_line_and_lists_it(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   rel = Path("entries/profile/reworded.md")

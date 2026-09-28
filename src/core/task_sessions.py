@@ -1487,16 +1487,23 @@ class TaskTreeManager:
     needle = query.strip().lower()
     if not needle:
       return {"items": [], "tree_revision": index.revision}
-    hits: list[SessionRow] = []
+    # session_row derives each row's full descendant walk (child counts and
+    # per-descendant work states), so it is only built for the rows the
+    # response serves: the match pass collects ids, the sort caps them at
+    # *limit*, and the row builds run after the cap. Building one row per
+    # match before the cap priced the common short query's whole match set
+    # (1501 of 1571 metas on the standing corpus) to serve 20 rows.
+    hits: list[str] = []
     for sid, meta in index.metas.items():
       goal = meta.task.goal if meta.task is not None else ""
       if needle in meta.name.lower() or needle in goal.lower():
-        hits.append(self.session_row(index, sid))
-    hits.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
+        hits.append(sid)
+    hits.sort(key=lambda sid: (index.metas[sid].created_at, sid))
     hits = hits[:limit]
     items = []
-    for row in hits:
-      ancestors = [self.session_row(index, a.id) for a in self._ancestors(index, row.id)]
+    for sid in hits:
+      row = self.session_row(index, sid)
+      ancestors = [self.session_row(index, a.id) for a in self._ancestors(index, sid)]
       items.append({"row": jsonable_row(row), "ancestors": [jsonable_row(a) for a in ancestors]})
     return {"items": items, "tree_revision": index.revision}
 

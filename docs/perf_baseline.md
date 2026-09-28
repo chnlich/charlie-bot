@@ -132,6 +132,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M123 hook-helper import floor, per hook event | M123 collector below | seconds per fresh-process registered hook-command wall (the collector runs the exact argv `claude_sub._write_hook_plugin` writes for the PreToolUse gate event, stdin `{}`, absent socket, `--gate` so the fail path returns rc 2 without signalling the parent group; the wall every Claude Code hook event pays before the bridge round-trip — the gate events UserPromptSubmit/PreToolUse/PermissionRequest sit on the turn's critical path) | median < 0.030 s, max < 0.030 s (the after band reads 23.2-23.5 ms median, 23.6-24.2 ms max — interpreter base, the json/re import chain, and the transport modules; the pre-fix shape pays site's editable finder for pathlib/glob/re the helper never imports plus argparse for a three-flag argv and reads 34.6-36.4 ms median with maxima to 50.4, tripping both lines) | — (introduced with its first history row) |
 | M124 config-verb dispatch wall, help path | M124 collector below | seconds per fresh-process `config --help` wall (the import+dispatch floor every config-verb invocation pays before argparse prints — the M92 protocol) and per `config get <key>` round (the verb's own reading; the model stack it needs either way is why its wall is not this line's subject) | help median < 0.10 s (the M92 line's shape: the deferred-module verbs' help floors read 26-57 ms, and the pre-fix config verb reads 151-173 ms — the eager `src.core.config` import pricing the pydantic model build into discovery; the other config-importing verb modules' floors sit higher on their core modules' own eager chains — see the history row); get median < 0.25 s (the M115 line's shape — the get round is the cold config resolution plus argparse) | — (introduced with its first history row) |
 | M125 sibling-verb dispatch floor, help path | M125 collector below | seconds per fresh-process `<verb> --help` wall (the M92 protocol's import+dispatch floor) for the five sibling verbs the M124 round left pinned by their core modules' eager chains (improve, publish, storage, gc-trash, remote-launch) | median < 0.10 s per verb (the M92 line's shape — the after band reads 29-45 ms across the five, the src.cli.config deferral shape's deferred-module band; the pre-fix shape reads 0.157-0.382 s, the publish/storage/trash/sequence/config chains' own eager cost) | — (introduced with its first history row) |
+| M126 task-tree search latency | M126 collector below | ms per request on the warm index, worst common query (the single character matching the most metas on name or task goal — the keystroke shape the search box rides) | median < max(0.004 s, metas × 0.0000015 s) (the after band reads 2.3-2.4 ms median at 1571 metas — the ~0.9 µs/meta lower+match loop plus the served rows' own descendant walks; the pre-fix shape built one full session_row per match before the created_at cap and read 37-41 ms, tripping 9x; the line tracks the corpus the way the M72/M119 lines track theirs) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8687,9 +8688,114 @@ for verb in VERBS:
 EOF
 ```
 
+M126 — task-tree search latency, steady state. The task-tree panel's search box issues
+`GET /api/sessions/tree/search` per keystroke; the route's whole body is
+`TaskTreeManager.tree_search` over the shared index (the same rebuild the M120/M121 collectors
+price), so the keystroke cost is the search derivation alone. The collector times
+`tree_search` from the main checkout over the worst common query — the single character
+matching the most metas on name or task goal, the M71 worst-capped-query derivation — on the
+warm index, one cold index build then twenty timed searches. A query matching nothing reads
+the scan alone; the shape that prices the derivation is the one matching most of the corpus.
+The M120 protocol shapes the corpus copy and the manager warm-up:
+
+```bash
+/home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import json, shutil, tempfile
+from pathlib import Path
+
+# Worst-search corpus snapshot: every session's metadata.json plus the
+# profile-bearing sessions' data/ trees — the same corpus shape the M120 page
+# collector copies; the index reads the metas and the served rows' activity
+# derivation reads the task-node event corpora. Live home read once for the
+# copy, never written.
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m126-tree-search-home-", dir="/tmp"))
+dst = home / "sessions"
+dst.mkdir(parents=True)
+n_meta = n_data = 0
+counts: dict[str, int] = {}
+for d in root.iterdir():
+    m = d / "metadata.json"
+    if not m.is_file():
+        continue
+    try:
+        raw = json.loads(m.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+    sd = dst / d.name
+    sd.mkdir()
+    shutil.copy2(m, sd / "metadata.json")
+    n_meta += 1
+    name = (raw.get("name") or "").lower()
+    goal = ((raw.get("task") or {}).get("goal") or "").lower()
+    for ch in set(name) | set(goal):
+        counts[ch] = counts.get(ch, 0) + 1
+    if raw.get("profile") is not None and (d / "data").is_dir():
+        shutil.copytree(d / "data", sd / "data",
+                        ignore=shutil.ignore_patterns("master_runs", "traces", "artifacts", "threads", "runs"))
+        n_data += 1
+
+best_q, best_n = None, -1
+for ch, n in counts.items():
+    if ch.isspace():
+        continue  # a whitespace query early-returns in the search, never reaches the scan
+    if n > best_n:
+        best_q, best_n = ch, n
+print(f"{n_meta} session metas, {n_data} task-node data trees; worst search query {best_q!r} "
+      f"matching {best_n} metas (cap 20)")
+print(f"export M126_HOME={home} M126_Q={best_q} M126_METAS={n_meta} M126_NODES={n_data}")
+EOF
+```
+
+Then run per checkout (``eval`` the snapshot export first):
+
+```bash
+CHECKOUT=${CHECKOUT:-/home/chaoli/workspace/charlie-bot} /home/chaoli/workspace/charlie-bot/.venv/bin/python - <<'EOF'
+import asyncio, hashlib, json, os, shutil, statistics, sys, time
+from pathlib import Path
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.task_sessions import TaskTreeManager
+
+home = Path(os.environ["M126_HOME"])
+Q = os.environ["M126_Q"]
+cfg = CharlieBotConfig(charliebot_home=home)
+session_mgr = SessionManager(cfg)
+tree = TaskTreeManager(cfg, session_mgr)
+
+async def main():
+    # The hours-running server's shared metadata cache: one authoritative read
+    # per session (the same populate path the server's own readers use). The
+    # scratch copy takes any migration write the warm-up triggers.
+    for sid in sorted(p.name for p in (home / "sessions").iterdir() if p.is_dir()):
+        await session_mgr.get_session(sid)
+    await tree.tree_page(parent_id=None, include_archived=False, limit=100, cursor=None)  # cold index build; not timed
+    times = []
+    res = None
+    for _ in range(20):
+        t0 = time.perf_counter()
+        res = await tree.tree_search(query=Q, limit=20)
+        times.append(time.perf_counter() - t0)
+    times.sort()
+    body = json.dumps(res, sort_keys=True, default=str)
+    print(f"checkout {os.path.basename(os.environ['CHECKOUT'])}: {os.environ['M126_METAS']} metadata files; "
+          f"tree-search query {Q!r} (cap 20) median {statistics.median(times) * 1000:.2f} ms, "
+          f"max {times[-1] * 1000:.2f} ms over 20 (warm index); {len(res['items'])} hits, "
+          f"body sha1 {hashlib.sha1(body.encode()).hexdigest()[:12]}, revision {res['tree_revision'][:12]}")
+
+try:
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home, ignore_errors=True)  # every exit path removes the scratch copy
+EOF
+```
+
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this PR | M126 task-tree search, introduced with this PR: `tree_search` built one full `session_row` per match before the created_at sort capped the response at 20 rows — `session_row` derives each row's whole descendant walk (child counts plus per-descendant work states through the facts memo, ~24 µs/row on the standing corpus), so the worst common query built 1501 rows to serve 20; the match pass now collects ids, the sort caps them at *limit*, and the row builds run after the cap; interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector on one shared snapshot per round, load 1.45-1.86: worst query 'e' (1501 of 1571 metas matching) 40.745/37.328/38.904 → 2.343/2.419/2.330 ms (median-of-medians 38.90 → 2.34, −94 %, every paired round faster), 'task' 11.234/9.837/11.336 → 6.791/6.682/6.543 ms (−38 %), 'fix' 8.550/7.873/8.433 → 4.643/4.475/3.969 ms (−47 %), body sha1 identical across every arm (70d5525326b6 / 5980c3d9a6fb / eb69b0efc0a7); the round's standing sweep read all 121 collectors inside their lines (the six torn two-block collectors re-run per the doc's eval-first rule, M97 with CHARLIEBOT_SESSION_ID unset) — the topic surfaced from the un-lined-endpoint scan, its before numbers self-measured under the fix's conditions, its healthy range set 1.7x over the after band | the row builds the response drops were the whole story — the remaining 'task'/'fix' walls are the served rows' own ancestor chains and activity reads, response content the cap cannot drop |
 | 2026-09-27 | this PR | M71 sidebar search capped name-match, the match result memoized on the query's derivation ground: every capped search re-ran the full derivation per request — the 1571-name lower+match loop, the 1437-match sort, and the content-candidate classification (stat + two memo peeks + root-cover check per active non-matched session) — 1.28 ms of the 2.4 ms drive the standing sweep read (2.70 ms median on the 315-row corpus, 90% of the 3 ms line); the result is a pure function of the listings memo's metas list (its identity moves exactly when a metadata.json does — the #2179 pattern) plus each candidate's chat-file signature (a chat file moves without touching any metadata.json), so the manager now memoizes the rows per lowered query on that ground, re-statted per request, and stores nothing after an errored scan (the retry-per-request rule stands); interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector on the shared snapshot, load 0.79-1.96: capped search 2.43/2.43/2.44 → 1.12/1.11/1.11 ms (median-of-medians 2.43 → 1.12, −54%, every paired round faster), 315 rows, decoded 1335995 B, body digest identical across every arm (decc4341b6b4); post-fix standing read 1.12 ms, inside the line with 2.7x headroom; same-round watch: the in-process sweep's M55/M71 pair collectors re-ran after the round's harness tore their setup exports (the setup blocks print progress lines before the export line — only the export line evals), M97 re-ran with CHARLIEBOT_SESSION_ID unset (this run's own session id tripping the plan CLI's ambiguity guard), all three re-runs measured and healthy |
 | 2026-09-27 | this PR | M120 task-tree page serve, the run-finished outcome fold memoized on the events identity: every tree_page serve re-walked each rendered node's whole event history to rebuild the run-finished outcome map — per row AND per descendant of every row (the badge counts), 168 event-history walks per roots-page serve on the standing corpus (1557 metas, 217 task-node corpora, 10 visible rows), and the full event load a runless node paid before the derivation answered idle; the map is a durable-fact fold (a run_finished fact never un-happens, last finish wins per run id), so it now rides the facts memo's key — the live events cache's list identity plus the archived extent, covered cursor in the cell: an append folds only the new suffix, a rotation re-keys the fold, a session delete drops the cell — and a runless node answers from derive_task_tree_activity's own empty-runs guard with no event load (the extraction stays inside the one derivation owner; derive builds the map itself when none is passed). Interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over one shared snapshot, load ~1.5-2.1 one-minute with the standing sweep's in-process collectors running concurrently (both arms equally loaded): 12.21/12.87/12.78 → 5.73/5.86/5.77 ms (−52% to −55%, every paired round faster), body sha1 11530a01d91d and tree revision 40afbb1b08dd identical across all six arms; the sweep's own single-arm main-checkout read the same hour 9.82 ms median, max 11.44 — the second straight round straddling the max(10 ms, 1550×6 µs) line after #2179's 10.78; the after band 5.7-5.9 ms sits ~1.7x under it; memo-freshness test pins the append-moves-verdict contract (fails with the covered cursor dropped from the key); full suite 989 passed (the 2 test_frontend_js failures reproduce on pristine main) | the task-node share of the corpus tripled after #2098 (71→217) and the derivation price is per-node-per-serve, so the row phase outgrew the build phase ~3:1; the build's 3.5 ms (scandir + fresh_cached_metas + facts revision over 1557 entries) is the next term if the corpus keeps growing |
 | 2026-09-27 | this PR | M98 memory query, the run-token shape the standing sweep now reads — the cron-through-worker-leaves landing (1bf0b842) put this cron's own shell under CHARLIEBOT_RUN_TOKEN, and the fresh-process `memory query --topic charliebot --index` wall with a token present read median 0.399/0.390/0.391 s (maxima 0.404-0.422) on main, over the < 0.30 s line the 09-25 round's 0.057 s operator shape (no token in its shell) sat against. Fix: streaming's three module-level imports defer to their call sites. Interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, four rounds of the verbatim collector, load 1.1-3.1 one-minute: 0.399/0.396/0.401/0.446 → 0.262/0.269/0.263/0.279 s (−32 % to −37 %), round 4 maxima 0.473 → 0.288 s, every paired round faster; no-token operator shape unchanged (0.053-0.054 → 0.052-0.057 s band). Component attribution (importtime, one token-path process): fastapi 0.116 s cumulative through sessions→streaming's module-level `from fastapi import WebSocket` — annotation-only use — plus src.api.responses (orjson/starlette) and src.agents.backends.base riding streaming's module scope though the token path calls neither; sessions' import 0.307 → 0.194 s, fastapi absent from its chain. The token path still pays the config-model build (0.110 s, the M115 shape) and src.core.runs (0.06 s, RunRecord's pydantic). No-regression: M99 import server 0.526 → 0.539 s (band, maxima 0.565/0.546); 994-passed suite (2 node-dep js failures identical on main), ruff and yapf clean | `_resolve_run_scoped_audience` builds SessionManager for one read, so every worker's memory query pays that chain as a fresh-process import wall; workers have carried run tokens since 2026-09-14 |

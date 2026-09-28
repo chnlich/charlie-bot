@@ -1,8 +1,8 @@
 """Worker account relay: a delegated task keeps running when its pool login runs out of quota.
 
-Covers the pool pin (claude_relay.pin_pool_account) and the Worker's own relay loop
-(src/agents/worker.py run/_relay): rejected-run relay onto another account, the safe-point
-termination after a far warning, the relay limit, login-failure marking, and compaction.
+Covers the Worker's own relay loop (src/agents/worker.py run/_relay): rejected-run relay onto
+another account, the safe-point termination after a far warning, the relay limit, login-failure
+marking, and compaction.
 """
 
 import json
@@ -72,33 +72,6 @@ def _worker(tmp_path: Path, cfg: CharlieBotConfig, label: str | None) -> Worker:
 def _logged_events(tmp_path: Path) -> list[dict]:
   lines = (tmp_path / "data" / "events.jsonl").read_text(encoding="utf-8").splitlines()
   return [json.loads(line) for line in lines if line.strip()]
-
-
-# ---------------------------------------------------------------------------
-# Pinning the account at construction
-# ---------------------------------------------------------------------------
-
-
-def test_pin_pool_account_picks_the_most_headroom_and_leaves_the_option_unchanged(tmp_path: Path) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed_warning", 0.95)["rate_limit_info"])
-  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.20)["rate_limit_info"])
-  claude_accounts.observe_rate_limit("ext-2", rate_limit_event("allowed", 0.60)["rate_limit_info"])
-  pooled = cfg.get_backend_option(POOLED_FABLE_ID)
-
-  option, account = claude_relay.pin_pool_account(cfg, pooled)
-
-  assert option is pooled
-  assert (account.label, account.config_dir) == ("ext-1", str(tmp_path / "claude-ext-1"))
-
-
-def test_pin_pool_account_raises_with_the_earliest_reset_when_every_account_is_rejected(tmp_path: Path) -> None:
-  cfg = fable_pool_cfg(tmp_path)
-  for label in ("main", "ext-1", "ext-2"):
-    _reject(label)
-
-  with pytest.raises(claude_relay.PoolExhaustedError, match="earliest reset"):
-    claude_relay.pin_pool_account(cfg, cfg.get_backend_option(POOLED_FABLE_ID))
 
 
 # ---------------------------------------------------------------------------

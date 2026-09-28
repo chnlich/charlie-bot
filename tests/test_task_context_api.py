@@ -73,12 +73,13 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
       RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
   from src.core.task_execution import capture_prompt_chain
-  from src.core.task_prompts import preview_snapshot
+  from src.core.task_prompts import assemble_snapshot, build_segments
   meta = await env.tree.load_meta(ids["worker"])
   assert meta is not None
   index = await env.tree._get_index()
   chain, node_ref = capture_prompt_chain(env.tree, index, meta)
-  snapshot, _err = preview_snapshot(env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  segments, _err = build_segments(env.cfg, meta, "work", chain=chain, node_ref=node_ref, overlay=None)
+  snapshot = assemble_snapshot(segments)
   path = env.tree.runs.run_dir(ids["worker"], run_id) / "prompt_snapshot.json"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False), encoding="utf-8")

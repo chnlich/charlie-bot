@@ -99,18 +99,21 @@ Known-alive symbols:
   one grep away from looking phase-1-deletable. Vulture also flags pydantic response-model
   fields served to `web/` (`schedule_cron`/`schedule_enabled`/`schedule_next_run`/
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
-  `parent_session_id` likewise, `lines_added` on `WorkerEvent`, `placeholder` on
+  `parent_session_id` likewise, `placeholder` on
   `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
+  (`lines_added` on `WorkerEvent` left this list: the worker-transcript rework removed its last
+  reader, so no repo line outside the field definition references it and the grep no longer
+  protects it.)
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
   `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
   appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).
-- `do_GET`, `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
+- `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Each name has
   exactly one whole-repo match (its definition), so vulture flags them as unused methods.
-- The `if False: yield {}` lines in `tests/test_chat_cancel.py`, `tests/test_master_cc_consumer.py`,
+- The `if False: yield {}` lines in `tests/test_master_cc_consumer.py`,
   `tests/conftest.py` (`CapturingBackend`, the shared master-cc round double), and
   `tests/test_worker_diagnostics.py` are flagged as
   100%-confidence unsatisfiable `if` conditions; the unreachable branch is what keeps each fake
@@ -281,9 +284,9 @@ Known-alive symbols:
   `websockets.asyncio.client` import) — reached by string: `_expect_hello`'s parameter is
   annotated `"ClientConnection"`, and that import is what resolves the forward reference
   for type checkers and IDEs. No type checker runs in CI, so a deletion stays suite-green
-  while leaving the annotation unresolved. Vulture flags the import as its only
-  production-scope finding (unused import, 90% confidence); never delete it on that
-  evidence.
+  while leaving the annotation unresolved. Current vulture reads the annotation as a use and
+  no longer flags the import; the no-type-checker fact is what keeps a deletion suite-green,
+  so the guard stays.
 - `__getattr__` (`src/core/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
   delegate to the shared `deferred_module_getattr` (`src/core/deferred.py`), which serves
   `load_requests`. (The former `src/cli/common.py` hook left with the phase-separated
@@ -293,10 +296,11 @@ Known-alive symbols:
   (`tests/core/test_artifact_wrap.py`) resolves the module attribute through the hook.
   Vulture flags it as an unused function at 60% confidence.
 - `split_sse_lines` (`src/core/sse.py`) — kept deliberately as the SSE framing oracle. The
-  property tests in `tests/test_sse.py` drive it through `_split_chunked` and assert the
-  production byte framer (`_ChunkedFramer`, same module) matches its answers on every two-way
-  split and on random chunkings; the framer's docstring names it the semantics home. No
-  production code calls it, so a production-scope vulture scan flags it as an unused function.
+  tests in `tests/test_sse.py` drive it directly (the trailing-CR hold, the CRLF straddle, the
+  final flush) and pin the production reader's byte mode against its str mode on every two-way
+  split; the byte framer's docstring (`_ChunkedFramer`, same module) names it the semantics
+  home. No production code calls it, so a production-scope vulture scan flags it as an unused
+  function.
 - `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/chat.py`,
   `src/core/master_trigger.py`)
   — the PEP 562 lazy-import hooks; same class as the `src/core/artifact_wrap.py` hook entry
@@ -325,41 +329,29 @@ Known-alive symbols:
 - `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
   in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
   `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in
-  `tests/test_ext_usage.py`, `_StubSlackResponse` in `tests/test_slack_delivery.py`,
-  `_StubResp` in `tests/test_slack_listener.py`) — production reads each through the duck-typed
+  `tests/test_ext_usage.py`) — production reads each through the duck-typed
   response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/core/sse.py`), the
   fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
   `response.aclose()`. Each double name matches only its own definition, so vulture flags the
   methods as unused.
-- `receive_text`, `send_json`, `resize` (the WebSocket and attachment doubles: `_ScriptedWebSocket`
-  and `_FakeAttachment` in `tests/test_terminal_backend.py`, `FakeWebSocket` in
-  `tests/conftest.py`) — `pty_common`'s attachment loop awaits `websocket.receive_text()` and
-  sends through `websocket.send_json(...)`, the resize path calls `attachment.resize(cols, rows)`,
-  and the server catchup/replay producers send through `FakeWebSocket.send_json`; every call
-  dispatches on the injected double. Vulture flags each method as unused.
-- `_proc`, `_ws` (backend and warm-renderer doubles in `tests/test_backend_logging.py`,
-  `tests/test_opencode_backend.py`, and the fake `_launch` in `tests/core/test_headless_render.py`)
-  — the stderr pump reads `self._proc.stderr` (`src/agents/backends/base.py`), the opencode
-  stdout pump reads `self._proc.stdout` (`src/agents/backends/opencode.py`), and
+- `resize` (the pty attachment double `ScriptedTtyAttachment` in
+  `tests/test_tui_task_completion.py`) — the resize path calls `attachment.resize(cols, rows)`
+  (`src/agents/backends/pty_common.py`), dispatching on the injected double. Vulture flags the
+  method as unused.
+- `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
-  (`src/core/headless_render.py`); the tests install each by attribute write on the double,
-  which vulture flags as an unused attribute.
+  (`src/core/headless_render.py`); the fake installs them by attribute write, which vulture
+  flags as an unused attribute.
 - `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
   the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
   (`src/agents/backends/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
   with a recorder, and vulture flags the write as an unused attribute.
-- `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend`, `TerminateFlagBackend`,
-  `_StoppedMidStreamBackend`, `_OomReportBackend` in `tests/conftest.py` and
-  `tests/test_master_cc_relay.py`) — the worker finalize path
+- `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend` and `TerminateFlagBackend`
+  in `tests/conftest.py`) — the worker finalize path
   (`self._backend.cgroup_exit_report()`, `src/agents/worker.py`) and the master round's error
   path (`backend.cgroup_exit_report()`, `src/agents/master_cc_run.py`) read the session
-  memory-cap attribution off whatever backend the test installed. Most doubles return `None`
-  (doubles never run inside a cgroup); `_OomReportBackend` returns its scripted report string.
-  Vulture flags the methods as unused.
-- `add_done_callback` (`DummyTask` in `tests/conftest.py`'s `capture_create_logged_task`) —
-  `create_logged_task` (`src/core/tasks.py`) calls `task.add_done_callback(_task_done_callback)`
-  on whatever task-like object the patched stand-in returned; the `DummyTask` override accepts
-  the callback and drops it. Vulture flags the method as unused.
+  memory-cap attribution off whatever backend the test installed. Both doubles return `None`
+  (doubles never run inside a cgroup). Vulture flags the methods as unused.
 - `_cron_snapshot` — a production module-global cache reset through a bare module-attribute
   write inside test setup (`core_config._cron_snapshot = core_config._CronSnapshot()` in
   `tests/conftest.py`). The read lives in `src/core/config.py`, so vulture flags the write as an
@@ -389,8 +381,25 @@ Known-alive symbols:
   `_StdinPipeProtocol` is the protocol `_wire_writer` hands `connect_write_pipe` for every piped
   backend stdin. The bare `FlowControlMixin` fallback raises `NotImplementedError`, so deleting
   the override — or the parameter the call passes — turns the next `proc.stdin.close()` +
-  `wait_closed()` on a piped stdin into that error. `test_stdin_pipe_write_drain_close`
-  (`tests/test_spawn_offloop.py`) pins the close path, and the class docstring states the
-  contract. Vulture flags the method as an unused method (60% confidence) and `stream` as an
+  `wait_closed()` on a piped stdin into that error; the class docstring states the contract.
+  Vulture flags the method as an unused method (60% confidence) and `stream` as an
   unused variable (100% confidence); a whole-repo grep finds only the definition. Never delete
   it on that evidence.
+- `_unprobed_verdict_stays_idle` (`src/api/sessions.py`, on `SessionDetailResponse`) — pydantic
+  `@field_validator` method, registered with pydantic at class-definition time and invoked
+  during model validation: it keeps a never-probed row's response `work_state` at the literal
+  `'idle'` instead of `null`. The name has exactly zero whole-repo matches outside its
+  definition, so vulture flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
+- `_load_legacy_single_event_id` (`src/core/models.py`, on `MasterRunRecord`) — pydantic
+  `@model_validator(mode='before')` method: it loads a pre-batching record's single
+  `user_event_id` as a one-element `user_event_ids`, so an interrupted turn written by the old
+  schema still feeds the restart-replay exclusion set. The name has exactly zero whole-repo
+  matches outside its definition, so vulture flags it as an unused method. Same
+  framework-registered class as the `check_sources_and_mode` entry above; deleting it would not
+  fail validation, it would silently drop the legacy record's replay exclusion.
+- `_default_backend_is_registered` (`src/core/config.py`, on `VoiceConfig`) — pydantic
+  `@model_validator(mode='after')` method: it rejects a `default_backend` typo against the
+  registry's ids at startup. The name has exactly zero whole-repo matches outside its
+  definition, so vulture flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.

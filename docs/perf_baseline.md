@@ -132,6 +132,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M124 config-verb dispatch wall, help path | M124 collector below | seconds per fresh-process `config --help` wall (the import+dispatch floor every config-verb invocation pays before argparse prints — the M92 protocol) and per `config get <key>` round (the verb's own reading; the model stack it needs either way is why its wall is not this line's subject) | help median < 0.10 s (the M92 line's shape: the deferred-module verbs' help floors read 26-57 ms, and the pre-fix config verb reads 151-173 ms — the eager `src.core.config` import pricing the pydantic model build into discovery; the other config-importing verb modules' floors sit higher on their core modules' own eager chains — see the history row); get median < 0.25 s (the M115 line's shape — the get round is the cold config resolution plus argparse) | — (introduced with its first history row) |
 | M125 sibling-verb dispatch floor, help path | M125 collector below | seconds per fresh-process `<verb> --help` wall (the M92 protocol's import+dispatch floor) for the five sibling verbs the M124 round left pinned by their core modules' eager chains (improve, publish, storage, gc-trash, remote-launch) | median < 0.10 s per verb (the M92 line's shape — the after band reads 29-45 ms across the five, the src.cli.config deferral shape's deferred-module band; the pre-fix shape reads 0.157-0.382 s, the publish/storage/trash/sequence/config chains' own eager cost) | — (introduced with its first history row) |
 | M126 startup task-tree reconcile, closed reviewed nodes | M126 collector below | seconds per closed node of one reconcile_task_tree pass; git fetch invocations per pass | median < 0.005 s per closed node; 0 fetches | — (introduced with its first history row) |
+| M127 server stop latency, unanswered Socket Mode close | M127 collector below | seconds from SIGINT to server process exit with the Slack listener connected to an endpoint that never answers a close frame; slack_listener_ms from the charliebot_shutdown line as the mechanism witness | median < 2.0 s | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8730,9 +8731,204 @@ finally:
 EOF
 ```
 
+M127 — server stop latency, unanswered Socket Mode close. Every Ctrl-C stop and every Socket Mode
+refresh reconnect used to pay websockets' 10 s close-wait default: the lifespan shutdown cancels the
+Slack listener second, the cancel exits `websockets.connect(...)` (src/core/slack_listener.py), and the
+close handshake waits close_timeout for a close frame Slack's Socket Mode endpoint never sends. The wait
+stretched every restart by 10 s for at least 12 days without any signal, because the launcher's tee died
+of the same Ctrl-C and took every shutdown log line with it — the same change makes tee ignore SIGINT
+and times each shutdown step into the charliebot_shutdown line, whose slack_listener_ms is the mechanism
+witness below. The collector builds a scratch data directory under a fresh temp dir with a config whose
+every host path points inside it, one synthetic backend option so the entry point's backend check passes,
+a synthetic Slack allowed user id, synthetic Slack tokens in the scratch credentials, and a server port
+found free by binding 0; it stubs the four host-shared doors (the cgroup sweep, the speech-model
+download, and the ext-usage and host-auth pollers — usage fetch can rotate shared OAuth tokens,
+host_auth probes remote hosts), stubs the Slack backfill, and points SlackClient.open_connection at an
+in-collector stand-in Socket Mode endpoint on an ephemeral port that never answers a close frame, so no
+request reaches Slack. It writes an entry script that imports `server` from CHECKOUT and runs server.py's
+own `__main__` block through `runpy.run_path(..., run_name="__main__")` so the uvicorn arguments have
+their one definition; the server's stdout and stderr go to a file (no uv, no tee). Per round (3 rounds)
+it waits for `server_ready` and for the stand-in's upgrade, sends SIGINT to the server process, times
+until it exits, and reads slack_listener_ms from charliebot_shutdown (n/a when the line has no such
+field, the pre-fix shape). The block writes only inside its temp dir, never contacts Slack or any network
+peer, touches no live data directory, kills its process group on any failure, and removes its temp dir.
+Evidence points the same collector at the before and after checkouts (`CHECKOUT` at each root, the
+M120/M126 pattern); run it from the checkout's root:
+
+```bash
+CHECKOUT=${CHECKOUT:-$PWD} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import asyncio, os, re, shutil, signal, socket, statistics, subprocess, sys, tempfile, threading, time
+from pathlib import Path
+
+SCRATCH = Path(tempfile.mkdtemp(prefix="m127-server-stop-", dir="/tmp"))
+try:
+    sys.dont_write_bytecode = True  # the checkout under test is read, never written
+    CHECKOUT = os.environ["CHECKOUT"]
+    HOME = SCRATCH / "home"
+
+    # The scratch data directory: every host path inside it, one synthetic
+    # backend option so the entry point's backend check passes, a synthetic
+    # Slack allowed user id, synthetic tokens in the scratch credentials.
+    (HOME / "sessions").mkdir(parents=True)
+    for name in ("workspace", "worktrees", "publish"):
+        (HOME / name).mkdir()
+    # A server port found free by binding 0.
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        PORT = probe.getsockname()[1]
+    (HOME / "config.yaml").write_text(f"""
+server:
+  port: {PORT}
+paths:
+  workspace_dirs: ["{HOME}/workspace"]
+  worktree_dir: "{HOME}/worktrees"
+backends:
+  options:
+    - id: claude-m127synthetic
+      label: m127 synthetic
+      type: cc-claude
+      model: synthetic-model
+slack:
+  allowed_user_ids: ["U127SYNTHETIC"]
+publish:
+  dir: "{HOME}/publish"
+""")
+    (HOME / "credentials.yaml").write_text(
+        "slack:\n  bot_token: xoxb-synthetic\n  app_token: xapp-synthetic\n")
+
+    # The stand-in Socket Mode endpoint: in-collector, ephemeral port, upgrade +
+    # hello, then read and discard everything - never answering a close frame.
+    UPGRADES: list[float] = []
+    _stand_in_port: list[int] = []
+
+    async def _stand_in(reader, writer):
+        import base64, hashlib
+        request = (await reader.readuntil(b"\r\n\r\n")).decode()
+        key = next(line.split(":", 1)[1].strip() for line in request.split("\r\n")
+                   if line.lower().startswith("sec-websocket-key:"))
+        accept = base64.b64encode(hashlib.sha1(
+            (key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
+        writer.write(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
+                      f"Connection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n").encode())
+        payload = b'{"type": "hello"}'
+        writer.write(bytes([0x81, len(payload)]) + payload)
+        await writer.drain()
+        UPGRADES.append(time.monotonic())
+        while await reader.read(4096):
+            pass  # read and discard everything, close frames included
+
+    def _run_stand_in():
+        async def serve():
+            server = await asyncio.start_server(_stand_in, "127.0.0.1", 0)
+            _stand_in_port.append(server.sockets[0].getsockname()[1])
+            async with server:
+                await server.serve_forever()
+        asyncio.run(serve())
+
+    threading.Thread(target=_run_stand_in, daemon=True).start()
+    deadline = time.monotonic() + 10
+    while not _stand_in_port:
+        if time.monotonic() > deadline:
+            raise RuntimeError("the stand-in never bound a port")
+        time.sleep(0.05)
+
+    # The entry script: import server from CHECKOUT, stub the four host-shared
+    # doors (the cgroup sweep, the speech-model download, and the two pollers -
+    # usage fetch can rotate shared OAuth tokens, host_auth probes remote hosts)
+    # plus the Slack backfill, point open_connection at the stand-in, then run
+    # server.py's own __main__ block through runpy so the uvicorn arguments have
+    # their one definition. The server's stdout and stderr go to a file below.
+    ENTRY = SCRATCH / "entry.py"
+    ENTRY.write_text(f"""
+import os, runpy, sys
+os.chdir({CHECKOUT!r})
+sys.path.insert(0, {CHECKOUT!r})
+import server
+
+async def _noop(*a, **k):
+    return None
+
+server.sweep_stale_session_cgroups = lambda *a, **k: 0
+server._provision_speech_models = lambda cfg: None
+server.ext_usage.start_poller = _noop
+server.host_auth.start_poller = _noop
+server._run_slack_backfill = _noop
+import src.core.slack_listener as slack_listener
+
+async def _open_stand_in(self):
+    return "ws://127.0.0.1:{_stand_in_port[0]}/"
+
+slack_listener.SlackClient.open_connection = _open_stand_in
+slack_listener._backfill_followed_threads = _noop
+runpy.run_path(os.path.join({CHECKOUT!r}, "server.py"), run_name="__main__")
+""")
+
+    rounds: list[tuple[float, str]] = []
+    for index in range(3):
+        expected = len(UPGRADES)
+        out_path = SCRATCH / f"server_round_{index}.txt"
+        env = os.environ.copy()
+        env["CHARLIEBOT_HOME"] = str(HOME)
+        env["HOME"] = str(HOME)
+        env["PYTHONPATH"] = CHECKOUT
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        env["PYTHONUNBUFFERED"] = "1"
+        with open(out_path, "wb") as out:
+            proc = subprocess.Popen(
+                [sys.executable, str(ENTRY)],
+                env=env,
+                stdout=out,
+                stderr=subprocess.STDOUT,
+                start_new_session=True)
+        try:
+
+            def _wait(what, check, limit):
+                end = time.monotonic() + limit
+                while time.monotonic() < end:
+                    if check():
+                        return
+                    if proc.poll() is not None:
+                        raise RuntimeError(f"server exited before {what}: " +
+                                           out_path.read_text(errors="replace")[-600:])
+                    time.sleep(0.05)
+                raise RuntimeError(f"the server never reached {what}")
+
+            _wait("server_ready", lambda: "server_ready" in out_path.read_text(errors="replace"), 120)
+            _wait("the stand-in's upgrade", lambda: len(UPGRADES) > expected, 30)
+            started = time.monotonic()
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.wait(120)
+            except subprocess.TimeoutExpired as exc:
+                raise RuntimeError("the server was still alive 120 s after SIGINT") from exc
+            seconds = time.monotonic() - started
+        except BaseException:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)  # its own process group
+            except ProcessLookupError:
+                pass  # already gone, which is the state the kill was for
+            proc.wait()
+            raise
+        line = next((l for l in out_path.read_text(errors="replace").splitlines()
+                     if "charliebot_shutdown" in l), "")
+        match = re.search(r"slack_listener_ms=(\d+)", line)
+        rounds.append((seconds, match.group(1) if match else None))
+    for index, (seconds, slack_ms) in enumerate(rounds, start=1):
+        print(f"checkout {Path(CHECKOUT).name}: round {index}: stop {seconds:.2f} s, "
+              f"slack_listener_ms {slack_ms if slack_ms is not None else 'n/a'}")
+    seconds_list = sorted(s for s, _ in rounds)
+    print(f"checkout {Path(CHECKOUT).name}: 3 rounds; stop median {statistics.median(seconds_list):.2f} s, "
+          f"max {max(seconds_list):.2f} s; slack_listener_ms "
+          + "/".join(slack_ms if slack_ms is not None else "n/a" for _, slack_ms in rounds))
+finally:
+    shutil.rmtree(SCRATCH, ignore_errors=True)  # every exit path removes the scratch dir
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this commit | M127 server stop latency introduced with its landing fix: the verbatim collector, four interleaved collector runs (three rounds each), branch worktree after vs base checkout before back-to-back, arm order alternating (after→before ×3, before→after ×1), load 1.07-5.29 one-minute — before (main@51c85bf0, the branch's base) medians 10.43/10.39/10.39/10.48 s, maxima 10.43/10.49/10.43/11.30 s, failing the line (median < 2.0 s) at about 10.5 s, and the pre-fix charliebot_shutdown line carries no slack_listener_ms (the collector prints n/a — the mechanism witness does not exist yet) — after medians 1.42/1.42/1.47/1.37 s, maxima 1.42/1.42/1.47/1.38 s, with slack_listener_ms 1000-1006 ms in every round, ~7x under the line | fix: every WebSocket the server opens as a client passes close_timeout=WS_CLIENT_CLOSE_TIMEOUT (1.0 s, src/core/timeouts.py) — Slack's Socket Mode endpoint never answers a client close frame, so websockets' 10 s default was paid on every stop and every refresh reconnect; the launcher's tee now ignores SIGINT so the shutdown lines survive Ctrl-C, and the lifespan shutdown times each step into the charliebot_shutdown line |
 | 2026-09-28 | this PR | M7 changed-round / M7 restart-cold / M81 / M122 collectors repaired, the sweep's own machinery (no product-code change): a same-day /tmp wipe (2026-09-28 ~12:36, deleter unidentified — tmpfiles' 30-day age bound does not fire same-day) deleted every scratch state the standing collectors assume — /tmp/charliebot-logs (the live server's tee still writes its deleted fd, so M2, M11's log-grep half and M93 read nothing this round and stay host-state unmeasured until a server restart), /tmp/opencode, /tmp/lp_m122, /tmp/node_modules. As printed, the M7 changed-round block failed rc=1 (copy2 into the missing /tmp/opencode — the restart-cold block beside it only passed because the warm-gate block's own mkdir runs one block earlier, a pure ordering artifact), M122 failed rc=1 (nothing in the sweep creates /tmp/lp_m122), and M81 exited on its jsdom preflight with the install left to an operator. Fix: the three scratch-file blocks create their parent dir the way the warm-gate and M107 blocks already do, and the M81 block re-creates the one-time jsdom install its own preflight message names (npm itself rides a pinned registry tarball — the host has no npm binary). Verified on the wiped state, the four blocks verbatim back-to-back: M7 changed-round 0.114 s (line < 0.5 s), restart-cold 0.299 s (line < max(0.5 s, 1.63 s)), M122 discovery median 10.2 ms max 10.4 ms (line median < 0.015 s, max < 0.030 s), M81 re-render 30.60 ms (line 60 ms at 2 delimiter-bearing bodies) — the same bands the earlier same-day sweep read (0.111 s / 0.285 s / 8.2 ms / 31.04 ms) at load 1.9-2.4 one-minute; no product code moves, so every other standing reading carries over unchanged | every round a collector fails is a round that metric's regression watch does not run; the M97 repair (2026-09-28) pinned the same rule for its own collector |
 | 2026-09-28 | this PR | M98 memory-CLI invocation wall, the module wall's dataclasses chain and the store's PR machinery priced off it: the entry/topic/store/selection classes become plain ``__slots__`` classes (the credentials.py and run_token.py precedents) and ``memory_proposal``'s import rides its one command — the query path no longer pays the dataclasses→inspect chain (~9 ms) or tarfile+subprocess (~10 ms). Verbatim collector, ABBA interleaved, 12 paired rounds over two series (7+5), main checkout before vs branch worktree after back-to-back, load 0.9-3.9 one-minute across the readings: token-shape medians 273-303 → 271-309 ms (median-of-medians 288.0 → 282.5, −5.5 ms; 8/12 rounds faster, 1 tie, 3 load-wave inversions); no-token witness (same command, ``CHARLIEBOT_RUN_TOKEN`` unset) 72.9 → 48.9 ms median (−33 %), min/max fully separated (67.4-77.5 → 47.2-51.5); in-process chain attribution src.cli.memory 28.4 → 10.7 ms (−62 %, 16 alternating ABBA samples); query output 165 B identical across every arm, load_store parity 3.9/4.2 ms, 1068-passed suite plus the documented 7-failure vfork/antigravity/frontend-js environmental set identical on the clean base | the memory CLI verbs are fresh processes; the served token shape's net is bounded by the config-model import re-paying the shared dependencies (prewarming the removed modules in the after arm restores main() to the before arm's 183-193 ms band), so the residual ~283 ms wall is the documented config+runs model stack — the structural item, out of one run's budget |
 | 2026-09-28 | this commit | M126 introduced with its landing fix: the verbatim collector, three interleaved rounds, base checkout before vs branch worktree after back-to-back, arm order alternating (before→after, after→before, before→after), load 2.3-5.0 one-minute — before 18.2/24.3/19.3 ms per closed node median (maxima 20.7/31.4/19.6 ms) with git fetches per pass [100, 100, 100, 100, 100] in every round, tripping both lines (median < 0.005 s per closed node; 0 fetches) — the local bare origin prices only the four git subprocesses, while the live host's network fetch read the same shape at ~1.18 s per closed node (62 closed tasks, ~73 s of a 79 s startup); after 1.5/1.7/1.8 ms (maxima 1.6/1.7/1.9 ms) with [0, 0, 0, 0, 0] in every round, ~3× under the line | fix: `_after_review_run` reads the task's derived state first — a task that is not open skips the landing proof and the automatic-completion call (whose recorded close replays inside it anyway) and keeps only the worktree cleanup; a reopened task derives "open" again and gets the full proof, and the open-task path and the failed-review branch are unchanged |

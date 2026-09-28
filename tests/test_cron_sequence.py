@@ -106,6 +106,50 @@ def _bound_task(name: str, session_id: str, **overrides) -> ScheduledTaskConfig:
   return ScheduledTaskConfig(**body)
 
 
+def _persist_chained_cron_d(cfg: CharlieBotConfig, session_id: str) -> ScheduledTaskConfig:
+  """Bind the two-step chained task for `session_id` and persist its durable
+  cron.d binding under this instance's home: the two step prompt files and the
+  chained.yaml. The recovery reads the binding from that durable file, so it
+  must exist on disk before a simulated restart. Returns the in-memory task
+  config the scheduler entry points accept."""
+  task_cfg = _bound_task(
+      "chained",
+      session_id,
+      steps=[
+          StepConfig(name="selector", prompt="Select."),
+          StepConfig(name="reviewer", prompt="Review."),
+      ])
+  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
+  cron_d.mkdir(parents=True, exist_ok=True)
+  sel_md = cron_d / "selector.md"
+  rev_md = cron_d / "reviewer.md"
+  sel_md.write_text("Select the target.\n", encoding="utf-8")
+  rev_md.write_text("Review the result.\n", encoding="utf-8")
+  (cron_d / "chained.yaml").write_text(
+      yaml.safe_dump(
+          {
+              "cron":
+                  "0 3 * * *",
+              "session_id":
+                  session_id,
+              "backend":
+                  "fake",
+              "steps":
+                  [
+                      {
+                          "name": "selector",
+                          "prompt_file": str(sel_md)
+                      },
+                      {
+                          "name": "reviewer",
+                          "prompt_file": str(rev_md)
+                      },
+                  ],
+          }),
+      encoding="utf-8")
+  return task_cfg
+
+
 def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> None:
   """Script the parent node's report-consuming turn through the registry
   builder (the manager dispatch path), so no external process starts from
@@ -178,43 +222,7 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
       monkeypatch, [
           SpawningScriptedBackend([result_event("broke")], exit_code=1),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  task_cfg = _bound_task(
-      "chained",
-      manager.id,
-      steps=[
-          StepConfig(name="selector", prompt="Select."),
-          StepConfig(name="reviewer", prompt="Review."),
-      ])
-  # The recovery reads the binding from the durable cron.d file (scoped to
-  # this instance's home), so persist it before the simulated restart.
-  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
-  cron_d.mkdir(parents=True, exist_ok=True)
-  sel_md = cron_d / "selector.md"
-  rev_md = cron_d / "reviewer.md"
-  sel_md.write_text("Select the target.\n", encoding="utf-8")
-  rev_md.write_text("Review the result.\n", encoding="utf-8")
-  (cron_d / "chained.yaml").write_text(
-      yaml.safe_dump(
-          {
-              "cron":
-                  "0 3 * * *",
-              "session_id":
-                  manager.id,
-              "backend":
-                  "fake",
-              "steps":
-                  [
-                      {
-                          "name": "selector",
-                          "prompt_file": str(sel_md)
-                      },
-                      {
-                          "name": "reviewer",
-                          "prompt_file": str(rev_md)
-                      },
-                  ],
-          }),
-      encoding="utf-8")
+  task_cfg = _persist_chained_cron_d(cfg, manager.id)
   scheduler = Scheduler(cfg, session_mgr)
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
@@ -329,43 +337,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
           SpawningScriptedBackend([result_event("reviewer wrote the report")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   _script_manager_turn(monkeypatch, ["report noted"])
-  task_cfg = _bound_task(
-      "chained",
-      manager.id,
-      steps=[
-          StepConfig(name="selector", prompt="Select."),
-          StepConfig(name="reviewer", prompt="Review."),
-      ])
-  # The recovery reads the binding from the durable cron.d file (scoped to
-  # this instance's home), so persist it before the simulated restart.
-  cron_d = cfg.charliebot_home / "config.d" / "cron.d"
-  cron_d.mkdir(parents=True, exist_ok=True)
-  sel_md = cron_d / "selector.md"
-  rev_md = cron_d / "reviewer.md"
-  sel_md.write_text("Select the target.\n", encoding="utf-8")
-  rev_md.write_text("Review the result.\n", encoding="utf-8")
-  (cron_d / "chained.yaml").write_text(
-      yaml.safe_dump(
-          {
-              "cron":
-                  "0 3 * * *",
-              "session_id":
-                  manager.id,
-              "backend":
-                  "fake",
-              "steps":
-                  [
-                      {
-                          "name": "selector",
-                          "prompt_file": str(sel_md)
-                      },
-                      {
-                          "name": "reviewer",
-                          "prompt_file": str(rev_md)
-                      },
-                  ],
-          }),
-      encoding="utf-8")
+  task_cfg = _persist_chained_cron_d(cfg, manager.id)
   # The durable mid-chain facts of a stopped process: the firing's leaf with
   # step 0's Run terminally successful (exit 0 — the frontier's advance
   # evidence), and nothing else.

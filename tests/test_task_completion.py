@@ -362,3 +362,25 @@ async def test_cancel_by_the_parent_session_skips_the_parent_wake(
   assert len(closes) == 1 and closes[0]["summary"] == "no longer needed"
   assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
   assert calls == []
+
+
+# ---------------------------------------------------------------------------
+# Tree search: the cap keeps the oldest matches, every hit ships its ancestors
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tree_search_serves_oldest_matches_under_the_cap(tmp_path: Path) -> None:
+  """The response carries the oldest matching rows by (created_at, id) up to
+  the limit, each with its complete root-to-parent path; a match the cap drops
+  never reaches the row builds."""
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  parent = await create_task(tree, parent=None, request_id="search-parent", name="needle-holder")
+  children = [await create_task(tree, parent=parent.id, request_id=f"search-{i}",
+                                name=f"needle child {i}") for i in range(3)]
+
+  res = await tree.tree_search(query="needle", limit=2)
+
+  assert [item["row"]["id"] for item in res["items"]] == [parent.id, children[0].id]
+  assert res["items"][0]["ancestors"] == []
+  assert [a["id"] for a in res["items"][1]["ancestors"]] == [parent.id]

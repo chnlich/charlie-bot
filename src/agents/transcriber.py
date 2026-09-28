@@ -26,13 +26,13 @@ from typing import BinaryIO
 import numpy as np
 import structlog
 
+from src.agents.transcription.base import SAMPLE_RATE
 from src.core.config import CharlieBotConfig
 from src.core.json_utils import atomic_write_stream
 from src.core.timeouts import HTTP_MODEL_DOWNLOAD_TIMEOUT
 
 log = structlog.get_logger()
 
-SAMPLE_RATE = 16_000
 MAX_RECORDING_SECONDS = 5 * 60
 MAX_RECORDING_SAMPLES = SAMPLE_RATE * MAX_RECORDING_SECONDS
 # A segment's decode starts where the previous one's ended, pause included, so quiet

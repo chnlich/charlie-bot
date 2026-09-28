@@ -20,6 +20,13 @@ from typing import ClassVar, Literal
 # fake audio at it.
 VOICE_CHUNK_SAMPLES = 2048
 
+# The capture rate, mono PCM16 (web/static/js/voice-input.js VOICE_SAMPLE_RATE):
+# the worklet resamples the microphone to this rate before emitting chunks. Every
+# Python reader of captured audio — the upload's WAV validation, the offline VAD
+# and decode, the live backends' mimeType and byte pacing — must read this same
+# number, so a rate change is a joint edit with that JS constant.
+SAMPLE_RATE = 16_000
+
 
 @dataclass(frozen=True)
 class TranscriptEvent:
@@ -74,7 +81,7 @@ class TranscriptionBackend(ABC):
       vocabulary: Sequence[str],
       languages: Sequence[str],
   ) -> AsyncIterator[TranscriptEvent]:
-    """Transcribe one recording: 16 kHz mono PCM16 chunks in, events out.
+    """Transcribe one recording: mono PCM16 chunks at SAMPLE_RATE in, events out.
 
     Exhaustion of ``audio`` is the end of the audio. Emits zero or more
     ``partial`` events, then exactly one ``final``. ``vocabulary`` biases

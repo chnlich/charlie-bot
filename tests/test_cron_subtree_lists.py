@@ -1,12 +1,14 @@
 """The cron subtree (every session whose parent chain reaches a scheduled_task session)
-rides only the Scheduled listing, nested under its own cron session.
+rides no sidebar listing.
 
 All (route + homepage render) and Archived return no cron-subtree rows — the
-projected legacy worker-thread rows under cron sessions included — while the
-archived cron sessions themselves keep their rows and the keyset pagination and
-group aggregates describe the rows actually returned. Search and Starred keep
-today's behavior, and ``list_sessions(scheduled=True)`` still returns exactly the
-cron sessions (the scheduler's lookup depends on it).
+projected legacy worker-thread rows under cron sessions included, and the
+active cron session itself with them (the ``scheduled`` listing filter keeps
+its root out of All) — while the archived cron sessions keep their rows in
+Archived and the keyset pagination and group aggregates describe the rows
+actually returned. Search and Starred keep their behavior, and
+``list_sessions(scheduled=True)`` still returns exactly the cron sessions (the
+scheduler's lookup depends on it).
 """
 
 from __future__ import annotations
@@ -178,25 +180,6 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) ->
   row_ids = {row["id"] for row in _initial_sessions(page_client, fx.ordinary.id)}
   assert {fx.ordinary.id, fx.plain_active.id} <= row_ids
   assert not (row_ids & _subtree_ids(fx))
-
-
-@pytest.mark.asyncio
-async def test_scheduled_list_nests_the_full_active_subtree(tmp_path: Path) -> None:
-  fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
-  resp = client.get("/api/sessions/scheduled")
-  assert resp.status_code == 200
-  rows = resp.json()
-  ids = [row["id"] for row in rows]
-  # The active cron session rides first, then its whole active subtree at any
-  # depth (the manager child, the direct leaf, and the grandchild); the
-  # delivered (derived-archived) leaf and the archived cron session stay out.
-  assert ids[0] == fx.cron.id
-  assert set(ids[1:]) == {fx.manager.id, fx.worker.id, fx.grandchild.id}
-  by_id = {row["id"]: row for row in rows}
-  assert by_id[fx.worker.id]["task_parent_id"] == fx.cron.id
-  assert by_id[fx.grandchild.id]["task_parent_id"] == fx.manager.id
-  assert by_id[fx.manager.id]["scheduled_task"] is None  # children never carry the mark
 
 
 @pytest.mark.asyncio

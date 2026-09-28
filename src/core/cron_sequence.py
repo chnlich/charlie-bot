@@ -97,15 +97,17 @@ def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
   return task
 
 
-def bound_task_name(session_id: str) -> str | None:
+def bound_task_name(session_id: str, tasks: list[ScheduledTaskConfig] | None = None) -> str | None:
   """The loaded scheduled task whose ``session_id`` binding names *session_id*.
 
   The one "is this node bound by a task" judgment, derived from the loaded task
   configs' ``session_id`` and never from a session's ``scheduled_task`` stamp:
   every duty that moves from the legacy cron session to the bound node keys on
-  this one implementation.
+  this one implementation. *tasks* injects the caller's snapshot so a consumer
+  that already holds one (the sidebar lists' schedule join) reads a single
+  generation; the default loads the current one.
   """
-  for task_cfg in get_scheduled_tasks():
+  for task_cfg in (tasks if tasks is not None else get_scheduled_tasks()):
     if task_cfg.session_id == session_id:
       return task_cfg.name
   return None

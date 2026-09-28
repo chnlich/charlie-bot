@@ -1411,6 +1411,39 @@ class SessionManager:
         "groups": groups,
     }
 
+  async def archived_context_rows(self, rows: list[SessionMetadata]) -> list[SessionMetadata]:
+    """Every unarchived ancestor of *rows* that *rows* do not already carry.
+
+    The archived listing's context rows (plan 4.2): a page's rows nest into the
+    client's project-grouped tree, so a row whose parent is still active needs
+    that parent delivered or the child flattens to a root. The walk follows
+    ``task_parent_id`` from every row through the metadata owner's own reads
+    and collects each ancestor the effective archive still lists as active —
+    a stored-archived ancestor or a derived-archived one (the tree's archive
+    overlay) is itself an archived listing row and never becomes context, but
+    the walk continues past it so the page carries the active ancestors above
+    it too. Ancestors already among *rows* are skipped (their own ancestors
+    are walked when they are processed); a missing ancestor ends that walk
+    rather than guessing past the gap. The caller serves the result beside its
+    page rows: the rows never enter the page's size, cursor, or aggregates.
+    """
+    present = {row.id for row in rows}
+    overlay = self.archive_overlay
+    derived = await overlay() if overlay is not None else set()
+    out: list[SessionMetadata] = []
+    seen: set[str] = set()
+    for row in rows:
+      parent_id = row.task_parent_id
+      while parent_id is not None and parent_id not in present and parent_id not in seen:
+        seen.add(parent_id)
+        ancestor = await self.get_session(parent_id)
+        if ancestor is None:
+          break
+        if ancestor.status != SessionStatus.ARCHIVED and ancestor.id not in derived:
+          out.append(ancestor)
+        parent_id = ancestor.task_parent_id
+    return out
+
   async def search_sessions(
       self,
       query: str,

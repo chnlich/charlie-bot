@@ -153,15 +153,6 @@ def pytest_collection_finish(session: pytest.Session) -> None:
         f"need it.")
 
 
-# The two Gemini-503 error channels, verbatim shapes: the failed
-# invocation's structured error event (the real failure) and the stderr tail
-# (the LiteLLM help banner that used to mask it in chat). Shared by the suites
-# covering the error-hint selection, the live exit, and the restart re-attach.
-LITELLM_503_ERROR_MESSAGE = (
-    "litellm.ServiceUnavailableError: ServiceUnavailableError: OpenAIException - "
-    "Error code: 503 - [{'error': {'code': 503, 'message': 'The service is currently "
-    "unavailable.', 'status': 'UNAVAILABLE'}}]")
-
 # Imports must follow the sys.path bootstrap above.
 import src.core.config as core_config  # noqa: E402,I001
 from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402

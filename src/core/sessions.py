@@ -70,11 +70,20 @@ log = LazyStructlogLogger()
 # The fork/elone API routes (src/api/sessions.py) open their auto-injected
 # bootstrap prompts with an opener plus the note, and
 # src.core.recap._AUTO_INJECTED_PREFIXES filters such injected messages from
-# recap asks by opener-prefix match; the v1/v2 context-reset notes reuse the
-# note. Both sides import this one copy so an edit cannot drift them apart.
+# recap asks by opener-prefix match; the clone/elone bootstraps and the
+# context-reset note (context_reset_note below) share the history note. Both
+# sides import this one copy so an edit cannot drift them apart.
 FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
 HISTORY_LOCATION_NOTE = "Earlier turns' history remains readable in this session's chat log, data/chat_events.jsonl in the working directory."
+# The clone-style instruction the v1/v2 context-reset notes append after the
+# history note: the fresh native conversation must read the chat log first and
+# open its reply with where things stand, instead of silently losing every
+# convention the earlier turns set.
+CONTEXT_RESET_INSTRUCTION = (
+    "Get oriented from that log before you respond: open your reply with two or "
+    "three sentences on where things stand and the conventions in force, then "
+    "respond to what follows.")
 
 
 def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
@@ -85,6 +94,21 @@ def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> s
   """
   return (f"this session switched from backend {native_backend} to {option_id}, "
           "which starts its own conversation")
+
+
+def context_reset_note(reason: str, task_goal: str | None = None) -> str:
+  """The whole bracketed note that opens a fresh native conversation's prompt.
+
+  The one assembly site for the v1 (master-cc) and v2 (task-tree) turn-start
+  notes, so their wording cannot drift apart: the reason names why the previous
+  conversation was left, the history note says where that history stays
+  readable, and the instruction tells the new model to read the log and open
+  with where things stand before responding. The task goal names what the
+  fresh context is working on (v2 carries the task's goal; v1 has none).
+  """
+  task_part = "" if task_goal is None else f" The task is: {task_goal}."
+  return (f"[Context reset: {reason}.{task_part} {HISTORY_LOCATION_NOTE} "
+          f"{CONTEXT_RESET_INSTRUCTION}]")
 
 
 _METADATA_CACHE_TTL = 30.0  # seconds

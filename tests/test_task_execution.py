@@ -32,27 +32,35 @@ from fastapi.testclient import TestClient
 from src.core import event_types as ET
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
-from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
+from src.core.sessions import (
+    CONTEXT_RESET_INSTRUCTION,
+    HISTORY_LOCATION_NOTE,
+    SessionManager,
+)
 from src.core.task_sessions import TaskTreeManager
 
 OPERATOR = {"Authorization": "Bearer op-secret"}
 OP_CALLER = CallerIdentity(kind="operator")
 
 
-def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None):
+def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None,
+              backend_ids: list[str] | None = None):
     """One fake backend registered, so task creation's default resolution works.
 
+    ``backend_ids`` names every configured option (default: the single "fake");
+    tests that switch a session's backend pin build a config with more than one.
     The synthetic home carries a synthetic access key: every child environment
     signs its run token against it (never operator credentials from the host).
     """
     import src.core.config as core_config
     from src.core.config import CharlieBotConfig
     home = tmp_path / "charliebot-home"
+    ids = backend_ids if backend_ids is not None else ["fake"]
     cfg = CharlieBotConfig(
         charliebot_home=home,
         backends={
-            "options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")],
-            "preference": ["fake"],
+            "options": [backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
+            "preference": ids[:1],
         },
         paths={"worktree_dir": str(home / "worktrees")})
     key = "task-exec-test-key"
@@ -1452,14 +1460,17 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
     # The stale anchor was cleared at spawn (the fresh native context's own
     # conversation replaces it); the old transcript's history is untouched.
     assert meta3.cc_session_id is None or meta3.cc_session_id != anchor_id
-    # The reset notice carried the standing reason and where earlier history
-    # lives (HISTORY_LOCATION_NOTE — the note no longer names the session id).
+    # The reset notice is the whole assembled note: the standing reason, the
+    # task's goal, where earlier history lives, and the clone-style
+    # read-the-log instruction.
     launch_text = (tree.runs.run_dir(manager.id, run3) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert launch_text.startswith(
+    note, sep, tail = launch_text.partition("\n\n")
+    assert sep
+    assert note == (
         "[Context reset: this task's managed instructions or sources changed since the "
-        "previous turn, so this turn starts a fresh native conversation. ")
-    assert HISTORY_LOCATION_NOTE in launch_text
-    assert "turn three" in launch_text
+        "previous turn, so this turn starts a fresh native conversation. "
+        f"The task is: {meta3.name}. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+    assert "turn three" in tail
 
 
 @pytest.mark.asyncio
@@ -1499,10 +1510,52 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
     # ran, and where the earlier history lives.
     launch_text = (tree.runs.run_dir(manager.id, decision["run_id"]) / "launch_prompt.md").read_text(
         encoding="utf-8")
-    assert launch_text.startswith(
+    note, sep, tail = launch_text.partition("\n\n")
+    assert sep
+    assert note == (
         "[Context reset: this session switched from backend some-other-backend to fake, "
-        "which starts its own conversation. ")
-    assert HISTORY_LOCATION_NOTE in launch_text
+        f"which starts its own conversation. The task is: {meta.name}. "
+        f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+    assert "two" in tail
+
+
+@pytest.mark.asyncio
+async def test_switch_away_and_back_before_next_turn_continues_native_conversation(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A mis-click — the backend switched away and back before the next
+    message — never resets the anchor: the recorded producer still names the
+    current backend, so turn 2 continues turn 1's native conversation and the
+    launch prompt carries no reset note."""
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
+    manager = await create_task(tree, parent=None, request_id="root")
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    first = SpawningScriptedBackend([result_event("turn one")])
+    second = SpawningScriptedBackend([result_event("turn two")])
+    install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+
+    run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
+    await wait_for_terminal_run(tree, manager.id, run1)
+    snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
+    anchor = "native-anchor-mis-click"
+    await tree.record_native_anchor(
+        manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
+        model="fake-model", reset_anchor=False)
+    await session_mgr.persist_cc_session_id(manager.id, anchor)
+
+    # The mis-click: switch away and back before the next message goes out.
+    await session_mgr.switch_backend(manager.id, "fake-2")
+    await session_mgr.switch_backend(manager.id, "fake")
+
+    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
+    decision = await tree.dispatch.dispatch_pending(manager.id)
+    assert decision.get("launch") is True
+    run2 = decision["run_id"]
+    await wait_for_terminal_run(tree, manager.id, run2)
+    meta = await tree.load_meta(manager.id)
+    assert meta.cc_session_id == anchor  # the native conversation continued
+    launch_text = (tree.runs.run_dir(manager.id, run2) / "launch_prompt.md").read_text(encoding="utf-8")
+    assert "Context reset" not in launch_text
+    assert "turn two" in launch_text
 
 
 @pytest.mark.asyncio

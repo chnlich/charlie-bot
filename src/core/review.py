@@ -95,7 +95,7 @@ def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> s
           f"7. {_REVIEW_CORRECTNESS_CHECK}",
           f"8. {_REVIEW_STYLE_CHECK}",
           "9. If you find issues, fix them and commit with descriptive messages.",
-          "10. Stash untracked/modified files: `git stash --include-untracked`",
+          "10. Before the rebase, commit every change you keep and restore tool-generated files with `git restore <path>`; untracked files stay in place.",
           f"11. Fetch the latest base branch: `git fetch origin {published}`",
           f"12. Rebase onto the remote base: `git rebase {landing}`",
           f"13. Push to remote base branch from the worktree: `git push origin HEAD:{published}`",

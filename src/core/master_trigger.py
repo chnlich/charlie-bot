@@ -1,9 +1,8 @@
 """Master-agent triggering subsystem — wake the master CC to process results.
 
-The scheduled-task duties the old dedicated cron session carried on its wake
-(the weekly recycle and the firing report's prefix) live here as the shared
-helpers the bound node's dispatched wake consumes; ``trigger_master`` itself no
-longer has a scheduled branch — the bound node took those duties over.
+The scheduled-task duties (the weekly recycle and the firing report's prefix)
+live in the shared helpers the bound node's dispatched wake consumes;
+``trigger_master`` itself has no scheduled branch.
 """
 
 import traceback

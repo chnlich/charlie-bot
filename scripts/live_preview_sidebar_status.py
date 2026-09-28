@@ -62,6 +62,7 @@ from scripts.live_preview_task_tree import (  # noqa: E402
     build_synthetic_repo,
     fail,
     log,
+    make_record,
     request,
     snapshot_native_storage,
     wait_run_terminal,
@@ -256,11 +257,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     shots = Shots(evidence_dir)
     checks: list[dict] = []
 
-    def record(name: str, ok: bool, detail: str) -> None:
-        checks.append({"name": name, "ok": ok, "detail": detail})
-        log(f"    [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-        if not ok:
-            fail(f"assertion failed: {name}: {detail}")
+    record = make_record(checks)
 
     # Isolation preflight: the production service and homes must be untouched
     # by construction — the trial gets a fresh temp home and a free port.

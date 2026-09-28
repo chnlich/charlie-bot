@@ -1672,20 +1672,20 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s27: the Workspace error badge")
                 await wait_for(cdp, session_id,
-                               "document.querySelector('#session-list .bg-red-900\\/40') !== null"
+                               'document.querySelector("#session-list [role=button][title=\'Open the first failed task\']") !== null'
                                " && document.querySelector('#session-list').textContent.includes('1 scheduled tasks failed to load')",
                                timeout=12, label="the error badge renders")
                 badge = await evaluate(cdp, session_id, """
-                    (() => {{
+                    (() => {
                       const list = document.getElementById('session-list');
                       const badge = list.querySelector('[role="button"][title="Open the first failed task"]');
                       const firstGroup = list.querySelector('.session-group');
-                      return JSON.stringify({{
+                      return JSON.stringify({
                             text: badge ? badge.textContent.trim() : null,
                             onclick: badge ? badge.getAttribute('onclick') : null,
                             onTop: badge && firstGroup ? badge.nextSibling === firstGroup || badge.compareDocumentPosition(firstGroup) & Node.DOCUMENT_POSITION_FOLLOWING : false,
-                      }});
-                    }})()
+                      });
+                    })()
                 """)
                 badge_info = json.loads(badge)
                 assert_true(badge_info["text"] == "⚠ 1 scheduled tasks failed to load",
@@ -1716,11 +1716,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                     api_request, base, access_key, "GET", "/api/sessions/archived?limit=100", timeout=10.0)
                 assert_true(status == 200, f"the archived listing answers 200 ({status})")
                 strip_all = await evaluate(cdp, session_id, """
-                    (() => {{
+                    (() => {
                       const pill = [...document.querySelectorAll('#session-list button')]
                         .find(b => b.textContent.trim().startsWith('All '));
                       return pill ? pill.textContent.replace(/[^0-9]/g, '') : null;
-                    }})()
+                    })()
                 """)
                 server_total = sum(g["total"] for g in archived_page["groups"])
                 assert_true(strip_all == str(server_total),

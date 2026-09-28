@@ -185,6 +185,19 @@ def test_open_refuses_uncommitted_live_change_and_touches_nothing(tmp_path: Path
   assert _git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
 
 
+def test_open_refuses_detached_live_checkout(tmp_path: Path, monkeypatch, capsys) -> None:
+  home = tmp_path / "home"
+  home.mkdir()
+  store = _build_store(home)
+  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  head = _git(store, "rev-parse", "HEAD").strip()
+  _git(store, "checkout", "-q", "--detach", head)
+  code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
+  assert code == 1
+  assert "not on a branch" in err
+  assert not memory_proposal.proposal_worktree(store).exists()
+
+
 # --- commit -------------------------------------------------------------------
 
 
@@ -252,6 +265,21 @@ def test_commit_refuses_line_reworded_to_the_base_wording(store: Path, monkeypat
   assert code == 1
   assert "reworded body" in err
   assert len(_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
+def test_commit_counts_line_occurrences_as_a_multiset(store: Path, monkeypatch, capsys) -> None:
+  """A line the PR added twice must survive twice: removing one occurrence refuses."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/doubled.md")
+  text = _entry_text("doubled", "dup line\ndup line\n")
+  _pr_commit(store, rel, text, "first")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(_entry_text("doubled", "dup line\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file",
+      str(_message_file(store, "drop one")))
+  assert code == 1
+  assert "dup line" in err
 
 
 def test_commit_refuses_deleted_pr_created_entry(store: Path, monkeypatch, capsys) -> None:
@@ -368,3 +396,15 @@ def test_status_tracks_worktree_dirty_state(store: Path, monkeypatch, capsys) ->
   (worktree / rel).write_text("drafted, not committed\n", encoding="utf-8")
   _code, out, _err = _run_cli(monkeypatch, capsys, "proposal", "status")
   assert _fields(out)["dirty"] == "yes"
+
+
+def test_status_dirty_dash_when_worktree_absent(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  _pr_commit(store, Path("entries/profile/detached-worktree.md"), _entry_text("detached-worktree", "body\n"), "add")
+  worktree = memory_proposal.proposal_worktree(store)
+  _git(store, "worktree", "remove", str(worktree))
+  code, out, err = _run_cli(monkeypatch, capsys, "proposal", "status")
+  assert code == 0, err
+  fields = _fields(out)
+  assert fields["dirty"] == "-"
+  assert fields["ahead"] == "1"

@@ -31,7 +31,7 @@ and labeling rules apply in both flows.
 
 ## Phrasing for model context
 
-Text that enters model context names the practice to follow: every rule sentence, trailing clauses included, states the action to take or the standing reality, and every example shows the practice itself. Statements of current system state keep their natural wording. Contrasting examples belong to pages written for the user.
+Text that enters model context names the practice to follow: every rule sentence, trailing clauses included, states the action to take or the standing reality, and every example shows the practice itself. Statements of current system state keep their natural wording and describe what the system does, stating an absent feature by what serves in its place. Contrasting examples belong to pages written for the user.
 
 ## Admission test
 

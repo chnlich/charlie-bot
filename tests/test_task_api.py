@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,7 @@ from conftest import stub_credentials
 
 from src.core.models import RunRecord, utc_now_iso
 from src.core.run_token import RunTokenClaims, sign_run_token
+from src.core.runs import read_pid_stat
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import make_api_client
@@ -112,6 +114,66 @@ async def test_activity_tracks_a_finish_that_lands_after_a_warm_derivation(task_
   await task_mgr.runs.register_run(RunRecord(id="r-memo", session_id=worker))
   assert task_mgr.activity_of(worker).work_state == "waiting"
   await task_mgr.runs.record_finish(worker, "r-memo", "completed")
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_activity_tracks_a_launch_that_lands_after_a_warm_derivation(task_env) -> None:
+  """The record write funnel bumps the generation the activity memo keys on,
+  so a launch identity persisted after a warmed derivation must move the
+  queued verdict — a memo the funnel bypass leaves stale would pin the
+  waiting verdict on every tree page and sidebar probe."""
+  _cfg, _session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r-launch", session_id=worker))
+  assert task_mgr.activity_of(worker).work_state == "waiting"
+  proc = subprocess.Popen(["sleep", "30"])
+  try:
+    pid_start, _state = read_pid_stat(proc.pid)
+    await task_mgr.runs.record_launch(worker, "r-launch", pid=proc.pid, pid_start=pid_start)
+    assert task_mgr.activity_of(worker).work_state == "running"
+  finally:
+    proc.kill()
+    proc.wait()
+
+
+@pytest.mark.asyncio
+async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation(task_env) -> None:
+  """The events cache takes an append in place — the list identity and the
+  archived extent survive the new fact — so a chat-only fact transition with
+  no record write (a stop request on a queued run) moves the verdict through
+  the covered length in the memo key. A key without it would pin the waiting
+  verdict on every tree page and sidebar probe until an unrelated record
+  write bumped the generation."""
+  _cfg, _session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r-stop", session_id=worker))
+  assert task_mgr.activity_of(worker).work_state == "waiting"
+  await task_mgr.runs.request_stop(worker, "r-stop", "stop-1")
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> None:
+  """A launched run without a terminal fact is judged through /proc, whose
+  death no record write announces: the derivation must re-read on every call
+  for such a node — a stored /proc verdict would pin a crashed run's running
+  verdict on every tree page until restart."""
+  _cfg, _session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r-proc", session_id=worker))
+  proc = subprocess.Popen(["sleep", "30"])
+  try:
+    pid_start, _state = read_pid_stat(proc.pid)
+    await task_mgr.runs.record_launch(worker, "r-proc", pid=proc.pid, pid_start=pid_start)
+    assert task_mgr.activity_of(worker).work_state == "running"
+    assert task_mgr.activity_of(worker).work_state == "running"
+  finally:
+    proc.kill()
+    proc.wait()
   assert task_mgr.activity_of(worker).work_state == "idle"
 
 

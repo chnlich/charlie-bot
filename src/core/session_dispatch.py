@@ -259,7 +259,6 @@ class TaskInputDispatcher:
         The executor's reservation binds the batch inside its own lock hold;
         taking the lock again here would deadlock a non-reentrant asyncio.Lock.
         """
-        from src.core.json_utils import atomic_write_text
         from src.core.task_sessions import TaskConflictError, TaskNotFoundError
 
         tree = self._tree
@@ -283,11 +282,7 @@ class TaskInputDispatcher:
                     [inputs_not_pending_conflict(session_id, unknown)])
             batch = list(input_ids)
         run.input_event_ids = [*run.input_event_ids, *batch]
-        await asyncio.to_thread(
-            atomic_write_text,
-            tree.runs.metadata_path(session_id, run_id),
-            run.model_dump_json(indent=2),
-        )
+        await tree.runs.write_record(session_id, run)
         return batch
 
     # ------------------------------------------------------------------

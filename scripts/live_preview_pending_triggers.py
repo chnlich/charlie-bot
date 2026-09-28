@@ -56,11 +56,7 @@ from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     trial_home_root,
 )
 from scripts.live_preview_task_tree import (  # noqa: E402
-    DEFAULT_BACKEND,
-    fail,
-    log,
-    make_record,
-    request,
+    DEFAULT_BACKEND, fail, log, make_record, request,
 )
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 

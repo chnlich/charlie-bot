@@ -14,106 +14,106 @@ from starlette.responses import Response
 
 from src.api.cron import next_run_iso
 from src.api.deps import (
-    SESSION_NOT_FOUND_DETAIL,
-    bad_request,
-    get_config_on_loop,
-    get_plan_manager,
-    get_run_store,
-    get_session_manager,
-    get_task_manager,
-    get_thread_manager,
-    get_trigger_manager,
-    require_caller,
-    require_found,
-    require_session,
+  SESSION_NOT_FOUND_DETAIL,
+  bad_request,
+  get_config_on_loop,
+  get_plan_manager,
+  get_run_store,
+  get_session_manager,
+  get_task_manager,
+  get_thread_manager,
+  get_trigger_manager,
+  require_caller,
+  require_found,
+  require_session,
 )
 from src.api.message_utils import (
-    SessionBootstrapData,
-    build_session_bootstrap_data,
-    build_session_view_data,
-    events_to_messages,
-    get_message_projection_fast,
+  SessionBootstrapData,
+  build_session_bootstrap_data,
+  build_session_view_data,
+  events_to_messages,
+  get_message_projection_fast,
 )
 from src.api.responses import (
-    GZIP_RESPONSE_HEADERS,
-    FastJsonResponse,
-    PreencodedJSONResponse,
-    fast_json_bytes,
-    gzip_body_response,
-    gzip_file_fresh,
-    request_wants_gzip,
+  GZIP_RESPONSE_HEADERS,
+  FastJsonResponse,
+  PreencodedJSONResponse,
+  fast_json_bytes,
+  gzip_body_response,
+  gzip_file_fresh,
+  request_wants_gzip,
 )
 from src.api.threads import view_thread_rows
 from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
-from src.core.cron_sequence import bound_task_name
 from src.core.config import (
-    CharlieBotConfig,
-    get_config,
-    get_scheduled_tasks,
+  CharlieBotConfig,
+  get_config,
+  get_scheduled_tasks,
 )
 from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
+from src.core.cron_sequence import bound_task_name
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
 from src.core.message_aggregator import tool_preview
 from src.core.models import (
-    AcknowledgeTaskInputsRequest,
-    AncestorRef,
-    CancelRunRequest,
-    CancelTaskRequest,
-    CompleteTaskRequest,
-    CreateSessionRequest,
-    DeleteGroupRequest,
-    EloneSessionRequest,
-    ExplainRequest,
-    ForkSessionRequest,
-    PatchSessionTaskRequest,
-    RateRoundRequest,
-    RenameGroupRequest,
-    ReopenTaskRequest,
-    RetryRunRequest,
-    RunCancelResponse,
-    RunKind,
-    RunPage,
-    RunRow,
-    SessionMetadata,
-    SessionRow,
-    SessionStatus,
-    SetGroupRequest,
-    SwitchBackendRequest,
-    TaskState,
-    ThreadMetadata,
-    TriggerStatus,
-    UtcDatetime,
-    WorkerThreadRef,
-    WorkState,
+  AcknowledgeTaskInputsRequest,
+  AncestorRef,
+  CancelRunRequest,
+  CancelTaskRequest,
+  CompleteTaskRequest,
+  CreateSessionRequest,
+  DeleteGroupRequest,
+  EloneSessionRequest,
+  ExplainRequest,
+  ForkSessionRequest,
+  PatchSessionTaskRequest,
+  RateRoundRequest,
+  RenameGroupRequest,
+  ReopenTaskRequest,
+  RetryRunRequest,
+  RunCancelResponse,
+  RunKind,
+  RunPage,
+  RunRow,
+  SessionMetadata,
+  SessionRow,
+  SessionStatus,
+  SetGroupRequest,
+  SwitchBackendRequest,
+  TaskState,
+  ThreadMetadata,
+  TriggerStatus,
+  UtcDatetime,
+  WorkerThreadRef,
+  WorkState,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.core.scheduled_sessions import cron_subtree_roots, write_cron_key
 from src.core.sessions import (
-    ELONE_BOOTSTRAP_OPENER,
-    FORK_BOOTSTRAP_OPENER,
-    HISTORY_LOCATION_NOTE,
-    SessionManager,
+  ELONE_BOOTSTRAP_OPENER,
+  FORK_BOOTSTRAP_OPENER,
+  HISTORY_LOCATION_NOTE,
+  SessionManager,
 )
 from src.core.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_execution import assemble_coherent_snapshot
 from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
-    AGENT_CREATE_SCOPE_REFUSAL,
-    TASK_CREATE_REQUEST_ID_REQUIRED,
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-    TaskTreeManager,
-    not_task_node_detail,
+  AGENT_CREATE_SCOPE_REFUSAL,
+  TASK_CREATE_REQUEST_ID_REQUIRED,
+  TaskConflictError,
+  TaskForbiddenError,
+  TaskInvalidError,
+  TaskNotFoundError,
+  TaskTreeManager,
+  not_task_node_detail,
 )
 from src.core.thinking_state import run_backend
 from src.core.threads import ThreadManager

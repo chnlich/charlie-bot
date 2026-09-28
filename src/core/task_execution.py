@@ -1527,6 +1527,22 @@ class TaskExecutionAdapter:
       return
     if durable_outcome != "success":
       return
+    task_state = self._tree.task_state(session_id)
+    if task_state != "open":
+      # A closed task already consumed this review's verdict: its recorded
+      # close replays the automatic-completion call before reading the
+      # evidence, but the landing proof still shells out to git (rev-parse,
+      # fetch, cat-file, merge-base) once per closed node on every startup
+      # reconcile. Only the worktree cleanup still runs; a reopened task
+      # derives "open" again and gets the full proof.
+      log.debug(
+          "review_followup_skipped_closed_task",
+          session_id=session_id,
+          run_id=run.id,
+          work_run=work_run.id,
+          task_state=task_state)
+      await self._cleanup_worktree_if_delivered(session_id, work_run)
+      return
     refs = [f"{RUN_REF_PREFIX}{work_run.id}"]
     if work_run.task_spec_hash:
       refs.append(f"{SPEC_REF_PREFIX}{work_run.task_spec_hash}")

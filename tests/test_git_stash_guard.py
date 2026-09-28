@@ -63,6 +63,7 @@ PARITY_ARGVS = [
     ["rev-parse", "--show-toplevel"],
     ["-c", "alias.loop=1", "-c", "alias.x=y", "-c", "alias.y=x", "x"],
     ["-c", "alias.p=!echo PFX=[$GIT_PREFIX] PWD=[$(pwd)] A=[$@]", "p", "x", "y"],
+    ["-c", "alias.x=!/nonexistent-bin", "x"],
 ]
 
 
@@ -171,6 +172,25 @@ def test_shell_alias_inner_stash_is_refused(guard_repo) -> None:
   assert proc.stderr == NOTICE
   assert _stash_state(repo, env) == before
   assert "dirty" in (repo / "tracked.txt").read_text()
+
+
+def test_shell_alias_unexecutable_slash_body_matches_real_git(guard_repo, tmp_path) -> None:
+  """A `!` body carrying a slash is exec'd directly: git's first line is
+    "fatal: cannot exec" with the errno text, not the PATH lookup's
+    "error: cannot run" form."""
+  repo, env = guard_repo
+  real = _real_git(env)
+  no_exec = tmp_path / "no-exec-bin"
+  no_exec.write_text("#!/bin/sh\necho hi\n")
+  no_exec.chmod(0o644)
+  argv = ["-c", f"alias.x=!{no_exec}", "x"]
+
+  guarded = _guard_run(repo, argv, env)
+  plain = subprocess.run([real, *argv], cwd=repo, env=env, capture_output=True, check=False)
+
+  assert (guarded.returncode, guarded.stdout, guarded.stderr) == (plain.returncode, plain.stdout, plain.stderr)
+  assert guarded.stderr.startswith(b"fatal: cannot exec '")
+  assert b"Permission denied" in guarded.stderr
 
 
 @pytest.mark.parametrize("argv", PARITY_ARGVS, ids=lambda argv: " ".join(argv))

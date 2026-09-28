@@ -243,14 +243,20 @@ split_next_word() {
   done
 }
 
-# git's two-line failure when the alias body cannot run at all.
+# git's two-line failure when the alias body cannot run at all: a PATH
+# lookup fails with "error: cannot run", a slash-carrying body (exec'd
+# directly) with "fatal: cannot exec".
 cannot_run() {
   if [ -e "$1" ]; then
     run_reason='Permission denied'
   else
     run_reason='No such file or directory'
   fi
-  printf 'error: cannot run %s: %s\n' "$1" "$run_reason" >&2
+  if [ "$2" = exec ]; then
+    printf "fatal: cannot exec '%s': %s\n" "$1" "$run_reason" >&2
+  else
+    printf 'error: cannot run %s: %s\n' "$1" "$run_reason" >&2
+  fi
   printf "fatal: while expanding alias '%s': '%s': %s\n" "$alias_name" "$1" "$run_reason" >&2
   exit 128
 }
@@ -506,8 +512,8 @@ while :; do
         exec /bin/sh -c "$alias_body \"\$@\"" "$alias_body" "$@"
       fi
       case $alias_body in
-        */*) [ -x "$alias_body" ] || cannot_run "$alias_body" ;;
-        *) find_on_path "$alias_body" >/dev/null || cannot_run "$alias_body" ;;
+        */*) [ -x "$alias_body" ] || cannot_run "$alias_body" exec ;;
+        *) find_on_path "$alias_body" >/dev/null || cannot_run "$alias_body" path ;;
       esac
       exec "$alias_body" "$@"
       ;;

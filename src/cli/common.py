@@ -684,17 +684,6 @@ def get_api(endpoint: str, params: dict[str, Any] | None = None) -> dict[str, An
   return _request_with_contract("GET", endpoint, params=params, unknown_effect="none")
 
 
-def derive_delegate_request_id(session_id: str, task_type: str, description: str) -> str:
-  """The server's derived delegation request id, computed the same way.
-
-  The derived default binds one (session, task type, spec body) to one
-  operation; an explicit ``--request-id`` names intentional same-spec siblings
-  and overrides this derivation on both sides.
-  """
-  from src.core.control_events import sha256_hex
-  return "delegate-" + sha256_hex("\x00".join([session_id, str(task_type), description]))[:24]
-
-
 def find_local_task_child(
     session_id: str,
     description: str,
@@ -713,12 +702,12 @@ def find_local_task_child(
   legacy thread.
   """
   from src.core.config import get_config
-  from src.core.control_events import stable_task_id
+  from src.core.control_events import derived_delegate_request_id, stable_task_id
   from src.core.models import SessionMetadata
   from src.core.runs import RUN_METADATA_NAME
   from src.core.threads import METADATA_NAME
 
-  resolved_request_id = request_id or derive_delegate_request_id(session_id, task_type, description)
+  resolved_request_id = request_id or derived_delegate_request_id(session_id, task_type, description)
   child_id = stable_task_id(session_id, resolved_request_id)
   meta_path = get_config().sessions_dir / child_id / METADATA_NAME
   if not meta_path.is_file():

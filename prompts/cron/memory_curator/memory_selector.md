@@ -2,15 +2,12 @@ Memory curation.
 
 Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
 Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or
-editing any entry prose, and check every added or rewritten line against it, ending with a framing-only
-pass over the added lines (each states the working action or standing reality first, and gives the
-healthy or working reading before any failure reading).
+editing any entry prose, check every added or rewritten line against it, and apply the skill's
+"Phrasing for model context" rule to every line the day's draft adds.
 
-Step 1: guard against an undecided prior day.
-If the memory repo working tree at `~/.charliebot/memory/` is dirty (uncommitted changes from a
-prior day's undecided proposal), fail loud: stop, re-present the pending diff, and ask the user
-to approve or reject before doing anything else. Do not proceed to staging while the canon has
-uncommitted changes.
+Step 1: open the day's PR worktree.
+Run `charliebot memory proposal open` and read the worktree path from the `worktree` line of its
+output. On a refusal, end the step with the command's reason as the final message.
 
 Step 2: mine cross-session user messages into staging.
 Run the digest script and read its output in full:
@@ -27,53 +24,43 @@ the first line `# <theme>` states the theme, and the body states the fact or pre
 record plus its provenance (each supporting session short id, date, and one quoted line). Step 3
 curates these captures exactly like every other candidate.
 
-Step 3: curate staging candidates, merge-first.
-Read every file in `~/.charliebot/memory/staging/`. Candidates are free-form captures: for
-each candidate, first test it against the admission whitelist and home routing in the
+Step 3: curate staging candidates into the PR worktree, merge-first.
+Read every file in `~/.charliebot/memory/staging/`, and read the PR's coverage state with
+`charliebot memory query --index --dir <worktree>`. Candidates are free-form captures: for each
+candidate, first test it against the admission whitelist and home routing in the
 llm-context-guideline skill (retaining durable mechanisms and routing execution artifacts,
 procedures, or discoverable facts to their canonical homes), and write the proof lines it
 requires. Draft each bullet at the category level as a standing reality, bounded to one to
-three lines, and lead with the working action or healthy reading per positive framing.
-For each
-passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`; the
-default action is a merge, not a new entry:
+three lines, with every line following the skill's "Phrasing for model context" rule.
+For each passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`;
+the default action is a merge:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,
   normally the entry named in the candidate body when the body expresses a change intent,
-  otherwise the thematically-matching entry, editing it in place so `git diff` shows the
-  before and after.
-- **admit (new entry)**: ONLY when no existing entry's theme covers the candidate AND the
+  otherwise the thematically-matching entry, editing it in place inside the worktree so
+  `git -C <worktree> diff` shows the before and after.
+- **admit (new entry)**: the index shows zero entries covering the candidate's theme, and the
   title honestly describes the whole content. Create `entries/<topic>/<slug>.md` with a
   complete header (scope, topic, audience, title) and the candidate body. Add the topic to
-  the `topics` vocabulary if it is not already there.
-- **reject**: do not admit; list the candidate in the report with the question it could not
-  answer or a one-line reason (wrong home, theme already covered, dishonest title, and so on).
-
-Run `charliebot memory lint`; it must pass before you present. If lint reports violations, fix
-the working tree until it is clean.
+  the `topics` vocabulary when it is new.
+- **reject**: list the candidate in the handoff sheet with the question left unanswered or a
+  one-line reason (wrong home, theme already covered, dishonest title, and so on).
+Every entry and `topics` edit is written inside the worktree and stays uncommitted; the
+reviewer performs the commits through `charliebot memory proposal commit`.
+Move every processed candidate (admitted, revised, or rejected) from
+`~/.charliebot/memory/staging/` into `~/.charliebot/memory-archive/staging-curation-<YYYYMMDD>/`,
+in the format of the existing archive directories: one `README.md` row per file naming the
+file, its disposition, and the entry path or the rejection reason, plus an updated `SHA256SUMS`
+over the moved files.
+Run `charliebot memory lint --dir <worktree>` and resolve every reported violation before you
+end the step.
 
 Step 4: deliver the handoff sheet.
 The final message is the handoff sheet: one line per staging file with its disposition
-(`revise <entry path>`, `admit <entry path>`, or `reject: <one-sentence reason>`) followed by
-that entry's three proof lines. The selector renders no report.
+(`revise <entry path>`, `admit <entry path>`, or `reject: <one-sentence reason>`), and one
+block per entry holding that entry's three proof lines plus a `Staging:` line naming each
+staging file the entry consumed. The selector's output is the handoff sheet alone.
 
-## After approval (session master)
-
-Every adjudication round ends by re-rendering the pending proposal page and re-linking it in the reply;
-a bare 'done' leaves the user no way to see the current state.
-
-Step 5: land only after approval.
-Only after the user explicitly approves: commit the working tree with the prefixed messages
-(`admit:` / `revise:` / `migrate:`), then delete the processed staging files, including the
-rejected ones. If approval is partial, commit only the approved changes and delete only their
-staging files; leave the rest staged for the next day.
-
-Step 6: prevent repeat feedback.
-Treat every user comment on a proposal as evidence of a rule gap. After applying the comment,
-check whether the llm-context-guideline skill or this prompt would have blocked the commented
-content had
-the rules been followed; when they would not, present in the same reply the one-line amendment
-that would, and land it through the normal repo change flow after approval.
-
-Session mining reads user events only, at daily curation; its findings enter the store only
-as staging captures through the same admission test. Never auto-commit. Never edit any file
-outside `~/.charliebot/memory/`.
+Session mining reads user messages at daily curation, and its findings reach curation as
+staging captures judged by the same admission test. The day's canon edits live in the PR
+worktree, and the llm-context-guideline skill's "Proposal review and landing" chapter owns the
+approval and landing flow.

@@ -1,21 +1,20 @@
 <!--
-USAGE: The daily memory curator renders its Step 4 report from this skeleton. Copy the file,
-replace every {{...}} placeholder, and delete the BLOCK comments. One <section> per admit or
-revise: the three proof lines sit directly above that entry's diff, each headed by the question
-it answers as the llm-context-guideline skill words it. A canon deletion or a vocabulary (`topics`) change
-reuses the same section shape with a one-line justification in place of the proof lines.
-Rejected candidates form one table, each row naming the question it could not answer. Filled
-prose is Chinese; the skeleton's static text stays as written; code, paths, and commands stay
-English. Diff rendering: one <span> per line inside <pre class="diff">, class add | del | hunk |
-meta | ctx by the line's first character.
-Each proof line is one sentence; verification runs before rendering and leaves no receipt on the page.
+USAGE: The daily reviewer renders the memory PR page from this skeleton. Copy the file, replace
+every {{...}} placeholder, and delete the BLOCK comments. The page describes the memory PR at
+its current head: the header carries the PR version (head SHA), the date the PR opened, the
+days it has been open, and the diff-page link (the root-relative `diff_path` from
+`charliebot memory proposal status`); one <section> per PR commit lists the commit subject
+(`git log <base>..<head>`) with the three proof lines from its commit body, each headed by the
+question it answers as the llm-context-guideline skill words it. Filled prose is Chinese; the
+skeleton's static text stays as written; code, paths, and commands stay English. Each proof
+line is one sentence; verification runs before rendering and leaves no receipt on the page.
 -->
 <!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Memory curation proposal · {{YYYY-MM-DD}}</title>
+<title>Memory PR · {{YYYY-MM-DD}}</title>
 <style>
   :root { color-scheme: light dark; }
   body { font-family: -apple-system, "Segoe UI", "Noto Sans SC", sans-serif; max-width: 62rem;
@@ -26,52 +25,83 @@ Each proof line is one sentence; verification runs before rendering and leaves n
        color: light-dark(#0550ae, #79b8ff); }
   .chip { display: inline-block; font-size: .72rem; font-family: inherit; border-radius: 999px;
           padding: .05rem .55rem; margin-right: .35rem; vertical-align: 1px; }
-  .chip.admit  { background: light-dark(#dafbe1, #12331c); color: light-dark(#116329, #7ee2a8); }
-  .chip.revise { background: light-dark(#ddf4ff, #0c2d48); color: light-dark(#0550ae, #79b8ff); }
-  .chip.remove { background: light-dark(#ffebe9, #3b1a1d); color: light-dark(#82071e, #ffa8a8); }
+  .chip.admit    { background: light-dark(#dafbe1, #12331c); color: light-dark(#116329, #7ee2a8); }
+  .chip.revise   { background: light-dark(#ddf4ff, #0c2d48); color: light-dark(#0550ae, #79b8ff); }
+  .chip.migrate  { background: light-dark(#ebe5ff, #2b2138); color: light-dark(#6639ba, #b392f0); }
+  .chip.remove   { background: light-dark(#ffebe9, #3b1a1d); color: light-dark(#82071e, #ffa8a8); }
+  .chip.scaffold { background: light-dark(#fff1e5, #3a230f); color: light-dark(#bc4c00, #f0883e); }
   ul.proof { margin: .2rem 0 .5rem; padding-left: 1.2rem; font-size: .92rem; }
   table { border-collapse: collapse; width: 100%; margin: .6rem 0; font-size: .9rem; }
   th, td { border: 1px solid light-dark(#d0d7de, #30363d); padding: .4rem .6rem; vertical-align: top; text-align: left; }
   th { background: light-dark(#f6f8fa, #1d2127); }
-  pre.diff { background: light-dark(#f6f8fa, #1d2127); border: 1px solid light-dark(#d0d7de, #30363d);
-             border-radius: 8px; padding: .7rem .9rem; overflow-x: auto; font-size: .8rem; line-height: 1.5; }
-  pre.diff span { display: block; white-space: pre; }
-  .add  { background: light-dark(#dafbe1, #12331c); color: light-dark(#116329, #7ee2a8); }
-  .del  { background: light-dark(#ffebe9, #3b1a1d); color: light-dark(#82071e, #ffa8a8); }
-  .hunk { color: light-dark(#6639ba, #b392f0); }
-  .meta { color: light-dark(#57606a, #8b949e); }
-  .ctx  { color: light-dark(#1f2328, #d5dae0); }
   footer { margin: 1.6rem 0; font-size: .9rem; color: light-dark(#57606a, #8b949e); }
 </style>
 </head>
 <body>
-<h1>Memory curation proposal · {{YYYY-MM-DD}}</h1>
-<p>{{disposition counts, e.g. admit 3, revise 2, reject 9}} (<code>charliebot memory lint</code>: {{clean}}, not committed).</p>
+<!-- BLOCK: header. Placeholders: {{YYYY-MM-DD}} (today's date), {{head SHA}} (the PR's head
+SHA), {{opened}} (the `opened` date from `charliebot memory proposal status`), {{N}} (the days
+open), {{diff_path}} (the root-relative diff link), {{disposition counts, e.g. admit 3, revise 2, reject 9}} (the day's
+counts), {{clean}} (the lint result over the PR worktree). -->
+<h1>Memory PR · {{YYYY-MM-DD}}</h1>
+<p>PR version <code>{{head SHA}}</code> · opened {{opened}} (day {{N}}) ·
+<a href="{{diff_path}}">line-comment diff page</a> ·
+{{disposition counts, e.g. admit 3, revise 2, reject 9}}
+(<code>charliebot memory lint --dir</code>: {{clean}})</p>
 
-<!-- BLOCK: one section per admit / revise -->
+<!-- BLOCK: one <section> per commit in the PR, in `git log <base>..<head>` order. Placeholders:
+{{admit|revise|migrate|remove|scaffold}} and {{prefix}} (the commit subject's prefix),
+{{topic/slug (title)}} (the rest of the subject), {{short SHA}} (the commit),
+{{the first question, as the guideline words it}}, {{the second question, as the guideline words it}},
+{{the third question, as the guideline words it}} (each headed by the question it answers as the
+llm-context-guideline skill words it), {{one sentence}} (each proof line, from the commit body). -->
 <section>
-<h2><span class="chip {{admit|revise}}">{{admit|revise}}</span> {{entries/<topic>/<slug>.md}}</h2>
+<h2><span class="chip {{admit|revise|migrate|remove|scaffold}}">{{prefix}}</span> {{topic/slug (title)}} <code>{{short SHA}}</code></h2>
 <ul class="proof">
 <li><b>{{the first question, as the guideline words it}}</b>: {{one sentence}}</li>
 <li><b>{{the second question, as the guideline words it}}</b>: {{one sentence}}</li>
 <li><b>{{the third question, as the guideline words it}}</b>: {{one sentence}}</li>
 </ul>
-<pre class="diff">{{the file's git diff}}</pre>
 </section>
 
-<!-- BLOCK: canon deletion or topics change, when present -->
+<!-- BLOCK: a commit without proof lines (a `topics` scaffold or a comment fix), when present,
+reuses the section shape with a one-line justification in place of the proof lines.
+Placeholders: {{scaffold}} and {{prefix}} (the commit subject's prefix), {{description}} (the
+rest of the subject), {{short SHA}} (the commit), {{one-line justification}} (the reason). -->
 <section>
-<h2><span class="chip remove">remove</span> {{entries/<topic>/<slug>.md}}</h2>
-<ul class="proof"><li>{{one-line justification, e.g. executing a user ruling}}</li></ul>
-<pre class="diff">{{the file's git diff}}</pre>
+<h2><span class="chip scaffold">{{prefix}}</span> {{description}} <code>{{short SHA}}</code></h2>
+<ul class="proof"><li>{{one-line justification}}</li></ul>
 </section>
 
-<h2>Rejected candidates ({{N}}), each naming the question left unanswered</h2>
+<!-- BLOCK: today's reviewer rewrites, when present; one row per rewrite recorded in Step 1.
+Placeholders: {{N}} (the row count), {{entries/topic/slug.md}} (the entry path), {{the change}}
+(what the rewrite changed), {{one line}} (its reason). -->
+<h2>Today's reviewer rewrites ({{N}})</h2>
 <table>
-<tr><th style="width:22rem">Candidate</th><th>Unanswered question</th><th>Reason</th></tr>
-<tr><td>{{staging filename stem}}</td><td>{{the question left unanswered}}</td><td>{{one line}}</td></tr>
+<tr><th style="width:14rem">Entry</th><th>Rewrite</th><th>Reason</th></tr>
+<tr><td>{{entries/topic/slug.md}}</td><td>{{the change}}</td><td>{{one line}}</td></tr>
 </table>
 
-<footer>Post-approval actions: commit with the admit / revise prefixes, delete all processed staging files (rejected ones included).</footer>
+<!-- BLOCK: conflicts between new candidates and existing PR lines, when present; one row per
+conflict recorded at a refused `charliebot memory proposal commit`. Placeholders: {{N}} (the
+row count), {{staging filename}} (the candidate), {{the candidate's intent, one line}} (what
+the candidate wanted), {{the existing PR line, quoted}} (the PR line it meets). -->
+<h2>Conflicts with existing PR lines ({{N}})</h2>
+<table>
+<tr><th style="width:22rem">Candidate</th><th>Candidate's intent</th><th>Existing PR line</th></tr>
+<tr><td>{{staging filename}}</td><td>{{the candidate's intent, one line}}</td><td>{{the existing PR line, quoted}}</td></tr>
+</table>
+
+<!-- BLOCK: candidates rejected since the PR opened, when present; one row per archive
+`README.md` row dated on or after `opened`. Placeholders: {{N}} (the row count), {{YYYY-MM-DD}}
+(the row's date), {{staging filename stem}} (the candidate), {{the question left unanswered or the one-line reason}}
+(the row's reason). -->
+<h2>Candidates rejected since the PR opened ({{N}})</h2>
+<table>
+<tr><th style="width:8rem">Date</th><th style="width:22rem">Candidate</th><th>Unanswered question / reason</th></tr>
+<tr><td>{{YYYY-MM-DD}}</td><td>{{staging filename stem}}</td><td>{{the question left unanswered or the one-line reason}}</td></tr>
+</table>
+
+<!-- BLOCK: footer. Placeholder: {{head SHA}} (the PR's head SHA). -->
+<footer>Approval runs <code>charliebot memory proposal land {{head SHA}}</code> for the approved version; comment fixes join the PR as new commits.</footer>
 </body>
 </html>

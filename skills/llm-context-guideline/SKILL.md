@@ -2,8 +2,9 @@
 name: llm-context-guideline
 description: Placement and admission policy for content that enters LLM context;
   its chapters currently govern the memory store (admission whitelist, the
-  three proof questions, entry form and labeling, canon change rules). Reload
-  in full before touching memory content.
+  three proof questions, entry form and labeling, canon change rules,
+  model-context phrasing, the proposal review and landing flow). Reload in
+  full before touching memory content.
 user-invocable: false
 ---
 
@@ -22,14 +23,19 @@ fact or rule set per file under `entries/<topic>/<slug>.md`, with front matter r
 `scope`, `topic`, `audience`, `title` and a pure-markdown body.
 Sessions only stage candidates (`charliebot memory add` writes to `staging/`): a staging
 candidate is a free-form capture whose labels are assigned at curation and whose change intent
-lives in the body; the canon changes only through user-approved diffs.
+lives in the body; the canon changes only by landing a user-approved proposal version with
+`charliebot memory proposal land <sha>`.
 
 This file governs the daily curator AND ad-hoc user-directed promotions: the same admission test
 and labeling rules apply in both flows.
 
+## Phrasing for model context
+
+Text that enters model context names the practice to follow: every rule sentence, trailing clauses included, states the action to take or the standing reality, and every example shows the practice itself. Statements of current system state keep their natural wording. Contrasting examples belong to pages written for the user.
+
 ## Admission test
 
-Admission is judged at curation time, with evidence, never mid-session. The store admits three
+Admission is judged at curation time, with evidence, over staged candidates. The store admits three
 kinds of entry, and only these:
 
 1. A ruling or preference the user stated.
@@ -37,8 +43,8 @@ kinds of entry, and only these:
    true a month from now.
 3. A host, cluster, or account level pointer that cannot be guessed and has no owning document.
 
-Everything else stays out by default; when in doubt, reject and name the candidate in the
-report. The model itself is the canonical home for general engineering and statistical
+Everything else stays out by default; when in doubt, reject the candidate and name it in the PR
+page. The model itself is the canonical home for general engineering and statistical
 reasoning. An entry records what holds across models, fixes, and runs: rules, mechanisms, and
 contracts. Entries hold durable mechanisms and standing policies: execution logs and `LESSONS.md`
 retain ephemeral identifiers, transient instance names, and active incident telemetry; repository
@@ -46,17 +52,16 @@ guides and skills retain documentation and reference procedures, with the store 
 a pointer line; and runtime inspection resolves on-demand system facts.
 
 State each fact at the category level in its most concise form, bounded to one to three lines of
-core conclusion, keeping narrative deduction and case histories in session records. Phrasing
-follows positive framing: state the working action or standing reality, and lead any warning
-with the working alternative.
+core conclusion, keeping narrative deduction and case histories in session records. Phrase each
+line by the `## Phrasing for model context` rule above.
 
-Every admit and every revise carries three proof lines in the report, each headed by the
-question it answers; a question that finds no answer is the signal to rethink whether the
-entry belongs in the store at all, and such a candidate is rejected:
+Every admit and every revise carries three proof lines in the PR page and its commit body, each
+headed by the question it answers; a question that finds no answer is the signal to rethink
+whether the entry belongs in the store at all, and such a candidate is rejected:
 
 - **"When will this be used again, and what will it change?"** (the Action line): the concrete
   future action this entry changes, named as work that recurs or is already planned in a named
-  project or stack; a constructed possibility fails the line.
+  project or stack.
 - **"Why is the store the cheapest home?"** (the Home line): answered by checking the others:
   repo-scoped knowledge lives in that repo's own CLAUDE.md or docs; charlie-bot behavior lives
   in the master prompt, a skill, config, or the source; incidents and event history live in
@@ -64,19 +69,19 @@ entry belongs in the store at all, and such a candidate is rejected:
   project's experiment verdicts live in its tracker (Linear).
   A project-scoped finding lives under that project's topic or its repo docs; a cluster or host
   entry holds only what binds every project there. The Home line also names the reader and the
-  delivery path that reaches them at the moment the entry changes their action. A reader who
-  cannot know to query fails the line: the knowledge belongs on a surface they already read.
+  delivery path that reaches them at the moment the entry changes their action, and the named
+  path is one the reader already travels.
   Residency is the costliest slot, full text in every master spawn: process rules governing every
   session hold it; domain conventions live with their domain. When the natural home is obstructed,
-  fix the obstruction or take another tracked path inside that home; the store does not absorb
-  another home's content.
+  fix the obstruction or take another tracked path inside that home; another home's content stays
+  in that home.
 - **"Is this the most concise expression?"** (the Brevity line): the curator trims the
   presented text (the new body, or the whole entry after a merge) to the Entry form brevity
   bar before presenting, and the answer names what the trim removed, or states the body's
   line count when the draft already sat at the bar.
 
-A candidate's text is a claim: verify its figures against the live system before presenting
-them. A revise re-verifies the surviving claims of the entry it edits.
+A candidate's text is a claim: verify its figures against the live system before presenting them.
+A revise re-verifies the surviving claims of the entry it edits.
 
 A trap claim about shared infrastructure enters only with its root cause named and reproduced
 outside the originating session; a fixable obstruction is fixed instead of recorded.
@@ -99,10 +104,10 @@ b. **Title-honesty**: the title honestly describes the entry's whole content aft
 
 The store holds decision knowledge: facts, rules, and conventions that change what the
 reader does next. Step-by-step operating procedures (command sequences, recipes, and their
-reference files) live in the owning skill, never the store: reject procedure-shaped
-candidates and name the owning skill in the report. Live state under active investigation
-stays with its owning system. One home per item: when a rule is admitted to the store, no
-skill keeps a duplicate of it.
+reference files) live in the owning skill: reject procedure-shaped candidates and name the
+owning skill in the PR page. Live state under active investigation stays with its owning
+system. One home per item: when a rule is admitted to the store, the store entry replaces the
+skill's copy of it.
 
 ## Labeling: the three axes plus title
 
@@ -131,17 +136,18 @@ quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Sai
 120 columns or fewer; new entry prose is written in Chinese (code, paths,
 identifiers, and commands stay English); pre-existing prose keeps its
 language until its next substantive edit. Entry prose follows the Writing Style section of prompts/master.md. Apply the
-admission test line by line as well as entry by entry: a line that changes no future action
-leaves.
-Brevity is part of the admission bar: lead with the action and keep only the mechanism the action
-is unintelligible without; receipts, verification notes, and secondary effects leave. Hold a
+admission test line by line as well as entry by entry, and keep the lines that change a future
+action.
+Brevity is part of the admission bar: lead with the action and keep the mechanism the action
+is unintelligible without; session reports and run dirs hold the receipts, verification notes,
+and secondary effects. Hold a
 bullet to about three lines and an entry body to about a dozen; a merge that would grow past that
 re-trims the whole entry by the same test.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.
 Environment composition and version facts (package pins, toolchain and interpreter versions,
-build and model numbers) never enter an entry: the manifest or config that pins them is the
-home, and the entry states the rule and points there.
+build and model numbers) live in the manifest or config that pins them: the entry states the
+rule and points there.
 Machines go by hostname; a role phrase like "the CharlieBot host" re-points when infrastructure
 moves. When context changes, revise the entry in place (a capture whose body states the change
 stages the proposed new text).
@@ -150,10 +156,42 @@ store states standing reality, and `LESSONS.md` holds the retirement event when 
 
 ## Commit message prefixes
 
-Curation commits use one of three prefixes so `git log` enumerates the canon's history:
+Curation commits use one of five prefixes so `git log` enumerates the canon's history:
 
 - `admit: <topic>/<slug> (<title>)`: a new entry promoted from staging.
 - `revise: <topic>/<slug> (<title>)`: an in-place edit of an existing entry (honoring a `revises`
   candidate, including merge-ins).
 - `migrate: <topic>/<slug> (<title>)`: a format-only rewrite to entry format v2 (moving the
   title to frontmatter, splitting `both`, dropping `created`/`source`) with no content change.
+- `remove: <topic>/<slug> (<title>)`: an entry's removal from the store.
+- `scaffold: <description>`: a `topics` vocabulary change, adding or retiring a topic.
+
+A commit body carries the entry's three proof lines, each headed by the question it answers,
+plus one `Staging: <file>` line per staging candidate the commit consumed.
+
+## Proposal review and landing
+
+The day's curation reaches the user as one pull request: the `proposal` branch of the memory
+repo, drafted in the git worktree `~/.charliebot/memory-proposal/`, where the selector writes
+the day's entry and `topics` edits uncommitted and the reviewer commits them entry by entry
+through `charliebot memory proposal commit <store-relative path> --message-file F`.
+The user reviews the PR at a pinned version through the diff page (`diff_path`) and the PR page,
+which lists every PR commit with its proof lines, the reviewer's rewrites of the day, the
+conflicts between new candidates and existing PR lines, and the candidates rejected since the
+PR opened.
+On the user's approval of version `<sha>`, the session that received the approval runs
+`charliebot memory proposal land <sha>`, which fast-forwards the live store
+`~/.charliebot/memory/` to exactly that version.
+On partial approval, remove the unwanted commits from the PR first, re-link the new version in
+the reply, and collect the user's approval of that version.
+`charliebot memory proposal open` rebases the PR onto the live base when the base moved, and a
+rebase voids earlier SHAs, so the session re-links the current head after every `open`.
+A diff-page comment fix is a delegated worker's edit: the worker edits only the commented lines
+in the PR worktree and commits one entry per commit.
+Every adjudication round ends by re-linking the current version in the reply.
+Each user comment on a proposal is evidence of a rule gap. After applying the comment, check
+whether the rules above would have kept the commented content out of the store on their own; a
+revealed gap gets its one-line amendment in the same reply, and the amendment lands through the
+normal repo change flow after approval.
+A change the user approves inside a session commits directly to the live store's base branch,
+and the next `open` rebases the PR onto it.

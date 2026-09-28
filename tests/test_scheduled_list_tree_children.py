@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager, get_thread_manager
 from src.api.sessions import router as sessions_router
-from src.core.models import CreateSessionRequest, TaskSpec
+from src.core.models import TaskSpec
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager

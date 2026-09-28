@@ -28,7 +28,7 @@ from conftest import (
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
 from src.core.control_events import stable_run_id
-from src.core.models import RunRecord, SessionMetadata, TaskSpec
+from src.core.models import RunRecord, TaskSpec
 from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager

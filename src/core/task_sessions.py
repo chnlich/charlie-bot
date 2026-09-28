@@ -386,6 +386,11 @@ class TaskTreeManager:
     self._index_build_generation = -1
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
+    # Activity cells: (records_generation, live events or None, archived count
+    # or -1, verdict). A None live list marks a runless node's cell — its
+    # verdict is a constant that only a record write (a generation bump) can
+    # move, so it skips the events load the runs-bearing key needs.
+    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, TaskTreeActivity]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
@@ -722,19 +727,50 @@ class TaskTreeManager:
 
     The one derivation the sidebar's task-tree probe reuses, so a sidebar row
     and the tree projection can never disagree about the same node.
+
+    Memoized per node on the inputs that can move the verdict: the run
+    records' generation (every record mutation funnels through one
+    :meth:`RunStore.write_record` bump) plus, for a node with runs, the
+    chat-events identity and archived extent the facts/outcomes memos key on.
+    A verdict that consulted /proc is never stored: a process death moves it
+    with no file write to bump the key, so that node re-derives until its
+    runs settle (the sidebar probe's recheck_liveness contract, unchanged).
     """
+    generation = self.runs.records_generation
+    cached = self._activity_memo.get(session_id)
+    if cached is not None and cached[0] == generation:
+      if cached[1] is None:
+        return cached[3]
+      live = self._sessions.load_chat_events_sync(session_id)
+      archived_count = self._archived_event_count(session_id, live)
+      if cached[1] is live and cached[2] == archived_count:
+        return cached[3]
     runs = self.runs.list_run_records_sync(session_id)
     if not runs:
       # No Run is no activity: the derivation's own guard answers without any
       # event load, so a listing's per-descendant derivation over a runless
       # node pays one runs-dir stat, not the node's whole event history.
-      return derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
+      activity = derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
+      self._activity_memo[session_id] = (generation, None, -1, activity)
+      return activity
     live = self._sessions.load_chat_events_sync(session_id)
     archived_count = self._archived_event_count(session_id, live)
+    probed = False
+
+    def host_boot_time() -> datetime:
+      nonlocal probed
+      probed = True
+      return self._host_boot_time()
+
     events = self.runs.load_events_sync(session_id)
     task_open = self._facts_of(session_id).task_state == "open"
-    return derive_task_tree_activity(
-        runs, events, self._host_boot_time, task_open, outcomes=self._run_outcomes_of(session_id, live, archived_count))
+    activity = derive_task_tree_activity(
+        runs, events, host_boot_time, task_open, outcomes=self._run_outcomes_of(session_id, live, archived_count))
+    if probed:
+      self._activity_memo.pop(session_id, None)
+    else:
+      self._activity_memo[session_id] = (generation, live, archived_count, activity)
+    return activity
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
     """``activity_of`` as the plain pair the sidebar snapshot stores.

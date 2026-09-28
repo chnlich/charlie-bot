@@ -52,13 +52,14 @@ def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool =
   path = cron_d_dir(home) / f"{name}.yaml"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(
-      dump_yaml({
-          "cron": "0 3 * * *",
-          "prompt_file": str(prompt_path),
-          "timezone": "America/Los_Angeles",
-          "enabled": enabled,
-          "session_id": session_id,
-      }),
+      dump_yaml(
+          {
+              "cron": "0 3 * * *",
+              "prompt_file": str(prompt_path),
+              "timezone": "America/Los_Angeles",
+              "enabled": enabled,
+              "session_id": session_id,
+          }),
       encoding="utf-8")
 
 
@@ -107,10 +108,10 @@ def _assert_unbound_row(row: dict) -> None:
 
 
 @pytest.mark.asyncio
-async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(
-    tmp_path: Path, temp_home: Path) -> None:
+async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
   thread_mgr = ThreadManager(cfg)
+
   async def manager(name: str, request_id: str, group: str | None = None):
     node = await create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
     if group is not None:

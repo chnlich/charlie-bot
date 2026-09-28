@@ -41,9 +41,8 @@ async def run_crash_recovery(
   never block the event loop while live requests are served; the async git
   quarantine calls are awaited normally.
 
-  The legacy thread reconcile/respawn half is gone — legacy threads are
-  read-only records and their executor no longer exists — so the thread scan
-  here feeds only the stale failed-worktree quarantine. *boot_time* is
+  Legacy threads are read-only records — nothing respawns them — so the
+  thread scan here feeds only the stale failed-worktree quarantine. *boot_time* is
   captured at lifespan start (kept for signature stability and the quarantine
   window's anchor).
 
@@ -69,8 +68,7 @@ async def run_crash_recovery(
   if session_mgr is None:
     from src.core.sessions import SessionManager
     session_mgr = SessionManager(cfg)
-  # The legacy thread reconcile/respawn half is gone: legacy threads are
-  # read-only records and their executor no longer exists. Startup still
+  # Legacy threads are read-only records: nothing respawns them. Startup
   # sweeps the failed worktrees the thread metadata names.
   threads = await asyncio.to_thread(_scan_thread_metas, cfg)
   if master_identity is not None:

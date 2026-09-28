@@ -1427,8 +1427,8 @@ class TaskExecutionAdapter:
             # Inputs admitted during this run waited for the serialized
             # consumer; the finish chain (review queued/landed, closure,
             # failure report) ran first, so this dispatch only sees what that
-            # chain left pending. The review path reaches it too — its early
-            # return used to strand inputs admitted during a review Run.
+            # chain left pending. The review path reaches it too, so the
+            # inputs admitted during a review Run dispatch here as well.
             await self._tree.dispatch.dispatch_pending(session_id)
 
     async def _redrive_firing(self, session_id: str) -> None:

@@ -57,9 +57,8 @@ def load_slash_commands() -> list[SlashCommand]:
   except (OSError, yaml.YAMLError) as e:
     log.warning('slash_commands_load_failed', path=str(path), error=str(e))
     return []
-  # A degenerate top-level document (an empty `or {}` collapse used to hide
-  # the falsy shapes; a truthy list always crashed here) is a load failure,
-  # the same contract as a malformed document.
+  # A top-level document that parses to a non-mapping (a list, a scalar) is a
+  # load failure, the same contract as a malformed document.
   if not isinstance(data, dict):
     log.warning('slash_commands_load_failed', path=str(path), error='top-level document is not a mapping')
     return []

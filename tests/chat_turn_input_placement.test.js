@@ -91,6 +91,22 @@ function sequenceC() {
   ];
 }
 
+// A still_thinking round end (a queued input kept the round's busy interval
+// alive) renders its separator like any other: the queued input then opens
+// the turn that answers it, and nothing follows the final separator.
+function sequenceStillThinking() {
+  return [
+    m('user', 'a', 'the ask'),
+    m('assistant', 's1', 'first step'),
+    m('user', 'mid', 'the queued follow-up'),
+    m('assistant', 'final', 'first round conclusion'),
+    sep('sep1', null),
+    m('assistant', 'r1', 'second round step'),
+    m('assistant', 'r2', 'second round conclusion'),
+    sep('sep2'),
+  ];
+}
+
 // (g): two adjacent rounds each receive one mid-round input, then a fourth
 // round with no carry closes the run.
 function sequenceG() {
@@ -138,6 +154,7 @@ const SUITE_SEQUENCES = [
   ['(b)', sequenceB],
   ['notice', sequenceNotice],
   ['(c)', sequenceC],
+  ['still_thinking', sequenceStillThinking],
   ['(g)', sequenceG],
   ['(h) agent_message', () => sequenceNoInput('agent_message')],
   ['(i) worker_summary', () => sequenceNoInput('worker_summary', 'mid-ws')],
@@ -403,6 +420,55 @@ test('(d) feeding sequence (a) message by message yields the one-shot mount segm
   const mounted = mountEngine(msgs);
   settle(mounted.timers);
   assert.deepEqual(engineTurns(engine), engineTurns(mounted.engine), 'segments equal the mount');
+});
+
+// --- still_thinking round end -------------------------------------------------
+// The history projection emits a separator for every round end, still_thinking
+// included: a queued mid-round input then opens the turn that answers it
+// instead of falling below the final separator.
+test('a still_thinking round end renders its separator, so the queued input opens turn 2', () => {
+  const msgs = sequenceStillThinking();
+
+  const placement = (engine, label) => {
+    const turns = engineTurns(engine);
+    assert.equal(turns.length, 2, `${label}: exactly two turns`);
+    assert.deepEqual(turns.map((turn) => turn.key), ['a|final|sep1', 'mid|r2|sep2'],
+        `${label}: the second turn's head is mid`);
+    assert.equal(turns[0].entryIds.includes('mid'), false, `${label}: turn 1 does not hold mid`);
+  };
+  const nothingPending = (context, root, label) => {
+    // debug.pending comes from the harness's vm realm: spread it before the
+    // deepStrictEqual prototype check.
+    assert.deepEqual([...engineDebug(context, root).pending], [false, false],
+        `${label}: no message follows the final separator`);
+  };
+
+  const {context, root, timers, engine} = mountEngine(msgs);
+  settle(timers);
+  assertEngineMatchesExpected(engine, msgs, 'engine mount');
+  placement(engine, 'engine mount');
+  nothingPending(context, root, 'engine mount');
+  assertEngineInvariants(context, root, root.children[root.children.length - 1], 'engine mount');
+
+  const live = mountEngine([]);
+  msgs.forEach((message) => live.engine.appendMessage(Object.assign({}, message), false));
+  settle(live.timers);
+  assertEngineMatchesExpected(live.engine, msgs, 'live append');
+  placement(live.engine, 'live append');
+  nothingPending(live.context, live.root, 'live append');
+  assertEngineInvariants(live.context, live.root, live.root.children[live.root.children.length - 1],
+      'live append');
+  assert.deepEqual(engineTurns(live.engine), engineTurns(engine), 'segments equal the mount');
+
+  const dom = mountCase(msgs.map(messageItem));
+  dom.context.applyTurnOutline(dom.root);
+  assertDomMatchesExpected(dom.root, msgs, 'dom mount');
+  assert.equal(wrappers(dom.root).length, 2, 'dom mount: exactly two turns');
+  assert.equal(directIdsOf(wrappers(dom.root)[1])[0], 'mid', 'dom mount: turn 2 opens with mid');
+  assert.equal(messageIdsUnder(wrappers(dom.root)[0]).includes('mid'), false,
+      'dom mount: turn 1 does not hold mid');
+  assert.equal(dom.root.children[dom.root.children.length - 1], wrappers(dom.root)[1],
+      'dom mount: nothing follows the final separator');
 });
 
 // --- (e) pagination across turn 1's separator ---------------------------------

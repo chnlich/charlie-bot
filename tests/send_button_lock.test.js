@@ -87,6 +87,7 @@ function makeVoiceRun(sessionId) {
     flushResolvers: new Map(),
     ui: null,
     backend: {id: 'local', label: 'Local (sherpa)', livePartials: false},
+    devicesPromise: null,
     relaySocket: null,
     relayFinalResolve: null,
     relayWaitTimer: null,
@@ -216,6 +217,7 @@ test('attachment and voice windows each lock, and the combined count unlocks onl
   const run = makeVoiceRun('session-a');
   h.context.__claimVoiceRun(run);
   h.context.startUpload(run);
+  await flush(); // startUpload awaits the recording's settled devices first
   assert.equal(sendLocked(h), true, 'a voice transcription window keeps it locked');
 
   completeUpload({path: '/tmp/a.txt', filename: 'a.txt', size: 3});
@@ -236,6 +238,7 @@ test('a failed voice upload settles its window; a retry re-locks; cancel settles
   h.context.__claimVoiceRun(run);
 
   h.context.startUpload(run);
+  await flush(); // startUpload awaits the recording's settled devices first
   assert.equal(sendLocked(h), true);
 
   run.xhr.failNetwork();
@@ -244,6 +247,7 @@ test('a failed voice upload settles its window; a retry re-locks; cancel settles
   assert.equal(run.phase, 'retry', 'the buffer waits in the retry state');
 
   h.context.startUpload(run);
+  await flush(); // the retry re-enters through the same devices await
   assert.equal(sendLocked(h), true, 'the retry re-enters the in-flight window');
 
   h.context.cancelVoiceUpload(run);
@@ -257,6 +261,7 @@ test('a session switch tears down an in-flight transcription window and settles 
   h.context.__claimVoiceRun(run);
 
   h.context.startUpload(run);
+  await flush(); // startUpload awaits the recording's settled devices first
   assert.equal(sendLocked(h), true);
 
   h.context.resetVoiceState();
@@ -338,6 +343,7 @@ test('the send gate names the in-flight category and /compact passes the same ga
   const run = makeVoiceRun('session-a');
   h.context.__claimVoiceRun(run);
   h.context.startUpload(run);
+  await flush(); // startUpload awaits the recording's settled devices first
   h.toasts.length = 0;
   assert.equal(h.context.blockIfUploadsInFlight(), true);
   assert.deepEqual(h.toasts, [{message: 'Please wait for the voice transcription to finish', isError: true}]);

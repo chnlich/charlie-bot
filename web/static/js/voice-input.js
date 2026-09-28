@@ -289,6 +289,7 @@ async function startRecording() {
     flushResolvers: new Map(),
     ui: null,
     backend: selectedVoiceBackend(),
+    devicesPromise: null,
     relaySocket: null,
     relayFinalResolve: null,
     relayWaitTimer: null,
@@ -308,6 +309,11 @@ async function startRecording() {
         autoGainControl: true,
       },
     });
+
+    // The recording's device facts: collection starts here, at recording
+    // start, without delaying it — the end frame and the upload await the
+    // settled object instead.
+    run.devicesPromise = collectVoiceDevices(run);
 
     const AudioContextCtor = window.AudioContext || window.webkitAudioContext;
     run.audioContext = new AudioContextCtor();
@@ -345,6 +351,50 @@ async function startRecording() {
     showToast('Voice input failed: ' + err.message, true);
     releaseVoiceRun(run);
   }
+}
+
+// --- Recording devices ------------------------------------------------------
+// One devices object per recording, collected when the mic opens: which
+// microphone captured it, the audio processing the track actually ran with,
+// and the output devices outside sound could have bled in from. Exactly five
+// keys — the server's voice_transcribed log schema.
+async function collectVoiceDevices(run) {
+  const track = run.stream.getAudioTracks()[0];
+  const devices = {
+    input_device: track.label,
+    capture_settings: voiceCaptureSettings(track.getSettings()),
+    output_device: null,
+    communications_output_device: null,
+    device_error: null,
+  };
+  try {
+    const listed = await navigator.mediaDevices.enumerateDevices();
+    devices.output_device = voiceOutputDeviceLabel(listed, 'default');
+    devices.communications_output_device = voiceOutputDeviceLabel(listed, 'communications');
+  } catch (err) {
+    // Enumeration failing never stops the recording: the two output fields
+    // stay null and the error rides the devices object into the server log.
+    console.error('Voice device enumeration failed:', err);
+    devices.device_error = err && err.message ? err.message : String(err);
+  }
+  return devices;
+}
+
+// The track's effective audio processing, with unreported settings as null so
+// the object JSON-roundtrips with all four keys present.
+function voiceCaptureSettings(settings) {
+  const picked = {};
+  for (const key of ['echoCancellation', 'noiseSuppression', 'autoGainControl', 'sampleRate']) {
+    picked[key] = settings[key] === undefined ? null : settings[key];
+  }
+  return picked;
+}
+
+// The label of the audiooutput entry with this deviceId, null when there is
+// none — 'communications' exists only on Windows Chrome.
+function voiceOutputDeviceLabel(listed, deviceId) {
+  const match = listed.find((info) => info.kind === 'audiooutput' && info.deviceId === deviceId);
+  return match ? match.label : null;
 }
 
 function handleVoiceWorkletMessage(run, event) {
@@ -464,7 +514,11 @@ function fireVoiceConfirm(run) {
     });
 }
 
-function startUpload(run) {
+async function startUpload(run) {
+  // The devices object settled at recording start rides the form; awaiting it
+  // here is the upload waiting for the enumeration, never the reverse.
+  const devices = await run.devicesPromise;
+  if (activeVoiceRun !== run) return;
   run.phase = 'uploading';
   run.uploadTimedOut = false;
   run.requestInFlight = true;
@@ -482,6 +536,7 @@ function startUpload(run) {
   const wav = assembleVoiceWav(run.pcmChunks, Math.min(run.totalSamples, VOICE_MAX_SAMPLES));
   postVoiceRecording(`/api/voice/${encodeURIComponent(run.sessionId)}`, wav, {
     backendId: run.backend.id,
+    devices,
     onXhr: (xhr) => { run.xhr = xhr; },
     onSent: () => {
       if (activeVoiceRun !== run) return;
@@ -637,12 +692,13 @@ function postVoiceWav(path, wavBuffer, opts = {}) {
 }
 
 // The fallback upload's transport: a multipart form with the audio plus the
-// backend the browser selected — the server persists the recording, decodes it,
-// and returns the text.
-function postVoiceRecording(path, wavBuffer, {backendId = null, ...opts} = {}) {
+// backend the browser selected and the recording's device object as JSON — the
+// server persists the recording, decodes it, and returns the text.
+function postVoiceRecording(path, wavBuffer, {backendId = null, devices = null, ...opts} = {}) {
   const form = new FormData();
   form.append('audio', new Blob([wavBuffer]), 'recording.wav');
   if (backendId !== null) form.append('backend', backendId);
+  if (devices !== null) form.append('devices', JSON.stringify(devices));
   return sendVoiceXhr(path, form, opts);
 }
 
@@ -717,21 +773,22 @@ function handleVoiceRelayMessage(run, event) {
   failVoiceRelay(run);
 }
 
-function collectVoiceRelayFinal(run) {
+async function collectVoiceRelayFinal(run) {
   // Seal the relay's recording and wait out the final for the bounded budget;
-  // null means it did not arrive in time and the fallback upload runs.
+  // null means it did not arrive in time and the fallback upload runs. The end
+  // frame carries the devices object collected at recording start.
+  const devices = await run.devicesPromise;
+  const socket = run.relaySocket;
+  try {
+    socket.send(JSON.stringify({type: 'end', devices}));
+  } catch (err) {
+    // The relay died between the last chunk and the stop: today's decode
+    // path owns the recording.
+    console.warn('Voice relay end send failed:', err);
+    closeVoiceRelay(run);
+    return null;
+  }
   return new Promise((resolve) => {
-    const socket = run.relaySocket;
-    try {
-      socket.send(JSON.stringify({type: 'end'}));
-    } catch (err) {
-      // The relay died between the last chunk and the stop: today's decode
-      // path owns the recording.
-      console.warn('Voice relay end send failed:', err);
-      closeVoiceRelay(run);
-      resolve(null);
-      return;
-    }
     run.relayFinalResolve = resolve;
     run.relayWaitTimer = setTimeout(() => {
       run.relayWaitTimer = null;

@@ -43,6 +43,19 @@ router = APIRouter()
 # takes a whole dictation and its cap is the transcriber's MAX_RECORDING_SAMPLES.
 CONFIRM_MAX_SECONDS = 10
 
+# The recording's device facts, sent by the browser both as the end frame's
+# ``devices`` object and as the upload form's ``devices`` field, and logged by
+# voice_transcribed under these exact names. A request without the object (a
+# page still running the pre-devices script across a server restart) logs all
+# five as None.
+_VOICE_DEVICE_FIELDS = (
+    "input_device",
+    "capture_settings",
+    "output_device",
+    "communications_output_device",
+    "device_error",
+)
+
 
 class _VoiceRequestError(Exception):
   """A voice-request failure carrying its HTTP status; endpoints render {"error": ...}."""
@@ -69,16 +82,19 @@ async def upload_voice_recording(
     session_id: str,
     audio: UploadFile,
     backend: str | None = Form(None),
+    devices: str | None = Form(None),
 ) -> FastJsonResponse:
   """The fallback path: persist the recording, decode it offline, return the text.
 
   Multipart form: ``audio`` is the WAV (same validation and size cap as the raw
-  body ever enforced) and ``backend`` names the backend the browser selected.
-  The voice_transcribed log line records ``backend`` — the local backend's id,
-  the producer of the persisted text — and ``selected_backend``, the form's
-  ``backend`` exactly as sent, None when absent.
+  body ever enforced), ``backend`` names the backend the browser selected, and
+  ``devices`` is the recording's device object as JSON. The voice_transcribed
+  log line records ``backend`` — the local backend's id, the producer of the
+  persisted text — and ``selected_backend``, the form's ``backend`` exactly as
+  sent, None when absent.
   """
   try:
+    device_info = _devices_form_field(devices)
     pcm_bytes = _wav_body_to_pcm(await audio.read(), _full_max_samples())
     # The bundle comes first so models-not-ready (503) persists nothing — the client
     # keeps its buffer and retries, and no orphan wav piles up per retry.
@@ -97,12 +113,31 @@ async def upload_voice_recording(
     # recording survives every later failure.
     return _error_response(exc)
   await asyncio.to_thread(_write_voice_transcript, audio_path, text)
-  _log_voice_transcribed(session_id, audio_path, pcm_bytes, text, produced_by, backend)
+  _log_voice_transcribed(session_id, audio_path, pcm_bytes, text, produced_by, backend, device_info)
   return FastJsonResponse({"text": text})
 
 
 def _error_response(exc: _VoiceRequestError) -> FastJsonResponse:
   return FastJsonResponse({"error": exc.message}, status_code=exc.status_code)
+
+
+def _devices_form_field(raw: str | None) -> dict | None:
+  """The upload form's ``devices`` field as its object; None when the field is absent.
+
+  A present field must be JSON and an object carrying exactly the device keys:
+  anything else is a 400 — the browser always sends the whole object, so a
+  partial one is a broken client, not a default to paper over.
+  """
+  if raw is None:
+    return None
+  try:
+    parsed = json.loads(raw)
+  except ValueError as exc:
+    raise _VoiceRequestError(400, f"malformed devices form field: {exc}") from exc
+  if not isinstance(parsed, dict) or set(parsed) != set(_VOICE_DEVICE_FIELDS):
+    raise _VoiceRequestError(
+        400, f"devices form field must carry exactly {list(_VOICE_DEVICE_FIELDS)}")
+  return parsed
 
 
 def _log_voice_transcribed(
@@ -112,8 +147,16 @@ def _log_voice_transcribed(
     text: str,
     produced_by: str,
     selected_backend: str | None,
+    devices: dict | None = None,
 ) -> None:
-  """The voice_transcribed line both archive paths write; its fields are the log's contract."""
+  """The voice_transcribed line both archive paths write; its fields are the log's contract.
+
+  ``devices`` is the recording's device object; None — every device field
+  logged as None — is the request from a page loaded before the devices
+  existed, still open across a server restart.
+  """
+  if devices is None:
+    devices = dict.fromkeys(_VOICE_DEVICE_FIELDS)
   log.info(
       "voice_transcribed",
       session_id=session_id,
@@ -123,6 +166,11 @@ def _log_voice_transcribed(
       transcription_preview=text[:80],
       backend=produced_by,
       selected_backend=selected_backend,
+      input_device=devices["input_device"],
+      capture_settings=devices["capture_settings"],
+      output_device=devices["output_device"],
+      communications_output_device=devices["communications_output_device"],
+      device_error=devices["device_error"],
   )
 
 
@@ -206,6 +254,7 @@ class _PreviewQueue:
     self._max_bytes = max_bytes
     self._queued_bytes = 0
     self._ended = False
+    self._devices: dict | None = None
     self._recording = bytearray()
     self._recording_budget_bytes = recording_budget_bytes
 
@@ -213,6 +262,11 @@ class _PreviewQueue:
   def ended(self) -> bool:
     """Whether the browser's end frame has sealed the recording."""
     return self._ended
+
+  @property
+  def devices(self) -> dict | None:
+    """The end frame's device object; None when the frame carried none."""
+    return self._devices
 
   def put(self, frame: bytes) -> bool:
     """Buffer one audio frame; False when the frame would exceed the budget."""
@@ -231,10 +285,11 @@ class _PreviewQueue:
     """The audio accepted so far: 16 kHz mono PCM16, cut at the recording cap."""
     return bytes(self._recording)
 
-  def end_audio(self) -> None:
+  def end_audio(self, devices: dict | None) -> None:
     """Seal the recording: the audio iterator ends after the buffered frames."""
     self._frames.put_nowait(None)
     self._ended = True
+    self._devices = devices
 
   async def audio(self) -> AsyncIterator[bytes]:
     """The audio the backend consumes; exhausted once the recording ends."""
@@ -262,8 +317,9 @@ async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id:
   """One recording's live preview: stream the selected backend's partials, archive its audio.
 
   Auth happens in server.py next to /ws/sessions. The browser sends binary
-  16 kHz PCM16 chunks from the start of the recording and a text
-  ``{"type":"end"}`` on stop; the relay answers with partial, final, and error
+  16 kHz PCM16 chunks from the start of the recording and a text end frame on
+  stop — ``{"type":"end"}``, or ``{"type":"end","devices":{...}}`` carrying the
+  recording's device facts; the relay answers with partial, final, and error
   frames. A refusal (unknown id, missing credential, no live partials) is one
   error frame and a close. Any backend failure is one error frame plus the
   voice_preview_failed log line, carrying the backend id and the reason and
@@ -349,25 +405,32 @@ async def _receive_preview_frames(websocket: WebSocket, queue: _PreviewQueue) ->
       if not queue.put(frame):
         return "overflow", f"voice preview buffer overflowed (over {PREVIEW_QUEUE_SECONDS}s of audio unconsumed)"
       continue
-    if _is_preview_end_frame(message.get("text")):
-      queue.end_audio()
-      return "ended", None
-    raise _PreviewProtocolError(f"unsupported preview control frame {message.get('text')!r}")
+    queue.end_audio(_preview_end_frame_devices(message.get("text")))
+    return "ended", None
 
 
-def _is_preview_end_frame(text: object) -> bool:
-  """True for the one control frame the protocol defines: ``{"type": "end"}``.
+def _preview_end_frame_devices(text: object) -> dict | None:
+  """The devices the one control frame carries: ``{"type": "end"}`` and
+  ``{"type": "end", "devices": {...}}`` both seal the recording.
 
-  Anything else — malformed JSON, a foreign type — is a _PreviewProtocolError:
-  the browser's own client never sends it.
+  Returns None for the bare frame and the devices object for the devices
+  frame. Anything else — malformed JSON, a foreign type, a ``devices`` value
+  that is not an object with exactly the device keys — is a
+  _PreviewProtocolError: the browser's own client never sends it.
   """
   try:
     control = json.loads(text)  # type: ignore[arg-type]
   except (TypeError, ValueError) as exc:
     raise _PreviewProtocolError(f"malformed preview control frame {text!r}") from exc
-  if isinstance(control, dict) and control.get("type") == "end":
-    return True
-  raise _PreviewProtocolError(f"unsupported preview control frame {text!r}")
+  if not (isinstance(control, dict) and control.get("type") == "end"):
+    raise _PreviewProtocolError(f"unsupported preview control frame {text!r}")
+  if "devices" not in control:
+    return None
+  devices = control["devices"]
+  if not isinstance(devices, dict) or set(devices) != set(_VOICE_DEVICE_FIELDS):
+    raise _PreviewProtocolError(
+        f"end frame devices must carry exactly {list(_VOICE_DEVICE_FIELDS)}: {devices!r}")
+  return devices
 
 
 async def _stream_preview_events(
@@ -437,7 +500,8 @@ async def _archive_then_push_final(
     with suppress(_PreviewSocketLost):
       await _push_preview_frame(websocket, {"type": "error", "message": "recording archive failed"})
     return
-  _log_voice_transcribed(session_id, audio_path, pcm_bytes, event.text, backend_id, backend_id)
+  _log_voice_transcribed(
+      session_id, audio_path, pcm_bytes, event.text, backend_id, backend_id, queue.devices)
   await _push_preview_frame(websocket, {"type": "final", "text": event.text})
 
 

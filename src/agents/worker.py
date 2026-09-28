@@ -33,6 +33,12 @@ from src.core.streaming import handle_compaction_events, streaming_manager
 
 log = LazyStructlogLogger()
 
+# Directory holding the tracked `git` wrapper every worker/reviewer child runs
+# with first on PATH (src/agents/git_stash_guard/git). This file sits at
+# src/agents/, so the guard is the sibling git_stash_guard/ directory - derived
+# from the module location, never a host path literal.
+GIT_STASH_GUARD_DIR = Path(__file__).resolve().parent / "git_stash_guard"
+
 
 def __getattr__(name: str) -> Any:
   # The "src.agents.worker.build_backend" patch target resolves through this hook.
@@ -194,6 +200,13 @@ class Worker:
     # home) applies AFTER it, so the child's explicit identity survives the
     # inherited-identity strip.
     env = {**claude_supervisor_env(os.environ), **self._extra_env}
+    # The stash-guard git wrapper rides first on the child's PATH (plan 3 v3):
+    # every worktree of a repository shares one stash stack, so the guard
+    # refuses the git stash write forms an agent runs by habit and passes
+    # everything else to real git. GIT_STASH_GUARD_DIR holds only that
+    # wrapper, derived from this module's location.
+    old_path = env.get("PATH")
+    env["PATH"] = f"{GIT_STASH_GUARD_DIR}:{old_path}" if old_path else str(GIT_STASH_GUARD_DIR)
 
     async def _on_spawn(pid: int) -> None:
       self._thread.pid = pid

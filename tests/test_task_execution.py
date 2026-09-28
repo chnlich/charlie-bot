@@ -29,13 +29,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.core import event_types as ET
-from src.core.models import (
-    BackendOption,
-    PatchSessionTaskRequest,
-    RunRecord,
-    SessionMetadata,
-    TaskSpec,
-)
+from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.run_token import CallerIdentity
 from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager
 from src.core.task_sessions import TaskTreeManager
@@ -1173,7 +1167,7 @@ async def test_repo_less_quick_edit_closes_without_review(
     assert pm_builds, "the delivered report never triggered a parent manager turn"
 
 
-async def _settle_parent(tree: TaskTreeManager, manager: SessionMetadata) -> None:
+async def _settle_parent(tree: TaskTreeManager, manager) -> None:
   """Wait out the parent's serialized report turns a delivered child report woke.
 
   Settled: the dispatch queue is drained and no run on the parent lacks a

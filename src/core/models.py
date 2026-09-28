@@ -240,8 +240,6 @@ class ThreadMetadata(BaseModel):
   context: str | None = None
   backend: str | None = None
   model: str | None = None
-  require_review: bool = True
-  skip_cleanup: bool = False
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
   task_type: TaskType | None = None

@@ -169,6 +169,55 @@ def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
   fence.release()
 
 
+_SHUTDOWN_TIMING_FIELDS = (
+    "shutdown_ms",
+    "speech_ms",
+    "slack_listener_ms",
+    "slack_backfill_ms",
+    "ext_usage_ms",
+    "host_auth_ms",
+    "http_client_ms",
+    "scheduler_ms",
+    "ws_close_ms",
+    "merge_pool_ms",
+)
+
+
+class _LogRecorder:
+  """A stand-in for the server module's structlog logger, recording every call."""
+
+  def __init__(self) -> None:
+    self.events: list[tuple[str, dict]] = []
+
+  def info(self, event: str, **kwargs: object) -> None:
+    self.events.append((event, kwargs))
+
+  def __getattr__(self, level: str):
+
+    def _record(event: str, **kwargs: object) -> None:
+      self.events.append((event, kwargs))
+
+    return _record
+
+
+@pytest.mark.asyncio
+async def test_lifespan_shutdown_line_carries_the_step_timings(lifespan_env, monkeypatch) -> None:
+  """The charliebot_shutdown line names every shutdown step's wall time in
+  integer milliseconds, so a slow stop names its slow step."""
+  from fastapi import FastAPI
+
+  server_module = lifespan_env
+  recorder = _LogRecorder()
+  monkeypatch.setattr(server_module, "log", recorder)
+  async with server_module.lifespan(FastAPI()):
+    pass
+  line = next(kwargs for event, kwargs in recorder.events if event == "charliebot_shutdown")
+  for name in _SHUTDOWN_TIMING_FIELDS:
+    value = line[name]  # a missing field is the failure, not a default
+    assert isinstance(
+        value, int) and not isinstance(value, bool) and value >= 0, (f"{name}={value!r} is not a non-negative int")
+
+
 @pytest.mark.asyncio
 async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, monkeypatch) -> None:
   """A shutdown exception releases the exclusion; the fence never outlives the

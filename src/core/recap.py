@@ -21,7 +21,7 @@ from src.core.config import CharlieBotConfig
 from src.core.deferred import deferred_module_getattr
 from src.core.json_utils import load_json_dict, write_json_atomically
 from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.models import utc_now
+from src.core.models import utc_now_iso
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
@@ -257,7 +257,7 @@ def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: in
 def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, summary: str) -> None:
   path = _cache_path(session_mgr, session_id)
   cache = load_json_dict(path)
-  cache[str(upto)] = {"summary": summary, "generated_at": utc_now().isoformat()}
+  cache[str(upto)] = {"summary": summary, "generated_at": utc_now_iso()}
   # The recap GET reads this file from an executor thread with no coordination
   # against this write; the swap keeps every read on one complete document.
   write_json_atomically(path, cache, indent=2)

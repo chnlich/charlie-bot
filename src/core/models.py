@@ -52,6 +52,11 @@ def utc_now() -> datetime:
   return datetime.now(UTC)
 
 
+def utc_now_iso() -> str:
+  """Return utc_now() as an ISO 8601 string: the timestamp form event logs and stamps carry."""
+  return utc_now().isoformat()
+
+
 UtcDatetime = Annotated[datetime, BeforeValidator(ensure_utc)]
 
 # ---------------------------------------------------------------------------

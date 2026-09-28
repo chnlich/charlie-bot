@@ -106,20 +106,19 @@ def build_control_event(
     **payload: object,
 ) -> dict:
   """One control event with the common header plus its typed payload fields."""
+  # Lazy: the pydantic model stack stays off this module's import path; the
+  # callers that stamp control facts pay it, not the boot chain.
+  from src.core.models import utc_now_iso
+
   event: dict = {
       "id": event_id or str(uuid.uuid4()),
       "type": event_type,
-      "timestamp": _utc_now_iso(),
+      "timestamp": utc_now_iso(),
       "actor": actor,
       "source_session_id": source_session_id,
   }
   event.update(payload)
   return event
-
-
-def _utc_now_iso() -> str:
-  from src.core.models import utc_now
-  return utc_now().isoformat()
 
 
 class ControlEventSink:

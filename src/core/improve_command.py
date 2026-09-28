@@ -21,7 +21,7 @@ from src.core.git import (
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.message_aggregator import extract_text_from_message
-from src.core.models import utc_now
+from src.core.models import utc_now_iso
 from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
 log = LazyStructlogLogger()
@@ -485,7 +485,7 @@ async def reserve_loop_state(
         merge_back=merge_back,
         backend=resolved_backend or None,
         model=resolved_model or None,
-        created_at=utc_now().isoformat(),
+        created_at=utc_now_iso(),
         server_pid=os.getpid(),
     )
     await save_loop_state(session_id, state, cfg)

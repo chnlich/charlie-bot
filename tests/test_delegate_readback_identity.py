@@ -14,7 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from src.cli.common import derive_delegate_request_id, find_local_task_child
+from src.cli.common import find_local_task_child
+from src.core.control_events import derived_delegate_request_id
 from src.core.models import RunRecord, TaskSpec, TaskType
 from tests.test_task_execution import build_env
 
@@ -62,7 +63,7 @@ async def test_two_same_spec_siblings_readback_binds_to_request_identity(
   assert readback_first is not None and readback_first["session_id"] == first.id
 
   # The derived default binds ONE (session, type, spec body) to one operation.
-  derived = derive_delegate_request_id(manager.id, "quick-edit", description)
+  derived = derived_delegate_request_id(manager.id, "quick-edit", description)
   derived_child = await tree.create_task(
       request_id=derived,
       task_parent_id=manager.id,

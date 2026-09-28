@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 import structlog
 
+from src.agents.transcription.base import SAMPLE_RATE
 from src.core.config import CharlieBotConfig, load_config
 from src.core.yaml_utils import load_yaml
 
@@ -102,7 +103,7 @@ def pick_preflight_recording(sessions_dir: Path) -> Path:
   for wav_path in sorted(sessions_dir.glob("*/voice/*.wav")):
     try:
       with wave.open(str(wav_path), "rb") as wav:
-        if wav.getframerate() != 16_000 or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+        if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
           continue
         duration = wav.getnframes() / wav.getframerate()
     except (wave.Error, OSError):
@@ -118,8 +119,8 @@ def pick_preflight_recording(sessions_dir: Path) -> Path:
 
 def _load_wav_samples(path: Path) -> np.ndarray:
   with wave.open(str(path), "rb") as wav:
-    if wav.getframerate() != 16_000 or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-      raise ValueError(f"preflight recording must be 16kHz mono int16 wav: {path}")
+    if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+      raise ValueError(f"preflight recording must be {SAMPLE_RATE // 1000}kHz mono int16 wav: {path}")
     frames = wav.readframes(wav.getnframes())
   return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
@@ -157,7 +158,7 @@ def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
   started = time.perf_counter()
   text = transcriber._decode_samples(bundle, samples)
   decode_seconds = time.perf_counter() - started
-  audio_seconds = len(samples) / transcriber.SAMPLE_RATE
+  audio_seconds = len(samples) / SAMPLE_RATE
   if not text:
     raise RuntimeError(f"preflight (c) failed: GPU decode of {wav_path.name} returned empty text")
   if decode_seconds >= PREFLIGHT_DECODE_THRESHOLD_SECONDS:

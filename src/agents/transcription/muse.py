@@ -16,12 +16,16 @@ import time
 from collections.abc import AsyncIterator, Sequence
 from typing import Protocol
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend, TranscriptionRejected
+from src.agents.transcription.base import (
+    SAMPLE_RATE,
+    TranscriptEvent,
+    TranscriptionBackend,
+    TranscriptionRejected,
+)
 from src.core.config import CharlieBotConfig
 from src.core.credentials import get_credentials
 
 MODEL = "muse-voice-transcribe-1.0"
-SAMPLE_RATE = 16_000
 BYTES_PER_SECOND = SAMPLE_RATE * 2  # mono PCM16
 DEFAULT_ENDPOINT_URL = "wss://api.meta.ai/v1/asr/realtime"
 # Meta's disconnect sits at a 5 s lead; the schedule caps the lead one second

@@ -207,8 +207,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   # only the server-owned cron trigger is enqueued — whose takeoff text still
   # mints nothing.
   with pytest.raises(TaskForbiddenError):
-    await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent",
-                from_session=root.id)
+    await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   await admit(tree, worker.id, "take off (cron)", event_type=ET.SCHEDULED_TRIGGER, actor="system")
   from src.core.takeoff_gate import DelegationBlockedError
   with pytest.raises(DelegationBlockedError):
@@ -387,6 +386,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 
   class _StreamingManager:
+
     def __init__(self) -> None:
       self.sent: list[tuple[str, dict]] = []
 
@@ -400,10 +400,15 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   try:
     with TestClient(app) as client:
       # Operator browser input is a real USER event with its attachments.
-      sent = client.post(f"/api/sessions/{worker.id}/message", json={
-          "content": "please handle this",
-          "uploaded_files": [{"filename": "brief.txt", "path": "/tmp/brief.txt"}],
-      })
+      sent = client.post(
+          f"/api/sessions/{worker.id}/message",
+          json={
+              "content": "please handle this",
+              "uploaded_files": [{
+                  "filename": "brief.txt",
+                  "path": "/tmp/brief.txt"
+              }],
+          })
       assert sent.status_code == 202
       events = tree.events.load_events(worker.id)
       users = [e for e in events if e["type"] == ET.USER]
@@ -423,8 +428,8 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       await tree.runs.record_launch(worker.id, "run-agent", pid=424242, pid_start="ps-1")
       claims = RunTokenClaims(run_id="run-agent", session_id=worker.id, agent="worker-agent")
       agent_client_headers = {"Authorization": f"Bearer {sign_run_token(claims, key)}"}
-      relayed = client.post(f"/api/sessions/{worker.id}/message", json={"content": "agent view"},
-                            headers=agent_client_headers)
+      relayed = client.post(
+          f"/api/sessions/{worker.id}/message", json={"content": "agent view"}, headers=agent_client_headers)
       assert relayed.status_code == 403
       events = tree.events.load_events(worker.id)
       assert len([e for e in events if e["type"] == ET.USER]) == 1  # no second USER
@@ -433,9 +438,13 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       # The agent-relay API delivers an agent message to the worker only from
       # its authorized parent: with no user authorization anywhere the gate
       # refuses the manager's instruction with 403 and nothing is enqueued.
-      relay_api = client.post("/api/internal/session-message", json={
-          "session_id": root.id, "target_session_id": worker.id, "content": "from the manager",
-      })
+      relay_api = client.post(
+          "/api/internal/session-message",
+          json={
+              "session_id": root.id,
+              "target_session_id": worker.id,
+              "content": "from the manager",
+          })
       assert relay_api.status_code == 403
       assert "Delegation blocked" in relay_api.json()["detail"]
       events = tree.events.load_events(worker.id)
@@ -471,57 +480,77 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   app.dependency_overrides[get_run_store] = lambda: tree.runs
   with TestClient(app) as client:
     # Blockers are a concrete 409 list: the open child blocks the root.
-    blocked = client.post(f"/api/sessions/{root.id}/complete", json={
-        "request_id": "route-1", "summary": "s", "result_refs": [], "run_ids": []})
+    blocked = client.post(
+        f"/api/sessions/{root.id}/complete",
+        json={
+            "request_id": "route-1",
+            "summary": "s",
+            "result_refs": [],
+            "run_ids": []
+        })
     assert blocked.status_code == 409
     assert any("open descendant" in b for b in blocked.json()["detail"]["blockers"])
 
     # The worker's successful run closes it; the route returns the Session detail.
     await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
     await tree.dispatch.finish_run(worker.id, "run-w", outcome="success")
-    ok = client.post(f"/api/sessions/{root.id}/complete", json={
-        "request_id": "route-2", "summary": "delivered",
-        "result_refs": ["run:run-w"], "run_ids": ["run-w"]})
+    ok = client.post(
+        f"/api/sessions/{root.id}/complete",
+        json={
+            "request_id": "route-2",
+            "summary": "delivered",
+            "result_refs": ["run:run-w"],
+            "run_ids": ["run-w"]
+        })
     assert ok.status_code == 409  # the worker's report is unprocessed input
-    await tree.runs.register_run(
-        RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
+    await tree.runs.register_run(RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
     await tree.dispatch.claim_input_batch(root.id, "run-root-turn")
     await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
-    ok = client.post(f"/api/sessions/{root.id}/complete", json={
-        "request_id": "route-2", "summary": "delivered",
-        "result_refs": ["run:run-root-turn"], "run_ids": ["run-root-turn"]})
+    ok = client.post(
+        f"/api/sessions/{root.id}/complete",
+        json={
+            "request_id": "route-2",
+            "summary": "delivered",
+            "result_refs": ["run:run-root-turn"],
+            "run_ids": ["run-root-turn"]
+        })
     assert ok.status_code == 200 and ok.json()["task_state"] == "completed"
 
     # Duplicate operation id replays the original outcome.
-    replay = client.post(f"/api/sessions/{root.id}/complete", json={
-        "request_id": "route-2", "summary": "delivered",
-        "result_refs": ["run:run-root-turn"], "run_ids": ["run-root-turn"]})
+    replay = client.post(
+        f"/api/sessions/{root.id}/complete",
+        json={
+            "request_id": "route-2",
+            "summary": "delivered",
+            "result_refs": ["run:run-root-turn"],
+            "run_ids": ["run-root-turn"]
+        })
     assert replay.status_code == 200
     closes = [e for e in tree.events.load_events(root.id) if e["type"] == ET.TASK_CLOSED]
     assert len(closes) == 1
 
     # Reopen is operator action; an agent token cannot mutate.
-    reopened = client.post(f"/api/sessions/{root.id}/reopen", json={
-        "request_id": "route-3", "reason": "more work"})
+    reopened = client.post(f"/api/sessions/{root.id}/reopen", json={"request_id": "route-3", "reason": "more work"})
     assert reopened.status_code == 200 and reopened.json()["task_state"] == "open"
     await tree.runs.register_run(RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
     await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
-    key2_headers = {"Authorization": f"Bearer {sign_run_token(
-        RunTokenClaims(run_id='run-root-agent', session_id=root.id, agent='a'), key)}"}
-    forbidden = client.post(f"/api/sessions/{root.id}/reopen", json={
-        "request_id": "route-4", "reason": "x"}, headers=key2_headers)
+    agent_token = sign_run_token(RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
+    key2_headers = {"Authorization": f"Bearer {agent_token}"}
+    forbidden = client.post(
+        f"/api/sessions/{root.id}/reopen", json={
+            "request_id": "route-4",
+            "reason": "x"
+        }, headers=key2_headers)
     assert forbidden.status_code == 403
     await tree.dispatch.finish_run(root.id, "run-root-agent", outcome="success")
 
     # Cancel preserves history and stays visible.
-    cancelled = client.post(f"/api/sessions/{root.id}/cancel", json={
-        "request_id": "route-5", "reason": "not needed"})
+    cancelled = client.post(f"/api/sessions/{root.id}/cancel", json={"request_id": "route-5", "reason": "not needed"})
     assert cancelled.status_code == 200 and cancelled.json()["task_state"] == "cancelled"
     index = await tree._get_index()
     assert tree.archived_of(index, index.metas[root.id]) is False
     # Cancel is refused on a task that is not open.
-    refused = client.post(f"/api/sessions/{root.id}/cancel", json={
-        "request_id": "route-6", "reason": "again"})
+    refused = client.post(f"/api/sessions/{root.id}/cancel", json={"request_id": "route-6", "reason": "again"})
     assert refused.status_code == 409
 
 

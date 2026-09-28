@@ -66,8 +66,14 @@ Known-alive symbols:
   an unused function. Same class as the `src/api/*.py` route handlers above, kept as its own entry
   because these live in `server.py` itself.
   (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
-  Step 3 grep finds it. Voice input has no websocket handler since the record-then-upload
-  migration: `POST /api/voice/...` runs through the `src/api/voice.py` router.)
+  Step 3 grep finds it.)
+- `voice_preview_websocket` — `@app.websocket` handler in `server.py` (`/ws/voice/{session_id}`),
+  reached by URL string: `web/static/js/voice-input.js` dials `/ws/voice/${sessionId}` with the
+  transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
+  asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
+  definition, so vulture flags it as an unused function. Same class as the `session_websocket`
+  entry above. The recording and upload endpoints themselves are `src/api/voice.py` route
+  handlers, covered by the `src/api/*.py` entry.
 - `slack_listener_task`, `slack_backfill_task` — `app.state` task handles assigned in the root
   `server.py` lifespan and read by string: the shutdown loop iterates
   `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via

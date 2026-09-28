@@ -948,6 +948,19 @@ def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> Test
   return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
 
 
+def page_initial_sessions(page_client: TestClient, session_id: str) -> list[dict]:
+  """The homepage render's INITIAL_SESSIONS row list for *session_id*, parsed.
+
+  The sidebar-list tests read the server-rendered page, not a JSON endpoint:
+  the rows ride the page as ``const INITIAL_SESSIONS = [...]``.
+  """
+  resp = page_client.get("/", params={"session": session_id})
+  assert resp.status_code == 200
+  match = re.search(r"const INITIAL_SESSIONS = (\[.*?\]);", resp.text)
+  assert match is not None
+  return json.loads(match.group(1))
+
+
 def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
   """HTTP ASGI scope for the tests that drive an app directly, no server boot.
 

@@ -14,8 +14,6 @@ and everything under it out.
 
 from __future__ import annotations
 
-import json
-import re
 from pathlib import Path
 
 import pytest
@@ -27,11 +25,12 @@ from conftest import (
     cron_d_dir,
     dump_yaml,
     make_legacy_cron_session,
+    page_initial_sessions,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_task_manager, get_thread_manager
 from src.api.pages import router as pages_router
 from src.api.sessions import router as sessions_router
 from src.core.models import CreateSessionRequest, RunRecord, SessionStatus
@@ -83,14 +82,6 @@ def _page_client(cfg, session_mgr: SessionManager, tree: TaskTreeManager, thread
   return TestClient(app)
 
 
-def _initial_sessions(page_client: TestClient, session_id: str) -> list[dict]:
-  resp = page_client.get("/", params={"session": session_id})
-  assert resp.status_code == 200
-  match = re.search(r"const INITIAL_SESSIONS = (\[.*?\]);", resp.text)
-  assert match is not None
-  return json.loads(match.group(1))
-
-
 def _assert_bound_row(row: dict, task_name: str, *, enabled: bool) -> None:
   """The join's full answer for one bound node's row."""
   assert row["schedule_task"] == task_name
@@ -139,7 +130,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
     _assert_unbound_row(by_id[unbound.id])
 
   # The homepage's server-rendered sidebar carries the same answer.
-  rows = {row["id"]: row for row in _initial_sessions(_page_client(cfg, session_mgr, tree, thread_mgr), unbound.id)}
+  rows = {row["id"]: row for row in page_initial_sessions(_page_client(cfg, session_mgr, tree, thread_mgr), unbound.id)}
   _assert_bound_row(rows[bound.id], "synthetic-daily", enabled=True)
   _assert_bound_row(rows[disabled_node.id], "synthetic-paused", enabled=False)
   _assert_unbound_row(rows[unbound.id])

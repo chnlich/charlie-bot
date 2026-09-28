@@ -13,8 +13,6 @@ scheduler's lookup depends on it).
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -25,6 +23,7 @@ from conftest import (
     build_env,
     create_task,
     make_legacy_cron_session,
+    page_initial_sessions,
     seed_thread,
 )
 from fastapi import FastAPI
@@ -150,14 +149,6 @@ def _page_client(fx: Fixture) -> TestClient:
   return TestClient(app)
 
 
-def _initial_sessions(page_client: TestClient, session_id: str) -> list[dict]:
-  resp = page_client.get("/", params={"session": session_id})
-  assert resp.status_code == 200
-  match = re.search(r"const INITIAL_SESSIONS = (\[.*?\]);", resp.text)
-  assert match is not None
-  return json.loads(match.group(1))
-
-
 @pytest.mark.asyncio
 async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
@@ -177,7 +168,7 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) ->
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _subtree_ids(fx)
-  row_ids = {row["id"] for row in _initial_sessions(page_client, fx.ordinary.id)}
+  row_ids = {row["id"] for row in page_initial_sessions(page_client, fx.ordinary.id)}
   assert {fx.ordinary.id, fx.plain_active.id} <= row_ids
   assert not (row_ids & _subtree_ids(fx))
 

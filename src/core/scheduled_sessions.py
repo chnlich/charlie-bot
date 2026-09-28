@@ -26,8 +26,7 @@ def cron_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
   ``scheduled_task`` is set; the cron session itself is not part of its subtree.
   Projected legacy worker-thread rows carry ``task_parent_id`` = their parent
   session, so the same walk classifies them. The sidebar lists share this one
-  walk — All and Archived drop the map's keys, Scheduled nests each member under
-  the cron session the map names — so the membership rule is implemented once.
+  walk, so the membership rule is implemented once.
 
   A chain member missing from *metas* (deleted or unreadable) ends that walk:
   the row classifies as unparented rather than guessing past the gap.

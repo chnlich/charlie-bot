@@ -34,7 +34,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
-from src.core.sessions import HISTORY_LOCATION_NOTE
+from src.core.sessions import HISTORY_LOCATION_NOTE, backend_switch_reset_reason
 from src.core.streaming import handle_compaction_events
 
 log = LazyStructlogLogger()
@@ -364,9 +364,7 @@ async def _v1_reset_reason(
   if not await item.callbacks.has_completed_round(item.session_meta.id):
     return None
   if fresh_by_switch:
-    return (
-        f"this session switched from backend {item.session_meta.native_backend} to {option.id}, "
-        "which starts its own conversation")
+    return backend_switch_reset_reason(item.session_meta.native_backend, option.id)
   return "the previous conversation could not be resumed"
 
 

@@ -1,9 +1,8 @@
 """Inputs admitted during a review Run must reach the node's own dispatcher.
 
-The review path's early return used to strand inputs admitted while a review
-Run was consuming the node's serialized slot: the parent got the failure
-report, the child's own pending input never saw a dispatch decision, and the
-next permitted serialized dispatch never came.
+Each test pins one admit-during-review shape: the input lands while the review
+Run holds the node's serialized slot, and its dispatch decision comes from the
+node's own dispatcher only after the review chain finishes.
 """
 
 from __future__ import annotations
@@ -131,8 +130,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   assert any("review" in str(e.get("summary", "")).lower() for e in reports), reports
   assert tree.task_state(child.id) == "open"
   # ...and the stranded input got the next permitted serialized dispatch: a
-  # fresh work Run claimed and consumed it (the review path's early return
-  # used to leave it pending forever).
+  # fresh work Run claimed and consumed it.
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
     next_runs = [r for r in tree.runs.list_run_records_sync(child.id) if r.kind == "work" and r.id != work_run_id]

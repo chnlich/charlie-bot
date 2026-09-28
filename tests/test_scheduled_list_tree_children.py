@@ -12,7 +12,7 @@ from conftest import make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.deps import get_config_on_loop, get_session_manager, get_thread_manager
+from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager, get_thread_manager
 from src.api.sessions import router as sessions_router
 from src.core.models import CreateSessionRequest, TaskSpec
 from src.core.sessions import SessionManager
@@ -40,6 +40,7 @@ async def test_scheduled_list_nests_task_children_under_their_cron_session(tmp_p
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_thread_manager] = lambda: ThreadManager(cfg)
+  app.dependency_overrides[get_task_manager] = lambda: tree
   client = TestClient(app)
 
   resp = client.get("/api/sessions/scheduled")
@@ -52,3 +53,10 @@ async def test_scheduled_list_nests_task_children_under_their_cron_session(tmp_p
   by_id = {r["id"]: r for r in rows}
   assert by_id[leaf.id]["task_parent_id"] == cron_session.id
   assert by_id[cron_session.id]["scheduled_task"] == "nightly-sweep"
+  # The listing ships the task spec without the goal body: the goal's one
+  # reader is the task-context modal through the detail endpoint, so a task
+  # node's prompt prose must not ride every scheduled poll.
+  assert "goal" not in (by_id[leaf.id]["task"] or {})
+  detail = client.get(f"/api/sessions/{leaf.id}")
+  assert detail.status_code == 200, detail.text
+  assert detail.json()["task"]["goal"] == "sweep"

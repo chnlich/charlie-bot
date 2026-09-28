@@ -33,7 +33,9 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
 # subprocess plus its own suite runtime): each carries the integration marker
 # via pytest.param below instead of dragging every suite's case over the cap.
 _INTEGRATION_SUITES = {
-    "chat_session_bump.test.js", "tailwind_class_coverage.test.js", "stream_incremental_parse.test.js",
+    "chat_session_bump.test.js",
+    "tailwind_class_coverage.test.js",
+    "stream_incremental_parse.test.js",
     # The archived view's cap walk: 21 keyset page loads whose merged tree
     # re-renders up to ~2100 rows per load — the walk the 2000-row render cap
     # bounds, far past a unit test's shape.

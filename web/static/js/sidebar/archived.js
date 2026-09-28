@@ -220,6 +220,14 @@ function adjustArchivedGroupCount(group, delta) {
   }
 }
 
+// A star toggle's optimistic flip, mirrored into the merged list: the star
+// renders from the stored row, so the next tree repaint (a page append, an
+// unarchive) paints the same state instead of reverting the button.
+function archivedStarToggled(sessionId, starred) {
+  const stored = archivedState.rows.find(s => s.id === sessionId);
+  if (stored) stored.starred = starred;
+}
+
 // A session left the archived set (unarchive / permanent delete): drop its
 // bookkeeping and decrement the strip counts, then repaint the tree without
 // its row.
@@ -244,6 +252,11 @@ function applyArchivedGroupChange(sessionId, group) {
   adjustArchivedGroupCount(oldGroup || null, -1);
   adjustArchivedGroupCount(next || null, +1);
   archivedState.rowGroups[sessionId] = next;
+  // The stored row moves with the counts: the next tree repaint (a page
+  // append, an unarchive) re-derives the groups from it, and the row must
+  // land in its new group rather than revert to the old one.
+  const stored = archivedState.rows.find(s => s.id === sessionId);
+  if (stored) stored.group = next || null;
   const row = document.getElementById('session-' + sessionId);
   if (row) {
     const btn = typeof row.querySelector === 'function' ? row.querySelector('[data-current-group]') : null;
@@ -260,6 +273,7 @@ const API = {
   loadArchivedView,
   setArchivedGroupFilter,
   loadArchivedNextPage,
+  archivedStarToggled,
   archivedForgetSession,
   applyArchivedGroupChange,
 };

@@ -326,6 +326,9 @@ async function toggleSessionStar(id, currentlyStarred) {
     btn.classList.toggle('hover:text-yellow-400', !starred);
     btn.setAttribute('onclick', Sidebar.starButtonOnclick(id, starred));
   }
+  // The archived tree's next repaint re-renders from its merged row list, so
+  // the flip rides the stored row too, not just the on-screen button.
+  if (currentFilter === 'archived') archivedStarToggled(id, !currentlyStarred);
   try {
     await fetch(`/api/sessions/${id}/${endpoint}`, { method: 'POST' });
     // If viewing starred filter and we just unstarred, remove from list

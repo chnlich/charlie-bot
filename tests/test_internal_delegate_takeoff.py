@@ -8,10 +8,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 from conftest import (
-  OPUS_BACKEND_ID,
-  OPUS_BACKEND_OPTION,
-  FakeSessionManager,
-  user_event,
+    OPUS_BACKEND_ID,
+    OPUS_BACKEND_OPTION,
+    FakeSessionManager,
+    user_event,
 )
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
@@ -20,9 +20,9 @@ from src.api import internal
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import (
-  DelegateRequest,
-  SessionMetadata,
-  TaskType,
+    DelegateRequest,
+    SessionMetadata,
+    TaskType,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
@@ -260,8 +260,7 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("task_type", [TaskType.IMPLEMENT, TaskType.QUICK_EDIT, TaskType.SCRIPT_RUN])
 @pytest.mark.parametrize("half", ["repo", "branch"])
-async def test_delegate_task_repo_scoped_types_take_repo_and_base_together(
-    task_type: TaskType, half: str) -> None:
+async def test_delegate_task_repo_scoped_types_take_repo_and_base_together(task_type: TaskType, half: str) -> None:
   """Exactly one of repo_path/base_branch is a malformed repo-less delegation."""
   repo_path = "/tmp/repo" if half == "repo" else None
   base_branch = "main" if half == "branch" else None
@@ -289,13 +288,17 @@ async def test_delegate_task_repo_less_request_passes_the_schema_gate(
   async def fake_delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, backend, model):
     captured["repo_path"] = req.repo_path
     captured["base_branch"] = req.base_branch
-    return {"session_id": "child", "parent_session_id": req.session_id, "run_id": "r",
-            "thread_id": "r", "description": req.description}
+    return {
+        "session_id": "child",
+        "parent_session_id": req.session_id,
+        "run_id": "r",
+        "thread_id": "r",
+        "description": req.description
+    }
 
   monkeypatch.setattr(internal, "_delegate_task_tree", fake_delegate_task_tree)
 
-  result = await internal.delegate_task(
-      req, session_mgr=session_mgr, task_mgr=_stub_task_manager(), caller=None)
+  result = await internal.delegate_task(req, session_mgr=session_mgr, task_mgr=_stub_task_manager(), caller=None)
 
   assert result["session_id"] == "child"
   assert captured["repo_path"] is None

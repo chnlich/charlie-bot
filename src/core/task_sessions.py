@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import time
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -61,6 +62,7 @@ from src.core.models import (
     SessionStatus,
     TaskSpec,
     WorkState,
+    ensure_utc,
     utc_now,
 )
 from src.core.ndjson import append_ndjson
@@ -1114,7 +1116,7 @@ class TaskTreeManager:
     sessions_dir = self._cfg.sessions_dir
     sessions_dir.mkdir(parents=True, exist_ok=True)
     final_dir = sessions_dir / task_id
-    temp_dir = sessions_dir / f".task-{task_id}-{os.getpid()}-{uuid4_hex()}.tmp"
+    temp_dir = sessions_dir / f".task-{task_id}-{os.getpid()}-{uuid.uuid4().hex}.tmp"
     meta = SessionMetadata(
         id=task_id,
         name=name or await self._default_node_name(task, profile),
@@ -1652,11 +1654,6 @@ class _TreeIndex:
   root_sig: tuple[int, int]
 
 
-def uuid4_hex() -> str:
-  from uuid import uuid4
-  return uuid4().hex
-
-
 # A Markdown ATX heading: up to three leading spaces, then 1-6 '#' closed by
 # whitespace or end of line (so "####### tag" is content, not a heading).
 _MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}(\s|$)")
@@ -1693,8 +1690,3 @@ def _decode_tree_cursor(cursor: str) -> tuple[str, tuple[datetime, str]]:
     return payload["r"], key
   except (ValueError, KeyError, TypeError) as e:
     raise TaskInvalidError(f"malformed tree page cursor: {cursor!r}") from e
-
-
-def ensure_utc(value: datetime) -> datetime:
-  from src.core.models import ensure_utc as _ensure
-  return _ensure(value)

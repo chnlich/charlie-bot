@@ -20,6 +20,7 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     SESSIONS_SESSION_MANAGER_PATCH_TARGET,
+    _async_wait_for,
     drain_session_consumer,
     fresh_master_state,
     make_sound_round,
@@ -496,7 +497,8 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
       running = asyncio.create_task(
           master_cc_queue.run_message(
               cfg, meta, "the running turn", callbacks, ET.USER, skip_user_event=True, backend_option=option))
-      await asyncio.wait_for(_wait_until(lambda: len(captured) == 1, timeout=5), timeout=6)
+      await _async_wait_for(
+          lambda: len(captured) == 1, 5.0, "the running turn never reached the enqueue count", poll=0.01)
 
       # Each caller is serialized through its own enqueue: the test pins the
       # arrival order (24 wakes, then the two users, then the report), which
@@ -510,7 +512,8 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
         task = asyncio.create_task(coro)
         calls.append(task)
         try:
-          await asyncio.wait_for(_wait_until(lambda: enqueued[0] >= ordinal, timeout=10), timeout=11)
+          await _async_wait_for(
+              lambda: enqueued[0] >= ordinal, 10.0, f"the enqueue count never reached {ordinal}", poll=0.01)
         except BaseException:
           if task.done() and not task.cancelled():
             print("ARRIVE-CALLER-RAISED", repr(task.exception()))
@@ -571,11 +574,3 @@ def _create_session_request(name: str):
   from src.core.models import CreateSessionRequest
 
   return CreateSessionRequest(name=name)
-
-
-async def _wait_until(predicate, timeout: float) -> None:
-  deadline = asyncio.get_running_loop().time() + timeout
-  while not predicate():
-    if asyncio.get_running_loop().time() > deadline:
-      raise TimeoutError("condition not reached")
-    await asyncio.sleep(0.01)

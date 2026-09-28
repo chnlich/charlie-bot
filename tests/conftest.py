@@ -2699,11 +2699,11 @@ def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
   return fake_create_logged_task
 
 
-# Restart-recovery e2e helpers, single-homed here for test_restart_recovery_e2e.py
-# and its sibling files. The A/B protocol's driver side (fake `claude` shim,
-# driver template, launcher) stays in test_restart_recovery_e2e.py; these are
-# the waits, readers, and the startup-crash-recovery entry the sibling files
-# share.
+# Shared test helpers, single-homed here: the waits, readers, and the
+# startup-crash-recovery entry, imported across the restart-recovery and
+# task-tree execution/recovery test files. The A/B protocol's driver side
+# (fake `claude` shim, driver template, launcher) stays in
+# test_restart_recovery_e2e.py.
 def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,
@@ -2721,15 +2721,43 @@ def _wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
   raise TimeoutError(what)
 
 
-async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: str) -> None:
+async def _async_wait_for(predicate: Callable[[], bool], timeout: float, what: str, *, poll: float = 0.05) -> None:
   # Async sibling of _wait_for: the tasks an async test waits on advance only while
   # the test yields to the event loop, so the poll must asyncio.sleep, not block.
+  # The 0.05 s default fits the wait-once callers; a caller that stacks many short
+  # waits inside one test's budget passes a tighter poll.
   deadline = time.monotonic() + timeout
   while time.monotonic() < deadline:
     if predicate():
       return
-    await asyncio.sleep(0.05)
+    await asyncio.sleep(poll)
   raise TimeoutError(what)
+
+
+async def _settle_parent(
+    tree: TaskTreeManager, manager: models.SessionMetadata, *, timeout: float, poll: float) -> None:
+  # Shared by the task-tree execution and recovery files, whose report-delivery
+  # assertions must wait out the parent's report turn without pinning a sleep.
+  # Settled: the dispatch queue is drained and no run on the parent lacks a
+  # terminal outcome. On timeout the test fails with the pending inputs and the
+  # run table, the state a hung parent is debugged from.
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    pm_events = tree.runs.load_events_sync(manager.id)
+    active = [
+        r for r in tree.runs.list_run_records_sync(manager.id) if tree.runs.terminal_outcome(pm_events, r.id) is None
+    ]
+    if not tree.dispatch.pending_inputs(manager.id) and not active:
+      return
+    await asyncio.sleep(poll)
+  # The dump re-reads the state so a late-settling parent is not reported from
+  # the last poll's stale snapshot.
+  pending = [str(e.get("id")) for e in tree.dispatch.pending_inputs(manager.id)]
+  pm_events = tree.runs.load_events_sync(manager.id)
+  runs_dbg = [
+      (r.id, tree.runs.terminal_outcome(pm_events, r.id), r.pid) for r in tree.runs.list_run_records_sync(manager.id)
+  ]
+  pytest.fail(f"the parent's report turns never settled: pending={pending} runs={runs_dbg}")
 
 
 def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:

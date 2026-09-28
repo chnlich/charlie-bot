@@ -18,6 +18,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    _settle_parent,
     patch_instructions_content,
 )
 
@@ -303,19 +304,6 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
     return cfg, session_mgr, tree, manager, worker
 
 
-async def _settle_parent(tree, manager) -> None:
-    """Wait out the parent's report-consumption turn the delivered report woke."""
-    deadline = asyncio.get_event_loop().time() + 5
-    while asyncio.get_event_loop().time() < deadline:
-        pm_events = tree.runs.load_events_sync(manager.id)
-        active = [r for r in tree.runs.list_run_records_sync(manager.id)
-                  if tree.runs.terminal_outcome(pm_events, r.id) is None]
-        if not tree.dispatch.pending_inputs(manager.id) and not active:
-            return
-        await asyncio.sleep(0.02)
-    pytest.fail("the parent's report turn never settled")
-
-
 @pytest.mark.asyncio
 async def test_recovery_closed_task_skips_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -330,7 +318,7 @@ async def test_recovery_closed_task_skips_landing(
     # turn settles before the counted passes start.
     await reconcile_task_tree(cfg, tree, session_mgr)
     assert tree.task_state(worker.id) == "completed"
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
     counts = _count_landing_git(monkeypatch)
     worker_facts = len(tree.fact_history(worker.id))
@@ -355,7 +343,7 @@ async def test_recovery_reopened_task_reproves_landing(
     cfg, session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
     await reconcile_task_tree(cfg, tree, session_mgr)
     assert tree.task_state(worker.id) == "completed"
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
     await tree.completion.reopen_task(
         worker.id, request_id="reopen-1", reason="recheck the delivery",
         caller=CallerIdentity(kind="operator"))
@@ -382,7 +370,7 @@ async def test_recovery_open_task_landing_unchanged(
     assert tree.task_state(worker.id) == "completed"
     reports = [e for e in tree.fact_history(manager.id) if e.get("type") == ET.CHILD_REPORT]
     assert reports and reports[-1]["outcome"] == "completed"
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
 
 @pytest.mark.asyncio

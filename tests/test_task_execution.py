@@ -20,6 +20,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    _settle_parent,
     backend_option,
     create_task,
     patch_instructions_content,
@@ -573,7 +574,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
         # Every delivered child report triggered the parent's next serialized
         # turn: all reports were consumed and acknowledged, the parent stays open.
-        await _settle_parent(tree, manager)
+        await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
         assert pm_builds, "the delivered child reports never triggered a parent manager turn"
         assert tree.task_state(manager.id) == "open"
 
@@ -823,7 +824,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
     # The delivered blocked and completed reports each triggered the parent's
     # next serialized turn, and the parent consumed them staying open.
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
     assert pm_builds, "the delivered reports never triggered a parent manager turn"
     assert tree.task_state(manager.id) == "open"
 
@@ -920,7 +921,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
             break
         await asyncio.sleep(0.05)
     assert reports and reports[-1]["outcome"] == "completed"
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
 
 
 @pytest.mark.asyncio
@@ -1079,7 +1080,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
     assert reports[-1]["outcome"] == "completed"
 
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
     assert pm_builds, "the delivered report never triggered a parent manager turn"
     assert tree.task_state(manager.id) == "open"
 
@@ -1163,30 +1164,8 @@ async def test_repo_less_quick_edit_closes_without_review(
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
     assert reports[-1]["outcome"] == "completed"
 
-    await _settle_parent(tree, manager)
+    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
     assert pm_builds, "the delivered report never triggered a parent manager turn"
-
-
-async def _settle_parent(tree: TaskTreeManager, manager) -> None:
-  """Wait out the parent's serialized report turns a delivered child report woke.
-
-  Settled: the dispatch queue is drained and no run on the parent lacks a
-  terminal outcome. The 30 s ceiling and 0.2 s poll fit the multi-turn harness
-  paths these tests wait behind. On timeout the test fails with the pending
-  inputs and the run table, the state a hung parent is debugged from.
-  """
-  deadline = asyncio.get_event_loop().time() + 30
-  while asyncio.get_event_loop().time() < deadline:
-    pm_events = tree.runs.load_events_sync(manager.id)
-    active = [r for r in tree.runs.list_run_records_sync(manager.id)
-              if tree.runs.terminal_outcome(pm_events, r.id) is None]
-    if not tree.dispatch.pending_inputs(manager.id) and not active:
-      return
-    await asyncio.sleep(0.2)
-  pending = [str(e.get("id")) for e in tree.dispatch.pending_inputs(manager.id)]
-  runs_dbg = [(r.id, tree.runs.terminal_outcome(pm_events, r.id), r.pid)
-              for r in tree.runs.list_run_records_sync(manager.id)]
-  pytest.fail(f"the parent's report turns never settled: pending={pending} runs={runs_dbg}")
 
 
 def _task_spec(tree: TaskTreeManager, spec: dict):

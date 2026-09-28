@@ -70,7 +70,7 @@ def main() -> None:
       "--dir",
       default=None,
       help=
-      "Store root to read (default: the live store at ~/.charliebot/memory); the PR worktree's path reads its drafted entries)",
+      "Store root to read (default: the live store at ~/.charliebot/memory); pass the PR worktree's path to read its drafted entries",
   )
 
   p_add = sub.add_parser(

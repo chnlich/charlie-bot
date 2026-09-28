@@ -185,9 +185,14 @@ def commit(memory_dir: Path, path: str, message_file: Path) -> str:
   worktree's file, so an approved line never silently moves under the
   reviewer's feet. Additions, edits and deletions of the named path commit
   alike; anything else in the worktree stays uncommitted.
+
+  *message_file* resolves against the caller's working directory here: the
+  git subprocess runs inside the worktree, so a relative path would otherwise
+  read a different file than the caller named.
   """
   memory_dir = memory_dir.resolve()
   rel = _store_path(path)
+  message_file = message_file.expanduser().resolve()
   worktree = proposal_worktree(memory_dir)
   if not worktree.exists():
     raise ProposalRefusalError(f"no proposal worktree at {worktree}; run 'charliebot memory proposal open' first")

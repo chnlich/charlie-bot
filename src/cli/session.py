@@ -19,7 +19,8 @@ tree. ``retry`` creates the request-bound retry run of one recorded run.
 ``complete`` closes one task: the result file carries the complete request's
 JSON body (summary/result_refs/run_ids); a duplicate request id replays the
 original outcome, and an agent's own active Run may request its own manager's
-closure (202 pending_run_finish). ``cancel`` explicitly cancels an open task
+closure (202 pending_run_finish; a request already facing blockers is refused
+409 with the blocker list and not saved). ``cancel`` explicitly cancels an open task
 with a reason — an operator cancels any open task, an agent running inside a
 Run cancels only a direct child of its own task; ``reopen`` reopens one
 closed task and refuses closed ancestors.

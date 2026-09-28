@@ -226,7 +226,8 @@ async def _replay_followups(
         if meta.profile == "manager" and run.kind == "manager_turn":
             # The durable write happened, the crash landed before
             # after_run_finished: the owner-close recheck replays once (its
-            # request-id replay dedups); phase 4's dispatch covers the rest.
+            # request-id replay dedups, and so does its blocked-request
+            # notice); phase 4's dispatch covers the rest.
             counters["followups"] += 1
             await tree.completion.recheck_close_requests(session_id, run.id)
             continue

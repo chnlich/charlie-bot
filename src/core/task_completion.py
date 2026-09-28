@@ -20,11 +20,15 @@ Contracts this stage pins:
   (session, request_id), so a duplicate request — including a retry after
   later close/reopen epochs — replays the original outcome instead of
   creating a second transition.
-- A manager's own active Run may request its own closure: the request is
-  durably saved with the VERIFIED caller's run id (never a spoofable payload
-  field), the API answers 202 pending_run_finish, and re-evaluation happens
-  only after that Run succeeds — replaying once per recovery pass, and
-  leaving the task open with visible blockers when conditions changed.
+- A manager's own active Run may request its own closure: a request that
+  already faces blockers — everything except what exists only because that
+  Run is still active — is refused 409 with them and saves nothing. Otherwise
+  the request is durably saved with the VERIFIED caller's run id (never a
+  spoofable payload field), the API answers 202 pending_run_finish, and
+  re-evaluation happens only after that Run succeeds — replaying once per
+  recovery pass. Conditions that changed meanwhile leave the task open and
+  deliver the blockers to the requesting session as one wake input per
+  request.
 - Agent permissions are own-node reporting, own-manager closure, and
   cancellation of a direct child of the agent's own task; unauthorized
   mutation paths raise 403 and retries never bypass scope.
@@ -43,13 +47,14 @@ from src.core.control_events import (
     ACTOR_SYSTEM,
     ACTOR_USER,
     build_control_event,
+    stable_close_blocked_notice_id,
     stable_close_event_id,
     stable_close_request_event_id,
     stable_input_ack_event_id,
     stable_reopen_event_id,
 )
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import SessionMetadata
+from src.core.models import RunRecord, SessionMetadata
 from src.core.runs import run_not_found_in_task_text
 
 if TYPE_CHECKING:
@@ -198,12 +203,20 @@ class TaskCompletionManager:
                     outcomes[run.id] = child_facts.run_outcomes.get(run.id)
         return runs, outcomes
 
-    def evidence_blockers(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[str]:
+    def evidence_blockers(
+        self,
+        meta: SessionMetadata,
+        evidence: CompletionEvidence,
+        *,
+        succeeding_run_ids: set[str] | None = None,
+    ) -> list[str]:
         """Validate one completion claim against this task's own facts.
 
         Pure over the given facts snapshot; callers run it outside the control
         lock and revalidate the relevant facts/spec/refs under the lock
-        before appending the close fact.
+        before appending the close fact. ``succeeding_run_ids`` names Runs
+        judged as successful: an own-run request's still-active caller Run,
+        whose request is re-evaluated only after it succeeds.
         """
         blockers: list[str] = []
         if not evidence.summary.strip():
@@ -212,6 +225,8 @@ class TaskCompletionManager:
             blockers.append("completion requires result evidence (result_refs)")
         tree = self._tree
         runs, outcomes = self._delivery_run_outcomes(meta)
+        for run_id in succeeding_run_ids or ():
+            outcomes[run_id] = "success"
         facts = tree.facts_of(meta.id)
         claimed: dict[str, object] = {}
         for run_id in evidence.run_ids:
@@ -440,9 +455,10 @@ class TaskCompletionManager:
 
         Operator callers close immediately (after evidence validation and a
         locked revalidation). A run-token agent may request closure only for
-        its own manager task, only through its own active Run: the request is
-        saved durably with the verified owner run id and re-evaluated once
-        that Run finishes successfully.
+        its own manager task, only through its own active Run: a request that
+        already faces blockers is refused with them, anything else is saved
+        durably with the verified owner run id and re-evaluated once that Run
+        finishes successfully.
         """
         from src.core.run_token import CallerIdentity
         from src.core.task_sessions import (
@@ -475,6 +491,12 @@ class TaskCompletionManager:
             replay = self._replay_close_request(session_id, request_id)
             if replay is not None:
                 return replay
+            blockers = await self._own_run_close_blockers(session_id, run, evidence)
+            if blockers:
+                # Saved, this request could only stay blocked after the Run
+                # ends; refusing it now puts the blockers in the requester's
+                # own response.
+                raise TaskConflictError(blockers)
             return await self._save_close_request(
                 session_id, request_id=request_id, owner_run_id=caller_run_id, evidence=evidence)
 
@@ -509,6 +531,27 @@ class TaskCompletionManager:
             if event.get("type") == ET.TASK_CLOSED and event.get("request_id") == request_id:
                 return 200, {"session_id": session_id, "closed_event_id": event.get("id")}
         return None
+
+    async def _own_run_close_blockers(
+        self, session_id: str, run: RunRecord, evidence: CompletionEvidence) -> list[str]:
+        """The blockers an own-run closure request faces now (lock held inside).
+
+        The close path's checks, minus what exists only because the caller
+        Run is still active — the carve-outs ``recheck_close_requests`` makes
+        once that Run succeeds: the Run itself (no active-Run blocker, and
+        judged successful as evidence) and the input batch it already claimed.
+        """
+        tree = self._tree
+        async with tree.control_lock:
+            index = await tree._get_index()
+            tree._index_meta(index, session_id)
+            blockers = self.completion_blockers(
+                session_id, exclude_run_ids={run.id}, exclude_input_ids=set(run.input_event_ids))
+            meta = await tree.load_meta(session_id)
+            assert meta is not None
+            blockers.extend(self.evidence_blockers(meta, evidence, succeeding_run_ids={run.id}))
+        blockers.extend(await self.landing_blockers(meta, evidence))
+        return sorted(set(blockers))
 
     async def _save_close_request(
         self,
@@ -679,9 +722,10 @@ class TaskCompletionManager:
         """Re-evaluate one Run's pending closure requests after it finished successfully.
 
         Recovery replays the same request once (the stable request id dedups);
-        changed conditions leave the task open with the blockers visible.
-        Returns the blockers that kept each request open (empty when a close
-        landed or nothing was pending).
+        changed conditions leave the task open and wake the requesting session
+        with the blockers (one notice per request id). Returns the blockers
+        that kept each request open (empty when a close landed or nothing was
+        pending).
         """
         tree = self._tree
         from src.core.task_sessions import TaskConflictError
@@ -721,7 +765,29 @@ class TaskCompletionManager:
                 remaining.extend(blockers)
                 log.info("task_close_request_still_blocked", session_id=session_id,
                          request_id=request_id, blockers=blockers)
+                if tree.task_state(session_id) == "open":
+                    await self._notify_close_request_blocked(session_id, request_id, blockers)
         return remaining
+
+    async def _notify_close_request_blocked(
+        self, session_id: str, request_id: str, blockers: list[str]) -> None:
+        """Wake the requesting session with the blockers its saved request hit.
+
+        A server-minted scheduled input (actor system, never a user event, so
+        it opens or closes no authorization window) under a stable id per
+        request: recovery replays of the same request admit nothing new.
+        """
+        tree = self._tree
+        lines = "\n".join(f"- {b}" for b in blockers)
+        await tree.dispatch.admit_input(
+            session_id,
+            event_type=ET.SCHEDULED_TRIGGER,
+            content=(f"Closure request {request_id} did not close this task. Blockers:\n{lines}\n"
+                     "Resolve them, then send a new closure request."),
+            actor=ACTOR_SYSTEM,
+            input_id=stable_close_blocked_notice_id(session_id, request_id),
+        )
+        await tree.dispatch.dispatch_pending(session_id)
 
     async def evaluate_automatic_completion(
         self,

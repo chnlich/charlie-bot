@@ -165,9 +165,9 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   # A repeat recovery pass and a direct re-delivery both dedup to the same event.
   again = await fresh.dispatch.recover_pending_reports(child.id)
   assert again == []
-  redelivered = await fresh.dispatch.deliver_child_report(
+  redelivered, created = await fresh.dispatch.deliver_child_report(
       child.id, source_event=close_event, outcome="completed", summary="delivered", result_refs=[], recipient=parent.id)
-  assert redelivered is not None and redelivered["id"] == delivered[0]["id"]
+  assert not created and redelivered["id"] == delivered[0]["id"]
   assert len(child_report_messages(session_mgr, parent.id)) == 1
 
   # Window (b): the parent append landed but the enqueue was lost — the report

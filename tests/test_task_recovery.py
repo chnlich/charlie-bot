@@ -14,14 +14,22 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
+from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    patch_instructions_content,
+)
 
 from src.core import event_types as ET
-from src.core.models import RunRecord, TaskSpec, TaskType
+from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, TaskType
+from tests.test_parent_wake import drain_legacy_wakes
+from tests.test_task_completion import wake_probe
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
+    git,
     init_repo_with_origin,
     install_backends,
     make_pm_build,
@@ -433,3 +441,84 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     # The retried review consumed the one scripted backend; nothing else launches.
     await reconcile_task_tree(cfg, tree, session_mgr)
     assert len([r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_replays_an_already_delivered_blocked_report_without_waking(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The startup pass never wakes a parent for an already delivered report.
+
+    The production wake-replay: an implement child whose landing check keeps
+    failing (a rebase rewrote the base) re-derives the same stable blocked
+    report id on every restart, and the pass replays every terminal review
+    run. The first delivery woke the legacy parent once; the reconcile of the
+    same state — two successful review runs, the report already in the
+    parent's log — must append nothing and wake nobody.
+    """
+    from src.core.task_recovery import reconcile_task_tree
+
+    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+    repo, _origin = init_repo_with_origin(tmp_path)
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend="fake")
+    worker = await tree.create_task(
+        request_id="w", task_parent_id=legacy.id, profile="worker",
+        task=TaskSpec(goal="add a marker", repo_path=str(repo), base_branch="main",
+                      task_type=TaskType.IMPLEMENT),
+        name="W", backend=None, caller="operator")
+    trigger, calls, fired = wake_probe()
+    monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+    patch_instructions_content(monkeypatch)
+
+    def worktree() -> Path:
+        work = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"]
+        assert len(work) == 1 and work[0].worktree_path
+        return Path(work[0].worktree_path)
+
+    def implement() -> None:
+        wt = worktree()
+        (wt / "marker.txt").write_text("implemented\n")
+        git(wt, "add", "-A")
+        git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+
+    # The reviewer never pushes, so the landing check fails on every pass.
+    install_backends(
+        monkeypatch,
+        [SpawningScriptedBackend([result_event("implemented")], pre_run=implement),
+         SpawningScriptedBackend([result_event("review ok")])],
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+    decision = await tree.dispatch.dispatch_pending(worker.id)
+    _work, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
+    assert outcome == "success"
+
+    deadline = asyncio.get_event_loop().time() + 15
+    while asyncio.get_event_loop().time() < deadline:
+        reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
+        if reports:
+            break
+        await asyncio.sleep(0.05)
+    else:
+        pytest.fail("the review chain never reported to the legacy parent")
+    await asyncio.wait_for(fired.wait(), timeout=5)
+    assert len(calls) == 1
+    assert [r["outcome"] for r in reports] == ["blocked"]
+    assert tree.task_state(worker.id) == "open"
+
+    # The shape that woke the production parent twice per restart: a second
+    # successful review run of the same work run replays alongside the first.
+    work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
+    await tree.runs.register_run(RunRecord(
+        id="review-replay-2", session_id=worker.id, kind="review", review_of_run_id=work_run.id,
+        backend="fake", model="fake-model", repo_path=work_run.repo_path,
+        base_branch=work_run.base_branch, branch_name=work_run.branch_name))
+    await tree.runs.record_finish(worker.id, "review-replay-2", "success")
+
+    counters = await reconcile_task_tree(cfg, tree, session_mgr)
+    await drain_legacy_wakes()
+
+    assert counters["followups"] == 3  # the work run plus both review runs replayed
+    assert len(calls) == 1
+    reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
+    assert len(reports) == 1

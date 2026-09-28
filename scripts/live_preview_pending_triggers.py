@@ -55,9 +55,7 @@ from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     open_authenticated_page,
     trial_home_root,
 )
-from scripts.live_preview_task_tree import (  # noqa: E402
-    DEFAULT_BACKEND, fail, log, make_record, request,
-)
+from scripts.live_preview_task_tree import DEFAULT_BACKEND, fail, log, make_record, request  # noqa: E402
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_PORT = 18498

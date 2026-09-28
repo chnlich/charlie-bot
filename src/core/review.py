@@ -22,10 +22,10 @@ from src.core.threads import thread_events_log_path
 
 log = LazyStructlogLogger()
 
-# The reviewer contract's stable parts, shared verbatim by the v1 review prompt
-# (build_review_prompt) and the v2 managed instruction block (review_rules_text).
-# One maintained home: src/core/review.py owns the review rules; prompts/ owns
-# the generic templates.
+# The reviewer contract's stable parts, one maintained home: src/core/review.py
+# owns the review rules; prompts/ owns the generic templates. review_rules_text
+# renders them as the review Run's managed instruction block;
+# review_numbered_steps interpolates the same checks into the numbered steps.
 _REVIEW_ROLE_TEXT = "## Code Review\nYou are reviewing another worker's code changes."
 
 _REVIEW_CHECKLIST_INTRO = (
@@ -37,12 +37,12 @@ _REVIEW_CHECKLIST_INTRO = (
     "state-machine tasks, verify the implementation against `## Required Behavior`; do not rely only "
     "on tests.")
 
-# The checklist heading and intro ride both prompt shapes (the v1 review prompt
-# and the v2 managed instruction block); one spelling of that contract here.
+# The checklist heading and intro ride both renderings (the managed instruction
+# block and the numbered steps); one spelling of that contract here.
 _REVIEW_CHECKLIST_BLOCK = f"## Review Checklist\n{_REVIEW_CHECKLIST_INTRO}\n\n"
 
-# The checklist's stable judgment rules (the volatile cd/fetch/diff/push steps
-# stay in build_review_prompt, which formats them with the run's actual paths).
+# The checklist's stable judgment rules; the volatile cd/fetch/diff/push steps
+# carry the run's actual paths and render in review_numbered_steps.
 _REVIEW_SCOPE_CHECK = (
     "**Scope check**: Flag any changes NOT requested in the task — extra flags, altered defaults,\n"
     "   new parameters, behavioral changes. Workers must only do what was asked.")
@@ -68,49 +68,11 @@ def review_rules_text() -> str:
 
   The volatile steps (cd/fetch/diff/push with this run's branch, worktree and
   base) are the review's task/input context, rendered by the launch path from
-  build_review_prompt's numbered sequence — never part of the stable
-  instruction hash.
+  review_numbered_steps — never part of the stable instruction hash.
   """
   return (f"{_REVIEW_ROLE_TEXT}\n\n"
           f"{_REVIEW_CHECKLIST_BLOCK}"
           f"{_REVIEW_STABLE_RULES}")
-
-
-def build_review_prompt(
-    branch_name: str,
-    wt_path: str,
-    base_branch: str,
-    cfg: CharlieBotConfig,
-    session_id: str,
-    original_thread_id: str,
-    sessions_dir: Path,
-    context: str | None,
-    user_request: str | None,
-    worker_summary: str | None,
-    worker_log_path: Path | None = None,
-) -> str:
-  """Build the prompt for a review worker."""
-  from src.core.spawner import load_worker_prompt_sections
-
-  coding_principles = load_worker_prompt_sections(cfg)["coding_principles"]
-
-  context_hint = context or '(none provided)'
-  context_section = "\n".join(review_context_lines(user_request, worker_summary, context_hint))
-  session_dir = sessions_dir / session_id
-  chat_log_path = chat_events_path(session_dir)
-  # A v2 review pass reads the work Run's own events log; the legacy default
-  # stays the thread transport path.
-  resolved_worker_log = worker_log_path or thread_events_log_path(session_dir, original_thread_id)
-  numbered_steps = review_numbered_steps(branch_name, wt_path, base_branch)
-  return _compose_review_prompt(
-      context_section=context_section,
-      chat_log_path=chat_log_path,
-      resolved_worker_log=resolved_worker_log,
-      coding_principles=coding_principles,
-      branch_name=branch_name,
-      wt_path=wt_path,
-      base_branch=base_branch,
-      numbered_steps=numbered_steps)
 
 
 def review_numbered_steps(branch_name: str, wt_path: str, base_branch: str) -> str:
@@ -194,29 +156,6 @@ def review_git_venue(branch_name: str, wt_path: str) -> str:
   return (
       f"The work is on branch `{branch_name}` in worktree `{wt_path}`. "
       f"All git operations below run from the worktree.")
-
-
-def _compose_review_prompt(
-    *,
-    context_section: str,
-    chat_log_path: Path,
-    resolved_worker_log: Path,
-    coding_principles: str,
-    branch_name: str,
-    wt_path: str,
-    base_branch: str,
-    numbered_steps: str,
-) -> str:
-  """The v1 review prompt: role, context, principles, checklist, and the run's steps."""
-  return (
-      f"{_REVIEW_ROLE_TEXT}\n\n"
-      f"## Context\n"
-      f"{context_section}\n\n"
-      f"{review_log_pointer(chat_log_path, resolved_worker_log)}\n\n"
-      f"{coding_principles}\n"
-      f"{_REVIEW_CHECKLIST_BLOCK}"
-      f"{review_git_venue(branch_name, wt_path)}\n\n"
-      f"{numbered_steps}")
 
 
 def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:

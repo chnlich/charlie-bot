@@ -7,9 +7,9 @@ import io
 import json
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 
 from src.core.gc_control import gc_off
 

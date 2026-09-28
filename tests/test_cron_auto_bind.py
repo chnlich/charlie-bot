@@ -242,6 +242,7 @@ async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # polls the fired run's terminal fact in real time through the full dispatch pipeline
 async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
     tick_env, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The same tick that binds a task evaluates its fire against the new node:
@@ -576,6 +577,7 @@ def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str, co
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # polls the fired run's terminal fact in real time; the weekly recycle walks the thread dirs
 async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
     tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """A bound node woken by a firing's child report takes over the cron
@@ -618,6 +620,7 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # two dispatch turns, each polled in real time to its terminal fact
 async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """The report prefix marks a FRESH native conversation: once the node holds
   a live anchor (recorded by the previous turn) the next firing report's wake

@@ -62,6 +62,8 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.mark.asyncio
+@pytest.mark.integration  # polls the delegated run's terminal fact in real time on the API loop
+@pytest.mark.asyncio
 async def test_authorized_ancestor_delegates_without_a_local_takeoff(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
     """The real route from a child manager with NO local user message and an

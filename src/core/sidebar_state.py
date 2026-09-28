@@ -16,6 +16,8 @@ window around a mark.
 
 from collections.abc import Iterable
 
+from src.core.memo import BoundedMemo
+
 # The sidebar dict keys, single-homed here: the probe snapshot and the
 # per-request derived entry both build and read their dicts by these names,
 # and /api/sessions relays the derived entry to web/static/js/sidebar/ verbatim.
@@ -60,6 +62,22 @@ _probe_signatures: dict[str, tuple] = {}
 # populate_sidebar_state invocation counter (process lifetime).
 _poll_count = 0
 
+# Process-global generation of every input the derived sidebar fold reads:
+# the probe snapshot, the busy map (thinking_state marks through here), and
+# the sessions' metadata fields the fold partitions on (every metadata write
+# publishes through save_metadata's mark). Both writer funnels —
+# :func:`mark_sidebar_dirty` and :func:`store_snapshot_entry` — bump it, so
+# an unchanged generation is the whole staleness contract for the derived-map
+# memo below. Loop-side only, the same convention the dirty set follows.
+_derived_generation = 0
+
+# (ids, flags, generation) -> the derived map the fold built at that
+# generation. Values are served uncopied to every poll between bumps, so a
+# caller may read them but never mutate them — the contract every
+# resolve_sidebar_state caller already holds.
+_DERIVED_MAP_MEMO_LIMIT = 4
+_derived_maps: BoundedMemo[tuple, dict] = BoundedMemo(_DERIVED_MAP_MEMO_LIMIT)
+
 # session id -> monotone change revision, bumped by every mark_sidebar_dirty
 # call. Consumers outside the poll prove a derived value against disk through
 # a :class:`RevisionSweepGate` and skip the proof while it stands.
@@ -84,6 +102,8 @@ def mark_sidebar_dirty(session_id: str, path: str | None = None) -> None:
   """
   _dirty.add(session_id)
   _revisions[session_id] = _revisions.get(session_id, 0) + 1
+  global _derived_generation
+  _derived_generation += 1
   if path is not None:
     paths = _marked_paths.setdefault(session_id, set())
     if len(paths) >= _MARKED_PATHS_CAP:
@@ -207,7 +227,24 @@ def required_snapshot_entry(session_id: str) -> dict:
 
 def store_snapshot_entry(session_id: str, entry: dict) -> None:
   """Refresh the snapshot entry for *session_id* with fresh probe results."""
+  global _derived_generation
+  _derived_generation += 1
   _snapshot[session_id] = entry
+
+
+def derived_generation() -> int:
+  """Current generation of the probed-state inputs the derived fold reads."""
+  return _derived_generation
+
+
+def peek_derived_map(key: tuple) -> dict | None:
+  """The derived map built at *key*'s generation, or None; served value is read-only."""
+  return _derived_maps.peek(key)
+
+
+def store_derived_map(key: tuple, derived: dict) -> None:
+  """Store one derived map under its (ids, flags, generation) key."""
+  _derived_maps.store(key, derived)
 
 
 def snapshot_task_activity(session_id: str) -> tuple[bool, str] | None:
@@ -255,3 +292,6 @@ def reset_for_tests() -> None:
   _probe_signatures.clear()
   _marked_paths.clear()
   _poll_count = 0
+  global _derived_generation
+  _derived_generation = 0
+  _derived_maps.clear()

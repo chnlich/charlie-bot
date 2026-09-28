@@ -55,7 +55,13 @@ from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     open_authenticated_page,
     trial_home_root,
 )
-from scripts.live_preview_task_tree import DEFAULT_BACKEND, fail, log, request  # noqa: E402
+from scripts.live_preview_task_tree import (  # noqa: E402
+    DEFAULT_BACKEND,
+    fail,
+    log,
+    make_record,
+    request,
+)
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_PORT = 18498
@@ -175,11 +181,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                           check=True).stdout.strip()
   checks: list[dict] = []
 
-  def record(name: str, ok: bool, detail: str) -> None:
-    checks.append({"name": name, "ok": ok, "detail": detail})
-    log(f"    [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-    if not ok:
-      fail(f"assertion failed: {name}: {detail}")
+  record = make_record(checks)
 
   if args.port is not None and args.port == PRODUCTION_PORT:
     fail("the requested port is the production port 18498")

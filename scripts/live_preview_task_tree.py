@@ -42,6 +42,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
+from collections.abc import Callable  # noqa: E402
 
 from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
 
@@ -60,6 +61,24 @@ def log(message: str) -> None:
 
 def fail(message: str) -> None:
     raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
+
+
+def make_record(checks: list[dict]) -> Callable[[str, bool, str], None]:
+    """The PASS/FAIL sink the live-preview harnesses record their checks through.
+
+    The returned closure appends the check to *checks* (the list the harness's
+    evidence JSON serializes), logs the verdict, and exits through ``fail`` on
+    the first failed check: a failed assertion ends the trial, so the checks
+    after it never run.
+    """
+
+    def record(name: str, ok: bool, detail: str) -> None:
+        checks.append({"name": name, "ok": ok, "detail": detail})
+        log(f"    [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
+        if not ok:
+            fail(f"assertion failed: {name}: {detail}")
+
+    return record
 
 
 def request(base: str, key: str, method: str, path: str,

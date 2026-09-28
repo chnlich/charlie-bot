@@ -51,7 +51,7 @@ async def run_crash_recovery(
 
   Master-side reconciliation is the identity judgment
   (:func:`reconcile_master_identity`) plus the replay pass
-  (``_replay_unanswered_user_messages``): per session, a recorded master turn
+  (``_replay_unanswered_inputs``): per session, a recorded master turn
   is resolved through ``runs.resolve_run``'s outcome table — re-attached or
   drained through the follower, or cleared — and every real user message
   after the last MASTER_DONE (minus the recorded turn's per-event exclusion)
@@ -308,7 +308,7 @@ async def _reconcile_master_runs(cfg: CharlieBotConfig, session_mgr: SessionMana
   """Thin wrapper kept for existing callers: identity pass, then replay pass.
 
   New code should run :func:`reconcile_master_identity` once (before any door
-  that can create a new turn) and ``_replay_unanswered_user_messages`` only
+  that can create a new turn) and ``_replay_unanswered_inputs`` only
   with its returned exclusion map.
   """
   try:

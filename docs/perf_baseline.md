@@ -3132,11 +3132,10 @@ shutil.rmtree(home)
 EOF
 ```
 
-M46 — cron tasks list payload and handler time, steady state. Every grouped
-sidebar render pairs ``GET /api/cron/tasks`` with ``GET /api/sessions/scheduled``
-(the project-manager refresh fires on every list render), and the pre-fix route
-shipped every task's resolved prompt body — ~90 KB of the 96 KB live response,
-content only the in-process scheduler/master reads (the UI edits
+M46 — cron tasks list payload and handler time, steady state. The sidebar's
+Workspace view fetches ``GET /api/cron/tasks`` on every view load, and the
+pre-fix route shipped every task's resolved prompt body — ~90 KB of the 96 KB
+live response, content only the in-process scheduler/master reads (the UI edits
 ``prompt_file``) — plus the client pays a same-size JSON.parse per render. The
 fixed dump excludes ``prompt``, mirroring the POST/PUT responses which never
 carried it. The cost rides the sidebar render path, so the collector drives the

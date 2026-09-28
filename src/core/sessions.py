@@ -190,7 +190,7 @@ def _stamp_thinking_since(meta: SessionMetadata) -> SessionMetadata:
   applies this stamp on the way out; the succession-internal
   readers (``read_metadata_fresh``, ``resolve_successor_chain``) deliberately
   return the disk value unstamped, and a reader that needs live busy state stamps
-  the meta itself (see ``_elone_scheduled_successor``). The field stays
+  the meta itself. The field stays
   declared on the model, so a stale value parsed from an old metadata.json
   or restored into the cache by a post-save rebuild must not leak out
   through an unstamped API path.

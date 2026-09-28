@@ -27,6 +27,7 @@ from src.agents.backends import base as backend_base
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.core.models import SessionCallbacks, SessionMetadata
+from src.core.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE, context_reset_note
 
 
 def _rule_cfg(tmp_path: Path) -> CharlieBotConfig:
@@ -180,6 +181,148 @@ async def test_cross_family_without_completed_round_starts_fresh_silently(
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
 
+
+
+# ---------------------------------------------------------------------------
+# The note itself and the v1 turn-start notes
+# ---------------------------------------------------------------------------
+
+
+def test_context_reset_note_assembles_history_note_and_instruction() -> None:
+  """The whole bracketed note, with and without a task goal: the reason, the
+  shared history note, and the clone-style read-the-log instruction."""
+  without_goal = (
+      "[Context reset: this session switched from backend claude-sonnet-5 to codex-gpt-luna, "
+      "which starts its own conversation. "
+      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+  assert context_reset_note(
+      "this session switched from backend claude-sonnet-5 to codex-gpt-luna, "
+      "which starts its own conversation") == without_goal
+  with_goal = (
+      "[Context reset: this task's managed instructions changed. The task is: ship the parser. "
+      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+  assert context_reset_note(
+      "this task's managed instructions changed", task_goal="ship the parser") == with_goal
+
+
+@pytest.mark.asyncio
+async def test_cross_family_switch_note_carries_the_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-claude session switched to a codex option: the turn starts a fresh
+  native conversation whose prompt opens with the full reset note, instruction
+  included."""
+  cfg = _rule_cfg(tmp_path)
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend="codex-o3", cc_session_id="c1", native_backend="claude-opus-5")
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option("codex-o3"),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=True))
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  assert log[0]["resume_session_id"] is None
+  note, sep, tail = log[0]["prompt"].partition("\n\n")
+  assert sep and tail == "hello"
+  assert note == (
+      "[Context reset: this session switched from backend claude-opus-5 to codex-o3, "
+      f"which starts its own conversation. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+
+
+@pytest.mark.asyncio
+async def test_dropped_resume_note_carries_the_instruction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The could-not-be-resumed path (same producer, transcript gone): the note
+  names the dropped resume and still carries the instruction."""
+  cfg = _rule_cfg(tmp_path)
+  config_dir = tmp_path / "login-dir"
+  config_dir.mkdir(parents=True)  # no transcript for c1 in the login directory
+  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend="claude-opus-5", cc_session_id="c1", native_backend="claude-opus-5")
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-opus-5": [None]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option("claude-opus-5"),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=True))
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  note, sep, tail = log[0]["prompt"].partition("\n\n")
+  assert sep and tail == "hello"
+  assert note == (
+      "[Context reset: the previous conversation could not be resumed. "
+      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+
+
+@pytest.mark.asyncio
+async def test_switch_back_to_producer_before_sending_resumes_without_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A session switched away and back before the next message: the recorded
+  producer equals the current backend, so the native conversation continues
+  and no note is added."""
+  cfg = _rule_cfg(tmp_path)
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend="codex-o3", cc_session_id="c1", native_backend="codex-o3")
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option("codex-o3"),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=True))
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  assert log[0]["resume_session_id"] == "c1"
+  assert log[0]["prompt"] == "hello"
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
+
+
+@pytest.mark.asyncio
+async def test_same_login_model_switch_resumes_without_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Two cc-claude options over one login directory (the claude-sonnet-5 to
+  claude-opus-5 shape) share one continuation domain: the held conversation
+  resumes across the model switch and no note is added."""
+  cfg = _rule_cfg(tmp_path)
+  config_dir = tmp_path / "login-dir"
+  make_transcript(config_dir, "c1")
+  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend="claude-fable-5", cc_session_id="c1", native_backend="claude-opus-5")
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-fable-5": [None]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option("claude-fable-5"),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=True))
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+
+  assert exit_code == 0 and error_msg is None
+  assert log[0]["extra_flags"] == ["--resume", "c1", "--exclude-dynamic-system-prompt-sections"]
+  assert log[0]["prompt"] == "hello"
+  events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
+  assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
 
 # ---------------------------------------------------------------------------
 # Through the consumer: round-end persistence of id + producer

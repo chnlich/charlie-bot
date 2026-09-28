@@ -34,7 +34,7 @@ from src.core.models import (
     backend_type_allows_missing_model,
 )
 from src.core.process import kill_group_escalating
-from src.core.sessions import HISTORY_LOCATION_NOTE, backend_switch_reset_reason
+from src.core.sessions import backend_switch_reset_reason, context_reset_note
 from src.core.streaming import handle_compaction_events
 
 log = LazyStructlogLogger()
@@ -739,7 +739,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if reset_reason is not None:
     # Only the prompt the backend receives carries the note; the persisted user
     # event was written before the run and stays unchanged.
-    prompt = f"[Context reset: {reset_reason}. {HISTORY_LOCATION_NOTE}]\n\n{prompt}"
+    prompt = f"{context_reset_note(reset_reason)}\n\n{prompt}"
 
   log.info(
       "master_cc_starting",

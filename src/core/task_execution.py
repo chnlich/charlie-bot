@@ -69,7 +69,7 @@ from src.core.models import (
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.session_dispatch import child_report_text
-from src.core.sessions import HISTORY_LOCATION_NOTE, SessionManager, backend_switch_reset_reason
+from src.core.sessions import SessionManager, backend_switch_reset_reason, context_reset_note
 from src.core.spawner_backends import resolve_backend_option
 from src.core.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
@@ -822,7 +822,7 @@ class TaskExecutionAdapter:
             "this task's managed instructions or sources changed since the "
             "previous turn, so this turn starts a fresh native conversation")
       goal = meta.task.goal if meta.task is not None else meta.name
-      prompt = f"[Context reset: {reason}. The task is: {goal}. {HISTORY_LOCATION_NOTE}]\n\n{content}"
+      prompt = f"{context_reset_note(reason, goal)}\n\n{content}"
 
     async def on_task_spawn(pid: int, pid_start: str | None) -> None:
       if pid_start is None:

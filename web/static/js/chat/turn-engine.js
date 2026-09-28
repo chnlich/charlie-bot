@@ -61,30 +61,26 @@
     return String(entry.msg.content || '').length;
   }
 
-  // The 9953270 rule over message JSON: any separator-terminated span with a
-  // non-empty body is a turn; head = last user message before the conclusion,
-  // else last stimulus, else body[0]. An empty-body bare separator stays flat.
+  // The 9953270 rule over message JSON, computed by the one shared span rule
+  // (shared.js): any separator-terminated span with a non-empty body is a
+  // turn; its own inputs sit before its first assistant message, later
+  // stimuli are carried out to the next span, and the fold holds the work
+  // between the first assistant message and the conclusion. An empty-body
+  // bare separator stays flat.
   function describeSpan(span) {
     const stable = span.filter((entry) => isStable(entry.msg));
     const separator = stable[stable.length - 1];
     if (!separator) return null;
     const body = stable.slice(0, -1);
-    let conclusion = null;
-    for (let i = body.length - 1; i >= 0; i--) {
-      if (body[i].msg.role === 'assistant') { conclusion = body[i]; break; }
-    }
-    let stimulus = null;
-    const limit = conclusion ? body.indexOf(conclusion) : body.length;
-    for (let i = limit - 1; i >= 0; i--) {
-      if (body[i].msg.role === 'user') { stimulus = body[i]; break; }
-      if (!stimulus && STIMULUS_ROLES.includes(body[i].msg.role)) stimulus = body[i];
-    }
-    const head = stimulus || body[0];
-    if (!head) return null;
-    const fold = conclusion
-      ? body.slice(body.indexOf(head) + 1, body.indexOf(conclusion))
-      : [];
-    return {head, conclusion, separator, fold};
+    const split = splitTurnSpan(body, (entry) => entry.msg.role);
+    if (!split.head) return null;
+    return {
+      head: split.head,
+      conclusion: split.conclusion,
+      separator,
+      fold: split.fold,
+      carried: split.carried,
+    };
   }
 
   function turnKeyOf(turn) {
@@ -228,26 +224,35 @@
       entries.forEach((entry) => {
         span.push(entry);
         if (isStable(entry.msg) && entry.msg.role === 'separator') {
-          segments.push(this.closeSpan(span));
-          span = [];
+          const closed = this.closeSpan(span);
+          segments.push(closed.segment);
+          span = closed.carried.slice();
         }
       });
       this.stats.derivations++;
       return {segments, tailSpan: span};
     }
 
+    // Closes one separator-terminated span into its segment. Entries a later
+    // round will handle (the shared rule's carry) leave the segment here and
+    // come back as `carried`: deriveSegments seeds the next span with them,
+    // appendMessage drops them into a new pending flat tail, and the
+    // pagination merge feeds them to the following settled segment.
     closeSpan(span) {
       const turn = describeSpan(span);
-      if (!turn) return {kind: 'flat', entries: span.slice(), pending: false};
-      const key = turnKeyOf(turn);
-      return {
+      if (!turn) {
+        return {segment: {kind: 'flat', entries: span.slice(), pending: false}, carried: []};
+      }
+      const carriedSet = new Set(turn.carried);
+      const segment = {
         kind: 'turn',
-        key,
-        entries: span.slice(),
+        key: turnKeyOf(turn),
+        entries: span.filter((entry) => !carriedSet.has(entry)),
         foldEntries: turn.fold.slice(),
         separatorEntry: turn.separator,
         rowSpec: rowSpecOf(turn),
       };
+      return {segment, carried: turn.carried.slice()};
     }
 
     makeEntry(msg) {
@@ -862,8 +867,15 @@
           });
           break;
         }
+        // The region's carried entries may already sit at the head of this
+        // segment — seeded there when it was derived from the page that also
+        // produced the span carrying them. They live in the region now, so
+        // the re-derivation must not see them twice.
+        const carriedIds = new Set(region.map((entry) => String(entry.msg.id)));
+        const settled = this.segments[boundaryIndex];
         const boundary = this.deriveSegments(
-          region.concat(this.segments[boundaryIndex].entries));
+          region.concat(settled.entries.filter(
+            (entry) => !carriedIds.has(String(entry.msg.id)))));
         this.segments.splice(boundaryIndex, 1, ...boundary.segments);
         this.stats.rederivesOfSettledTurns++;
         if (!boundary.tailSpan.length) break;
@@ -916,12 +928,19 @@
 
       let closed = null;
       if (isStable(msg) && msg.role === 'separator') {
-        closed = this.closeSpan(pending.entries);
+        const result = this.closeSpan(pending.entries);
+        closed = result.segment;
         this.segments[this.segments.length - 1] = closed;
         const stale = this.domBySeg.get(pending);
         if (stale) {
           stale.remove();
           this.domBySeg.delete(pending);
+        }
+        // Inputs the closed round queued for a later one stay visible at the
+        // bottom: they open the next pending flat tail until the handling
+        // round's separator arrives.
+        if (result.carried.length) {
+          this.segments.push({kind: 'flat', entries: result.carried.slice(), pending: true});
         }
         this.stats.derivations++;
       }

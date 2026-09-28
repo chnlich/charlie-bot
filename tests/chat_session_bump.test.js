@@ -527,8 +527,13 @@ function lastMatch(items, predicate) {
   return found;
 }
 
-// The span cut and the head/conclusion/fold-range picks, recomputed from the
-// item list alone.
+// The span cut and the head/conclusion/fold picks, recomputed from the item
+// list alone under the shared turn-input rule: a span's own inputs are the
+// stimuli before its first assistant message, later stimuli are carried to
+// the next span (they open it, ahead of its own items), the head keeps the
+// user-over-stimulus priority over those inputs, and the fold holds the work
+// from the first assistant message to the conclusion — or, in a span with no
+// inputs at all, today's shape: head = body[0], fold after it.
 function expectedTurns(items) {
   const spans = [];
   let span = [];
@@ -540,23 +545,44 @@ function expectedTurns(items) {
       span = [];
     }
   }
-  return spans.map(describeExpectedSpan).filter(Boolean);
+  let carriedIn = [];
+  return spans.map((span) => {
+    const turn = describeExpectedSpan(span.items, carriedIn);
+    if (turn) carriedIn = turn.carried;
+    return turn;
+  }).filter(Boolean);
 }
 
-function describeExpectedSpan(span) {
-  const messages = span.items.filter((item) => item.kind === 'msg');
+function describeExpectedSpan(spanItems, carriedIn) {
+  const messages = [...carriedIn, ...spanItems.filter((item) => item.kind === 'msg')];
   const tail = messages[messages.length - 1];
   const body = messages.slice(0, -1);
   const conclusion = lastMatch(body, (item) => item.role === 'assistant');
-  const beforeConclusion = conclusion ? body.slice(0, body.indexOf(conclusion)) : body;
-  const stimulus = lastMatch(beforeConclusion, (item) => item.role === 'user')
-    || lastMatch(beforeConclusion, (item) => STIMULUS_ROLES.includes(item.role));
-  const head = stimulus || body[0];
+  const found = body.findIndex((item) => item.role === 'assistant');
+  const firstAssistantIdx = found === -1 ? body.length : found;
+  const ownInputs = body.filter(
+      (item, i) => STIMULUS_ROLES.includes(item.role) && i < firstAssistantIdx);
+  const carried = body.filter(
+      (item, i) => STIMULUS_ROLES.includes(item.role) && i >= firstAssistantIdx);
+  const head = lastMatch(ownInputs, (item) => item.role === 'user')
+    || ownInputs[ownInputs.length - 1]
+    || body[0];
   if (!head) return null;
-  const steps = conclusion
-    ? body.slice(body.indexOf(head) + 1, body.indexOf(conclusion))
-    : [];
-  return {items: span.items, head, conclusion, tail, steps};
+  const conclusionIdx = conclusion ? body.indexOf(conclusion) : body.length;
+  let steps;
+  if (!conclusion) {
+    steps = [];
+  } else if (ownInputs.length) {
+    const queued = new Set(carried);
+    steps = body.slice(firstAssistantIdx, conclusionIdx).filter((item) => !queued.has(item));
+  } else {
+    steps = body.slice(1, conclusionIdx);
+  }
+  // The wrapper holds the span's own nodes plus the carried-in ones, minus
+  // the stimuli this span queues for the next round.
+  const queued = new Set(carried);
+  const held = [...carriedIn, ...spanItems].filter((item) => !queued.has(item));
+  return {items: held, head, conclusion, tail, steps, carried};
 }
 
 function expectedRow(turn) {

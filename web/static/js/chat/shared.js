@@ -2,9 +2,70 @@
 (function() {
   const Chat = globalThis.Chat;
 
-// Roles whose messages open a chat turn. Both turn-layout consumers read this
-// list: rendering.js's DOM matcher and turn-engine.js's fold derive.
+// Roles whose messages open a chat turn — the one list, read by the shared
+// span rule below and by rendering.js's DOM matcher.
 const STIMULUS_ROLES = ['user', 'scheduled_trigger', 'agent_message', 'worker_summary', 'child_report'];
+
+// ---------------------------------------------------------------------------
+// The turn-input rule, stated once.
+//
+// A chat round renders as one turn: every input the session received while
+// that round ran (a user message, a relayed agent_message, a scheduled
+// trigger, a child report, a worker summary) shows in the turn that handled
+// it, outside the folded steps. Both turn-layout consumers — turn-engine.js
+// over message entries and rendering.js over rendered elements — call this
+// one pure function; neither keeps a second copy of the rule.
+//
+// `items` is one separator-terminated span's messages in arrival order (the
+// separator itself excluded); `roleOf(item)` reads the message's role, which
+// is what lets the two consumers share the function. Inputs a round queued
+// while an earlier round was still running arrive after that round's first
+// assistant message: they are carried out of this span and the caller moves
+// them ahead of the next span, in arrival order, where they become that
+// span's own inputs (they sit at its front, before its first assistant).
+function splitTurnSpan(items, roleOf) {
+  let conclusion = null;
+  for (let i = items.length - 1; i >= 0; i--) {
+    if (roleOf(items[i]) === 'assistant') { conclusion = items[i]; break; }
+  }
+  const conclusionIdx = conclusion ? items.indexOf(conclusion) : items.length;
+  let firstAssistantIdx = items.length;
+  for (let i = 0; i < items.length; i++) {
+    if (roleOf(items[i]) === 'assistant') { firstAssistantIdx = i; break; }
+  }
+  const ownInputs = [];
+  const carried = [];
+  items.forEach((item, i) => {
+    if (!STIMULUS_ROLES.includes(roleOf(item))) return;
+    (i < firstAssistantIdx ? ownInputs : carried).push(item);
+  });
+  // Head: today's priority over the span's inputs, carried-in ones included —
+  // the last user input, else the last input of any stimulus role, else
+  // body[0]. Without a stimulus the fold keeps today's shape too: it starts
+  // after body[0]. With inputs the fold holds the span's work — from the
+  // first assistant message to the conclusion, minus the carried stimuli —
+  // so notices between the last input and the first assistant message (a
+  // model switch, say) stay outside the fold next to the inputs.
+  let head = null;
+  for (let i = ownInputs.length - 1; i >= 0; i--) {
+    if (roleOf(ownInputs[i]) === 'user') { head = ownInputs[i]; break; }
+  }
+  if (!head && ownInputs.length) head = ownInputs[ownInputs.length - 1];
+  if (!head) head = items[0] || null;
+  if (!head) return {ownInputs, carried, head: null, conclusion: null, fold: []};
+  let fold = [];
+  if (conclusion) {
+    if (ownInputs.length) {
+      const queued = new Set(carried);
+      for (let i = firstAssistantIdx; i < conclusionIdx; i++) {
+        if (!queued.has(items[i])) fold.push(items[i]);
+      }
+    } else {
+      fold = items.slice(1, conclusionIdx);
+    }
+  }
+  return {ownInputs, carried, head, conclusion, fold};
+}
 
 // ---------------------------------------------------------------------------
 // Auto-scroll helper — returns true only when user is near the bottom
@@ -114,6 +175,7 @@ function isRenderedMessage(msg) {
 }
 
 const GLOBALS = {
+  splitTurnSpan,
   shouldAutoScroll,
   escapeHtml,
   escapeHtmlAttr,

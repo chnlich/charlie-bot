@@ -109,16 +109,13 @@ function isStableRenderedMessage(el) {
 // Every finished turn (one stimulus-to-answer round, ending in a separator)
 // lives in one `.turn-wrap`: that span's own nodes in their original order,
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
-// reverse. Nothing is ever unwrapped and no message is ever moved again, so a
+// reverse. Nothing is ever unwrapped, and the only nodes that ever move after
+// wrapping are a span's carried inputs (queued for the next round) — so a
 // reader-expanded `N steps` bar, an open recap panel and embedded artifact
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
 const TEXT_NODE = 3;
-
-function isStimulusMessage(el) {
-  return STIMULUS_ROLES.includes(renderedMessageRole(el));
-}
 
 // #streaming-msg and #load-more-sentinel are container fixtures owned by no
 // turn — the sentinel sits at the top of a paginated page, exactly where a
@@ -127,10 +124,13 @@ function isTurnSpanNode(el) {
   return el.id !== 'streaming-msg' && el.id !== 'load-more-sentinel';
 }
 
-// One pass over the container's flat runs. An existing wrapper is a settled
-// turn: its span can no longer change, so it only ends the run before it.
+// One pass over the container's flat runs, wrapping each finished turn as
+// its separator lands. An existing wrapper is a settled turn: its span can
+// no longer change, so it only ends the run before it. Wrapping in run order
+// — not after collecting every span — is what lets one span's carried inputs
+// join the next span inside this same derive: wrapTurn moves them to just
+// after the new wrapper, and the run continues from there.
 function collectTurns(root) {
-  const turns = [];
   let nodes = [];
 
   Array.from(root.children).forEach(el => {
@@ -142,45 +142,30 @@ function collectTurns(root) {
     nodes.push(el);
     if (isStableRenderedMessage(el) && renderedMessageRole(el) === 'separator') {
       const turn = describeTurn(nodes);
-      if (turn) turns.push(turn);
-      nodes = [];
+      nodes = turn ? turn.carried.slice() : [];
+      if (turn) wrapTurn(root, turn);
     }
   });
-
-  return turns;
 }
 
-// The parts of one finished turn. Null for a span that stays flat: a bare
-// separator with an empty body.
+// The parts of one finished turn — computed by the one shared span rule
+// (shared.js) over the rendered elements. Null for a span that stays flat: a
+// bare separator with an empty body. `carried` lists the span's queued
+// inputs; wrapTurn moves their nodes to just after the wrapper.
 function describeTurn(nodes) {
   const messages = nodes.filter(isStableRenderedMessage);
   const separator = messages[messages.length - 1];
   const body = messages.slice(0, -1);
-  const conclusion = lastMessageWithRole(body, 'assistant');
-  const stimulus = lastStimulusBefore(body, conclusion);
-  const head = stimulus || body[0];
-  if (!head) return null;
-  const foldRange = conclusion
-    ? body.slice(body.indexOf(head) + 1, body.indexOf(conclusion))
-    : [];
-  return {nodes, head, conclusion, separator, foldRange};
-}
-
-function lastMessageWithRole(messages, role) {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (renderedMessageRole(messages[i]) === role) return messages[i];
-  }
-  return null;
-}
-
-function lastStimulusBefore(messages, conclusion) {
-  const limit = conclusion ? messages.indexOf(conclusion) : messages.length;
-  let stimulus = null;
-  for (let i = limit - 1; i >= 0; i--) {
-    if (renderedMessageRole(messages[i]) === 'user') return messages[i];
-    if (!stimulus && isStimulusMessage(messages[i])) stimulus = messages[i];
-  }
-  return stimulus;
+  const split = splitTurnSpan(body, renderedMessageRole);
+  if (!split.head) return null;
+  return {
+    nodes,
+    head: split.head,
+    conclusion: split.conclusion,
+    separator,
+    foldRange: split.fold,
+    carried: split.carried,
+  };
 }
 
 function turnFoldKey(turn) {
@@ -396,6 +381,13 @@ function wrapTurn(root, turn) {
   turn.nodes.forEach(node => wrap.appendChild(node));
   installTurnFoldFromTurn(wrap, turn);
   installTurnCollapseControl(turn.separator);
+  // The span's carried inputs were queued for a later round: move their nodes
+  // to just after this wrapper — the same moment the fold nodes move into
+  // the band — so the next span opens with them.
+  if (turn.carried.length) {
+    const afterWrap = wrap.nextSibling;
+    turn.carried.forEach(node => root.insertBefore(node, afterWrap));
+  }
   return wrap;
 }
 
@@ -444,7 +436,7 @@ function applyTurnOutline(root) {
   const wasAtBottom = shouldAutoScroll(root);
   const bottomOffset = root.scrollHeight - root.scrollTop;
 
-  collectTurns(root).forEach(turn => wrapTurn(root, turn));
+  collectTurns(root);
 
   const wrappers = turnWrappers(root);
   wrappers.forEach((wrap, i) => setTurnOpen(wrap, turnIsOpen(wrap, i === wrappers.length - 1)));

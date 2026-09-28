@@ -32,7 +32,7 @@ from pathlib import Path
 from src.core import event_types as ET
 from src.core.memo import BoundedMemo
 from src.core.message_projection import MessageProjection
-from src.core.models import RunRecord, ThreadMetadata, utc_now
+from src.core.models import RunRecord, ThreadMetadata, utc_now_iso
 from src.core.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
 from src.core.task_prompts import LAUNCH_TEXT_FILENAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME
@@ -190,7 +190,7 @@ def _delivery_event(task_state: str, facts_events: list[dict], runs: list[RunRec
       "base_branch": delivered.base_branch or "",
       "branch_name": delivered.branch_name or "",
       "run_id": delivered.id,
-      "timestamp": utc_now().isoformat(),
+      "timestamp": utc_now_iso(),
   }
 
 

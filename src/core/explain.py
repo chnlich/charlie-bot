@@ -30,7 +30,7 @@ from src.api.message_utils import events_to_messages
 from src.core.config import CharlieBotConfig
 from src.core.deferred import deferred_module_getattr
 from src.core.json_utils import load_json_dict, write_json_atomically
-from src.core.models import BackendOption, utc_now
+from src.core.models import BackendOption, utc_now, utc_now_iso
 from src.core.sessions import SessionManager
 from src.core.streaming import session_channel, streaming_manager
 from src.core.tasks import create_logged_task
@@ -120,7 +120,7 @@ def _reap_stale_pending(session_mgr: SessionManager, session_id: str, upto: int,
   and persists this error instead of waiting on a generation that no longer exists.
   No startup hook: reaping happens only where a read actually touches the entry.
   """
-  reaped = {**entry, "state": "error", "error": _REAPED_ERROR, "generated_at": utc_now().isoformat()}
+  reaped = {**entry, "state": "error", "error": _REAPED_ERROR, "generated_at": utc_now_iso()}
   _write_entry(session_mgr, session_id, upto, reaped)
   log.warning("explain_pending_reaped", session_id=session_id, upto=upto)
   return reaped
@@ -132,7 +132,7 @@ def _pending_entry(backend_id: str) -> dict:
       "backend": backend_id,
       "answer": "",
       "error": None,
-      "requested_at": utc_now().isoformat(),
+      "requested_at": utc_now_iso(),
       "generated_at": None,
   }
 
@@ -144,7 +144,7 @@ def _terminal_entry(backend_id: str, requested_at: str, *, state: str, answer: s
       "answer": answer,
       "error": error,
       "requested_at": requested_at,
-      "generated_at": utc_now().isoformat(),
+      "generated_at": utc_now_iso(),
   }
 
 

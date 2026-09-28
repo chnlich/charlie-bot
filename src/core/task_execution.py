@@ -64,7 +64,7 @@ from src.core.models import (
     RunRecord,
     SessionMetadata,
     TaskType,
-    utc_now,
+    utc_now_iso,
 )
 from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
@@ -608,7 +608,7 @@ class TaskExecutionAdapter:
             "type": ET.ERROR,
             "message": error_text,
             "content": error_text,
-            "timestamp": utc_now().isoformat(),
+            "timestamp": utc_now_iso(),
         })
         # The leaf card's Events link reads the record's events_ref: the
         # launch-failed run's evidence is reachable exactly the way a process

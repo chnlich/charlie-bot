@@ -48,6 +48,7 @@ from src.core.models import (
     SessionStatus,
     parse_utc_datetime,
     utc_now,
+    utc_now_iso,
 )
 from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
@@ -1769,7 +1770,7 @@ class SessionManager:
         "type": ET.CLONE_START,
         "parent_session_id": parent_id,
         "parent_session_name": parent.name,
-        "timestamp": utc_now().isoformat(),
+        "timestamp": utc_now_iso(),
     }
     # The child log is born whole — prefix plus marker — through one atomic
     # stream. A marker append after the copy would fdatasync the entire corpus

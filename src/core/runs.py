@@ -692,7 +692,7 @@ class RunStore:
     # is logged and never fails the durable operation.
     self._liveness_notifier: Callable[[str, RunRecord, bool], Awaitable[None]] | None = None
     # Bumped after every record-mirror write below; every mutation of a record
-    # a reader can observe funnels through _write_record, so an unchanged
+    # a reader can observe funnels through write_record, so an unchanged
     # generation is the whole staleness contract for a reader memo keyed on it
     # (the same writer-funnel shape the sidebar fold's generation uses).
     self.records_generation = 0

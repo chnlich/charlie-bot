@@ -139,6 +139,23 @@ async def test_activity_tracks_a_launch_that_lands_after_a_warm_derivation(task_
 
 
 @pytest.mark.asyncio
+async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation(task_env) -> None:
+  """The events cache takes an append in place — the list identity and the
+  archived extent survive the new fact — so a chat-only fact transition with
+  no record write (a stop request on a queued run) moves the verdict through
+  the covered length in the memo key. A key without it would pin the waiting
+  verdict on every tree page and sidebar probe until an unrelated record
+  write bumped the generation."""
+  _cfg, _session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r-stop", session_id=worker))
+  assert task_mgr.activity_of(worker).work_state == "waiting"
+  await task_mgr.runs.request_stop(worker, "r-stop", "stop-1")
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
 async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> None:
   """A launched run without a terminal fact is judged through /proc, whose
   death no record write announces: the derivation must re-read on every call

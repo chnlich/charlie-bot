@@ -387,10 +387,15 @@ class TaskTreeManager:
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
     # Activity cells: (records_generation, live events or None, archived count
-    # or -1, verdict). A None live list marks a runless node's cell — its
-    # verdict is a constant that only a record write (a generation bump) can
-    # move, so it skips the events load the runs-bearing key needs.
-    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, TaskTreeActivity]] = {}
+    # or -1, covered live length or -1, verdict). A None live list marks a
+    # runless node's cell — its verdict is a constant that only a record write
+    # (a generation bump) can move, so it skips the events load the
+    # runs-bearing key needs. The covered length is in the key because the
+    # events cache takes an append in place: the list identity and the
+    # archived extent survive a new fact, and unlike the suffix folds this
+    # memo returns a stored verdict, so the only append a key check can see
+    # is the length move.
+    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, int, TaskTreeActivity]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
@@ -731,7 +736,11 @@ class TaskTreeManager:
     Memoized per node on the inputs that can move the verdict: the run
     records' generation (every record mutation funnels through one
     :meth:`RunStore.write_record` bump) plus, for a node with runs, the
-    chat-events identity and archived extent the facts/outcomes memos key on.
+    chat-events identity, its covered length, and the archived extent the
+    facts/outcomes memos key on. The length is in the key because the events
+    cache takes an append in place — identity and archived extent survive a
+    new fact, and a fact transition with no record write (a stop request, a
+    close/reopen) moves only the length.
     A verdict that consulted /proc is never stored: a process death moves it
     with no file write to bump the key, so that node re-derives until its
     runs settle (the sidebar probe's recheck_liveness contract, unchanged).
@@ -740,18 +749,18 @@ class TaskTreeManager:
     cached = self._activity_memo.get(session_id)
     if cached is not None and cached[0] == generation:
       if cached[1] is None:
-        return cached[3]
+        return cached[4]
       live = self._sessions.load_chat_events_sync(session_id)
       archived_count = self._archived_event_count(session_id, live)
-      if cached[1] is live and cached[2] == archived_count:
-        return cached[3]
+      if cached[1] is live and cached[2] == archived_count and cached[3] == len(live):
+        return cached[4]
     runs = self.runs.list_run_records_sync(session_id)
     if not runs:
       # No Run is no activity: the derivation's own guard answers without any
       # event load, so a listing's per-descendant derivation over a runless
       # node pays one runs-dir stat, not the node's whole event history.
       activity = derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
-      self._activity_memo[session_id] = (generation, None, -1, activity)
+      self._activity_memo[session_id] = (generation, None, -1, -1, activity)
       return activity
     live = self._sessions.load_chat_events_sync(session_id)
     archived_count = self._archived_event_count(session_id, live)
@@ -769,7 +778,7 @@ class TaskTreeManager:
     if probed:
       self._activity_memo.pop(session_id, None)
     else:
-      self._activity_memo[session_id] = (generation, live, archived_count, activity)
+      self._activity_memo[session_id] = (generation, live, archived_count, len(live), activity)
     return activity
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:
@@ -1646,6 +1655,7 @@ class TaskTreeManager:
       self._invalidate_index()
       self._facts_memo.pop(session_id, None)
       self._outcomes_memo.pop(session_id, None)
+      self._activity_memo.pop(session_id, None)
     return result
 
 

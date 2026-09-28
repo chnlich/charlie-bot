@@ -131,6 +131,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M123 hook-helper import floor, per hook event | M123 collector below | seconds per fresh-process registered hook-command wall (the collector runs the exact argv `claude_sub._write_hook_plugin` writes for the PreToolUse gate event, stdin `{}`, absent socket, `--gate` so the fail path returns rc 2 without signalling the parent group; the wall every Claude Code hook event pays before the bridge round-trip — the gate events UserPromptSubmit/PreToolUse/PermissionRequest sit on the turn's critical path) | median < 0.030 s, max < 0.030 s (the after band reads 23.2-23.5 ms median, 23.6-24.2 ms max — interpreter base, the json/re import chain, and the transport modules; the pre-fix shape pays site's editable finder for pathlib/glob/re the helper never imports plus argparse for a three-flag argv and reads 34.6-36.4 ms median with maxima to 50.4, tripping both lines) | — (introduced with its first history row) |
 | M124 config-verb dispatch wall, help path | M124 collector below | seconds per fresh-process `config --help` wall (the import+dispatch floor every config-verb invocation pays before argparse prints — the M92 protocol) and per `config get <key>` round (the verb's own reading; the model stack it needs either way is why its wall is not this line's subject) | help median < 0.10 s (the M92 line's shape: the deferred-module verbs' help floors read 26-57 ms, and the pre-fix config verb reads 151-173 ms — the eager `src.core.config` import pricing the pydantic model build into discovery; the other config-importing verb modules' floors sit higher on their core modules' own eager chains — see the history row); get median < 0.25 s (the M115 line's shape — the get round is the cold config resolution plus argparse) | — (introduced with its first history row) |
 | M125 sibling-verb dispatch floor, help path | M125 collector below | seconds per fresh-process `<verb> --help` wall (the M92 protocol's import+dispatch floor) for the five sibling verbs the M124 round left pinned by their core modules' eager chains (improve, publish, storage, gc-trash, remote-launch) | median < 0.10 s per verb (the M92 line's shape — the after band reads 29-45 ms across the five, the src.cli.config deferral shape's deferred-module band; the pre-fix shape reads 0.157-0.382 s, the publish/storage/trash/sequence/config chains' own eager cost) | — (introduced with its first history row) |
+| M126 startup task-tree reconcile, closed reviewed nodes | M126 collector below | seconds per closed node of one reconcile_task_tree pass; git fetch invocations per pass | median < 0.005 s per closed node; 0 fetches | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8567,9 +8568,158 @@ for verb in VERBS:
 EOF
 ```
 
+M126 — startup task-tree reconcile, closed reviewed nodes. Every server start awaits
+`reconcile_task_tree` (src/core/task_recovery.py) on the readiness critical path — the lifespan
+yields only after the pass — and the pass replays every terminal review Run's follow-up. Each
+closed task's replay used to re-prove its landing (`git rev-parse`, `git fetch origin <base>`,
+cat-file, merge-base) before the automatic-completion call returned the recorded close without
+reading the evidence, so the startup cost multiplied by the delivered-task history: the
+2026-09-28 live boot read 62 closed tasks at ~1.18 s each, ~73 s of a 79 s startup. The collector
+builds a scratch data directory of 100 closed, reviewed, landed implement worker nodes
+(successful work Run, successful review Run, automatic close carrying the landing evidence, no
+worktree left on disk) against a scratch repo whose origin is a local bare repo, stubs the
+process-launch seam (every Run is terminal, so a build attempt fails the collector loud), times
+`reconcile_task_tree` in-process for 5 rounds after one warm pass — the pass that closes the
+still-open nodes, the one a first boot after the fix pays — and prints the median seconds per
+closed node and the per-pass git fetch count. Evidence points the same collector at the before
+and after checkouts (`CHECKOUT` at each root, the M120 pattern); run it from the checkout's root:
+
+```bash
+CHECKOUT=${CHECKOUT:-$PWD} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import asyncio, logging, os, shutil, structlog, subprocess, sys, tempfile, time
+from pathlib import Path
+
+SCRATCH = Path(tempfile.mkdtemp(prefix="m126-reconcile-", dir="/tmp"))
+try:
+    sys.dont_write_bytecode = True  # the checkout under test is read, never written
+    # The scratch repo and its local bare origin: one reviewed branch landed on
+    # origin's base (the reviewer's push) — the landing every node's close names.
+    repo = SCRATCH / "repo"
+    origin = SCRATCH / "origin.git"
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
+
+    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True, capture_output=True)
+    subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True, capture_output=True)
+    git("config", "user.email", "m126@example.com")
+    git("config", "user.name", "m126")
+    (repo / "seed.txt").write_text("seed\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "seed")
+    git("push", "-q", "origin", "main")
+    git("checkout", "-q", "-b", "task/work")
+    (repo / "marker.txt").write_text("implemented\n")
+    git("add", "-A")
+    git("commit", "-q", "-m", "implement marker")
+    git("push", "-q", "origin", "task/work:main")
+
+    CHECKOUT = os.environ["CHECKOUT"]
+    sys.path.insert(0, CHECKOUT)
+    # The replay's per-run INFO lines would drown the printed reading.
+    structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))
+    import src.core.config as core_config
+    from src.core.config import CharlieBotConfig
+    from src.core.models import BACKEND_OPTION_ADAPTER, RunRecord, TaskSpec, TaskType
+    from src.core.run_token import CallerIdentity
+    from src.core.sessions import SessionManager
+    from src.core.task_execution import TaskExecutionAdapter
+    from src.core.task_recovery import reconcile_task_tree
+    from src.core.task_sessions import TaskTreeManager
+
+    home = SCRATCH / "home"
+    os.environ["CHARLIEBOT_HOME"] = str(home)
+    cfg = CharlieBotConfig(
+        charliebot_home=home,
+        backends={"options": [
+            BACKEND_OPTION_ADAPTER.validate_python(
+                {"id": "fake", "label": "Fake", "type": "codex", "model": "fake-model"})],
+            "preference": ["fake"]})
+    core_config._credentials_cache.seed(core_config.Credentials(
+        path=home / "credentials.yaml",
+        sections={"charliebot": {"access_key": "m126-collector-key"}}))
+    (home / "memory").mkdir(parents=True)
+    session_mgr = SessionManager(cfg)
+    tree = TaskTreeManager(cfg, session_mgr)
+    adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
+    tree.dispatch.executor = adapter
+
+    # Process-launch stub: every Run is terminal, so a build attempt is a bug —
+    # the assert below fails the collector loud instead of spawning a process.
+    import src.agents.backends.registry as backend_registry
+    import src.agents.worker as worker_mod
+
+    builds = {"n": 0}
+
+    def refusing_build(*args, **kwargs):
+        builds["n"] += 1
+        raise AssertionError("reconcile attempted a process launch")
+
+    backend_registry.build_backend = refusing_build
+    worker_mod.build_backend = refusing_build
+
+    # The fetch counter rides the module attribute the landing proof's
+    # git_verify_commit_landed resolves its fetch through.
+    from src.core import git as git_mod
+
+    real_fetch = git_mod.git_fetch
+    fetch_rounds: list[int] = []
+
+    async def counting_fetch(repo_path, remote, branch):
+        fetch_rounds[-1] += 1
+        return await real_fetch(repo_path, remote, branch)
+
+    N = 100
+
+    async def main() -> None:
+        task = TaskSpec(goal="## Goal\n\nm126 node\n", repo_path=str(repo), base_branch="main",
+                        task_type=TaskType.IMPLEMENT, keep_worktree=False)
+        for i in range(N):
+            w = await tree.create_task(
+                request_id=f"m126-{i}", task_parent_id=None, profile="worker", task=task,
+                name=f"m126-{i}", backend=None, caller=CallerIdentity(kind="operator"))
+            work_run_id = f"m126-work-{i}"
+            await tree.runs.register_run(RunRecord(
+                id=work_run_id, session_id=w.id, kind="work", backend="fake", model="fake-model",
+                repo_path=str(repo), base_branch="main", branch_name="task/work",
+                worktree_path=str(home / "worktrees" / f"m126-{i}")))
+            await tree.dispatch.finish_run(w.id, work_run_id, outcome="success", exit_code=0)
+            review_run_id = f"m126-review-{i}"
+            await tree.runs.register_run(RunRecord(
+                id=review_run_id, session_id=w.id, kind="review", review_of_run_id=work_run_id,
+                backend="fake", model="fake-model"))
+            await tree.dispatch.finish_run(w.id, review_run_id, outcome="success", exit_code=0)
+        # The warm pass replays the review follow-up on every still-open node:
+        # the landing proof runs once, the automatic close lands. Not timed.
+        await reconcile_task_tree(cfg, tree, session_mgr)
+        nodes = [p for p in (home / "sessions").iterdir() if p.is_dir()]
+        states = {tree.task_state(n.name) for n in nodes}
+        assert states == {"completed"} and len(nodes) == N, \
+            f"warm pass left states {states} over {len(nodes)} nodes"
+        git_mod.git_fetch = counting_fetch
+        per_node = []
+        for _round in range(5):
+            fetch_rounds.append(0)
+            t0 = time.perf_counter()
+            await reconcile_task_tree(cfg, tree, session_mgr)
+            per_node.append((time.perf_counter() - t0) / N)
+        assert builds["n"] == 0, f"launch stub reached {builds['n']} times"
+        per_node.sort()
+        print(f"checkout {Path(CHECKOUT).name}: {N} closed reviewed landed nodes; "
+              f"reconcile median {per_node[2] * 1000:.3f} ms per closed node "
+              f"(max {per_node[-1] * 1000:.3f} ms) over 5 rounds; "
+              f"git fetches per pass {fetch_rounds}")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(SCRATCH, ignore_errors=True)  # every exit path removes the scratch dir
+EOF
+```
+
 ## Sampling history
 
 | Date | PR | Before → after | Note |
+| 2026-09-28 | this commit | M126 introduced with its landing fix: the verbatim collector, three interleaved rounds, base checkout before vs branch worktree after back-to-back, arm order alternating (before→after, after→before, before→after), load 2.3-5.0 one-minute — before 18.2/24.3/19.3 ms per closed node median (maxima 20.7/31.4/19.6 ms) with git fetches per pass [100, 100, 100, 100, 100] in every round, tripping both lines (median < 0.005 s per closed node; 0 fetches) — the local bare origin prices only the four git subprocesses, while the live host's network fetch read the same shape at ~1.18 s per closed node (62 closed tasks, ~73 s of a 79 s startup); after 1.5/1.7/1.8 ms (maxima 1.6/1.7/1.9 ms) with [0, 0, 0, 0, 0] in every round, ~3× under the line | fix: `_after_review_run` reads the task's derived state first — a task that is not open skips the landing proof and the automatic-completion call (whose recorded close replays inside it anyway) and keeps only the worktree cleanup; a reopened task derives "open" again and gets the full proof, and the open-task path and the failed-review branch are unchanged |
 | 2026-09-28 | this PR | M97 collector repaired, the sweep's own machinery (no product-code change): the verbatim collector failed every round — the invoking cron shell's own ``CHARLIEBOT_SESSION_ID`` rides the timed subprocess, and the plan CLI's session-ambiguity guard refuses the collector's ``--session`` (the worst plans corpus, session a9bb2346) as contradicting it, so the sweep read rc=2 unmeasured (2026-09-27's round documented the same refusal and re-ran by hand; this round's sweep reproduced it before the repair). The repair strips that one variable from the timed child's environment — the probe's session identity is the explicit ``--session`` argument, the cron session's own id is not the probe's; the run token and profile home ride unchanged (the authed live-GET shape the M98 line documents as the sweep's normal). Repaired collector, verbatim, three back-to-back rounds on the quiet host (load 0.48 one-minute): median 0.058/0.058/0.059 s, max 0.059-0.061 s over 7 each, against the < 0.15 s line — the 09-25 post-fix band read 0.059-0.066 s under the then-cron's load, so the wall sits at its import-plus-GET floor | every round the collector fails is a round the plan-CLI wall's regression watch does not run; the 2026-09-17 landing's 0.088-0.091 s band and the 09-25 fix's 0.059-0.066 s band were both read through manual env-unset re-runs, which is the repair this row pins into the collector itself |
 | 2026-09-28 | this PR | M56 /status served median 1.17/1.18/1.19 → 1.02/0.86/0.89 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, arm order alternating, load 1.17-1.52; median-of-medians 1.18 → 0.89, −25 %, every paired round faster), body digest 135fec1cf7ae identical across arms; witnesses riding the same fold: M119 root list 1.23 → 0.92 ms (−25 %) and M71 capped search 1.05 → 0.89 ms (−15 %), digests 2b2fc48505af / c26a9dd674be identical; M44 /scheduled 1.86 → 1.85 ms and M21 sweep 8.3 → 7.9 ms unchanged (paths off the fold) | every /status poll rebuilt one derived entry per requested session — the 296-entry fold was the route's largest handler term (0.36 ms of the 1.1 ms drive by stage timers) — although between state bumps it is a pure function of the probed-state snapshot, the busy map, and the metadata partition; all three sit behind two writer funnels (mark_sidebar_dirty, store_snapshot_entry), so a process-global generation bumped at both makes an unchanged generation the whole staleness contract: a clean poll serves the last fold's map whole, a raced round stores under its pre-probe generation so a mark landing inside the probe's await can never be served for the state it raced, and the every-10th sweep's stores re-derive the next poll; keyed on the id tuple because the read-only loaders hand fresh copies per poll, so a list-identity key (the listings memo's ground) never hits |
 | 2026-09-28 | this PR | M44 healthy range recalibrated to the listing's row count, docs-only (no code change): the fixed < 0.002 s line priced the 2026-09-15 corpus, but the /scheduled listing's rows are the cron fleet's own active churn — cron sessions plus their task-tree leaves — and the standing sweep read 106 rows at 2.16/1.64/2.37 ms (pre-#2179), 1.78/1.75/1.76 ms after #2179, and 1.87 ms median / 2.30 ms max over 9 at 128 rows this round, load 0.30-0.46 one-minute — per-row 16.6 → 14.6 µs across the same landings that cut the payload bytes (#2193) and memoized the cron-subtree walk (#2179); at the observed +22 rows / 12 h the fixed line trips at ~137 rows within ~1 day with the per-row cost healthy, a false regression trip the rows term removes: the line reads max(0.002 s, rows × 0.000025 s), 1.5× over the band's top (the M119 line's convention), so a per-row regression — an unmemoized croniter resolution at ~12 µs/row — still crosses it; today's reading sits at 58 % of the 3.20 ms the 128-row term prices; no-regression: the 0.002 s floor and the collector are unchanged (the standing collector prints the row count, so the term is self-verifying) | the line's shape, not the serve, was the defect: every other corpus-scaled serve line (M116/M119/M120/M121) carries the corpus term, and the row count is host workload — the cron fleet's firing leaves — not code health |

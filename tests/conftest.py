@@ -1662,9 +1662,9 @@ async def seed_thread(
 ) -> models.ThreadMetadata:
   """Seed one legacy thread record through the manager's durable save funnel.
 
-  The legacy executor is gone, so tests seed the read-only records the views
-  scan directly: a default ThreadMetadata plus its thread dir, persisted via
-  save_metadata (the same funnel updates ride). Overrides land on the model.
+  Tests seed the read-only records the views scan directly: a default
+  ThreadMetadata plus its thread dir, persisted via save_metadata (the same
+  funnel updates ride). Overrides land on the model.
   """
   meta = models.ThreadMetadata(session_id=session_meta.id, description=description, **overrides)
   (thread_mgr.thread_dir(session_meta.id, meta.id) / "data").mkdir(parents=True, exist_ok=True)

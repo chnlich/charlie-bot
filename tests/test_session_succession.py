@@ -105,7 +105,6 @@ async def test_elone_writes_successor_pointer_and_archives_parent(tmp_path: Path
   assert fresh_parent is not None
   assert fresh_parent.successor_session_id == child.id
   assert fresh_parent.status == SessionStatus.ARCHIVED
-  # Session-level rating is gone: the persisted metadata carries no rating key.
   assert "rating" not in json.loads(mgr._metadata_path(parent_id).read_text())
 
 

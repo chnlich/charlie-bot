@@ -327,8 +327,8 @@ def _row_source_stats(
   files: the v2 compatibility rows ride the same proof, so a Run's metadata
   write (atomic rename, mtime moves) refreshes its row inside the same sweep
   window the unmarked thread write heals in. Trigger records are not row
-  sources — the workers-panel list is gone and the pending-triggers tray reads
-  them through its own endpoint (src/api/sessions.py get_pending_triggers) —
+  sources — the pending-triggers tray reads them through its own endpoint
+  (src/api/sessions.py get_pending_triggers) —
   so a trigger write neither joins the signature nor rebuilds this body.
   """
   thread_pairs: list[tuple[str, os.stat_result]] = []
@@ -976,12 +976,12 @@ async def cancel_thread(
 ) -> dict:
   """Cancel one thread by resolving it to the Run it aliases.
 
-  The legacy thread executor is gone; a thread id survives as a read-only
-  record and as a v2 alias (new-run compatibility alias, or an imported old
-  id). The alias routes to the Run owner's stop implementation: the same
-  durable request, identity check, terminal fact and agent own-run scope as
-  the v2 cancel route — and no legacy ThreadMetadata status copy is ever
-  written. A thread id that resolves to no Run is a 404.
+  A thread id survives as a read-only record and as a v2 alias (new-run
+  compatibility alias, or an imported old id). The alias routes to the Run
+  owner's stop implementation: the same durable request, identity check,
+  terminal fact and agent own-run scope as the v2 cancel route — and no
+  legacy ThreadMetadata status copy is ever written. A thread id that
+  resolves to no Run is a 404.
   """
   alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
   if alias is None:

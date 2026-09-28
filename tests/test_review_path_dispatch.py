@@ -1,9 +1,8 @@
 """Inputs admitted during a review Run must reach the node's own dispatcher.
 
-The review path's early return used to strand inputs admitted while a review
-Run was consuming the node's serialized slot: the parent got the failure
-report, the child's own pending input never saw a dispatch decision, and the
-next permitted serialized dispatch never came.
+Each test pins one admit-during-review shape: the input lands while the review
+Run holds the node's serialized slot, and its dispatch decision comes from the
+node's own dispatcher only after the review chain finishes.
 """
 
 from __future__ import annotations

@@ -147,8 +147,8 @@ def delegate_request_id(req: DelegateRequest) -> str:
   """
   if req.request_id:
     return req.request_id
-  from src.core.control_events import sha256_hex
-  return "delegate-" + sha256_hex("\x00".join([req.session_id, str(req.task_type.value), req.description]))[:24]
+  from src.core.control_events import derived_delegate_request_id
+  return derived_delegate_request_id(req.session_id, req.task_type.value, req.description)
 
 
 async def _delegate_task_tree(

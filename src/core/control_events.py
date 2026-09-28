@@ -104,6 +104,17 @@ def sha256_hex(text: str) -> str:
   return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def derived_delegate_request_id(session_id: str, task_type: str, description: str) -> str:
+  """The delegation request id one (session, task type, spec body) binds to.
+
+  The server derives this default when a delegation carries no explicit
+  request_id; the CLI derives the same value so its sent-but-lost readback
+  binds to the child the server created. An explicit request_id names
+  intentional same-spec siblings and overrides this derivation on both sides.
+  """
+  return "delegate-" + sha256_hex("\x00".join([session_id, task_type, description]))[:24]
+
+
 def build_control_event(
     event_type: str,
     *,

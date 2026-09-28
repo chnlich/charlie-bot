@@ -406,18 +406,15 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
   const filterAll = createElement({className: 'filter-pill'});
   const filterStarred = createElement({className: 'filter-pill'});
   const filterArchived = createElement({className: 'filter-pill'});
-  const filterScheduled = createElement({className: 'filter-pill'});
   const {context, fetchRequests} = buildContext({
     elements: new Map([
       ['session-list', nav],
       ['filter-all', filterAll],
       ['filter-starred', filterStarred],
       ['filter-archived', filterArchived],
-      ['filter-scheduled', filterScheduled],
-      ['cron-add-btn', createElement()],
     ]),
     querySelectorAll: (selector) => selector === '.filter-pill'
-      ? [filterAll, filterStarred, filterArchived, filterScheduled] : [],
+      ? [filterAll, filterStarred, filterArchived] : [],
   });
 
   context.INITIAL_SESSIONS = [
@@ -453,7 +450,9 @@ test('restoreSidebarFromUrl renders initial all sessions through grouped rendere
 
   context.restoreSidebarFromUrl();
 
-  assert.equal(fetchRequests.length, 0);
+  // The initial sessions render from the bootstrap payload with no sessions
+  // fetch; the one request is the Workspace error badge's own cron pull.
+  assert.deepEqual(fetchRequests.map((r) => r.url), ['/api/cron/tasks']);
   assert.match(nav.innerHTML, /class="session-group group"/);
   assert.match(nav.innerHTML, /Work/);
   assert.match(nav.innerHTML, /\(No group\)/);
@@ -698,15 +697,13 @@ test('group limit toggles and filter switches never write the expansion keys to 
   const {nav, context, localStorageData} = buildNavContext({
     localStorageItems: {
       'session-group-list-expanded': '{"Work": true}',
-      'cron-group-list-expanded': '{"Nightly": true}',
     },
   });
 
-  // Expand, collapse, expand the cron bucket, then a public filter-switch
-  // round-trip; none of it may touch the seeded storage values.
+  // Expand, collapse, then a public filter-switch round-trip; none of it may
+  // touch the seeded storage values.
   context.toggleSessionGroupLimit('Work');
   context.toggleSessionGroupLimit('Work');
-  context.toggleCronGroupLimit('Nightly');
   context.fetch = async () => ({ok: true, json: async () => []});
   context.switchSidebarFilter('archived');
   await new Promise(setImmediate);
@@ -714,7 +711,6 @@ test('group limit toggles and filter switches never write the expansion keys to 
   await new Promise(setImmediate);
 
   assert.equal(localStorageData.get('session-group-list-expanded'), '{"Work": true}');
-  assert.equal(localStorageData.get('cron-group-list-expanded'), '{"Nightly": true}');
 });
 
 test('renderSessionList keeps active grouped session visible outside the first five', () => {
@@ -740,31 +736,6 @@ test('renderSessionList leaves search results flat and untrimmed', () => {
   assert.doesNotMatch(nav.innerHTML, /session-group-limit-toggle/);
   assert.doesNotMatch(nav.innerHTML, /session-group-limit-extra/);
   assert.match(nav.innerHTML, /id="session-search-7"/);
-});
-
-test('renderGroupedScheduledList limits project groups to five visible sessions', () => {
-  const {nav, context} = buildNavContext({
-    localStorageItems: {
-      'cron-group-collapsed': JSON.stringify({Nightly: false}),
-    },
-  });
-  const sessions = Array.from({length: 7}, (_, idx) =>
-    makeSession(`scheduled-${idx + 1}`, `Scheduled ${idx + 1}`, {
-      schedule_project: 'Nightly',
-      scheduled_task: 'nightly',
-      schedule_enabled: true,
-      schedule_cron: '0 2 * * *',
-      schedule_timezone: 'UTC',
-    }));
-
-  context.renderSessionList(sessions, 'scheduled');
-
-  assert.match(nav.innerHTML, /Nightly/);
-  assert.match(nav.innerHTML, /cron-group-limit-toggle/);
-  assert.match(nav.innerHTML, />Show all<\/button>/);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-5').includes('cron-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-6').includes('cron-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'scheduled-7').includes('cron-group-limit-extra hidden'), true);
 });
 
 test('switchSession preserves worker icon until authoritative status returns', async () => {
@@ -992,44 +963,21 @@ test('renderSessionItem shows separate delayed-trigger and scheduled indicators'
     has_pending_trigger: true,
     pending_trigger_count: 1,
     next_trigger_at: '2026-04-02T06:00:00Z',
-    scheduled_task: 'nightly',
+    schedule_task: 'nightly',
+    schedule_cron: '0 2 * * *',
+    schedule_timezone: 'UTC',
     schedule_enabled: true,
+    schedule_next_run: '2026-04-03T02:00:00Z',
     starred: false,
   }, 'search');
 
   assert.match(html, /id="pending-trigger-session-a"/);
   assert.match(html, /1 pending delayed trigger/);
   assert.match(html, /Scheduled: nightly/);
-  assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0"/);
-  assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
-  assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
-  assert.doesNotMatch(html, /session-name">[^<]*<span class="tui-status-dot/);
-});
-
-test('renderScheduledSessionItem keeps delayed-trigger and cron indicators distinct', () => {
-  const {context} = buildContext({
-    BACKEND_TYPES: {'claude-tui': 'tui-cli'},
-  });
-
-  const html = context.Sidebar.renderScheduledSessionItem({
-    id: 'session-a',
-    name: 'Wake later',
-    backend: 'claude-tui',
-    has_running_tasks: false,
-    has_unread: false,
-    has_pending_trigger: true,
-    pending_trigger_count: 2,
-    next_trigger_at: '2026-04-02T06:00:00Z',
-    scheduled_task: 'nightly',
-    schedule_enabled: true,
-    schedule_cron: '0 2 * * *',
-    schedule_timezone: 'UTC',
-    starred: false,
-  });
-
-  assert.match(html, /id="pending-trigger-session-a"/);
-  assert.match(html, /2 pending delayed triggers/);
-  assert.match(html, /Scheduled: nightly/);
+  // The bound row's schedule line rides every view, the flat search paint
+  // included, next to the delayed-trigger indicator.
+  assert.match(html, /0 2 \* \* \*/);
+  assert.match(html, /Next: /);
   assert.match(html, /<\/svg>\s*<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0"/);
   assert.match(html, /<span class="tui-status-dot w-2 h-2 rounded-full flex-shrink-0" data-session-id="session-a" title="Claude stopped"><\/span>\s*<span class="flex-1 min-w-0">/);
   assert.match(html, /<span class="truncate block session-name">Wake later<\/span>/);
@@ -1051,7 +999,6 @@ test('renderSessionItem omits tui dot for non-tui backend', () => {
     has_pending_trigger: false,
     pending_trigger_count: 0,
     next_trigger_at: null,
-    scheduled_task: '',
     starred: false,
   }, 'search');
 

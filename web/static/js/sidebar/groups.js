@@ -3,12 +3,9 @@
 
 const GROUP_SESSION_PREVIEW_LIMIT = 5;
 const SESSION_GROUP_LIMIT_STORAGE_KEY = 'session-group-list-expanded';
-const CRON_GROUP_LIMIT_STORAGE_KEY = 'cron-group-list-expanded';
 const SESSION_GROUP_COLLAPSED_STORAGE_KEY = 'session-group-collapsed';
-const CRON_GROUP_COLLAPSED_STORAGE_KEY = 'cron-group-collapsed';
 const groupLimitState = {
   [SESSION_GROUP_LIMIT_STORAGE_KEY]: {},
-  [CRON_GROUP_LIMIT_STORAGE_KEY]: {},
 };
 
 function loadGroupLimitState(storageKey) {
@@ -26,7 +23,6 @@ function setGroupLimitExpanded(storageKey, key, expanded) {
 
 function resetGroupLimitState() {
   groupLimitState[SESSION_GROUP_LIMIT_STORAGE_KEY] = {};
-  groupLimitState[CRON_GROUP_LIMIT_STORAGE_KEY] = {};
 }
 
 // A corrupt stored blob degrades to no saved state rather than breaking the
@@ -62,41 +58,35 @@ function isOverGroupLimitExtra(session, index) {
   return index >= GROUP_SESSION_PREVIEW_LIMIT && session.id !== SESSION_ID;
 }
 
-function groupLimitItemOptions(kind, key, session, index, expanded) {
+function groupLimitItemOptions(key, session, index, expanded) {
   if (!isOverGroupLimitExtra(session, index)) return {};
   const safeKey = escapeHtmlAttr(key);
   const hiddenClass = shouldLimitHideSession(session, index, expanded) ? ' hidden' : '';
   return {
-    extraClass: `${kind}-group-limit-extra${hiddenClass}`,
-    extraAttrs: `data-${kind}-group-limit-extra="${safeKey}"`,
+    extraClass: `session-group-limit-extra${hiddenClass}`,
+    extraAttrs: `data-session-group-limit-extra="${safeKey}"`,
   };
 }
 
-function renderGroupLimitToggle(kind, key, totalCount, expanded) {
+function renderGroupLimitToggle(key, totalCount, expanded) {
   if (totalCount <= GROUP_SESSION_PREVIEW_LIMIT) return '';
   const safeKey = escapeHtmlAttr(key);
   const label = expanded ? 'Show less' : 'Show all';
-  const dataAttr = kind === 'session' ? 'sgroup-limit-toggle-key' : 'cron-limit-toggle-key';
-  const handler = kind === 'session' ? 'toggleSessionGroupLimit' : 'toggleCronGroupLimit';
   return `<button type="button"
-          class="${kind}-group-limit-toggle w-full text-left px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 hover:bg-slate-700/30 rounded-lg transition-colors"
-          data-${dataAttr}="${safeKey}"
+          class="session-group-limit-toggle w-full text-left px-3 py-1.5 text-xs text-blue-400 hover:text-blue-300 hover:bg-slate-700/30 rounded-lg transition-colors"
+          data-sgroup-limit-toggle-key="${safeKey}"
           aria-expanded="${expanded ? 'true' : 'false'}"
-          onclick="event.stopPropagation(); ${handler}(this.dataset.${kind === 'session' ? 'sgroupLimitToggleKey' : 'cronLimitToggleKey'})">${label}</button>`;
+          onclick="event.stopPropagation(); toggleSessionGroupLimit(this.dataset.sgroupLimitToggleKey)">${label}</button>`;
 }
 
-function updateGroupLimitDom(kind, key, expanded) {
-  const extraSelector = `.${kind}-group-limit-extra`;
-  const toggleSelector = `.${kind}-group-limit-toggle`;
-  const extraDatasetKey = `${kind}GroupLimitExtra`;
-  const toggleDatasetKey = kind === 'session' ? 'sgroupLimitToggleKey' : 'cronLimitToggleKey';
-  document.querySelectorAll(extraSelector).forEach(el => {
-    if (el.dataset[extraDatasetKey] === key) {
+function updateGroupLimitDom(key, expanded) {
+  document.querySelectorAll('.session-group-limit-extra').forEach(el => {
+    if (el.dataset.sessionGroupLimitExtra === key) {
       el.classList.toggle('hidden', !expanded);
     }
   });
-  document.querySelectorAll(toggleSelector).forEach(btn => {
-    if (btn.dataset[toggleDatasetKey] === key) {
+  document.querySelectorAll('.session-group-limit-toggle').forEach(btn => {
+    if (btn.dataset.sgroupLimitToggleKey === key) {
       btn.textContent = expanded ? 'Show less' : 'Show all';
       btn.setAttribute('aria-expanded', expanded ? 'true' : 'false');
     }
@@ -106,13 +96,7 @@ function updateGroupLimitDom(kind, key, expanded) {
 function toggleSessionGroupLimit(key) {
   const expanded = !isGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key);
   setGroupLimitExpanded(SESSION_GROUP_LIMIT_STORAGE_KEY, key, expanded);
-  updateGroupLimitDom('session', key, expanded);
-}
-
-function toggleCronGroupLimit(key) {
-  const expanded = !isGroupLimitExpanded(CRON_GROUP_LIMIT_STORAGE_KEY, key);
-  setGroupLimitExpanded(CRON_GROUP_LIMIT_STORAGE_KEY, key, expanded);
-  updateGroupLimitDom('cron', key, expanded);
+  updateGroupLimitDom(key, expanded);
 }
 
 const GROUP_MODAL_OVERLAY_ID = 'group-modal-overlay';
@@ -222,11 +206,12 @@ async function setSessionGroup(sessionId, group) {
 }
 
 // ---------------------------------------------------------------------------
-// Grouped scheduled task rendering
+// Cron error badge
 // ---------------------------------------------------------------------------
-// Global cron load-failure badge, rendered from the broken cron entries the
-// Scheduled filter fetch hands the renderer (name order); clicking opens the
-// cron editor on the first broken task. Empty when nothing is broken.
+// Global cron load-failure badge, rendered at the top of Workspace from the
+// broken cron entries the filter fetch hands the renderer (name order);
+// clicking opens the cron editor on the first broken task. Empty when nothing
+// is broken.
 function renderCronErrorBadge(brokenTasks) {
   const broken = brokenTasks || [];
   if (!broken.length) return '';
@@ -235,9 +220,8 @@ function renderCronErrorBadge(brokenTasks) {
        onclick="openCronEditor('${escapeHtml(broken[0].name)}')">⚠ ${broken.length} scheduled tasks failed to load</div>`;
 }
 
-// Session-row action buttons shared by renderScheduledSessionItem and
-// renderSessionItem: a markup change to one of these buttons lands here, not
-// in one renderer.
+// Session-row action buttons: a markup change to one of these buttons lands
+// here, not in one renderer.
 const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
 
 // The one trash-can outline: archive/delete action buttons below and, through
@@ -249,7 +233,7 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // call site keeps its own center markup.
 const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 
-// The one right-chevron outline: the cron-group and session-group collapse
+// The one right-chevron outline: the session-group collapse
 // toggles below and, through the namespace, workers.js's thread-card chevron
 // (Sidebar.CHEVRON_SVG_PATH). Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
@@ -342,31 +326,53 @@ function renderTaskContextButton(s, activeBtnClass) {
       activeBtnClass);
 }
 
+// The one clock-plus outline: the Add schedule hover button below and the
+// group header's New scheduled task button share it (each call site keeps its
+// own svg wrapper).
+const CLOCK_PLUS_SVG_PATH = `<circle cx="11" cy="12" r="8" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 8v4l2.5 1.5M19 3v4m-2-2h4"/>`;
+
+// A bound node row's Edit schedule hover button: the existing cron editor for
+// that task.
 function renderCronGearButton(taskName, activeBtnClass) {
   if (!taskName) return '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(taskName)}')"
-          class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit task config">
+          class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit schedule">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
 }
 
-// Scheduled-task clock badge shared by renderScheduledSessionItem and
-// renderSessionItem: a markup change lands here, not in one renderer.
+// An unbound manager row's Add schedule hover button: the cron editor in
+// create mode with this node prefilled as the binding.
+function renderAddScheduleButton(s, activeBtnClass) {
+  return `<button onclick="event.preventDefault(); event.stopPropagation(); openCronAdder({sessionId: '${s.id}'})"
+          class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Add schedule">
+    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_PLUS_SVG_PATH}</svg>
+  </button>`;
+}
+
+// A bound node's clock badge: blue while the task is enabled, grey with the
+// Disabled line when it is not. One markup home for every view's row.
 function renderScheduledBadge(s) {
-  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.scheduled_task)}">${CLOCK_SVG_BODY}</svg>`;
+  return `<svg class="w-3 h-3 flex-shrink-0 ${s.schedule_enabled === false ? 'text-slate-500' : 'text-blue-400'}" fill="none" stroke="currentColor" viewBox="0 0 24 24" title="Scheduled: ${escapeHtmlAttr(s.schedule_task)}">${CLOCK_SVG_BODY}</svg>`;
 }
 
-// Cron line shared by renderScheduledSessionItem and renderSessionItem's
-// scheduled branch: a markup change lands here, not in one renderer. The
-// caller's show-guard stays at the call site: renderScheduledSessionItem
-// gates on s.schedule_cron alone, renderSessionItem also gates on the
-// 'scheduled' filter.
+// A bound node's schedule lines, in every view: the next run (or Disabled),
+// then the truncated cron · timezone line, then the firing bookkeeping's Last
+// line the legacy cron rows carried. One markup home for every view's row.
 function renderSessionScheduleLine(s) {
-  return `<span class="block text-xs text-slate-500">${escapeHtml(s.schedule_cron)} (${escapeHtml(s.schedule_timezone || '')})</span><span class="block text-xs text-slate-500">${s.schedule_enabled === false ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`;
+  const disabled = s.schedule_enabled === false;
+  let html = `<span class="block text-xs ${disabled ? 'text-slate-500' : 'text-blue-300'}">${disabled ? 'Disabled' : 'Next: ' + relativeTime(s.schedule_next_run)}</span>`
+    + `<span class="block truncate text-xs text-slate-500" title="${escapeHtmlAttr(s.schedule_cron)} (${escapeHtmlAttr(s.schedule_timezone || '')})">${escapeHtml(s.schedule_cron)} · ${escapeHtml(s.schedule_timezone || '')}</span>`;
+  if (s.last_run_status) {
+    const lastClass = s.last_run_status === 'success' ? 'text-green-400'
+      : s.last_run_status === 'running' ? 'text-yellow-400'
+        : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
+    html += `<span class="block text-xs ${lastClass}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>`;
+  }
+  return html;
 }
 
-// Session-row highlight shared by renderScheduledSessionItem and
-// renderSessionItem: a tint change lands here, not in one renderer.
+// Session-row highlight: a tint change lands here, not in one renderer.
 function sessionRowActiveClass(isActive) {
   return isActive ? 'bg-blue-600/20 text-blue-300' : 'hover:bg-slate-700/50 text-slate-300';
 }
@@ -378,8 +384,8 @@ function openThreadView(sessionId, threadId) {
     + '&thread=' + encodeURIComponent(threadId);
 }
 
-// The one session-row frame shared by renderScheduledSessionItem and
-// renderSessionItem: the anchor open tag, the name span, and the closing tag.
+// The one session-row frame: the anchor open tag, the name span, and the
+// closing tag.
 // A markup change to the row frame lands here, not in one renderer.
 // indicators and line are prebuilt strings — the status column and the content
 // after the name span — and actions the trailing button column.
@@ -406,35 +412,9 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
   </a>`;
 }
 
-function renderScheduledSessionItem(s, options = {}) {
-  const isActive = SESSION_ID === s.id;
-  const activeClass = sessionRowActiveClass(isActive);
-  const activeBtnClass = isActive ? '!opacity-100' : '';
-  const actions = `
-    ${renderStarButton(s, activeBtnClass)}
-    ${renderRenameButton(s, activeBtnClass)}
-    ${renderArchiveButton(s, activeBtnClass)}
-    ${renderCronGearButton(s.scheduled_task, activeBtnClass)}`;
-  // The tree chevron leads the indicator slot, as in renderSessionItem: the
-  // Scheduled tab's cron roots nest their worker leaves behind it, and a
-  // childless root draws the same chevron so a level's markers line up in
-  // one column.
-  const indicators = [
-      'treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : '',
-      renderSessionIndicators(s),
-      renderPendingTriggerIndicator(s),
-      renderPendingPlanApprovalIndicator(s),
-      renderScheduledBadge(s),
-      renderTuiStatusDot(s),
-  ].join('\n    ');
-  const line = `${s.schedule_cron ? renderSessionScheduleLine(s) : ''}
-      ${s.last_run_status ? `<span class="block text-xs ${s.last_run_status === 'success' ? 'text-green-400' : s.last_run_status === 'running' ? 'text-yellow-400' : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400')}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>` : ''}`;
-  return renderSessionRowShell(s, {filter: 'scheduled', activeClass, options, indicators, line, actions});
-}
-
-// Empty list note shared by the scheduled/grouped/search lists here and,
-// through the namespace, the archived list in archived.js: a markup change
-// lands here, not in each list's empty branch.
+// Empty list note shared by the grouped/search lists here and, through the
+// namespace, the archived list in archived.js: a markup change lands here, not
+// in each list's empty branch.
 function renderEmptyNote(text) {
   return `<p class="text-slate-500 text-sm px-3 py-2">${text}</p>`;
 }
@@ -445,85 +425,17 @@ function resyncSessionUnread(sessions) {
   sessions.forEach(s => { sessionUnread[s.id] = !!s.has_unread; });
 }
 
-function renderGroupedScheduledList(sessions, options = {}) {
-  const nav = document.getElementById('session-list');
-  const brokenTasks = options.brokenTasks || [];
-  lastScheduledRenderArgs = {sessions, brokenTasks};
-  const badgeHtml = renderCronErrorBadge(brokenTasks);
-  if (!sessions.length) {
-    nav.innerHTML = badgeHtml + renderEmptyNote('No scheduled sessions');
-    return;
-  }
-  // The same parent/child tree the All tab builds: a projected worker leaf
-  // nests under the cron session that ran it instead of sitting at group
-  // level, and only the roots group by project.
-  const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
-  lastTreeChildrenOf = childrenOf;
-  lastTreeParentOf = parentOf;
-  revealActiveSessionOnce(parentOf);
-  const {groups, sortedKeys} = groupSessionsBySortedKeys(roots, s => s.schedule_project);
-  const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
-  const limitState = loadGroupLimitState(CRON_GROUP_LIMIT_STORAGE_KEY);
-
-  let html = '';
-  for (const key of sortedKeys) {
-    const label = key || '(No project)';
-    const groupRoots = groups[key];
-    // Counts and the preview cap read the roots alone: a leaf belongs to its
-    // cron session's subtree, not to the group's row budget.
-    const enabledCount = groupRoots.filter(s => s.schedule_enabled !== false).length;
-    const totalCount = groupRoots.length;
-    const isCollapsed = collapsedState[key] !== false; // collapsed by default
-    const isLimitExpanded = limitState[key] === true;
-    const chevronClass = isCollapsed ? '' : 'rotate-90';
-    const safeKey = escapeHtml(key);
-
-    html += `<div class="cron-group" data-group-key="${safeKey}">
-      <div class="flex items-center gap-2 px-3 py-1.5 cursor-pointer hover:bg-slate-700/30 rounded-lg select-none"
-           onclick="toggleCronGroup('${safeKey}')">
-        <svg class="w-3 h-3 text-slate-500 transition-transform cron-group-chevron ${chevronClass}" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          ${CHEVRON_SVG_PATH}
-        </svg>
-        <span class="text-xs font-semibold text-slate-400 uppercase tracking-wider">${escapeHtml(label)}</span>
-        <span class="text-xs text-slate-500 ml-auto">${enabledCount}/${totalCount} enabled</span>
-      </div>
-      <div class="cron-group-items ${isCollapsed ? 'hidden' : ''}" data-group-items="${safeKey}">
-        ${groupRoots.map((s, index) => renderSessionTree(
-          s,
-          'scheduled',
-          groupLimitItemOptions('cron', key, s, index, isLimitExpanded),
-          childrenOf,
-          renderScheduledSessionItem
-        )).join('')}
-        ${renderGroupLimitToggle('cron', key, groupRoots.length, isLimitExpanded)}
-      </div>
-    </div>`;
-  }
-  nav.innerHTML = badgeHtml + html;
-  resyncSessionUnread(sessions);
-  // A collapsed cron row stands in for its hidden leaves' running/unread state.
-  if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
-  updateRelativeTimes();
-  refreshTuiDots();
-}
-
-function toggleCronGroup(key) {
-  const collapsedState = loadGroupCollapsedState(CRON_GROUP_COLLAPSED_STORAGE_KEY);
-  const wasCollapsed = collapsedState[key] !== false;
-  collapsedState[key] = !wasCollapsed;
-  localStorage.setItem(CRON_GROUP_COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedState));
-
-  const items = document.querySelector(`[data-group-items="${key}"]`);
-  if (items) items.classList.toggle('hidden');
-  const group = document.querySelector(`[data-group-key="${key}"]`);
-  if (group) {
-    const chevron = group.querySelector('.cron-group-chevron');
-    if (chevron) chevron.classList.toggle('rotate-90');
-  }
-}
-
 let lastGroupedRenderArgs = null;
-let lastScheduledRenderArgs = null;
+
+// The Workspace error badge's async repaint: the first paint never waits for
+// the cron pull, and this repaint sources the first paint's own args (no list
+// refetch) — discarding itself when the view has already moved on (another
+// filter, or the search overlay on screen).
+function paintWorkspaceBadge(brokenTasks) {
+  if (currentFilter !== 'all' || searchListPainted) return;
+  if (!lastGroupedRenderArgs || lastGroupedRenderArgs.filter !== 'all') return;
+  renderGroupedSessionList(lastGroupedRenderArgs.sessions, 'all', {brokenTasks});
+}
 // Whether the last renderSessionList call painted the search overlay. The
 // search flow never assigns currentFilter, so this marker — not the filter
 // state — is what tells the delete path a flat search list is on screen.
@@ -533,12 +445,12 @@ let searchListPainted = false;
 // Grouped session list rendering (by session.group)
 // ---------------------------------------------------------------------------
 function renderGroupedSessionList(sessions, filter, options = {}) {
-  const nav = document.getElementById('session-list');
+  const nav = options.container || document.getElementById('session-list');
+  lastGroupedRenderArgs = {sessions, filter, brokenTasks: options.brokenTasks || null};
   if (!sessions.length) {
-    nav.innerHTML = renderEmptyNote('No sessions yet');
+    nav.innerHTML = renderCronErrorBadge(options.brokenTasks) + renderEmptyNote('No sessions yet');
     return;
   }
-  lastGroupedRenderArgs = {sessions, filter};
   // Grouping follows the root rows; a child row nests under its parent
   // whatever its own group field says.
   const {roots, childrenOf, parentOf} = buildSessionTree(sessions);
@@ -558,13 +470,18 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const chevronClass = isCollapsed ? '' : 'rotate-90';
     const safeKey = escapeHtmlAttr(key);
     const taskRowOptions = (s, index) =>
-      groupLimitItemOptions('session', key, s, index, isLimitExpanded);
+      groupLimitItemOptions(key, s, index, isLimitExpanded);
 
-    const groupActions = key ? `
+    const groupActions = key && options.groupActions !== false ? `
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); createSessionInGroup(this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
+      </button>
+      <button data-group-name="${safeKey}"
+              onclick="event.stopPropagation(); createScheduledTaskInGroup(this.dataset.groupName)"
+              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="New scheduled task">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_PLUS_SVG_PATH}</svg>
       </button>
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); renameGroup(this.dataset.groupName)"
@@ -592,14 +509,14 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         ${groupSessions.map((s, index) => renderSessionTree(
           s,
           filter,
-          taskRowOptions(s, index),
+          {...taskRowOptions(s, index), staticTime: !!options.staticTime},
           childrenOf
         )).join('')}
-        ${renderGroupLimitToggle('session', key, groupSessions.length, isLimitExpanded)}
+        ${renderGroupLimitToggle(key, groupSessions.length, isLimitExpanded)}
       </div>
     </div>`;
   }
-  nav.innerHTML = html;
+  nav.innerHTML = renderCronErrorBadge(options.brokenTasks) + html;
   resyncSessionUnread(sessions);
   // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
   if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
@@ -779,17 +696,12 @@ function renderWorkerDeliveredIcon() {
 // group-limit class and attributes, so a root hidden by the 5-row preview
 // hides its subtree with it and Show all reveals both; the inner container
 // carries the expand state. Each level indents 22px behind a guide line.
-// rowRenderer (optional) renders the top row alone; the subtree rows always
-// render through renderSessionItem — the Scheduled tab's cron rows are the
-// one caller whose root row form (renderScheduledSessionItem) differs from
-// its subtree's.
 // Every row rendered here receives treeChildCount (0 for a leaf); its
 // presence is the one marker that tells a row renderer a tree row from a
-// flat one — the flat paints (search results, the Archived tab) pass none.
-function renderSessionTree(s, filter, options, childrenOf, rowRenderer) {
-  const renderRow = rowRenderer || ((row, opts) => renderSessionItem(row, filter, opts));
+// flat one — the flat paints (search results) pass none.
+function renderSessionTree(s, filter, options, childrenOf) {
   const children = childrenOf.get(s.id) || [];
-  const row = renderRow(s, {...options, treeChildCount: children.length});
+  const row = renderSessionItem(s, filter, {...options, treeChildCount: children.length});
   if (!children.length) return row;
   const wrapClass = ['tree-subtree', options.extraClass || ''].filter(Boolean).join(' ');
   const wrapAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
@@ -831,6 +743,11 @@ function renderSessionItem(s, filter, options = {}) {
   // tab, search results): unarchive/delete actions, and none of the live-state
   // indicators, which archived sessions cannot carry.
   const isArchivedRow = filter === 'archived' || s.status === 'archived';
+  // A context row (the archived tree's unarchived ancestor) renders dimmed
+  // with an active tag: it is not a row the user archived, so it takes none
+  // of the archived row's unarchive/delete actions and none of the live
+  // row's mutating ones.
+  const isContextRow = filter === 'archived' && s.context_only === true;
   // A worker leaf is identified by its icon and carries the archive action alone.
   const isWorker = s.profile === 'worker';
   const isWorkerRow = isWorker && !isArchivedRow;
@@ -849,6 +766,8 @@ function renderSessionItem(s, filter, options = {}) {
   let actions = '';
   if (s.worker_thread) {
     actions = '';
+  } else if (isContextRow) {
+    actions = renderStarButton(s, activeBtnClass);
   } else if (isArchivedRow) {
     actions = `
       ${renderStarButton(s, activeBtnClass)}
@@ -878,13 +797,14 @@ function renderSessionItem(s, filter, options = {}) {
       ${renderNewChildButton(s, activeBtnClass)}
       ${taskContextBtn}
       ${renderArchiveButton(s, activeBtnClass)}
-      ${renderCronGearButton(filter === 'scheduled' ? s.scheduled_task : '', activeBtnClass)}`;
+      ${s.schedule_task ? renderCronGearButton(s.schedule_task, activeBtnClass)
+        : (s.profile === 'manager' ? renderAddScheduleButton(s, activeBtnClass) : '')}`;
   }
   const indicators = isArchivedRow ? '' : [
       renderSessionIndicators(s),
       renderPendingTriggerIndicator(s),
       renderPendingPlanApprovalIndicator(s),
-      s.scheduled_task ? renderScheduledBadge(s) : '',
+      s.schedule_task ? renderScheduledBadge(s) : '',
       renderTuiStatusDot(s),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
@@ -899,37 +819,47 @@ function renderSessionItem(s, filter, options = {}) {
           : ('treeChildCount' in options ? renderTreeChevron(s.id, options.treeChildCount) : ''),
       indicators,
   ].join('\n    ');
-  const line = filter === 'scheduled' && s.schedule_cron
+  const line = s.schedule_task
       ? renderSessionScheduleLine(s)
       : renderSessionTimeLine(s, timeIso, timeStr, !!options.staticTime);
-  return renderSessionRowShell(s, {filter, activeClass, options, indicators: lead, line, actions});
+  // A context row dims and carries the active tag after the line, as the mock
+  // shows it; the tag rides outside the name span so a long name cannot push
+  // it out.
+  return renderSessionRowShell(s, {
+    filter,
+    activeClass: activeClass + (isContextRow ? ' opacity-60' : ''),
+    options,
+    indicators: lead,
+    line,
+    actions: actions + (isContextRow
+      ? '<span class="px-1.5 py-0.5 rounded bg-slate-700 text-[10px] font-medium text-slate-400 flex-shrink-0">active</span>'
+      : ''),
+  });
 }
 
 function renderSessionList(sessions, filter, options = {}) {
   searchListPainted = (filter === 'search');
-  // The grouped paints (All and Scheduled) nest rows and set the tree maps
+  // The grouped paints (Workspace and Later) nest rows and set the tree maps
   // themselves; a flat paint shows each row's own facts.
   lastTreeChildrenOf = new Map();
   lastTreeParentOf = new Map();
-  if (filter === 'scheduled') {
-    renderGroupedScheduledList(sessions, options);
-    return;
-  }
   const nav = document.getElementById('session-list');
   if (!sessions.length) {
     const labels = {
       all: 'No sessions yet',
       starred: 'No starred sessions',
       archived: 'No archived sessions',
-      scheduled: 'No scheduled sessions',
       search: 'No matching sessions',
     };
-    nav.innerHTML = renderEmptyNote(labels[filter]);
+    // The Workspace error badge rides the empty paint too: with zero sessions
+    // it is still the one thing paging the maintainer.
+    nav.innerHTML = (filter === 'all' ? renderCronErrorBadge(options.brokenTasks) : '')
+      + renderEmptyNote(labels[filter]);
     return;
   }
   // Always use grouped rendering for non-search tabs
   if (filter !== 'search') {
-    renderGroupedSessionList(sessions, filter);
+    renderGroupedSessionList(sessions, filter, options);
     return;
   }
   const truncationHint = filter === 'search' && sessions.length >= 200
@@ -963,26 +893,19 @@ function subtreeIdsToRemove(sessions, sessionId) {
 }
 
 // Inline-delete repaint for the grouped views: filter the removed session's
-// whole subtree out of the last-rendered list (the args each grouped renderer
+// whole subtree out of the last-rendered list (the args the grouped renderer
 // stored at paint time) and repaint in place, so the preview window backfills
-// and counts and toggles resync — with no refetch. The archived tab owns its
-// own paginated list and the search overlay is keyed by the marker above, so
+// and counts and toggles resync — with no refetch. The archived view owns its
+// own paginated tree and the search overlay is keyed by the marker above, so
 // both keep the caller's node-only row removal (false).
 function removeSessionFromRenderedList(sessionId) {
   if (currentFilter === 'archived' || searchListPainted) return false;
-  if (currentFilter === 'scheduled') {
-    if (!lastScheduledRenderArgs) return false;
-    const doomed = subtreeIdsToRemove(lastScheduledRenderArgs.sessions, sessionId);
-    renderGroupedScheduledList(
-        lastScheduledRenderArgs.sessions.filter(s => !doomed.has(s.id)),
-        {brokenTasks: lastScheduledRenderArgs.brokenTasks});
-    return true;
-  }
   if (!lastGroupedRenderArgs) return false;
   const doomed = subtreeIdsToRemove(lastGroupedRenderArgs.sessions, sessionId);
   renderGroupedSessionList(
       lastGroupedRenderArgs.sessions.filter(s => !doomed.has(s.id)),
-      lastGroupedRenderArgs.filter);
+      lastGroupedRenderArgs.filter,
+      {brokenTasks: lastGroupedRenderArgs.brokenTasks});
   return true;
 }
 
@@ -991,11 +914,10 @@ function removeSessionFromRenderedList(sessionId) {
 const GLOBALS = {
   renderEmptyNote,
   openThreadView,
+  paintWorkspaceBadge,
   resetGroupLimitState,
   toggleSessionGroupLimit,
-  toggleCronGroupLimit,
   showGroupSelector,
-  toggleCronGroup,
   toggleSessionGroup,
   renameGroup,
   deleteGroup,
@@ -1021,8 +943,7 @@ const SIDEBAR_ONLY = {
   treeChildIds,
   treeParentId,
   setSessionGroup,
-  renderScheduledSessionItem,
-  renderGroupedScheduledList,
+  renderGroupedSessionList,
 };
 Sidebar.wire(GLOBALS, SIDEBAR_ONLY);
 

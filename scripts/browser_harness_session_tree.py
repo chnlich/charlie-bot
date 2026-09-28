@@ -16,10 +16,12 @@ before running it. Isolation contract:
   no real model, cron or external side effects and no real data copies.
 - Synthetic data. The scenario tree (root manager → feature manager → two
   workers, run records with recorded facts, pending inputs, and one unread
-  reply on the feature manager seeded through SessionManager.mark_unread) is
-  seeded through the same task_sessions owner the APIs serve, in this process
-  only. Every UI mutation under test then rides the real HTTP API from the
-  browser.
+  reply on the feature manager seeded through SessionManager.mark_unread),
+  the sidebar views' schedule fixtures (two bound nodes via cron.d
+  session_id bindings, one archived firing under its bound node, one starred
+  node, one broken cron file), all seeded through the same task_sessions
+  owner the APIs serve, in this process only. Every UI mutation under test
+  then rides the real HTTP API from the browser.
 - Browser. System google-chrome (checked first; an absent binary is an
   explicit failure — never a faked pass) driven over CDP with a private
   ``--user-data-dir`` profile inside the harness temp dir. Screenshots,
@@ -558,24 +560,55 @@ async def seed_scenario(home: Path) -> dict:
             summary=withheld_reason, result_refs=["run:run-withheld"],
             recipient=withhold_parent.id, actor=ACTOR_SYSTEM)
 
-        cron_session = await session_mgr.create_session(
-            CreateSessionRequest(name="Scheduled: nightly-sweep", scheduled_task="nightly-sweep"),
-            backend="fake-scripted")
-        cron_leaf = await tree.create_task(
-            request_id="seed-cron-leaf", task_parent_id=cron_session.id, profile="worker",
-            task=TaskSpec(goal="sweep the cold sessions"), name="nightly-sweep · 2026-01-01T00:00:00+00:00",
+        # --- the sidebar views' schedule fixtures (S25-S28) -------------------
+        # Two manager nodes carry bound tasks (one enabled, one disabled) via
+        # the cron.d session_id binding; one archived worker under the bound
+        # node gives the Archive view its dimmed context ancestor; the feature
+        # manager is starred for Later; one broken cron file feeds the
+        # Workspace error badge. The host files point at prompt files under
+        # the synthetic home and ride the same loader the production cron dir
+        # uses; JSON bodies are valid YAML.
+        bound_node = await tree.create_task(
+            request_id="seed-bound-node", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="fire on a schedule"), name="Bound nightly",
+            backend=None, caller=OP)
+        paused_node = await tree.create_task(
+            request_id="seed-paused-node", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="a paused schedule"), name="Paused nightly",
+            backend=None, caller=OP)
+        archived_child = await tree.create_task(
+            request_id="seed-archived-child", task_parent_id=bound_node.id, profile="worker",
+            task=TaskSpec(goal="a firing the user archived"), name="Archived firing",
             backend=None, caller=OP)
         await tree.runs.register_run(RunRecord(
-            id="run-cron-leaf", session_id=cron_leaf.id, kind="work",
-            backend="fake-scripted", model="scripted-model"), task_spec_text="sweep spec")
-        # The firing's terminal fact lands at the runs layer only: the dispatch
-        # funnel's follow-up would auto-close (and derived-archive) the leaf
-        # the scenario watches. The node stays open and visible, one delivered
-        # Run in its history.
-        async with tree.control_lock:
-            cron_done = await tree.runs.record_finish_locked(cron_leaf.id, "run-cron-leaf", "success")
-        await tree.runs.notify_liveness(cron_leaf.id, cron_done, launched=False)
-        await tree.patch_task(cron_leaf.id, PatchSessionTaskRequest(presentation="shown"), caller=OP)
+            id="run-archived-child", session_id=archived_child.id, kind="work",
+            backend="fake-scripted", model="scripted-model"), task_spec_text="firing spec")
+        # The delivered run derives the archive: the worker leaves the active
+        # lists and rides /api/sessions/archived under its still-active parent.
+        await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
+        await session_mgr.star_session(feature.id)
+
+        prompts_dir = home / "prompts"
+        prompts_dir.mkdir(parents=True, exist_ok=True)
+        cron_d = home / "config.d" / "cron.d"
+        cron_d.mkdir(parents=True, exist_ok=True)
+        for task_name, node_id, enabled in (("harness-daily", bound_node.id, True),
+                                            ("harness-paused", paused_node.id, False)):
+            (prompts_dir / f"{task_name}.md").write_text(
+                f"synthetic prompt for {task_name}\n", encoding="utf-8")
+            (cron_d / f"{task_name}.yaml").write_text(json.dumps({
+                "cron": "0 9 * * *",
+                "prompt_file": str(prompts_dir / f"{task_name}.md"),
+                "timezone": "America/Los_Angeles",
+                "enabled": enabled,
+                "session_id": node_id,
+            }, indent=2), encoding="utf-8")
+        # The broken file: an inline prompt is a load error, so the loader
+        # surfaces one error entry and the Workspace badge counts it.
+        (cron_d / "harness-broken.yaml").write_text(json.dumps({
+            "cron": "0 9 * * *",
+            "prompt": "an inline prompt is a cron.d load error",
+        }), encoding="utf-8")
 
         seed_memory_store(home)
         return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id,
@@ -585,7 +618,8 @@ async def seed_scenario(home: Path) -> dict:
                 "evidence": evidence.id, "bind_a": bind_a.id, "bind_b": bind_b.id,
                 "live": live.id, "live_parent": live_parent.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
                 "withhold_parent": withhold_parent.id, "withhold_worker": withhold_worker.id,
-                "cron_session": cron_session.id, "cron_leaf": cron_leaf.id,
+                "bound_node": bound_node.id, "paused_node": paused_node.id,
+                "archived_child": archived_child.id,
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
                                   "counter": live_counter, "tree": tree,
@@ -1500,9 +1534,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s23_FAILED")
                 results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
                                ok=False, detail=repr(exc) + " | " + diag, screenshot=shot)
-            # ---- S24: the withheld launch and the legacy cron session ----------
+            # ---- S24: the withheld launch --------------------------------------
             try:
-                log("  s24: withheld run and cron leaf")
+                log("  s24: withheld run")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
                 # The worker transcript's Run header reads "withheld · <reason>".
@@ -1522,37 +1556,212 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("(a) a withheld Run shows 'withheld · <reason>' in its Run header", ok=True,
                                detail="cancelled task's queued Run; reason from the durable run_launch_withheld fact", screenshot=shot)
 
-                # The cron worker node hangs under its legacy cron session in
-                # the Scheduled tab (the grouped cron render nests the leaves).
-                await cdp.send("Page.navigate",
-                               {"url": f"{base}/?filter=scheduled&session={ids['cron_session']}"},
-                               session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
-                await expand_to(cdp, session_id, [ids["cron_session"]])
-                names = await evaluate(cdp, session_id, """
-                    [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
-                """)
-                assert_true(any("nightly-sweep ·" in n for n in names),
-                            f"the cron worker node renders nested under its legacy session ({names})")
-                # The cron project group renders collapsed by default; open it
-                # so the leaf's row can scroll on screen.
-                await evaluate(cdp, session_id, """
-                    (() => {
-                      document.querySelectorAll('.cron-group-items.hidden').forEach(el => el.classList.remove('hidden'));
-                      document.querySelectorAll('.cron-group-chevron').forEach(el => el.classList.add('rotate-90'));
-                    })()
-                """)
-                await reveal_row(cdp, session_id, ids["cron_leaf"])
-                leaf_visible = await evaluate(cdp, session_id, f"""
-                    !!document.getElementById('session-{ids['cron_leaf']}')
-                """)
-                assert_true(leaf_visible, "the cron leaf's row is visible under the expanded legacy cron session")
-                shot = await screenshot(cdp, session_id, results, "s24_cron_worker_under_legacy_session")
-                results.record("(b) a cron worker node hangs under its legacy cron session", ok=True,
-                               detail="legacy scheduled session parents its firings' worker leaves in the sidebar", screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s24_FAILED")
-                results.record("withheld run and cron leaf scenarios", ok=False, detail=repr(exc), screenshot=shot)
+                results.record("withheld run scenario", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S25: the three view pills — Workspace, Later, Archive --------
+            # The strip's labels render in order, each pill's click lands in its
+            # view (Later serves /api/sessions/starred, Archive builds its
+            # project-grouped tree), and coming back to Workspace repaints it.
+            try:
+                log("  s25: the three view pills")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                labels = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#sidebar-filter-pills .filter-pill')].map(b => b.textContent.trim())
+                """)
+                assert_true(labels == ["Workspace", "Later", "Archive"],
+                            f"the pill strip reads Workspace, Later, Archive in order ({labels})")
+                assert_true(await evaluate(cdp, session_id,
+                                           "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"),
+                            "Workspace is the active pill on load")
+
+                await evaluate(cdp, session_id, "document.getElementById('filter-starred').click()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('filter-starred').classList.contains('bg-blue-600/20')"
+                               f" && !!document.getElementById('session-{ids['feature']}')",
+                               timeout=12, label="Later renders the starred row")
+                later_names = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
+                """)
+                assert_true(any("Feature alpha" in n for n in later_names),
+                            f"the starred feature manager renders under Later ({later_names})")
+                shot = await screenshot(cdp, session_id, results, "s25_later_pill")
+                results.record("the Later pill serves the starred queue", ok=True,
+                               detail="strip reads Workspace/Later/Archive; Later shows the starred feature manager",
+                               screenshot=shot)
+
+                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('filter-archived').classList.contains('bg-blue-600/20')"
+                               " && !!document.querySelector('#session-list .session-group')",
+                               timeout=12, label="Archive renders its tree")
+                await evaluate(cdp, session_id, "document.getElementById('filter-all').click()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"
+                               f" && !!document.getElementById('session-{ids['root']}')",
+                               timeout=12, label="Workspace repaints on return")
+                shot = await screenshot(cdp, session_id, results, "s25_pill_round_trip")
+                results.record("the pills round-trip Workspace / Later / Archive", ok=True,
+                               detail="each pill lands in its view; the archived tree and the Workspace tree both render",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s25_FAILED")
+                results.record("the three view pills", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S26: a bound node's schedule rides its Workspace row ---------
+            # The enabled bound node shows the blue clock, the "Next:" line and
+            # the truncated cron · timezone line, with the Edit schedule gear;
+            # the disabled one goes grey with "Disabled" and no next run.
+            try:
+                log("  s26: bound nodes' schedule rows in Workspace")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id,
+                               f"!!document.getElementById('session-{ids['bound_node']}')"
+                               f" && !!document.getElementById('session-{ids['paused_node']}')",
+                               timeout=12, label="both bound rows render")
+                await reveal_row(cdp, session_id, ids["bound_node"])
+                await reveal_row(cdp, session_id, ids["paused_node"])
+                bound_row = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const row = document.getElementById('session-{ids['bound_node']}');
+                      const clock = row.querySelector('svg[title^="Scheduled:"]');
+                      return JSON.stringify({{
+                            clock: !!clock,
+                            blue: !!clock && clock.classList.contains('text-blue-400'),
+                            title: clock ? clock.getAttribute('title') : null,
+                            next: row.textContent.includes('Next: '),
+                            cronTz: row.textContent.includes('0 9 * * * · America/Los_Angeles'),
+                            edit: !!row.querySelector('button[title="Edit schedule"]'),
+                      }});
+                    }})()
+                """)
+                bound = json.loads(bound_row)
+                assert_true(bound["clock"] and bound["blue"] and bound["title"] == "Scheduled: harness-daily",
+                            f"the bound row shows the blue clock naming its task ({bound})")
+                assert_true(bound["next"] and bound["cronTz"],
+                            f"the bound row shows the Next line and the cron · timezone line ({bound})")
+                assert_true(bound["edit"], "the bound row carries the Edit schedule hover button")
+                paused_row = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const row = document.getElementById('session-{ids['paused_node']}');
+                      const clock = row.querySelector('svg[title^="Scheduled:"]');
+                      return JSON.stringify({{
+                            clock: !!clock,
+                            grey: !!clock && clock.classList.contains('text-slate-500'),
+                            disabled: row.textContent.includes('Disabled'),
+                            next: row.textContent.includes('Next: '),
+                      }});
+                    }})()
+                """)
+                paused = json.loads(paused_row)
+                assert_true(paused["clock"] and paused["grey"] and paused["disabled"] and not paused["next"],
+                            f"the disabled bound row goes grey, says Disabled, and names no next run ({paused})")
+                shot = await screenshot(cdp, session_id, results, "s26_bound_rows_workspace")
+                results.record("a bound node's schedule rides its Workspace row; disabled goes grey", ok=True,
+                               detail="blue clock + Next + cron·timezone + Edit schedule; the disabled row is grey with Disabled",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s26_FAILED")
+                results.record("bound nodes' schedule rows in Workspace", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S27: the Workspace error badge --------------------------------
+            # One broken cron file on disk; the badge renders at the top of the
+            # Workspace view and opens the cron editor on the broken task.
+            try:
+                log("  s27: the Workspace error badge")
+                await wait_for(cdp, session_id,
+                               "document.querySelector('#session-list .bg-red-900\\/40') !== null"
+                               " && document.querySelector('#session-list').textContent.includes('1 scheduled tasks failed to load')",
+                               timeout=12, label="the error badge renders")
+                badge = await evaluate(cdp, session_id, """
+                    (() => {{
+                      const list = document.getElementById('session-list');
+                      const badge = list.querySelector('[role="button"][title="Open the first failed task"]');
+                      const firstGroup = list.querySelector('.session-group');
+                      return JSON.stringify({{
+                            text: badge ? badge.textContent.trim() : null,
+                            onclick: badge ? badge.getAttribute('onclick') : null,
+                            onTop: badge && firstGroup ? badge.nextSibling === firstGroup || badge.compareDocumentPosition(firstGroup) & Node.DOCUMENT_POSITION_FOLLOWING : false,
+                      }});
+                    }})()
+                """)
+                badge_info = json.loads(badge)
+                assert_true(badge_info["text"] == "⚠ 1 scheduled tasks failed to load",
+                            f"the badge names the broken count ({badge_info})")
+                assert_true("openCronEditor('harness-broken')" in (badge_info["onclick"] or ""),
+                            f"the badge opens the cron editor on the first broken task ({badge_info})")
+                assert_true(badge_info["onTop"], "the badge renders at the top of the Workspace view")
+                shot = await screenshot(cdp, session_id, results, "s27_workspace_error_badge")
+                results.record("the Workspace error badge renders from the broken cron entries", ok=True,
+                               detail="⚠ 1 scheduled tasks failed to load, above the tree, opening the cron editor",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s27_FAILED")
+                results.record("the Workspace error badge", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S28: the Archive tree with its dimmed context ancestor --------
+            # The archived firing nests under its still-active bound node: the
+            # ancestor arrives as a context_only row, dimmed with the active
+            # tag, carrying a star and none of the archived row's actions.
+            try:
+                log("  s28: the Archive tree with a dimmed context node")
+                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+                await wait_for(cdp, session_id,
+                               f"!!document.getElementById('session-{ids['archived_child']}')"
+                               f" && !!document.getElementById('session-{ids['bound_node']}')",
+                               timeout=12, label="the archived page and its context row render")
+                status, archived_page = await asyncio.to_thread(
+                    api_request, base, access_key, "GET", "/api/sessions/archived?limit=100", timeout=10.0)
+                assert_true(status == 200, f"the archived listing answers 200 ({status})")
+                strip_all = await evaluate(cdp, session_id, """
+                    (() => {{
+                      const pill = [...document.querySelectorAll('#session-list button')]
+                        .find(b => b.textContent.trim().startsWith('All '));
+                      return pill ? pill.textContent.replace(/[^0-9]/g, '') : null;
+                    }})()
+                """)
+                server_total = sum(g["total"] for g in archived_page["groups"])
+                assert_true(strip_all == str(server_total),
+                            f"the strip's All count equals the server's archived aggregate ({strip_all} vs {server_total})")
+                await expand_to(cdp, session_id, [ids["bound_node"]])
+                nest = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const child = document.getElementById('session-{ids['archived_child']}');
+                      const node = document.getElementById('session-{ids['bound_node']}');
+                      const container = document.querySelector("[data-tree-children='{ids['bound_node']}']");
+                      const rowText = node.textContent;
+                      return JSON.stringify({{
+                            nested: !!container && container.contains(child),
+                            dimmed: node.classList.contains('opacity-60'),
+                            activeTag: rowText.includes('active'),
+                            star: !!node.querySelector('button[title^="Star"]'),
+                            unarchive: !!node.querySelector('button[title="Unarchive"]'),
+                            childUnarchive: !!child.querySelector('button[title="Unarchive"]'),
+                            childDimmed: child.classList.contains('opacity-60'),
+                      }});
+                    }})()
+                """)
+                nest_info = json.loads(nest)
+                assert_true(nest_info["nested"],
+                            "the archived firing nests under its scheduled context node")
+                assert_true(nest_info["dimmed"] and nest_info["activeTag"],
+                            f"the context node renders dimmed with the active tag ({nest_info})")
+                assert_true(nest_info["star"] and not nest_info["unarchive"],
+                            f"the context row keeps the star and takes no unarchive action ({nest_info})")
+                assert_true(nest_info["childUnarchive"] and not nest_info["childDimmed"],
+                            f"the archived child keeps its own archived row form ({nest_info})")
+                await reveal_row(cdp, session_id, ids["archived_child"])
+                await evaluate(cdp, session_id,
+                               f"document.getElementById('session-{ids['bound_node']}').scrollIntoView({{block: 'center'}})")
+                shot = await screenshot(cdp, session_id, results, "s28_archive_context_tree")
+                results.record("the Archive tree nests the archived firing under its dimmed context node", ok=True,
+                               detail="context_only ancestor: dimmed, active tag, star only; the strip counts archived rows alone",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s28_FAILED")
+                results.record("the Archive tree with a dimmed context node", ok=False, detail=repr(exc), screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

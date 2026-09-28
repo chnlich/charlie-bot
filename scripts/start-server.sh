@@ -8,7 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-LOG_DIR="/tmp/charliebot-logs"
+# Tests drive the real launcher through this variable; the default stays the
+# live log directory.
+LOG_DIR="${CHARLIEBOT_LOG_DIR:-/tmp/charliebot-logs}"
 mkdir -p "$LOG_DIR"
 TS="$(date +%Y%m%d_%H%M%S)"
 LOG="$LOG_DIR/server_${TS}.log"
@@ -20,5 +22,12 @@ echo "  latest -> $LOG_DIR/server-latest.log"
 
 # PYTHONUNBUFFERED: avoid block buffering when piped, so log lines flush promptly.
 # tee keeps console output and writes the file; PIPESTATUS preserves the real exit code.
-PYTHONUNBUFFERED=1 uv run python3 server.py 2>&1 | tee -a "$LOG"
-exit "${PIPESTATUS[0]}"
+# -i makes tee ignore SIGINT: Ctrl-C reaches the whole foreground process group, and
+# tee must outlive it to record the server's shutdown lines, then ends on EOF when
+# the server exits.
+PYTHONUNBUFFERED=1 uv run python3 server.py 2>&1 | tee -i -a "$LOG"
+SERVER_RC="${PIPESTATUS[0]}"
+EXIT_LINE="$(date '+%Y-%m-%d %H:%M:%S.%3N') launcher: server exited rc=${SERVER_RC}"
+echo "$EXIT_LINE" >> "$LOG"
+echo "$EXIT_LINE"
+exit "$SERVER_RC"

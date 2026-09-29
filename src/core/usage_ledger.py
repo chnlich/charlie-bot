@@ -30,10 +30,6 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
-from src.core.config import get_config
-
-_LEDGER_NAME = "ledger.sqlite3"
-
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage (
   record_id TEXT PRIMARY KEY,
@@ -224,11 +220,6 @@ class _ModelSum:
   accounts: dict[str, _Sum] = field(default_factory=dict)
 
 
-def default_ledger_path() -> Path:
-  """The ledger lives under the charliebot home, beside the sessions it indexes."""
-  return get_config().charliebot_home / "usage" / _LEDGER_NAME
-
-
 class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 
@@ -255,8 +246,7 @@ class UsageLedger:
 
   def captured_sigs(self, host: str) -> dict[str, str]:
     """Every captured file path and its last-recorded signature for one host."""
-    rows = self._conn.execute(
-        "SELECT path, sig FROM captured_files WHERE host = ?", (host,)).fetchall()
+    rows = self._conn.execute("SELECT path, sig FROM captured_files WHERE host = ?", (host,)).fetchall()
     return {row["path"]: row["sig"] for row in rows}
 
   def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord]) -> int:
@@ -272,23 +262,20 @@ class UsageLedger:
     with self._conn:
       for rec in records:
         self._conn.execute(
-            _UPSERT_USAGE_SQL,
-            (rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts,
-             rec.in_fresh, rec.cache_write, rec.cache_read, rec.output, path, captured_at))
+            _UPSERT_USAGE_SQL, (
+                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
+                rec.cache_write, rec.cache_read, rec.output, path, captured_at))
         if rec.kind == RecordKind.NATIVE:
           for session in rec.sessions:
             self._conn.execute(
-                "INSERT OR IGNORE INTO native_sessions (session, source) VALUES (?, ?)",
-                (session, rec.source))
+                "INSERT OR IGNORE INTO native_sessions (session, source) VALUES (?, ?)", (session, rec.source))
         else:
           for session in rec.sessions:
             self._conn.execute(
-                "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)",
-                (rec.record_id, session))
+                "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
-             ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""",
-          (host, path, sig))
+             ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
     return len(records)
 
   def model_rows(self) -> list[LedgerRow]:
@@ -331,8 +318,9 @@ class UsageLedger:
             fallback_calls=acc.fallback_calls,
             fallback_output=acc.fallback_output,
             accounts=sorted(
-                (LedgerAccount(name=name, calls=s.calls, output=s.output, total=s.total)
-                 for name, s in acc.accounts.items()),
+                (
+                    LedgerAccount(name=name, calls=s.calls, output=s.output, total=s.total)
+                    for name, s in acc.accounts.items()),
                 key=lambda a: (-a.total, a.name)),
         )
         for (source, model), acc in accs.items()

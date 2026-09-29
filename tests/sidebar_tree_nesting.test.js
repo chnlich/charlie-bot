@@ -466,7 +466,7 @@ test('a legacy session row keeps its actions but shows no Task & context button'
 
 // ---------------------------------------------------------------------------
 // A bound node in the Workspace tree: the same tree the All tab builds, with
-// the bound row form — schedule lines, clock badge, Edit schedule gear — and
+// the bound row form — schedule lines, clock badge, Settings gear — and
 // its firing leaves nested collapsed under it.
 // ---------------------------------------------------------------------------
 

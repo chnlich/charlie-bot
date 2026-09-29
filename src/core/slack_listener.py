@@ -70,7 +70,7 @@ from src.core.tasks import create_logged_task
 
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
-from src.core.thread_entry import ThreadReplyError, summon_prompt_tail
+from src.core.thread_entry import ThreadPlatform, ThreadReplyError, chunk_text, summon_prompt_tail
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
 if TYPE_CHECKING:
@@ -153,6 +153,20 @@ _FOLLOW_FLOOR_RE = re.compile(r"floor=([0-9.]+)")
 # Wire type of the persisted ack audit record. It mirrors the ET constants but
 # stays local: the ack record is a pure audit trail, consumed by nothing else.
 _ACK_EVENT_TYPE = "slack_ack"
+
+# The platform description every shared thread helper takes; each value keeps
+# its one home in the constants above.
+SLACK = ThreadPlatform(
+    name="slack",
+    display_name="Slack",
+    reply_event_type=ET.SLACK_REPLY,
+    reply_command=_REPLY_COMMAND,
+    max_post_chars=_MAX_POST_CHARS,
+    follow_trigger_prefix=_FOLLOW_TRIGGER_PREFIX,
+    id_key=str,
+)
+# The derived ack wire type must spell the persisted one.
+assert SLACK.ack_event_type == _ACK_EVENT_TYPE
 
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
@@ -698,44 +712,6 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
       name=f"slack-ack-clear-{session_id}")
 
 
-def _chunk_text(text: str, limit: int = _MAX_POST_CHARS) -> list[str]:
-  """Split *text* into chunks of at most *limit* chars for sequential posting.
-
-  Greedy packing over paragraph units (a paragraph plus its trailing
-  blank-line separator); a unit longer than *limit* falls to newline units,
-  and a single line longer than *limit* is hard-cut. Chunks keep the input
-  order and no boundary eats content; the whitespace-only chunk dropped at
-  return (it carries no postable text) is the only way the posted chunks fall
-  short of the input.
-  """
-  if len(text) <= limit:
-    return [text]
-  pieces: list[str] = []
-  paragraphs = re.split(r"(\n{2,})", text)  # alternates paragraph / separator
-  for i in range(0, len(paragraphs), 2):
-    unit = paragraphs[i] + (paragraphs[i + 1] if i + 1 < len(paragraphs) else "")
-    if len(unit) <= limit:
-      pieces.append(unit)
-      continue
-    for line in re.split(r"(?<=\n)", unit):  # a line plus its trailing newline
-      if len(line) <= limit:
-        pieces.append(line)
-      else:
-        pieces.extend(line[j:j + limit] for j in range(0, len(line), limit))
-  chunks: list[str] = []
-  current = ""
-  for piece in pieces:
-    if piece and len(current) + len(piece) > limit:
-      chunks.append(current)
-      current = ""
-    current += piece
-  if current:
-    chunks.append(current)
-  # A whitespace-only chunk (possible only from leading input whitespace) is
-  # dropped: Slack rejects text-less posts, and no content is lost by it.
-  return [c for c in chunks if c.strip()] or chunks
-
-
 def _event_by_id(events: list[dict], event_id: str) -> dict | None:
   for ev in events:
     if ev.get("id") == event_id:
@@ -951,7 +927,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   answers = _summon_of(bound[1], bound[0]) if bound is not None else None
   origin = meta.slack_origin
   client = _bot_client()
-  bodies = _chunk_text(text)
+  bodies = chunk_text(text, SLACK.max_post_chars)
   for index, body in enumerate(bodies, start=1):
     ok = await _post_with_retry(client, origin.channel_id, origin.thread_ts, body, session_id=session_id)
     if not ok:

@@ -148,11 +148,17 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
 
       # Audio is sent as fast as it arrives, concurrently with receiving: the
       # API accepts a burst, and pacing here would only add stop-to-final lag.
+      # The loop holds only weak references to tasks, so the close task below
+      # must stay referenced until it runs or the receive loop can wait forever.
+      close_tasks: set[asyncio.Task] = set()
+
       def end_receive_when_sender_dies(sender_task: asyncio.Task) -> None:
         """A sender that died must close the session now: the receive loop would
         otherwise wait forever for messages that will never come."""
         if not sender_task.cancelled() and sender_task.exception() is not None:
-          asyncio.create_task(socket.close())
+          close_task = asyncio.create_task(socket.close())
+          close_tasks.add(close_task)
+          close_task.add_done_callback(close_tasks.discard)
 
       sender = asyncio.create_task(send_audio())
       sender.add_done_callback(end_receive_when_sender_dies)

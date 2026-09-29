@@ -1528,7 +1528,6 @@ class TaskExecutionAdapter:
     work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")
     if work_run is None:
       raise TaskInvalidError(f"review run {run.id} names no recorded work Run")
-    work_run = work_run
     if durable_outcome == "failed":
       retried = await self._maybe_spawn_review(session_id, work_run)
       if retried is None:

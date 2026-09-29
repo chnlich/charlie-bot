@@ -112,9 +112,15 @@ def _corpus_shape(home: Path) -> tuple[int, int]:
 
 def _read_manifest() -> dict | None:
   try:
-    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
   except (OSError, ValueError):
     return None
+  # Only the builder writes the file, but a hand-edited or truncated-then-valid
+  # parse must ride the same rebuild path as an unreadable one, so main()'s
+  # subscripts never see a manifest without both integer fields.
+  if (isinstance(manifest, dict) and isinstance(manifest.get("files"), int) and isinstance(manifest.get("bytes"), int)):
+    return manifest
+  return None
 
 
 def main() -> None:

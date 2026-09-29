@@ -38,6 +38,17 @@ def test_verified_corpus_survives_a_rerun_untouched(tmp_path, monkeypatch, capsy
   assert manifest == {"files": files, "bytes": total}
 
 
+def test_shapeless_manifest_rebuilds(tmp_path, monkeypatch, capsys):
+  home = _shrink(monkeypatch, tmp_path)
+  builder.main()
+  sids = _sids(home)
+  capsys.readouterr()
+  builder.MANIFEST.write_text("{}", encoding="utf-8")  # valid JSON, no fields
+  builder.main()
+  assert "corpus built" in capsys.readouterr().out
+  assert _sids(home) != sids
+
+
 def test_drifted_shape_rebuilds(tmp_path, monkeypatch, capsys):
   home = _shrink(monkeypatch, tmp_path)
   builder.main()

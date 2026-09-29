@@ -331,14 +331,7 @@ function renderSettingsButton(s, activeBtnClass, rowMenu) {
 // child moves with its parent (no group move), a legacy row has no task
 // record behind Task & context, a bound row edits its task while an unbound
 // manager adds one.
-function openSessionRowMenu(anchor, sessionId) {
-  const attrs = anchor.dataset;
-  // The archived row reuses the Settings button's markup and data attributes;
-  // its marker picks the archived item list instead of the normal one.
-  if (attrs.rowMenu === 'archived') {
-    openArchivedRowMenu(anchor, sessionId);
-    return;
-  }
+function desktopSessionMenuItems(attrs, sessionId) {
   const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
   if (!attrs.taskParent) {
     items.push({label: 'Move to group…',
@@ -352,19 +345,64 @@ function openSessionRowMenu(anchor, sessionId) {
   } else if (attrs.profile === 'manager') {
     items.push({label: 'Add schedule…', onSelect: () => openCronAdder({sessionId})});
   }
+  return items;
+}
+
+// The touch menu's star item reads the row's starred state off the star
+// button at open time -- filters.js's toggleSessionStar repaints it in place
+// (the text-yellow-400 flip), so the class never goes stale between renders.
+function touchStarItem(sessionId) {
+  const star = document.getElementById('star-' + sessionId);
+  const starred = !!star && star.classList.contains('text-yellow-400');
+  return {label: starred ? 'Remove from Later' : 'Add to Later',
+    onSelect: () => toggleSessionStar(sessionId, starred)};
+}
+
+function openSessionRowMenu(anchor, sessionId) {
+  const attrs = anchor.dataset;
+  // The archived row reuses the Settings button's markup and data attributes;
+  // its marker picks the archived item list instead of the normal one.
+  if (attrs.rowMenu === 'archived') {
+    openArchivedRowMenu(anchor, sessionId);
+    return;
+  }
+  const items = [];
+  if (window.matchMedia('(hover: none)').matches) {
+    // Touch: the direct buttons are hidden behind the gear, so the menu
+    // leads with the star toggle and the child creation and trails with the
+    // archive -- the three actions with no desktop direct button left.
+    items.push(touchStarItem(sessionId));
+    items.push({label: 'New child session', onSelect: () => createChildSession(sessionId)});
+    items.push(...desktopSessionMenuItems(attrs, sessionId));
+    items.push({separator: true});
+    items.push({label: 'Archive', onSelect: () => archiveSession(sessionId)});
+  } else {
+    items.push(...desktopSessionMenuItems(attrs, sessionId));
+  }
   openRowMenu(anchor, items);
 }
 
 // The archived row's Settings menu: each item keeps its old direct button's
 // condition -- a task-tree child moves with its parent (no group move) -- and
-// the delete keeps its red danger styling. A child's menu is the delete alone,
-// with no separator.
+// the delete keeps its red danger styling. Touch leads with the star toggle
+// and Unarchive (the direct buttons a touch row hides); a child's menu keeps
+// the separator around the group move's absence.
 function openArchivedRowMenu(anchor, sessionId) {
   const attrs = anchor.dataset;
+  const touch = window.matchMedia('(hover: none)').matches;
   const items = [];
+  if (touch) {
+    items.push(touchStarItem(sessionId));
+    items.push({label: 'Unarchive', onSelect: () => unarchiveSession(sessionId)});
+  }
   if (!attrs.taskParent) {
     items.push({label: 'Move to group…',
       onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
+  }
+  // The delete rides a separator wherever the menu has an item above it: on
+  // touch always, on desktop only when the group move is present (a desktop
+  // child's menu is the delete alone).
+  if (!attrs.taskParent || touch) {
     items.push({separator: true});
   }
   items.push({label: 'Delete permanently', danger: true,

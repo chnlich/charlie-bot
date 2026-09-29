@@ -119,14 +119,13 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
     deadline = asyncio.get_event_loop().time() + 30
     while asyncio.get_event_loop().time() < deadline:
       records = tree.runs.list_run_records_sync(child_id)
-      reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-      if len(records) == 2 and reports and all(
+      if len(records) == 2 and _final_reports(tree, manager.id) and all(
           tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) is not None for r in records):
         return
       await asyncio.sleep(0.1)
     pytest.fail(
         f"the sequence never finished: runs={[(r.id, r.kind) for r in tree.runs.list_run_records_sync(child_id)]} "
-        f"reports={[e for e in tree.events.load_events(manager.id) if e.get('type') == ET.CHILD_REPORT]}")
+        f"reports={_child_reports(tree, manager.id)}")
 
   body, child_id = await _start_loop(cfg, session_mgr, tree, manager, monkeypatch, wait_effect=_wait_done)
 
@@ -153,20 +152,21 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   assert len(builds) == 2
   for i, b in enumerate(builds, start=1):
     assert f"iter_{i:04d}.md" in b["backend"].prompt
-  # One final result report on the manager, from the child, after BOTH runs.
+  # One final result report on the manager, from the child, after BOTH runs,
+  # plus one per-iteration report for each judged iteration.
   deadline = asyncio.get_event_loop().time() + 10
   report = None
   while asyncio.get_event_loop().time() < deadline:
-    events = tree.events.load_events(manager.id)
-    reports = [e for e in events if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      report = reports[0]
+    finals = _final_reports(tree, manager.id)
+    if finals:
+      report = finals[0]
       break
     await asyncio.sleep(0.1)
   assert report is not None, "the final sequence result was never delivered"
   assert report.get("child_session_id") == child_id
   assert report.get("outcome") in ("completed", "blocked", "failed", "cancelled")
   assert "Improve loop" in str(report.get("summary"))
+  assert len(_iteration_reports(tree, manager.id)) == 2
   # The loop state is honestly 'blocked' — iterations exhausted without a
   # proven landing (no merge-back) is NOT successful delivery.
   state = await load_loop_state(manager.id, body["loop_id"], cfg)
@@ -219,8 +219,7 @@ async def test_live_goal_change_affects_next_iteration(
     deadline = asyncio.get_event_loop().time() + 30
     while asyncio.get_event_loop().time() < deadline:
       records = tree.runs.list_run_records_sync(child_id)
-      reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-      if len(records) == 2 and reports and all(
+      if len(records) == 2 and _final_reports(tree, manager.id) and all(
           tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) is not None for r in records):
         break
       await asyncio.sleep(0.1)
@@ -269,16 +268,30 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
 # ---------------------------------------------------------------------------
 
 
+def _child_reports(tree, manager_id: str) -> list[dict]:
+  """Every child report on the manager, in delivery order."""
+  return [e for e in tree.events.load_events(manager_id) if e.get("type") == ET.CHILD_REPORT]
+
+
+def _iteration_reports(tree, manager_id: str) -> list[dict]:
+  """The per-iteration child reports: their header names the iteration."""
+  return [e for e in _child_reports(tree, manager_id) if "· iteration" in str(e.get("summary"))]
+
+
+def _final_reports(tree, manager_id: str) -> list[dict]:
+  """The loop's final child reports: no iteration header."""
+  return [e for e in _child_reports(tree, manager_id) if "· iteration" not in str(e.get("summary"))]
+
+
 async def _wait_for_final_report(tree, manager_id: str, timeout: float = 30.0) -> dict:
   """The ONE final sequence result on the manager, from the child."""
   deadline = asyncio.get_event_loop().time() + timeout
-  reports: list[dict] = []
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager_id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      return reports[0]
+    final = _final_reports(tree, manager_id)
+    if final:
+      return final[0]
     await asyncio.sleep(0.1)
-  pytest.fail(f"the final sequence result was never delivered: {reports}")
+  pytest.fail(f"the final sequence result was never delivered: {_child_reports(tree, manager_id)}")
 
 
 def _count_manager_wakes(monkeypatch: pytest.MonkeyPatch, tree, manager_id: str) -> list[str]:
@@ -328,8 +341,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
     deadline = asyncio.get_event_loop().time() + 30
     while asyncio.get_event_loop().time() < deadline:
       records = tree.runs.list_run_records_sync(body["child_session_id"])
-      reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-      if len(records) == 2 and reports and all(
+      if len(records) == 2 and _final_reports(tree, manager.id) and all(
           tree.runs.terminal_outcome(tree.runs.load_events_sync(body["child_session_id"]), r.id) is not None
           for r in records):
         return
@@ -410,8 +422,11 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   # lowercases the event text before scanning).
   assert claude_relay.POOL_EXHAUSTED_PHRASE.lower() in failed_payloads[0]["reason"]
 
-  # The one wake: the final report's, through the delivery entry.
+  # The one wake: the final report's, through the delivery entry. The
+  # quota-terminated iteration never reaches the delivery point, so no
+  # per-iteration report exists.
   assert wakes == [manager.id]
+  assert _iteration_reports(tree, manager.id) == []
 
 
 @pytest.mark.parametrize(
@@ -455,7 +470,10 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
 
   report = await _wait_for_final_report(tree, manager.id)
   assert report["outcome"] == expected_outcome
-  assert wakes == [manager.id]
+  # Two per-iteration reports plus the final one: every freshly written
+  # report woke the parent exactly once.
+  assert len(_iteration_reports(tree, manager.id)) == 2
+  assert wakes == [manager.id, manager.id, manager.id]
 
   # The replay re-derives the same stable report id, appends nothing, and
   # wakes nobody.
@@ -468,4 +486,161 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
       result_refs=list(report["result_refs"]),
       recipient=manager.id)
   assert created is False and replayed["id"] == report["id"]
-  assert wakes == [manager.id]
+  assert wakes == [manager.id, manager.id, manager.id]
+
+
+async def _await_wakes(wakes: list[str], manager_id: str, count: int, timeout: float = 10.0) -> None:
+  """Wait until *count* parent wakes have fired (the final report's wake is
+  awaited inline right after its append, so the poll only covers the tick)."""
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline and len(wakes) < count:
+    await asyncio.sleep(0.05)
+  assert wakes == [manager_id] * count
+
+
+@pytest.mark.asyncio
+async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_times(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """Every judged iteration delivers ONE child report to the parent, and every
+  freshly written report (3 per-iteration + 1 final) wakes it exactly once.
+  The last iteration's report and the final report coexist under different
+  ids: the per-iteration source id carries the improve-iteration prefix over
+  the iteration's own run_finished event, so the final report (the raw latest
+  run_finished) is never deduplicated away."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  builds = _worker_backends(monkeypatch, ["iter one words", "iter two words", "iter three words"])
+  wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  _body, child_id = await _start_loop(
+      cfg, session_mgr, tree, manager, monkeypatch,
+      payload_overrides={"iterations": 3, "work_branch": "improve/three"},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  final = await _wait_for_final_report(tree, manager.id)
+  await _await_wakes(wakes, manager.id, 4)
+
+  iteration_reports = _iteration_reports(tree, manager.id)
+  assert len(builds) == 3
+  assert len(iteration_reports) == 3 and len(_final_reports(tree, manager.id)) == 1
+  assert [e["outcome"] for e in iteration_reports] == ["success", "success", "success"]
+  assert final["outcome"] == "blocked"  # exhausted without a proven landing
+  # One wake per freshly written report: iteration 1, 2, 3, then the final.
+  assert wakes == [manager.id, manager.id, manager.id, manager.id]
+  # The last iteration's report and the final report are both present, with
+  # different stable ids (child_event_id is the source id the report
+  # deduplicates on).
+  last = iteration_reports[-1]
+  assert last["child_event_id"].startswith("improve-iteration:")
+  assert not str(final["child_event_id"]).startswith("improve-iteration:")
+  assert last["id"] != final["id"] and last["child_event_id"] != final["child_event_id"]
+  # Each iteration report rides its own run_finished event and carries the
+  # loop + run refs; the final report keeps its loop-only ref.
+  records = tree.runs.list_run_records_sync(child_id)
+  assert [r.kind for r in records] == ["iteration", "iteration", "iteration"]
+  assert [e["result_refs"] for e in iteration_reports] == [
+      ["loop:1", f"run:{r.id}"] for r in records]
+  assert final["result_refs"] == ["loop:1"]
+
+
+@pytest.mark.asyncio
+async def test_iteration_report_header_carries_the_judgment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The header names the iteration, report_valid, tip, commits_added and the
+  report path. An iteration whose worker wrote no report file is invalid with
+  the reason "no report file" (decided before the controller's fallback file
+  is written); an iteration with a well-formed report is valid."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  loop_dir = cfg.sessions_dir / manager.id / "loops" / "1"
+
+  async def write_iter_two_report() -> None:
+    # The second worker writes a well-formed zero-progress report after its
+    # stream: the mechanical verdict reads it as valid.
+    (loop_dir / "iter_0002.md").write_text(
+        "## Iter 2\n\nMeasured the goal reading; nothing to ship.\n\n### Commits\n\n"
+        "- none \u2014 zero progress is acceptable per the goal.\n")
+
+  backends = [
+      SpawningScriptedBackend([result_event("iter one words")]),
+      SpawningScriptedBackend([result_event("iter two words")], post_events=write_iter_two_report),
+  ]
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  _body, _child_id = await _start_loop(
+      cfg, session_mgr, tree, manager, monkeypatch,
+      payload_overrides={"work_branch": "improve/header"},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  iteration_reports = _iteration_reports(tree, manager.id)
+  assert [e["outcome"] for e in iteration_reports] == ["success", "success"]
+  first, second = iteration_reports
+  # Iteration 1: no report file. The header says invalid with the reason, and
+  # the body keeps the worker's own closing words (the fallback text).
+  assert first["summary"].startswith(
+      "[Improve loop 1 · iteration 1/2] report_valid=false [invalid: no report file] ")
+  assert f" report={loop_dir / 'iter_0001.md'} Audit per the improve-goal skill." in first["summary"]
+  assert " tip=" in first["summary"] and " commits_added=0 " in first["summary"]
+  assert first["summary"].endswith("\n\niter one words")
+  # The controller's fallback file is marked and never flipped the verdict.
+  fallback = (loop_dir / "iter_0001.md").read_text()
+  assert fallback.startswith("<!-- runner fallback: worker wrote no report -->\n")
+  assert "iter one words" in fallback
+  # Iteration 2: a well-formed report is valid; the header carries the same
+  # fields and the body is the report head.
+  assert second["summary"].startswith(
+      "[Improve loop 1 · iteration 2/2] report_valid=true tip=")
+  assert "[invalid:" not in second["summary"]
+  assert f" report={loop_dir / 'iter_0002.md'} Audit per the improve-goal skill." in second["summary"]
+  assert " commits_added=0 " in second["summary"]
+  assert "## Iter 2" in second["summary"]
+
+
+@pytest.mark.asyncio
+async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A per-iteration report re-delivered under the same source id dedups: no
+  second event lands in the parent's log and nobody is woken."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  _worker_backends(monkeypatch, ["iter one words"])
+  wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  _body, child_id = await _start_loop(
+      cfg, session_mgr, tree, manager, monkeypatch,
+      payload_overrides={"iterations": 1, "work_branch": "improve/replay"},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  await _wait_for_final_report(tree, manager.id)
+  await _await_wakes(wakes, manager.id, 2)  # the iteration report's + the final report's
+  iteration_reports = _iteration_reports(tree, manager.id)
+  assert len(iteration_reports) == 1
+  first = iteration_reports[0]
+
+  replayed, created = await tree.dispatch.deliver_child_report(
+      child_id,
+      source_event={"id": first["child_event_id"]},
+      outcome=first["outcome"],
+      summary=str(first["summary"]),
+      result_refs=list(first["result_refs"]),
+      recipient=manager.id)
+  assert created is False and replayed["id"] == first["id"]
+  assert len(_iteration_reports(tree, manager.id)) == 1
+  assert wakes == [manager.id, manager.id]

@@ -113,7 +113,7 @@ def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:
 
 def test_build_worker_prompt_task_type_implement_matches_legacy_format() -> None:
   prompt = build_worker_prompt("Implement X", cfg=_build_cfg())
-  assert "Commit your changes with descriptive messages." in prompt
+  assert "commits-and-prs.md" in prompt
   assert "A reviewer will handle that." in prompt
   assert "Do NOT modify tracked files." not in prompt
   assert "Do NOT commit." not in prompt
@@ -130,7 +130,7 @@ def test_build_worker_prompt_instructs_task_spec_source_file_handling() -> None:
 
 def test_build_worker_prompt_task_type_quick_edit_skips_reviewer_mention() -> None:
   prompt = build_worker_prompt("Cherry-pick fix", cfg=_build_cfg(), task_type=TaskType.QUICK_EDIT)
-  assert "Commit your changes with descriptive messages." in prompt
+  assert "commits-and-prs.md" in prompt
   assert "No reviewer will run" in prompt
   assert "A reviewer will handle that." not in prompt
 
@@ -139,7 +139,7 @@ def test_build_worker_prompt_task_type_script_run_forbids_edits_and_commits() ->
   prompt = build_worker_prompt("Run SLURM benchmark", cfg=_build_cfg(), task_type=TaskType.SCRIPT_RUN)
   assert "Do NOT modify tracked files" in prompt
   assert "Do NOT commit" in prompt
-  assert "Commit your changes with descriptive messages." not in prompt
+  assert "commits-and-prs.md" not in prompt
   assert "A reviewer will handle that." not in prompt
 
 

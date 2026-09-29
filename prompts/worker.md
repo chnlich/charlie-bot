@@ -24,8 +24,11 @@ You are continuing work in an existing worktree from a previous iteration. Revie
 <!-- section: workflow_steps -->
 Follow these steps exactly:
 1. `cd` into the assigned worktree (Worktree above) — do ALL your work inside this worktree.
-2. Commit your changes with descriptive messages.
-   Use structured commit messages: first line is a short summary, then a blank line, then a "Why:" line explaining the business reason for the change.
+2. Commit your changes with messages that follow the commits-and-prs genre
+   (~/.claude/skills/writing-style/genres/commits-and-prs.md): the first line names the effect, the
+   body gives why, evidence, then how. Comments you add or rewrite follow the code genre
+   (~/.claude/skills/writing-style/genres/code.md): they state current facts, and change history
+   lives in commit messages.
 3. Test discipline — add a test only for behavior that would break silently and cost real damage
    (a core-flow contract, a data-safety or permission boundary, a parser against real input);
    extend an existing test before adding a new file; never assert the literal wording of prompts,

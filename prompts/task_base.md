@@ -21,8 +21,7 @@ The codebase has a single user. Apply these principles:
 <!-- section: skills_discovery -->
 ## Skills Discovery
 - **Before starting any task**, check for skills relevant to the target repo or task domain.
-  - Look in **`~/.charliebot/skills/`** (canonical source — always available regardless of CLI backend).
-  - Alternatively: `~/.claude/skills/` (Claude Code) or `~/.agents/skills/` (Codex/Gemini).
+  - Look in `~/.claude/skills/` or `~/.agents/skills/`: both symlink the two canonical sources, the charlie-bot checkout's `skills/` (general, writing-style included) and `~/.charliebot/skills/` (host-specific).
 - **Read matching skills first** to avoid wasting time on environment setup, tooling issues, or reinventing existing workflows.
 - **Mandatory for tasks in any domain that has a matching skill**: you MUST read that skill BEFORE writing any code, running any command, or submitting any job. This includes profiling, metrics analysis, data processing — not just training. Starting work without reading the relevant skill is forbidden.
 - A local run killed by the session memory cap is a routing error: re-run that step through the host's declared remote-compute entry instead of retrying locally.

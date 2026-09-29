@@ -23,15 +23,19 @@ from conftest import (
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.models import SessionStatus
 from src.core.thread_entry import (
     ThreadAdapter,
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
+    accept_summon,
     ack_messages,
     chunk_text,
+    consume_mention,
     deliver_done,
     follow_floor,
+    follow_message,
     lost_summons,
     newest_thread_input,
     noticed,
@@ -312,17 +316,61 @@ class FakeAdapter(ThreadAdapter):
     return {"channel": address["channel_id"]}
 
 
-class FakeSessions:
-  """The session-manager surface the round side touches, over one in-memory
-  metadata; persisted events land in ``persisted`` for the readback asserts."""
+class FakeTriggers:
+  """The trigger-manager surface the summon and follow sides touch: armed
+  records list, cancels, and creates record; a created record carries the
+  label the core built and answers the armed log's ``fire_at`` read."""
 
-  def __init__(self, meta: SimpleNamespace) -> None:
+  def __init__(self, armed: list | None = None) -> None:
+    self.armed = list(armed or [])
+    self.cancelled: list[tuple[str, str]] = []
+    self.created: list[SimpleNamespace] = []
+
+  async def list_triggers(self, session_id: str) -> list:
+    return list(self.armed)
+
+  async def cancel_trigger(self, session_id: str, trigger_id: str) -> None:
+    self.cancelled.append((session_id, trigger_id))
+
+  async def create_trigger(
+      self, session_id: str, delay: int, message: str, *, created_at, enforce_pending_limit: bool = False,
+  ) -> SimpleNamespace:
+    record = SimpleNamespace(id=f"tr{len(self.created) + 1}", message=message, fire_at=created_at)
+    self.created.append(record)
+    return record
+
+
+class FakeSessions:
+  """The session-manager surface the round side and the summon side touch, over
+  one in-memory metadata; persisted events land in ``persisted`` for the
+  readback asserts and the summon create/group writes land in ``created`` and
+  ``groups``. A None *meta* is the no-session-yet state the summon create
+  resolves."""
+
+  def __init__(self, meta: SimpleNamespace | None) -> None:
     self.meta = meta
     self.events: list[dict] = []
     self.persisted: list[dict] = []
+    self.created: list = []
+    self.groups: list[tuple[str, str]] = []
 
-  async def get_session(self, session_id: str) -> SimpleNamespace:
+  async def get_session(self, session_id: str) -> SimpleNamespace | None:
     return self.meta
+
+  async def create_session(self, request) -> None:
+    self.created.append(request)
+    self.meta = SimpleNamespace(
+        id=request.session_id,
+        name=request.name,
+        group=request.group,
+        status=SessionStatus.ACTIVE,
+        updated_at="2026-01-01T00:00:00Z",
+        fakechat_origin=getattr(request, "fakechat_origin", None),
+        fakechat_watermark_id=None,
+    )
+
+  async def set_group(self, session_id: str, group: str | None) -> None:
+    self.groups.append((session_id, group))
 
   async def save_metadata(self, meta: SimpleNamespace) -> None:
     pass
@@ -423,3 +471,87 @@ async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) ->
   assert "(no `charliebot fakechat reply` call)" in nudge["content"]
   assert "`charliebot fakechat reply --file <path>`" in nudge["content"]
   assert nudge["fakechat"] == {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", "nudge_of": "s1"}
+
+
+# ---------------------------------------------------------------------------
+# The summon and follow side under the fakechat platform: the fake adapter's
+# ack/link/wake face and the fake trigger manager record what the shared
+# machinery consumes, groups, arms, and fires.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_consume_mention_advances_the_watermark_by_the_platform_id_key() -> None:
+  # Integer order: "100" sorts above the "99" watermark only as an integer; the
+  # string sort would leave it unread.
+  sessions = FakeSessions(_fake_meta())
+  sessions.meta.fakechat_watermark_id = "99"
+  triggers = FakeTriggers()
+
+  await consume_mention(FAKECHAT, sessions, triggers, "s1", "100")
+
+  assert sessions.meta.fakechat_watermark_id == "100"
+  assert triggers.cancelled == []
+
+
+@pytest.mark.asyncio
+async def test_follow_message_drops_below_the_watermark_and_arms_above_it() -> None:
+  adapter = FakeAdapter()
+  sessions = FakeSessions(_fake_meta())
+  sessions.meta.status = SessionStatus.ACTIVE
+  sessions.meta.fakechat_watermark_id = "100"
+  triggers = FakeTriggers()
+  origin_matches = lambda origin: origin == sessions.meta.fakechat_origin  # noqa: E731  (a one-line guard shape)
+
+  # Integer order: "99" sits below the "100" watermark even though the string sorts above.
+  dropped = await follow_message(adapter, sessions, triggers, "s1", "99", origin_matches=origin_matches)
+  assert dropped is None
+  assert triggers.created == []
+
+  armed = await follow_message(adapter, sessions, triggers, "s1", "101", origin_matches=origin_matches)
+
+  assert armed == "s1"
+  assert [rec.message for rec in triggers.created] == ["fakechat-thread-follow floor=101\nhttps://fakechat.test/t1"]
+
+
+@pytest.mark.asyncio
+async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() -> None:
+  adapter = FakeAdapter()
+  sessions = FakeSessions(None)  # no session yet: the summon create resolves it
+  triggers = FakeTriggers()
+  block = {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}
+  tasks: list[asyncio.Task] = []
+
+  with (
+      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
+      patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+  ):
+    sid = await accept_summon(
+        adapter,
+        None,
+        sessions,
+        triggers,
+        session_id="s1",
+        label="Fakechat #c1",
+        origin={"channel_id": "c1", "thread_ts": "t1"},
+        block=block,
+        content="fakechat summon",
+        user="u1",
+    )
+    await asyncio.gather(*tasks)
+
+  assert sid == "s1"
+  request = sessions.created[0]
+  assert request.name.startswith("Fakechat #c1 ")
+  # The origin rides the request under the platform's origin field name.
+  assert request.fakechat_origin == {"channel_id": "c1", "thread_ts": "t1"}
+  assert sessions.groups == [("s1", "Fakechat #c1")]
+  summon_event = sessions.persisted[0]
+  assert summon_event["type"] == ET.AGENT_MESSAGE
+  assert summon_event["from_session_name"] == "Fakechat"
+  assert summon_event["fakechat"] == block
+  mock_trigger.assert_awaited_once()
+  assert mock_trigger.await_args.args[0] == "s1"
+  assert mock_trigger.await_args.kwargs["user_event_id"] == summon_event["id"]
+  assert adapter.acks == [block]
+  assert sorted(task.get_name() for task in tasks) == ["fakechat-ack-s1", "fakechat-round-s1"]

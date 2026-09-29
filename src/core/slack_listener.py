@@ -52,15 +52,9 @@ from src.core import thread_entry, timeouts
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
-
-# trigger_master keeps its importable Slack name for the mention-seam tests.
-from src.core.master_trigger import trigger_master as trigger_master
 from src.core.models import PendingTrigger, SlackOrigin
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
-
-# create_logged_task keeps its importable Slack name for the mention-seam tests.
-from src.core.tasks import create_logged_task as create_logged_task
 
 # _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
 from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE

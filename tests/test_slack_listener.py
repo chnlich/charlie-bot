@@ -12,8 +12,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     ROOT,
-    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
+    THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
     WsServerNeverAnswersClose,
     build_slack_cfg,
@@ -92,9 +92,9 @@ def _mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock
   context.
   """
   with contextlib.ExitStack() as stack:
-    trigger = stack.enter_context(patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
+    trigger = stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
     if tasks is not None:
-      stack.enter_context(patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
+      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     yield trigger
 
 

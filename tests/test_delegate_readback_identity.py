@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from conftest import create_task
 
 from src.cli.common import find_local_task_child
 from src.core.control_events import derived_delegate_request_id
@@ -24,14 +25,8 @@ from tests.test_task_execution import build_env
 async def test_two_same_spec_siblings_readback_binds_to_request_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   description = "Fix the flaky test the same way twice"
   first = await tree.create_task(
       request_id="delegate-sibling-1",
@@ -80,14 +75,8 @@ async def test_two_same_spec_siblings_readback_binds_to_request_identity(
 async def test_readback_returns_none_without_the_bound_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No bound child (or a mismatched one) is outcome-unknown, never a fallback."""
   _cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   description = "A delegation that never landed"
   # A sibling with a DIFFERENT description exists: the readback must not
   # return it for a missing operation.
@@ -114,14 +103,8 @@ async def test_readback_run_id_is_the_operation_work_run(tmp_path: Path, monkeyp
     directory sorts first (a review Run of the same child is a different op)."""
   from src.core.control_events import stable_run_id
   _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   description = "The spec"
   child = await tree.create_task(
       request_id="delegate-runcheck",

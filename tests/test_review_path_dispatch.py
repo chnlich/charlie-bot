@@ -11,7 +11,12 @@ import asyncio
 from pathlib import Path
 
 import pytest
-from conftest import BUILD_BACKEND_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, patch_instructions_content
+from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    create_task,
+    patch_instructions_content,
+)
 
 from src.core import event_types as ET
 from src.core import git
@@ -43,14 +48,8 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path / "repo")
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")

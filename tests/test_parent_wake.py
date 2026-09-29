@@ -15,7 +15,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, build_env
+from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, build_env, create_task
 
 from src.core import event_types as ET
 from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
@@ -86,15 +86,8 @@ async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
 @pytest.mark.asyncio
 async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_mgr, tree = build_env(tmp_path)
-  from src.core.models import TaskSpec
-  node = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller="operator")
+  node = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
   dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = AsyncMock()
@@ -113,16 +106,9 @@ async def test_task_tree_parent_with_the_caller_equal_to_itself_still_dispatches
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The skip rule is legacy-only: a manager node's dispatch consults its
   durable inputs, never the caller — even when the closer is the node itself."""
-  from src.core.models import TaskSpec
   _cfg, _session_mgr, tree = build_env(tmp_path)
-  node = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller="operator")
+  node = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
   dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
   trigger = AsyncMock()
@@ -212,22 +198,10 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
   never fires for a node parent."""
   cfg, session_mgr, tree = build_env(tmp_path)
   adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="project"),
-      name="Project",
-      backend=None,
-      caller="operator")
-  worker = await tree.create_task(
-      request_id="w",
-      task_parent_id=manager.id,
-      profile="worker",
-      task=TaskSpec(goal="fix the thing"),
-      name="W",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=TaskSpec(goal="fix the thing"), name="W")
   await tree.runs.register_run(_failed_work_run(worker.id, "run-t"))
   await tree.runs.record_finish(worker.id, "run-t", "failed")
   run = await tree.runs.get_run(worker.id, "run-t")

@@ -45,7 +45,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
+from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core import thread_entry, timeouts
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
@@ -76,7 +76,6 @@ from src.core.thread_entry import (
     ThreadReplyError,
     follow_floor,
     lost_summons,
-    newest_thread_input,
     summon_prompt_tail,
     unread_after,
 )
@@ -117,10 +116,6 @@ _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
     f"Per-message limit: {_MAX_POST_CHARS} characters. "
     "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
-
-_LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
-
-_LOST_SUMMON_CONTENT = ("这条 Slack 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。")
 
 # Thread-follow windows: a batch sleeps out this quiet delay from the newest
 # message, and a chain never runs past this cap from its first message, so a
@@ -752,63 +747,11 @@ def _lost_summons(events: list[dict], *, owned: set[str], running: set[str]) -> 
 async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
-  First the summons lost while queued: the startup replay covers ``ET.USER``
-  only (src/core/init_master_recovery.py), so a Slack injection sitting in the queue when the
-  process died is picked up by nothing else and gets the lost-summon notice.
-  Then the round-end audit over every finished round, which closes the crash
-  windows between a done and its nudge, and between a nudge round's done and
-  its notice. Every predicate reads the log, so a second pass finds nothing.
-  Runs once per boot, after re-attach and replay have had their chance.
+  One-line pass-through to the shared boot audit
+  (``thread_entry.backfill_lost_summons``) on the Slack adapter; the
+  lost-summon report and the per-round audit live there.
   """
-  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
-
-  sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
-  adapter = SlackThreadAdapter(_bot_client())
-  reported = 0
-  for meta in sessions:
-    if meta.slack_origin is None:
-      continue
-    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-    lost = lost_summons(
-        SLACK,
-        events,
-        owned=master_cc.queued_user_event_ids(meta.id),
-        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
-    for ev in lost:
-      # Persist the marker before posting: a crash in between costs one notice,
-      # while posting first would re-post it on every boot until the marker landed.
-      await session_mgr.persist_and_broadcast(
-          meta.id, {
-              "type": ET.ASSISTANT_ERROR,
-              "content": _LOST_SUMMON_CONTENT,
-              "slack_backfill": {
-                  ET.INPUT_EVENT_ID: ev["id"]
-              },
-          })
-      slack = ev["slack"]
-      await thread_entry.post_with_retry(adapter, slack, _LOST_SUMMON_NOTICE, session_id=meta.id)
-      thread_entry.ack_clear(adapter, slack, meta.id)
-      reported += 1
-      logger.info(
-          "slack_backfill_lost_summon",
-          session=meta.id,
-          channel=slack["channel_id"],
-          thread_ts=slack["thread_ts"],
-          input_event_id=ev["id"])
-    if lost:
-      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
-    for done in dones:
-      bound = newest_thread_input(SLACK, events, master_done_input_event_ids(done))
-      if bound is None:
-        continue
-      done_input_id, target = bound
-      if await thread_entry.audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
-        reported += 1
-        # The action appended an event the next done's predicates must see.
-        events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-  return reported
+  return await thread_entry.backfill_lost_summons(SlackThreadAdapter(_bot_client()), cfg, session_mgr)
 
 
 async def _expect_hello(ws: ClientConnection) -> None:

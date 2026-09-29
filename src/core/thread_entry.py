@@ -460,6 +460,72 @@ _NO_REPLY_NOTICE = (
 # Session-log content of the notice marker; its notice payload names the summon it closes.
 _NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the nudge round; the thread was told so."
 
+_LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
+
+_LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。"
+
+
+async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+  """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
+
+  First the summons lost while queued: the startup replay covers ``ET.USER``
+  only (src/core/init_master_recovery.py), so a summon injection sitting in the
+  queue when the process died is picked up by nothing else and gets the
+  lost-summon notice. Then the round-end audit over every finished round, which
+  closes the crash windows between a done and its nudge, and between a nudge
+  round's done and its notice. Every predicate reads the log, so a second pass
+  finds nothing. Runs once per boot, after re-attach and replay have had their
+  chance.
+  """
+  platform = adapter.platform
+  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+
+  sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
+  reported = 0
+  for meta in sessions:
+    if getattr(meta, platform.origin_field) is None:
+      continue
+    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+    lost = lost_summons(
+        platform,
+        events,
+        owned=master_cc.queued_user_event_ids(meta.id),
+        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
+    for ev in lost:
+      # Persist the marker before posting: a crash in between costs one notice,
+      # while posting first would re-post it on every boot until the marker landed.
+      await session_mgr.persist_and_broadcast(
+          meta.id, {
+              "type": ET.ASSISTANT_ERROR,
+              "content": _LOST_SUMMON_CONTENT.format(platform=platform.display_name),
+              platform.backfill_key: {
+                  ET.INPUT_EVENT_ID: ev["id"]
+              },
+          })
+      block = ev[platform.name]
+      await post_with_retry(adapter, block, _LOST_SUMMON_NOTICE, session_id=meta.id)
+      ack_clear(adapter, block, meta.id)
+      reported += 1
+      logger.info(
+          f"{platform.name}_backfill_lost_summon",
+          session=meta.id,
+          **adapter.log_fields(block),
+          input_event_id=ev["id"])
+    if lost:
+      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
+    for done in dones:
+      bound = newest_thread_input(platform, events, master_done_input_event_ids(done))
+      if bound is None:
+        continue
+      done_input_id, target = bound
+      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
+        reported += 1
+        # The action appended an event the next done's predicates must see.
+        events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+  return reported
+
 
 def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> str:
   """The thread link as the summon prompt states it; the platform's fallback ids when it has none."""

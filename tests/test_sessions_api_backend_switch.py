@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, backend_option
+from conftest import CODEX_BACKEND_OPTION, backend_option, bind_deps_managers
 from conftest import make_sessions_client as _build_client
 
 from src.core.config import CharlieBotConfig
@@ -133,9 +133,7 @@ async def test_switch_bound_node_cross_family_is_400(
   session_mgr = SessionManager(cfg)
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   rl = await tree.create_task(
       request_id="scheduled-node:nightly",
       task_parent_id=None,

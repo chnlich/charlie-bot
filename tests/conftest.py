@@ -818,6 +818,18 @@ def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
+def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, session_mgr: SessionManager) -> None:
+  """Install *tree* and *session_mgr* as the api deps module's manager singletons.
+
+  The pair rides one patch: a task tree bound without its session manager
+  leaves deps.session_manager() free to build a second SessionManager over the
+  same home, whose private chat-event cache never sees the tree's rounds.
+  """
+  from src.api import deps
+  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+
+
 def identity_of(pid: int) -> tuple[int, str]:
   """(pid, start_time) for a live pid; asserts the /proc stat read succeeded, so callers can pin
   a RunRecord to the pair without a None check."""

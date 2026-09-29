@@ -40,14 +40,15 @@ import asyncio  # noqa: E402
 import base64  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
-import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,
+    open_evidence_dir,
     pick_free_port,
+    resolve_chrome,
 )
 from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     build_source_home,
@@ -246,14 +247,10 @@ async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
-    if not chrome:
-        fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
+    chrome = resolve_chrome(args.chrome, fail)
 
     evidence_dir = Path(args.evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
-                            capture_output=True, text=True, check=True).stdout.strip()
+    commit = open_evidence_dir(evidence_dir)
     shots = Shots(evidence_dir)
     checks: list[dict] = []
 

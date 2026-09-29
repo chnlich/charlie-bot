@@ -440,7 +440,11 @@ function renderSessionScheduleLine(s) {
     const lastClass = s.last_run_status === 'success' ? 'text-green-400'
       : s.last_run_status === 'running' ? 'text-yellow-400'
         : s.last_run_status === 'skipped' ? 'text-slate-400' : (s.schedule_allow_failure ? 'text-amber-400' : 'text-red-400');
-    html += `<span class="block text-xs ${lastClass}">Last: ${escapeHtml(s.last_run_status)}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}</span>`;
+    // The Last line truncates with an ellipsis like the cron line above it
+    // (one line tall on the touch drawer too) and carries its full text in
+    // the title attribute.
+    const lastText = `Last: ${s.last_run_status}${s.last_scheduled_run ? ', ' + formatBubbleTime(s.last_scheduled_run) : ''}${s.last_run_status === 'failed' && s.schedule_allow_failure ? ' (review needed)' : ''}`;
+    html += `<span class="block truncate text-xs ${lastClass}" title="${escapeHtmlAttr(lastText)}">${escapeHtml(lastText)}</span>`;
   }
   return html;
 }

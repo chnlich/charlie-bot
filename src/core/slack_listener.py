@@ -74,7 +74,6 @@ from src.core.thread_entry import (
     follow_floor,
     lost_summons,
     summon_prompt_tail,
-    unread_after,
 )
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
@@ -397,23 +396,6 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
   return (message.get("subtype") is None and message.get("bot_id") is None and message.get("user") in allowed_user_ids)
 
 
-def _unread_eligible(messages: list[dict], allowed_user_ids: list[str], watermark_ts: str | None) -> list[dict]:
-  """The eligible messages strictly above *watermark_ts*; a None watermark passes everything."""
-  return unread_after(
-      messages,
-      eligible=lambda m: _eligible_thread_message(m, allowed_user_ids),
-      message_id=lambda m: m["ts"],
-      watermark=watermark_ts,
-      id_key=SLACK.id_key)
-
-
-async def _fetch_unread_eligible(
-    client: SlackClient, origin: SlackOrigin, cfg: CharlieBotConfig, watermark_ts: str | None) -> list[dict]:
-  """Read the session's thread once and return its unread eligible messages."""
-  messages = await client.get_thread_replies(origin.channel_id, origin.thread_ts)
-  return _unread_eligible(messages, cfg.slack.allowed_user_ids, watermark_ts)
-
-
 async def _armed_follow_triggers(trigger_mgr: TriggerManager, session_id: str) -> list[PendingTrigger]:
   """The session's pending thread-follow trigger records (at most one by construction)."""
   return [
@@ -577,6 +559,7 @@ async def _backfill_followed_threads(
   whose thread shows no unread eligible message arms nothing, and each armed
   session arms exactly once, independent of its unread count.
   """
+  adapter = SlackThreadAdapter(client)
   armed = 0
   # The ACTIVE filter rides the listing so the backfill never copies+stamps
   # the archived majority it drops on the line below.
@@ -585,12 +568,12 @@ async def _backfill_followed_threads(
       continue
     origin = meta.slack_origin
     try:
-      unread = await _fetch_unread_eligible(client, origin, cfg, meta.slack_watermark_ts)
+      unread = await thread_entry.unread_messages(adapter, origin, cfg, meta.slack_watermark_ts)
       if not unread:
         continue
       permalink = await client.get_permalink(origin.channel_id, origin.thread_ts)
       trigger = await _arm_follow_trigger(
-          trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0]["ts"])
+          trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0].id)
       if trigger is not None:
         armed += 1
     except Exception as e:

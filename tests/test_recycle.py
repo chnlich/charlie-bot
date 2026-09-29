@@ -16,7 +16,7 @@ from conftest import (
 from conftest import append_events as _append_events
 from conftest import archive_cutoff_events as _archive_cutoff_events
 
-from src.api.message_utils import build_session_view_data
+from src.api.message_utils import build_session_bootstrap_data
 from src.core.models import ThreadMetadata, ThreadStatus
 from src.core.ndjson import count_ndjson_lines
 
@@ -184,16 +184,16 @@ async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_session_view_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
+async def test_session_bootstrap_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
   await recycle_archive_cutoff_events(mgr, session.id)
 
-  full_view = await build_session_view_data(session.id, mgr, [])
+  full_view = await build_session_bootstrap_data(session.id, mgr)
   assert full_view.total_event_count == 8
   assert full_view.has_more is True
   assert [m["event_index"] for m in full_view.messages] == [5, 6, 7]
 
-  tail_view = await build_session_view_data(session.id, mgr, [], message_limit=2)
+  tail_view = await build_session_bootstrap_data(session.id, mgr, message_limit=2)
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
   assert full_view.oldest_message_ordinal == 5

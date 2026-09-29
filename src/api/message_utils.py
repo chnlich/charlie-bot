@@ -17,12 +17,10 @@ if TYPE_CHECKING:
 
 __all__ = [
     "SessionBootstrapData",
-    "SessionViewData",
     "build_agent_input_content",
     "build_agent_message_event",
     "build_scheduled_trigger_event",
     "build_session_bootstrap_data",
-    "build_session_view_data",
     "build_user_event",
     "events_to_messages",
     "events_to_view",
@@ -106,18 +104,6 @@ class SessionBootstrapData:
   messages: list[dict]
   pending_draft: dict | None = None
   total_event_count: int = 0
-  oldest_message_ordinal: int = 0
-  has_more: bool = False
-
-
-@dataclass
-class SessionViewData:
-  """Data produced by the messages → usage → mark-read pipeline."""
-  messages: list[dict]
-  threads: list[dict]
-  usage: dict | None
-  pending_draft: dict | None = None
-  total_event_count: int | None = None
   oldest_message_ordinal: int = 0
   has_more: bool = False
 
@@ -265,64 +251,6 @@ async def build_session_bootstrap_data(
       pending_draft=pending_draft,
       total_event_count=total_event_count,
       oldest_message_ordinal=oldest_ordinal,
-      has_more=has_more,
-  )
-
-
-async def build_session_view_data(
-    session_id: str,
-    session_mgr: SessionManager,
-    thread_rows: list[dict],
-    *,
-    message_limit: int | None = 40,
-    tree: TaskTreeManager | None = None,
-) -> SessionViewData:
-  """Build the view's messages and usage.
-
-  *thread_rows* are the session view's thread rows (``view_thread_rows``'s
-  shape), resolved by the caller so the view's row proof is shared with the
-  workers-panel list. When *message_limit* is None, loads all events. When
-  set, the page shape follows the shared projection-or-tail policy
-  (``_messages_page``): a projection-served page is turn-aligned and holds at
-  least *message_limit* messages (unless history is exhausted), while the
-  tail path folds the last *message_limit* raw events, which can render
-  fewer messages.
-
-  Returns committed messages plus an optional pending_draft (the in-progress
-  assistant draft that has not yet been flushed). Live render paths show the
-  pending_draft in the streaming preview, not as a committed bubble; this
-  keeps SSR aligned with the per-session live aggregator and avoids the
-  duplicate-bubble seen on mid-stream reload.
-  """
-  session_meta = await session_mgr.get_session(session_id)
-  if session_meta is None:
-    raise ValueError(f"session '{session_id}' metadata missing during view build")
-
-  if session_meta.profile == "worker":
-    if tree is None:
-      raise ValueError(f"worker session '{session_id}' view requires the task tree")
-    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = await _worker_messages_page(
-        tree, session_id, message_limit if message_limit is not None else 40)
-    usage = await _worker_usage(tree, session_id)
-  elif message_limit is None:
-    raw_events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-    total_event_count = session_meta.archive_offset + len(raw_events)
-    oldest_message_ordinal = session_meta.archive_offset
-    has_more = session_meta.archive_offset > 0
-    messages, pending_draft = events_to_view(raw_events, event_index_offset=session_meta.archive_offset)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-  else:
-    messages, pending_draft, total_event_count, oldest_message_ordinal, has_more = await _messages_page(
-        session_mgr, session_id, session_meta.archive_offset, message_limit)
-    usage = await session_mgr.resolve_session_usage(session_id, session_meta)
-
-  return SessionViewData(
-      messages=messages,
-      threads=thread_rows,
-      usage=usage,
-      pending_draft=pending_draft,
-      total_event_count=total_event_count,
-      oldest_message_ordinal=oldest_message_ordinal,
       has_more=has_more,
   )
 

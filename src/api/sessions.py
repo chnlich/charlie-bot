@@ -30,7 +30,6 @@ from src.api.deps import (
 from src.api.message_utils import (
     SessionBootstrapData,
     build_session_bootstrap_data,
-    build_session_view_data,
     events_to_messages,
     get_message_projection_fast,
 )
@@ -1129,7 +1128,7 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
   return body
 
 
-# The switch fetches (view, bootstrap) and the sidebar's status poll (/status)
+# The switch fetch (bootstrap) and the sidebar's status poll (/status)
 # rebuild their payload per request, so unlike the
 # events page there is no projection generation to key a gzip form on; the
 # rendered body bytes are their own invalidation ground — a memo hit proves
@@ -1156,54 +1155,6 @@ _sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST
 # One steady-state whole-body slot beside the gzip memo: the search route's
 # _search_whole_body mechanism. The slot is only ever replaced whole.
 _sessions_list_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
-
-
-@router.get('/{session_id}/view')
-async def get_session_view(
-    session_id: str,
-    request: Request,
-    meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> Response:
-  """Return data needed to render a session chat panel (SPA switch).
-
-  Uses tail-loading: only the last 40 messages are parsed and returned.
-  The response includes has_more and oldest_message_ordinal so the frontend
-  can paginate backwards.
-  """
-  await session_mgr.populate_sidebar_state(
-      [meta],
-      include_running_status=True,
-      include_pending_trigger_status=True,
-  )
-  # The threads array rides the workers-panel list's row proof (revision gate +
-  # row memo): a repeat view of a session no write landed in pays zero stats.
-  thread_rows = await view_thread_rows(session_id, cfg, thread_mgr)
-  view = await build_session_view_data(session_id, session_mgr, thread_rows, tree=task_mgr)
-  # The chat column's thread rows carry one CSS-truncated description line per
-  # row and its full text rides the thread-detail endpoint (the workers-panel
-  # list's truncation contract), so the view ships the same prefixed rows — the
-  # worst session's whole-row dumps measured 2.6 MB of body per session open.
-  payload = {
-      "session": meta.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE),
-      "messages": view.messages,
-      "pending_draft": view.pending_draft,
-      "threads": view.threads,
-      "event_count": view.total_event_count,
-      "oldest_message_ordinal": view.oldest_message_ordinal,
-      "usage": view.usage,
-      "has_more": view.has_more,
-  }
-  if meta.profile == "worker":
-    from src.core import worker_transcript
-    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
-    payload["active_run_id"] = entry.active_run_id
-  payload.update(_active_backend_payload(meta, cfg))
-  # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
-  return await _switch_payload_response(request, payload)
 
 
 @router.get('/{session_id}/pending-triggers')
@@ -1251,7 +1202,7 @@ async def mark_session_read(
 ) -> dict:
   """Clear the session's unread flag; the client posts this after a render lands.
 
-  "Read" means "content rendered": the view/bootstrap GETs stay side-effect-free
+  "Read" means "content rendered": the bootstrap GET stays side-effect-free
   and this explicit POST is the only flip-off path, so a bare data fetch can no
   longer wipe the sidebar's unread dot. Flip semantics and the unread_changed
   broadcast (only on an actual flip) are SessionManager.mark_read's own.

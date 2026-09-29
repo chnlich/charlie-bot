@@ -608,7 +608,8 @@ async def view_thread_rows(
     cfg: CharlieBotConfig,
     thread_mgr: ThreadManager,
 ) -> list[dict]:
-  """Thread rows for the session view payload, proven current like the list body.
+  """Thread rows for the sidebar leaf projection and the search route, proven
+  current like the list body.
 
   Serves the stored rows while the session's write revision stands; a mark
   rebuilds synchronously, and the countdown's insurance sweep runs detached

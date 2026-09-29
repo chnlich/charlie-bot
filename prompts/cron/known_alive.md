@@ -24,7 +24,7 @@ Known-alive symbols:
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
 - Every FastAPI route handler in `src/api/*.py` (functions under `@router.get/post/patch/put/
   delete/websocket` decorators, e.g. `list_projects`, `get_backlog`, `list_cron_tasks`,
-  `get_session_view`, `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
+  `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
   each router with `include_router(prefix=...)` and `web/static/js/` fetches the composed paths
   (e.g. `/api/sessions/projects` from `context-panel.js`, `/rounds/{id}/rate` from
   `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside

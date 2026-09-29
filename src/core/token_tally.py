@@ -1358,14 +1358,13 @@ _OPENCODE_PROBE_SQL = (
     "select count(*), coalesce(sum(time_updated), 0), "
     "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
 
-# The probe scans the whole message table (878 MB on the live db and growing, ~73 ms), so it
-# re-runs only when the db files moved since the probe whose signature it recorded: a durable
-# commit appends a WAL frame or rewrites the main db, moving one of the two (size, mtime_ns)
-# pairs, while a reader touching only the -shm sidecar moves neither. Process-local, keyed by
-# the caller's path spelling (the same string the ledger's captured_files key uses); a
-# fresh process probes once, which is the pre-gate shape.
-_OpencodeGate = tuple[tuple[int, int], tuple[int, int] | None, str]
-_opencode_probe_gate: dict[str, _OpencodeGate] = {}
+# The probe scans the whole message table (5.7 GB db, ~80 ms warm and multi-second disk-cold),
+# so it re-runs only when the db files moved since the probe whose signature it recorded: a
+# durable commit appends a WAL frame or rewrites the main db, moving one of the two
+# (size, mtime_ns) pairs, while a reader touching only the -shm sidecar moves neither. The
+# gate lives in the ledger's capture_gates table keyed by the caller's path spelling (the same
+# string the captured_files key uses), so a fresh process — every server restart's first page
+# load — reuses the stored probe instead of paying the scan again.
 
 
 def _opencode_db_stats(db: Path) -> tuple[tuple[int, int], tuple[int, int] | None]:
@@ -1386,8 +1385,9 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
   The db opens read-only (mode=ro) — the capture never writes to it. The whole message
   table signs with the probe aggregates ``_OPENCODE_PROBE_SQL`` projects; a db whose
   signature the ledger already recorded for this host is skipped, and the probe itself is
-  skipped while the db files sit unchanged since the probe that recorded it (the stat gate
-  above). Otherwise every row at or above the previous capture's max time_updated is re-read
+  skipped while the db files sit unchanged since the probe that recorded it (the gate stored
+  in the ledger's capture_gates table). Otherwise every row at or above the previous
+  capture's max time_updated is re-read
   through ``_opencode_row_data`` and each contributing row upserts on ``opencode:<message
   id>``: an updated row moves its ledger record, a deleted row leaves the stored rows
   untouched (the ledger contains no DELETE). A missing db contributes nothing; a parse or
@@ -1399,16 +1399,19 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
     return 0
   db_key = str(db)
   main_pair, wal_pair = _opencode_db_stats(db)
-  gated = _opencode_probe_gate.get(db_key)
+  stored = ledger.captured_gate(host, db_key)
   sig: str | None = None
-  if gated is not None and gated[0] == main_pair and gated[1] == wal_pair:
-    sig = gated[2]  # the files are byte-still since that probe, so its aggregates hold
+  if stored is not None and stored[0] == (main_pair, wal_pair):
+    sig = stored[1]  # the files are byte-still since that probe, so its aggregates hold
   con: sqlite3.Connection | None = None
   try:
     if sig is None:
       con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
       sig = ":".join(map(str, con.execute(_OPENCODE_PROBE_SQL).fetchone()))
-      _opencode_probe_gate[db_key] = (main_pair, wal_pair, sig)
+      # The gate is written before the rows it prices: a capture that dies between the two
+      # leaves the probe's signature absent from captured_files, so the next capture still
+      # re-reads those rows from the captured floor — the gate never hides uncaptured rows.
+      ledger.record_gate(host, db_key, main_pair, wal_pair, sig)
     captured = ledger.captured_sigs(host).get(db_key)
     if captured == sig:
       return 0

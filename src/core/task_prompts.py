@@ -501,19 +501,24 @@ def render_worktree_bindings(
     repo_path: str,
 ) -> str:
   """The workflow's binding header (intro + branch/worktree/repo), actual values."""
-  from src.core.spawner_prompt import WORKFLOW_PROMPT_SECTION, _substitute_tokens, load_marker_sections
+  from src.core.spawner_prompt import (
+      WORKFLOW_PROMPT_SECTION,
+      _substitute_tokens,
+      load_marker_sections,
+      worktree_binding_tokens,
+  )
   # Element 0 of the section map's single home is the bindings section.
   section = WORKFLOW_PROMPT_SECTION[task_type][0]
   sections = load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", (section,), extraction="worker-prompt")
   return _substitute_tokens(
-      sections[section], {
-          "{{intro_line}}": intro_line,
-          "{{branch_name}}": branch_name,
-          "{{base_branch_origin}}": base_branch_origin,
-          "{{wt_path}}": wt_path,
-          "{{repo_path}}": repo_path,
-      })
+      sections[section],
+      worktree_binding_tokens(
+          intro_line=intro_line,
+          branch_name=branch_name,
+          base_branch_origin=base_branch_origin,
+          wt_path=wt_path,
+          repo_path=repo_path))
 
 
 def render_task_body(cfg: CharlieBotConfig, description: str) -> str:

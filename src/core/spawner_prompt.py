@@ -180,6 +180,22 @@ def iteration_report_tokens(loop_dir: str, iteration_number: int) -> dict[str, s
   }
 
 
+def worktree_binding_tokens(
+    *, intro_line: str, branch_name: str, base_branch_origin: str, wt_path: str, repo_path: str) -> dict[str, str]:
+  """The bindings section's token map: the intro line plus branch/worktree/repo.
+
+  One home for both render paths (the v1 worker assembly and the v2 render_worktree_bindings),
+  so a token the section gains gets its value once.
+  """
+  return {
+      "{{intro_line}}": intro_line,
+      "{{branch_name}}": branch_name,
+      "{{base_branch_origin}}": base_branch_origin,
+      "{{wt_path}}": wt_path,
+      "{{repo_path}}": repo_path,
+  }
+
+
 def _build_worker_prompt(
     description: str,
     repo_path: Path,
@@ -203,21 +219,18 @@ def _build_worker_prompt(
   intro_line = sections["intro_continuation"] if is_continuation else sections["intro_new"]
 
   branch_origin = f"`{base_branch}`" + (f" @ `{start_point}`" if start_point else "")
-  branch_tokens = {
-      "{{branch_name}}": branch_name,
-      "{{base_branch_origin}}": branch_origin,
-      "{{wt_path}}": wt_path,
-      "{{repo_path}}": str(repo_path),
-  }
 
   workflow_section_ids = WORKFLOW_PROMPT_SECTION.get(task_type)
   if workflow_section_ids is None:
     raise ValueError(f"unsupported task_type: {task_type!r}")
   workflow_body = _substitute_tokens(
-      "\n".join(sections[section_id] for section_id in workflow_section_ids), {
-          "{{intro_line}}": intro_line,
-          **branch_tokens
-      })
+      "\n".join(sections[section_id] for section_id in workflow_section_ids),
+      worktree_binding_tokens(
+          intro_line=intro_line,
+          branch_name=branch_name,
+          base_branch_origin=branch_origin,
+          wt_path=wt_path,
+          repo_path=str(repo_path)))
 
   task_section = sections["task"].replace("{{description}}", description)
 

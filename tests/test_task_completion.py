@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    OPERATOR,
     OPUS_BACKEND_ID,
     build_env,
     create_task,
@@ -24,8 +25,6 @@ from src.core.task_sessions import (
     TaskForbiddenError,
     TaskTreeManager,
 )
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 def live_identity() -> tuple[int, str, datetime]:

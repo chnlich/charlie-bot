@@ -10,10 +10,10 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import OPERATOR, make_home_config
 
 from src.core.models import RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
+from src.core.run_token import RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
@@ -57,7 +57,7 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
       task=TaskSpec(goal="g"),
       name="N",
       backend=None,
-      caller=CallerIdentity(kind="operator"))
+      caller=OPERATOR)
   run_id = "query-run"
   await tree.runs.register_run(RunRecord(id=run_id, session_id=meta.id, kind="work"))
   proc = subprocess.Popen(["/bin/sleep", "60"])

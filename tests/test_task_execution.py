@@ -26,12 +26,12 @@ from conftest import (
     patch_instructions_content,
     stub_credentials,
 )
+from conftest import OPERATOR as OP_CALLER
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.core import event_types as ET
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity
 from src.core.sessions import (
     CONTEXT_RESET_INSTRUCTION,
     HISTORY_LOCATION_NOTE,
@@ -40,7 +40,6 @@ from src.core.sessions import (
 from src.core.task_sessions import TaskTreeManager
 
 OPERATOR = {"Authorization": "Bearer op-secret"}
-OP_CALLER = CallerIdentity(kind="operator")
 
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None,

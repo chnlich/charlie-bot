@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import build_env, create_task, stub_credentials
+from conftest import OPERATOR, build_env, create_task, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
@@ -17,8 +17,6 @@ from src.core.task_sessions import (
     TaskForbiddenError,
     TaskTreeManager,
 )
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 async def admit(

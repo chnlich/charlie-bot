@@ -9,6 +9,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CHAT_CANCEL_MASTER_PATCH_TARGET,
+    OPERATOR,
     backend_option,
     make_work_item,
     mock_session_callbacks,
@@ -75,7 +76,6 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
   from conftest import make_home_config
 
   from src.api.deps import set_task_manager
-  from src.core.run_token import CallerIdentity
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
 
@@ -83,13 +83,7 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   node = await tree.create_task(
-      request_id="node",
-      task_parent_id=None,
-      profile=profile,
-      task=None,
-      name="Node",
-      backend=None,
-      caller=CallerIdentity(kind="operator"))
+      request_id="node", task_parent_id=None, profile=profile, task=None, name="Node", backend=None, caller=OPERATOR)
   set_task_manager(tree)
   return cfg, session_mgr, tree, node
 

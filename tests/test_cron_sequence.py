@@ -19,6 +19,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CODEX_BACKEND_OPTION,
     MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    OPERATOR,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
@@ -282,7 +283,6 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
-  from src.core.run_token import CallerIdentity
   from src.core.task_completion import CompletionEvidence
   close_run = stable_run_id(manager.id, "close:evidence")
   await tree.runs.register_run(RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
@@ -291,7 +291,7 @@ async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypat
   await tree.completion.complete_task(
       manager.id,
       request_id="close-1",
-      caller=CallerIdentity(kind="operator"),
+      caller=OPERATOR,
       evidence=CompletionEvidence(summary="done", run_ids=[close_run], result_refs=[f"run:{close_run}"]))
   task_cfg = _bound_task("wake-manager", manager.id, prompt="Standup.")
   scheduler = Scheduler(cfg, session_mgr)
@@ -410,15 +410,11 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
 async def cancel_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
   """Close one run-less node with outcome cancelled: a closed task withholds
   every launch (a queued Run would block the cancel, so close first)."""
-  from src.core.run_token import CallerIdentity
-  await tree.completion.cancel_task(
-      session_id, request_id=request_id, reason="withhold the launch", caller=CallerIdentity(kind="operator"))
+  await tree.completion.cancel_task(session_id, request_id=request_id, reason="withhold the launch", caller=OPERATOR)
 
 
 async def reopen_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
-  from src.core.run_token import CallerIdentity
-  await tree.completion.reopen_task(
-      session_id, request_id=request_id, reason="precondition cleared", caller=CallerIdentity(kind="operator"))
+  await tree.completion.reopen_task(session_id, request_id=request_id, reason="precondition cleared", caller=OPERATOR)
 
 
 def blocked_reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:

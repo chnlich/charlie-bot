@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     agent_headers,
     delegate_payload,
@@ -31,7 +32,6 @@ from conftest import (
 from src.core import event_types as ET
 from src.core.control_events import build_control_event
 from src.core.models import RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
@@ -46,7 +46,6 @@ from tests.test_task_execution import (
 )
 
 KEY = "op-secret"
-OP_CALLER = CallerIdentity(kind="operator")
 
 
 def live_run_identity() -> tuple[int, str]:
@@ -89,7 +88,7 @@ async def manager_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
       task=TaskSpec(goal="project"),
       name="Project",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   return cfg, session_mgr, tree, root
 
 
@@ -168,7 +167,7 @@ async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open
       task=TaskSpec(goal="feature"),
       name="Feature",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   await register_live_manager_run(tree, child.id, "child-owner-run")
 
   with make_api_client(cfg, session_mgr, tree) as client:
@@ -375,7 +374,7 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
       task=TaskSpec(goal="check the thing", task_type="verify"),
       name="Verify",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   verify_run = await tree.runs.register_run(
       RunRecord(id="verify-run", session_id=verify.id, kind="work", backend="fake", model="fake-model"))
   observation = await tree.dispatch.executor.launch_and_settle(verify.id, verify_run.id)
@@ -408,7 +407,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
       task=TaskSpec(goal="feature"),
       name="Feature",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   other = await tree.create_task(
       request_id="other",
       task_parent_id=None,
@@ -416,7 +415,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
       task=TaskSpec(goal="other program"),
       name="Other",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   await tree.runs.register_run(RunRecord(id="other-run", session_id=other.id, kind="manager_turn"))
   await tree.runs.record_launch(other.id, "other-run", pid=424243, pid_start="ps-other")
 

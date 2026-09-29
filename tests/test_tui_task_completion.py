@@ -24,6 +24,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
+from conftest import OPERATOR
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -374,12 +375,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   # untouched (its bytes stay the evidence of record), and the node's rule ref
   # moved for the NEXT launch only.
   from src.core.models import PatchSessionTaskRequest
-  from src.core.run_token import CallerIdentity
   snapshot_before = Path(runs_first.prompt_snapshot_ref).read_bytes()
   patched = await tree.patch_task(
-      session_id,
-      PatchSessionTaskRequest(node_prompt="Live edit while attached"),
-      caller=CallerIdentity(kind="operator"))
+      session_id, PatchSessionTaskRequest(node_prompt="Live edit while attached"), caller=OPERATOR)
   assert patched.node_prompt_ref is not None
   assert Path(runs_first.prompt_snapshot_ref).read_bytes() == snapshot_before
 

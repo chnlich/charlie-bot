@@ -97,11 +97,11 @@ async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
   monkeypatch.setattr(tree, "_ensure_prompt_changed_fact", real_ensure)
   # Repeated recovery (the startup sweep) lands the fact once, then no-ops.
   from src.core.task_recovery import reconcile_task_tree
-  await reconcile_task_tree(cfg, tree, tree._sessions)
+  await reconcile_task_tree(cfg, tree)
   first = prompt_facts(tree, sid)
   assert len(first) == 1
-  await reconcile_task_tree(cfg, tree, tree._sessions)
-  await reconcile_task_tree(cfg, tree, tree._sessions)
+  await reconcile_task_tree(cfg, tree)
+  await reconcile_task_tree(cfg, tree)
   assert prompt_facts(tree, sid) == first
 
 

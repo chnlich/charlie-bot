@@ -105,7 +105,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
     """A run registered (reservation) but never launched: recovery dispatches it
     through the executor — one process, the exact registered provenance."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     backend = SpawningScriptedBackend([result_event("recovered work")])
     builds = install_resume_ready_backends(monkeypatch, [backend])
     patch_instructions_content(monkeypatch)
@@ -119,14 +119,14 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
                   backend="fake", model="fake-model"))
     await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
 
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
     assert outcome == "success"
     assert run.pid == 424001
     assert run.input_event_ids == [str(admitted["id"])]
     assert len(builds) == 1
     # A repeated pass launches nothing new and duplicates nothing.
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert len(tree.runs.list_run_records_sync(worker.id)) == 1
     assert len(builds) == 1
 
@@ -136,7 +136,7 @@ async def test_restart_after_launch_reattaches_live_process(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A recorded live (pid, pid_start) process is followed, never relaunched."""
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     gate = asyncio.Event()
     backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
     builds = install_resume_ready_backends(monkeypatch, [backend])
@@ -159,7 +159,7 @@ async def test_restart_after_launch_reattaches_live_process(
         gate.set()
 
     asyncio.get_event_loop().create_task(_release_soon())
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
     # The follow observed the recorded process ENDING (true→false) and the run
     # converged to its durable result instead of staying falsely running. The
@@ -174,7 +174,7 @@ async def test_restart_after_launch_reattaches_live_process(
 async def test_stop_request_wins_over_launch_and_recovery(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])],
                               WORKER_BUILD_BACKEND_PATCH_TARGET)
     patch_instructions_content(monkeypatch)
@@ -184,7 +184,7 @@ async def test_stop_request_wins_over_launch_and_recovery(
                   backend="fake", model="fake-model"))
     await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
     await tree.runs.request_stop(worker.id, run_id, "stop-1")
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     # Stop precedence: the queued run never launches and never claims input;
     # the durable stop request stands and no side effect happened.
     events = tree.runs.load_events_sync(worker.id)
@@ -192,7 +192,7 @@ async def test_stop_request_wins_over_launch_and_recovery(
     assert builds == []
     stopped_run = await tree.runs.get_run(worker.id, run_id)
     assert stopped_run is not None and stopped_run.pid is None
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert builds == []
 
 
@@ -207,7 +207,7 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
-    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path / "repo")
     await tree.patch_task(
         worker.id,
@@ -234,7 +234,7 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     await tree.dispatch.finish_run(worker.id, review_id, outcome="success", exit_code=0)
 
     for _round in range(2):
-        await reconcile_task_tree(cfg, tree, session_mgr)
+        await reconcile_task_tree(cfg, tree)
         reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
         assert len(reviews) == 1, f"recovery registered a new review: {[r.id for r in reviews]}"
         assert reviews[0].id == review_id
@@ -313,11 +313,11 @@ async def test_recovery_closed_task_skips_landing(
     its parent, and leave the state completed."""
     from src.core.task_recovery import reconcile_task_tree
 
-    cfg, session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
     # The warm pass replays the follow-up on the still-open task: the landing
     # proof runs once, the automatic close lands, and the parent report's own
     # turn settles before the counted passes start.
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert tree.task_state(worker.id) == "completed"
     await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
@@ -325,7 +325,7 @@ async def test_recovery_closed_task_skips_landing(
     worker_facts = len(tree.fact_history(worker.id))
     manager_facts = len(tree.fact_history(manager.id))
     for _round in range(2):
-        await reconcile_task_tree(cfg, tree, session_mgr)
+        await reconcile_task_tree(cfg, tree)
     assert counts["git_fetch"] == 0, counts
     assert counts["git_verify_commit_landed"] == 0, counts
     assert len(tree.fact_history(worker.id)) == worker_facts
@@ -341,8 +341,8 @@ async def test_recovery_reopened_task_reproves_landing(
     from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
 
-    cfg, session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+    await reconcile_task_tree(cfg, tree)
     assert tree.task_state(worker.id) == "completed"
     await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
     await tree.completion.reopen_task(
@@ -351,7 +351,7 @@ async def test_recovery_reopened_task_reproves_landing(
     assert tree.task_state(worker.id) == "open"
 
     counts = _count_landing_git(monkeypatch)
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert counts["git_verify_commit_landed"] >= 1, counts
 
 
@@ -363,9 +363,9 @@ async def test_recovery_open_task_landing_unchanged(
     exactly as the closed-task skip left it."""
     from src.core.task_recovery import reconcile_task_tree
 
-    cfg, session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
     counts = _count_landing_git(monkeypatch)
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert counts["git_verify_commit_landed"] >= 1, counts
     assert counts["git_fetch"] >= 1, counts
     assert tree.task_state(worker.id) == "completed"
@@ -385,7 +385,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
-    cfg, session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     # Two reviewer entries beyond the worker's own backend: a failed first
     # attempt must move to the second one.
     cfg.backends.options.extend([
@@ -417,7 +417,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
                   review_of_run_id=run_id, backend="fake2", model="fake2-model"))
     await tree.dispatch.finish_run(worker.id, failed_review, outcome="failed", exit_code=1)
 
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
     assert len(reviews) == 2, f"expected the retried review, got {[r.id for r in reviews]}"
     retried = next(r for r in reviews if r.id != failed_review)
@@ -428,7 +428,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     _run, outcome = await wait_for_terminal_run(tree, worker.id, retried.id)
     assert outcome == "success"
     # The retried review consumed the one scripted backend; nothing else launches.
-    await reconcile_task_tree(cfg, tree, session_mgr)
+    await reconcile_task_tree(cfg, tree)
     assert len([r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]) == 2
 
 
@@ -494,7 +494,7 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
         base_branch=work_run.base_branch, branch_name=work_run.branch_name))
     await tree.runs.record_finish(worker.id, "review-replay-2", "success")
 
-    counters = await reconcile_task_tree(cfg, tree, session_mgr)
+    counters = await reconcile_task_tree(cfg, tree)
     await drain_legacy_wakes()
 
     assert counters["followups"] == 3  # the work run plus both review runs replayed

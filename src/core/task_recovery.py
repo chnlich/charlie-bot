@@ -40,7 +40,7 @@ from src.core.threads import METADATA_NAME
 
 if TYPE_CHECKING:
     from src.core.task_execution import TaskExecutionAdapter
-    from src.core.task_sessions import SessionManager, TaskTreeManager
+    from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -48,7 +48,6 @@ log = LazyStructlogLogger()
 async def reconcile_task_tree(
     cfg: CharlieBotConfig,
     tree: TaskTreeManager,
-    session_mgr: SessionManager,
     adapter: TaskExecutionAdapter | None = None,
 ) -> dict:
     """Reconcile every v2 node this instance owns. Returns pass counters."""
@@ -82,7 +81,7 @@ async def reconcile_task_tree(
         session_id = session_dir.name
         counters["nodes"] += 1
         try:
-            await _reconcile_node(session_id, tree, session_mgr, adapter, counters, cfg)
+            await _reconcile_node(session_id, tree, adapter, counters, cfg)
         except Exception:
             log.exception("task_recovery_node_failed", session=session_id)
     return counters
@@ -91,7 +90,6 @@ async def reconcile_task_tree(
 async def _reconcile_node(
     session_id: str,
     tree: TaskTreeManager,
-    session_mgr: SessionManager,
     adapter: TaskExecutionAdapter | None,
     counters: dict,
     cfg: CharlieBotConfig,

@@ -916,11 +916,11 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
       # messaging, global cgroup sweep and the other shared provisioners never
       # start in a preview instance; the request-boundary gate keeps their
       # routes unreachable.
-      from src.api.deps import session_manager, task_manager
+      from src.api.deps import task_manager
 
       tree = task_manager()
       tree.dispatch.executor.launch_workspace_guard = make_workspace_guard(cfg)
-      stats = await reconcile_task_tree(cfg, tree, session_manager())
+      stats = await reconcile_task_tree(cfg, tree)
       log.info("preview_task_tree_recovery_done", **stats)
       _activate_preview_mode()
       write_instance_record(setup, ready=True)

@@ -326,7 +326,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   complete the leaf, and deliver exactly ONE completed boundary report; a
   repeated recovery pass creates no extra step, close, or report."""
   from src.core.task_recovery import reconcile_task_tree
-  cfg, session_mgr, tree = bound_env
+  cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   # Step 1 rides a scripted worker process; the manager's report-consuming
   # turn rides the registry builder (scripted) — no external process starts
@@ -366,7 +366,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   # Fresh recovery advances the frontier through the same launch checks; the
   # recovered step's durable finish re-drives the frontier, so the remaining
   # step run, the close, and the ONE boundary report all land from this pass.
-  await reconcile_task_tree(cfg, tree, session_mgr)
+  await reconcile_task_tree(cfg, tree)
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
@@ -394,8 +394,8 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
 
   # A repeated pass adds nothing: no second step, no second close, no second
   # report.
-  await reconcile_task_tree(cfg, tree, session_mgr)
-  await reconcile_task_tree(cfg, tree, session_mgr)
+  await reconcile_task_tree(cfg, tree)
+  await reconcile_task_tree(cfg, tree)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 2
   assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
@@ -971,7 +971,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   """The same check fires on the recovery path: a mid-chain firing whose next
   launch now resolves to a shared backend stops before that launch and reports."""
   from src.core.task_recovery import reconcile_task_tree
-  cfg, session_mgr, tree = bound_env
+  cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("should never run")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -1021,7 +1021,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
       tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend=None, model=None)
   await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
 
-  await reconcile_task_tree(cfg, tree, session_mgr)
+  await reconcile_task_tree(cfg, tree)
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]

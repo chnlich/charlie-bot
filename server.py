@@ -427,7 +427,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # on the background task above for unmigrated v1 sessions only.
     try:
       from src.core.task_recovery import reconcile_task_tree
-      task_tree_stats = await reconcile_task_tree(cfg, task_manager(), session_mgr)
+      task_tree_stats = await reconcile_task_tree(cfg, task_manager())
       log.info("task_tree_recovery_done", **task_tree_stats)
     except Exception:
       log.exception("task_tree_recovery_failed")

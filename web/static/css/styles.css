@@ -447,10 +447,55 @@ body.resizing { cursor: col-resize; user-select: none; }
 .slash-item:hover, .slash-item.active { background: #334155; }
 .slash-item .slash-name { font-weight: 600; color: #93c5fd; font-family: ui-monospace, 'Fira Code', monospace; }
 .slash-item .slash-desc { color: #94a3b8; font-size: 0.75rem; align-self: center; }
+/* Session-row action buttons, the hover reveal: at rest a row's buttons sit
+   out of flow at the row's right end, so the name and the second-line spans
+   reach the row's right edge and no width is reserved for actions. On hover
+   they stack over the text end on an opaque cover matching the hovered row,
+   so revealing them reflows nothing. Buttons forced visible via !opacity-100
+   — the current session's actions and a starred row's solid star — stay in
+   flow, so the name truncates before them; the same class flips are all the
+   star toggle and the highlight move paint with (no list repaint).
+   Geometry: a button is 22px (p-1 around its 14px glyph), the row's flex gap
+   is 8px and its horizontal padding 12px, so one stack pitch is 30px. The
+   offsets run from the row's padding edge right-to-left in reverse DOM order;
+   nth-last-of-type keeps non-button trailing spans (the archived tree's
+   active tag) out of the count. */
+.session-row { position: relative; }
+.session-row > button { position: absolute; right: 12px; pointer-events: none; }
+.session-row > button:nth-last-of-type(2) { right: 42px; }
+.session-row > button:nth-last-of-type(3) { right: 72px; }
+.session-row > button:nth-last-of-type(4) { right: 102px; }
+/* A starred row's in-flow star owns the rightmost slot, so its hover
+   neighbours stack one pitch left of it. */
+.session-row > .star-btn.\!opacity-100 ~ button { right: 42px; }
+.session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(2) { right: 72px; }
+.session-row > .star-btn.\!opacity-100 ~ button:nth-last-of-type(3) { right: 102px; }
+/* The current session's buttons and the starred star keep their flow slot
+   and stay clickable at rest. */
+.session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
+/* Hover: the revealed buttons cover the text end with the hovered row's own
+   composite — the sidebar panel (slate-850) under the row's hover tint — as
+   a color layer plus image so the browser blends it exactly like the row
+   behind; each button's shadow fills the 8px flex gap to its right, keeping
+   the strip continuous. The transitions ride the row's transition-colors
+   beat (they replace the buttons' transition-opacity, opacity included). */
+.session-row > button {
+  transition: opacity 0.15s, background-color 0.15s, box-shadow 0.15s;
+}
+.session-row:hover > button:not(.\!opacity-100) {
+  pointer-events: auto;
+  background-color: #172033;
+  background-image: linear-gradient(rgba(51, 65, 85, 0.5), rgba(51, 65, 85, 0.5));
+  box-shadow: 8px 0 0 0 rgb(37, 49, 68);
+}
 /* On touch devices, invisible sidebar action buttons swallow taps.
-   Exclude buttons forced visible via !opacity-100 (starred / active session). */
+   Exclude buttons forced visible via !opacity-100 (starred / active session).
+   The hover reveal's out-of-flow buttons go back into the row flow: touch
+   keeps today's always-visible in-flow actions until the touch slice
+   replaces them. */
 @media (hover: none) {
   #session-list .group-hover\:opacity-100:not(.\!opacity-100) { opacity: 0.4; pointer-events: auto; }
+  #session-list .session-row > button { position: static; }
 }
 /* Prevent overscroll bounce */
 body { overscroll-behavior: none; }

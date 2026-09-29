@@ -82,6 +82,8 @@ from scripts.live_smoke_task_tree import (  # noqa: E402
     log,
     redact,
     register_secret,
+    shutdown_servers,
+    start_server,
     tree_run_dir,
 )
 from src.core import event_types as ET  # noqa: E402
@@ -107,7 +109,6 @@ TURN2_TASK = "Write a Python function that formats a number of seconds as HH:MM:
 
 TURN_TIMEOUT_SECONDS = 600.0
 REPLY_OPENING_CHARS = 400
-_SERVERS: list = []
 
 
 def fail(message: str) -> NoReturn:
@@ -212,34 +213,6 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
         f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
     register_secret(access_key)
     return port, access_key
-
-
-async def start_server(port: int) -> None:
-    """Start the isolated API server on the reserved port, without the normal lifespan."""
-    import uvicorn
-    from fastapi import FastAPI
-
-    from src.api import chat, internal, sessions, threads
-    from src.api.auth import AuthMiddleware
-
-    app = FastAPI(title="charliebot-live-switch-accept")
-    app.add_middleware(AuthMiddleware)
-    app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-    app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-    app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-    app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
-    server = uvicorn.Server(config)
-    task = asyncio.get_running_loop().create_task(server.serve())
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if task.done():
-            fail(f"isolated server failed to start: {task.exception()!r}")
-        if time.monotonic() > deadline:
-            fail("isolated server did not start within 30s")
-        await asyncio.sleep(0.05)
-    _SERVERS.append(server)
-
 
 # ---------------------------------------------------------------------------
 # Trial-state readers
@@ -755,7 +728,10 @@ async def accept(out_path: Path, keep: bool) -> int:
     }
     natives: list[NativeRecord] = []
     try:
-        await start_server(port)
+        try:
+            await start_server(port, "charliebot-live-switch-accept")
+        except RuntimeError as exc:
+            fail(str(exc))
         for spec in LEGS:
             results["legs"].append(await run_leg(spec, base, access_key, home, natives))
     except SystemExit as exc:
@@ -763,9 +739,7 @@ async def accept(out_path: Path, keep: bool) -> int:
     except Exception as exc:
         results["harness_error"] = f"{type(exc).__name__}: {redact(str(exc))}"
     finally:
-        for server in _SERVERS:
-            server.should_exit = True
-        await asyncio.sleep(0.5)
+        await shutdown_servers()
 
     cleanup_native_files(natives, results)
     results["passed"] = (

@@ -189,15 +189,19 @@ def tree_run_dir(session_id: str, run_id: str) -> Path:
 _SERVERS: list = []
 
 
-async def start_server(port: int) -> None:
-    """Start the isolated API server on the reserved port, without the normal lifespan."""
+async def start_server(port: int, title: str) -> None:
+    """Start the isolated API server on the reserved port, without the normal lifespan.
+
+    The started server lands in _SERVERS, so shutdown_servers() stops it; *title*
+    names the app in /docs and openapi.json and is the calling harness's own.
+    """
     import uvicorn
     from fastapi import FastAPI
 
     from src.api import chat, internal, sessions, threads
     from src.api.auth import AuthMiddleware
 
-    app = FastAPI(title="charliebot-live-smoke")
+    app = FastAPI(title=title)
     app.add_middleware(AuthMiddleware)
     app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
     app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
@@ -208,12 +212,22 @@ async def start_server(port: int) -> None:
     task = asyncio.get_running_loop().create_task(server.serve())
     deadline = time.monotonic() + 30
     while not server.started:
+        # RuntimeError, not fail(): fail() carries this module's smoke prefix,
+        # and the accept harness imports this helper — each call site maps the
+        # error to its own exit message.
         if task.done():
-            fail(f"isolated server failed to start: {task.exception()!r}")
+            raise RuntimeError(f"isolated server failed to start: {task.exception()!r}")
         if time.monotonic() > deadline:
-            fail("isolated server did not start within 30s")
+            raise RuntimeError("isolated server did not start within 30s")
         await asyncio.sleep(0.05)
     _SERVERS.append(server)
+
+
+async def shutdown_servers() -> None:
+    """Ask every server start_server() started to exit and give uvicorn a beat to land."""
+    for server in _SERVERS:
+        server.should_exit = True
+    await asyncio.sleep(0.5)
 
 
 async def wait_for_terminal_run(session_id: str, run_id: str, label: str) -> tuple[object, str]:
@@ -285,7 +299,10 @@ async def smoke(backend_id: str, purge: bool) -> None:
     log(f"smoke home: {home}")
     log(f"isolated server: {base}")
 
-    await start_server(port)
+    try:
+        await start_server(port, "charliebot-live-smoke")
+    except RuntimeError as exc:
+        fail(str(exc))
     try:
         # -- the manager task and its real manager turn ----------------------
         status, manager = await arequest(base, "POST", "/api/sessions/", access_key, {
@@ -553,9 +570,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
         else:
             log(f"smoke home kept for inspection: {home}")
     finally:
-        for server in _SERVERS:
-            server.should_exit = True
-        await asyncio.sleep(0.5)
+        await shutdown_servers()
 
 
 def main() -> None:

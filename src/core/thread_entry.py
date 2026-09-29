@@ -220,3 +220,25 @@ def lost_summons(platform: ThreadPlatform, events: list[dict], *, owned: set[str
       ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and platform.name in ev and ev["id"] not in answered and
       ev["id"] not in marked and ev["id"] not in owned and ev["id"] not in running
   ]
+
+
+def unread_after(
+    messages: list[dict],
+    *,
+    eligible: Callable[[dict], bool],
+    message_id: Callable[[dict], str],
+    watermark: str | None,
+    id_key: Callable[[str], Any],
+) -> list[dict]:
+  """The eligible messages whose id sorts strictly above *watermark* under *id_key*.
+
+  A None watermark passes every eligible message. *eligible* is the
+  platform's thread-eligibility rule and *message_id* reads one message's id;
+  the comparison runs on the platform's id ordering key, so a string-sorted id
+  space (Slack ts strings) and an integer-sorted one (Discord snowflakes)
+  share the rule.
+  """
+  if watermark is None:
+    return [m for m in messages if eligible(m)]
+  floor = id_key(watermark)
+  return [m for m in messages if eligible(m) and id_key(message_id(m)) > floor]

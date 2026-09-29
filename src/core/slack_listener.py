@@ -71,17 +71,18 @@ from src.core.tasks import create_logged_task
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
 from src.core.thread_entry import (
-    ThreadPlatform,
-    ThreadReplyError,
-    chunk_text,
-    event_by_id,
-    lost_summons,
-    newest_thread_input,
-    noticed,
-    nudged,
-    replied,
-    summon_of,
-    summon_prompt_tail,
+  ThreadPlatform,
+  ThreadReplyError,
+  chunk_text,
+  event_by_id,
+  lost_summons,
+  newest_thread_input,
+  noticed,
+  nudged,
+  replied,
+  summon_of,
+  summon_prompt_tail,
+  unread_after,
 )
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
@@ -458,10 +459,12 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
 
 def _unread_eligible(messages: list[dict], allowed_user_ids: list[str], watermark_ts: str | None) -> list[dict]:
   """The eligible messages strictly above *watermark_ts*; a None watermark passes everything."""
-  return [
-      m for m in messages
-      if _eligible_thread_message(m, allowed_user_ids) and (watermark_ts is None or m["ts"] > watermark_ts)
-  ]
+  return unread_after(
+      messages,
+      eligible=lambda m: _eligible_thread_message(m, allowed_user_ids),
+      message_id=lambda m: m["ts"],
+      watermark=watermark_ts,
+      id_key=SLACK.id_key)
 
 
 async def _fetch_unread_eligible(

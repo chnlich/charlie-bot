@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient
 from src.core import event_types as ET
 from src.core.models import TaskSpec
 from src.core.run_token import RunTokenClaims, sign_run_token
+from tests.test_task_execution import wait_for_terminal_run
 
 
 class ScriptedTtyAttachment:
@@ -556,13 +557,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
     run_cancel = client.post(
         f"/api/sessions/{agents_task.id}/runs/agent-run/cancel", json={"request_id": "cancel-agent-run"})
     assert run_cancel.status_code == 200, run_cancel.text
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-      if tree.runs.terminal_outcome(tree.runs.load_events_sync(agents_task.id), "agent-run") is not None:
-        break
-      await asyncio.sleep(0.05)
-    else:
-      pytest.fail("the agent run never reached its terminal fact after cancellation")
+    await wait_for_terminal_run(tree, agents_task.id, "agent-run", timeout=10.0)
     cancelled = client.post(
         f"/api/sessions/{agents_task.id}/cancel", json={
             "request_id": "cancel-agent-leaf",

@@ -45,6 +45,7 @@ from tests.test_task_execution import (
     init_repo_with_origin,
     install_backends,
     result_event,
+    wait_for_terminal_run,
 )
 
 
@@ -476,13 +477,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   builds2 = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("first done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   await asyncio.wait_for(cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id), 20)
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    if tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs[0].id) is not None:
-      break
-    await asyncio.sleep(0.05)
-  else:
-    pytest.fail("the replayed step never launched after the precondition cleared")
+  await wait_for_terminal_run(tree, leaf.id, runs[0].id, timeout=15.0)
   assert len(builds2) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 1
 

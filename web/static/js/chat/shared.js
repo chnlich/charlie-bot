@@ -95,9 +95,8 @@ function escapeJsSingleQuoted(str) {
 
 // Show-more toggle for over-limit text: the click swaps the short span for
 // the full one, so the id base must be page-unique (callers randomize it).
-// Every caller's host renders its text at text-xs, except the workers.js
-// assistant bubble (text-sm); the pinned class holds the button at text-xs
-// there too.
+// Every caller's host renders its text at text-xs, and the button's pinned
+// text-xs keeps it at the host's size.
 function showMoreToggleHtml(id, restHtml) {
   return `<span id="${id}-short">… <button onclick="document.getElementById('${id}-short').style.display='none';document.getElementById('${id}-full').style.display='inline'" class="text-blue-400 hover:underline text-xs">Show more</button></span><span id="${id}-full" style="display:none">${restHtml}</span>`;
 }
@@ -105,9 +104,9 @@ function showMoreToggleHtml(id, restHtml) {
 // Collapsed "Thinking…" button: the onclick flips the target element's display
 // in place, so the paired element must carry this id and start hidden. The id
 // is interpolated into a DOM query and must be page-unique — chat mints one per
-// message; the streaming draft is a singleton, so its fixed id cannot collide;
-// workers thread events mint one per event. Each caller passes its palette
-// class; the button label and flip mechanism are the shared part.
+// message; the streaming draft is a singleton, so its fixed id cannot collide.
+// Each caller passes its palette class; the button label and flip mechanism are
+// the shared part.
 function thinkingButtonHtml(id, buttonClass) {
   return `<button onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'" class="${buttonClass}">Thinking…</button>`;
 }
@@ -118,9 +117,9 @@ function thinkingToggleHtml(id, thinking) {
   return `${thinkingButtonHtml(id, 'text-xs text-slate-500 hover:text-slate-400 italic mb-1')}<div id="${id}" style="display:none" class="text-xs text-slate-500 whitespace-pre-wrap mb-2">${escapeHtml(String(thinking))}</div>`;
 }
 
-// Tool-name chip on a turn's tool-call row. Both renderers stamp it:
-// rendering.js in the chat transcript and workers.js in the thread event
-// detail. The caller passes the resolved display name; the helper escapes it.
+// Tool-name chip on a turn's tool-call row: rendering.js stamps it in the
+// chat transcript. The caller passes the resolved display name; the helper
+// escapes it.
 function toolNameChipHtml(name) {
   return '<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-blue-900/60 text-blue-300 border border-blue-700/50">'
     + escapeHtml(name) + '</span>';

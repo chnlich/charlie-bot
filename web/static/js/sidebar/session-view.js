@@ -117,9 +117,6 @@ function resetLazySessionData() {
     else clearTimeout(lazySessionDataTimer);
     lazySessionDataTimer = null;
   }
-  stopPageTimer('workers-list');
-  workersLoadedForSession = null;
-  workersLoadInflightForSession = null;
 }
 
 function disposeActiveTurnEngine() {

@@ -288,9 +288,9 @@ decodes the opening clip as a recognition probe.
 
 **Frontend**
 - Vanilla-JS UI under `web/static/js/`, served by FastAPI StaticFiles (Node.js/npm is build-time only: Tailwind CSS)
-- Panels: the sessions sidebar plus the tab strip — Terminal, Chat w/ TeX, Backlog, Plans, Chat, Workers (the thread list and per-thread detail)
+- Panels: the sessions sidebar plus the tab strip — Terminal, Chat w/ TeX, Backlog, Plans, Chat
 - The session WebSocket (`web/static/js/websocket.js`) drives the chat: rendering is fully driven by aggregated `message`/`stream` deltas, so a worker completion summary arrives as an assistant message
-- Polls: the workers tab list polls every 3 seconds; an open thread detail polls its events every 5 seconds while its worker runs (both ride the page-timers registry, so a hidden tab polls nothing)
+- Polls: the sidebar status poll adapts (3 s with running tasks, 10 s idle); an open session view polls its usage every 3 s while the master is thinking, and an open worker transcript polls every 2 s (all ride the page-timers registry, so a hidden tab polls nothing)
 - Draft persistence: unsent message text is saved to localStorage per session (debounced 300ms) and restored on session switch-back or page reload
 
 **Configuration**

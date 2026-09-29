@@ -8587,7 +8587,7 @@ try:
             await tree.dispatch.finish_run(w.id, review_run_id, outcome="success", exit_code=0)
         # The warm pass replays the review follow-up on every still-open node:
         # the landing proof runs once, the automatic close lands. Not timed.
-        await reconcile_task_tree(cfg, tree, session_mgr)
+        await reconcile_task_tree(cfg, tree)
         nodes = [p for p in (home / "sessions").iterdir() if p.is_dir()]
         states = {tree.task_state(n.name) for n in nodes}
         assert states == {"completed"} and len(nodes) == N, \
@@ -8597,7 +8597,7 @@ try:
         for _round in range(5):
             fetch_rounds.append(0)
             t0 = time.perf_counter()
-            await reconcile_task_tree(cfg, tree, session_mgr)
+            await reconcile_task_tree(cfg, tree)
             per_node.append((time.perf_counter() - t0) / N)
         assert builds["n"] == 0, f"launch stub reached {builds['n']} times"
         per_node.sort()

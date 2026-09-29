@@ -329,6 +329,13 @@ class SlackOrigin(BaseModel):
   thread_ts: str
 
 
+class DiscordOrigin(BaseModel):
+  """Discord thread a session was summoned from; set at creation, never mutated."""
+  guild_id: str
+  parent_channel_id: str
+  thread_id: str
+
+
 class WorkerThreadRef(BaseModel):
   """The origin of one projected legacy worker-thread row (sidebar list only)."""
   session_id: str
@@ -397,6 +404,11 @@ class SessionMetadata(BaseModel):
   # Newest consumed thread ts for a followed Slack thread; None = nothing
   # consumed yet. Advanced by summon creation (mention ts) and ack only.
   slack_watermark_ts: str | None = None
+  # Newest consumed message id of a followed Discord thread; None = nothing
+  # consumed yet. A Discord snowflake, compared as an integer.
+  discord_watermark_id: str | None = None
+  # Discord thread this session was summoned from; set at creation, never mutated.
+  discord_origin: DiscordOrigin | None = None
   # ------------------------------------------------------------------
   # Task-tree fields (schema_version=2). All default to their v1 absence so
   # existing metadata.json files keep parsing; a v2 task sets profile=manager
@@ -476,6 +488,7 @@ class CreateSessionRequest(BaseModel):
   backend: str | None = None
   session_id: str | None = None
   slack_origin: SlackOrigin | None = None
+  discord_origin: DiscordOrigin | None = None
   # ---- v2 task create: any of these set routes POST /api/sessions/ through the
   # task-tree owner; request_id is required there and binds the stable node id.
   request_id: str | None = None

@@ -75,6 +75,7 @@ from src.core.thread_entry import (
     ThreadReplyError,
     chunk_text,
     event_by_id,
+    newest_thread_input,
     summon_of,
     summon_prompt_tail,
 )
@@ -728,23 +729,6 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
 # stays for the adapter's callers (the server endpoint and the tests).
 SlackReplyError = ThreadReplyError
 
-def _newest_slack_input(events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
-  """``(event id, slack block)`` of the newest Slack-bearing input among *event_ids*, or None.
-
-  A round answers a list of inputs (one per queued item it merged); only an
-  input that carries a slack block (a summon or its nudge) binds the reply to
-  a summon, and the newest of those -- latest in log order -- is the thread's
-  freshest ask. A browser-typed message, a trigger wake, or an empty list
-  binds nothing.
-  """
-  wanted = set(event_ids)
-  bound: tuple[str, dict] | None = None
-  for ev in events:
-    if ev.get("id") in wanted and isinstance(ev.get("slack"), dict):
-      bound = (str(ev["id"]), ev["slack"])
-  return bound
-
-
 async def _require_slack_thread_session(session_id: str, session_mgr: SessionManager) -> SessionMetadata:
   """The session named by *session_id* when it exists and carries a Slack thread.
 
@@ -918,7 +902,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
     fresh = await session_mgr.read_metadata_fresh(session_id)
     if fresh is not None and fresh.master_run is not None:
       input_event_ids = fresh.master_run.user_event_ids
-  bound = _newest_slack_input(events, input_event_ids)
+  bound = newest_thread_input(SLACK, events, input_event_ids)
   answers = summon_of(bound[1], bound[0]) if bound is not None else None
   origin = meta.slack_origin
   client = _bot_client()
@@ -1073,7 +1057,7 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
   # The round-end audit targets the same input the reply binding does: the
   # newest Slack-bearing one of the batch.
-  bound = _newest_slack_input(events, input_event_ids)
+  bound = newest_thread_input(SLACK, events, input_event_ids)
   if bound is None:
     return False
   input_event_id, target = bound
@@ -1157,7 +1141,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
 
     dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
     for done in dones:
-      bound = _newest_slack_input(events, master_done_input_event_ids(done))
+      bound = newest_thread_input(SLACK, events, master_done_input_event_ids(done))
       if bound is None:
         continue
       done_input_id, target = bound

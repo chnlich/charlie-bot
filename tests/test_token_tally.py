@@ -1154,3 +1154,32 @@ def test_capture_opencode_gate_skips_the_probe_until_the_db_files_move(
     assert opens["n"] - before == 1  # the commit moved the files: one probe connection
     row = _ledger_row(ledger, "opencode", NAME)
     assert (row.calls, row.in_fresh, row.output) == (2, 322, 32)
+
+
+def test_capture_opencode_gate_survives_a_reopened_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The probe's gate lives in the ledger, not the process: a capture against a reopened
+  ledger — fresh module state, the shape of every server restart's first page load — skips
+  the whole-table probe while the db files sit unchanged since the stored gate."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 10))
+  oc.write("m2", 200, _usage(200, 20))
+  ledger_path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(ledger_path) as ledger:
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+
+  real_connect = sqlite3.connect
+  opens = {"n": 0}
+
+  def counting_connect(*args: Any, **kwargs: Any) -> Any:
+    opens["n"] += 1
+    return real_connect(*args, **kwargs)
+
+  monkeypatch.setattr(tt.sqlite3, "connect", counting_connect)
+  with UsageLedger(ledger_path) as ledger:
+    opens["n"] = 0  # the reopened ledger's own connect is not the probe
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    assert opens["n"] == 0  # the stored gate serves: no probe connection, no re-read
+    oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
+    before = opens["n"]
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
+    assert opens["n"] - before == 1  # the commit moved the files: one probe connection, re-read on it

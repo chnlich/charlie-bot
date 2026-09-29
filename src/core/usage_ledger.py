@@ -18,6 +18,10 @@ and their spans stays possible forever.
 
 ``captured_files`` remembers the last signature written per (host, path), so a
 collector can skip files it already ingested by content, not by existence.
+
+``capture_gates`` remembers one source's *probe* per (host, path): the file-state
+pairs a probe ran under and the signature it computed, so a fresh process reuses
+that probe while the files sit byte-still instead of re-scanning the source.
 """
 
 from __future__ import annotations
@@ -52,6 +56,16 @@ CREATE INDEX IF NOT EXISTS usage_group_cover ON usage(kind, source, model, accou
 CREATE TABLE IF NOT EXISTS captured_files (
   host TEXT NOT NULL,
   path TEXT NOT NULL,
+  sig TEXT NOT NULL,
+  PRIMARY KEY (host, path)
+);
+CREATE TABLE IF NOT EXISTS capture_gates (
+  host TEXT NOT NULL,
+  path TEXT NOT NULL,
+  main_size INTEGER NOT NULL,
+  main_mtime_ns INTEGER NOT NULL,
+  wal_size INTEGER,
+  wal_mtime_ns INTEGER,
   sig TEXT NOT NULL,
   PRIMARY KEY (host, path)
 );
@@ -260,6 +274,29 @@ class UsageLedger:
     """Every captured file path and its last-recorded signature for one host."""
     rows = self._conn.execute("SELECT path, sig FROM captured_files WHERE host = ?", (host,)).fetchall()
     return {row["path"]: row["sig"] for row in rows}
+
+  def captured_gate(self, host: str, path: str) -> tuple[tuple[tuple[int, int], tuple[int, int] | None], str] | None:
+    """One stored probe gate: the file-state pairs the probe ran under and the signature it
+    computed, or None when nothing is stored for the (host, path)."""
+    row = self._conn.execute(
+        "SELECT main_size, main_mtime_ns, wal_size, wal_mtime_ns, sig FROM capture_gates"
+        " WHERE host = ? AND path = ?", (host, path)).fetchone()
+    if row is None:
+      return None
+    wal = None if row["wal_size"] is None else (row["wal_size"], row["wal_mtime_ns"])
+    return ((row["main_size"], row["main_mtime_ns"]), wal), row["sig"]
+
+  def record_gate(self, host: str, path: str, main: tuple[int, int], wal: tuple[int, int] | None, sig: str) -> None:
+    """Store one probe's gate: the file-state pairs it ran under and the signature it computed."""
+    with self._conn:
+      self._conn.execute(
+          """INSERT INTO capture_gates (host, path, main_size, main_mtime_ns, wal_size, wal_mtime_ns, sig)
+             VALUES (?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(host, path) DO UPDATE SET
+               main_size = excluded.main_size, main_mtime_ns = excluded.main_mtime_ns,
+               wal_size = excluded.wal_size, wal_mtime_ns = excluded.wal_mtime_ns,
+               sig = excluded.sig""",
+          (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
 
   def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord]) -> int:
     """Store one file capture atomically and return the record count.

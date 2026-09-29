@@ -377,7 +377,10 @@ async def _arm_follow_trigger(
       session_id,
       floor=floor_ts,
       wake_label=lambda floor: _build_follow_wake_message(floor, permalink),
-      log_fields={"channel": channel_id, "thread_ts": thread_ts})
+      log_fields={
+          "channel": channel_id,
+          "thread_ts": thread_ts
+      })
 
 
 async def handle_thread_message(

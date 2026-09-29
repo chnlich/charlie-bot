@@ -76,12 +76,7 @@ class FakeDiscordClient:
     return self.channels[channel_id]
 
   async def start_thread_from_message(self, channel_id: str, message_id: str, name: str) -> dict:
-    self.calls.append(
-        ("start_thread_from_message", {
-            "channel_id": channel_id,
-            "message_id": message_id,
-            "name": name
-        }))
+    self.calls.append(("start_thread_from_message", {"channel_id": channel_id, "message_id": message_id, "name": name}))
     self.started_threads.append({"channel_id": channel_id, "message_id": message_id, "name": name})
     return {"id": self.thread_id, "name": name, "type": 11}
 
@@ -134,10 +129,14 @@ def _message(**overrides: object) -> dict:
       "id": _MENTION,
       "guild_id": _GUILD,
       "channel_id": _PARENT,
-      "author": {"id": _USER},
+      "author": {
+          "id": _USER
+      },
       "type": 0,
       "content": f"<@{_BOT_USER}> plan the release",
-      "mentions": [{"id": _BOT_USER}],
+      "mentions": [{
+          "id": _BOT_USER
+      }],
   }
   base.update(overrides)
   return base
@@ -180,7 +179,11 @@ def _round_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]:
 @pytest.mark.asyncio
 async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {"id": _PARENT, "type": 0, "name": "general"}})
+      tmp_path, channels={_PARENT: {
+          "id": _PARENT,
+          "type": 0,
+          "name": "general"
+      }})
   tasks: list[asyncio.Task] = []
 
   with _round_seam(tasks) as trigger:
@@ -251,8 +254,8 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(tmp_pat
   tasks: list[asyncio.Task] = []
 
   with _round_seam(tasks):
-    sid = await handle_message_create(_message(channel_id=_THREAD), cfg, session_mgr, client, trigger_mgr,
-                                      bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        _message(channel_id=_THREAD), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   assert sid == summon_session_id(_GUILD, _THREAD)
@@ -277,7 +280,11 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(tmp_pat
 @pytest.mark.asyncio
 async def test_second_summon_reuses_and_unarchives(tmp_path: Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {"id": _PARENT, "type": 0, "name": "general"}})
+      tmp_path, channels={_PARENT: {
+          "id": _PARENT,
+          "type": 0,
+          "name": "general"
+      }})
   tasks: list[asyncio.Task] = []
 
   with _round_seam(tasks):
@@ -299,14 +306,21 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {"id": _PARENT, "type": 0, "name": "general"}})
+      tmp_path, channels={_PARENT: {
+          "id": _PARENT,
+          "type": 0,
+          "name": "general"
+      }})
 
   with _round_seam():
     disallowed = await handle_message_create(
         _message(author={"id": _OTHER}), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     # A bot-flagged author drops even when its id is on the allow-list.
     bot = await handle_message_create(
-        _message(author={"id": _USER, "bot": True}), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+        _message(author={
+            "id": _USER,
+            "bot": True
+        }), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
 
   assert disallowed is None and bot is None
   assert not client.calls
@@ -319,10 +333,14 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
   message = {
       "id": _MENTION,
       "channel_id": _DM_CHANNEL,
-      "author": {"id": _USER},
+      "author": {
+          "id": _USER
+      },
       "type": 0,
       "content": f"<@{_BOT_USER}> hello",
-      "mentions": [{"id": _BOT_USER}],
+      "mentions": [{
+          "id": _BOT_USER
+      }],
   }
 
   with _round_seam():
@@ -357,7 +375,9 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
       "id": message_id,
       "guild_id": _GUILD,
       "channel_id": _THREAD,
-      "author": {"id": _USER},
+      "author": {
+          "id": _USER
+      },
       "type": 0,
       "content": "the follow-up",
       "mentions": [],
@@ -388,7 +408,16 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
 @pytest.mark.asyncio
 async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> None:
   cfg, _session_mgr, _trigger_mgr, client = _rig(tmp_path)
-  human = [{"id": f"500000000000000{i:03d}", "author": {"id": _USER}, "content": f"m{i}", "type": 0} for i in range(101)]
+  human = [
+      {
+          "id": f"500000000000000{i:03d}",
+          "author": {
+              "id": _USER
+          },
+          "content": f"m{i}",
+          "type": 0
+      } for i in range(101)
+  ]
   bot = {"id": "50000000000000000050", "author": {"id": _OTHER, "bot": True}, "content": "noise", "type": 0}
   client.thread = sorted([*human, bot], key=lambda m: snowflake_key(m["id"]))
   adapter = DiscordThreadAdapter(client)
@@ -400,10 +429,18 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
   assert all(m.user == _USER for m in messages)
   calls = [c for name, c in client.calls if name == "get_messages"]
   assert calls == [
-      {"channel_id": _THREAD, "after": "0", "limit": 100},
+      {
+          "channel_id": _THREAD,
+          "after": "0",
+          "limit": 100
+      },
       # The second page continues after the first page's last id (human[99],
       # the 100th oldest); the short second page stops the paging.
-      {"channel_id": _THREAD, "after": human[99]["id"], "limit": 100},
+      {
+          "channel_id": _THREAD,
+          "after": human[99]["id"],
+          "limit": 100
+      },
   ]
 
 

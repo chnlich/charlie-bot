@@ -264,8 +264,8 @@ class DiscordThreadAdapter(ThreadAdapter):
     while True:
       page = await client.get_messages(origin.thread_id, after=after, limit=100)
       messages.extend(
-          ThreadMessage(m["id"], m["author"]["id"], m.get("content") or "") for m in page
-          if _eligible_message(m, cfg.discord.allowed_user_ids))
+          ThreadMessage(m["id"], m["author"]["id"],
+                        m.get("content") or "") for m in page if _eligible_message(m, cfg.discord.allowed_user_ids))
       if len(page) < 100:
         return messages
       after = page[-1]["id"]
@@ -404,7 +404,12 @@ async def handle_message_create(
       session_id=summon_session_id(guild_id, thread_id),
       label=f"Discord #{parent['name']}",
       origin=DiscordOrigin(guild_id=guild_id, parent_channel_id=parent_channel_id, thread_id=thread_id),
-      block={"guild_id": guild_id, "channel_id": channel_id, "thread_id": thread_id, "mention_id": message_id},
+      block={
+          "guild_id": guild_id,
+          "channel_id": channel_id,
+          "thread_id": thread_id,
+          "mention_id": message_id
+      },
       content=_build_summon_prompt(message_link(guild_id, channel_id, message_id), cfg),
       user=author_id,
   )

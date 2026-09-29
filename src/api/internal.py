@@ -6,13 +6,13 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
-  bad_request,
-  get_config_on_loop,
-  get_plan_manager,
-  get_session_manager,
-  get_task_manager,
-  get_trigger_manager,
-  require_found,
+    bad_request,
+    get_config_on_loop,
+    get_plan_manager,
+    get_session_manager,
+    get_task_manager,
+    get_trigger_manager,
+    require_found,
 )
 from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
@@ -21,44 +21,44 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
 from src.core.discord_commands import check_setup, read_thread
 from src.core.improve_command import (
-  ImproveLoopAlreadyRunningError,
-  ImproveState,
-  loop_goal_path,
-  loop_plan_path,
-  reserve_loop_state,
-  save_loop_state,
+    ImproveLoopAlreadyRunningError,
+    ImproveState,
+    loop_goal_path,
+    loop_plan_path,
+    reserve_loop_state,
+    save_loop_state,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  DelegateInvocationMetadata,
-  DelegateRequest,
-  DiscordCheckRequest,
-  DiscordReadRequest,
-  DiscordReplyRequest,
-  ImproveRequest,
-  PlanAmendRequest,
-  PlanApproveRequest,
-  PlanCloseRequest,
-  PlanPresentRequest,
-  ScheduleTriggerRequest,
-  SessionMessageRequest,
-  SlackAckRequest,
-  SlackReplyRequest,
-  TaskType,
-  WatchKind,
+    DelegateInvocationMetadata,
+    DelegateRequest,
+    DiscordCheckRequest,
+    DiscordReadRequest,
+    DiscordReplyRequest,
+    ImproveRequest,
+    PlanAmendRequest,
+    PlanApproveRequest,
+    PlanCloseRequest,
+    PlanPresentRequest,
+    ScheduleTriggerRequest,
+    SessionMessageRequest,
+    SlackAckRequest,
+    SlackReplyRequest,
+    TaskType,
+    WatchKind,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-  SlackReplyError,
-  ack_messages,
-  assert_thread_fresh,
-  post_reply,
+    SlackReplyError,
+    ack_messages,
+    assert_thread_fresh,
+    post_reply,
 )
 from src.core.spawner import (
-  resolve_requested_subagent_backend_model,
-  select_verify_backend,
+    resolve_requested_subagent_backend_model,
+    select_verify_backend,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager

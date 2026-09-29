@@ -917,6 +917,24 @@ async def consume_mention(
     logger.info(f"{platform.name}_follow_trigger_cancelled_for_mention", session=session_id, cancelled=cancelled)
 
 
+async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, session_id: str, label: str) -> None:
+  """Group a summon session under its label, unless it already has a group.
+
+  The label is resolved once by the summon path (the single resolution point)
+  and passed through — this function resolves nothing. It only writes when the
+  session has a platform origin and an empty group (None or '') — an existing
+  group is never overwritten. Best-effort: any failure logs a warning and is
+  swallowed, so summon, round, and reply behavior are unaffected.
+  """
+  try:
+    meta = await session_mgr.get_session(session_id)
+    if meta is None or getattr(meta, platform.origin_field) is None or meta.group:
+      return
+    await session_mgr.set_group(session_id, label)
+  except Exception as e:
+    logger.warning(f"{platform.name}_group_assignment_failed", session=session_id, label=label, error=str(e))
+
+
 # The file-service URL prefixes: the mounted mounts with the trailing slash the
 # rewrite gate matches on.
 _FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)

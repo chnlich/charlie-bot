@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from conftest import codex_token_count_event, fresh_state_fixture
 
 from src.core import token_tally as tt
 from src.core.token_tally import collect_token_usage
+from src.core.usage_ledger import UsageLedger
 
 NAME = "claude-model"
 
@@ -392,3 +394,134 @@ def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, mo
   retired = _row(tally, "charlie-bot", "kimi-k3")
   assert retired.total == 305
   assert [a.name for a in retired.accounts] == ["charlie-code-kimi-k3"]
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture (capture_jsonl_sources)
+# ---------------------------------------------------------------------------
+
+
+def _parity_fixture(tmp_path: Path) -> tuple[Claude, Codex]:
+  """The Claude and Codex corpus of test_tally_is_absolutely_correct: an original response,
+  its verbatim replay in a second config dir, a subagent response, and one Codex rollout."""
+  claude = Claude(tmp_path)
+  codex = Codex(tmp_path)
+  usage = {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 40, "output_tokens": 30}
+  claude.write(claude.work, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
+  claude.write(claude.ext, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
+  claude.write(
+      claude.work,
+      "sess2", [],
+      subagents=[
+          [
+              _claude_record(
+                  "sub-id", NAME, "2024-01-02T00:00:00Z", {
+                      "input_tokens": 50,
+                      "cache_creation_input_tokens": 10,
+                      "cache_read_input_tokens": 0,
+                      "output_tokens": 5
+                  })
+          ],
+      ])
+  codex.write(
+      "rollout", [
+          _codex_meta(),
+          _codex_turn("codex-some"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
+      ])
+  return claude, codex
+
+
+def _capture(claude: Claude | None,
+             codex: Codex | None,
+             ledger: UsageLedger,
+             cache: Path | None = None) -> dict[str, int]:
+  """One capture round against *ledger*; *cache*, when given, is loaded and saved like the
+  collect's own document, so the capture rides the same cache-gated serve."""
+  notes: list[str] = []
+  tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
+  written = tt.capture_jsonl_sources(
+      ledger, "host-a", claude.dirs if claude else {}, codex.homes if codex else {}, tally_cache)
+  if tally_cache is not None:
+    tally_cache.save(cache)
+  return written
+
+
+def _ledger_row(ledger: UsageLedger, source: str, model: str):
+  return next(r for r in ledger.model_rows() if r.source == source and r.model == model)
+
+
+def test_capture_parity_with_the_collect_rows(tmp_path: Path) -> None:
+  """Every ledger row equals the matching collect row on source, model, the four token
+  fields, calls, first and last: the capture saw exactly what the collect counted."""
+  claude, codex = _parity_fixture(tmp_path)
+  tally = _collect(claude, codex, tmp_path / "db.sqlite")
+  collect_rows = {(r.source, r.model): r for r in tally.rows}
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture(claude, codex, ledger)
+    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows()}
+  assert set(ledger_rows) == set(collect_rows)
+  for key, lr in ledger_rows.items():
+    cr = collect_rows[key]
+    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output) == \
+        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output)
+    assert (lr.calls, lr.first, lr.last) == (cr.calls, cr.first, cr.last)
+
+
+def test_captured_rows_survive_deleting_the_source_files(tmp_path: Path) -> None:
+  """Capturing again over deleted sources leaves every ledger row equal field by field:
+  the ledger contains no delete, so its rows outlive the logs they were parsed from."""
+  claude, codex = _parity_fixture(tmp_path)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture(claude, codex, ledger)
+    before = ledger.model_rows()
+    shutil.rmtree(claude.work)
+    shutil.rmtree(claude.ext)
+    shutil.rmtree(codex.home)
+    _capture(claude, codex, ledger)
+    assert ledger.model_rows() == before
+
+
+def test_second_capture_without_changes_writes_nothing(tmp_path: Path) -> None:
+  """A file the ledger already holds at the same signature is skipped: the second capture
+  over an unchanged corpus writes zero records."""
+  claude, codex = _parity_fixture(tmp_path)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    first = _capture(claude, codex, ledger)
+    assert first == {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included
+    assert _capture(claude, codex, ledger) == {"Claude Code": 0, "Codex": 0}
+
+
+def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: Path) -> None:
+  """An appended line reaches the ledger on the next capture (the file rewrites whole: its
+  captured records re-upsert beside the new one), and a message id replayed into a second
+  config dir is captured yet still counted once."""
+  claude = Claude(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+  cache = tmp_path / "cache.json"
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture(claude, None, ledger, cache)
+    before = _ledger_row(ledger, "Claude Code", NAME)
+
+    # Resume/fork behaviour: the session file copied verbatim into the second config dir.
+    src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+    replay_dir = claude.ext / "projects" / "rel" / "sess1"
+    replay_dir.mkdir(parents=True)
+    (replay_dir / "sess1.jsonl").write_text(src.read_text())
+    assert _capture(claude, None, ledger, cache)["Claude Code"] == 1  # the replay file is captured too
+    replayed = _ledger_row(ledger, "Claude Code", NAME)
+    assert replayed.calls == before.calls == 1  # ... yet its message id counts once
+
+    with src.open("a") as fh:
+      fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2))) + "\n")
+    written = _capture(claude, None, ledger, cache)
+    after = _ledger_row(ledger, "Claude Code", NAME)
+
+  assert written["Claude Code"] == 2  # m1 re-upserts beside the appended m2
+  assert after.calls == 2 and after.output == 7
+  assert (after.first, after.last) == ("2024-01-01", "2024-01-02")

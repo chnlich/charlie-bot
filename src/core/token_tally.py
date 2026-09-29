@@ -166,6 +166,7 @@ from src.core.constants import (
 from src.core.json_utils import atomic_write_stream
 from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
+from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 
 DEFAULT_CLAUDE_DIR = default_claude_dir()
 DEFAULT_OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
@@ -2317,3 +2318,91 @@ def collect_token_usage(
       elapsed_s=elapsed,
       scanned_bytes=t.scanned_bytes,
   )
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture: the Claude Code and Codex jsonl copied into the SQLite ledger
+# ---------------------------------------------------------------------------
+
+
+def capture_jsonl_sources(
+    ledger: UsageLedger,
+    host: str,
+    claude_homes: dict[str, Path],
+    codex_homes: dict[str, Path],
+    cache: TallyCache | None,
+) -> dict[str, int]:
+  """Copy the Claude Code and Codex jsonl usage into the SQLite usage ledger, so the page's
+  rows survive deletion of the source logs (see the ledger's module docstring).
+
+  The serve reuses the collect's walk and cache-gated parse (``cache`` is the collect's own
+  TallyCache or None); a parsed file whose content signature the ledger already recorded for
+  this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
+  is written atomically with that signature. Each record dedupes on its record_id — Claude
+  on the response's message id, Codex on the file session and event index — so a re-captured
+  file re-upserts what it stored before and a message replayed into a second config dir
+  counts once. A parse failure raises: the capture runs in the collector, not the page
+  load, so nothing here notes-and-continues.
+
+  Returns the records written per source label.
+  """
+  written: dict[str, int] = {USAGE_SOURCE_CLAUDE_CODE: 0, USAGE_SOURCE_CODEX: 0}
+  captured = ledger.captured_sigs(host)
+  probe = _Tally()
+
+  rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, probe)
+  walked, _order = _walk_source(
+      probe, USAGE_SOURCE_CLAUDE_CODE, "claude", claude_homes, rows, cache, _claude_file_contribution)
+  for path, account, entry, _hit in walked:
+    if entry is None:
+      continue
+    sig = f"{entry['sig'][0]}:{entry['sig'][1]}"
+    if captured.get(path) == sig:
+      continue
+    stem = Path(path).stem
+    records = [
+        UsageRecord(
+            record_id=f"claude:{key}",
+            kind=RecordKind.NATIVE,
+            source=USAGE_SOURCE_CLAUDE_CODE,
+            model=model,
+            account=account,
+            ts=ts or "",
+            in_fresh=in_fresh,
+            cache_write=cache_write,
+            cache_read=cache_read,
+            output=output,
+            sessions=(stem,)) for key, model, ts, in_fresh, cache_write, cache_read, output in entry["records"]
+    ]
+    written[USAGE_SOURCE_CLAUDE_CODE] += ledger.record_file(host, path, sig, records)
+
+  rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, probe)
+  walked, _order = _walk_source(probe, USAGE_SOURCE_CODEX, "codex", codex_homes, rows, cache, _codex_file_contribution)
+  for path, account, entry, _hit in walked:
+    if entry is None:
+      continue
+    sig = f"{entry['sig'][0]}:{entry['sig'][1]}"
+    if captured.get(path) == sig:
+      continue
+    name = os.path.basename(path)
+    if name.startswith("rollout-") and name.endswith(".jsonl"):
+      # The session id the file name carries, parsed exactly as _rollout_session_ids does.
+      sid = "-".join(name[len("rollout-"):-len(".jsonl")].rsplit("-", 5)[-5:])
+    else:
+      sid = os.path.relpath(path, str(codex_homes[account]))
+    records = [
+        UsageRecord(
+            record_id=f"codex:{sid}:{i}",
+            kind=RecordKind.NATIVE,
+            source=USAGE_SOURCE_CODEX,
+            model=model,
+            account=account,
+            ts=ts or "",
+            in_fresh=in_fresh,
+            cache_write=0,
+            cache_read=cache_read,
+            output=output,
+            sessions=(sid,)) for i, (model, ts, in_fresh, cache_read, output) in enumerate(entry["records"])
+    ]
+    written[USAGE_SOURCE_CODEX] += ledger.record_file(host, path, sig, records)
+  return written

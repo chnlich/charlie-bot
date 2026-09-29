@@ -2673,11 +2673,14 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
   The corpus is ``<session>/data/runs/<run id>/agent.raw.ndjson`` — the execution record
   the Run workers write, which the collect never scanned. One record per run at most,
   deduped on the run id; the backend verdict in the run's metadata picks the usage arm (see
-  ``_run_record``). A parse whose stat signature the ledger already recorded for this host
-  (``captured_sigs``, read once per call) is skipped, and every other parsed file records
-  with that signature — also one whose content yields no record, so a result-less run is
-  never re-parsed. A missing or unreadable metadata.json raises: the capture runs in the
-  collector, not the page load.
+  ``_run_record``). Each candidate is stat'ed before anything opens it: its
+  ``st_mtime_ns:st_size`` pair is the signature, and one ``captured_sigs`` (read once per
+  call) already holds for this host skips the file outright — no log read, no
+  metadata.json — so an unchanged corpus pays one stat per run. Otherwise the file parses
+  as before and records the parse-time signature (taken before the read, so an append
+  mid-read is seen on the next capture) — also one whose content yields no record, so a
+  result-less run is never re-parsed. A missing or unreadable metadata.json raises: the
+  capture runs in the collector, not the page load.
 
   Returns the records written.
   """
@@ -2685,10 +2688,12 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
   captured = ledger.captured_sigs(host)
   written = 0
   for path in _iter_run_logs(sessions_dir):
-    sig_pair, objects, _end = _prefiltered_jsonl(path, _RUNS_MARKERS)
-    sig = f"{sig_pair[0]}:{sig_pair[1]}"
+    st = os.stat(path)
+    sig = f"{st.st_mtime_ns}:{st.st_size}"
     if captured.get(path) == sig:
       continue
+    sig_pair, objects, _end = _prefiltered_jsonl(path, _RUNS_MARKERS)
+    sig = f"{sig_pair[0]}:{sig_pair[1]}"
     meta = _run_metadata(path)
     backend = meta.get("backend")
     record = _run_record(objects, meta, registry, backend, Path(path).parent.name) if backend else None

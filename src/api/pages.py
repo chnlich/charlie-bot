@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode, urlparse
 
-import orjson
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response
@@ -40,6 +39,7 @@ from src.api.sessions import (
     project_worker_threads,
     row_schedule_fields,
 )
+from src.core import direct_pass_child
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import (
@@ -54,7 +54,6 @@ from src.core.constants import (
     USAGE_SOURCE_CODEX,
     USAGE_SOURCE_OPENCODE,
 )
-from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import SessionStatus
@@ -540,34 +539,33 @@ async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path
 
 
 def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
-  """Validate the input is a parseable Chrome-JSON trace while a gzip process stream-compresses the original bytes.
+  """Validate the input is a parseable Chrome-JSON trace while a child process stream-compresses the original bytes.
 
   The artifact is the original bytes compressed and the parse result is discarded, so the two
-  passes are independent; the parse holds the GIL for its whole run (measured: a concurrent
-  gzip thread makes no progress), so the compress must leave the process — the merge family's
-  one compressor (``trace_merge.igzip_command``) compresses in parallel with the parse. Validation parses
-  with orjson, the parser the merge path's build already parses with, so both serve shapes
-  share one JSON boundary: the NaN/Infinity literals stdlib json accepts fail the build loudly
-  here too — a literal Perfetto cannot render must not reach the cache.
+  passes are independent. Both passes run in the child (``direct_pass_child.main``): the
+  validating parse holds the GIL for its whole run (a concurrent gzip thread makes no
+  progress), and this build runs on a server thread — the in-process parse stalled the event
+  loop 2010-2014 ms on the 334.3 MB corpus, every concurrent request and WebSocket with it —
+  so the parse must leave the process the way the compress already does. The child reports
+  its verdict by exit class; this side re-raises the same error types the route's handler
+  answered before. Validation parses with orjson, the parser the merge path's build already
+  parses with, so both serve shapes share one JSON boundary: the NaN/Infinity literals stdlib
+  json accepts fail the build loudly here too — a literal Perfetto cannot render must not
+  reach the cache.
   """
-  command = _trace_merge().igzip_command("-c", str(path))
-  with (out_path.open("wb") as compressed, subprocess.Popen(command, stdout=compressed, stderr=subprocess.PIPE) as
-        gzip_proc, gc_off(collect=True)):
-    # The parse allocates ~1M dicts per 1M input events; the generational passes
-    # over that churn measured 0.27-0.35 s per 307 MB parse. Unlike the merge
-    # path's pool worker, this build runs on a server thread, so the disable is
-    # process-wide but bounded by the build window; collect reclaims the parse's
-    # cyclic leftovers.
-    try:
-      with path.open("rb") as validate_file:
-        # Parseable JSON is not enough: a JSON object with no traceEvents array
-        # (an analysis manifest) would otherwise compress into the cache and
-        # reach the viewer as a trace that renders nothing.
-        _trace_merge()._trace_events_or_raise(orjson.loads(validate_file.read()), path)
-      _trace_merge()._gzip_exit_or_raise(gzip_proc, str(path))
-    except BaseException:
-      _trace_merge()._kill_gzip_run(gzip_proc)
-      raise
+  argv = direct_pass_child.parent_argv(path, out_path, str(Path(__file__).resolve().parents[2]))
+  proc = subprocess.Popen(argv, stderr=subprocess.PIPE)
+  _, stderr = proc.communicate()
+  detail = stderr.decode(errors="replace").strip()
+  if proc.returncode == direct_pass_child.EXIT_OK:
+    return
+  if proc.returncode == direct_pass_child.EXIT_NOT_A_TRACE:
+    raise _trace_merge().NotATraceError(detail)
+  if proc.returncode == direct_pass_child.EXIT_PARSE_FAILED:
+    raise ValueError(detail)
+  if proc.returncode == direct_pass_child.EXIT_IGZIP_FAILED:
+    raise RuntimeError(detail)
+  raise RuntimeError(f"direct-pass build child failed rc={proc.returncode}: {detail}")
 
 
 async def _cached_direct_pass(path: Path) -> Path:

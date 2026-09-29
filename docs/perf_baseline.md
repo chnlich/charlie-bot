@@ -94,7 +94,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M84 backend stream-line parse, worst on-disk raw log | M84 collector below | seconds per full replay of the raw-log tail-follow loop and the stdout-stream NDJSON funnel over the worst on-disk raw agent log (scratch copy, live home read-only) | tail-follow median < max(0.060 s, bytes ÷ 250 MB/s) (recalibrated from bytes ÷ 200 MB/s with the 2026-09-18 drain-copy removal: the drain splits its lines from a read-only mapping instead of a whole-backlog readall copy, so both funnels share the orjson+translate parse floor the 250 MB/s figure prices — the after readings sit 344-378 MB/s on the 1051.1 MB corpus — see the 2026-09-18 history row); stdout-stream median < max(0.040 s, bytes ÷ 250 MB/s) (recalibrated from the absolute 0.060/0.040 s lines: the worst on-disk raw log is now a 1050.9 MB / 150-line master-run log whose orjson+translate replay floor measures 2874-3455 ms, 304-366 MB/s, so the line tracks the corpus's own floor; the 0.060/0.040 s max() floors keep the small-corpus watch verbatim — see the 2026-09-16 history row) | — (introduced with its first history row) |
 | M86 delegation takeoff-gate scan, delegation-flow shape | M86 collector below | seconds per `check_takeoff_gate` call, worst live chat corpus, one authorized user message appended; the blocked-round repeat (the corpus-as-it-stands shape — nine steady-state calls on an unchanged corpus, the parity witness) | median < 0.001 s; blocked-round median < 0.0005 s | — (introduced with its first history row) |
 | M87 opencode abort client round-trip | M87 collector below | seconds per `_abort_session` call against a local stub serve (the per-turn cleanup POST over the shared outbound client — the run-start attempt client keeps its own per-attempt construction; loop lag reads the 5 ms ticker floor like M14) | wall median < 0.005 s | — (introduced with its first history row) |
-| M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validation parse + parallel gzip subprocess over the original bytes), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts) | median < 3.5 s (recalibrated from < 6 s: the compress now overlaps the parse in a gzip subprocess, landing at 2.79-2.85 s on the 307.3 MB / 1,068,461-event corpus; the validation parse is the floor — 2.72 s measured standalone — and grows with the corpus) | — (introduced with its first history row) |
+| M88 perfetto direct-pass build, worst on-disk trace corpus | M88 collector below | seconds per `_build_direct_pass_gzip` build (validation parse + parallel gzip subprocess over the original bytes), largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts); the build window's event-loop stall sub-reading (a 5 ms ticker rides the loop across each timed build — the served shape runs the build on a server thread, so a pass that holds the GIL for its whole run stalls every concurrent request and WebSocket for its duration, the M114 stall class) | median < 3.5 s (recalibrated from < 6 s: the compress now overlaps the parse in a gzip subprocess, landing at 2.79-2.85 s on the 307.3 MB / 1,068,461-event corpus; the validation parse is the floor — 2.72 s measured standalone — and grows with the corpus); stall max-gap median < 0.020 s (the M114 loop-lag line's bound, read the M118 max-gap way across the three timed builds; the pre-fix in-process parse read 2010-2014 ms) | — (introduced with its first history row) |
 | M89 backend stderr pump, per chunk | M89 collector below | seconds per 8 KB chunk pumped through the stderr tee (the streamed pump shape: buffer work plus amortized log flushes) | median < 0.00005 s | — (introduced with its first history row) |
 | M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk pumped through the opencode stdout pump (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.00003 s; line median < 0.0002 s | — (introduced with its first history row) |
 | M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 0.020 s (recalibrated from < 1.0 ms: the worst on-disk worker log now carries one 9.5 MB tool_result line whose orjson dumps + page-cache write floor measures ~13-14 ms — the funnel's floor; the 2026-09-11 range was set on the 234 KB-era corpus); replay wall median < 0.30 s | — (introduced with its first history row) |
@@ -6204,17 +6204,20 @@ M88 — perfetto direct-pass build, worst on-disk trace corpus. The first view o
 Chrome-JSON trace (``/perfetto/merged?trace=<file>``, single input, not slim) runs
 ``_build_direct_pass_gzip``: a full parse validating the file, then a stream-compress of the
 original bytes — so the build wall is user-visible first-view latency (the cache answers repeat
-views). The cost is background executor work invisible to HTTP probes, so the collector times
-the build over the largest Chrome-JSON trace on disk (read-only; scratch output under /tmp),
-from the checkout under test: one cold pass, as at the first view of a corpus, then three timed
-builds. The trace roots are the host's documented trace homes (~/data, ~/scripts); no
-qualifying file prints nothing and the round treats the metric as unmeasured. Evidence while
-the live server runs older code points the same collector at the branch checkout (``CHECKOUT``
-at the worktree root), the same shape as the M66 protocol:
+views). The collector times the build over the largest Chrome-JSON trace on disk (read-only;
+scratch output under /tmp), from the checkout under test, and reads the build window's
+event-loop stall beside it: the served shape runs the build on a server thread, so a pass that
+holds the GIL for its whole run stalls every concurrent request and WebSocket for its duration
+(the M114 stall class) while the build wall itself stays blind to it — a 5 ms ticker rides the
+loop across each timed build, the M114 protocol. One cold pass, as at the first view of a
+corpus, then three timed builds. The trace roots are the host's documented trace homes
+(~/data, ~/scripts); no qualifying file prints nothing and the round treats the metric as
+unmeasured. Evidence while the live server runs older code points the same collector at the
+branch checkout (``CHECKOUT`` at the worktree root), the same shape as the M66 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import os, subprocess, sys, tempfile, time
+import asyncio, concurrent.futures, os, subprocess, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 import orjson
@@ -6256,14 +6259,50 @@ print(f"worst direct-pass corpus: {best}, {best_n / 1e6:.1f} MB")
 work = Path(tempfile.mkdtemp(prefix="m88-direct-pass-", dir="/tmp"))
 out = work / "direct.json.gz"
 
-_build_direct_pass_gzip(best, out)  # cold pass, as at the first view of a corpus; not timed
-times = []
-for _ in range(3):
-    t0 = time.perf_counter()
-    _build_direct_pass_gzip(best, out)
-    times.append(time.perf_counter() - t0)
-times.sort()
-print(f"direct-pass build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
+loop = asyncio.new_event_loop()
+
+async def main():
+    gaps = []
+    stop = False
+
+    async def ticker():
+        prev = time.perf_counter()
+        while not stop:
+            await asyncio.sleep(0.005)
+            now = time.perf_counter()
+            gaps.append(now - prev)
+            prev = now
+
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    async def build_once():
+        nonlocal stop
+        gaps.clear()
+        tick = asyncio.create_task(ticker())
+        t0 = time.perf_counter()
+        await loop.run_in_executor(pool, _build_direct_pass_gzip, best, out)
+        wall = time.perf_counter() - t0
+        stop = True
+        await tick
+        stop = False
+        g = sorted(gaps)
+        return wall, (g[-1] if g else 0.0), (g[len(g) // 2] if g else 0.0)
+
+    await build_once()  # cold pass, as at the first view of a corpus; not timed
+    rounds = [await build_once() for _ in range(3)]
+    walls = sorted(r[0] for r in rounds)
+    maxgaps = sorted(r[1] for r in rounds)
+    p50s = sorted(r[2] for r in rounds)
+    print(f"direct-pass build median {walls[1]:.2f} s, max {walls[-1]:.2f} s over 3; "
+          f"artifact {out.stat().st_size / 1e6:.1f} MB.gz; build-window tick p50 "
+          f"{p50s[1] * 1000:.2f} ms, max-gap median {maxgaps[1] * 1000:.2f} ms over 3 "
+          f"builds (worst {max(maxgaps) * 1000:.2f} ms)")
+    pool.shutdown()
+
+try:
+    loop.run_until_complete(main())
+finally:
+    loop.close()
 subprocess.run(["rm", "-rf", str(work)], check=True)
 EOF
 ```
@@ -9042,6 +9081,7 @@ EOF
 ```
 
 ## Sampling history
+| 2026-09-29 | this PR | M88 direct-pass build window's event-loop stall, introduced with this PR: the validating parse moved into a child process (`src/core/direct_pass_child.py`) — the parse holds the GIL for its whole run and the build ran on a server thread, so the in-process parse stalled the event loop, every concurrent request and WebSocket with it, for its whole duration; the compress had already left the process for that exact reason, and the child now runs both passes with the same overlap (the wall stays max(parse, compress)) while the parent maps the child's exit classes back onto the same error types the route's handler answered; verbatim collector, now reading the stall beside the wall (a 5 ms ticker rides the loop across each timed build, the M114 protocol), main checkout before vs branch worktree after back-to-back at load ~2 one-minute over the 334.3 MB worst corpus: max-gap median 2010.35 ms (worst 2014.41) → 5.50 ms (worst 6.31), −99.7 %, the loop running 568-582 ticks per build window where the stall shape ran ~57; wall band parity 2.96 → 2.98 s median (max 2.96 → 2.99), artifact 28.7 MB.gz both arms; no-regression witnesses interleaved: M99 import server 0.544/0.543/0.563 → 0.553/0.548/0.546 s medians over three paired rounds (band), M66 merged build 4.01 → 4.06 s median (band), M107 multi-trace build 5.58 → 5.00 s median with event-identity digest 479b669d84e7 identical across arms; child-contract tests added (artifact identity, NotATraceError on a manifest, loud ValueError on a truncated body); ruff and yapf clean | the fix's metric is the stall sub-reading the collector now carries: the build wall never showed the ~2 s full-server stall every first-view trace build paid |
 | 2026-09-29 | this PR | M108 claude-sub launch floor, the launch graph's dataclasses/shutil/tempfile chain priced out: the two frozen argv/pane value classes and the bridge's turn state machine become plain classses (the run_token.py/credentials.py precedent — the dataclasses import pulls inspect, ~7 ms measured standalone, for frozen/eq/repr/default_factory machinery no consumer calls), ClaudeSubArgs keeps no __slots__ because the stdin-prompt rebuild reads ``args.__dict__``, and shutil/tempfile ride their call sites (tempfile's own module imports shutil, so the two defer together). Verbatim collector, five interleaved rounds (arm order alternating before→after / after→before), main checkout before vs branch worktree after back-to-back, load 1.25-1.30 one-minute (rounds 1-2 rode the tail of a sibling cron's CUDA compile storm that peaked at load 13; the paired arms still ran back-to-back): medians 79/76/56/49/51 → 50/53/37/33/35 ms (median-of-medians 56 → 37, −34 %, every paired round faster; maxima 80-170 → 41-76 ms; the quiet-host rounds 3-5 pair 56/49/51 → 37/33/35, −32 % to −38 %); component attribution, ``-X importtime`` fresh-process: src.cli.claude_sub cumulative 31.6 → 7.9 ms with dataclasses, shutil, and tempfile absent from the launch tree; witnesses: the claude-sub/launcher/home suite files 17-passed, ruff and yapf clean, the typing TYPE_CHECKING import stays (the 2026-09-26 landing's shape) so typing remains in the chain | every cc-claude subscription worker and reviewer launch pays the M108 floor before the claude CLI starts, and the chain still carried dataclasses→inspect for three value classes whose machinery nothing calls — the run_token.py docstring priced the same inspect chain out of the verb walls on the 09-25/09-28 landings; shutil and tempfile were launch-path-only imports whose module bodies the argv-parse probe never reaches |
 | 2026-09-29 | this PR | M7 changed-round and restart-cold collectors retargeted to the ledger capture, the sweep's own machinery (no product-code change); M7 warm-gate retired. The ledger refactor (93d9277e) deleted the in-process row memo and proof gate those three harnesses priced — they failed with ``collect_token_usage`` / ``_rows_sidecar_name`` AttributeErrors every standing sweep since, the remainder #2255's repair named (2026-09-28). The page's collect is now ``capture_usage`` into a SQLite ``UsageLedger`` plus a fresh ``model_rows()`` read per load, so the warm shape has no subject; its surviving costs (the cache-document parse, the ledger sig gate) ride the retargeted restart-cold round, the moved-file tail-parse and re-upsert the retargeted changed-round. Retargeted shapes: changed-round = scratch copy of the two transcript corpora (528 MB copied once, live home read-only), per timed round one final-~1 MB line-aligned append to each corpus's largest transcript (the hourly move), timed capture, ledger rows digest as the cross-arm witness; restart-cold = scratch cache doc + ledger seeded by one capture over the live corpus read-only, five fresh-process rounds timed from the page's deferred tally-stack import through the ledger read. After readings (verbatim collectors, main checkout at origin/main, load 0.8-1.3 one-minute): changed-round median 66.2-70.5 ms, max 71.2-73.9 ms over 5, rows digest 72b3714bfe5a identical across two independent runs (the codex leg keys record ids on the event index, so an appended copy's records take fresh ids — the digest is the cross-arm witness, not a totals assertion; records written {'Claude Code': 1184, 'Codex': 911} cumulative); restart-cold wall 213-227 ms over five fresh rounds, rows 11, digest 21ab923d4a99 stable across runs, written 0/0 (a quiet corpus — the floor shape; a moved corpus adds the moved files' re-parse and re-upsert on top). Lines set from the bands: changed-round median < 0.15 s (~2x band, trips the lost-cache-gate shape's ~2.1 s full-corpus re-parse at the M78 floor), restart-cold median < 0.35 s (~1.5x band) | a collector that fails is a metric whose regression watch does not run (the rule the M97 repair pinned, 2026-09-28); these three shapes have been dark since the ledger refactor landed |
 | 2026-09-28 | this PR | M35 / M63 / M80 collectors repaired, the sweep's own machinery (no product-code change): the standing sweep read all 123 defined metrics but six collectors failed — M35 and M63 drove ``GET /api/sessions/{id}/view``, deleted by #2249 (404 / ``AttributeError: get_session_view``), and M7 changed-round, M7 warm-gate, M7 restart-cold and M80 imported ``collect_token_usage``/``_rows_sidecar_name``, retired by the ledger refactor (93d9277e) — so those six metrics read unmeasured. Repairs: M35 drops the view leg (the SPA switch loads through bootstrap since #2249); M63 retires per the M44 precedent (the /view handler was its only subject; the thread-row costs ride the standing M5 threads/list and M36 worker-list lines at the same worst corpus); M80 retargets the busy-turn shape at the page's capture-first path — scratch claude+codex corpus, cold capture into a scratch ``UsageLedger``, ~1 MB line-aligned appends to both files, timed changed-round capture, ledger-row digest across arms. After readings (verbatim collectors, main checkout at origin/main, load 0.2-0.5 one-minute): M35 events median 0.82/0.86/0.88 ms, max 1.41-1.59 ms, digest 0a5ce8209968, bootstrap median 1.08/1.10/1.13 ms, digest eff30ffa2fcf, identical across rounds (events line < 0.004 s); M80 changed-round capture wall 0.0438/0.0442/0.0454/0.0459 s over four rounds, records written {'Claude Code': 1184, 'Codex': 771} and rows digest 24b906fc5dd9 identical every round (line median < 0.30 s). Remainder for a later run: the three M7 sub-shapes still price the retired cache-document collect; their production shapes (corpus move between page loads, first load after a start, the row-memo gate advance) now live in the ledger capture and need their own retargeted harnesses | a collector that fails is a metric whose regression watch does not run; the M97 repair (2026-09-28) pinned the same rule |

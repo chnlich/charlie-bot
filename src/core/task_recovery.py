@@ -30,12 +30,13 @@ for a v2 node.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import TaskType
+from src.core.models import RunRecord, TaskType
 from src.core.thinking_state import note_run_backend
 from src.core.threads import METADATA_NAME
 
@@ -44,6 +45,12 @@ if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
+
+
+def _is_out_of_space(exc: BaseException) -> bool:
+    """The one predicate's recovery-side name: task_execution owns the definition."""
+    from src.core.task_execution import is_out_of_space_error
+    return is_out_of_space_error(exc)
 
 
 async def reconcile_task_tree(
@@ -83,8 +90,14 @@ async def reconcile_task_tree(
         counters["nodes"] += 1
         try:
             await _reconcile_node(session_id, tree, adapter, counters, cfg)
-        except Exception:
+        except Exception as exc:
             log.exception("task_recovery_node_failed", session=session_id)
+            # An out-of-space node pass enters the end-landing retry: the
+            # retry re-runs this pass until a round survives, so the node
+            # converges once space returns (a restart would repair it the
+            # same way — the retry just does it without waiting for one).
+            if adapter is not None and _is_out_of_space(exc):
+                adapter.start_run_end_landing_retry(session_id)
     return counters
 
 
@@ -94,7 +107,17 @@ async def _reconcile_node(
     adapter: TaskExecutionAdapter | None,
     counters: dict,
     cfg: CharlieBotConfig,
+    is_driven: Callable[[RunRecord], bool] | None = None,
 ) -> None:
+    """Reconcile one node from its durable facts.
+
+    ``is_driven`` marks the runs this process is already driving (an execute
+    task in flight, or a resume follow). Boot reconcile omits it — its premise
+    is that no follower exists in this process yet — while the end-landing
+    retry passes it: the retry runs while the server is live, so steps 1 and 2
+    must skip runs whose driver this process already holds (steps 3 and 4 stay
+    unskipped: they dedupe by stable ids).
+    """
     meta = await tree.load_meta(session_id)
     if meta is None:
         return
@@ -118,6 +141,8 @@ async def _reconcile_node(
 
     # --- 1. stop requests take precedence over any launch or follow --------
     for run in run_records:
+        if is_driven is not None and is_driven(run):
+            continue  # this process already drives it: its driver owns the stop
         if tree.runs.run_has_terminal_fact(run, events):
             continue
         if tree.runs.stop_requested(events, run.id):
@@ -128,6 +153,8 @@ async def _reconcile_node(
 
     # --- 2. launched, non-terminal Runs re-attach or drain -----------------
     for run in run_records:
+        if is_driven is not None and is_driven(run):
+            continue  # this process already drives it: never a second follower
         if run.pid is None:
             continue  # queued (never launched): step 4's dispatch decides
         if tree.runs.run_has_terminal_fact(run, events):
@@ -146,9 +173,7 @@ async def _reconcile_node(
             # before any door opens, and the recorded pid keeps holding the
             # node's serialized slot (no competing dispatch) until the follow
             # converges and lands the run's durable terminal fact.
-            from src.core.tasks import create_logged_task
-            create_logged_task(adapter.resume_run(session_id, run.id),
-                               name=f"task-resume-{run.id[:8]}")
+            adapter.follow_run_in_background(session_id, run.id)
         else:
             # The process ended before its terminal fact landed (crash in the
             # follow). The drain converges to the durable result — raw-stream
@@ -205,6 +230,15 @@ async def _replay_followups(
     run_records = tree.runs.list_run_records_sync(session_id)
     for run in run_records:
         outcome = tree.runs.terminal_outcome(events, run.id)
+        # A terminal run whose metadata write failed (ended_at empty) gets its
+        # end metadata re-derived from the raw log: the run_finished fact is on
+        # disk, ended_at/exit_code are not. Idempotent — an already-written
+        # metadata file is never touched.
+        if outcome is not None and run.ended_at is None:
+            if adapter is None:
+                raise RuntimeError(
+                    "task execution adapter is not installed; cannot repair a half-written end record")
+            await adapter.repair_end_metadata(session_id, run, outcome)
         if run.kind == "iteration":
             continue  # the improve loop is never resumed (the restart boundary)
         if run.kind == "scheduled_step":

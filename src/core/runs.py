@@ -1168,11 +1168,17 @@ class RunStore:
     existing_payload = self._fact_input_payload(events, run_id)
     if existing is not None:
       # Repeat reconciliation: the terminal fact is authoritative; repair the
-      # metadata mirror a crash may have left behind. The first outcome and its
-      # acknowledgement payload never move, whatever a repeat caller names.
+      # metadata mirror a crash (or an out-of-space write) may have left
+      # behind. The first outcome and its acknowledgement payload never move,
+      # whatever a repeat caller names. An empty ended_at is the half-written
+      # end record: the caller's ended_at/exit_code (the drain rule's values)
+      # fill the empty fields only — values already written stay unchanged.
       if run.input_event_ids != existing_payload or run.ended_at is None:
         run.input_event_ids = existing_payload
-        run.ended_at = run.ended_at or utc_now()
+        if run.ended_at is None:
+          run.ended_at = ended_at or utc_now()
+          if exit_code is not None:
+            run.exit_code = exit_code
         await self.write_record(session_id, run)
       return run
     payload = self._finish_payload(run, input_event_ids)

@@ -1001,9 +1001,10 @@ def assert_true(cond: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-# The one sidebar-ready gate every navigation in this harness waits on: at least one
-# sidebar row has rendered. The row markup lives in web/static/js/sidebar/groups.js,
-# which is the file whose class names must match this predicate.
+# Sidebar-ready gate: at least one sidebar row has rendered. Scenarios wait on
+# this after a navigation (one stronger scenario-specific predicate implies it).
+# The row markup lives in web/static/js/sidebar/groups.js, which is the file
+# whose class names must match this predicate.
 SIDEBAR_READY = "document.querySelectorAll('#session-list .session-name').length >= 1"
 
 

@@ -25,6 +25,7 @@ from conftest import (
     make_legacy_cron_session,
     page_initial_sessions,
     seed_thread,
+    walk_archived_pages,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -198,22 +199,11 @@ async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: 
       fx.cron_archived.id, fx.plain_archived.id, fx.plain_archived_thread.id, *(filler.id for filler in fx.fillers)
   }
   walk: list[str] = []
-  before = None
-  before_id = None
-  for _ in range(10):
-    params: dict = {"limit": 2}
-    if before is not None:
-      params.update({"before": before, "before_id": before_id})
-    resp = client.get("/api/sessions/archived", params=params)
-    assert resp.status_code == 200
-    page = resp.json()
+  for page in walk_archived_pages(client):
     real_rows = [row for row in page["sessions"] if row["worker_thread"] is None]
     if page["has_more"]:
       assert len(real_rows) == 2  # a page stays full when more rows exist
     walk.extend(row["id"] for row in page["sessions"])
-    if not page["has_more"]:
-      break
-    before, before_id = page["next_before"], page["next_before_id"]
   assert len(walk) == len(set(walk))  # the cursor never repeats a row
   assert set(walk) == expected
 

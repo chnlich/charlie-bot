@@ -26,6 +26,7 @@ from conftest import (
     dump_yaml,
     make_legacy_cron_session,
     page_initial_sessions,
+    walk_archived_pages,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -244,16 +245,8 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   client = _api_client(cfg, session_mgr, tree, thread_mgr)
   archived: list[str] = []
   context: list[str] = []
-  before = None
-  before_id = None
-  page: dict = {}
-  for _ in range(10):
-    params: dict = {"limit": 2}
-    if before is not None:
-      params.update({"before": before, "before_id": before_id})
-    resp = client.get("/api/sessions/archived", params=params)
-    assert resp.status_code == 200
-    page = resp.json()
+  pages = walk_archived_pages(client)
+  for page in pages:
     rows = page["sessions"]
     real = [r for r in rows if not r.get("context_only")]
     # Page size stays an archived-row count: a page never fills with context.
@@ -268,9 +261,6 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
       if row.get("context_only"):
         assert row["status"] != SessionStatus.ARCHIVED
     context.extend(page_context)
-    if not page["has_more"]:
-      break
-    before, before_id = page["next_before"], page["next_before_id"]
 
   # Every archived row exactly once — the walk's cursor never repeats a row.
   assert len(archived) == len(set(archived))
@@ -279,7 +269,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   # climbed past the derived-archived intermediate.
   assert set(context) == {root.id}
   # The aggregates describe the archived rows alone.
-  assert page["groups"] == [{"group": None, "total": 6}]
+  assert pages[-1]["groups"] == [{"group": None, "total": 6}]
 
 
 @pytest.mark.asyncio
@@ -300,20 +290,9 @@ async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, 
 
   client = _api_client(cfg, session_mgr, tree, thread_mgr)
   seen: dict[str, dict] = {}
-  before = None
-  before_id = None
-  for _ in range(10):
-    params: dict = {"limit": 2}
-    if before is not None:
-      params.update({"before": before, "before_id": before_id})
-    resp = client.get("/api/sessions/archived", params=params)
-    assert resp.status_code == 200
-    page = resp.json()
+  for page in walk_archived_pages(client):
     for row in page["sessions"]:
       seen[row["id"]] = row
-    if not page["has_more"]:
-      break
-    before, before_id = page["next_before"], page["next_before_id"]
 
   # The cron-subtree exclusion holds: neither the firing nor its cron session
   # rides any page, as an archived row or as context.

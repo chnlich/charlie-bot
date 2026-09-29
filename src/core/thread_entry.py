@@ -23,6 +23,7 @@ import asyncio
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
@@ -34,9 +35,10 @@ from src.core.config import CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
-from src.core.models import SessionMetadata, utc_now
+from src.core.models import PendingTrigger, SessionMetadata, TriggerStatus, utc_now
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
+from src.core.triggers import ArchivedSessionError, TriggerManager
 
 logger = LazyStructlogLogger()
 
@@ -808,6 +810,93 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
         # The action appended an event the next done's predicates must see.
         events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
   return reported
+
+
+# ---------------------------------------------------------------------------
+# Thread follow: the persisted per-session wake a later thread message arms
+# ---------------------------------------------------------------------------
+
+# Thread-follow windows: a batch sleeps out this quiet delay from the newest
+# message, and a chain never runs past this cap from its first message, so a
+# steady trickle still flushes.
+_FOLLOW_QUIET_SECONDS = 45
+_FOLLOW_CHAIN_CAP_SECONDS = 300
+
+
+async def armed_follow_triggers(
+    platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> list[PendingTrigger]:
+  """The session's pending thread-follow trigger records (at most one by construction)."""
+  return [
+      t for t in await trigger_mgr.list_triggers(session_id)
+      if t.status == TriggerStatus.PENDING and t.message.startswith(platform.follow_trigger_prefix)
+  ]
+
+
+async def cancel_armed_follow_triggers(
+    platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> int:
+  """Cancel every armed thread-follow trigger of the session; return how many."""
+  armed = await armed_follow_triggers(platform, trigger_mgr, session_id)
+  for trigger in armed:
+    await trigger_mgr.cancel_trigger(session_id, trigger.id)
+  return len(armed)
+
+
+async def arm_follow_trigger(
+    platform: ThreadPlatform,
+    trigger_mgr: TriggerManager,
+    session_id: str,
+    *,
+    floor: str,
+    wake_label: Callable[[str], str],
+    log_fields: dict,
+) -> PendingTrigger | None:
+  """Cancel-then-create the session's one persisted follow trigger; return the fresh record.
+
+  The replaced record's ``created_at`` and floor id are read BEFORE the cancel:
+  the new record is stamped with that same ``created_at`` — the chain's start —
+  so a steady trickle still flushes at ``chain_start + _FOLLOW_CHAIN_CAP_SECONDS``
+  no matter how many re-arms land, and the label keeps the chain's oldest
+  unacked id as the floor — *wake_label* builds it after that re-arm floor is
+  resolved. *log_fields* names the thread in the arm logs. Returns None without
+  arming when the session was archived mid-flight: the thread-follow stops with
+  its session.
+  """
+  chain_start: datetime | None = None
+  for old in await armed_follow_triggers(platform, trigger_mgr, session_id):
+    if chain_start is None:  # exactly one armed record exists by construction
+      chain_start = old.created_at
+      parsed_floor = follow_floor(old.message)
+      if parsed_floor is not None:
+        floor = parsed_floor
+    await trigger_mgr.cancel_trigger(session_id, old.id)
+  now = utc_now()
+  start = chain_start or now
+  fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
+  delay = max(0, int((fire_at - now).total_seconds()))
+  try:
+    # The re-arm is never rejected by the pending-trigger limit: it replaces its
+    # own record, and a thread's new message must never silently stop waking
+    # its session. Its record still counts toward the limit.
+    trigger = await trigger_mgr.create_trigger(
+        session_id,
+        delay,
+        wake_label(floor),
+        created_at=start,
+        enforce_pending_limit=False,
+    )
+  except ArchivedSessionError as e:
+    # The archive raced the re-arm between the caller's ACTIVE check and the
+    # create: log and leave without a new trigger record.
+    logger.info(f"{platform.name}_follow_trigger_not_armed_archived", session=session_id, **log_fields, error=str(e))
+    return None
+  logger.info(
+      f"{platform.name}_follow_trigger_armed",
+      session=session_id,
+      **log_fields,
+      **{f"floor_{platform.id_label}": floor},
+      fire_at=trigger.fire_at.isoformat(),
+      chain_start=start.isoformat())
+  return trigger
 
 
 # The file-service URL prefixes: the mounted mounts with the trailing slash the

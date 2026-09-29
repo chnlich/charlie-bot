@@ -608,6 +608,7 @@ async def _run_connection(
         await ws.send(json.dumps({"op": 1, "d": last_seq}))
       except ConnectionClosed:
         return  # the receive loop's exception already reports the dead socket
+      await asyncio.sleep(interval_s)  # the next beat — and its ACK check — is one interval away
 
   heartbeat_task = asyncio.create_task(beat())
   try:

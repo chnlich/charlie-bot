@@ -71,31 +71,38 @@ class FakeGatewaySocket:
   A scripted ``close_code`` raises the real ConnectionClosedError at the first
   received frame after the script runs out — the shape websockets itself hands
   the listener for a server-initiated close. Sent frames land in ``sent`` as
-  parsed JSON, close requests in ``closes`` in order.
+  parsed JSON, close requests in ``closes`` in order. With ``ack_heartbeats``
+  every op 1 the listener sends gets its op 11 ACK fed back to the receive
+  side, the way the real gateway answers each heartbeat.
   """
 
-  def __init__(self, payloads: list[dict], *, close_code: int | None = None) -> None:
+  def __init__(self, payloads: list[dict], *, close_code: int | None = None, ack_heartbeats: bool = False) -> None:
     self.sent: list[dict] = []
     self.closes: list[int] = []
-    self._script = list(payloads)
+    self._queue: asyncio.Queue[dict | None] = asyncio.Queue()
+    for payload in payloads:
+      self._queue.put_nowait(payload)
     self._close_code = close_code
-    self._closed = asyncio.Event()
+    self._ack_heartbeats = ack_heartbeats
 
   async def send(self, raw: str) -> None:
-    self.sent.append(json.loads(raw))
+    message = json.loads(raw)
+    self.sent.append(message)
+    if self._ack_heartbeats and message.get("op") == 1:
+      self._queue.put_nowait({"op": 11})
 
   async def close(self, code: int = 1000) -> None:
     self.closes.append(code)
-    self._closed.set()
+    self._queue.put_nowait(None)  # wake a recv parked on the drained script: the socket is closed
 
   async def recv(self) -> str:
-    if self._script:
-      return json.dumps(self._script.pop(0))
-    if self._close_code is not None:
+    if self._queue.empty() and self._close_code is not None:
       code, self._close_code = self._close_code, None
       raise ConnectionClosedError(Close(code, "server closed"), None)
-    await self._closed.wait()
-    raise _IdleClosedError
+    item = await self._queue.get()
+    if item is None:
+      raise _IdleClosedError
+    return json.dumps(item)
 
   def __aiter__(self) -> FakeGatewaySocket:
     return self
@@ -231,6 +238,22 @@ async def test_heartbeat_carries_the_last_seq(tmp_path: Path) -> None:
     task = asyncio.create_task(run_listener(cfg, session_mgr))
     try:
       await _until(lambda: any(m == {"op": 1, "d": 7} for m in ws.sent))
+    finally:
+      await _stop(task)
+
+
+@pytest.mark.asyncio
+async def test_acked_heartbeats_keep_beating_one_interval_apart(tmp_path: Path) -> None:
+  """A beat whose previous beat got its op 11 is answered with the next beat an interval later, not a close."""
+  cfg, session_mgr = _rig(tmp_path)
+  ws = FakeGatewaySocket([_hello(30_000), _ready()], ack_heartbeats=True)
+  with _listener([ws]):
+    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    try:
+      # the third beat only exists when the earlier beats each saw their ACK
+      # and the loop waited out the interval instead of closing at once
+      await _until(lambda: len([m for m in ws.sent if m.get("op") == 1]) >= 3)
+      assert ws.closes == []
     finally:
       await _stop(task)
 

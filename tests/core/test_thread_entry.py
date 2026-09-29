@@ -273,6 +273,7 @@ class FakeAdapter(ThreadAdapter):
 
   def __init__(self) -> None:
     self.posts: list[tuple[dict, str, list]] = []
+    self.acks: list[dict] = []
     self.removed: list[dict] = []
     self.thread: list[ThreadMessage] = []
     self.files: list = []
@@ -280,8 +281,17 @@ class FakeAdapter(ThreadAdapter):
   async def post(self, address: dict, text: str, files: Sequence) -> None:
     self.posts.append((address, text, list(files)))
 
+  async def add_ack(self, block: dict) -> None:
+    self.acks.append(block)
+
   async def remove_ack(self, block: dict) -> None:
     self.removed.append(block)
+
+  async def thread_link(self, origin) -> str:
+    return f"https://fakechat.test/{origin['thread_ts']}"
+
+  def follow_wake_message(self, floor: str, link: str) -> str:
+    return f"{self.platform.follow_trigger_prefix} floor={floor}\n{link}"
 
   async def read_eligible(self, origin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
     return list(self.thread)

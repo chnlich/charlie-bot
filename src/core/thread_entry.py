@@ -110,14 +110,14 @@ class ThreadMessage:
 
 
 class ThreadAdapter(abc.ABC):
-  """The per-platform posting face the round side works through.
+  """The per-platform posting face the round side works through and the summon and follow side arms through.
 
   One subclass per entrypoint wraps the platform's client: posting into the
-  thread, clearing the summon ack, reading the thread's eligible messages,
-  naming the thread (the ``address`` dict ``post`` accepts), rewriting the
-  reply's file links, and shaping the log fields that point at the thread.
-  The platform description rides on the class, so every core helper reads it
-  off the adapter it was handed.
+  thread, lighting and clearing the summon ack, reading the thread's eligible
+  messages, naming the thread (the ``address`` dict ``post`` accepts),
+  rewriting the reply's file links, shaping the log fields that point at the
+  thread, and naming the follow wake. The platform description rides on the
+  class, so every core helper reads it off the adapter it was handed.
   """
 
   platform: ThreadPlatform
@@ -130,6 +130,10 @@ class ThreadAdapter(abc.ABC):
     (``attaches_files``); a platform whose swap publishes the linked pages
     instead takes none. Raises on failure -- ``post_with_retry`` catches it.
     """
+
+  @abc.abstractmethod
+  async def add_ack(self, block: dict) -> None:
+    """Light the summon ack the summon block *block* carries (the mirror of ``remove_ack``)."""
 
   @abc.abstractmethod
   async def remove_ack(self, block: dict) -> None:
@@ -154,6 +158,14 @@ class ThreadAdapter(abc.ABC):
   @abc.abstractmethod
   def log_fields(self, address: dict) -> dict:
     """The log fields naming the thread *address* points at."""
+
+  @abc.abstractmethod
+  async def thread_link(self, origin: Any) -> str:
+    """The permalink naming the thread *origin* points at: the link a wake label names."""
+
+  @abc.abstractmethod
+  def follow_wake_message(self, floor: str, link: str) -> str:
+    """The armed follow trigger's label: the chain *floor* id, the thread *link*, and the wake contract."""
 
 
 class ThreadReplyError(Exception):

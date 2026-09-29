@@ -635,6 +635,9 @@ class SlackThreadAdapter(ThreadAdapter):
   async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
     await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"])
 
+  async def add_ack(self, block: dict) -> None:
+    await self._client.add_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
+
   async def remove_ack(self, block: dict) -> None:
     await self._client.remove_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
 
@@ -653,6 +656,12 @@ class SlackThreadAdapter(ThreadAdapter):
 
   def log_fields(self, address: dict) -> dict:
     return {"channel": address["channel_id"], "thread_ts": address["thread_ts"]}
+
+  async def thread_link(self, origin: SlackOrigin) -> str:
+    return await self._client.get_permalink(origin.channel_id, origin.thread_ts)
+
+  def follow_wake_message(self, floor: str, link: str) -> str:
+    return _build_follow_wake_message(floor, link)
 
 
 # ---------------------------------------------------------------------------

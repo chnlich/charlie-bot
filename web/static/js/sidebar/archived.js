@@ -75,18 +75,10 @@ function renderArchivedFoot() {
   }
 }
 
-// Merge one page into the tree's row list and repaint the whole tree: the
-// archived view's one render form, so a delivered firing always nests under
-// its scheduled node whatever page each arrived on.
-function appendArchivedRows(sessions) {
-  if (!archivedState.rowsEl) return;
-  const fresh = sessions.filter(s => !archivedState.rowIds[s.id]);
-  fresh.forEach(s => {
-    archivedState.rowIds[s.id] = true;
-    archivedState.rows.push(s);
-    if (!s.context_only) archivedState.rowGroups[s.id] = s.group || '';
-  });
-  archivedState.renderedCount += fresh.filter(s => !s.context_only).length;
+// The archived view's one render form: every repaint of the merged list — a
+// page append or an in-list removal — routes through this call, so a delivered
+// firing always nests under its scheduled node whatever page delivered it.
+function repaintArchivedTree() {
   if (!archivedState.rows.length) {
     archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
     return;
@@ -96,6 +88,21 @@ function appendArchivedRows(sessions) {
     staticTime: true,
     groupActions: false,
   });
+}
+
+// Merge one page into the tree's row list and repaint the whole tree, so a
+// delivered firing always nests under its scheduled node whatever page each
+// arrived on.
+function appendArchivedRows(sessions) {
+  if (!archivedState.rowsEl) return;
+  const fresh = sessions.filter(s => !archivedState.rowIds[s.id]);
+  fresh.forEach(s => {
+    archivedState.rowIds[s.id] = true;
+    archivedState.rows.push(s);
+    if (!s.context_only) archivedState.rowGroups[s.id] = s.group || '';
+  });
+  archivedState.renderedCount += fresh.filter(s => !s.context_only).length;
+  repaintArchivedTree();
 }
 
 // Drop rows from the merged list and repaint: an in-list operation's node-only
@@ -108,15 +115,7 @@ function repaintWithoutRows(doomedIds) {
     delete archivedState.rowGroups[id];
   });
   archivedState.rows = archivedState.rows.filter(s => !doomed.has(s.id));
-  if (!archivedState.rows.length) {
-    archivedState.rowsEl.innerHTML = renderEmptyNote('No archived sessions');
-    return;
-  }
-  Sidebar.renderGroupedSessionList(archivedState.rows, 'archived', {
-    container: archivedState.rowsEl,
-    staticTime: true,
-    groupActions: false,
-  });
+  repaintArchivedTree();
 }
 
 async function fetchArchivedPage() {

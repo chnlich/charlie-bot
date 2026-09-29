@@ -992,6 +992,33 @@ def page_initial_sessions(page_client: TestClient, session_id: str) -> list[dict
   return json.loads(match.group(1))
 
 
+def walk_archived_pages(client: TestClient, limit: int = 2) -> list[dict]:
+  """GET /api/sessions/archived page by page, threading the keyset cursor.
+
+  Returns every page's JSON body in walk order. The limit stays pinned, and
+  each page's ``next_before``/``next_before_id`` ride the next request only
+  while that page says ``has_more`` — the walk stops at the first exhausted
+  page. The 10-page bound keeps a runaway cursor a bounded failure: the last
+  returned page then still says ``has_more``, and the callers' exactly-once
+  and membership asserts catch the short walk.
+  """
+  pages: list[dict] = []
+  before = None
+  before_id = None
+  for _ in range(10):
+    params: dict = {"limit": limit}
+    if before is not None:
+      params.update({"before": before, "before_id": before_id})
+    resp = client.get("/api/sessions/archived", params=params)
+    assert resp.status_code == 200
+    page = resp.json()
+    pages.append(page)
+    if not page["has_more"]:
+      break
+    before, before_id = page["next_before"], page["next_before_id"]
+  return pages
+
+
 def make_http_scope(url: str, *, headers: list[tuple[bytes, bytes]]) -> dict[str, Any]:
   """HTTP ASGI scope for the tests that drive an app directly, no server boot.
 

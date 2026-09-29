@@ -1241,15 +1241,6 @@ CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version
 # reads it as a module global at call time; the source value stays the timeouts module's own.
 CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
 
-# Import-path patch targets for the master wake a Slack message fires. src/core/slack_listener.py
-# binds both names at import scope (`from src.core.master_trigger import trigger_master`,
-# `from src.core.tasks import create_logged_task`), so mock setattrs the stand-ins on the
-# src.core.slack_listener module attributes and the listener's handlers read them at call time;
-# sibling modules binding the same functions (e.g. TRIGGER_MASTER_PATCH_TARGET's route) keep
-# their own namespaces.
-SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET = "src.core.slack_listener.trigger_master"
-SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create_logged_task"
-
 # Import-path patch target for the logged-task spawner the shared thread core
 # (src/core/thread_entry.py) fires: the round side's ack-clear and nudge tasks
 # are created there once the round side moves into the core, so mock setattrs

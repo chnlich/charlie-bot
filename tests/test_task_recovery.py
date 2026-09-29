@@ -11,6 +11,8 @@ instance's data and owned processes stay untouched.
 from __future__ import annotations
 
 import asyncio
+import json
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 
@@ -21,9 +23,12 @@ from conftest import (
     OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
+    fresh_master_state,
     patch_instructions_content,
+    patch_resume_seams,
 )
 
+import src.core.task_execution as task_execution_module
 from src.core import event_types as ET
 from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, TaskType
 from tests.test_parent_wake import drain_legacy_wakes
@@ -32,12 +37,18 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
+    child_reports,
     implement_marker_commit,
     init_repo_with_origin,
+    inject_chat_append_fault,
+    inject_run_record_write_fault,
     install_backends,
+    install_worker_launch_and_resume_backends,
     make_pm_build,
+    poll_until,
     result_event,
     wait_for_terminal_run,
+    write_raw_result,
 )
 
 
@@ -499,3 +510,205 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
     assert len(calls) == 1
     reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
     assert len(reports) == 1
+
+
+# ---------------------------------------------------------------------------
+# End-landing retry: the node reconcile pass re-run on out-of-space endings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """(f) A run_finished fact whose metadata write failed out of space: the
+    retry fills ended_at/exit_code from the raw log once space returns, and a
+    boot reconcile fills them too — from the drain rule's values, once."""
+    import src.core.task_execution as task_execution_module
+    from src.core.task_recovery import reconcile_task_tree
+    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    tree.dispatch.executor = adapter
+    patch_instructions_content(monkeypatch)
+    install_worker_launch_and_resume_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+
+    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+    decision = await tree.dispatch.dispatch_pending(worker.id)
+    run_id = decision["run_id"]
+    run_dir = tree.runs.run_dir(worker.id, run_id)
+    staged: list = []
+
+    def _stage_raw_log() -> None:
+        staged.append(write_raw_result(run_dir, "drained work result"))
+
+    # The finish's metadata write (the one carrying ended_at) fails out of
+    # space after the fact landed; the fault stages the drain's raw log.
+    inject_run_record_write_fault(monkeypatch, only_finished=True, times=1, on_raise=_stage_raw_log)
+    run, _outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+    assert len(staged) == 1
+    raw_mtime = staged[0][1]
+    # (The half-written state itself is transient — the retry repairs it within
+    # the first round — and is staged explicitly for the boot half below.)
+    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+    run = await tree.runs.get_run(worker.id, run_id)
+    assert run is not None
+    assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
+    assert run.exit_code == 0  # the raw log's successful result event
+    finished = [e for e in tree.fact_history(worker.id)
+                if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_id]
+    assert len(finished) == 1  # the retry never wrote a second end record
+
+    # A boot reconcile repairs the same shape too: a staged fact with empty
+    # metadata and a past-stamped raw log.
+    cfg2, session_mgr2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
+    tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_mgr2, tree2, monkeypatch)
+    patch_instructions_content(monkeypatch)
+    install_worker_launch_and_resume_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
+    boot_run_id = "run-half-written"
+    await tree2.runs.register_run(
+        RunRecord(id=boot_run_id, session_id=worker2.id, kind="work", backend="fake", model="fake-model"))
+    await tree2.dispatch.finish_run(worker2.id, boot_run_id, outcome="success", exit_code=0)
+    meta_path = tree2.runs.metadata_path(worker2.id, boot_run_id)
+    record = json.loads(meta_path.read_text(encoding="utf-8"))
+    record["ended_at"] = None
+    record["exit_code"] = None
+    meta_path.write_text(json.dumps(record), encoding="utf-8")
+    _raw, boot_mtime = write_raw_result(
+        tree2.runs.run_dir(worker2.id, boot_run_id), "boot result", age_seconds=1800)
+    await reconcile_task_tree(cfg2, tree2, tree2.dispatch.executor)
+    boot_run = await tree2.runs.get_run(worker2.id, boot_run_id)
+    assert boot_run is not None
+    assert boot_run.ended_at is not None and abs(boot_run.ended_at - boot_mtime) < timedelta(seconds=1)
+    assert boot_run.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_boot_node_out_of_space_hands_node_to_retry(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """(g) Boot reconcile's node pass failing out of space hands the node to
+    the retry entry; the retry's own round delivers the parent report."""
+    import src.core.task_execution as task_execution_module
+    from src.core.task_recovery import reconcile_task_tree
+    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    tree.dispatch.executor = adapter
+    patch_instructions_content(monkeypatch)
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+    await tree.runs.register_run(
+        RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+    await tree.dispatch.finish_run(worker.id, "run-failed", outcome="failed", exit_code=-1)
+    assert child_reports(tree, manager.id) == []
+
+    # The boot pass's delivery write fails out of space: the node pass raises,
+    # the boot hands the node to the retry, and the retry's round delivers.
+    inject_chat_append_fault(
+        monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
+    await reconcile_task_tree(cfg, tree, adapter)
+    await poll_until(
+        lambda: len(child_reports(tree, manager.id)) == 1,
+        what="the retry's parent report delivery", timeout=10.0)
+    reports = child_reports(tree, manager.id)
+    assert [r.get("outcome") for r in reports] == ["failed"]
+    await poll_until(
+        lambda: worker.id not in adapter._landing_retries,
+        what="the clean round ending the retry task")
+    assert len(child_reports(tree, manager.id)) == 1  # exactly one report
+
+
+@pytest.mark.asyncio
+async def test_retry_round_skips_runs_this_process_already_drives(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """(h) A retry's node reconcile pass never makes a second follower for a
+    run whose execute task is in flight, a run a previous round already
+    follows, or a manager-turn follow queued in the master queue; replayed
+    delivery starts no second review process."""
+    from src.core import task_recovery
+    from src.core.models import TaskType
+    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+        tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
+    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    tree.dispatch.executor = adapter
+    patch_instructions_content(monkeypatch)
+    builds = install_resume_ready_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+
+    # A run whose execute task is in flight, and a worker run a previous round
+    # already follows: both stay this process's property.
+    for run_key, pid in (("run-inflight", 424811), ("run-followed", 424812)):
+        await tree.runs.register_run(
+            RunRecord(id=run_key, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+        await tree.runs.record_launch(worker.id, run_key, pid=pid, pid_start="1-424000")
+    adapter._launch_inflight.add((worker.id, "run-inflight"))
+    adapter._resume_follows.add((worker.id, "run-followed"))
+
+    # A delivered (terminal) work run whose review is registered but
+    # unfinished: the replayed delivery re-enters _maybe_spawn_review, which
+    # must return the existing review, never a second review process.
+    await tree.runs.register_run(
+        RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+    await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
+    await tree.runs.register_run(
+        RunRecord(id="review-pending", session_id=worker.id, kind="review",
+                  review_of_run_id="run-work", backend="fake", model="fake-model"))
+
+    # A manager-turn follow queued in the master queue: its future stays
+    # pending until released, and the pair stays registered the whole time.
+    await tree.runs.register_run(
+        RunRecord(id="run-mturn", session_id=manager.id, kind="manager_turn",
+                  backend="fake", model="fake-model"))
+    await tree.runs.record_launch(manager.id, "run-mturn", pid=424813, pid_start="1-424000")
+    released = asyncio.Event()
+    resume_calls: list = []
+
+    async def blocked_resume_cc(item):
+        resume_calls.append(item)
+        await asyncio.wait_for(released.wait(), timeout=5)
+        return (None, 0, None, {})
+
+    patch_resume_seams(monkeypatch, resume_cc=blocked_resume_cc)
+    async with fresh_master_state(manager.id):
+        await adapter.resume_run(manager.id, "run-mturn", is_alive=lambda: False)
+        assert (manager.id, "run-mturn") in adapter._resume_follows
+
+        driven = lambda run: adapter._drives_run(worker.id, run)  # noqa: E731
+        counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
+        await task_recovery._reconcile_node(worker.id, tree, adapter, counters, cfg, is_driven=driven)
+        # No second follower, no second review process: the skipped runs stay
+        # non-terminal and the builds queue is untouched.
+        assert builds == []
+        for run_key in ("run-inflight", "run-followed"):
+            run = await tree.runs.get_run(worker.id, run_key)
+            assert run is not None and run.pid is not None
+            assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_key) is None
+        reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+        assert [r.id for r in reviews] == ["review-pending"]
+
+        # The manager turn's round skips the queued follow too: still exactly
+        # one resume call (the test's own), and the pair stays registered.
+        await task_recovery._reconcile_node(
+            manager.id, tree, adapter,
+            {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}, cfg,
+            is_driven=lambda run: adapter._drives_run(manager.id, run))
+        assert len(resume_calls) == 1
+        assert (manager.id, "run-mturn") in adapter._resume_follows
+
+        # Releasing the future resolves the follow: the pair leaves the
+        # registry only then, and the run lands exactly once.
+        released.set()
+        await poll_until(
+            lambda: (manager.id, "run-mturn") not in adapter._resume_follows,
+            what="the manager-turn follow pair release")
+        await wait_for_terminal_run(tree, manager.id, "run-mturn")
+        assert len(resume_calls) == 1
+
+        # Without the driver the retry follows the worker run itself: the
+        # registry pair was the only thing holding the round back.
+        adapter._launch_inflight.discard((worker.id, "run-inflight"))
+        await task_recovery._reconcile_node(worker.id, tree, adapter,
+                                            {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}, cfg)
+        await wait_for_terminal_run(tree, worker.id, "run-inflight")

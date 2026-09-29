@@ -161,7 +161,7 @@ def free_disk_gib(path: Path) -> float:
     if parent == probe:
       raise FileNotFoundError(f"no existing ancestor to probe for {path}")
     probe = parent
-  return shutil.disk_usage(probe).free / (1024 ** 3)
+  return shutil.disk_usage(probe).free / (1024**3)
 
 
 def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
@@ -467,8 +467,7 @@ class TaskExecutionAdapter:
     from src.core.tasks import create_logged_task
 
     self._landing_retries[session_id] = create_logged_task(
-        self._run_end_landing_retry(session_id, run_id),
-        name=f"run-end-landing-retry-{session_id[:8]}")
+        self._run_end_landing_retry(session_id, run_id), name=f"run-end-landing-retry-{session_id[:8]}")
 
   async def _run_end_landing_retry(self, session_id: str, run_id: str | None) -> None:
     """The retry loop: reconcile the node until a round raises no out-of-space.
@@ -483,7 +482,11 @@ class TaskExecutionAdapter:
           from src.core import task_recovery
           counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
           await task_recovery._reconcile_node(
-              session_id, self._tree, self, counters, self._cfg,
+              session_id,
+              self._tree,
+              self,
+              counters,
+              self._cfg,
               is_driven=lambda run: self._drives_run(session_id, run))
           return  # a clean round ends the retry
         except asyncio.CancelledError:
@@ -493,10 +496,7 @@ class TaskExecutionAdapter:
             log.exception("task_recovery_node_failed", session=session_id)
             return
           log.warning(
-              "run_end_landing_retry",
-              session=session_id,
-              run_id=run_id,
-              error=f"{type(exc).__name__}: {exc}"[:500])
+              "run_end_landing_retry", session=session_id, run_id=run_id, error=f"{type(exc).__name__}: {exc}"[:500])
           await asyncio.sleep(RUN_END_LANDING_RETRY_INTERVAL_SECONDS)
     finally:
       self._landing_retries.pop(session_id, None)
@@ -1612,12 +1612,10 @@ class TaskExecutionAdapter:
       if not future_owned:
         self._resume_follows.discard(key)
 
-  async def _resume_run_checked(
-      self, session_id: str, run_id: str, is_alive: Callable[[], bool] | None) -> bool:
-    """resume_run's checks and follow; True when the manager-turn future's
-    done-callback took over the caller's follow-pair release."""
+  async def _resume_run_checked(self, session_id: str, run_id: str, is_alive: Callable[[], bool] | None) -> bool:
     """resume_run's checks and follow, under the caller's follow-pair
-    registration."""
+    registration; True when the manager-turn future's done-callback took over
+    the caller's release."""
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
@@ -1784,8 +1782,7 @@ class TaskExecutionAdapter:
       _events, _result, scanned = await asyncio.to_thread(
           runs.scan_result_exit, raw_path, self._fresh_translate(option))
       exit_code = scanned
-    await self._tree.dispatch.finish_run(
-        session_id, run.id, outcome=outcome, exit_code=exit_code, ended_at=ended_at)
+    await self._tree.dispatch.finish_run(session_id, run.id, outcome=outcome, exit_code=exit_code, ended_at=ended_at)
 
   # ------------------------------------------------------------------
   # Post-finish delivery chain

@@ -28,6 +28,60 @@ The core owns the whole life of a thread-bound session. Each step below names th
 
 ## The adapter contract
 
+A platform describes itself to the core with one `ThreadPlatform` value and one `ThreadAdapter` subclass; the core reads everything it needs off the two. The Slack values below are the `SLACK` instance in `src/core/slack_listener.py`, and the Discord values are the `DISCORD` instance in `src/core/discord_listener.py`. `ThreadMessage` is the shape both sides exchange for one thread message: `id` is the platform's message id (a Slack ts, a Discord snowflake), `user` its author (None when the platform names none), and `text` its text (empty when the platform names none).
+
+### `ThreadPlatform` fields
+
+| Field | Meaning | Slack | Discord |
+|-------|---------|-------|---------|
+| `name` | Summon event-block key and prefix of every persisted marker; the derived keys spell themselves from it | `slack` | `discord` |
+| `display_name` | Human-facing platform name in prompts, notices, and logs | `Slack` | `Discord` |
+| `reply_event_type` | Wire type of the persisted reply event | `ET.SLACK_REPLY` (`slack_reply`) | `ET.DISCORD_REPLY` (`discord_reply`) |
+| `reply_command` | The reply command the prompt contract states and the round-end audit enforces | `charliebot slack reply` | `charliebot discord reply` |
+| `max_post_chars` | Per-message limit `chunk_text` splits at | `40000` | `2000` |
+| `follow_trigger_prefix` | Trigger-label prefix identifying the session's armed follow record | `slack-thread-follow` | `discord-thread-follow` |
+| `id_key` | Maps one message id to its ordering key | `str` (dotted ts strings sort as strings) | `snowflake_key` (snowflakes sort as integers) |
+| `origin_field` | `SessionMetadata` attribute holding the thread origin | `slack_origin` | `discord_origin` |
+| `watermark_field` | `SessionMetadata` attribute holding the newest consumed message id | `slack_watermark_ts` | `discord_watermark_id` |
+| `id_label` | Key naming a message id in readbacks and refusals (the 412 payload's per-message key) | `ts` | `id` |
+| `mention_key` | Summon-block key of the mention message; a block without it carries no ack to clear | `mention_ts` | `mention_id` |
+| `block_keys` | Summon-block keys a nudge copies from the summon it re-asks | `channel_id`, `thread_ts`, `mention_ts` | `guild_id`, `channel_id`, `thread_id`, `mention_id` |
+| `thread_fallback` | Formatted with the summon block when a summon prompt carries no link | `(channel {channel_id}, thread {thread_ts})` | `(guild {guild_id}, thread {thread_id})` |
+| `attaches_files` | True when linked pages are uploaded as attachments instead of published | `False` (publishes and swaps the URLs) | `True` (uploads on the last chunk) |
+
+Three marker keys derive from `name` and so carry no field of their own: `notice_key` (`slack_notice` / `discord_notice`), `backfill_key` (`slack_backfill` / `discord_backfill`), and `ack_event_type` (`slack_ack` / `discord_ack`).
+
+### `ThreadAdapter` methods
+
+| Method | What the core uses it for | Slack (`SlackThreadAdapter`) | Discord (`DiscordThreadAdapter`) |
+|--------|---------------------------|------------------------------|----------------------------------|
+| `post(address, text, files)` | `post_with_retry` posts every reply chunk and every notice through it | `SlackClient.post_message` (`chat.postMessage` with `thread_ts`); takes no files | `DiscordClient.create_message` on the thread; the files ride as attachments |
+| `add_ack(block)` | Lights the summon ack when the summon round fires | `reactions.add` of `eyes` (`_ACCEPTANCE_REACTION`) on the mention ts | `add_reaction` of `👀` (`_ACCEPTANCE_EMOJI`) on the mention id |
+| `remove_ack(block)` | Closes the summon ack when a reply, notice, or lost-summon report answers it | `reactions.remove`; a `no_reaction` error is the end state, so the clear is idempotent | `remove_own_reaction` of `👀` |
+| `read_eligible(origin, cfg)` | The eligible thread read behind the freshness gate, the ack check, and the reconnect backfill | one `conversations.replies` call; keeps plain (subtype-absent) human messages from allowed users | `get_messages` paged oldest-first, 100 per call from id `0` until a short page; keeps human-authored, non-webhook messages of type 0 or 19 from allowed users |
+| `address_of(origin)` | Builds the address dict `post` accepts | `{"channel_id", "thread_ts"}` from the `SlackOrigin` | `{"guild_id", "thread_id"}` from the `DiscordOrigin` |
+| `link_swap(cfg)` | The rewrite swap `rewrite_file_links` applies to the reply's file links, plus the list of files to attach | `_publish_swap`: publishes each linked page and returns its published URL; appends to nothing | keeps the file's bare name for the URL and collects each distinct path once |
+| `log_fields(address)` | Log fields naming the thread on every core log line | `channel`, `thread_ts` | `guild`, `thread` |
+| `thread_link(origin)` | The permalink the follow wake label names | `chat.getPermalink` | `message_link` built from the guild and thread ids (no API call) |
+| `follow_wake_message(floor, link)` | The armed follow trigger's label | `_build_follow_wake_message`: the prefix, `floor=<ts>`, the permalink, the slack-skill read instruction, and the ack and reply commands | `_build_follow_wake_message`: the prefix, `floor=<id>`, the message link, the server-side read command first, then the reply commands |
+
+### What a platform module owns outside the adapter
+
+The adapter is not the whole platform module. Each platform also owns:
+
+- **The connection loop.** Slack: `run_listener` in `src/core/slack_listener.py` — a Socket Mode websocket whose backoff doubles from 1 s to 30 s. Discord: `run_listener` in `src/core/discord_listener.py` — a gateway websocket with identify and heartbeat, the stop close codes in `_STOP_CLOSE_CODES` (retrying cannot fix them), and a `_preflight` that refuses to start without the Message Content intent.
+- **Event parsing and drop rules.** Slack: `handle_app_mention` (summons: type `app_mention`, sender on the allowed list) and `handle_thread_message` (follows: drop subtypes, drop non-thread messages, drop bots and non-allowed senders before the core's session guards run). Discord: `handle_message_create` — one guard chain over human sender, message type, allowed author, the DM notice (`_DM_NOTICE`, a DM binds no guild thread), mention versus follow traffic, and channel type (a mention already in a thread binds that thread; a channel mention starts a thread named from the stripped mention content, `_thread_name`).
+- **The session-id namespace.** Slack: `SLACK_NS` and `summon_session_id(team_id, channel_id, thread_ts)` in `src/core/slack_listener.py`; Discord: `DISCORD_NS` and `summon_session_id(guild_id, thread_id)` in `src/core/discord_listener.py`. Both derive a stable uuid5 from the thread's coordinates.
+- **The session label.** Slack: `Slack #<channel name>`, resolved once in `handle_app_mention` (channel id when the name lookup fails); Discord: `Discord #<parent channel name>`, resolved in `handle_message_create`.
+- **The origin model and its metadata fields.** `SlackOrigin` (`team_id`, `channel_id`, `thread_ts`) and `DiscordOrigin` (`guild_id`, `parent_channel_id`, `thread_id`) in `src/core/models.py`; each platform's `SessionMetadata` and `CreateSessionRequest` fields are its `origin_field` and `watermark_field` (`slack_origin` / `slack_watermark_ts`, `discord_origin` / `discord_watermark_id`).
+- **The summon block keys.** The platform decides them (`block_keys` in the table above): the Slack block is built in `handle_app_mention`, the Discord block in `handle_message_create`.
+- **The summon prompt and the platform line.** Slack: `_build_summon_prompt` and `_PLATFORM_LINE` in `src/core/slack_listener.py` (the permalink plus the slack-skill read hint); Discord: the same two names in `src/core/discord_listener.py` (the message link plus the server-side read command). Both end at the shared tail `summon_prompt_tail` — the citation boundary, the PII red line, and the reply-format contract — unchanged across platforms.
+- **The follow wake label.** Slack: `_build_follow_wake_message` in `src/core/slack_listener.py`; Discord: `_build_follow_wake_message` in `src/core/discord_listener.py`.
+- **The server start and stop.** `server.py` starts each platform's listener task and its boot-backfill task in the lifespan when the platform's credentials and allowed users are set, and cancels both on shutdown.
+- **The round-end hook.** `SessionManager.persist_and_broadcast` in `src/core/sessions.py` fires each platform's `deliver_done` as its own logged task on every `master_done` event.
+- **The CLI and the internal endpoints.** Slack: `src/cli/slack.py` (`charliebot slack reply`, `charliebot slack ack`) over `POST /api/internal/slack/reply` and `POST /api/internal/slack/ack`; Discord: `src/cli/discord.py` (`charliebot discord reply`, `charliebot discord read`, `charliebot discord check`) over the matching endpoints in `src/api/internal.py`.
+- **The reply event type and its session-view row.** The constants `ET.SLACK_REPLY` and `ET.DISCORD_REPLY` live in `src/core/event_types.py`; `src/core/message_aggregator.py` maps each to the system row the session view renders ("Posted to Slack: ..." / "Posted to Discord: ...").
+
 ---
 
 ## Adding a platform

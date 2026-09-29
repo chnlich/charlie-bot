@@ -48,7 +48,7 @@ _TEAM = "T_TEST"
 _RETRY_DELAYS_PATCH_TARGET = "src.core.slack_listener._RETRY_DELAYS"
 _QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
-# A summon prompt embeds prompts/slack_reply_format.md, which names the reply
+# A summon prompt embeds prompts/thread_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.
 _SUMMON_CONTENT = f"Slack 线程召唤：{_PERMALINK}\n\nPost the reply with `charliebot slack reply --file <path>`."
 

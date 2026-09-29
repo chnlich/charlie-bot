@@ -13,23 +13,34 @@ import asyncio
 import json
 import subprocess
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
+    FABLE_MODEL,
+    POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
+    assistant_text_event,
     backend_option,
     create_task,
+    install_scripted_backends,
+    make_transcript,
     patch_instructions_content,
+    pool_cfg,
+    rate_limit_event,
     stub_credentials,
+    ScriptedRelayBackend,
 )
 from conftest import OPERATOR as OP_CALLER
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+import src.core.task_execution as task_execution_module
+from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.sessions import (
@@ -1911,3 +1922,201 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
     # behind the failure and the node is left with the fact, not a queued run.
     assert tree.dispatch.pending_inputs(manager.id) == []
     assert [r.id for r in tree.runs.list_run_records_sync(manager.id)] == [run_id]
+
+
+# ---------------------------------------------------------------------------
+# Pooled fresh launches: the Run starts on a Claude pool account
+# ---------------------------------------------------------------------------
+
+
+def build_pooled_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                     labels: tuple[str, ...] = ("main", "ext-1", "ext-2")):
+    """The task-tree env over a pooled config: one cc-claude option drawing from the
+    Claude account pool *labels* (pool_cfg plants healthy credentials in every account
+    dir). ``labels=()`` keeps the same cc-claude option over an empty pool. The
+    synthetic access key and CHARLIEBOT_HOME match build_env, so child environments
+    sign against the synthetic home.
+    """
+    import src.core.config as core_config
+    from src.core.config import CharlieBotConfig
+    home = tmp_path / "charliebot-home"
+    option = backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)
+    cfg = pool_cfg(tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels)
+    key = "task-exec-test-key"
+    core_config._credentials_cache.seed(core_config.Credentials(
+        path=home / "credentials.yaml",
+        sections={"charliebot": {"access_key": key}}))
+    monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+    session_mgr = SessionManager(cfg)
+    return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+
+
+class WorkerAccountRecorder:
+    """The Worker-constructor spy: records every claude_account= the adapter passes.
+
+    A subclass stands in for src.core.task_execution.Worker, so the real Worker —
+    its relay loop included — still runs every recorded launch.
+    """
+
+    def __init__(self) -> None:
+        self.accounts: list = []
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        recorder = self
+        real_worker = task_execution_module.Worker
+
+        class RecordingWorker(real_worker):  # type: ignore[misc,valid-type]
+            def __init__(self, *args, **kwargs) -> None:
+                recorder.accounts.append(kwargs.get("claude_account"))
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(task_execution_module, "Worker", RecordingWorker)
+
+
+async def _register_work_run(
+        tree: TaskTreeManager, worker_id: str, run_id: str, backend: str, model: str) -> None:
+    await tree.runs.register_run(
+        RunRecord(id=run_id, session_id=worker_id, kind="work", backend=backend, model=model))
+
+
+@pytest.mark.asyncio
+async def test_pooled_fresh_worker_launches_hand_worker_the_selected_account(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """With a non-empty pool and a cc-claude backend, the fresh work Run and the
+    review it spawns both hand Worker the account claude_accounts.select returned,
+    and the relay loop is armed from the first process (the backend build receives
+    the same account). The iteration and scheduled-step kinds launch through their
+    controllers and are pinned in the sequence suites."""
+    claude_accounts.reset_for_tests()
+    cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+    # An implement task: the work Run's success spawns its review, the second
+    # fresh launch this test pins.
+    worker = await create_task(
+        tree, parent=None, request_id="w", profile="worker",
+        task=TaskSpec(goal="ship it", task_type="implement"))
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    recorder = WorkerAccountRecorder()
+    recorder.install(monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("work done; modified /tmp/x.sh")]),
+                      SpawningScriptedBackend([result_event("review ok")])],
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+    expected = claude_accounts.select(cfg, FABLE_MODEL)
+    assert expected is not None and expected.label == "main"
+
+    await _register_work_run(tree, worker.id, "run-work", POOLED_FABLE_ID, FABLE_MODEL)
+    tree.dispatch.executor.launch(worker.id, "run-work")
+    _work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+    assert outcome == "success"
+
+    # The implement work Run's review is a fresh launch of its own: it spawns
+    # automatically and runs on the pool too.
+    deadline = asyncio.get_event_loop().time() + 10
+    while asyncio.get_event_loop().time() < deadline:
+        reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+        if reviews and tree.runs.terminal_outcome(
+                tree.runs.load_events_sync(worker.id), reviews[0].id) is not None:
+            break
+        await asyncio.sleep(0.1)
+    else:
+        pytest.fail("the spawned review never reached a terminal fact")
+
+    assert recorder.accounts == [expected, expected]
+    assert [b["kwargs"]["claude_account"] for b in builds] == [expected, expected]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("env_builder, backend_id", [
+    (lambda tmp_path, monkeypatch: build_pooled_env(tmp_path, monkeypatch, labels=()), POOLED_FABLE_ID),
+    (lambda tmp_path, monkeypatch: build_env(tmp_path, monkeypatch), "fake"),
+], ids=["empty-pool", "non-claude-backend"])
+async def test_unpooled_fresh_worker_launch_carries_no_account(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env_builder, backend_id: str) -> None:
+    """An empty pool and a non-Claude backend both leave the account unset: the
+    worker runs on its default login exactly as before this change."""
+    cfg, session_mgr, tree = env_builder(tmp_path, monkeypatch)
+    worker = await create_task(
+        tree, parent=None, request_id="w", profile="worker",
+        task=TaskSpec(goal="ship it", task_type="quick-edit"))
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    recorder = WorkerAccountRecorder()
+    recorder.install(monkeypatch)
+    builds = install_backends(
+        monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+    await _register_work_run(tree, worker.id, "run-work", backend_id, FABLE_MODEL)
+    tree.dispatch.executor.launch(worker.id, "run-work")
+    _run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+    assert outcome == "success"
+
+    assert recorder.accounts == [None]
+    assert builds[0]["kwargs"]["claude_account"] is None
+
+
+@pytest.mark.asyncio
+async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """select returns None: the Run fails before any process starts, its events
+    log carries the pool-exhausted error with the earliest reset time, and the
+    improve quota classification reads that text as a quota blocker."""
+    claude_accounts.reset_for_tests()
+    cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+    worker = await create_task(
+        tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it"))
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    # An empty build queue: any process spawn would pop from it and fail loudly.
+    builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+    for label in ("main", "ext-1", "ext-2"):
+        claude_accounts.observe_rate_limit(label, rate_limit_event("rejected", 1.0)["rate_limit_info"])
+    assert claude_accounts.select(cfg, FABLE_MODEL) is None
+
+    await _register_work_run(tree, worker.id, "run-x", POOLED_FABLE_ID, FABLE_MODEL)
+    tree.dispatch.executor.launch(worker.id, "run-x")
+    run, outcome = await wait_for_terminal_run(tree, worker.id, "run-x")
+    assert outcome == "failed"
+    assert run.pid is None
+    assert builds == []
+
+    error_text = _read_error_event(tree.runs.run_dir(worker.id, "run-x") / "events.jsonl")
+    assert claude_relay.POOL_EXHAUSTED_PHRASE in error_text
+    assert "earliest reset" in error_text and "UTC" in error_text
+    assert error_text == claude_relay.pool_exhausted_message(cfg)
+
+
+@pytest.mark.asyncio
+async def test_rejected_first_process_relays_to_another_pool_account_and_succeeds(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A Run launched through task_execution relays like a directly driven Worker:
+    the first process's rejected rate_limit_event moves the run to the account
+    with the most headroom (same session id, scripted relay backend) and the Run
+    ends success."""
+    claude_accounts.reset_for_tests()
+    cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+    worker = await create_task(
+        tree, parent=None, request_id="w", profile="worker",
+        task=TaskSpec(goal="ship it", task_type="quick-edit"))
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    cc_id = "11111111-2222-3333-4444-555555555555"
+    # The fresh launch binds a new Claude session id; pin it so the transcript
+    # the relay moves exists before the first process is rejected.
+    monkeypatch.setattr(task_execution_module.uuid, "uuid4", lambda: uuid.UUID(cc_id))
+    make_transcript(tmp_path / "claude-main", cc_id)
+    builds = install_scripted_backends(
+        monkeypatch,
+        [
+            ScriptedRelayBackend([assistant_text_event("halfway"), rate_limit_event("rejected", 1.0)], exit_code=1),
+            ScriptedRelayBackend([result_event("done after relay")], exit_code=0),
+        ],
+        WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+    await _register_work_run(tree, worker.id, "run-relay", POOLED_FABLE_ID, FABLE_MODEL)
+    tree.dispatch.executor.launch(worker.id, "run-relay")
+    run, outcome = await wait_for_terminal_run(tree, worker.id, "run-relay", timeout=20)
+    assert outcome == "success"
+    assert run.exit_code == 0
+
+    assert [b["kwargs"]["claude_account"].label for b in builds] == ["main", "ext-1"]
+    # The transcript moved with the run: the resumed process finds it on the
+    # new account under the same session id.
+    assert (tmp_path / "claude-ext-1" / "projects" / "slug" / f"{cc_id}.jsonl").is_file()

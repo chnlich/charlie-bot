@@ -121,6 +121,56 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: Path) -> None:
+  """The crash-window repair's freshly delivered report is the parent's new
+  durable input: the delivery entry wakes the parent (its next serialized turn
+  dispatches now, without waiting for the next message or restart). A replayed
+  recovery pass re-derives the same report id, delivers nothing, wakes nobody."""
+  _, _, tree = build_env(tmp_path)
+  parent = await create_task(tree, parent=None, request_id="parent")
+  child = await create_task(tree, parent=parent.id, request_id="a", profile="worker")
+
+  # The close fact exists with an owed report, delivered by nobody: the crash
+  # window recover_pending_reports repairs.
+  close_event = {
+      "id": "close-child",
+      "type": ET.TASK_CLOSED,
+      "timestamp": utc_now_iso(),
+      "actor": "system",
+      "source_session_id": child.id,
+      "request_id": "auto:run-1",
+      "outcome": "completed",
+      "summary": "delivered",
+      "result_refs": ["run:run-1"],
+      "run_ids": ["run-1"],
+      "report_to": parent.id,
+  }
+  await tree.events.append(child.id, close_event)
+  assert [e for e in tree.events.load_events(parent.id) if e.get("type") == ET.CHILD_REPORT] == []
+  assert tree.dispatch.undelivered_report_blockers(child.id), "the close fact must owe its report"
+
+  wakes: list[str] = []
+  real_dispatch = tree.dispatch.dispatch_pending
+
+  async def counting_dispatch(session_id: str) -> dict:
+    if session_id == parent.id:
+      wakes.append(session_id)
+    return await real_dispatch(session_id)
+
+  tree.dispatch.dispatch_pending = counting_dispatch  # type: ignore[method-assign]
+
+  delivered = await tree.dispatch.recover_pending_reports(child.id)
+  assert len(delivered) == 1 and delivered[0]["child_session_id"] == child.id
+  # The fresh report woke the parent exactly once.
+  assert wakes == [parent.id]
+
+  # A repeated recovery pass re-derives the same report id: no delivery, no wake.
+  again = await tree.dispatch.recover_pending_reports(child.id)
+  assert again == []
+  assert wakes == [parent.id]
+
+
+@pytest.mark.asyncio
 async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
   parent = await create_task(tree, parent=None, request_id="parent")

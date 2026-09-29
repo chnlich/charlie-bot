@@ -20,6 +20,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     create_task,
     patch_instructions_content,
+    run_git,
 )
 
 from src.core import event_types as ET
@@ -29,7 +30,6 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
-    git,
     implement_marker_commit,
     init_repo_with_origin,
     install_backends,
@@ -72,7 +72,7 @@ async def _reviewed_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
 
   def publish() -> None:
     if reviewer_pushes:
-      git(work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
+      run_git(work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
 
   install_backends(
       monkeypatch, [
@@ -109,10 +109,10 @@ async def test_commit_published_only_on_origin_base_closes_the_reviewed_task(
 
   work = next(r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work")
   assert work.base_branch == "main" and work.branch_name
-  commit = git(repo, "rev-parse", work.branch_name)
+  commit = run_git(repo, "rev-parse", work.branch_name)
   # The premise: the reviewed commit is on the published main only; the
   # clone's local main still sits at the seed commit.
-  assert git(repo, "rev-parse", "origin/main") == commit
+  assert run_git(repo, "rev-parse", "origin/main") == commit
   assert subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, "main"]).returncode == 1
 
   deadline = asyncio.get_event_loop().time() + 10

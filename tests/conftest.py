@@ -870,6 +870,18 @@ def live_subprocess() -> subprocess.Popen:
   return subprocess.Popen(["/bin/sleep", "30"])
 
 
+def run_git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str] | None = None) -> str:
+  """Run one git command in *cwd* and return its stripped stdout.
+
+  check=True fails the test with the exact command and git's stderr;
+  check=False returns an expected failure's output for the caller to judge.
+  """
+  result = subprocess.run(["git", *args], cwd=str(cwd), env=env, capture_output=True, text=True, check=False)
+  if check and result.returncode != 0:
+    raise AssertionError(f"git {' '.join(args)} failed in {cwd}: {result.stderr.strip()}")
+  return result.stdout.strip()
+
+
 def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edit") -> dict:
   """The /api/internal/delegate request body one test delegation sends."""
   return {

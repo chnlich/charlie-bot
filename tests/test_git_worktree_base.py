@@ -20,10 +20,10 @@ Plus the resolution's probe-fed forms:
     from one ls-remote
 """
 
-import subprocess
 from pathlib import Path
 
 import pytest
+from conftest import run_git
 
 from src.core.git import (
     BaseBranchResolutionError,
@@ -33,24 +33,12 @@ from src.core.git import (
 )
 
 
-def _git(cwd: Path, *args: str) -> str:
-  """Run a git command synchronously and return stdout. Raises on non-zero exit."""
-  result = subprocess.run(
-      ["git", *args],
-      cwd=str(cwd),
-      check=True,
-      capture_output=True,
-      text=True,
-  )
-  return result.stdout.strip()
-
-
 def _commit(cwd: Path, filename: str, content: str, message: str) -> str:
   """Write a file, commit it, and return the new commit's SHA."""
   (cwd / filename).write_text(content, encoding="utf-8")
-  _git(cwd, "add", filename)
-  _git(cwd, "commit", "-m", message)
-  return _git(cwd, "rev-parse", "HEAD")
+  run_git(cwd, "add", filename)
+  run_git(cwd, "commit", "-m", message)
+  return run_git(cwd, "rev-parse", "HEAD")
 
 
 @pytest.fixture
@@ -65,20 +53,20 @@ def repo_setup(tmp_path: Path) -> dict[str, Path]:
   main_checkout = tmp_path / "main_checkout"
 
   # Bare remote.
-  _git(tmp_path, "init", "--bare", str(origin))
+  run_git(tmp_path, "init", "--bare", str(origin))
 
   # Seed clone — author the initial commit on branch 'feature' and push.
-  _git(tmp_path, "clone", str(origin), str(seed))
-  _git(seed, "config", "user.email", "test@example.com")
-  _git(seed, "config", "user.name", "Test")
-  _git(seed, "checkout", "-b", "feature")
+  run_git(tmp_path, "clone", str(origin), str(seed))
+  run_git(seed, "config", "user.email", "test@example.com")
+  run_git(seed, "config", "user.name", "Test")
+  run_git(seed, "checkout", "-b", "feature")
   _commit(seed, "README.md", "seed\n", "seed")
-  _git(seed, "push", "-u", "origin", "feature")
+  run_git(seed, "push", "-u", "origin", "feature")
 
   # Main checkout — represents the user's working clone.
-  _git(tmp_path, "clone", "--branch", "feature", str(origin), str(main_checkout))
-  _git(main_checkout, "config", "user.email", "test@example.com")
-  _git(main_checkout, "config", "user.name", "Test")
+  run_git(tmp_path, "clone", "--branch", "feature", str(origin), str(main_checkout))
+  run_git(main_checkout, "config", "user.email", "test@example.com")
+  run_git(main_checkout, "config", "user.name", "Test")
 
   return {
       "origin": origin,
@@ -89,14 +77,14 @@ def repo_setup(tmp_path: Path) -> dict[str, Path]:
 
 
 def _worktree_head(wt_path: Path) -> str:
-  return _git(wt_path, "rev-parse", "HEAD")
+  return run_git(wt_path, "rev-parse", "HEAD")
 
 
 @pytest.mark.asyncio
 async def test_local_equals_origin_uses_origin_tip(repo_setup: dict[str, Path]) -> None:
   """When local and origin point at the same commit, the worktree starts from origin/<base>."""
   main_checkout = repo_setup["main_checkout"]
-  expected = _git(main_checkout, "rev-parse", "feature")
+  expected = run_git(main_checkout, "rev-parse", "feature")
 
   wt_path = repo_setup["tmp_path"] / "wt-equal"
   resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-equal", wt_path)
@@ -115,16 +103,16 @@ async def test_local_behind_origin_starts_from_origin_tip(repo_setup: dict[str, 
   main_checkout = repo_setup["main_checkout"]
 
   origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin")
-  _git(seed, "push", "origin", "feature")
-  local_tip = _git(main_checkout, "rev-parse", "feature")
+  run_git(seed, "push", "origin", "feature")
+  local_tip = run_git(main_checkout, "rev-parse", "feature")
   assert local_tip != origin_tip  # the local branch is behind
 
   wt_path = repo_setup["tmp_path"] / "wt-behind"
   resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-behind", wt_path)
 
   assert _worktree_head(wt_path) == origin_tip
-  assert _git(main_checkout, "rev-parse", resolution.start_point) == origin_tip
-  assert _git(main_checkout, "rev-parse", "feature") == local_tip  # the local ref never moved
+  assert run_git(main_checkout, "rev-parse", resolution.start_point) == origin_tip
+  assert run_git(main_checkout, "rev-parse", "feature") == local_tip  # the local ref never moved
   assert isinstance(resolution, BaseResolution)
   assert resolution.canonical == "feature"
   assert resolution.start_point == "origin/feature"
@@ -144,7 +132,7 @@ async def test_merge_base_unexpected_exit_code_raises(
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
   _commit(seed, "advance.txt", "advance\n", "advance origin")
-  _git(seed, "push", "origin", "feature")  # local feature is now behind: the probe runs
+  run_git(seed, "push", "origin", "feature")  # local feature is now behind: the probe runs
 
   class _BrokenProc:
     returncode = 2
@@ -182,19 +170,19 @@ def remote_default_repo(tmp_path: Path) -> dict[str, Path]:
   seed = tmp_path / "seed"
   clone = tmp_path / "clone"
 
-  _git(tmp_path, "init", "--bare", str(origin))
-  _git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
+  run_git(tmp_path, "init", "--bare", str(origin))
+  run_git(origin, "symbolic-ref", "HEAD", "refs/heads/main")
 
-  _git(tmp_path, "clone", str(origin), str(seed))
-  _git(seed, "config", "user.email", "test@example.com")
-  _git(seed, "config", "user.name", "Test")
-  _git(seed, "symbolic-ref", "HEAD", "refs/heads/main")
+  run_git(tmp_path, "clone", str(origin), str(seed))
+  run_git(seed, "config", "user.email", "test@example.com")
+  run_git(seed, "config", "user.name", "Test")
+  run_git(seed, "symbolic-ref", "HEAD", "refs/heads/main")
   _commit(seed, "README.md", "seed\n", "seed main")
-  _git(seed, "push", "-u", "origin", "main")
+  run_git(seed, "push", "-u", "origin", "main")
 
-  _git(tmp_path, "clone", str(origin), str(clone))
-  _git(clone, "config", "user.email", "test@example.com")
-  _git(clone, "config", "user.name", "Test")
+  run_git(tmp_path, "clone", str(origin), str(clone))
+  run_git(clone, "config", "user.email", "test@example.com")
+  run_git(clone, "config", "user.name", "Test")
 
   return {
       "origin": origin,
@@ -213,16 +201,16 @@ async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo:
   tmp_path = remote_default_repo["tmp_path"]
 
   origin_tip = _commit(seed, "advance.txt", "advance\n", "advance origin main")
-  _git(seed, "push", "origin", "main")
-  assert _git(clone, "rev-parse", "main") != origin_tip  # sanity: local main is behind
+  run_git(seed, "push", "origin", "main")
+  assert run_git(clone, "rev-parse", "main") != origin_tip  # sanity: local main is behind
 
-  _git(clone, "checkout", "-b", "local-only")
+  run_git(clone, "checkout", "-b", "local-only")
 
   base = "origin/main"
   wt_path = tmp_path / "wt-baseless"
   resolution = await git_create_worktree(clone, base, "charliebot/task-baseless", wt_path)
 
-  assert _git(clone, "rev-parse", resolution.start_point) == origin_tip
+  assert run_git(clone, "rev-parse", resolution.start_point) == origin_tip
   assert wt_path.is_dir()
   assert _worktree_head(wt_path) == origin_tip
 

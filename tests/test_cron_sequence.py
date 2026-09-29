@@ -18,16 +18,18 @@ import yaml
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CODEX_BACKEND_OPTION,
+    FABLE_MODEL,
     MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
     OPERATOR,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     bind_deps_managers,
     patch_instructions_content,
 )
 
-from src.core import event_types as ET
+from src.core import claude_accounts, event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
 from src.core.control_events import stable_run_id
 from src.core.models import RunRecord, TaskSpec
@@ -36,7 +38,9 @@ from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
+    WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
+    build_pooled_env,
     init_repo_with_origin,
     install_backends,
     result_event,
@@ -808,6 +812,9 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   _persist_unbound_cron_d(cfg, "repo-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   backend = SpawningScriptedBackend([result_event("sweep done")])
   install_backends(monkeypatch, [backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The close report's wake dispatches the bound node's report-consuming turn;
+  # script it through the registry builder so no external process starts.
+  _script_manager_turn(monkeypatch, ["report noted"])
 
   task_cfg = ScheduledTaskConfig(
       name="repo-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake", repo=str(repo))
@@ -840,6 +847,11 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   assert work.branch_name in launch_text and work.worktree_path in launch_text
   assert "Do the sweep." in launch_text
   # The type-less delivery: no review Run, and the delivered worktree is gone.
+  # The removal follows the close report (the finalize chain's cleanup step
+  # runs after the report is durable), so poll it out instead of racing it.
+  deadline = asyncio.get_event_loop().time() + 10
+  while Path(work.worktree_path).exists() and asyncio.get_event_loop().time() < deadline:
+    await asyncio.sleep(0.05)
   assert not Path(work.worktree_path).exists()
 
 
@@ -1046,6 +1058,10 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
           SpawningScriptedBackend([result_event("picked three")]),
           SpawningScriptedBackend([result_event("reviewed the picks")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The completed close's report wake dispatches the manager's turn (the test
+  # drains it below); script it so no external CLI process starts — the real
+  # spawn sat right on the 1s unit budget and flaked.
+  _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained",
       manager.id,
@@ -1068,3 +1084,53 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   assert "**selector result (fake):**" in summary
   assert "**reviewer result (codex-o3):**" in summary
   await _drain_manager_turns(tree, manager.id)
+
+
+# ---------------------------------------------------------------------------
+# Pooled launches: the scheduled step starts on a Claude pool account
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The cron controller's scheduled_step Runs are fresh worker launches: the
+  step hands Worker the pool account claude_accounts.select returned, and the
+  relay loop is armed (the backend build receives the same account)."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  manager = await make_manager(tree, "Pooled Manager")
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
+  recorder = WorkerAccountRecorder()
+  recorder.install(monkeypatch)
+  builds = install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("step done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+  # The boundary close's report wake dispatches the manager's turn; the launch
+  # under test is the step's, so the wake records without launching one.
+  async def stub_dispatch(session_id: str) -> dict:
+    return {"session_id": session_id, "pending": 0, "launch": False}
+
+  monkeypatch.setattr(tree.dispatch, "dispatch_pending", stub_dispatch)
+
+  task_cfg = _bound_task(
+      "pooled-steps",
+      manager.id,
+      backend=POOLED_FABLE_ID,
+      steps=[StepConfig(name="only", prompt="Do the single thing.")])
+  from src.core import cron_sequence
+  from src.core.tasks import create_logged_task
+  meta = await tree.load_meta(manager.id)
+  leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "pooled steps")
+  handle = create_logged_task(
+      cron_sequence.run_firing_steps(task_cfg, meta, tree, FIRING, leaf.id), name="pooled-steps-controller")
+  await asyncio.wait_for(handle, 20)
+
+  expected = claude_accounts.select(cfg, FABLE_MODEL)
+  assert expected is not None and expected.label == "main"
+  assert recorder.accounts == [expected]
+  assert builds[0]["kwargs"]["claude_account"] == expected
+  runs = tree.runs.list_run_records_sync(leaf.id)
+  assert len(runs) == 1 and tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs[0].id) == "success"

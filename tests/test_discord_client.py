@@ -100,10 +100,18 @@ async def test_create_message_multipart_with_two_files(tmp_path: Path):
   payload = json.loads(parts["payload_json"][1])
   assert payload == {
       "content": "see attached",
-      "allowed_mentions": {"parse": []},
+      "allowed_mentions": {
+          "parse": []
+      },
       "attachments": [
-          {"id": 0, "filename": "one.bin"},
-          {"id": 1, "filename": "two.bin"},
+          {
+              "id": 0,
+              "filename": "one.bin"
+          },
+          {
+              "id": 1,
+              "filename": "two.bin"
+          },
       ],
   }
   assert parts["files[0]"][1] == b"\x00ONE"
@@ -162,8 +170,8 @@ async def test_http_error_carries_code_and_message_without_token():
   with pytest.raises(DiscordAPIError) as exc_info:
     await _client(handler).get_channel("555555555555555555")
   error = exc_info.value
-  assert (error.method, error.path, error.status, error.code, error.message) == (
-      "GET", "/channels/555555555555555555", 403, 50013, "Missing Permissions")
+  assert (error.method, error.path, error.status, error.code,
+          error.message) == ("GET", "/channels/555555555555555555", 403, 50013, "Missing Permissions")
   text = str(error)
   for fragment in ("GET", "/channels/555555555555555555", "403", "50013", "Missing Permissions"):
     assert fragment in text
@@ -200,10 +208,18 @@ async def test_get_messages_sorts_oldest_first_by_integer_id():
 
   def handler(request: httpx.Request) -> httpx.Response:
     seen["params"] = dict(request.url.params)
-    return httpx.Response(200, json=[
-        {"id": "100000000000000000", "content": "newest"},
-        {"id": "99999999999999999", "content": "oldest"},
-    ])
+    return httpx.Response(
+        200,
+        json=[
+            {
+                "id": "100000000000000000",
+                "content": "newest"
+            },
+            {
+                "id": "99999999999999999",
+                "content": "oldest"
+            },
+        ])
 
   seen: dict = {}
   messages = await _client(handler).get_messages("666666666666666666", after="888888888888888888")
@@ -248,13 +264,15 @@ async def test_reaction_emoji_is_url_encoded():
 
 def test_message_link_round_trip():
   """message_link and parse_message_link invert each other, message id optional."""
-  assert message_link("111111111111111111", "222222222222222222") == "https://discord.com/channels/111111111111111111/222222222222222222"
+  assert message_link(
+      "111111111111111111",
+      "222222222222222222") == "https://discord.com/channels/111111111111111111/222222222222222222"
   assert message_link("111111111111111111", "222222222222222222", "333333333333333333") == (
       "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333")
   assert parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222") == (
       "111111111111111111", "222222222222222222", None)
-  assert parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333") == (
-      "111111111111111111", "222222222222222222", "333333333333333333")
+  assert parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
+                           ) == ("111111111111111111", "222222222222222222", "333333333333333333")
 
 
 def test_parse_message_link_rejects_non_discord_urls():
@@ -282,16 +300,30 @@ def test_message_content_intent_bits():
 def test_missing_permissions_table_and_administrator():
   """missing_permissions names the absent bits; ADMINISTRATOR grants everything."""
   assert list(REQUIRED_PERMISSIONS) == [
-      "VIEW_CHANNEL", "SEND_MESSAGES", "SEND_MESSAGES_IN_THREADS",
-      "CREATE_PUBLIC_THREADS", "READ_MESSAGE_HISTORY", "ADD_REACTIONS", "ATTACH_FILES",
+      "VIEW_CHANNEL",
+      "SEND_MESSAGES",
+      "SEND_MESSAGES_IN_THREADS",
+      "CREATE_PUBLIC_THREADS",
+      "READ_MESSAGE_HISTORY",
+      "ADD_REACTIONS",
+      "ATTACH_FILES",
   ]
   assert missing_permissions(0) == [
-      "VIEW_CHANNEL", "SEND_MESSAGES", "SEND_MESSAGES_IN_THREADS",
-      "CREATE_PUBLIC_THREADS", "READ_MESSAGE_HISTORY", "ADD_REACTIONS", "ATTACH_FILES",
+      "VIEW_CHANNEL",
+      "SEND_MESSAGES",
+      "SEND_MESSAGES_IN_THREADS",
+      "CREATE_PUBLIC_THREADS",
+      "READ_MESSAGE_HISTORY",
+      "ADD_REACTIONS",
+      "ATTACH_FILES",
   ]
   assert missing_permissions(sum(REQUIRED_PERMISSIONS.values())) == []
   assert missing_permissions(1 << 3) == []
   have = (1 << 10) | (1 << 11)
   assert missing_permissions(have) == [
-      "SEND_MESSAGES_IN_THREADS", "CREATE_PUBLIC_THREADS", "READ_MESSAGE_HISTORY", "ADD_REACTIONS", "ATTACH_FILES",
+      "SEND_MESSAGES_IN_THREADS",
+      "CREATE_PUBLIC_THREADS",
+      "READ_MESSAGE_HISTORY",
+      "ADD_REACTIONS",
+      "ATTACH_FILES",
   ]

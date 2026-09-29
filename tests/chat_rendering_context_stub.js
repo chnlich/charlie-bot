@@ -88,8 +88,8 @@ function makeChatRenderContext(elements = new Map()) {
 
 // loadToggleHarness covers the toggle suites (show_more_toggle,
 // thinking_toggle): the makeChatRenderContext sandbox, then the module-load
-// sequence above, then one extra module (workers.js or usage.js) whose own
-// deps arrive via extraStubs. extraStubs spread onto the context before
+// sequence above, then one extra module (usage.js) whose own deps arrive via
+// extraStubs. extraStubs spread onto the context before
 // createContext, so a stub is a context global when the extra module's render
 // path reads it (usage.js reads the bare identifier restoreBottomPin).
 function loadToggleHarness(extraModule, extraStubs = {}) {

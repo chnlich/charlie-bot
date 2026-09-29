@@ -233,18 +233,15 @@ const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" str
 // call site keeps its own center markup.
 const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 
-// The one right-chevron outline: the session-group collapse
-// toggles below and, through the namespace, workers.js's thread-card chevron
-// (Sidebar.CHEVRON_SVG_PATH). Each call site keeps its own <svg> wrapper.
+// The one right-chevron outline: the session-group collapse toggle and the
+// tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
 
 // The one pencil outline: the session-row rename button below and the
 // session-group rename button.
 const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>`;
 
-// The one clock-badge body (face plus hands): renderScheduledBadge below
-// and, through the namespace, workers.js's trigger-card icon
-// (Sidebar.CLOCK_SVG_BODY). Each call site keeps its own <svg> wrapper.
+// The one clock-badge body (face plus hands): renderScheduledBadge below.
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
 const DOC_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z"/>`;
 const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
@@ -929,8 +926,6 @@ const SIDEBAR_ONLY = {
   TRASH_SVG_PATH,
   starButtonOnclick,
   GEAR_SVG_PATH,
-  CHEVRON_SVG_PATH,
-  CLOCK_SVG_BODY,
   MODAL_OVERLAY_CLASS,
   MODAL_DIALOG_CLASS,
   removeSessionFromRenderedList,

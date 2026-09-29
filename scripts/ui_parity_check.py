@@ -20,20 +20,20 @@ How it works:
   and are checked by eye on the trial instance.
 - Data. The same metadata.json files are written into both homes: three
   groups, one root with a child session and a worker, two archived workers and
-  plain sessions. Main ignores the task fields and lists every session flat.
+  plain sessions. The task rows carry the schema-v2 task fields, so both sides
+  nest the same rows.
 - Browser. System google-chrome, headless, over CDP with a private profile.
   Each view exports the DOM outline of ``aside#sidebar`` and ``main > header``
   (tag, id, classes, own text, visibility) after the whitelist below drops its
   nodes, and the two outlines must be identical.
 
-Whitelist (the intended visible differences of the task-tree layout):
+Whitelist (the tree-UI nodes the outline drops on both sides):
 
-- nested-row: a session row whose parent's row is in the same list (the branch
-  nests it under the parent; main shows it flat).
+- nested-row: a session row whose parent's row is in the same list (both sides
+  nest the same child rows, so the all view compares the root rows only).
 - tree-container, tree-toggle: the subtree wrapper and the expand chevron.
 - worker-icon: the leaf or delivered-check icon on a worker row.
 - new-child-action, task-context-action: the two hover row actions.
-- workers-tab: the Workers tab button, removed on the branch.
 The preview cap counting only root rows is the one intended difference the data
 does not reach: every group holds at most five rows even when flat. Apart from
 the whitelist, the logo's build label (served commit and date) is compared as a
@@ -238,7 +238,6 @@ OUTLINE_JS = r"""
     const onclick = el.getAttribute('onclick') || '';
     if (onclick.includes('createChildSession(')) return 'new-child-action';
     if (onclick.includes('openTaskContextModal(')) return 'task-context-action';
-    if (id === 'btn-workers') return 'workers-tab';
     if (el.tagName.toLowerCase() === 'svg' && (el.getAttribute('title') || '').startsWith('Worker (')) return 'worker-icon';
     return null;
   }

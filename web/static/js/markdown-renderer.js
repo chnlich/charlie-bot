@@ -305,8 +305,8 @@ function wrapWideChars(html) {
 // marker swap re-wraps the bytes its settled block just wrapped. The wrap is a
 // pure function of the input string, so a bounded LRU serves the repeats; the
 // cap bounds retained outputs to one wrapped block per entry, keyed by bytes
-// the highlight cache already holds. The tool-preview mounts (workers.js,
-// chat/rendering.js) stay on the direct wrap: their re-renders carry new
+// the highlight cache already holds. The tool-preview mounts (chat/rendering.js)
+// stay on the direct wrap: their re-renders carry new
 // truncated bodies, so caching them would only evict the block entries.
 var WRAP_CACHE_CAP = 64;
 var wrapWideCharsCache = new Map();

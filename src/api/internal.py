@@ -38,7 +38,6 @@ from src.core.models import (
     PlanPresentRequest,
     ScheduleTriggerRequest,
     SessionMessageRequest,
-    SessionMetadata,
     SlackAckRequest,
     SlackReplyRequest,
     TaskType,
@@ -97,7 +96,7 @@ async def _authorize_spawn_request(
     req: DelegateRequest | ImproveRequest,
     session_mgr: SessionManager,
     task_mgr: TaskTreeManager,
-) -> tuple[SessionMetadata, CharlieBotConfig, str | None, str | None]:
+) -> tuple[str | None, str | None]:
   """Validate session, enforce the takeoff gate, and resolve backend/model for spawn-style endpoints.
 
   A v2 task-tree node takes the one central v2 authorization owner —
@@ -134,7 +133,7 @@ async def _authorize_spawn_request(
   except ValueError as e:
     raise bad_request(e) from e
 
-  return meta, cfg, resolved_backend, resolved_model
+  return resolved_backend, resolved_model
 
 
 def delegate_request_id(req: DelegateRequest) -> str:
@@ -153,8 +152,6 @@ def delegate_request_id(req: DelegateRequest) -> str:
 
 async def _delegate_task_tree(
     req: DelegateRequest,
-    meta: SessionMetadata,
-    cfg: CharlieBotConfig,
     task_mgr: TaskTreeManager,
     session_mgr: SessionManager,
     caller: object,
@@ -297,8 +294,8 @@ async def delegate_task(
           detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
           "give both for a repo task, neither for a repo-less one")
   require_found(await session_mgr.get_session(req.session_id))
-  meta, cfg, resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
-  return await _delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
+  resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
+  return await _delegate_task_tree(req, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
 
 @router.post("/improve")

@@ -541,7 +541,6 @@ def review_task_context(
     branch_name: str,
     wt_path: str,
     base_branch: str,
-    session_id: str,
     chat_log_path: Path,
     worker_log_path: Path,
     context_section: str,

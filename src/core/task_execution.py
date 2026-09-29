@@ -719,7 +719,6 @@ class TaskExecutionAdapter:
       session_id: str,
       option: BackendOption,
       overlay_error: OSError | None,
-      declared: bool,
   ) -> None:
     """The unified fenceless-run alert (undeclared or unreadable overlay)."""
     reason = "unreadable" if overlay_error is not None else "undeclared"
@@ -757,7 +756,7 @@ class TaskExecutionAdapter:
     await asyncio.to_thread(atomic_write_text, path, json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
     await self._tree.runs.record_observation(meta.id, run.id, prompt_snapshot_ref=str(path))
     if not declared or overlay_error is not None:
-      await self._alert_overlay_inactive(meta.id, option, overlay_error, declared)
+      await self._alert_overlay_inactive(meta.id, option, overlay_error)
     return snapshot
 
   async def _execute_manager_turn(
@@ -923,7 +922,7 @@ class TaskExecutionAdapter:
         raise TaskInvalidError(f"review run {run_id} names no recorded work Run")
       # The review reuses the work Run's exact repo, branch and worktree.
       review_worktree = work_run.worktree_path
-      context = await self._build_review_context(session_id, run, work_run)
+      context = await self._build_review_context(session_id, work_run)
     elif run.kind == "iteration":
       context = await self._build_iteration_context(meta, run, launch_prompt)
     elif launch_prompt is not None:
@@ -1214,7 +1213,7 @@ class TaskExecutionAdapter:
     parts.append(task_prompts.render_task_body(self._cfg, step_prompt))
     return "\n\n".join(part for part in parts if part)
 
-  async def _build_review_context(self, session_id: str, run: RunRecord, work_run: RunRecord) -> str:
+  async def _build_review_context(self, session_id: str, work_run: RunRecord) -> str:
     """The review Run's task/input context: the work being judged and its git steps.
 
         The reviewer's stable contract rides the managed instructions
@@ -1238,7 +1237,6 @@ class TaskExecutionAdapter:
         branch_name=work_run.branch_name,
         wt_path=work_run.worktree_path,
         base_branch=work_run.base_branch,
-        session_id=session_id,
         chat_log_path=chat_events_path(self._cfg.sessions_dir / session_id),
         worker_log_path=self._tree.runs.run_dir(session_id, work_run.id) / RUN_EVENTS_NAME,
         context_section="\n".join(context_lines),

@@ -344,7 +344,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   from src.core import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
-      task_cfg, meta, tree, FIRING, "chained steps", backend="fake", model="fake-model")
+      task_cfg, meta, tree, FIRING, "chained steps")
   leaf_id = leaf.id
   run0 = await cron_sequence.register_leaf_run(
       tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend="fake", model="fake-model")
@@ -452,7 +452,7 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
   from src.core.tasks import create_logged_task
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
-      task_cfg, meta, tree, FIRING, f"{task_cfg.name} steps", backend="fake", model="fake-model")
+      task_cfg, meta, tree, FIRING, f"{task_cfg.name} steps")
   await cancel_task_node(tree, leaf.id, "withhold-leaf")
   await cron_sequence.register_leaf_run(
       tree, leaf.id, task_cfg, FIRING, kind="scheduled_step", position=0, backend="fake", model="fake-model")
@@ -544,7 +544,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
   from src.core import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
-      task_cfg, meta, tree, FIRING, "recovered boundary steps", backend="fake", model="fake-model")
+      task_cfg, meta, tree, FIRING, "recovered boundary steps")
   leaf_meta = await tree.load_meta(leaf.id)
   for position, (_name, _outcome_text) in enumerate([("zero", "step zero done"), ("one", "step one done")]):
     run = await cron_sequence.register_leaf_run(
@@ -1020,7 +1020,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   from src.core import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(
-      task_cfg, meta, tree, FIRING, "distinct steps", backend=None, model=None)
+      task_cfg, meta, tree, FIRING, "distinct steps")
   leaf_id = leaf.id
   run0 = await cron_sequence.register_leaf_run(
       tree, leaf_id, task_cfg, FIRING, kind="scheduled_step", position=0, backend=None, model=None)

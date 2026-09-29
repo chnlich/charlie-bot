@@ -219,8 +219,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   # The delivered close report is the parent's durable input: the close itself
   # dispatched the parent's next serialized turn through the same executor.
   assert executor.batches[1][0] == root.id and len(executor.batches[1][1]) == 1
-  index = await tree._get_index()
-  assert tree.task_state_of(index, worker.id) == "completed"  # auto-close landed
+  assert tree.task_state(worker.id) == "completed"  # auto-close landed
 
   # The closed node keeps late input as history.
   await admit(tree, worker.id, "late arrival", input_id="late-1")

@@ -96,8 +96,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   worker_1 = await create_task(tree, parent=feature.id, request_id="w1", profile="worker")
   worker_2 = await create_task(tree, parent=feature.id, request_id="w2", profile="worker")
 
-  index = await tree._get_index()
-  assert tree.work_state_of(index, worker_1.id) == "idle"  # no runs yet
+  assert tree.work_state_of(worker_1.id) == "idle"  # no runs yet
   await tree.runs.register_run(RunRecord(id="run-w1", session_id=worker_1.id, kind="work"))
   await finish_worker_run(tree, worker_1.id, "run-w1")
   # Delivery evidence closed the worker and its report is on the parent.

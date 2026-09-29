@@ -27,15 +27,23 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
+from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
-from src.core.models import PendingTrigger, SessionMetadata, TriggerStatus, utc_now
+from src.core.models import (
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionMetadata,
+    SessionStatus,
+    TriggerStatus,
+    utc_now,
+)
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.triggers import ArchivedSessionError, TriggerManager
@@ -933,6 +941,75 @@ async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, se
     await session_mgr.set_group(session_id, label)
   except Exception as e:
     logger.warning(f"{platform.name}_group_assignment_failed", session=session_id, label=label, error=str(e))
+
+
+_LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
+
+
+def _local_time() -> str:
+  """Local wall-clock stamp for a session display name."""
+  return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
+
+
+async def accept_summon(
+    adapter: ThreadAdapter,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    trigger_mgr: TriggerManager,
+    *,
+    session_id: str,
+    label: str,
+    origin: Any,
+    block: dict,
+    content: str,
+    user: str | None,
+) -> str:
+  """Accept one summon: resolve the session, persist the summon, fire the round, light the ack eye.
+
+  The entrypoint has already dropped the disallowed mention and resolved
+  everything this path reads: the deterministic *session_id*, the *label*
+  naming both the session and its group, the thread *origin*, the summon
+  *block* (the platform's persisted marker payload), the summon prompt
+  *content*, and the mentioning *user*. The session is created — named
+  ``<label> <local time>``, born with *origin* under the platform's origin
+  field —, unarchived, or reused; the mention round consumes its own id and
+  any armed follow trigger is cancelled; the session is grouped under *label*;
+  the summon event is persisted under the platform's key; the round and the
+  ack eye fire as logged tasks. Returns the session id.
+  """
+  platform = adapter.platform
+  fields = {**adapter.log_fields(block), f"{platform.name}_user": user}
+
+  session_meta = await session_mgr.get_session(session_id)
+  if session_meta is None:
+    session_name = f"{label} {_local_time()}"
+    await session_mgr.create_session(
+        CreateSessionRequest(
+            session_id=session_id,
+            name=session_name,
+            **{platform.origin_field: origin}))
+    logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
+  elif session_meta.status == SessionStatus.ARCHIVED:
+    await session_mgr.unarchive_session(session_id)
+    logger.info(f"{platform.name}_mention_session_unarchived", **fields, session=session_id)
+  else:
+    logger.info(f"{platform.name}_mention_session_existing", **fields, session=session_id)
+
+  await consume_mention(platform, session_mgr, trigger_mgr, session_id, block[platform.mention_key])
+
+  await ensure_group(platform, session_mgr, session_id, label)
+
+  evt = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
+  evt[platform.name] = block
+  await session_mgr.persist_and_broadcast(session_id, evt)
+  round_event_id = evt.get("id")
+  logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
+
+  create_logged_task(
+      trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=round_event_id),
+      name=f"{platform.name}-round-{session_id}")
+  create_logged_task(adapter.add_ack(block), name=f"{platform.name}-ack-{session_id}")
+  return session_id
 
 
 # The file-service URL prefixes: the mounted mounts with the trailing slash the

@@ -23,6 +23,7 @@ from conftest import (
     FABLE_MODEL,
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    ScriptedRelayBackend,
     _settle_parent,
     assistant_text_event,
     backend_option,
@@ -33,7 +34,6 @@ from conftest import (
     pool_cfg,
     rate_limit_event,
     stub_credentials,
-    ScriptedRelayBackend,
 )
 from conftest import OPERATOR as OP_CALLER
 from fastapi import FastAPI
@@ -1938,7 +1938,6 @@ def build_pooled_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     sign against the synthetic home.
     """
     import src.core.config as core_config
-    from src.core.config import CharlieBotConfig
     home = tmp_path / "charliebot-home"
     option = backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)
     cfg = pool_cfg(tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels)

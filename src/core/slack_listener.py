@@ -1,17 +1,22 @@
 """Slack Socket Mode listener — the Slack half of the shared-thread entrypoint.
 
-Summon path: an allowed ``app_mention`` resolves/creates a per-thread session,
-persists the thread permalink as an agent message, and starts a master round
-via ``trigger_master`` (without awaiting it).
-
-Round side: the reply path, the freshness gate, the ack, the round-end audit,
-and the lost-summon backfill are the platform-neutral machinery in
-``src.core.thread_entry``; this module describes Slack to it with the ``SLACK``
-platform and the ``SlackThreadAdapter`` over the bot client, and keeps the
-public Slack-named wrappers (``post_reply``, ``assert_thread_fresh``,
-``ack_messages``, ``deliver_done``, ``backfill_lost_summons``) that the server
-endpoint, the session manager, and the tests import. The master posts to its
-session's thread itself, through ``charliebot slack reply`` ->
+This module holds the Slack-specific pieces: the event parsing (the
+``app_mention`` and thread ``message`` handlers that read one Socket Mode
+event, apply Slack's drop rules, and hand the rest to the shared core), the
+``SlackClient`` Web API wrapper, the Socket Mode connect/receive/reconnect
+loop (``run_listener``), and the ``SlackThreadAdapter`` over the bot client.
+Everything platform-neutral lives in ``src.core.thread_entry``: the summon
+acceptance (``accept_summon`` — session create/unarchive/reuse, the watermark
+step, the group, the summon event, the round and ack tasks), the mention
+consumption, the group assignment, the follow triggers, the thread-message
+follow, the reconnect backfill, and the round side (``post_reply``,
+``assert_thread_fresh``, ``ack_messages``, ``deliver_done``,
+``backfill_lost_summons``). This module describes Slack to the core with the
+``SLACK`` platform and keeps the public Slack-named wrappers (``post_reply``,
+``assert_thread_fresh``, ``ack_messages``, ``deliver_done``,
+``backfill_lost_summons``, the summon and thread-message handlers) that the
+server endpoint, the session manager, and the tests import. The master posts
+to its session's thread itself, through ``charliebot slack reply`` ->
 ``POST /api/internal/slack/reply`` -> the ``post_reply`` wrapper, and reads the
 outcome back in the same call; before any chunk posts, the reply path publishes
 every file-server artifact the text links and swaps the URLs to the published
@@ -20,17 +25,19 @@ names the summon the running round was answering (None for a round no summon
 started). ``deliver_done`` hangs off the round's terminal ``master_done`` event
 (called from ``SessionManager.persist_and_broadcast``), not off a waiting
 coroutine, so it survives a server restart. The eyes ack reaction tracks the
-open question: lit at the summon, cleared when a reply answering it lands, or
-when the notice or the lost-summon report closes it.
+open question: lit at the summon (the shared accept path's ack task), cleared
+when a reply answering it lands, or when the notice or the lost-summon report
+closes it.
 
 Thread follow: after the first summon, eligible thread messages (human, allowed,
 newer than the session's ``slack_watermark_ts``) arriving over the same Socket
-Mode connection — or found by the reconnect backfill — arm one persisted
-per-session trigger whose wake label names the chain's floor ts and the thread
-link. The reply path is gated on freshness: ``assert_thread_fresh`` refuses with
-412 until every eligible message is acked (``ack_messages`` advances the
-watermark); silence stays a legal round outcome because trigger wakes enter the
-log as scheduled-trigger events with no slack block, outside the audit.
+Mode connection — or found by the reconnect backfill on every (re)connection —
+arm one persisted per-session trigger whose wake label names the chain's floor
+ts and the thread link. The reply path is gated on freshness:
+``assert_thread_fresh`` refuses with 412 until every eligible message is acked
+(``ack_messages`` advances the watermark); silence stays a legal round outcome
+because trigger wakes enter the log as scheduled-trigger events with no slack
+block, outside the audit.
 """
 
 import asyncio
@@ -328,11 +335,13 @@ async def handle_app_mention(
 
 
 def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool:
-  """The shared thread-eligibility rule for guards, the gate, and ack.
+  """The thread-eligibility rule the adapter's eligible readback applies.
 
   A message is eligible when it is a plain (subtype-absent) human-authored
   message from an allowed user. Gate eligibility equals guard eligibility, so
-  nothing is demanded of an ack that the session would never consume.
+  nothing is demanded of an ack that the session would never consume; the
+  thread-message handler's guard 3 restates the same rule against the raw
+  event.
   """
   return (message.get("subtype") is None and message.get("bot_id") is None and message.get("user") in allowed_user_ids)
 

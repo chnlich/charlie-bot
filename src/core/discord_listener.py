@@ -613,14 +613,20 @@ async def _run_connection(
   heartbeat_task = asyncio.create_task(beat())
   try:
     await ws.send(
-        json.dumps({
-            "op": 2,
-            "d": {
-                "token": token,
-                "intents": _INTENTS,
-                "properties": {"os": sys.platform, "browser": "charlie-bot", "device": "charlie-bot"},
-            },
-        }))
+        json.dumps(
+            {
+                "op": 2,
+                "d":
+                    {
+                        "token": token,
+                        "intents": _INTENTS,
+                        "properties": {
+                            "os": sys.platform,
+                            "browser": "charlie-bot",
+                            "device": "charlie-bot"
+                        },
+                    },
+            }))
     async for raw in ws:
       payload = json.loads(raw)
       if payload.get("s") is not None:

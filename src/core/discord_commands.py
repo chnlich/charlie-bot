@@ -187,14 +187,19 @@ async def check_setup(cfg: CharlieBotConfig) -> dict:
   except DiscordAPIError as e:
     raise ThreadReplyError(502, str(e)) from e
   intent = message_content_intent_enabled(application["flags"])
-  guild_views = [{
-      "id": g["id"],
-      "name": g["name"],
-      "missing_permissions": missing_permissions(int(g["permissions"])),
-  } for g in guilds]
+  guild_views = [
+      {
+          "id": g["id"],
+          "name": g["name"],
+          "missing_permissions": missing_permissions(int(g["permissions"])),
+      } for g in guilds
+  ]
   return {
       "ok": intent and not any(view["missing_permissions"] for view in guild_views),
-      "bot_user": {"id": user["id"], "username": user["username"]},
+      "bot_user": {
+          "id": user["id"],
+          "username": user["username"]
+      },
       "application_id": application["id"],
       "message_content_intent": intent,
       "guilds": guild_views,

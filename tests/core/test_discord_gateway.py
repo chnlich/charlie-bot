@@ -219,11 +219,16 @@ async def test_identify_carries_token_and_intents(tmp_path: Path) -> None:
       identify = next(m for m in ws.sent if m.get("op") == 2)
       assert identify == {
           "op": 2,
-          "d": {
-              "token": "test-bot-token",
-              "intents": 37377,
-              "properties": {"os": sys.platform, "browser": "charlie-bot", "device": "charlie-bot"},
-          },
+          "d":
+              {
+                  "token": "test-bot-token",
+                  "intents": 37377,
+                  "properties": {
+                      "os": sys.platform,
+                      "browser": "charlie-bot",
+                      "device": "charlie-bot"
+                  },
+              },
       }
       assert _INTENTS == 37377
     finally:

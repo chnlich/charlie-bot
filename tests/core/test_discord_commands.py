@@ -140,7 +140,9 @@ def _message(
       "author": author_obj,
       "timestamp": f"2026-08-26T00:00:{i:02d}Z",
       "content": content,
-      "attachments": [{"url": url} for url in attachments],
+      "attachments": [{
+          "url": url
+      } for url in attachments],
       "type": 0,
   }
 
@@ -174,18 +176,19 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   cfg, session_mgr, client = _rig(
       tmp_path,
       channels={
-          _THREAD: [
-              _message(1, "hello"),
-              _message(2, "second"),
-              _message(3, "bot noise", author=_BOT, bot=True),
-              _message(4, "first follow up"),
-              _message(5, "attached", attachments=("https://cdn.discordapp.com/attachments/shot.png",)),
-              _message(6, "bot again", author=_BOT, bot=True),
-              _message(7, "third follow up"),
-              _message(8, "fourth follow up"),
-              _message(9, "fifth follow up"),
-              _message(10, "sixth follow up"),
-          ],
+          _THREAD:
+              [
+                  _message(1, "hello"),
+                  _message(2, "second"),
+                  _message(3, "bot noise", author=_BOT, bot=True),
+                  _message(4, "first follow up"),
+                  _message(5, "attached", attachments=("https://cdn.discordapp.com/attachments/shot.png",)),
+                  _message(6, "bot again", author=_BOT, bot=True),
+                  _message(7, "third follow up"),
+                  _message(8, "fourth follow up"),
+                  _message(9, "fifth follow up"),
+                  _message(10, "sixth follow up"),
+              ],
       })
   session_id = await _make_session(session_mgr, watermark=_mid(2))
   # Unread runs m4..m10 minus the ineligible bot messages (m3, m6); the window
@@ -306,7 +309,8 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
 async def test_read_skips_a_404_starter(tmp_path: Path) -> None:
   """A forum post or a thread not started from a message has no starter: the read goes on without one."""
   cfg, session_mgr, client = _rig(
-      tmp_path, channels={_THREAD: [_message(1, "first follow up"), _message(2, "second follow up")]})
+      tmp_path, channels={_THREAD: [_message(1, "first follow up"),
+                                    _message(2, "second follow up")]})
   session_id = await _make_session(session_mgr)
 
   with patch(_BOT_CLIENT_TARGET, return_value=client):
@@ -324,8 +328,7 @@ async def test_read_skips_a_404_starter(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path: Path) -> None:
   """--url reads the newest *limit* of the linked channel, all unread false, nothing acked."""
-  cfg, session_mgr, client = _rig(
-      tmp_path, channels={_OTHER_CHANNEL: [_message(i, f"m{i}") for i in range(1, 6)]})
+  cfg, session_mgr, client = _rig(tmp_path, channels={_OTHER_CHANNEL: [_message(i, f"m{i}") for i in range(1, 6)]})
   session_id = await _make_session(session_mgr)
   url = f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"
 
@@ -356,7 +359,10 @@ async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: Path)
   ):
     hidden = http.post(
         "/api/internal/discord/read",
-        json={"session_id": session_id, "url": f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"})
+        json={
+            "session_id": session_id,
+            "url": f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"
+        })
     bad_link = http.post("/api/internal/discord/read", json={"session_id": session_id, "url": "https://x.com/no"})
 
   assert hidden.status_code == 404
@@ -391,8 +397,10 @@ async def test_read_on_a_non_discord_session_answers_409(tmp_path: Path) -> None
 async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: Path) -> None:
   """The reply gate fires before any post; the read marks the thread and the reply goes through."""
   cfg, session_mgr, client = _rig(
-      tmp_path,
-      channels={_THREAD: [_message(1, "first follow up"), _message(2, "second follow up")], _PARENT: []})
+      tmp_path, channels={
+          _THREAD: [_message(1, "first follow up"), _message(2, "second follow up")],
+          _PARENT: []
+      })
   session_id = await _make_session(session_mgr)
 
   with (
@@ -429,11 +437,25 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
   every_permission_but_attach = sum(REQUIRED_PERMISSIONS.values()) - (1 << 15)
   cfg, session_mgr, client = _rig(
       tmp_path,
-      user={"id": _BOT, "username": "charlie-bot"},
-      application={"id": "600000000000000009", "flags": 0},
+      user={
+          "id": _BOT,
+          "username": "charlie-bot"
+      },
+      application={
+          "id": "600000000000000009",
+          "flags": 0
+      },
       guilds=[
-          {"id": _GUILD, "name": "Research", "permissions": str(every_permission_but_attach)},
-          {"id": _OTHER_GUILD, "name": "Ops", "permissions": str(1 << 3)},  # ADMINISTRATOR
+          {
+              "id": _GUILD,
+              "name": "Research",
+              "permissions": str(every_permission_but_attach)
+          },
+          {
+              "id": _OTHER_GUILD,
+              "name": "Ops",
+              "permissions": str(1 << 3)
+          },  # ADMINISTRATOR
       ],
   )
 
@@ -445,14 +467,29 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
 
   assert resp.status_code == 200
   assert resp.json() == {
-      "ok": False,
-      "bot_user": {"id": _BOT, "username": "charlie-bot"},
-      "application_id": "600000000000000009",
-      "message_content_intent": False,
-      "guilds": [
-          {"id": _GUILD, "name": "Research", "missing_permissions": ["ATTACH_FILES"]},
-          {"id": _OTHER_GUILD, "name": "Ops", "missing_permissions": []},
-      ],
+      "ok":
+          False,
+      "bot_user": {
+          "id": _BOT,
+          "username": "charlie-bot"
+      },
+      "application_id":
+          "600000000000000009",
+      "message_content_intent":
+          False,
+      "guilds":
+          [
+              {
+                  "id": _GUILD,
+                  "name": "Research",
+                  "missing_permissions": ["ATTACH_FILES"]
+              },
+              {
+                  "id": _OTHER_GUILD,
+                  "name": "Ops",
+                  "missing_permissions": []
+              },
+          ],
   }
   assert "test-bot-token" not in json.dumps(resp.json())
 

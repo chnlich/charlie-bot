@@ -96,8 +96,7 @@ def _cmd_reply(args: argparse.Namespace) -> None:
 def _cmd_read(args: argparse.Namespace) -> None:
   session_id = resolve_session_id(args.session)
   limit = _validate_read_limit(args.limit)
-  result = post_internal_api(
-      "/api/internal/discord/read", {"session_id": session_id, "url": args.url, "limit": limit})
+  result = post_internal_api("/api/internal/discord/read", {"session_id": session_id, "url": args.url, "limit": limit})
   print(json.dumps(result))
 
 

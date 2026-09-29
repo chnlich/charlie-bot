@@ -22,15 +22,18 @@ _REPLY_READBACK = {
     "attachments": ["answer.html"],
 }
 _READ_READBACK = {
-    "messages": [{
-        "id": "m1",
-        "author_id": "u1",
-        "author": "someone",
-        "timestamp": "2026-01-01T00:00:00+00:00",
-        "content": "hello",
-        "attachments": [],
-        "unread": False,
-    }],
+    "messages":
+        [
+            {
+                "id": "m1",
+                "author_id": "u1",
+                "author": "someone",
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "content": "hello",
+                "attachments": [],
+                "unread": False,
+            }
+        ],
     "watermark_id": "m1",
     "more_unread": False,
 }
@@ -76,7 +79,9 @@ def test_stale_thread_refusal_exits_non_zero_with_the_detail_on_stderr(
   reply_file = _write_reply_file(tmp_path)
   refusal = MagicMock()
   refusal.status_code = 412
-  refusal.json.return_value = {"detail": "Session has unread Discord thread messages; run charliebot discord read first"}
+  refusal.json.return_value = {
+      "detail": "Session has unread Discord thread messages; run charliebot discord read first"
+  }
   with patched_cli_post(cfg, ["discord", "reply", "--file", str(reply_file)], return_value=refusal), \
        patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), \
        pytest.raises(SystemExit) as exc_info:
@@ -107,13 +112,15 @@ def test_read_passes_the_url_and_limit_through(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
   resp = make_json_response(_READ_READBACK)
-  with patched_cli_post(
-      cfg, ["discord", "read", "--url", "https://discord.com/channels/1/2/3", "--limit", "5"],
-      return_value=resp) as post_mock:
+  with patched_cli_post(cfg, ["discord", "read", "--url", "https://discord.com/channels/1/2/3", "--limit", "5"],
+                        return_value=resp) as post_mock:
     main()
 
   assert post_mock.call_args.kwargs["json"] == {
-      "session_id": "abc", "url": "https://discord.com/channels/1/2/3", "limit": 5}
+      "session_id": "abc",
+      "url": "https://discord.com/channels/1/2/3",
+      "limit": 5
+  }
   assert json.loads(capsys.readouterr().out) == _READ_READBACK
 
 
@@ -138,7 +145,11 @@ def test_check_posts_an_empty_body_prints_the_readback_and_exits_zero_when_ok(
       "bot_user": "charliebot",
       "application_id": "app-1",
       "message_content_intent": True,
-      "guilds": [{"id": "g1", "name": "Guild", "missing_permissions": []}],
+      "guilds": [{
+          "id": "g1",
+          "name": "Guild",
+          "missing_permissions": []
+      }],
   }
   resp = make_json_response(readback)
   with patched_cli_post(cfg, ["discord", "check"], return_value=resp) as post_mock:
@@ -159,7 +170,11 @@ def test_check_exits_one_after_printing_when_ok_is_false(
       "bot_user": "charliebot",
       "application_id": "app-1",
       "message_content_intent": False,
-      "guilds": [{"id": "g1", "name": "Guild", "missing_permissions": ["VIEW_CHANNEL"]}],
+      "guilds": [{
+          "id": "g1",
+          "name": "Guild",
+          "missing_permissions": ["VIEW_CHANNEL"]
+      }],
   }
   resp = make_json_response(readback)
   with patched_cli_post(cfg, ["discord", "check"], return_value=resp), \

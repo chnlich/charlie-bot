@@ -117,18 +117,6 @@ class RunResolution:
 # ---------------------------------------------------------------------------
 
 
-def raw_log_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / RAW_LOG_NAME
-
-
-def stderr_log_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / STDERR_LOG_NAME
-
-
-def cursor_path(thread_dir: Path) -> Path:
-  return thread_dir / DATA_DIR_NAME / CURSOR_NAME
-
-
 def master_run_log_dir(session_dir: Path, started_at: datetime) -> Path:
   """The per-turn transport dir one master run pins its raw log, stderr log, and cursor in."""
   return session_dir / DATA_DIR_NAME / MASTER_RUNS_DIR_NAME / started_at.isoformat()

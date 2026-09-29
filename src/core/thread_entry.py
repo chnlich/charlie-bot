@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
 
@@ -177,3 +178,22 @@ def newest_thread_input(
     if ev.get("id") in wanted and isinstance(ev.get(platform.name), dict):
       bound = (str(ev["id"]), ev[platform.name])
   return bound
+
+
+def replied(platform: ThreadPlatform, events: list[dict], summon_id: str) -> bool:
+  """Whether the log holds a reply event answering *summon_id*."""
+  return any(
+      ev.get("type") == platform.reply_event_type and
+      (ev.get(platform.reply_event_type) or {}).get("answers") == summon_id for ev in events)
+
+
+def nudged(platform: ThreadPlatform, events: list[dict], summon_id: str) -> bool:
+  """Whether the log holds the nudge for *summon_id* (a summon-block message carrying ``nudge_of``)."""
+  return any(
+      ev.get("type") == ET.AGENT_MESSAGE and (ev.get(platform.name) or {}).get("nudge_of") == summon_id
+      for ev in events)
+
+
+def noticed(platform: ThreadPlatform, events: list[dict], summon_id: str) -> bool:
+  """Whether the log holds the thread's no-reply notice marker for *summon_id*."""
+  return any((ev.get(platform.notice_key) or {}).get(ET.INPUT_EVENT_ID) == summon_id for ev in events)

@@ -76,6 +76,9 @@ from src.core.thread_entry import (
     chunk_text,
     event_by_id,
     newest_thread_input,
+    noticed,
+    nudged,
+    replied,
     summon_of,
     summon_prompt_tail,
 )
@@ -953,20 +956,6 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
 # ---------------------------------------------------------------------------
 
 
-def _replied(events: list[dict], summon_id: str) -> bool:
-  return any(
-      ev.get("type") == ET.SLACK_REPLY and (ev.get(ET.SLACK_REPLY) or {}).get("answers") == summon_id for ev in events)
-
-
-def _nudged(events: list[dict], summon_id: str) -> bool:
-  return any(
-      ev.get("type") == ET.AGENT_MESSAGE and (ev.get("slack") or {}).get("nudge_of") == summon_id for ev in events)
-
-
-def _noticed(events: list[dict], summon_id: str) -> bool:
-  return any((ev.get("slack_notice") or {}).get(ET.INPUT_EVENT_ID) == summon_id for ev in events)
-
-
 def _thread_link(summon: dict | None, slack_block: dict) -> str:
   """The thread permalink as the summon prompt states it; channel and thread ids when it has none."""
   match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
@@ -992,11 +981,11 @@ async def _audit_round(
   summon = event_by_id(events, summon_id)
   if _REPLY_COMMAND not in ((summon or {}).get("content") or ""):
     return False
-  if _replied(events, summon_id):
+  if replied(SLACK, events, summon_id):
     return False
 
   if "nudge_of" not in target:
-    if _nudged(events, summon_id):
+    if nudged(SLACK, events, summon_id):
       return False
     content = _NUDGE_TEMPLATE.format(link=_thread_link(summon, target))
     nudge = build_agent_message_event(content, from_session=session_id, from_session_name="Slack")
@@ -1015,7 +1004,7 @@ async def _audit_round(
         nudge_id=nudge["id"])
     return True
 
-  if _noticed(events, summon_id):
+  if noticed(SLACK, events, summon_id):
     return False
   ok = await _post_with_retry(
       client, target["channel_id"], target["thread_ts"], _NO_REPLY_NOTICE, session_id=session_id)

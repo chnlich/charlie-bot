@@ -328,18 +328,27 @@ class UsageLedger:
     return len(records)
 
   def model_rows(self) -> list[LedgerRow]:
-    """The /token-usage page rows, aggregated from counted records only.
+    """The /token-usage page rows, aggregated from counted records only."""
+    return self.model_rows_with_native_starts()[0]
+
+  def model_rows_with_native_starts(self) -> tuple[list[LedgerRow], dict[str, str]]:
+    """The page rows plus each source's first native day, from one grouped pass.
 
     Rows and accounts are both sorted by total descending, with the group keys as
     tiebreakers so the same ledger content always yields the same ordering.
+
+    The native start is the earliest dated day across the source's NATIVE groups.
+    Fallback-only sources are absent: their spans ride on CLI logs that may be
+    pruned, so they cannot anchor a source's history. The day rides the group's
+    NULLIF'd ``first``: an empty-ts native row must not MIN the source to the
+    empty string the way a raw ``MIN(SUBSTR(ts, 1, 10))`` over the table did.
     """
-    # Read every stored kind through the enum first: the counted-rows query filters on
-    # kind in SQL, so an unknown stored value would otherwise be silently dropped from
-    # the page instead of surfacing as the read error it is.
-    for row in self._conn.execute("SELECT DISTINCT kind FROM usage"):
-      RecordKind(row["kind"])
     accs: dict[tuple[str, str], _ModelSum] = {}
+    native_starts: dict[str, str] = {}
     for row in self._conn.execute(_MODEL_ROWS_SQL):
+      # The grouped rows enumerate every kind stored (retirement only ever drops
+      # kind='fallback' rows): an unknown stored value raises on this read's own
+      # pass instead of surfacing silently dropped from the page.
       kind = RecordKind(row["kind"])
       acc = accs.setdefault((row["source"], row["model"]), _ModelSum())
       acc.sums.add(row)
@@ -351,6 +360,9 @@ class UsageLedger:
       if kind == RecordKind.FALLBACK:
         acc.fallback_calls += row["calls"]
         acc.fallback_output += row["output"]
+      if kind == RecordKind.NATIVE and first and (row["source"] not in native_starts or
+                                                  first < native_starts[row["source"]]):
+        native_starts[row["source"]] = first
       acc.accounts.setdefault(row["account"], _Sum()).add(row)
     rows = [
         LedgerRow(
@@ -375,15 +387,4 @@ class UsageLedger:
         for (source, model), acc in accs.items()
     ]
     rows.sort(key=lambda r: (-r.total, r.source, r.model))
-    return rows
-
-  def native_start(self) -> dict[str, str]:
-    """First day (``ts[:10]``) a NATIVE record was seen, per source.
-
-    Fallback-only sources are absent: their spans ride on CLI logs that may be
-    pruned, so they cannot anchor a source's history.
-    """
-    rows = self._conn.execute(
-        "SELECT source, MIN(SUBSTR(ts, 1, 10)) AS start FROM usage"
-        " WHERE kind = 'native' GROUP BY source").fetchall()
-    return {row["source"]: row["start"] for row in rows}
+    return rows, native_starts

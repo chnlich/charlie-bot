@@ -182,7 +182,19 @@ def test_native_start_ignores_fallback_only_spans(tmp_path):
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", [fb])
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", [native])
-    starts = ledger.native_start()
+    rows, starts = ledger.model_rows_with_native_starts()
+  assert starts == {SOURCE: "2026-01-11"}
+  assert [row.model for row in rows] == ["model-a"]
+
+
+def test_native_start_survives_an_empty_ts_native_row(tmp_path):
+  """One empty-ts native row must not MIN the source's start to the empty string."""
+  undated = _record("rec-undated", RecordKind.NATIVE, sessions=("sess-u",), ts="")
+  dated = _record("rec-dated", RecordKind.NATIVE, sessions=("sess-d",), ts=TS_B)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/u.jsonl", "sig-u", [undated])
+    ledger.record_file(HOST, "/logs/d.jsonl", "sig-d", [dated])
+    _rows, starts = ledger.model_rows_with_native_starts()
   assert starts == {SOURCE: "2026-01-11"}
 
 

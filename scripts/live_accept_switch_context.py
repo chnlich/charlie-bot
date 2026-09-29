@@ -72,12 +72,18 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.request  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
 from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from scripts.live_smoke_task_tree import (  # noqa: E402
+    arequest,
+    deps_tree,
+    log,
+    redact,
+    register_secret,
+    tree_run_dir,
+)
 from src.core import event_types as ET  # noqa: E402
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from src.core.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
@@ -101,20 +107,7 @@ TURN2_TASK = "Write a Python function that formats a number of seconds as HH:MM:
 
 TURN_TIMEOUT_SECONDS = 600.0
 REPLY_OPENING_CHARS = 400
-_REDACTIONS: list[str] = []
 _SERVERS: list = []
-
-
-def redact(text: str) -> str:
-    """Redact the synthetic key and the backend endpoints out of any log line."""
-    for secret in _REDACTIONS:
-        if secret:
-            text = text.replace(secret, "<redacted>")
-    return text
-
-
-def log(message: str) -> None:
-    print(redact(message), flush=True)
 
 
 def fail(message: str) -> NoReturn:
@@ -183,11 +176,9 @@ def load_source_entries() -> dict[str, dict]:
         if option is None:
             fail(f"backend option {backend_id!r} is not configured in the source config")
         entries[backend_id] = json.loads(option.model_dump_json())
-        _REDACTIONS.extend(
-            secret for secret in (
-                str(entries[backend_id].get("api_base") or ""),
-                str(entries[backend_id].get("api_key") or ""))
-            if secret)
+        register_secret(
+            str(entries[backend_id].get("api_base") or ""),
+            str(entries[backend_id].get("api_key") or ""))
     return entries
 
 
@@ -219,7 +210,7 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
     access_key = "switch-accept-key-" + os.urandom(8).hex()
     (home / "credentials.yaml").write_text(
         f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    _REDACTIONS.append(access_key)
+    register_secret(access_key)
     return port, access_key
 
 
@@ -250,40 +241,9 @@ async def start_server(port: int) -> None:
     _SERVERS.append(server)
 
 
-def request(base: str, method: str, path: str, key: str, payload: dict | None = None,
-            timeout: float = 30.0) -> tuple[int, dict | list]:
-    body = None
-    headers = {"Authorization": f"Bearer {key}"}
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode("utf-8") or "{}")
-
-
-async def arequest(base: str, method: str, path: str, key: str, payload: dict | None = None,
-                   timeout: float = 30.0) -> tuple[int, dict | list]:
-    """request() off the loop thread: the isolated uvicorn server lives on this same
-    loop, so a blocking urlopen here would deadlock the server that must answer it."""
-    return await asyncio.to_thread(request, base, method, path, key, payload, timeout)
-
-
 # ---------------------------------------------------------------------------
 # Trial-state readers
 # ---------------------------------------------------------------------------
-
-
-def deps_tree():
-    from src.api.deps import task_manager
-    return task_manager()
-
-
-def tree_run_dir(session_id: str, run_id: str) -> Path:
-    return deps_tree().runs.run_dir(session_id, run_id)
 
 
 def read_chat_events(home: Path, session_id: str) -> list[dict]:

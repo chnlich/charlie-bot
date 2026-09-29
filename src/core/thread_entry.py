@@ -159,3 +159,21 @@ def event_by_id(events: list[dict], event_id: str) -> dict | None:
 def summon_of(block: dict, event_id: str) -> str:
   """The summon a round with this summon block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
   return block.get("nudge_of") or event_id
+
+
+def newest_thread_input(
+    platform: ThreadPlatform, events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
+  """``(event id, summon block)`` of the newest summon-bearing input among *event_ids*, or None.
+
+  A round answers a list of inputs (one per queued item it merged); only an
+  input that carries a summon block under the platform's key (a summon or its
+  nudge) binds the reply to a summon, and the newest of those -- latest in log
+  order -- is the thread's freshest ask. A browser-typed message, a trigger
+  wake, or an empty list binds nothing.
+  """
+  wanted = set(event_ids)
+  bound: tuple[str, dict] | None = None
+  for ev in events:
+    if ev.get("id") in wanted and isinstance(ev.get(platform.name), dict):
+      bound = (str(ev["id"]), ev[platform.name])
+  return bound

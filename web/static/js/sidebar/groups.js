@@ -224,26 +224,29 @@ function renderCronErrorBadge(brokenTasks) {
 // here, not in one renderer.
 const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
 
-// The one trash-can outline: archive/delete action buttons below and, through
-// the namespace, filters.js's delete-confirm modal (Sidebar.TRASH_SVG_PATH).
+// The one trash-can outline: real deletion only -- the archived row's Delete
+// permanently and the group header's Delete group below, and through the
+// namespace filters.js's delete-confirm modal (Sidebar.TRASH_SVG_PATH).
 const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
 
-// The one cog-outline body: the cron-edit button below and, through the
-// namespace, status.js's worker indicator (Sidebar.GEAR_SVG_PATH). Each
-// call site keeps its own center markup.
+// The one archive-box outline: the Archive action button (a normal row's and
+// a worker row's -- archiving is not deletion, so it gets its own icon).
+const ARCHIVE_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"/>`;
+
+// The one cog-outline body: the session-row Settings button below and,
+// through the namespace, status.js's worker indicator (Sidebar.GEAR_SVG_PATH).
+// Each call site keeps its own center markup.
 const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>`;
 
 // The one right-chevron outline: the session-group collapse toggle and the
 // tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
 
-// The one pencil outline: the session-row rename button below and the
-// session-group rename button.
+// The one pencil outline: the session-group rename button.
 const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>`;
 
 // The one clock-badge body (face plus hands): renderScheduledBadge below.
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
-const DOC_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414A1 1 0 0121 9.414V19a2 2 0 01-2 2z"/>`;
 const CLOCK_SVG_BODY = `<circle cx="12" cy="12" r="10" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6l4 2"/>`;
 
 // The one modal chrome for the sidebar's JS-built overlays: showGroupSelector's
@@ -272,8 +275,8 @@ function renderStarButton(s, activeBtnClass) {
 
 // The one hover-revealed icon button frame for the session row's plain
 // actions: a markup change lands here, not in one renderer. The star's
-// dynamic fill and id, the cron gear's guard, and the set-group button's
-// data attribute stay at their own renderers.
+// dynamic fill and id and the Settings button's data attributes stay at
+// their own renderers.
 function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnClass) {
   return `<button onclick="${onclick}"
           class="opacity-0 group-hover:opacity-100 p-1 ${colorClass} transition-opacity flex-shrink-0 ${activeBtnClass}" title="${title}">
@@ -281,21 +284,12 @@ function renderRowActionButton(onclick, colorClass, title, svgBody, activeBtnCla
   </button>`;
 }
 
-function renderRenameButton(s, activeBtnClass) {
-  return renderRowActionButton(
-      `event.preventDefault(); event.stopPropagation(); startRename(event, '${s.id}')`,
-      'hover:text-blue-400',
-      'Rename',
-      PENCIL_SVG_PATH,
-      activeBtnClass);
-}
-
 function renderArchiveButton(s, activeBtnClass) {
   return renderRowActionButton(
       `event.preventDefault(); event.stopPropagation(); archiveSession('${s.id}')`,
       'hover:text-red-400',
       'Archive',
-      TRASH_SVG_PATH,
+      ARCHIVE_SVG_PATH,
       activeBtnClass);
 }
 
@@ -312,40 +306,49 @@ function renderNewChildButton(s, activeBtnClass) {
       activeBtnClass);
 }
 
-// A logical session row opens the read-only Task & context dialog
-// (modals.js): its task record over the context its next Run assembles.
-function renderTaskContextButton(s, activeBtnClass) {
-  return renderRowActionButton(
-      `event.preventDefault(); event.stopPropagation(); openTaskContextModal('${s.id}')`,
-      'hover:text-blue-300',
-      'Task &amp; context',
-      DOC_SVG_PATH,
-      activeBtnClass);
-}
-
-// The one clock-plus outline: the Add schedule hover button below and the
-// group header's New scheduled task button share it (each call site keeps its
-// own svg wrapper).
-const CLOCK_PLUS_SVG_PATH = `<circle cx="11" cy="12" r="8" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 8v4l2.5 1.5M19 3v4m-2-2h4"/>`;
-
-// A bound node row's Edit schedule hover button: the existing cron editor for
-// that task.
-function renderCronGearButton(taskName, activeBtnClass) {
-  if (!taskName) return '';
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); openCronEditor('${escapeHtml(taskName)}')"
-          class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Edit schedule">
+// The row's Settings hover button: opens the shared row menu (row-menu.js)
+// with the facts its items need as data attributes -- current group,
+// task-tree parent, profile, bound schedule task -- because openSessionRowMenu
+// below reads them off the anchor at click time. It owns its markup the way
+// the star does: the frame renderer takes no extra attributes.
+function renderSettingsButton(s, activeBtnClass) {
+  return `<button onclick="event.preventDefault(); event.stopPropagation(); openSessionRowMenu(this, '${s.id}')"
+          title="Settings"
+          data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
+          data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
+          data-profile="${escapeHtmlAttr(s.profile || '')}"
+          data-schedule-task="${escapeHtmlAttr(s.schedule_task || '')}"
+          class="opacity-0 group-hover:opacity-100 p-1 text-slate-500 hover:text-slate-300 transition-opacity flex-shrink-0 ${activeBtnClass}">
     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
   </button>`;
 }
 
-// An unbound manager row's Add schedule hover button: the cron editor in
-// create mode with this node prefilled as the binding.
-function renderAddScheduleButton(s, activeBtnClass) {
-  return `<button onclick="event.preventDefault(); event.stopPropagation(); openCronAdder({sessionId: '${s.id}'})"
-          class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Add schedule">
-    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_PLUS_SVG_PATH}</svg>
-  </button>`;
+// The normal row's Settings menu: openRowMenu (row-menu.js) draws, places and
+// closes the popover; this builds its items from the Settings button's data
+// attributes. Each item keeps its old direct button's condition: a task-tree
+// child moves with its parent (no group move), a legacy row has no task
+// record behind Task & context, a bound row edits its task while an unbound
+// manager adds one.
+function openSessionRowMenu(anchor, sessionId) {
+  const attrs = anchor.dataset;
+  const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
+  if (!attrs.taskParent) {
+    items.push({label: 'Move to group…',
+      onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
+  }
+  if (attrs.profile) {
+    items.push({label: 'Task & context', onSelect: () => openTaskContextModal(sessionId)});
+  }
+  if (attrs.scheduleTask) {
+    items.push({label: 'Edit schedule…', onSelect: () => openCronEditor(attrs.scheduleTask)});
+  } else if (attrs.profile === 'manager') {
+    items.push({label: 'Add schedule…', onSelect: () => openCronAdder({sessionId})});
+  }
+  openRowMenu(anchor, items);
 }
+
+// The one clock-plus outline: the group header's New scheduled task button.
+const CLOCK_PLUS_SVG_PATH = `<circle cx="11" cy="12" r="8" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 8v4l2.5 1.5M19 3v4m-2-2h4"/>`;
 
 // A bound node's clock badge: blue while the task is enabled, grey with the
 // Disabled line when it is not. One markup home for every view's row.
@@ -784,18 +787,14 @@ function renderSessionItem(s, filter, options = {}) {
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s, activeBtnClass);
   } else {
-    // A legacy session (profile null) has no task-tree context behind the
-    // Task & context dialog (the endpoint answers 400 for it).
-    const taskContextBtn = s.profile === null ? '' : renderTaskContextButton(s, activeBtnClass);
+    // A normal row (manager or legacy): four direct buttons; rename, group
+    // move, Task & context and the schedule items moved into the Settings
+    // menu (openSessionRowMenu above).
     actions = `
       ${renderStarButton(s, activeBtnClass)}
-      ${renderRenameButton(s, activeBtnClass)}
-      ${groupBtn}
       ${renderNewChildButton(s, activeBtnClass)}
-      ${taskContextBtn}
       ${renderArchiveButton(s, activeBtnClass)}
-      ${s.schedule_task ? renderCronGearButton(s.schedule_task, activeBtnClass)
-        : (s.profile === 'manager' ? renderAddScheduleButton(s, activeBtnClass) : '')}`;
+      ${renderSettingsButton(s, activeBtnClass)}`;
   }
   const indicators = isArchivedRow ? '' : [
       renderSessionIndicators(s),
@@ -915,6 +914,7 @@ const GLOBALS = {
   resetGroupLimitState,
   toggleSessionGroupLimit,
   showGroupSelector,
+  openSessionRowMenu,
   toggleSessionGroup,
   renameGroup,
   deleteGroup,

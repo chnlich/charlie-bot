@@ -1,30 +1,27 @@
-"""Slack Socket Mode listener — both halves of the Slack entrypoint.
+"""Slack Socket Mode listener — the Slack half of the shared-thread entrypoint.
 
 Summon path: an allowed ``app_mention`` resolves/creates a per-thread session,
 persists the thread permalink as an agent message, and starts a master round
 via ``trigger_master`` (without awaiting it).
 
-Reply path: the master posts to its session's thread itself, through
-``charliebot slack reply`` -> ``POST /api/internal/slack/reply`` -> ``post_reply``
-here, and reads the outcome back in the same call. Before any chunk posts, the
-reply path publishes every file-server artifact the text links and swaps the URLs
-to the published ones; a linked file that is gone — or an unconfigured publish
-lane — refuses the whole reply. The posted text is persisted
-as a ``slack_reply`` event whose ``answers`` names the summon the running round
-was answering (None for a round no summon started); a reply that answers a
-summon clears the summon's eyes ack.
-
-Round-end audit: ``deliver_done`` hangs off the round's terminal ``master_done``
-event (called from ``SessionManager.persist_and_broadcast``), not off a waiting
-coroutine, so it survives a server restart. A summon round that ended without
-a reply wakes the master once through a nudge event (the summon's ``slack``
-block plus ``nudge_of``); a nudge round that still posted nothing gets a
-one-line notice in the thread. Every predicate reads the event log, so a
-replayed done is a no-op. ``backfill_lost_summons`` runs the same audit over
-every finished round at boot, after reporting the summons that were still
-queued when the process died.
-The eyes ack reaction tracks the open question: lit at the summon, cleared when
-a reply answering it lands, or when the notice or the lost-summon report closes it.
+Round side: the reply path, the freshness gate, the ack, the round-end audit,
+and the lost-summon backfill are the platform-neutral machinery in
+``src.core.thread_entry``; this module describes Slack to it with the ``SLACK``
+platform and the ``SlackThreadAdapter`` over the bot client, and keeps the
+public Slack-named wrappers (``post_reply``, ``assert_thread_fresh``,
+``ack_messages``, ``deliver_done``, ``backfill_lost_summons``) that the server
+endpoint, the session manager, and the tests import. The master posts to its
+session's thread itself, through ``charliebot slack reply`` ->
+``POST /api/internal/slack/reply`` -> the ``post_reply`` wrapper, and reads the
+outcome back in the same call; before any chunk posts, the reply path publishes
+every file-server artifact the text links and swaps the URLs to the published
+ones. The posted text is persisted as a ``slack_reply`` event whose ``answers``
+names the summon the running round was answering (None for a round no summon
+started). ``deliver_done`` hangs off the round's terminal ``master_done`` event
+(called from ``SessionManager.persist_and_broadcast``), not off a waiting
+coroutine, so it survives a server restart. The eyes ack reaction tracks the
+open question: lit at the summon, cleared when a reply answering it lands, or
+when the notice or the lost-summon report closes it.
 
 Thread follow: after the first summon, eligible thread messages (human, allowed,
 newer than the session's ``slack_watermark_ts``) arriving over the same Socket

@@ -86,6 +86,7 @@ _NODE_TESTS = [
     "sidebar_indicator_priority.test.js",
     "sidebar_mark_read.test.js",
     "sidebar_rename_prefill.test.js",
+    "sidebar_row_menu.test.js",
     "sidebar_session_model.test.js",
     "sidebar_tree_nesting.test.js",
     "sidebar_usage_poll.test.js",

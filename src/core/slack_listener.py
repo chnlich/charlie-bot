@@ -94,16 +94,26 @@ _LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
 # fallback only.
 _MAX_POST_CHARS = 40000
 
-# The reply budget the format contract states (prompts/slack_reply_format.md):
+# The reply budget the format contract states (prompts/thread_reply_format.md):
 # replies should stay under this many chars, with the depth going to a page.
 # This is the single measurement point for that budget.
 _REPLY_BUDGET_CHARS = 500
 
-# The command the reply-format contract (prompts/slack_reply_format.md) names
+# The command the reply-format contract (prompts/thread_reply_format.md) names
 # for posting a reply. A summon prompt embeds that contract, so a summon whose
 # content names the command was issued under it; the round-end audit enforces
 # only that contract and leaves rounds issued under the earlier one alone.
 _REPLY_COMMAND = "charliebot slack reply"
+
+# The summon prompt's platform line. The shared reply-format contract
+# (prompts/thread_reply_format.md) defers the platform-specific facts to
+# this line: platform name, reply command, per-message limit, and how
+# linked pages reach readers. Another platform's entrypoint states its own
+# line and reuses the contract unchanged.
+_PLATFORM_LINE = (
+    f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
+    f"Per-message limit: {_MAX_POST_CHARS} characters. "
+    "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
 
 # Waits between the retries of one Slack call; the answer stays readable in the
 # session log either way, so exhausting them logs an error rather than raising.
@@ -309,15 +319,16 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   """
   red_line = _load_prompt_doc(
       cfg.charlie_bot_repo,
-      "slack_reply_redline.md",
-      likely_cause="the repo checkout most likely predates the slack-reply-redline extraction commit")
+      "thread_reply_redline.md",
+      likely_cause="the repo checkout most likely predates the thread-reply-redline rename commit")
   reply_format = _load_prompt_doc(
       cfg.charlie_bot_repo,
-      "slack_reply_format.md",
-      likely_cause="the repo checkout most likely predates the slack-reply-format extraction commit")
+      "thread_reply_format.md",
+      likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
   return (
       f"Slack 线程召唤：{permalink}\n\n"
       "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
+      f"{_PLATFORM_LINE}\n\n"
       f"{CITATION_BOUNDARY}\n{red_line}\n{reply_format}")
 
 
@@ -478,9 +489,9 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
       f"{_FOLLOW_TRIGGER_PREFIX} floor={floor_ts}\n"
       f"Slack 线程跟帖唤醒：{permalink}\n"
       "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；"
-      "回复之前从仓库重读 prompts/slack_reply_redline.md 与 prompts/slack_reply_format.md；"
+      "回复之前从仓库重读 prompts/thread_reply_redline.md 与 prompts/thread_reply_format.md；"
       "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；"
-      "只在值得时回复。")
+      f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 
 
 async def _arm_follow_trigger(

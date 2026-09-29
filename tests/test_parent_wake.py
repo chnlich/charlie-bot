@@ -15,26 +15,17 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, make_home_config
+from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, build_env
 
 from src.core import event_types as ET
 from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
-from src.core.sessions import SessionManager
 from src.core.task_execution import TaskExecutionAdapter
-from src.core.task_sessions import TaskTreeManager
 
 
 async def await_wake(task: asyncio.Task | None) -> None:
   """The legacy wake is scheduled, not awaited inline; the test waits it out."""
   assert task is not None
   await task
-
-
-async def build_env(tmp_path: Path):
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
-  return cfg, session_mgr, tree
 
 
 def child_report(child_session_id: str, *, outcome: str, summary: str, event_id: str) -> dict:
@@ -54,7 +45,7 @@ def child_report(child_session_id: str, *, outcome: str, summary: str, event_id:
 
 @pytest.mark.asyncio
 async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = await build_env(tmp_path)
+  cfg, session_mgr, tree = build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   child_id = "child-task-1"
   report = child_report(child_id, outcome="completed", summary="the work landed", event_id="report-1")
@@ -77,7 +68,7 @@ async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The parent's own turn already holds the outcome in its HTTP response; an
   echo wake would only replay the parent's own words as a new queued turn."""
-  _cfg, session_mgr, tree = await build_env(tmp_path)
+  _cfg, session_mgr, tree = build_env(tmp_path)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   report = child_report("child-task-1", outcome="cancelled", summary="no longer needed", event_id="report-1")
   await tree.events.append(legacy.id, report)
@@ -94,7 +85,7 @@ async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
 
 @pytest.mark.asyncio
 async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = await build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   from src.core.models import TaskSpec
   node = await tree.create_task(
       request_id="root",
@@ -123,7 +114,7 @@ async def test_task_tree_parent_with_the_caller_equal_to_itself_still_dispatches
   """The skip rule is legacy-only: a manager node's dispatch consults its
   durable inputs, never the caller — even when the closer is the node itself."""
   from src.core.models import TaskSpec
-  _cfg, _session_mgr, tree = await build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   node = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -181,7 +172,7 @@ async def test_failure_report_wakes_a_legacy_parent_once_and_a_replay_never_wake
   id, finds it already in the parent's log, appends nothing — and must not
   spend a legacy parent's full model turn on the replay.
   """
-  cfg, session_mgr, tree = await build_env(tmp_path)
+  cfg, session_mgr, tree = build_env(tmp_path)
   adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
   worker = await tree.create_task(
@@ -219,7 +210,7 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
   """The first failed/blocked delivery is a task-tree parent's new durable
   input: its next serialized turn dispatches now, and the legacy master wake
   never fires for a node parent."""
-  cfg, session_mgr, tree = await build_env(tmp_path)
+  cfg, session_mgr, tree = build_env(tmp_path)
   adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
   manager = await tree.create_task(
       request_id="root",

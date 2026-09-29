@@ -69,9 +69,8 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   return cfg, tree, meta.id, run_id, token, proc
 
 
-def _run_cli(monkeypatch: pytest.MonkeyPatch, cfg, argv: list[str], token: str | None) -> tuple[str, str, int]:
+def _run_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str], token: str | None) -> tuple[str, str, int]:
   import src.cli.memory as cli
-  monkeypatch.setattr(cli, "get_config", lambda: cfg)
   monkeypatch.setattr("sys.argv", ["charliebot", *argv])
   if token is None:
     monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
@@ -88,19 +87,19 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, cfg, argv: list[str], token: str |
 
 
 async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _tree, _session_id, _run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  _cfg, _tree, _session_id, _run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # No --audience: the worker run's token filters to the worker audience.
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], token)
+    out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta"], token)
     assert code == 0, err
     assert "worker body" in out
     assert "master body" not in out
     # The same topic through the token cannot see the master-only store slice.
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "alpha"], token)
+    out, err, code = _run_cli(monkeypatch, ["query", "--topic", "alpha"], token)
     assert code == 0, err
     assert "master body" not in out
     # A contradictory --audience cannot broaden it.
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta", "--audience", "master"], token)
+    out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta", "--audience", "master"], token)
     assert code == 1
     assert "contradicts" in err
   finally:
@@ -108,10 +107,10 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
 
 
 async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  _cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     await tree.runs.record_finish(session_id, run_id, "completed", input_event_ids=[])
-    out, err, code = _run_cli(monkeypatch, cfg, ["query", "--topic", "beta"], token)
+    out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta"], token)
     assert code == 1
     assert "active run" in err
     assert out == ""  # no operator-grade output leaked

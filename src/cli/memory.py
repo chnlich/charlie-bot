@@ -4,7 +4,10 @@ Pure-local; no server dependency. The store lives at
 ``charliebot_home_dir() / "memory"`` (``~/.charliebot/memory/``); the home is
 env-resolved (src.core.home) and no config key can move it, so the verbs read
 no config file — a broken config.yaml must not block the store's own verbs.
-See ``src/core/memory.py`` for the store contract.
+The run-token path is config-free too: the audience resolves from the home and
+the credentials file (src.core.home, src.core.credentials), never the config
+model stack (the M98 invocation wall). See ``src/core/memory.py`` for the
+store contract.
 
   charliebot memory query --topic <t> [--audience A] [--index] [--resident] [--dir D]
   charliebot memory add [--file F]
@@ -28,29 +31,21 @@ import re
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from src.cli.help_formatter import CliHelpFormatter
 from src.core import memory
 from src.core.home import charliebot_home_dir
 from src.core.run_token import load_run_token
 
-if TYPE_CHECKING:
-  from src.core.config import CharlieBotConfig
-
-
-def get_config() -> CharlieBotConfig:
-  """Deferred config load: the module import stays config-free (the M98 invocation
-  wall — a broken config.yaml must not block the store's own verbs), and only the
-  run-token path (which must resolve the run credential's fixed audience) calls it.
-  """
-  from src.core.config import get_config as _load_config
-  return _load_config()
-
 
 def _memory_dir() -> Path:
   """The store root: ``<home>/memory`` (the CharlieBotConfig.memory_dir derivation)."""
   return charliebot_home_dir() / "memory"
+
+
+def _sessions_root() -> Path:
+  """The sessions root: ``<home>/sessions`` (the CharlieBotConfig.sessions_dir derivation)."""
+  return charliebot_home_dir() / "sessions"
 
 
 def main() -> None:
@@ -113,8 +108,7 @@ def main() -> None:
 def _cmd_query(args: argparse.Namespace) -> None:
   token = load_run_token()
   if token is not None:
-    cfg = get_config()
-    audience = _resolve_run_scoped_audience(cfg, token)
+    audience = _resolve_run_scoped_audience(token)
     if args.audience is not None and args.audience != audience:
       print(
           f"error: --audience {args.audience} contradicts the run credential's fixed "
@@ -156,7 +150,7 @@ def _cmd_query(args: argparse.Namespace) -> None:
     print(memory.full_text(e))
 
 
-def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
+def _resolve_run_scoped_audience(token: str) -> str:
   """The audience the verified, active owning Run of *token* fixes — or a visible exit.
 
   Reuses the central run-identity pieces (the signature verifier and the one
@@ -167,14 +161,13 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
   # Deferred off the module wall (M98): this resolution is the only asyncio consumer.
   import asyncio
 
-  from src.core.config import configured_access_key
-  from src.core.control_events import ControlEventSink
+  from src.core.credentials import configured_access_key
+  from src.core.json_utils import load_model_meta
+  from src.core.models import SessionMetadata
   from src.core.run_token import RunTokenError, verify_run_token
-  from src.core.runs import RunStore, run_identity_refusal
+  from src.core.runs import METADATA_NAME, RunStore, run_identity_refusal
   from src.core.session_aliases import SessionAliasStore
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
-  from src.core.threads import METADATA_NAME
+  root = _sessions_root()
   key = configured_access_key()
   if not key:
     print("error: run token presented but no signing key is configured", file=sys.stderr)
@@ -185,14 +178,16 @@ def _resolve_run_scoped_audience(cfg: CharlieBotConfig, token: str) -> str:
     print(f"error: invalid run token: {e}", file=sys.stderr)
     sys.exit(1)
   # A read-only local resolution through the same owners the server uses (the
-  # one shared active-Run predicate), no server process needed.
-  store = RunStore(cfg, asyncio.Lock(), ControlEventSink(SessionManager(cfg)), SessionAliasStore(cfg.sessions_dir))
+  # one shared active-Run predicate), no server process needed. events=None:
+  # the store reads the live chat log directly (the sink's SessionManager read
+  # serves the same file); nothing here writes.
+  store = RunStore(root, asyncio.Lock(), None, SessionAliasStore(root))
   run = store.read_run_sync(claims.session_id, claims.run_id)
   refusal = run_identity_refusal(run, store.load_events_sync(claims.session_id))
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)
     sys.exit(1)
-  meta = TaskTreeManager._read_metadata_file(cfg.sessions_dir / claims.session_id / METADATA_NAME)
+  meta = load_model_meta(root / claims.session_id / METADATA_NAME, SessionMetadata)
   if meta is None or meta.profile is None:
     print(
         f"error: run token references session {claims.session_id}, which is not a "

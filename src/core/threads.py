@@ -12,15 +12,10 @@ from src.core.json_utils import write_model_json_atomically
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import ThreadMetadata
-from src.core.runs import DATA_DIR_NAME
+from src.core.runs import DATA_DIR_NAME, METADATA_NAME
 from src.core.sidebar_state import mark_sidebar_dirty
 
 log = LazyStructlogLogger()
-
-# The JSON metadata file every session directory and each of its thread
-# directories carries. Readers stat it by name and writers publish it through
-# the atomic tmp rename, so both sides must agree on this one name.
-METADATA_NAME = "metadata.json"
 
 # The sessions-tree directory holding a session's thread directories. The
 # creation skeleton lays it down and every scanner (sidebar probe, storage-cool

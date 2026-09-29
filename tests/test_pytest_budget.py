@@ -53,6 +53,35 @@ def _run_inner(pytester: pytest.Pytester, ini: str, test_source: str) -> pytest.
   return pytester.runpytest("-p", "no:cacheprovider", plugins=[conftest])
 
 
+_INNER_FIXTURE_TIME_TESTS = """
+import time
+
+import pytest
+
+
+@pytest.fixture
+def time_spent_outside_the_call():
+    time.sleep(0.02)
+    yield
+    time.sleep(0.02)
+
+
+def test_fixture_time_counts_in_the_budget(time_spent_outside_the_call):
+    pass
+"""
+
+
+def test_setup_and_teardown_time_counts_in_the_budget(pytester: pytest.Pytester) -> None:
+  """Fixture setup and teardown accrue into the same budget: two stages each
+  inside the unit budget trip it together, so a stage wrapper gone missing
+  cannot silently shrink what the budget counts. The trip lands on the
+  teardown report, which pytest surfaces as an error, not a failure."""
+  result = _run_inner(pytester, _INNER_INI, _INNER_FIXTURE_TIME_TESTS)
+  outcomes = result.parseoutcomes()
+  assert outcomes.get("errors") == 1, (outcomes, result.stdout.str())
+  assert "exceeds the 0.03s unit budget" in result.stdout.str(), result.stdout.str()
+
+
 def test_budget_mechanism(pytester: pytest.Pytester) -> None:
   """An over-budget test fails with the compliance message; the same sleep under
   the integration marker passes on its larger budget."""

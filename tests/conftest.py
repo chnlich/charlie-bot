@@ -97,27 +97,17 @@ def _accrue(item: pytest.Item, seconds: float) -> None:
 
 
 @pytest.hookimpl(wrapper=True)
-def pytest_runtest_setup(item: pytest.Item) -> Any:
+def _accrue_stage_time(item: pytest.Item) -> Any:
   start = time.perf_counter()
   result = yield
   _accrue(item, time.perf_counter() - start)
   return result
 
 
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_call(item: pytest.Item) -> Any:
-  start = time.perf_counter()
-  result = yield
-  _accrue(item, time.perf_counter() - start)
-  return result
-
-
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_teardown(item: pytest.Item) -> Any:
-  start = time.perf_counter()
-  result = yield
-  _accrue(item, time.perf_counter() - start)
-  return result
+# pluggy names each hook after the module attribute it found the wrapper under
+# (pytest requires that name to start with "pytest_"), so the one shared
+# wrapper must be bound under all three stage names.
+pytest_runtest_setup = pytest_runtest_call = pytest_runtest_teardown = _accrue_stage_time
 
 
 @pytest.hookimpl(wrapper=True)

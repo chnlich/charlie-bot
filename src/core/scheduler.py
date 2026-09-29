@@ -485,8 +485,7 @@ class Scheduler:
     backend, model = self._resolve_bound_backend_model(task_cfg, tree)
 
     if task_cfg.steps:
-      leaf = await self._bound_leaf(
-          task_cfg, meta, tree, firing, goal=f"{task_cfg.name} steps")
+      leaf = await self._bound_leaf(task_cfg, meta, tree, firing, goal=f"{task_cfg.name} steps")
       from src.core.cron_sequence import register_leaf_run
       # The firing's first durable product is the leaf's first step Run: the
       # checkpoint advances only after it exists, so a replayed occurrence
@@ -512,24 +511,12 @@ class Scheduler:
     # applies with the repo's default branch as the merge target. Every other
     # action stays a type-less leaf whose success closes it.
     leaf = await self._bound_leaf(
-        task_cfg,
-        meta,
-        tree,
-        firing,
-        goal=prompt,
-        task_type=TaskType.IMPLEMENT if action == "implement" else None)
+        task_cfg, meta, tree, firing, goal=prompt, task_type=TaskType.IMPLEMENT if action == "implement" else None)
     from src.core.cron_sequence import register_leaf_run
     await register_leaf_run(tree, leaf.id, task_cfg, firing, kind="work", position=None, backend=backend, model=model)
     await self._record_bound_fire(meta, task_cfg)
     handle = await self._launch_bound_round(
-        task_cfg,
-        meta,
-        tree,
-        firing,
-        leaf.id,
-        backend=backend,
-        model=model,
-        record_handle=record_handle)
+        task_cfg, meta, tree, firing, leaf.id, backend=backend, model=model, record_handle=record_handle)
     return {"session_id": meta.id, "leaf_session_id": leaf.id, "firing": firing}
 
   async def _record_bound_fire(

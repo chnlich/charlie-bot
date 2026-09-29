@@ -8,7 +8,7 @@ import os
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, TypeVar
 
 from src.core.log_once import LazyStructlogLogger
 
@@ -19,6 +19,8 @@ from src.core.log_once import LazyStructlogLogger
 # module's one async writer is the only reader.
 if TYPE_CHECKING:
   from pydantic import BaseModel
+
+BaseModelT = TypeVar("BaseModelT", bound="BaseModel")
 
 log = LazyStructlogLogger()
 
@@ -36,6 +38,15 @@ def load_json_meta(
     return json.loads(path.read_text(encoding='utf-8'))
   except catch as e:
     log.debug(log_event, path=str(path), error=str(e))
+    return None
+
+
+def load_model_meta(path: Path, model_cls: type[BaseModelT]) -> BaseModelT | None:
+  """The *model_cls*-validated content of *path*, or None when the file is
+  missing or malformed — the pydantic sibling of :func:`load_json_meta`."""
+  try:
+    return model_cls.model_validate_json(path.read_text(encoding="utf-8"))
+  except (OSError, ValueError):
     return None
 
 

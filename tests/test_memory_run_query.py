@@ -71,7 +71,6 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
 
 def _run_cli(monkeypatch: pytest.MonkeyPatch, cfg, argv: list[str], token: str | None) -> tuple[str, str, int]:
   import src.cli.memory as cli
-  monkeypatch.setattr(cli, "get_config", lambda: cfg)
   monkeypatch.setattr("sys.argv", ["charliebot", *argv])
   if token is None:
     monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)

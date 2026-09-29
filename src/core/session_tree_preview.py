@@ -77,6 +77,7 @@ import yaml
 from src.core.buildinfo import init_build_info
 from src.core.config import (
     CHARLIEBOT_HOME_ENV,
+    CONFIG_FILENAME,
     CREDENTIALS_FILENAME,
     CharlieBotConfig,
     charliebot_home_dir,
@@ -256,8 +257,8 @@ def check_ui_assets() -> None:
 def _legacy_home_evidence(home: Path) -> list[str]:
   """Named evidence that an existing non-preview directory is not a trial home."""
   evidence: list[str] = []
-  if (home / "config.yaml").is_file():
-    evidence.append("config.yaml exists (an existing configuration this entry point did not seed)")
+  if (home / CONFIG_FILENAME).is_file():
+    evidence.append(f"{CONFIG_FILENAME} exists (an existing configuration this entry point did not seed)")
   if (home / CREDENTIALS_FILENAME).is_file():
     evidence.append(f"{CREDENTIALS_FILENAME} exists")
   if (home / "memory").is_dir():
@@ -520,7 +521,7 @@ def _prepare_preview(
 
 def validate_existing_config(home: Path) -> dict:
   """Load and structurally validate the preview home's config; refuse unrelated shapes."""
-  path = home / "config.yaml"
+  path = home / CONFIG_FILENAME
   data = load_yaml(path, default=None)
   if not isinstance(data, dict):
     raise PreviewRefusedError(f"{path} is not a config mapping; this is not a usable preview home")
@@ -580,7 +581,7 @@ def _stored_backend_catalog(home: Path) -> tuple[list[dict], str, tuple[str, str
   entries = [dict(entry) for entry in options]
   backend_id = entries[0].get("id")
   if not backend_id:
-    raise PreviewRefusedError(f"{home / 'config.yaml'} configures a backend without an id")
+    raise PreviewRefusedError(f"{home / CONFIG_FILENAME} configures a backend without an id")
   credential: tuple[str, str] | None = None
   referenced = entries[0].get("credential")
   if referenced:
@@ -681,7 +682,7 @@ def _extend_existing_home_catalog(setup: PreviewSetup) -> None:
   credential sections are written: the default, its order, the bind address,
   the paths, the stored access key and every existing section stay as they are.
   """
-  config_path = setup.home / "config.yaml"
+  config_path = setup.home / CONFIG_FILENAME
   data = validate_existing_config(setup.home)
   options = data["backends"]["options"]
   existing_ids = {str(entry["id"]) for entry in options}
@@ -729,7 +730,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
   """
   if classify_home(setup.home):
     setup.home.mkdir(parents=True, exist_ok=True)
-    save_yaml(setup.home / "config.yaml", _preview_config_data(setup))
+    save_yaml(setup.home / CONFIG_FILENAME, _preview_config_data(setup))
     atomic_write_text(setup.home / CREDENTIALS_FILENAME, _credentials_text(setup), private=True)
     for dirname in (PREVIEW_NATIVE_DIRNAME, PREVIEW_WORKSPACES_DIRNAME, PREVIEW_WORKTREES_DIRNAME, PREVIEW_LOG_DIRNAME):
       (setup.home / dirname).mkdir(parents=True, exist_ok=True)
@@ -740,7 +741,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
     if server.get("port") != setup.port or server.get("host") != "127.0.0.1":
       server.update({"host": "127.0.0.1", "port": setup.port})
       data["server"] = server
-      save_yaml(setup.home / "config.yaml", data)
+      save_yaml(setup.home / CONFIG_FILENAME, data)
       log.info("preview_bind_address_updated", home=str(setup.home), port=setup.port)
     if setup.backend_additions:
       _extend_existing_home_catalog(setup)

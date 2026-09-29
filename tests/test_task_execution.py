@@ -206,14 +206,20 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
 
 async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: str,
                                 timeout: float = 15.0) -> tuple[RunRecord, str]:
-    """Poll one Run until its terminal fact lands (the launch is fire-and-forget)."""
+    """Poll one Run until its end record lands (the launch is fire-and-forget).
+
+    The terminal fact and the metadata mirror land as two writes under one
+    lock; a poll that reads the record between them returns a stale record
+    whose ``ended_at`` is still empty, so the terminal outcome alone is not
+    the landing's edge — wait for the mirror's ``ended_at`` too.
+    """
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         run = await tree.runs.get_run(session_id, run_id)
         assert run is not None, f"run {run_id} vanished"
         events = tree.runs.load_events_sync(session_id)
         outcome = tree.runs.terminal_outcome(events, run_id)
-        if outcome is not None:
+        if outcome is not None and run.ended_at is not None:
             return run, str(outcome)
         await asyncio.sleep(0.05)
     pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
@@ -2330,7 +2336,10 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
     # the hook-1 handover (the process is dead): the node shows idle again.
     await poll_until(lambda: busy_since(worker.id) is None, what="the worker header timer")
     # The retried landing delivered the success-based report exactly once, and
-    # the parent's report turn settles without a restart.
+    # the parent's report turn settles without a restart. The report rides the
+    # retry task's async delivery chain, so wait for the report itself: an
+    # idle-parent poll can win the race against the not-yet-appended report.
+    await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried landing's report")
     await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
     reports = child_reports(tree, manager.id)
     assert [r.get("outcome") for r in reports] == ["completed"]
@@ -2403,6 +2412,9 @@ async def test_parent_report_enospc_retry_delivers_report_once(
     run_id = decision["run_id"]
     run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
     assert outcome == "success"
+    # The retry's re-delivery is asynchronous with the live finish: wait for
+    # the one report before naming the appends and settling the parent.
+    await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried delivery's report")
     assert fault_hits == [True, False]  # the live delivery failed; the retry's landed
     ended_at = run.ended_at
     assert ended_at is not None

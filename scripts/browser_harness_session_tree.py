@@ -894,6 +894,23 @@ async def click_selector_center(cdp: CDP, session_id: str, selector: str, label:
     assert_true(box is not None, f"{label}: the click target renders: {selector}")
     await cdp.send("Input.dispatchMouseEvent",
                    {"type": "mouseMoved", "x": box["x"], "y": box["y"]}, session_id=session_id)
+    # The move first, then check the point really hits the target: a covered
+    # or pointer-transparent target fails here with the covering element's
+    # identity instead of as a silent miss downstream.
+    hit = await evaluate(cdp, session_id, f"""
+        (() => {{
+          const el = document.querySelector({json.dumps(selector)});
+          const at = document.elementFromPoint({box['x']}, {box['y']});
+          if (!el) return {{ok: false, at: 'target gone'}};
+          if (el.contains(at) || at === el) return {{ok: true}};
+          return {{ok: false,
+                   at: at ? (at.tagName + '#' + at.id + ' .' + at.className
+                             + ' title=' + (at.title || '')) : 'nothing'}};
+        }})()
+    """)
+    assert_true(hit and hit.get("ok"),
+                f"{label}: the click point misses the target "
+                f"({box['x']:.0f},{box['y']:.0f}), hits: {hit and hit.get('at')}")
     for kind in ("mousePressed", "mouseReleased"):
         await cdp.send("Input.dispatchMouseEvent",
                        {"type": kind, "x": box["x"], "y": box["y"],
@@ -2146,6 +2163,10 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
                 results.record("a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
 
+            # The desktop viewport baseline the touch scenarios must restore.
+            desktop_viewport = await evaluate(
+                cdp, session_id, "window.innerWidth + 'x' + window.innerHeight")
+
             # ---- S30: the desktop Settings menus' item lists -------------------
             # Every row kind's gear opens the one shared .row-menu with the
             # plan's items -- labels, order, separators and red danger items
@@ -2321,7 +2342,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                             and [b["title"] for b in header_buttons] == ["New session in group", "Settings"],
                             f"the named header keeps + and gear: {header_buttons}")
                 assert_tappable(header_buttons, "named group header")
-                touch_numbers.append("header + {0[0]['w']}x{0[0]['h']}, gear {0[1]['w']}x{0[1]['h']}".format(header_buttons))
+                touch_numbers.append(f"header + {header_buttons[0]['w']}x{header_buttons[0]['h']}, "
+                                     f"gear {header_buttons[1]['w']}x{header_buttons[1]['h']}")
 
                 await reveal_row(cdp, session_id, ids["bound_node"])
                 bound = await evaluate(cdp, session_id, f"""
@@ -2341,6 +2363,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                 touch_numbers.append(f"bound row {bound['h']}px <= pad {bound['padY']}px + 3x{bound['lineHeight']}px")
 
                 gear = "#session-{} > button[title='Settings']"
+                # Re-reveal before each open: the geometry reads above scrolled
+                # the list, and a gear below the fold click-tests as nothing.
+                await reveal_row(cdp, session_id, ids["ops_root"])
                 actual = await open_row_menu(
                     cdp, session_id, gear.format(ids["ops_root"]), "touch unstarred root manager")
                 assert_menu_matches(actual, ["Add to Later", "New child session", "Rename",
@@ -2349,6 +2374,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 touch_numbers.append(f"root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch unstarred root manager')}px")
                 await close_row_menu(cdp, session_id, "touch unstarred root manager")
 
+                await reveal_row(cdp, session_id, ids["feature"])
                 actual = await open_row_menu(
                     cdp, session_id, gear.format(ids["feature"]), "touch starred row")
                 assert_true(actual[0] == "Remove from Later",
@@ -2422,11 +2448,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                                "document.getElementById('sidebar').classList.contains('open')",
                                timeout=6, label="the drawer opens on the cover screen")
                 drawer = await evaluate(cdp, session_id, """
-                    (() => {{
+                    (() => {
                       const r = document.getElementById('sidebar').getBoundingClientRect();
-                      return {{left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10,
-                               width: Math.round(r.width * 10) / 10}};
-                    }})()
+                      return {left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10,
+                              width: Math.round(r.width * 10) / 10};
+                    })()
                 """)
                 assert_true(drawer["right"] <= 280.5,
                             f"the drawer's right edge stays on the cover screen: {drawer}")
@@ -2461,23 +2487,32 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s32_cover_drawer_FAILED")
                 results.record("the cover-screen drawer at 280x800", ok=False, detail=repr(exc), screenshot=shot)
 
-            # The touch scenarios leave the desktop emulation behind: the
-            # window's 1440x900 back, media features cleared, touch off.
+            # The touch scenarios leave the desktop emulation behind: media
+            # features cleared, touch off, and the capture viewport pinned back
+            # at its baseline (a bare clear leaves chrome's own window math).
+            # The live document keeps its notified feature set until the next
+            # navigation, so the restored profile is read on a fresh load.
             await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=session_id)
             await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=session_id)
             await cdp.send("Emulation.setTouchEmulationEnabled",
                            {"enabled": False}, session_id=session_id)
-            restored = await evaluate(cdp, session_id, """
+            base_w, base_h = desktop_viewport.split("x")
+            await cdp.send("Emulation.setDeviceMetricsOverride",
+                           {"mobile": False, "width": int(base_w), "height": int(base_h),
+                            "deviceScaleFactor": 1}, session_id=session_id)
+            await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+            await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+            restored = json.loads(await evaluate(cdp, session_id, """
                 JSON.stringify({
                   size: window.innerWidth + 'x' + window.innerHeight,
                   hoverHover: matchMedia('(hover: hover)').matches,
                   hoverNone: matchMedia('(hover: none)').matches,
+                  coarse: matchMedia('(pointer: coarse)').matches,
                 })
-            """)
-            restored = json.loads(restored)
-            assert_true(restored["size"] == "1440x900" and restored["hoverHover"]
-                        and not restored["hoverNone"],
-                        f"the desktop emulation is restored: {restored}")
+            """))
+            assert_true(restored["size"] == desktop_viewport and restored["hoverHover"]
+                        and not restored["hoverNone"] and not restored["coarse"],
+                        f"the desktop emulation is restored (baseline {desktop_viewport}): {restored}")
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

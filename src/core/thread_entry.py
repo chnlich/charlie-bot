@@ -12,6 +12,7 @@ reply, audit, backfill) stays in the entrypoint. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -107,3 +108,41 @@ def summon_prompt_tail(platform_line: str, cfg: CharlieBotConfig) -> str:
       "thread_reply_format.md",
       likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
   return f"{platform_line}\n\n{CITATION_BOUNDARY}\n{red_line}\n{reply_format}"
+
+
+def chunk_text(text: str, limit: int) -> list[str]:
+  """Split *text* into chunks of at most *limit* chars for sequential posting.
+
+  Greedy packing over paragraph units (a paragraph plus its trailing
+  blank-line separator); a unit longer than *limit* falls to newline units,
+  and a single line longer than *limit* is hard-cut. Chunks keep the input
+  order and no boundary eats content; the whitespace-only chunk dropped at
+  return (it carries no postable text) is the only way the posted chunks fall
+  short of the input.
+  """
+  if len(text) <= limit:
+    return [text]
+  pieces: list[str] = []
+  paragraphs = re.split(r"(\n{2,})", text)  # alternates paragraph / separator
+  for i in range(0, len(paragraphs), 2):
+    unit = paragraphs[i] + (paragraphs[i + 1] if i + 1 < len(paragraphs) else "")
+    if len(unit) <= limit:
+      pieces.append(unit)
+      continue
+    for line in re.split(r"(?<=\n)", unit):  # a line plus its trailing newline
+      if len(line) <= limit:
+        pieces.append(line)
+      else:
+        pieces.extend(line[j:j + limit] for j in range(0, len(line), limit))
+  chunks: list[str] = []
+  current = ""
+  for piece in pieces:
+    if piece and len(current) + len(piece) > limit:
+      chunks.append(current)
+      current = ""
+    current += piece
+  if current:
+    chunks.append(current)
+  # A whitespace-only chunk (possible only from leading input whitespace) is
+  # dropped: the platform rejects text-less posts, and no content is lost by it.
+  return [c for c in chunks if c.strip()] or chunks

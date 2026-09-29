@@ -52,38 +52,6 @@ from tests.test_task_execution import (
 )
 
 
-class _IdentityTranslator:
-    """A translate-only double: the scripted raw log already carries standard
-    event dicts, so resume's stream translator passes them through."""
-
-    _POST_RESULT_TIMEOUT = 5.0
-
-    def translate_event(self, event: dict) -> list[dict]:
-        # The raw bytes already carry standard event dicts; the stream
-        # translator's contract is a list of projected events.
-        return [event]
-
-
-def install_resume_ready_backends(monkeypatch: pytest.MonkeyPatch, backends: list) -> list:
-    """Serve launcher builds from *backends*; translate-only builds (resume)
-    get the identity translator instead of consuming a scripted double."""
-    builds: list = []
-    queue = list(backends)
-
-    def fake_build(option, cfg, **kwargs):
-        if kwargs.get("on_spawn") is None:
-            return _IdentityTranslator()
-        backend = queue.pop(0)
-        on_spawn = kwargs.get("on_spawn")
-        if on_spawn is not None:
-            backend.set_on_spawn(on_spawn)
-        builds.append({"option": option, "backend": backend})
-        return backend
-
-    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, fake_build)
-    return builds
-
-
 async def _takeoff_manager(tmp_path, monkeypatch):
     """One manager with its take-off turn already consumed (scripted backend)."""
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
@@ -119,7 +87,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
     from src.core.task_recovery import reconcile_task_tree
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     backend = SpawningScriptedBackend([result_event("recovered work")])
-    builds = install_resume_ready_backends(monkeypatch, [backend])
+    builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
     patch_instructions_content(monkeypatch)
     admitted = await tree.dispatch.admit_input(
         worker.id, event_type=ET.USER, content="Start the task.", actor="user")
@@ -151,7 +119,7 @@ async def test_restart_after_launch_reattaches_live_process(
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     gate = asyncio.Event()
     backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
-    builds = install_resume_ready_backends(monkeypatch, [backend])
+    builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
     patch_instructions_content(monkeypatch)
     run_id = "run-live"
     await tree.runs.register_run(
@@ -634,7 +602,7 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     tree.dispatch.executor = adapter
     patch_instructions_content(monkeypatch)
-    builds = install_resume_ready_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
+    builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
     monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
     # A run whose execute task is in flight, and a worker run a previous round

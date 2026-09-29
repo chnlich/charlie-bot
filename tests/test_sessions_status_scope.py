@@ -123,3 +123,67 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   assert row.has_pending_plan_approval is False
   row.has_unread = True  # a caller mutation must never reach the shared cache
   assert (await session_mgr.list_sessions(**flags))[0].has_unread is False
+
+
+@pytest.mark.asyncio
+async def test_root_list_changed_round_rerenders_only_moved_rows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  """A moved row re-dumps itself; every unmoved row reuses its rendered dict.
+
+  The root list's whole-body memo misses whenever any row's overlay state
+  moves — the standing shape under active turns — and the changed round then
+  re-rendered every row. A row's memo slot keys on the row identity the
+  manager's fresh check moves exactly when its content moves, so a stale
+  render can only be served for a row whose content provably did not move;
+  the served body must still equal a full re-render's bytes.
+  """
+  sidebar_state.reset_for_tests()
+  import src.api.sessions as sessions_api
+
+  sessions_api._sessions_list_whole_body = None
+  sessions_api._sessions_list_row_render.clear()
+  cfg = build_tui_sessions_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  stay = await session_mgr.create_session(CreateSessionRequest(name="Steady"))
+  mover = await session_mgr.create_session(CreateSessionRequest(name="Churning"))
+  leaving = await session_mgr.create_session(CreateSessionRequest(name="Departing"))
+  counts = {"dump": 0}
+  real_dump = SessionMetadata.model_dump
+
+  def counted_dump(self: SessionMetadata, *args: object, **kwargs: object) -> object:
+    counts["dump"] += 1
+    return real_dump(self, *args, **kwargs)
+
+  monkeypatch.setattr(SessionMetadata, "model_dump", counted_dump)
+
+  with _build_client(cfg, session_mgr) as client:
+    full = client.get("/api/sessions/")
+    assert full.status_code == 200
+    full_dumps = counts["dump"]
+
+    counts["dump"] = 0
+    thinking_state.mark_busy(mover.id)
+    changed = client.get("/api/sessions/")
+    assert changed.status_code == 200
+    changed_dumps = counts["dump"]
+    # the mover's row re-dumped; the unmoved rows did not
+    assert 0 < changed_dumps < full_dumps
+
+    # byte parity: a forced full re-render of the same corpus and states
+    sessions_api._sessions_list_whole_body = None
+    sessions_api._sessions_list_row_render.clear()
+    counts["dump"] = 0
+    forced = client.get("/api/sessions/")
+    assert forced.status_code == 200
+    assert forced.content == changed.content
+    assert counts["dump"] == full_dumps
+
+    # a row that left the projection drops its slot with it
+    await session_mgr.archive_session(leaving.id)
+    thinking_state.clear_busy(mover.id)
+    after = client.get("/api/sessions/")
+    assert after.status_code == 200
+    assert len(sessions_api._sessions_list_row_render) == len(after.json())
+    assert all(row["id"] != leaving.id for row in after.json())

@@ -477,6 +477,10 @@ async def list_sessions(
     return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
   payload = []
   for row, (state, schedule_state) in zip(list_rows, list_states, strict=True):
+    rendered = _sessions_list_row_render.get(id(row))
+    if rendered is not None and rendered[0] == state and rendered[1] == schedule_state:
+      payload.append(rendered[3])
+      continue
     dump = row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
     if state:
       (
@@ -489,6 +493,14 @@ async def list_sessions(
         # set stays byte-identical (the dump already carries the field's null).
         dump[sidebar_state.WORK_STATE] = work_state
     payload.append(apply_row_schedule(dump, dict(schedule_state)))
+    _sessions_list_row_render[id(row)] = (state, schedule_state, row, payload[-1])
+  if len(_sessions_list_row_render) > len(list_rows):
+    # A row that left the projection (archived, completed, filtered) holds a
+    # slot nothing will ever consult again; drop it so the map stays at the
+    # corpus the route serves.
+    live = {id(row) for row in list_rows}
+    for stale in [row_id for row_id in _sessions_list_row_render if row_id not in live]:
+      del _sessions_list_row_render[stale]
   body = fast_json_bytes(payload)
   _sessions_list_whole_body = (list_rows, list_states, body)
   # The Response return skips response_model's jsonable_encoder pass over every
@@ -1155,6 +1167,17 @@ _sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST
 # One steady-state whole-body slot beside the gzip memo: the search route's
 # _search_whole_body mechanism. The slot is only ever replaced whole.
 _sessions_list_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
+
+# The changed round's per-row render: row id -> (overlay state, schedule
+# state, row, final payload dict). The slot holds the row, and a live
+# reference pins its id(), so an id hit is that row and only that row; the
+# manager's fresh check moves a row's identity exactly when its content
+# moves, so a slot can never serve a stale row's fields, and the two state
+# tuples in the slot re-state the render's remaining inputs. Payload dicts
+# are handed to the JSON renderer uncopied and never mutated after the
+# schedule join, which is what keeps a shared slot read-only. Pruned to the
+# current projection after each changed round.
+_sessions_list_row_render: dict[int, tuple[tuple, tuple, SessionMetadata, dict]] = {}
 
 
 @router.get('/{session_id}/pending-triggers')

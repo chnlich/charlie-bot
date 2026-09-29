@@ -579,8 +579,8 @@ async def _run_connection(
 ) -> None:
   """Drive one gateway connection from HELLO to close; every end raises.
 
-  ``_StopClose`` carries a close code in ``_STOP_CLOSE_CODES`` (the listener
-  stops); ``_Dropped`` is every other end (the listener reconnects, resetting
+  ``_StopCloseError`` carries a close code in ``_STOP_CLOSE_CODES`` (the listener
+  stops); ``_DroppedError`` is every other end (the listener reconnects, resetting
   its backoff when a READY had landed). There is no RESUME: every connection
   identifies afresh, and the READY backfill covers anything the gap lost.
   """

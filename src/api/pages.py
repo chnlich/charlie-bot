@@ -818,11 +818,15 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
   task = _token_usage_task
   if task is None:
     task = _token_usage_task = asyncio.create_task(asyncio.to_thread(_capture_ledger_rows))
-  rows, native_starts, written, elapsed_s = await task
-  if _token_usage_task is task:
-    # Only the last joiner to observe its own task still installed clears it; a joiner that
-    # resumes after a newer task has already replaced it must not clobber that newer task.
-    _token_usage_task = None
+  try:
+    rows, native_starts, written, elapsed_s = await task
+  finally:
+    if _token_usage_task is task:
+      # Only the last joiner to observe its own task still installed clears it; a joiner that
+      # resumes after a newer task has already replaced it must not clobber that newer task.
+      # The clear runs on failure too: a capture that raised must not stay installed and
+      # re-raise the same stale exception at every later request until a server restart.
+      _token_usage_task = None
   return _templates().TemplateResponse(
       request,
       "token_usage.html",

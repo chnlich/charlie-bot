@@ -1503,32 +1503,6 @@ class TaskTreeManager:
     """True when any descendant's current work is running."""
     return any(self.work_state_of(index, d) == "running" for d in self._descendants(index, session_id))
 
-  async def tree_search(self, *, query: str, limit: int = 20) -> dict:
-    """Task-tree search: matching rows with each one's complete ancestor path.
-
-    The client cannot reconstruct a path from a partial tree (an archived or
-    hidden ancestor is absent from its cached pages), so each hit carries the
-    full ancestor row chain (nearest-first, the session-detail convention).
-    Archived tasks match too — search reveals them; presentation never hides
-    a search hit.
-    """
-    index = await self._get_index()
-    needle = query.strip().lower()
-    if not needle:
-      return {"items": [], "tree_revision": index.revision}
-    hits: list[SessionRow] = []
-    for sid, meta in index.metas.items():
-      goal = meta.task.goal if meta.task is not None else ""
-      if needle in meta.name.lower() or needle in goal.lower():
-        hits.append(self.session_row(index, sid))
-    hits.sort(key=lambda r: (index.metas[r.id].created_at, r.id))
-    hits = hits[:limit]
-    items = []
-    for row in hits:
-      ancestors = [self.session_row(index, a.id) for a in self._ancestors(index, row.id)]
-      items.append({"row": jsonable_row(row), "ancestors": [jsonable_row(a) for a in ancestors]})
-    return {"items": items, "tree_revision": index.revision}
-
   async def tree_page(
       self,
       *,

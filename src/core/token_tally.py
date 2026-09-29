@@ -164,7 +164,7 @@ from src.core.constants import (
     BackendType,
 )
 from src.core.json_utils import atomic_write_stream
-from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME
+from src.core.runs import DATA_DIR_NAME, MASTER_RUNS_DIR_NAME, RAW_LOG_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME
 from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 
@@ -2494,4 +2494,202 @@ def capture_charliebot(ledger: UsageLedger, host: str, sessions_dir: Path, cache
             for i, (model, account, ts, in_fresh, cache_write, cache_read, output) in enumerate(entry["records"])
         ]
     written += ledger.record_file(host, path, sig, records)
+  return written
+
+
+# The Run raw stream's prefilter markers: the CLC worker's json.dumps spelling
+# ("type": "result", with the space its writer defaults to), the claude CLI's compact
+# spelling ("type":"result" — its result line carries no type key until deep into the
+# line), the Codex stream's turn.completed and thread.started, and the session_id the
+# claude stream's init and result lines carry at top level. A line is parsed only when it
+# can contribute usage or an exclusion key.
+_RUNS_MARKERS = (
+    b'"type": "result"',
+    b'"type":"result"',
+    b'"turn.completed"',
+    b'"session_id"',
+    b'"thread.started"',
+)
+
+
+def _iter_run_logs(sessions_dir: Path) -> Iterator[str]:
+  """Yield every Run raw capture's path: ``<session>/data/runs/<run id>/agent.raw.ndjson``.
+
+  Both directory levels list through ``_charliebot_listing``; a session without a
+  ``data/runs`` directory — most of them, the sessions tree predating Run records — is
+  empty, and a run directory that launched no raw log skips. Every other read failure
+  raises: the capture runs in the collector, not the page load.
+  """
+  try:
+    session_dirs = _charliebot_listing(str(sessions_dir))
+  except FileNotFoundError:
+    return
+  for session_dir in session_dirs:
+    runs_dir = _WALK_SEP.join((session_dir, DATA_DIR_NAME, RUNS_DIR_NAME))
+    try:
+      run_dirs = _charliebot_listing(runs_dir)
+    except FileNotFoundError:
+      continue
+    for run_dir in run_dirs:
+      run_log = run_dir + _WALK_SEP + RAW_LOG_NAME
+      try:
+        os.stat(run_log)
+      except FileNotFoundError:
+        continue
+      yield run_log
+
+
+def _run_metadata(run_dir: str) -> dict:
+  """The run directory's metadata.json document.
+
+  A missing file or a non-object document raises: the Run record is written at
+  registration, before any raw line lands, so a capture that cannot read it is a corpus
+  bug, not a skippable shape.
+  """
+  meta_path = Path(run_dir).parent / RUN_METADATA_NAME
+  with open(meta_path, "rb") as fh:
+    meta = orjson.loads(fh.read())
+  if not isinstance(meta, dict):
+    raise ValueError(f"{meta_path}: metadata is not an object")
+  return meta
+
+
+def _last_run_result(objects: list[dict]) -> dict | None:
+  """The raw stream's last ``type == "result"`` object, or None when it carries none."""
+  return next((obj for obj in reversed(objects) if obj.get("type") == ET.RESULT), None)
+
+
+def _codex_turn_sums(objects: list[dict]) -> tuple[int, int, int] | None:
+  """(in_fresh, cache_read, output) summed over the raw stream's ``turn.completed`` lines,
+  or None when it carries none — a run with no usage line contributes no record. Each
+  turn's input arrives with its cached reads inside the same field, so per turn the
+  in_fresh arm subtracts them back out."""
+  in_fresh = cache_read = output = 0
+  seen = False
+  for obj in objects:
+    if obj.get("type") != "turn.completed":
+      continue
+    seen = True
+    usage = obj.get("usage") or {}
+    cached = usage.get("cached_input_tokens", 0) or 0
+    in_fresh += (usage.get("input_tokens", 0) or 0) - cached
+    cache_read += cached
+    output += usage.get("output_tokens", 0) or 0
+  return (in_fresh, cache_read, output) if seen else None
+
+
+def _cc_claude_backend(backend: str, registry: dict) -> bool:
+  """Whether a backend id names a cc-claude backend: its config type, or — off config (a
+  retired id) — the type prefix the id rule keeps on every id."""
+  opt = registry.get(backend)
+  return opt.type == BackendType.CC_CLAUDE if opt is not None else backend.startswith("claude-")
+
+
+def _run_session_ids(objects: list[dict], meta: dict) -> tuple[str, ...]:
+  """A fallback run's session ids, sorted and deduplicated: metadata's native_session_id
+  (absent on many runs), every string top-level ``session_id`` in the raw stream (the
+  claude stream's init and result lines), and every ``thread.started`` object's
+  ``thread_id`` (the Codex stream). These key the ledger's any-match exclusion, so the
+  fallback retires the moment any of the run's CLI logs is captured."""
+  ids: set[str] = set()
+  native = meta.get("native_session_id")
+  if isinstance(native, str) and native:
+    ids.add(native)
+  for obj in objects:
+    sid = obj.get("session_id")
+    if isinstance(sid, str) and sid:
+      ids.add(sid)
+    if obj.get("type") == "thread.started":
+      tid = obj.get("thread_id")
+      if isinstance(tid, str) and tid:
+        ids.add(tid)
+  return tuple(sorted(ids))
+
+
+def _run_record(objects: list[dict], meta: dict, registry: dict, backend: str, run_id: str) -> UsageRecord | None:
+  """The Run directory's one ledger record, or None when nothing is storable.
+
+  The backend verdict picks the usage arm:
+    include (CLC)     the raw stream's trailing result line, native — the run log is the
+      only home the usage has. Its input arrives with the cached reads included in one
+      field (``cached_tokens``), so in_fresh subtracts them back out.
+    codex             the turn.completed lines' summed usage, fallback.
+    skip + cc-claude  the trailing result line through the Claude envelope keys
+      (``_usage_counts``), fallback — the CLI's own transcript restates it while it exists.
+  Any other backend, a run with no usage line of its verdict's shape, and a fallback run
+  with no session id to key the any-match exclusion on contribute nothing — the file still
+  records as captured, so it is never re-parsed.
+  """
+  verdict = _classify_backend(backend, registry)
+  if verdict == "include":
+    last = _last_run_result(objects)
+    if last is None:
+      return None
+    usage = last.get("usage") or {}
+    input_tokens = usage.get("input_tokens", 0) or 0
+    cached = usage.get("cached_tokens", 0) or 0
+    in_fresh, cache_write, cache_read = input_tokens - cached, 0, cached
+    output = usage.get("output_tokens", 0) or 0
+    kind = RecordKind.NATIVE
+    sessions: tuple[str, ...] = ()
+  else:
+    if verdict == "codex":
+      sums = _codex_turn_sums(objects)
+      if sums is None:
+        return None
+      in_fresh, cache_read, output = sums
+      cache_write = 0
+    elif _cc_claude_backend(backend, registry):
+      last = _last_run_result(objects)
+      if last is None:
+        return None
+      in_fresh, cache_write, cache_read, output = _usage_counts(last.get("usage") or {})
+    else:
+      return None
+    sessions = _run_session_ids(objects, meta)
+    if not sessions:
+      return None
+    kind = RecordKind.FALLBACK
+  row_meta = {"backend": backend, "model": meta.get("model")}
+  return UsageRecord(
+      record_id=f"run:{run_id}",
+      kind=kind,
+      source=USAGE_SOURCE_CHARLIE_BOT,
+      model=_thread_row_model(row_meta, registry),
+      account=backend,
+      ts=meta.get("started_at") or "",
+      in_fresh=in_fresh,
+      cache_write=cache_write,
+      cache_read=cache_read,
+      output=output,
+      sessions=sessions)
+
+
+def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
+  """Copy the Run directories' raw captures into the SQLite usage ledger, so a run's totals
+  survive deletion of its own raw log (see the ledger's module docstring).
+
+  The corpus is ``<session>/data/runs/<run id>/agent.raw.ndjson`` — the execution record
+  the Run workers write, which the collect never scanned. One record per run at most,
+  deduped on the run id; the backend verdict in the run's metadata picks the usage arm (see
+  ``_run_record``). A parse whose stat signature the ledger already recorded for this host
+  (``captured_sigs``, read once per call) is skipped, and every other parsed file records
+  with that signature — also one whose content yields no record, so a result-less run is
+  never re-parsed. A missing or unreadable metadata.json raises: the capture runs in the
+  collector, not the page load.
+
+  Returns the records written.
+  """
+  registry = _backend_registry()
+  captured = ledger.captured_sigs(host)
+  written = 0
+  for path in _iter_run_logs(sessions_dir):
+    sig_pair, objects, _end = _prefiltered_jsonl(path, _RUNS_MARKERS)
+    sig = f"{sig_pair[0]}:{sig_pair[1]}"
+    if captured.get(path) == sig:
+      continue
+    meta = _run_metadata(path)
+    backend = meta.get("backend")
+    record = _run_record(objects, meta, registry, backend, Path(path).parent.name) if backend else None
+    written += ledger.record_file(host, path, sig, [record] if record is not None else [])
   return written

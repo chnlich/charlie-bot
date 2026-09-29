@@ -6,22 +6,38 @@ block key, marker keys derived from the name, and an id sort that is not the
 string sort — is covered without any Slack fixture.
 """
 
+import asyncio
 import dataclasses
+import uuid
+from collections.abc import Callable, Sequence
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
-from conftest import make_home_config
+from conftest import (
+    THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
+    THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
+    make_home_config,
+    make_task_spawner,
+)
 
 from src.core import event_types as ET
+from src.core.config import CharlieBotConfig
 from src.core.thread_entry import (
+    ThreadAdapter,
+    ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
+    ack_messages,
     chunk_text,
+    deliver_done,
     follow_floor,
     lost_summons,
     newest_thread_input,
     noticed,
     nudged,
     operator_only_note,
+    post_reply,
     replied,
     rewrite_file_links,
     unread_after,
@@ -241,3 +257,159 @@ def test_rewrite_file_links_refuses_when_the_linked_file_is_gone(tmp_path) -> No
 
   assert excinfo.value.status == 422
   assert file_url in str(excinfo.value.detail)
+
+
+# ---------------------------------------------------------------------------
+# The round side under the fakechat platform: one fake adapter records what
+# the shared machinery posts, acks, and persists; nothing Slack-shaped runs.
+# ---------------------------------------------------------------------------
+
+
+class FakeAdapter(ThreadAdapter):
+  """The fakechat adapter over an in-memory double: posts and acks record, and
+  ``read_eligible`` returns the canned ``thread``."""
+
+  platform = FAKECHAT
+
+  def __init__(self) -> None:
+    self.posts: list[tuple[dict, str, list]] = []
+    self.removed: list[dict] = []
+    self.thread: list[ThreadMessage] = []
+    self.files: list = []
+
+  async def post(self, address: dict, text: str, files: Sequence) -> None:
+    self.posts.append((address, text, list(files)))
+
+  async def remove_ack(self, block: dict) -> None:
+    self.removed.append(block)
+
+  async def read_eligible(self, origin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+    return list(self.thread)
+
+  def address_of(self, origin) -> dict:
+    return dict(origin)
+
+  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable, list]:
+    # The attaching swap appends each linked file itself and returns the
+    # replacement text; the returned list is what rides the last chunk.
+    def swap(fs_path) -> str:
+      self.files.append(fs_path)
+      return f"published:{fs_path.name}"
+
+    return swap, self.files
+
+  def log_fields(self, address: dict) -> dict:
+    return {"channel": address["channel_id"]}
+
+
+class FakeSessions:
+  """The session-manager surface the round side touches, over one in-memory
+  metadata; persisted events land in ``persisted`` for the readback asserts."""
+
+  def __init__(self, meta: SimpleNamespace) -> None:
+    self.meta = meta
+    self.events: list[dict] = []
+    self.persisted: list[dict] = []
+
+  async def get_session(self, session_id: str) -> SimpleNamespace:
+    return self.meta
+
+  async def save_metadata(self, meta: SimpleNamespace) -> None:
+    pass
+
+  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
+    # The store injects a missing id/timestamp before the append; the round
+    # side reads the nudge's id back after persisting, so the double does too.
+    event.setdefault("id", str(uuid.uuid4()))
+    event.setdefault("timestamp", "2026-01-01T00:00:00Z")
+    self.persisted.append(event)
+
+  def load_chat_events_sync(self, session_id: str) -> list[dict]:
+    return list(self.events)
+
+  async def read_metadata_fresh(self, session_id: str) -> None:
+    return None
+
+
+def _fake_meta() -> SimpleNamespace:
+  """One fakechat thread-bound session: the origin names the thread, no watermark yet."""
+  return SimpleNamespace(fakechat_origin={"channel_id": "c1", "thread_ts": "t1"}, fakechat_watermark_id=None)
+
+
+@pytest.mark.asyncio
+async def test_ack_messages_orders_ids_by_the_platform_id_key() -> None:
+  adapter = FakeAdapter()
+  # "100" sorts above "99" only as an integer; the string sort would pick "99".
+  adapter.thread = [ThreadMessage("99", "u", "a"), ThreadMessage("100", "u", "b")]
+  sessions = FakeSessions(_fake_meta())
+
+  readback = await ack_messages(adapter, "s1", ["100", "99"], None, sessions)
+
+  assert readback == {"acked": 2, "watermark_id": "100"}
+  assert sessions.meta.fakechat_watermark_id == "100"
+  ack_event = sessions.persisted[0]
+  assert ack_event["type"] == "fakechat_ack"
+  assert ack_event["content"] == "Fakechat thread ack: 2 message(s) read through 100"
+  assert ack_event["fakechat_ack"] == {"message_ids": ["99", "100"], "watermark_id": "100"}
+
+
+@pytest.mark.asyncio
+async def test_post_reply_carries_the_linked_file_on_the_last_chunk_only(tmp_path) -> None:
+  cfg = make_home_config(tmp_path)
+  page = tmp_path / "page.html"
+  page.write_text("<p>hi</p>", encoding="utf-8")
+  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
+  # One linked file, but over the 2000-char per-message limit once the URL is
+  # rewritten, so the reply splits into several chunks.
+  text = ("filler paragraph\n\n" * 150) + f"see {file_url} for details"
+  adapter = FakeAdapter()
+  sessions = FakeSessions(_fake_meta())
+
+  readback = await post_reply(adapter, "s1", text, cfg, sessions)
+
+  assert len(adapter.posts) > 1
+  assert all(files == [] for _, _, files in adapter.posts[:-1])
+  assert adapter.posts[-1][2] == [page]
+  assert readback["attachments"] == ["page.html"]
+  reply_event = sessions.persisted[0]
+  assert reply_event["type"] == "fakechat_reply"
+  assert reply_event["fakechat_reply"]["attachments"] == ["page.html"]
+
+
+@pytest.mark.asyncio
+async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) -> None:
+  cfg = make_home_config(tmp_path)
+  adapter = FakeAdapter()
+  sessions = FakeSessions(_fake_meta())
+  sessions.events = [
+      {
+          "id": "s1",
+          "type": ET.AGENT_MESSAGE,
+          "content": "Fakechat summon; post the reply with `charliebot fakechat reply --file <path>`.",
+          "fakechat": {
+              "channel_id": "c1",
+              "thread_ts": "t1",
+              "mention_id": "m1"
+          },
+      }
+  ]
+  done = {"type": ET.MASTER_DONE, "input_event_id": "s1", "exit_code": 0, "still_thinking": False}
+  tasks: list[asyncio.Task] = []
+
+  with (
+      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
+      patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+  ):
+    acted = await deliver_done(adapter, "s1", done, cfg, sessions)
+    await asyncio.gather(*tasks)
+
+  assert acted is True
+  mock_trigger.assert_awaited_once()
+  nudge = sessions.persisted[0]
+  assert nudge["type"] == ET.AGENT_MESSAGE
+  assert nudge["from_session_name"] == "Fakechat"
+  # The link-less summon falls back to the platform's own thread naming.
+  assert nudge["content"].startswith("Fakechat thread (channel c1, thread t1): the round answering this mention")
+  assert "(no `charliebot fakechat reply` call)" in nudge["content"]
+  assert "`charliebot fakechat reply --file <path>`" in nudge["content"]
+  assert nudge["fakechat"] == {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1", "nudge_of": "s1"}

@@ -461,8 +461,21 @@ class SlackThreadAdapter(ThreadAdapter):
 
   platform = SLACK
 
-  def __init__(self, client: SlackClient) -> None:
-    self._client = client
+  def __init__(self, client: SlackClient | None = None) -> None:
+    self._given = client
+
+  @property
+  def _client(self) -> SlackClient:
+    """The client this adapter posts through: the given one, or the bot client
+    built on the first platform call and reused after. The round-side wrappers
+    pass no client, so a host without Slack credentials never builds one for a
+    round the shared core refuses before its first platform call.
+    ``_bot_client`` resolves as the module global at that moment, so the
+    ``SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET`` patches keep working.
+    """
+    if self._given is None:
+      self._given = _bot_client()
+    return self._given
 
   async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
     await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"])
@@ -511,7 +524,7 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mg
   One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
   on the Slack adapter; the refusal shapes live there.
   """
-  return await thread_entry.assert_thread_fresh(SlackThreadAdapter(_bot_client()), session_id, cfg, session_mgr)
+  return await thread_entry.assert_thread_fresh(SlackThreadAdapter(), session_id, cfg, session_mgr)
 
 
 async def ack_messages(
@@ -522,7 +535,7 @@ async def ack_messages(
   the Slack adapter; the refusal shapes, the ack event, and the readback keys
   live there.
   """
-  return await thread_entry.ack_messages(SlackThreadAdapter(_bot_client()), session_id, message_ids, cfg, session_mgr)
+  return await thread_entry.ack_messages(SlackThreadAdapter(), session_id, message_ids, cfg, session_mgr)
 
 
 def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
@@ -548,7 +561,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   on the Slack adapter; the rewrite, chunking, refusals, reply event, and
   readback live there.
   """
-  return await thread_entry.post_reply(SlackThreadAdapter(_bot_client()), session_id, text, cfg, session_mgr)
+  return await thread_entry.post_reply(SlackThreadAdapter(), session_id, text, cfg, session_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -562,7 +575,7 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
   the Slack adapter; the audit gate, the nudge, and the notice live there.
   """
-  return await thread_entry.deliver_done(SlackThreadAdapter(_bot_client()), session_id, done, cfg, session_mgr)
+  return await thread_entry.deliver_done(SlackThreadAdapter(), session_id, done, cfg, session_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -586,7 +599,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   (``thread_entry.backfill_lost_summons``) on the Slack adapter; the
   lost-summon report and the per-round audit live there.
   """
-  return await thread_entry.backfill_lost_summons(SlackThreadAdapter(_bot_client()), cfg, session_mgr)
+  return await thread_entry.backfill_lost_summons(SlackThreadAdapter(), cfg, session_mgr)
 
 
 async def _expect_hello(ws: ClientConnection) -> None:

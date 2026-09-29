@@ -102,10 +102,18 @@ def test_trailing_keys_after_traceevents_still_build(tmp_path: Path, monkeypatch
 
 def test_corrupt_pretty_trace_fails_loud_after_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   trace = tmp_path / "trace.json"
-  events = [_event(i) for i in range(120)]
-  trace.write_text(json.dumps({"traceEvents": events}, indent=2).replace('"dur": 1,', '"dur": NaN,', 1))
-  out = tmp_path / "out.gz"
-  assert _run_child(monkeypatch, trace, out) == direct_pass_child.EXIT_PARSE_FAILED
+  trace.write_text(json.dumps({"traceEvents": [_event(i) for i in range(120)]}, indent=2))
+  raw = trace.read_bytes()
+  trace.write_bytes(raw.replace(b'"dur": 1,', b'"dur": NaN,', 1))
+  assert _run_child(monkeypatch, trace, tmp_path / "nan.gz") == direct_pass_child.EXIT_PARSE_FAILED
+
+  # A missing inter-element comma is the one corruption a chunk parse could
+  # erase at a split point; requiring the separator sends it to the whole-file
+  # rejection. Dropped at the split's own first anchor (2048 = _run_child's patch).
+  split = direct_pass_child._split_chunks(trace, len(raw), 2048)
+  comma = raw.rfind(b",", 0, split[2][0])
+  trace.write_bytes(raw[:comma] + raw[comma + 1:])
+  assert _run_child(monkeypatch, trace, tmp_path / "sep.gz") == direct_pass_child.EXIT_PARSE_FAILED
 
 
 def test_unsplittable_shapes_return_no_split(tmp_path: Path) -> None:

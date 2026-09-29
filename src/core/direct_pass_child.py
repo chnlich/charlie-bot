@@ -39,9 +39,8 @@ def _split_chunks(path: Path, size: int, min_chunk_bytes: int) -> tuple[bool, by
   when the file cannot be split: not JSON starting with ``{``/``[``, no
   traceEvents array (the whole-file parse then also answers the shape check),
   fewer bytes than two chunks, a first element sharing the array's line
-  (compact JSON), or no usable anchor at a boundary. The events array must be
-  the document's last value: the head chunk is closed by appending ``]}``,
-  which only parses when nothing follows the array.
+  (compact JSON), or no usable anchor at a boundary. The events array may be
+  followed by sibling keys: the tail chunk validates them beside the elements.
   """
   if size < 2 * min_chunk_bytes:
     return None
@@ -125,6 +124,11 @@ def _chunk_parse_input(
   with path.open("rb") as f:
     f.seek(start)
     core = f.read(end - start).rstrip(_WS)
+  # A non-tail chunk's last byte is the next element's separator comma;
+  # requiring it sends a missing comma at a split point to the whole-file
+  # rejection instead of erasing it into a silent acceptance.
+  if index < count - 1 and not core.endswith(b","):
+    raise ValueError("chunk does not end with the element separator")
   if core.endswith(b","):
     core = core[:-1]
   if index == 0:

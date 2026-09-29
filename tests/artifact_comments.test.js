@@ -13,9 +13,9 @@ const {mulberry32} = require('./mulberry32');
 const ARTIFACT_COMMENTS_JS = readStatic('artifact-comments.js');
 
 const SESSION_270_PLAN_PATH =
-  '/absolute_filepath/data/home/chaoli/.charliebot/sessions/session-270/artifacts/plan.html';
+  '/absolute_filepath/data/home/user/.charliebot/sessions/session-270/artifacts/plan.html';
 const PATH_SESSION_PLAN_PATH =
-  '/absolute_filepath/data/home/chaoli/.charliebot/sessions/path-session/artifacts/plan.html';
+  '/absolute_filepath/data/home/user/.charliebot/sessions/path-session/artifacts/plan.html';
 
 function makeTextNode(text) {
   return {nodeType: 3, textContent: text};
@@ -96,7 +96,7 @@ function seedDraft(pathname, entries) {
 test('resolveSessionId resolves the injected server session id and ignores the URL path', () => {
   // The pathname carries a different id on purpose: session identity is owned by the
   // server-injected value, never by the URL shape.
-  const pathName = '/absolute_filepath/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
+  const pathName = '/absolute_filepath/data/home/user/.charliebot/sessions/WRONG/artifacts/x.html';
   const {window} = loadArtifactCommentsScript(pathName, false, {serverSessionId: 'RIGHT'});
   const resolve = window.__cbcResolveSessionId;
 
@@ -106,7 +106,7 @@ test('resolveSessionId resolves the injected server session id and ignores the U
 test('resolveSessionId returns null with no injected id and no hash, ignoring the URL path', () => {
   // This assertion fails if a path parser is kept as a fallback: the path says WRONG,
   // and the resolved id must be null rather than WRONG.
-  const pathName = '/absolute_filepath/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
+  const pathName = '/absolute_filepath/data/home/user/.charliebot/sessions/WRONG/artifacts/x.html';
   const {window} = loadArtifactCommentsScript(pathName);
   const resolve = window.__cbcResolveSessionId;
 
@@ -126,7 +126,7 @@ test('resolveSessionId prefers a valid cbsession hash over the injected server s
 });
 
 test('resolveSessionId falls back to the injected id for malformed cbsession hashes', () => {
-  const pathName = '/absolute_filepath/data/home/chaoli/.charliebot/sessions/WRONG/artifacts/x.html';
+  const pathName = '/absolute_filepath/data/home/user/.charliebot/sessions/WRONG/artifacts/x.html';
   const {window} = loadArtifactCommentsScript(pathName, false, {serverSessionId: 'RIGHT'});
   const resolve = window.__cbcResolveSessionId;
 

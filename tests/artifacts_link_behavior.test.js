@@ -17,7 +17,7 @@ function extractInterceptorScript(html) {
 
 test('injectLinkBehavior injects one base tag with the artifact /absolute_filepath href inside the head', () => {
   const ctx = loadArtifactsScript();
-  const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
+  const absPath = '/home/user/sessions/test-session/artifacts/plan.html';
   const input = '<html><head></head><body><p>hi</p></body></html>';
   const out = ctx.Chat.injectLinkBehavior(input, absPath);
 
@@ -39,7 +39,7 @@ test('injectLinkBehavior injects one base tag with the artifact /absolute_filepa
 
 test('injectLinkBehavior does not inject a second base tag when one already exists', () => {
   const ctx = loadArtifactsScript();
-  const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
+  const absPath = '/home/user/sessions/test-session/artifacts/plan.html';
   const input = '<html><head><base href="/other"></head><body><p>hi</p></body></html>';
   const out = ctx.Chat.injectLinkBehavior(input, absPath);
 
@@ -67,7 +67,7 @@ test('injectLinkBehavior prepends base and appends interceptor when no head or b
 
 test('injectLinkBehavior base href contains no cbsession viewing fragment', () => {
   const ctx = loadArtifactsScript();
-  const absPath = '/home/chaoli/sessions/test-session/artifacts/plan.html';
+  const absPath = '/home/user/sessions/test-session/artifacts/plan.html';
   const out = ctx.Chat.injectLinkBehavior('<html><head></head><body></body></html>', absPath);
   const baseMatch = out.match(/<base\b[^>]*>/i);
   assert.ok(baseMatch, 'base tag present');

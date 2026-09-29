@@ -1,42 +1,7 @@
 'use strict';
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const vm = require('node:vm');
-const { readStatic } = require('./read_static');
-const { buildRendererContext } = require('./renderer_vm_context');
-
-// Fake marked: parse output embeds the body text, deterministic per body, so
-// a repeat render hands renderChatMath the identical pre-walk HTML.
-const FAKE_MARKED_SRC = `
-let parseCalls = 0;
-globalThis.marked = {
-  Renderer: function() { return {}; },
-  use() {},
-  parse: (s) => { parseCalls++; return '<p>' + s + '</p>'; },
-  parseCallCount: () => parseCalls,
-};`;
-
-// Fake marked that routes every parse through the registered code renderer,
-// the surface the highlight deferral and its flush settle touch.
-const FAKE_MARKED_CODE_SRC = `
-let parseCalls = 0;
-let codeRenderer = null;
-globalThis.marked = {
-  Renderer: function() { return {}; },
-  use(opts) { if (opts.renderer && opts.renderer.code) codeRenderer = opts.renderer.code; },
-  parse: (s) => { parseCalls++; return '<pre>' + codeRenderer({ text: s, lang: '', raw: '' }) + '</pre>'; },
-  parseCallCount: () => parseCalls,
-};`;
-
-function loadRenderer({ withTimers = false, codeParser = false } = {}) {
-  const context = buildRendererContext({ withTimers });
-  vm.createContext(context);
-  vm.runInContext(codeParser ? FAKE_MARKED_CODE_SRC : FAKE_MARKED_SRC, context,
-      { filename: 'marked-fake.js' });
-  vm.runInContext(readStatic('math-scanner.js'), context, { filename: 'math-scanner.js' });
-  vm.runInContext(readStatic('markdown-renderer.js'), context, { filename: 'markdown-renderer.js' });
-  return context;
-}
+const { loadRenderer } = require('./prose_fake_marked_harness');
 
 // A walk stub that transforms the element the way auto-render does: the output
 // is a pure function of the input HTML.

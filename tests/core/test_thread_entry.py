@@ -35,6 +35,13 @@ FAKECHAT = ThreadPlatform(
     max_post_chars=2000,
     follow_trigger_prefix="fakechat-thread-follow",
     id_key=int,
+    origin_field="fakechat_origin",
+    watermark_field="fakechat_watermark_id",
+    id_label="id",
+    mention_key="mention_id",
+    block_keys=("channel_id", "thread_ts", "mention_id"),
+    thread_fallback="(channel {channel_id}, thread {thread_ts})",
+    attaches_files=True,
 )
 
 

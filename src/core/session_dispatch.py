@@ -26,6 +26,7 @@ Ordering contract (the one this stage exists to pin):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
@@ -632,6 +633,20 @@ class TaskInputDispatcher:
         delivered = next((e for e in self._tree.fact_history(recipient) if e.get("id") == report_id), None)
         return report_id, delivered
 
+    def _undelivered_close_recipients(self, session_id: str) -> Iterator[tuple[dict, str]]:
+        """Yield (close fact, recipient) for each close of *session_id* whose report the
+        recipient's fact history does not hold yet. The recovery scan and the reparent
+        guard consume this one walk, so they cannot disagree about which close reports
+        are still owed."""
+        facts = self._tree.facts_of(session_id)
+        for close in facts.close_events:
+            recipient = close.get("report_to")
+            if not recipient:
+                continue
+            _report_id, already = self._child_report_delivery(session_id, str(close.get("id")), str(recipient))
+            if already is None:
+                yield close, str(recipient)
+
     async def recover_pending_reports(self, session_id: str) -> list[dict]:
         """Repair the crash window *child result saved before parent append*.
 
@@ -644,15 +659,8 @@ class TaskInputDispatcher:
         """
         tree = self._tree
         await tree.load_task_meta(session_id)
-        facts = tree.facts_of(session_id)
         delivered: list[dict] = []
-        for close in facts.close_events:
-            recipient = close.get("report_to")
-            if not recipient:
-                continue
-            _report_id, already = self._child_report_delivery(session_id, str(close.get("id")), str(recipient))
-            if already is not None:
-                continue  # already delivered: a repeat pass never re-reports it
+        for close, recipient in self._undelivered_close_recipients(session_id):
             outcome = str(close.get("outcome") or "completed")
             report, created = await self.deliver_child_report(
                 session_id,
@@ -660,7 +668,7 @@ class TaskInputDispatcher:
                 outcome=outcome,
                 summary=str(close.get("summary") or ""),
                 result_refs=list(close.get("result_refs") or []),
-                recipient=str(recipient),
+                recipient=recipient,
                 actor=ACTOR_SYSTEM,
             )
             if created:
@@ -671,18 +679,10 @@ class TaskInputDispatcher:
         """The reparent-guard form of the crash-window repair: every close fact
         this task still owes its fixed recipient (the entire moving subtree is
         guarded by the caller walking its nodes)."""
-        tree = self._tree
-        facts = tree.facts_of(session_id)
-        blockers: list[str] = []
-        for close in facts.close_events:
-            recipient = close.get("report_to")
-            if not recipient:
-                continue
-            _report_id, already = self._child_report_delivery(session_id, str(close.get("id")), str(recipient))
-            if already is None:
-                blockers.append(
-                    f"has an undelivered parent report for close event {close.get('id')}")
-        return blockers
+        return [
+            f"has an undelivered parent report for close event {close.get('id')}"
+            for close, _ in self._undelivered_close_recipients(session_id)
+        ]
 
 
 def input_event_type_for_caller(caller: object) -> str:

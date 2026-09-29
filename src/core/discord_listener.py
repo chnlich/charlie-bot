@@ -74,6 +74,23 @@ from src.core.triggers import TriggerManager
 
 logger = LazyStructlogLogger()
 
+# Gateway intents for the listener: GUILDS (thread/channel events), GUILD_MESSAGES,
+# DIRECT_MESSAGES (DM mentions get the notice) and MESSAGE_CONTENT (reading thread
+# messages). Value must match the Discord gateway docs' intent bits.
+_INTENTS = 1 << 0 | 1 << 9 | 1 << 12 | 1 << 15  # GUILDS | GUILD_MESSAGES | DIRECT_MESSAGES | MESSAGE_CONTENT
+
+# Gateway close codes that end the listener instead of triggering a reconnect:
+# retrying cannot fix them, so the message says what to change on the Discord
+# application side.
+_STOP_CLOSE_CODES = {
+    4004: "authentication failed",
+    4010: "invalid shard",
+    4011: "sharding required",
+    4012: "invalid API version",
+    4013: "invalid intents",
+    4014: "disallowed intents: enable the Message Content intent in the Discord developer portal",
+}
+
 # Fixed namespace UUID for Discord summon session ids. Arbitrary but stable
 # across process restarts; changing it would orphan every existing
 # Discord-backed session.

@@ -75,6 +75,7 @@ from src.core.thread_entry import (
   ThreadReplyError,
   chunk_text,
   event_by_id,
+  follow_floor,
   lost_summons,
   newest_thread_input,
   noticed,
@@ -159,9 +160,6 @@ _FOLLOW_CHAIN_CAP_SECONDS = 300
 
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
-
-# The chain floor carried on every follow label; re-arms parse it back.
-_FOLLOW_FLOOR_RE = re.compile(r"floor=([0-9.]+)")
 
 # Wire type of the persisted ack audit record. It mirrors the ET constants but
 # stays local: the ack record is a pure audit trail, consumed by nothing else.
@@ -519,9 +517,9 @@ async def _arm_follow_trigger(
   for old in await _armed_follow_triggers(trigger_mgr, session_id):
     if chain_start is None:  # exactly one armed record exists by construction
       chain_start = old.created_at
-      match = _FOLLOW_FLOOR_RE.search(old.message)
-      if match is not None:
-        floor_ts = match.group(1)
+      parsed_floor = follow_floor(old.message)
+      if parsed_floor is not None:
+        floor_ts = parsed_floor
     await trigger_mgr.cancel_trigger(session_id, old.id)
   now = utc_now()
   start = chain_start or now

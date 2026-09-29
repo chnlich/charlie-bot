@@ -242,3 +242,16 @@ def unread_after(
     return [m for m in messages if eligible(m)]
   floor = id_key(watermark)
   return [m for m in messages if eligible(m) and id_key(message_id(m)) > floor]
+
+
+# The chain floor carried on every follow label; re-arms parse it back.
+_FOLLOW_FLOOR_RE = re.compile(r"floor=([0-9.]+)")
+
+
+def follow_floor(label: str) -> str | None:
+  """The ``floor=<id>`` value on a follow-trigger label, or None when the label carries none.
+
+  The value matches digits and dots only.
+  """
+  match = _FOLLOW_FLOOR_RE.search(label)
+  return match.group(1) if match is not None else None

@@ -15,6 +15,7 @@ _COMMANDS = {
     "artifact": "src.cli.artifact",
     "config": "src.cli.config",
     "delegate": "src.cli.delegate",
+    "discord": "src.cli.discord",
     "improve": "src.cli.improve",
     "schedule-trigger": "src.cli.schedule_trigger",
     "remote-launch": "src.cli.remote_launch",

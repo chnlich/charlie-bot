@@ -8,6 +8,7 @@ than a hard-coded total.
 
 from __future__ import annotations
 
+import sqlite3
 from types import SimpleNamespace
 
 import pytest
@@ -223,3 +224,33 @@ def test_model_rows_plan_scans_the_cover_index_without_analyze(tmp_path):
     plan = [row["detail"] for row in ledger._conn.execute("EXPLAIN QUERY PLAN " + _MODEL_ROWS_SQL)]
   assert any("SCAN" in detail and "usage_group_cover" in detail for detail in plan)
   assert not any("MULTI-INDEX OR" in detail for detail in plan)
+
+
+def test_capture_gate_round_trip(tmp_path) -> None:
+  """The gate stores the file-state pairs a probe ran under and the signature it computed;
+  a re-record replaces both, and a path with no gate reads None."""
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") is None
+    ledger.record_gate(HOST, "/data/db.sqlite", (10, 20), (30, 40), "sig-1")
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") == (((10, 20), (30, 40)), "sig-1")
+    ledger.record_gate(HOST, "/data/db.sqlite", (11, 21), None, "sig-2")
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") == (((11, 21), None), "sig-2")
+    assert ledger.captured_gate("other-host", "/data/db.sqlite") is None
+
+
+def test_reopen_recreates_a_dropped_gate_table(tmp_path) -> None:
+  """The gate table is created on open (IF NOT EXISTS), so a ledger written before the
+  table existed upgrades on its first open with no migration step."""
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_gate(HOST, "/data/db.sqlite", (10, 20), None, "sig-1")
+  con = sqlite3.connect(path)
+  try:
+    con.execute("DROP TABLE capture_gates")
+    con.commit()
+  finally:
+    con.close()
+  with UsageLedger(path) as ledger:
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") is None
+    ledger.record_gate(HOST, "/data/db.sqlite", (10, 20), None, "sig-1")
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") == (((10, 20), None), "sig-1")

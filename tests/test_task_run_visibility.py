@@ -17,19 +17,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import patch_instructions_content, stub_credentials
+from conftest import OPERATOR, patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
 from src.core import thinking_state
 from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
-from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     build_env,
     make_api_client,
 )
-
-OP_CALLER = CallerIdentity(kind="operator")
 
 
 async def manager_with_worker(tmp_path, monkeypatch):
@@ -44,7 +41,7 @@ async def manager_with_worker(tmp_path, monkeypatch):
       task=TaskSpec(goal="project"),
       name="Project",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=root.id,
@@ -52,7 +49,7 @@ async def manager_with_worker(tmp_path, monkeypatch):
       task=TaskSpec(goal="leaf"),
       name="W",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   return cfg, session_mgr, tree, root, worker
 
 
@@ -106,7 +103,7 @@ async def test_a_run_closes_only_the_interval_it_opened(tmp_path: Path, monkeypa
       task=TaskSpec(goal="leaf"),
       name="LW",
       backend=None,
-      caller=OP_CALLER)
+      caller=OPERATOR)
   await tree.runs.register_run(
       RunRecord(
           id="run-l",

@@ -25,7 +25,9 @@ from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
+    _REPLY_COMMAND,
     CITATION_BOUNDARY,
+    _build_follow_wake_message,
     handle_app_mention,
     summon_session_id,
 )
@@ -35,9 +37,9 @@ _TS = "1700000000.000100"
 # The approved red-line and reply-format texts, read from the same prompts docs
 # the builder reads and stripped exactly like the builder, so the tail
 # assertions pin exact bytes.
-_RED_LINE_PATH = ROOT / "prompts" / "slack_reply_redline.md"
+_RED_LINE_PATH = ROOT / "prompts" / "thread_reply_redline.md"
 _RED_LINE = _RED_LINE_PATH.read_text(encoding="utf-8").strip()
-_FORMAT_PATH = ROOT / "prompts" / "slack_reply_format.md"
+_FORMAT_PATH = ROOT / "prompts" / "thread_reply_format.md"
 _REPLY_FORMAT = _FORMAT_PATH.read_text(encoding="utf-8").strip()
 
 
@@ -149,6 +151,39 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
   assert expected_url in trigger.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig(tmp_path)
+  event = _make_event()
+  tasks = _spawn_round_tasks()
+
+  with _mention_seam(tasks):
+    await handle_app_mention(event, cfg, session_mgr, client)
+    await asyncio.gather(*tasks)
+
+  events = session_mgr.load_chat_events_sync(_sid(event))
+  agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
+  content = agent_messages[0]["content"]
+  # The platform line sits between the fetch hint and the citation boundary
+  # and carries the facts the shared reply-format contract defers to it: the
+  # reply command the round-end audit gate reads off the summon, and the
+  # per-message limit.
+  expected_platform_line = (
+      f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
+      "Per-message limit: 40000 characters. "
+      "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
+  assert f"\n{expected_platform_line}\n" in content
+
+
+def test_follow_wake_message_names_thread_reply_docs_and_reply_command() -> None:
+  msg = _build_follow_wake_message(
+      _TS, "https://fake.slack.test/archives/C_TEST/p1700000000000100")
+  assert msg.startswith("slack-thread-follow floor=1700000000.000100\n")
+  assert "prompts/thread_reply_redline.md" in msg
+  assert "prompts/thread_reply_format.md" in msg
+  assert msg.endswith(f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 
 
 @pytest.mark.asyncio

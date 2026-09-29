@@ -104,3 +104,15 @@ A new platform repeats the shape Slack and Discord already fill. Work down this 
 ---
 
 ## Telegram mapping
+
+This section is design only: no Telegram code exists in the repository. Every point below states what the Bot API documentation (https://core.telegram.org/bots/api) documents today; re-check each against it before building.
+
+- **Thread.** A forum topic in a supergroup with topics enabled (`message_thread_id`), or a reply chain in a plain group (its root message id). The session id derives from the chat id plus the thread id, in the pattern of the two `summon_session_id` functions above.
+- **Message ids.** Integers unique per chat, so `id_key=int` — the Discord row's ordering, not Slack's string sort.
+- **Summon.** A `mention` entity naming the bot's username, or a reply to one of the bot's messages.
+- **Ack.** `setMessageReaction` with 👀 (Bot API 7.0 and later) — the same lit-at-summon, cleared-when-answered contract both adapters implement.
+- **Post.** `sendMessage` with `message_thread_id`; 4096 characters per message sets `max_post_chars` for `chunk_text`.
+- **Attachments.** `sendDocument` (50 MB per file, one file per call; `sendMediaGroup` groups 2 to 10) — an `attaches_files` platform like Discord.
+- **Reading the thread.** The Bot API has no history read, so `read_eligible` needs a local store of the messages the bot received, kept per followed thread. This is the main divergence from Slack and Discord, whose adapters read the platform's history API.
+- **Follow visibility.** With privacy mode on (the default), a bot in a group receives only messages that mention it, reply to it, or are commands (https://core.telegram.org/bots/features#privacy-mode). Following a thread needs privacy mode off or the bot as a group admin — the analog of Discord's Message Content intent, which `_preflight` refuses to start without.
+- **Connection.** `getUpdates` long polling or a webhook, instead of the websocket both current listeners hold open.

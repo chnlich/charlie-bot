@@ -102,9 +102,6 @@ Known-alive symbols:
   `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
-  (`lines_added` on `WorkerEvent` left this list: the worker-transcript rework removed its last
-  reader, so no repo line outside the field definition references it and the grep no longer
-  protects it.)
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
   `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
   appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).

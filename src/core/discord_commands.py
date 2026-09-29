@@ -25,8 +25,9 @@ from src.core.discord_client import (
     message_content_intent_enabled,
     missing_permissions,
     parse_message_link,
+    snowflake_key,
 )
-from src.core.discord_listener import DISCORD, DiscordThreadAdapter
+from src.core.discord_listener import DISCORD, DiscordThreadAdapter, eligible_message
 from src.core.models import DiscordOrigin
 from src.core.sessions import SessionManager
 from src.core.thread_entry import ThreadReplyError
@@ -95,7 +96,16 @@ async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, s
     if e.status != 404:
       raise ThreadReplyError(502, str(e)) from e
     starter = None
-  unread_ids = {m.id for m in await thread_entry.unread_messages(adapter, origin, cfg, watermark)}
+  # One read feeds both the window and the unread flags: a message landing after
+  # this fetch is simply not in the readback, never an id the window pick misses.
+  unread_ids = {
+      m["id"] for m in thread_entry.unread_after(
+          thread_messages,
+          eligible=lambda m: eligible_message(m, cfg.discord.allowed_user_ids),
+          message_id=lambda m: m["id"],
+          watermark=watermark,
+          id_key=snowflake_key)
+  }
   if unread_ids:
     start = next(i for i, m in enumerate(thread_messages) if m["id"] in unread_ids)
     window = thread_messages[start:start + limit]

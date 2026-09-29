@@ -220,6 +220,13 @@ class _ModelSum:
   accounts: dict[str, _Sum] = field(default_factory=dict)
 
 
+def default_ledger_path() -> Path:
+  """The CLI's default ledger: under the charliebot home, beside the sessions it indexes."""
+  from src.core.config import get_config
+
+  return get_config().charliebot_home / "usage" / "ledger.sqlite3"
+
+
 class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 

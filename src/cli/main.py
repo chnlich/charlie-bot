@@ -26,6 +26,7 @@ _COMMANDS = {
     "session-tree": "src.cli.session_tree",
     "slack": "src.cli.slack",
     "storage": "src.cli.storage",
+    "usage-ledger": "src.cli.usage_ledger",
 }
 
 

@@ -1358,6 +1358,25 @@ _OPENCODE_PROBE_SQL = (
     "select count(*), coalesce(sum(time_updated), 0), "
     "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
 
+# The probe scans the whole message table (878 MB on the live db and growing, ~73 ms), so it
+# re-runs only when the db files moved since the probe whose signature it recorded: a durable
+# commit appends a WAL frame or rewrites the main db, moving one of the two (size, mtime_ns)
+# pairs, while a reader touching only the -shm sidecar moves neither. Process-local, keyed by
+# the resolved db path; a fresh process probes once, which is the pre-gate shape.
+_OpencodeGate = tuple[tuple[int, int], tuple[int, int] | None, str]
+_opencode_probe_gate: dict[str, _OpencodeGate] = {}
+
+
+def _opencode_db_stats(db: Path) -> tuple[tuple[int, int], tuple[int, int] | None]:
+  """The main db's and -wal sidecar's (size, mtime_ns) pairs — the gate's change proof."""
+  main = db.stat()
+  try:
+    wal_stat = db.with_name(db.name + "-wal").stat()
+    wal = (wal_stat.st_size, wal_stat.st_mtime_ns)
+  except FileNotFoundError:
+    wal = None
+  return (main.st_size, main.st_mtime_ns), wal
+
 
 def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
   """Copy the opencode db's message-table usage into the SQLite usage ledger, so the page's
@@ -1365,23 +1384,35 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
 
   The db opens read-only (mode=ro) — the capture never writes to it. The whole message
   table signs with the probe aggregates ``_OPENCODE_PROBE_SQL`` projects; a db whose
-  signature the ledger already recorded for this host is skipped. Otherwise every row at or
-  above the previous capture's max time_updated is re-read through ``_opencode_row_data``
-  and each contributing row upserts on ``opencode:<message id>``: an updated row moves its
-  ledger record, a deleted row leaves the stored rows untouched (the ledger contains no
-  DELETE). A missing db contributes nothing; a parse or read failure raises, because the
-  capture runs in the collector, not the page load.
+  signature the ledger already recorded for this host is skipped, and the probe itself is
+  skipped while the db files sit unchanged since the probe that recorded it (the stat gate
+  above). Otherwise every row at or above the previous capture's max time_updated is re-read
+  through ``_opencode_row_data`` and each contributing row upserts on ``opencode:<message
+  id>``: an updated row moves its ledger record, a deleted row leaves the stored rows
+  untouched (the ledger contains no DELETE). A missing db contributes nothing; a parse or
+  read failure raises, because the capture runs in the collector, not the page load.
 
   Returns the records written.
   """
   if not db.exists():
     return 0
-  con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+  db_key = str(db)
+  main_pair, wal_pair = _opencode_db_stats(db)
+  gated = _opencode_probe_gate.get(db_key)
+  sig: str | None = None
+  if gated is not None and gated[0] == main_pair and gated[1] == wal_pair:
+    sig = gated[2]  # the files are byte-still since that probe, so its aggregates hold
+  con: sqlite3.Connection | None = None
   try:
-    sig = ":".join(map(str, con.execute(_OPENCODE_PROBE_SQL).fetchone()))
-    captured = ledger.captured_sigs(host).get(str(db))
+    if sig is None:
+      con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+      sig = ":".join(map(str, con.execute(_OPENCODE_PROBE_SQL).fetchone()))
+      _opencode_probe_gate[db_key] = (main_pair, wal_pair, sig)
+    captured = ledger.captured_sigs(host).get(db_key)
     if captured == sig:
       return 0
+    if con is None:
+      con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     floor = int(captured.split(":")[2]) if captured is not None else 0
     records: list[UsageRecord] = []
     for mid, session_id, _time_updated, data in con.execute(
@@ -1403,7 +1434,8 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
               output=rec[6],
               sessions=(session_id,)))
   finally:
-    con.close()
+    if con is not None:
+      con.close()
   return ledger.record_file(host, str(db), sig, records)
 
 

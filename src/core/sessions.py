@@ -1299,19 +1299,15 @@ class SessionManager:
     into ``__dict__``, so the row build stays one copy instead of a copy plus a
     per-field setattr chain (the M61 listing's dominant term at corpus scale).
     """
-    metas = await self._with_derived_archive(await self._load_session_metas(status), status)
-    rows = [
-        meta for meta in metas if (starred is None or meta.starred == starred) and
-        (scheduled is None or bool(meta.scheduled_task) == scheduled)
-    ]
-    derived = await self.resolve_sidebar_state(
-        rows,
+    rows, derived = await self.list_sessions_readonly(
+        status,
+        starred,
+        scheduled,
         include_running_status=include_running_status,
         include_pending_trigger_status=include_pending_trigger_status,
         include_pending_plan_approval=include_pending_plan_approval,
-        force=False,
     )
-    sessions = [
+    return [
         meta.model_copy(
             update={
                 "thinking_since": busy_since(meta.id),
@@ -1319,8 +1315,6 @@ class SessionManager:
                 **derived[meta.id],
             }) for meta in rows
     ]
-    sessions.sort(key=lambda s: s.updated_at, reverse=True)
-    return sessions
 
   async def list_sessions_readonly(
       self,

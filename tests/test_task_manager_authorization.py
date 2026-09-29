@@ -330,6 +330,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
   assert "no active authorization" in shadowed.json()["detail"]
 
 
+@pytest.mark.integration  # polls the retried run's terminal fact in real time through the dispatch pipeline
 @pytest.mark.asyncio
 async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:

@@ -3,12 +3,18 @@
 The shared thread feature exists once per chat platform (Slack today, Discord
 next): a summon starts a session bound to one thread, the round answers into
 that thread, and the audit keeps summon and reply consistent across restarts.
-This module holds what every platform shares — the platform description
-(``ThreadPlatform``) and the pure, platform-neutral helpers. The per-platform
+This module holds what every platform shares: the platform description
+(``ThreadPlatform``), the pure helpers, the adapter surface the round side
+posts through (``ThreadAdapter``, one subclass per entrypoint wrapping the
+platform's client), and the round side itself — the reply path
+(``post_reply``), the freshness gate (``assert_thread_fresh``), the ack
+(``ack_messages``), the round-end audit (``deliver_done`` over ``audit_round``),
+and the lost-summon backfill (``backfill_lost_summons``). The per-platform
 entrypoint (``src.core.slack_listener`` today) describes its platform with one
-``ThreadPlatform`` instance built from its own constants and calls these
-helpers with it; the async orchestration (summon handling, follow triggers,
-reply, audit, backfill) stays in the entrypoint. Imports point one way: the
+``ThreadPlatform`` instance built from its own constants and hands platform
+plus adapter to these functions; the summon and thread-follow side
+(``handle_app_mention``, ``handle_thread_message``, the follow triggers, the
+reconnect backfill) stays in the entrypoint. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
 

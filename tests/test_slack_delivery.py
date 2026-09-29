@@ -72,9 +72,8 @@ def _listener_seam(
 ) -> Iterator[None]:
   """Patch the slack_listener module seams; the seam wiring lives here and nowhere else.
 
-  ``_bot_client`` always returns *client*. *tasks* feeds the thread core's
-  ``create_logged_task`` (the ack and nudge task spawner), *trigger* replaces the
-  thread core's ``trigger_master``, *queued* pins
+  ``_bot_client`` always returns *client*. *tasks* feeds ``create_logged_task``'s
+  task spawner, *trigger* replaces ``trigger_master``, *queued* pins
   ``master_cc.queued_user_event_ids``; each stays unpatched when its argument is
   None. Any further patch a test needs (retry delays, log capture) stays visible
   at the call site as a sibling context.

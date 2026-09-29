@@ -110,13 +110,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   assert ok
   review_gate.set()
 
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    if tree.runs.terminal_outcome(tree.runs.load_events_sync(child.id), review_run.id) is not None:
-      break
-    await asyncio.sleep(0.05)
-  else:
-    pytest.fail("the review Run never reached its terminal fact")
+  await wait_for_terminal_run(tree, child.id, review_run.id, timeout=10.0)
 
   # The blocked report reached the parent; the child is still open...
   reports: list[dict] = []

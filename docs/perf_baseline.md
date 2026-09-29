@@ -7432,6 +7432,8 @@ if __name__ == "__main__":
     home = tempfile.mkdtemp(prefix="m107-home-")
     os.environ["CHARLIEBOT_HOME"] = home  # scratch cache home; the live home read-only
     best_dir, best_n = find_corpus()
+    if best_dir is None:
+        raise SystemExit(0)  # no qualifying dir under the roots: the M66/M88 finders' clean-exit shape
     print(f"worst multi-trace dir: {best_dir}, {best_n / 1e6:.1f} MB")
     asyncio.run(main(sorted(real_traces(best_dir)), best_n, home))
 PYEOF

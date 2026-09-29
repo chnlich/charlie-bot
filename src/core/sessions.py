@@ -156,11 +156,18 @@ _SEARCH_HIT_ROOTS_PER_FILE = 8
 # re-derives at the pre-memo cost, the same degradation the miss/hit memo
 # bounds set.
 _SEARCH_MATCH_MEMO_LIMIT = 8
-# str.lower() and substring search hold the GIL for the whole input, so the
-# sidebar content search reads chat files in windows of this many characters:
-# each lower()/scan call's GIL hold stays bounded instead of scaling with the
-# chat file's size, which would stall the event loop for every other request.
-_SEARCH_CHUNK_CHARS = 1 << 18
+# str.lower()/bytes.translate and substring search hold the GIL for the whole
+# input, so the sidebar content search reads chat files in windows of this many
+# characters (the decoded path) or bytes (the raw path): each window's GIL hold
+# stays bounded instead of scaling with the chat file's size, which would stall
+# the event loop for every other request.
+_SEARCH_CHUNK_SIZE = 1 << 18
+# The raw-byte scan's case fold: A-Z to a-z, every other byte identity. UTF-8
+# never encodes a non-ASCII codepoint below 0x80, so for an ASCII needle this
+# fold sees exactly the ASCII letters the decoded text's str.lower() sees,
+# except U+212A and U+0130, whose str.lower() contains an ASCII letter — those
+# two stay on the decoded path's side of the boundary the scan docstring states.
+_ASCII_LOWER = bytes.maketrans(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ", b"abcdefghijklmnopqrstuvwxyz")
 # Bounds both the successor-chain walk (a cycle must never spin) and the
 # delivery retry loop that re-resolves racing elones, keeping the two in agreement.
 _SUCCESSOR_CHAIN_HOP_LIMIT = 100
@@ -533,33 +540,47 @@ def _search_content_sigs_hold(
 
 
 def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: int) -> bool | None:
-  """Character-window scan of a chat-events file for *query_lower* (thread-pool work).
+  """Window scan of a chat-events file for *query_lower* (thread-pool work).
 
   *start* is a byte offset the scan begins at; the caller uses it to re-scan
-  only the bytes appended after a proven-absent prefix. The offset can split
-  a UTF-8 sequence, so a nonzero start decodes with ``errors="replace"`` and
-  the verdict equals a full strict scan's for every file a full scan can
-  decode. A zero start keeps strict decoding: a corrupt file fails loud as
-  before. Returns the verdict, or None when the file could not be read: an
+  only the bytes appended after a proven-absent prefix. An ASCII query rides
+  raw bytes: UTF-8 never encodes a non-ASCII codepoint below 0x80, so the
+  ``_ASCII_LOWER`` fold matches exactly what the decoded text's lower() sees,
+  except U+212A and U+0130, whose str.lower() contains an ASCII letter — those
+  two need the decoded path. A non-ASCII query decodes as before: *start* can
+  split a UTF-8 sequence, so a nonzero start decodes with ``errors="replace"``
+  and the verdict equals a full strict scan's for every file a full scan can
+  decode; a zero start keeps strict decoding, where a corrupt file fails loud
+  as before. Returns the verdict, or None when the file could not be read: an
   errored scan proves no absence, so the caller must not memoize it as a miss.
   """
   overlap = len(query_lower) - 1
-  tail = ""
+  # Every window carries the last *overlap* units of the previous one, so a
+  # hit straddling a read boundary lies whole inside exactly one window.
   try:
     with path.open("rb") as raw:
       if start:
         raw.seek(start)
-      with io.TextIOWrapper(raw, encoding="utf-8", errors="replace" if start else "strict") as stream:
+      if query_lower.isascii():
+        needle = query_lower.encode("ascii")
+        tail = b""
         while True:
-          chunk = stream.read(_SEARCH_CHUNK_CHARS)
+          chunk = raw.read(_SEARCH_CHUNK_SIZE)
+          if not chunk:
+            return False
+          window = tail + chunk.translate(_ASCII_LOWER)
+          if needle in window:
+            return True
+          tail = window[-overlap:] if overlap else b""
+      with io.TextIOWrapper(raw, encoding="utf-8", errors="replace" if start else "strict") as stream:
+        tail = ""
+        while True:
+          chunk = stream.read(_SEARCH_CHUNK_SIZE)
           if not chunk:
             return False
           window = tail + chunk.lower()
           if query_lower in window:
             return True
-          # This and the next window together cover the file with an
-          # overlap of len(query)-1 chars, so a hit straddling the chunk
-          # boundary lies whole inside exactly one window.
           tail = window[-overlap:] if overlap else ""
   except OSError as e:
     _log_search_read_failed_once(session_id, e)

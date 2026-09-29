@@ -36,6 +36,8 @@
   .tile .val { font-size:24px; font-weight:620; letter-spacing:-.4px; margin-top:2px }
   .tile .foot { font-size:11.5px; color:var(--mut2); margin-top:3px }
   .card { background:var(--panel); border:1px solid var(--bd); border-radius:12px; padding:16px 18px 12px }
+  .lb { display:inline-block; margin-left:8px; font-size:11px; color:var(--mut); border:1px solid var(--bd);
+    border-radius:4px; padding:1px 6px; white-space:nowrap; font-family:var(--mono) }
   .legend { display:flex; flex-wrap:wrap; gap:16px; margin:0 0 14px; font-size:12.5px; color:var(--mut) }
   .legend .k { display:inline-flex; align-items:center; gap:7px }
   .legend .sw { width:11px; height:11px; border-radius:3px; display:inline-block }
@@ -144,15 +146,14 @@
 
   <h2><span class="n">5</span>Methodology</h2>
   <ul>
-    <li><b>Sources:</b> Claude Code reads each assistant message's <code>usage</code> from
-      <code>projects/**/*.jsonl</code> in every config dir; Codex reads <code>token_count</code> events from
-      <code>sessions/**/*.jsonl</code> in every home, with the model name taken from the same file&rsquo;s
-      <code>turn_context</code>; opencode reads the <code>message</code> table of its local database;
-      charlie-bot reads its own thread event logs (<code>result</code> events in
-      <code>threads/*/data/events.jsonl</code> under each session directory) and master-run captures
-      (<code>agent.raw.ndjson</code> under <code>data/master_runs/</code>) &mdash; charlie-code-type
-      backends in full, codex-type history only when no rollout file for the thread's session id remains
-      on disk. All four are local logs; no vendor usage API is called.</li>
+    <li><b>Sources:</b> the same four local-log sources (Claude Code, Codex, opencode, charlie-bot) feed a
+      per-call ledger at <code>~/.charliebot/usage/ledger.sqlite3</code>: every capture &mdash; a page load like
+      this one, the daily cron, the start of every storage-cool sweep, <code>charliebot usage-ledger capture</code>
+      &mdash; upserts one record per API call into it (deduped on the CLI&rsquo;s own message id), and this page
+      reads its rows from that ledger alone. No vendor usage API is called, and ledger rows are never deleted,
+      so the numbers stop shrinking when the source logs they were parsed from are pruned. charlie-bot thread
+      and Run result totals count only when none of their CLI sessions has per-call records, so those rows
+      are a lower bound.</li>
     <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request
@@ -162,8 +163,10 @@
       threads. Gemini (<code>gemini.api_key</code> direct) has no local token log; any call made on another
       machine, or outside the Claude login directories listed under <code>accounts.claude</code> in <code>config.yaml</code>,
       or the default <code>~/.codex</code> home, is not in this table either.</li>
-    <li><b>Retention:</b> the left edge {{ window[0] }} is the date of the oldest local log file, not an account start date;
-      earlier sessions that have been pruned cannot be counted.</li>
+    <li><b>Retention:</b> each source&rsquo;s history is anchored at its first native record (the CLI&rsquo;s own
+      log){% for src in known %}{% set ns = ctx.per_src[src].get('native_start', '') %} &mdash; {{ src }}
+      from {{ ns if ns else '(no native records yet)' }}{% endfor %}. The left edge {{ window[0] }} is the
+      earliest counted record, not an account start date.</li>
     <li><b>Cost:</b> this reports tokens only and does not convert to money — these calls run on subscriptions, not per-token.</li>
   </ul>
 
@@ -174,7 +177,7 @@
     </div>
   </details>
 
-  <p class="foot">Collected this session in <b>{{ "%.2f"%ctx.elapsed_s }}&thinsp;s</b>; scanned <b>{{ ctx.scanned_compact }}</b> of log data. Refresh to re-run.</p>
+  <p class="foot">Collected this session in <b>{{ "%.2f"%ctx.elapsed_s }}&thinsp;s</b>; captured <b>{{ ctx.captured_now }}</b> new records into the ledger this load. Refresh to re-run.</p>
 </div>
 
 <div class="tip" id="tip" role="tooltip" aria-hidden="true"></div>
@@ -276,6 +279,7 @@ function tip(ev, r) {
   add('cache write', fmt(r.cache_write));
   add('fresh input', fmt(r.in_fresh));
   add('API calls', fmt(r.calls));
+  if (r.fallback_output > 0) add('lower bound', 'output \u2265 ' + fmt(r.fallback_output));
   add('window', r.window);
   TIP.append(t, tb);
   TIP.style.opacity = '1';
@@ -304,6 +308,13 @@ for (const r of DATA.rows) {
   const td0 = el('td','mdl');
   const sw = el('span','sw'); sw.style.background = SLOT[r.slot];
   td0.append(sw, el('span', null, r.model));
+  // Counted fallback records are the part of the row that could still grow if a pruned CLI
+  // log resurfaces, so the output behind them is only a lower bound — say so on the row.
+  if (r.fallback_output > 0) {
+    const mark = el('span', 'lb', '\u2265' + fmt(r.fallback_output) + ' out, lower bound');
+    mark.title = fmt(r.fallback_output) + ' output tokens come from captures whose CLI logs are pruned';
+    td0.append(mark);
+  }
   tr.append(td0, el('td', null, r.source));
   for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) {
     tr.append(el('td', null, fmt(r[k])));

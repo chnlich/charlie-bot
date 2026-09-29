@@ -695,8 +695,8 @@ DESKTOP_CAPTURE_FLAGS = [
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
-    "--blink-settings=primaryHoverType=2,availableHoverTypes=2,"
-    "primaryPointerType=4,availablePointerTypes=4",
+    ("--blink-settings=primaryHoverType=2,availableHoverTypes=2,"
+     "primaryPointerType=4,availablePointerTypes=4"),
 ]
 
 
@@ -2622,7 +2622,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(raw is not None, "the paused scheduled row renders in the drawer")
                 measured = json.loads(raw)
                 lines = measured["lines"]
-                texts = [l["text"] for l in lines]
+                texts = [line["text"] for line in lines]
                 assert_true(len(lines) == 4 and texts[1].startswith("Disabled")
                             and texts[2].startswith("0 9 * * *") and texts[3].startswith("Last: "),
                             f"the paused row renders name, Disabled, cron and Last lines: {texts}")
@@ -2639,7 +2639,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s31b_last_line")
                 results.record("the scheduled row's Last line stays on one line at 412x915", ok=True,
                                detail=(f"paused row {measured['rowH']}px tall; line heights "
-                                       + "/".join(f"{l['h']}" for l in lines)
+                                       + "/".join(f"{line['h']}" for line in lines)
                                        + f"px at line-height {lines[0]['lineHeight']}px; the Last line "
                                          "truncates with an ellipsis like the cron line and its title "
                                          f"carries the full text ({last['title']})"),

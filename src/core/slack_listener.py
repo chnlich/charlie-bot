@@ -72,16 +72,13 @@ from src.core.thread_entry import (
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
-    chunk_text,
     event_by_id,
     follow_floor,
     lost_summons,
     newest_thread_input,
     noticed,
     nudged,
-    operator_only_note,
     replied,
-    rewrite_file_links,
     summon_of,
     summon_prompt_tail,
     unread_after,
@@ -107,11 +104,6 @@ _LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
 # message is left for the client to collapse; splitting is the above-limit
 # fallback only.
 _MAX_POST_CHARS = 40000
-
-# The reply budget the format contract states (prompts/thread_reply_format.md):
-# replies should stay under this many chars, with the depth going to a page.
-# This is the single measurement point for that budget.
-_REPLY_BUDGET_CHARS = 500
 
 # The command the reply-format contract (prompts/thread_reply_format.md) names
 # for posting a reply. A summon prompt embeds that contract, so a summon whose
@@ -742,86 +734,11 @@ def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
 async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
-  Before any chunk posts, file-server URLs in the text are rewritten to published
-  ones (``rewrite_file_links`` with the publish swap), so the thread receives links
-  its readers can open;
-  the refusal paths there — a linked file gone, the publish lane unconfigured —
-  raise ``SlackReplyError`` and leave the thread untouched. Refusals raise
-  ``SlackReplyError``: 404 unknown session, 409 no Slack thread, 422 blank text, 422
-  a rewrite refusal, 502 when a chunk exhausted its retries (nothing is persisted
-  then, so the caller can retry). The endpoint runs ``assert_thread_fresh``
-  first, so a stale thread (412) never reaches this function. On success the
-  ``slack_reply`` event records
-  the text that went out, the summon it answers, and the chunk count; a reply that
-  answers a summon clears that summon's eyes. The readback carries that outbound
-  text plus one line naming any application-route links, which stay as written and
-  reach the operator alone.
+  One-line pass-through to the shared reply path (``thread_entry.post_reply``)
+  on the Slack adapter; the rewrite, chunking, refusals, reply event, and
+  readback live there.
   """
-  meta = await thread_entry.require_thread_session(SLACK, session_id, session_mgr)
-  if not text.strip():
-    raise SlackReplyError(422, "Reply text is empty")
-
-  text, operator_only_links = await asyncio.to_thread(rewrite_file_links, text, cfg, _publish_swap(cfg))
-
-  # lazy: mirrors the backfill import's agents-package guard
-  from src.agents import master_cc_state
-
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  # Binding identity: the in-process running round first (authoritative, no
-  # metadata-cache race), the disk record as fallback for the restart gap where
-  # an orphaned master posts before the re-attach item reaches the consumer.
-  # Either way the round answers a list of inputs; the newest Slack-bearing one
-  # of the list is the summon this reply answers.
-  input_event_ids = master_cc_state.running_user_event_ids(session_id)
-  if not input_event_ids:
-    fresh = await session_mgr.read_metadata_fresh(session_id)
-    if fresh is not None and fresh.master_run is not None:
-      input_event_ids = fresh.master_run.user_event_ids
-  bound = newest_thread_input(SLACK, events, input_event_ids)
-  answers = summon_of(bound[1], bound[0]) if bound is not None else None
-  origin = meta.slack_origin
-  adapter = SlackThreadAdapter(_bot_client())
-  address = adapter.address_of(origin)
-  bodies = chunk_text(text, SLACK.max_post_chars)
-  for index, body in enumerate(bodies, start=1):
-    ok = await thread_entry.post_with_retry(adapter, address, body, session_id=session_id)
-    if not ok:
-      raise SlackReplyError(
-          502, f"Slack did not accept chunk {index} of {len(bodies)} after {len(thread_entry._RETRY_DELAYS) + 1} "
-          "attempts; nothing was persisted")
-
-  await session_mgr.persist_and_broadcast(
-      session_id, {
-          "type": ET.SLACK_REPLY,
-          "content": text,
-          ET.SLACK_REPLY: {
-              "answers": answers,
-              "chars": len(text),
-              "chunks": len(bodies)
-          },
-      })
-  if bound is not None:
-    thread_entry.ack_clear(adapter, bound[1], session_id)
-  over_budget = len(text) > _REPLY_BUDGET_CHARS
-  logger.info(
-      "slack_reply_posted",
-      session=session_id,
-      channel=origin.channel_id,
-      thread_ts=origin.thread_ts,
-      chars=len(text),
-      chunks=len(bodies),
-      over_budget=over_budget,
-      budget=_REPLY_BUDGET_CHARS,
-      answers=answers)
-  return {
-      "posted": True,
-      "text": text,
-      "operator_only_note": operator_only_note(operator_only_links),
-      "chars": len(text),
-      "chunks": len(bodies),
-      "over_budget": over_budget,
-      "answers": answers,
-  }
+  return await thread_entry.post_reply(SlackThreadAdapter(_bot_client()), session_id, text, cfg, session_mgr)
 
 
 # ---------------------------------------------------------------------------

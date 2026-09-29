@@ -25,7 +25,7 @@ CC_TS, CODEX_TS, OC_TS, CB_TS = (
 @pytest.fixture(autouse=True)
 def _fresh_single_flight():
   """Reset the single-flight holder around each test: a previous test's task belongs to a
-  different event loop, and a failed capture leaves the failed task installed."""
+  different event loop."""
   pages._token_usage_task = None
   yield
   pages._token_usage_task = None
@@ -143,3 +143,26 @@ async def test_capture_failure_fails_the_request(monkeypatch: pytest.MonkeyPatch
   monkeypatch.setattr("src.core.token_tally.capture_local", boom)
   with pytest.raises(RuntimeError, match="capture exploded"):
     await pages.token_usage_viewer(make_page_request("/token-usage"))
+
+
+@pytest.mark.asyncio
+async def test_failed_capture_clears_itself_so_the_next_request_renders(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """A failed capture uninstalls itself instead of poisoning later requests: once the
+  capture works again, the very next request renders the seeded rows (no server restart)."""
+  ledger_path = tmp_path / "usage" / "ledger.sqlite3"
+  _seed(ledger_path)
+  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
+
+  def boom(ledger: UsageLedger) -> dict[str, int]:
+    raise RuntimeError("capture exploded")
+
+  monkeypatch.setattr("src.core.token_tally.capture_local", boom)
+  with pytest.raises(RuntimeError, match="capture exploded"):
+    await pages.token_usage_viewer(make_page_request("/token-usage"))
+
+  _stub_capture(monkeypatch, ledger_path, {"Codex": 3})
+  body = (await pages.token_usage_viewer(make_page_request("/token-usage"))).body.decode("utf-8")
+  assert {(r["model"], r["output"]) for r in _data_rows(body)} == {
+      ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
+  }

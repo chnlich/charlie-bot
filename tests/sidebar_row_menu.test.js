@@ -141,7 +141,7 @@ test('choosing an item closes the menu, then calls its onSelect', () => {
 
   body.children[0].children[0].fire('click', {});
 
-  assert.deepEqual(events, [[0]], 'onSelect ran after the menu was already closed');
+  assert.deepEqual(events, [['select', 0]], 'onSelect ran after the menu was already closed');
   assertClosed({body, doc, sessionList, win});
 });
 

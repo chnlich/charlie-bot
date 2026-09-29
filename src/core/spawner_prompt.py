@@ -76,8 +76,6 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
     "memory",
 )
 
-_REQUIRED_VERIFY_PROMPT_SECTIONS = ("preamble", "scope")
-
 
 def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
   """Read a marker-sectioned prompt template fresh and return its sections.

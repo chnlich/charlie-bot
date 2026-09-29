@@ -7368,13 +7368,37 @@ from pathlib import Path
 from src.api import pages
 
 
+def real_traces(d: Path) -> list[Path]:
+    # A stale symlink (its checkpoint pruned off storage) is not a trace: the
+    # OSError-guarded stat is the walk rule the M66/M88 corpus finders size by,
+    # and the sizing and the merge must see the same readable set.
+    kept = []
+    for p in d.glob("*.json"):
+        try:
+            p.stat()
+        except OSError:
+            continue
+        kept.append(p)
+    return kept
+
+
 def find_corpus() -> tuple[Path, int]:
     # Worst trace dir: the directory under the documented roots (~/data, ~/scripts)
     # whose *.json traces carry the most bytes; the merged view's dir-merge shape.
-    dirs = [d for root in ("data", "scripts") if (Path.home() / root).is_dir()
-            for d in (Path.home() / root).rglob("*") if d.is_dir() and len(list(d.glob("*.json"))) > 1]
-    best = max(dirs, key=lambda d: sum(p.stat().st_size for p in d.glob("*.json")))
-    return best, sum(p.stat().st_size for p in best.glob("*.json"))
+    best, best_n = None, -1
+    for root in ("data", "scripts"):
+        if not (Path.home() / root).is_dir():
+            continue
+        for d in (Path.home() / root).rglob("*"):
+            if not d.is_dir():
+                continue
+            traces = real_traces(d)
+            if len(traces) < 2:
+                continue
+            n = sum(p.stat().st_size for p in traces)
+            if n > best_n:
+                best, best_n = d, n
+    return best, best_n
 
 
 async def main(paths: list[Path], best_n: int, home: str) -> None:
@@ -7409,7 +7433,7 @@ if __name__ == "__main__":
     os.environ["CHARLIEBOT_HOME"] = home  # scratch cache home; the live home read-only
     best_dir, best_n = find_corpus()
     print(f"worst multi-trace dir: {best_dir}, {best_n / 1e6:.1f} MB")
-    asyncio.run(main(sorted(best_dir.glob("*.json")), best_n, home))
+    asyncio.run(main(sorted(real_traces(best_dir)), best_n, home))
 PYEOF
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" /tmp/opencode/m107_collector.py
 ```
@@ -9401,3 +9425,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-29 | this PR | M129 sidebar root-list changed round, introduced with this PR: the per-row render memoized on the row's identity and overlay/schedule state — interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over the live worst corpus (414 rows, 576056 B decoded, live home read-only) at load 1.98-2.36 one-minute: changed-round median 11.32/10.81/10.86 → 6.07/5.03/5.42 ms (median-of-medians 10.86 → 5.42, −50 %, every paired round faster), decoded size identical across arms (576056 B); byte parity driven in-process on the same corpus and states: the memo-served changed-round body equals a forced full re-render's body (digest 35fba47fc1ff both), and the changed round re-dumps 1 row of 414 where the forced render dumps 414 (counted through a model_dump counter); suite 1145-passed — the 1 frontend-js failure and 25 stash-guard errors are the documented environmental set, a subset of the clean base's own failure set — plus one test (the changed round re-dumps only the moved row, serves bytes identical to a full re-render, and a row that leaves the projection drops its slot); same-round regression watch over the same route family: M119 steady-state memo-hit serve 1.61 ms median at 415 rows (line: rows × 8 µs = 3.3 ms), M8 absent-needle search 3 ms median (line 0.5 s), M56 /status 1.07 ms median (line 3 ms), all inside their lines | the production log showed the root list's served shape is the whole-body memo miss nearly always (908 requests over 4.9 h, zero under 3 ms, median 15 ms — the cron fleet's state churn moves some row's overlay between fetches), and the miss re-rendered every row: the phase probe put the per-row model_dump loop at 4.26 ms of the 8.34 ms in-process render; the memo keys on the row identity the manager's fresh check moves exactly when the row's content moves, with the slot holding the row so its id stays pinned, re-stating the render's remaining inputs (the two state tuples) in the slot, so a stale render can only serve a row whose content provably did not move; the prune keeps the map at the served corpus |
 | 2026-09-29 | this PR | M119 root-list memo-hit serve, the schedule join (row_schedule_fields) memoized on the id set plus the cron snapshot's fingerprint, bounded by the earliest served next-run fire: interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over the live corpus (421 rows, 586074 B decoded, live home read-only) at load 1.49-1.66 one-minute: hit median 1.76/1.83/1.72 → 1.65/1.49/1.48 ms (median-of-medians 1.76 → 1.49, −15 %, every paired round faster), decoded size and digest identical across arms (586074 B, 9fa86713fa9d); same-route-family regression watch: M129 changed-round 5.73/5.79/5.59 → 5.60/5.43/5.13 ms (median-of-medians 5.73 → 5.43, −5 %, every paired round faster, decoded size identical 586098 B — the digest moves with the busy-overlay timestamps each corpus copy stamps), M40 starred 0.26/0.25/0.24 → 0.25/0.23/0.25 ms and group-name reduction 0.26/0.25/0.24 → 0.27/0.23/0.22 ms (the manager-level legs the join never touches), M61 idle-cold archived-page 1.99/1.45 → 1.53 ms and single get_session 0.030/0.045 → 0.030 ms (noise band); suite: the branch full-suite failure set is identical to a clean-HEAD snapshot worktree's (7 failed + 25 stash-guard errors, the vfork/antigravity/frontend-js set of a fresh worktree missing the _vfkspawn build artifact; test_repo_prompt_task_launches's worktree-cleanup assert is a pre-existing race that flakes on the clean main checkout at the same rate — 4 of 6 file runs there) plus one test (the join answer repeats until the snapshot or a served fire moves; a cron config change re-binds inside the served window; a passed fire re-derives the next occurrence) | the whole-body memo hit re-derived the schedule join every request — 442 bound_task_name scans plus per-row dicts, ~390 µs, the largest single hit-path term after the projection fold — to decide a memo key whose answer is a pure function of the id set and the cron snapshot; the stored entry carries the earliest served fire so a delivered next run still advances (the _NEXT_RUN_MEMO rule), a cron config change re-binds through the fingerprint, and the repeat cost is one fingerprint walk (~65 µs); the same join rides /starred, /archived, and the homepage first paint |
 | 2026-09-29 | this PR | M7 token-usage warm serve, the opencode signature probe gated on the db files' (size, mtime_ns) pairs: interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of a raw-ASGI harness driving `GET /token-usage` (one untimed warm pass then 5 timed drives per arm, fresh process per arm per round; scratch `CHARLIEBOT_HOME` — scratch ledger + tally cache, the real sources read-only: the 5.7 GB opencode db, the live claude/codex logs, the live session tree symlinked read-only) at load 2.2-2.9 one-minute: median 470.0/414.9/419.3 → 363.5/356.8/340.4 ms (median-of-medians 419.3 → 356.8, −15 %, every paired round faster, body ~31.8 KB both arms); the probe itself measured 73-75 ms standalone against the live db, read-only, warm and cold connection alike — a full 878 MB message-table scan | the probe re-ran on every `/token-usage` load to decide a signature whose answer is fixed while the db files sit still — a durable commit appends a WAL frame or rewrites the main file, moving one of the two stat pairs, so a load whose pairs equal the last probe's serves that probe's signature without the scan (the same (size, mtime_ns) proof the JSONL walkers' stat-pair signatures use); the gate is process-local (a fresh process probes once — the cron and CLI captures keep the pre-gate shape), the ledger's stored signature semantics are untouched, and the first load after a server start probes once |
+| 2026-09-29 | this PR | M107 collector repaired, the sweep's own machinery (no product-code change): the corpus finder sized directories with a bare `p.stat().st_size` sum, so the worst-dir scan crashed with FileNotFoundError the moment any `*.json` entry was a symlink whose target left storage — this round the whole `~/scripts/20260929_vae_fill_ab/out/step3/traces_pooled/` dir (128 pooled-rank links into a since-vanished `/data` checkpoint mount) tripped it, and every round since that dir landed reported M107 unmeasured; the fix adds the module-level `real_traces` guard (stat each glob hit, drop OSError entries — the same walk rule the M66/M88 corpus finders already carry) and feeds the sizing and the merge from it, so the finder prices readable traces only; verbatim collector, main checkout at origin/main, scratch `CHARLIEBOT_HOME`: before = FileNotFoundError in find_corpus (unmeasured), after = worst dir the 961.9 MB / 12-trace 20260915_webui_freeze_repro corpus, merge build median 4.46 s, max 10.26 s over 3, artifact 77.7 MB, event-identity digest 69328480354c stable across rounds — in range (median < max(8 s, 961.9 MB ÷ 200 MB/s = 4.81 s)) | a pooled-trace dir full of dead checkpoint links is permanent host drift, not a transient mount: the bare-stat sizing turned one stale symlink into a standing-sweep collector that fails every round, and the guard is the pattern the two sibling finders on the same roots already price by |

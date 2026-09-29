@@ -340,13 +340,6 @@ class Charliebot:
         fh.write(json.dumps(line) + "\n")
     return run / "agent.raw.ndjson"
 
-  def raw_master(self, session: str, started: str, raw: str) -> Path:
-    """One master-run capture written verbatim (for shapes other writers produce)."""
-    run = self.root / session / "data" / "master_runs" / started
-    run.mkdir(parents=True, exist_ok=True)
-    (run / "agent.raw.ndjson").write_text(raw)
-    return run / "agent.raw.ndjson"
-
 
 def _result_usage(input_: int, output: int, cache_read: int = 0) -> dict:
   return {

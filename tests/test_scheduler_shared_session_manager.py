@@ -16,6 +16,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    bind_deps_managers,
 )
 
 from src.core import event_types as ET
@@ -60,9 +61,7 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   # The scheduler reloads the process config on every fire; pin the reload to
   # the synthetic home's in-memory cfg.
   monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)

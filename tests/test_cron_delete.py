@@ -7,6 +7,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     append_events,
     apply_config_overrides,
+    bind_deps_managers,
     cron_d_dir,
     dump_yaml,
     make_legacy_cron_session,
@@ -62,11 +63,9 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   stays exactly as it is (it is the user's task-tree node, not the deletion's
   product), and no legacy cron session is archived either."""
   cfg, session_mgr, _scheduler = make_scheduler_setup(tmp_path)
-  from src.api import deps
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   write_nightly_task(temp_home)
   node = await tree.create_task(
       request_id="scheduled-node:nightly",

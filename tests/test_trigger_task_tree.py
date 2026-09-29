@@ -20,6 +20,7 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    bind_deps_managers,
     patch_instructions_content,
 )
 
@@ -70,9 +71,7 @@ def _trigger(session_id: str, trigger_id: str = "trigger-v2-1") -> PendingTrigge
 async def test_trigger_admits_one_durable_input_to_task_tree_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)
   manager = await tree.create_task(

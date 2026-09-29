@@ -21,6 +21,7 @@ import pytest
 from conftest import (
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
     SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
+    bind_deps_managers,
     make_home_config,
     write_thread_meta,
 )
@@ -155,9 +156,7 @@ async def _bound_rig_tree(
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   session = await tree.create_task(
       request_id="scheduled-node:code-health",
       task_parent_id=None,

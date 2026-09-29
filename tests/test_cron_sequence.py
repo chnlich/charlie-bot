@@ -22,6 +22,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    bind_deps_managers,
     patch_instructions_content,
 )
 
@@ -77,9 +78,7 @@ def bound_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   The bound manager node is created per test (each test is async).
   """
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   return cfg, session_mgr, tree
 

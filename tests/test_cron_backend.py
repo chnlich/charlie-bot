@@ -10,6 +10,7 @@ import pytest
 import yaml
 from conftest import (
     OPUS_BACKEND_ID,
+    bind_deps_managers,
     make_cron_client,
     make_scheduler_setup,
     write_nightly_prompt,
@@ -67,11 +68,9 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   """A bound task's node follows the task config: the tick's alignment switches
   the node's backend in place and leaves the scheduler bookkeeping untouched."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.api import deps
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   node = await tree.create_task(
       request_id="scheduled-node:nightly",
       task_parent_id=None,
@@ -112,11 +111,9 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   preserves its last_scheduled_run: the next fire is computed from the true last
   occurrence, not from a rotated generation's empty bookkeeping."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.api import deps
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   node = await tree.create_task(
       request_id="scheduled-node:nightly",
       task_parent_id=None,

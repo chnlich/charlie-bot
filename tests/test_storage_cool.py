@@ -392,8 +392,7 @@ def test_real_sweep_captures_once_before_first_deletion_dry_run_never(
 # ---------------------------------------------------------------------------
 
 
-def test_usage_ledger_handler_summarizes_and_propagates(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_usage_ledger_handler_summarizes_and_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The scheduler's daily capture returns one line per source and never swallows
   a capture failure."""
   from src.core.scheduler import TASK_HANDLERS

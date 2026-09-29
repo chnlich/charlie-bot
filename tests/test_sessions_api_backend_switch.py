@@ -14,7 +14,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import CODEX_BACKEND_OPTION, backend_option, bind_deps_managers
+from conftest import CODEX_BACKEND_OPTION, backend_option, bind_deps_managers, create_scheduled_node
 from conftest import make_sessions_client as _build_client
 
 from src.core.config import CharlieBotConfig
@@ -134,14 +134,7 @@ async def test_switch_bound_node_cross_family_is_400(
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
-  rl = await tree.create_task(
-      request_id="scheduled-node:nightly",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="nightly",
-      backend="claude-opus-5",
-      caller="system")
+  rl = await create_scheduled_node(tree, name="nightly", backend="claude-opus-5")
   # temp_home points HOME (and so cron_dir()) at tmp_path: the binding file the
   # loaded task configs read lives under the same synthetic home.
   assert cfg.charliebot_home == Path(temp_home) / ".charliebot"

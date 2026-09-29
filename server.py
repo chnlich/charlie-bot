@@ -345,7 +345,8 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
   log.info("slack_backfill_done", count=reported)
 
 
-async def _run_discord_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
+async def _run_discord_backfill(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
   """Report Discord summons lost across the restart, once recovery has had its chance.
 
   Waits on the crash-recovery task first so re-attach and the user-message

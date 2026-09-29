@@ -1,4 +1,4 @@
-"""Discord server-side commands — the thread read behind the CLI verb.
+"""Discord server-side commands — the thread read and the setup check behind the CLI verbs.
 
 A Discord-summoned session reads its own thread through ``read_thread`` (the
 internal ``/discord/read`` endpoint): the read pages the whole thread
@@ -8,15 +8,24 @@ returns as read — Discord has no separate ack verb, so the read is the ack.
 With a channel link it reads that channel instead and marks nothing. Every
 Discord call runs inside the server process through the client
 ``discord_listener._bot_client`` builds — the token never reaches the CLI.
-Refusals raise ``ThreadReplyError`` with the HTTP status the endpoint maps
-onto the response.
+``check_setup`` (the internal ``/discord/check``
+endpoint) reports the bot identity, the message-content intent, and the
+per-guild missing permissions, so the operator can see what the bot token can
+and cannot do. Refusals raise ``ThreadReplyError`` with the HTTP status the
+endpoint maps onto the response.
 """
 
 from __future__ import annotations
 
 from src.core import discord_listener, thread_entry
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import DiscordAPIError, DiscordClient, parse_message_link
+from src.core.config import CharlieBotConfig, get_credentials
+from src.core.discord_client import (
+    DiscordAPIError,
+    DiscordClient,
+    message_content_intent_enabled,
+    missing_permissions,
+    parse_message_link,
+)
 from src.core.discord_listener import DISCORD, DiscordThreadAdapter
 from src.core.models import DiscordOrigin
 from src.core.sessions import SessionManager
@@ -146,3 +155,37 @@ async def read_thread(
   if url is not None:
     return await _read_linked_channel(url, limit)
   return await _read_own_thread(session_id, limit, cfg, session_mgr)
+
+
+async def check_setup(cfg: CharlieBotConfig) -> dict:
+  """Report the Discord bot token's setup: identity, intent, and per-guild permissions.
+
+  Refuses with 409 when ``credentials.discord.bot_token`` is unset — there is
+  nothing to check. Otherwise the three ``@me`` reads name the bot user, the
+  application flags (the message-content intent), and every guild's permission
+  bitfield; ``ok`` is the intent on and no guild missing anything. A failed
+  Discord call raises ``ThreadReplyError`` 502 (a 401 means the token is
+  invalid). The readback carries no token.
+  """
+  if get_credentials().get("discord", "bot_token") is None:
+    raise ThreadReplyError(409, "credentials.discord.bot_token is not set")
+  client = discord_listener._bot_client()
+  try:
+    user = await client.get_current_user()
+    application = await client.get_current_application()
+    guilds = await client.list_current_user_guilds()
+  except DiscordAPIError as e:
+    raise ThreadReplyError(502, str(e)) from e
+  intent = message_content_intent_enabled(application["flags"])
+  guild_views = [{
+      "id": g["id"],
+      "name": g["name"],
+      "missing_permissions": missing_permissions(int(g["permissions"])),
+  } for g in guilds]
+  return {
+      "ok": intent and not any(view["missing_permissions"] for view in guild_views),
+      "bot_user": {"id": user["id"], "username": user["username"]},
+      "application_id": application["id"],
+      "message_content_intent": intent,
+      "guilds": guild_views,
+  }

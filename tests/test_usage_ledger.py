@@ -56,8 +56,7 @@ def test_one_record_id_from_two_hosts_counts_once(tmp_path):
 
 
 def test_fallback_excluded_once_any_session_is_native(tmp_path):
-  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a", "sess-b"),
-               model="model-fb", ts=TS_B)
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a", "sess-b"), model="model-fb", ts=TS_B)
   native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",), model="model-native")
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", [fb])
@@ -72,8 +71,7 @@ def test_fallback_excluded_once_any_session_is_native(tmp_path):
 
 def test_rows_equal_for_either_write_order(tmp_path):
   native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",), account="acct-a")
-  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-b",), account="acct-b",
-               ts=TS_B, output=7)
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-b",), account="acct-b", ts=TS_B, output=7)
   with UsageLedger(tmp_path / "native-first.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", [native])
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-f", [fb])
@@ -99,8 +97,7 @@ def test_empty_ts_never_becomes_first_or_last(tmp_path):
   empty = _record("rec-empty", RecordKind.NATIVE, sessions=("sess-e",), ts="")
   early = _record("rec-early", RecordKind.NATIVE, sessions=("sess-a",), ts=TS_A, account="acct-b")
   late = _record("rec-late", RecordKind.NATIVE, sessions=("sess-b",), ts=TS_B)
-  blank = _record(
-      "rec-blank", RecordKind.NATIVE, sessions=("sess-c",), ts="", model="model-blank")
+  blank = _record("rec-blank", RecordKind.NATIVE, sessions=("sess-c",), ts="", model="model-blank")
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [empty, early, late, blank])
     rows = {row.model: row for row in ledger.model_rows()}
@@ -162,8 +159,7 @@ def test_unknown_stored_kind_raises_on_model_rows(tmp_path):
         "INSERT INTO usage (record_id, kind, source, model, account, host, ts,"
         " in_fresh, cache_write, cache_read, output, origin, captured_at)"
         " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("rec-x", "replayed", SOURCE, "model-x", "acct-a", HOST, TS_A, 1, 0, 0, 2,
-         "/logs/x.jsonl", TS_A))
+        ("rec-x", "replayed", SOURCE, "model-x", "acct-a", HOST, TS_A, 1, 0, 0, 2, "/logs/x.jsonl", TS_A))
     ledger._conn.commit()
     with pytest.raises(ValueError):
       ledger.model_rows()

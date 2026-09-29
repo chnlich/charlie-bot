@@ -66,7 +66,7 @@ def cool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CharlieBotConfi
 def no_real_usage_capture(monkeypatch: pytest.MonkeyPatch) -> None:
   """No sweep reads the real home's ledger: the pre-sweep capture is a no-op unless
   a test overrides it."""
-  monkeypatch.setattr(storage_cool, "_capture_usage_before_sweep", lambda: {})
+  monkeypatch.setattr(storage_cool, "_capture_usage_before_sweep", dict)
 
 
 def write_session_meta(cfg: CharlieBotConfig, sid: str, meta: dict) -> Path:

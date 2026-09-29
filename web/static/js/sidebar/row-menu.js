@@ -3,8 +3,9 @@
 // renders a single div.row-menu appended to document.body, fixed-positioned
 // under the anchor's right edge (flipped above the anchor near the viewport
 // bottom, clamped inside the viewport horizontally), and closeRowMenu removes
-// it. Slice 1 of the settings-menu plan: the component only -- no row renderer
-// calls it yet; later slices attach anchors.
+// it. The normal row's Settings button is the first anchor (groups.js's
+// openSessionRowMenu); archived rows and group headers attach in later
+// slices.
 // ---------------------------------------------------------------------------
 (function() {
   const Sidebar = globalThis.Sidebar;
@@ -61,10 +62,11 @@
     button.className = item.danger ? 'row-menu-item row-menu-item-danger' : 'row-menu-item';
     button.setAttribute('role', 'menuitem');
     button.textContent = item.label;
-    // Close first, then act: onSelect sees the menu already gone.
-    button.addEventListener('click', function() {
+    // Close first, then act: onSelect sees the menu already gone. The click
+    // event rides along -- rename anchors its input off the event.
+    button.addEventListener('click', function(event) {
       closeRowMenu();
-      item.onSelect();
+      item.onSelect(event);
     });
     menu.appendChild(button);
   }

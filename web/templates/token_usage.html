@@ -147,8 +147,9 @@
   <h2><span class="n">5</span>Methodology</h2>
   <ul>
     <li><b>Sources:</b> the same four local-log sources (Claude Code, Codex, opencode, charlie-bot) feed a
-      per-call ledger at <code>~/.charliebot/usage/ledger.sqlite3</code>: every capture &mdash; a page load like
-      this one, the daily cron, the start of every storage-cool sweep, <code>charliebot usage-ledger capture</code>
+      per-call ledger (<code>usage/ledger.sqlite3</code> under this profile&rsquo;s charliebot home): every
+      capture &mdash; a page load like this one, the daily cron, the start of every storage-cool sweep,
+      <code>charliebot usage-ledger capture</code>
       &mdash; upserts one record per API call into it (deduped on the CLI&rsquo;s own message id), and this page
       reads its rows from that ledger alone. No vendor usage API is called, and ledger rows are never deleted,
       so the numbers stop shrinking when the source logs they were parsed from are pruned. charlie-bot thread

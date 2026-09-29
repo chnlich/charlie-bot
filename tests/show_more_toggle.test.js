@@ -11,8 +11,7 @@ const { loadToggleHarness } = require('./chat_rendering_context_stub');
 
 function loadContext() {
   // usage.js stands in as the extra module: the harness loads the real
-  // renderer, pins Math.random for deterministic toggle ids, and the deleted
-  // workers.js card panel no longer takes part.
+  // renderer and pins Math.random for deterministic toggle ids.
   return loadToggleHarness('usage.js', {restoreBottomPin: () => {}});
 }
 

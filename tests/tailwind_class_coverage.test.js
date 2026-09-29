@@ -2,8 +2,8 @@
 // Coverage boundary: this test only asserts that Tailwind utility classes
 // produced by the render paths the fixture below actually exercises --
 // renderMessage() (user/assistant/tool-activity/system/delegate/worker/plan/
-// clone/trigger/separator), the workers-tab card renderer, the backlog card
-// renderer, and the plan compact-card builder -- are present in the committed
+// clone/trigger/separator), the backlog card renderer, and the plan
+// compact-card builder -- are present in the committed
 // web/static/css/tailwind.css. It says nothing about class usage in code
 // paths (or templates) the fixture does not touch.
 // ---------------------------------------------------------------------------

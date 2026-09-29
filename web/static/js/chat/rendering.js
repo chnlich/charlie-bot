@@ -724,7 +724,7 @@ function renderMessage(msg, sessionId) {
   }
   if (msg.role === "run_delivery") {
     // The worker transcript's close: the delivery summary and the four
-    // evidence links the old leaf banner showed (sidebar/workers.js is gone).
+    // evidence links.
     var delivered = msg.completed;
     var palette = delivered ? 'border-green-500/50 bg-green-500/10' : 'border-slate-600 bg-slate-800';
     var labelClass = delivered ? 'text-green-300' : 'text-slate-400';

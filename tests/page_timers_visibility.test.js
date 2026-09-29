@@ -1,9 +1,9 @@
 // ---------------------------------------------------------------------------
 // A hidden tab must do no periodic work: no session-status, TUI-status,
-// worker-list, active-session-view, thread-detail or ext-usage poll, and no
-// thinking tick. Every timer goes through the page-timers registry, so this
-// exercises the real registry plus the real call sites in app.js, the sidebar
-// modules, workers.js and ext_usage.js.
+// active-session-view, transcript or ext-usage poll, and no thinking tick.
+// Every timer goes through the page-timers registry, so this exercises the
+// real registry plus the real call sites in app.js, the sidebar modules and
+// ext_usage.js.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');

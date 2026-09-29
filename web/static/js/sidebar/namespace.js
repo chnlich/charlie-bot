@@ -35,8 +35,6 @@
   exposeState('switching', false);
   exposeState('currentFilter', 'all');
   exposeState('statusPollMs', 3000);
-  exposeState('workersLoadedForSession', null);
-  exposeState('workersLoadInflightForSession', null);
   exposeState('thinkingStart', null);
 
   Sidebar.wire = wire;

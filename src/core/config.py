@@ -286,6 +286,14 @@ class ServerConfig(BaseModel):
   session_memory_max_mb: int = 12288
   session_swap_max_mb: int = 0
 
+  # Worker-class launch precheck: the filesystems holding the CharlieBot data
+  # dir (~/.charliebot) and the worktree root must hold at least this much
+  # free space, or the run stays queued with a blocked report to its parent
+  # (an environment install is the write-heavy case). 0 disables the check.
+  # Manager turns never check: they write little and are the path that tells
+  # the operator about the shortage.
+  min_free_disk_gib: int = 10
+
 
 class PathsConfig(BaseModel):
   """``paths:`` section: repos to scan and where worker worktrees live."""

@@ -1163,16 +1163,11 @@ class AgentBackend(ABC):
   def detach(self) -> None:
     """Forget the running child without signalling it (graceful-shutdown let-go).
 
-    The asyncio subprocess transport kills a still-running child when closed
-    (BaseSubprocessTransport.close), and every transport is closed at
-    event-loop teardown — so "no signal at shutdown" only holds if the
-    transport's process handle is dropped first. The run's ground truth stays
-    on disk (raw log + cursor + pid/pid_start); the next boot re-attaches.
+    The launch path spawns through ``spawn_subprocess`` (src/agents/backends/
+    spawn.py) — a ``subprocess.Popen`` (or the vfork twin) reaped by a daemon
+    thread, with no asyncio subprocess transport — so nothing at event-loop
+    teardown signals the child: dropping the handle is the whole let-go. The
+    run's ground truth stays on disk (raw log + cursor + pid/pid_start); the
+    next boot re-attaches.
     """
-    proc = self._proc
-    if proc is None:
-      return
-    transport = getattr(proc, "_transport", None)
-    if transport is not None and getattr(transport, "_proc", None) is not None:
-      transport._proc = None
     self._proc = None

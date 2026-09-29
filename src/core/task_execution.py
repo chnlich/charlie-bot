@@ -37,11 +37,14 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import errno
 import functools
 import json
+import shutil
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -118,6 +121,47 @@ class LaunchSettlement:
 
 
 LAUNCH_STARTED = "started"
+
+# The end-landing retry's cadence: the first round runs immediately, later
+# rounds every interval, with no round limit. A module constant so tests
+# shorten it instead of sleeping 30 s.
+RUN_END_LANDING_RETRY_INTERVAL_SECONDS = 30.0
+
+_OUT_OF_SPACE_ERRNOS = frozenset({errno.ENOSPC, errno.EDQUOT})
+
+
+def is_out_of_space_error(exc: BaseException) -> bool:
+  """Whether *exc* is a disk-full error: an OSError with errno ENOSPC or EDQUOT
+  on the exception itself or anywhere on its ``__cause__``/``__context__`` chain.
+
+  The one owner of the predicate every end-landing retry handover reads. Only
+  out-of-space errors enter the retry — they clear once space is freed — while
+  any other error keeps the immediate landing, so a code defect in the end path
+  never retries forever.
+  """
+  seen: set[int] = set()
+  current: BaseException | None = exc
+  while current is not None and id(current) not in seen:
+    seen.add(id(current))
+    if isinstance(current, OSError) and current.errno in _OUT_OF_SPACE_ERRNOS:
+      return True
+    current = current.__cause__ or current.__context__
+  return False
+
+
+def free_disk_gib(path: Path) -> float:
+  """Free bytes on the filesystem holding *path*, in GiB.
+
+  A not-yet-created path (a fresh worktree root) probes the nearest existing
+  ancestor — the filesystem that would hold it.
+  """
+  probe = path
+  while not probe.exists():
+    parent = probe.parent
+    if parent == probe:
+      raise FileNotFoundError(f"no existing ancestor to probe for {path}")
+    probe = parent
+  return shutil.disk_usage(probe).free / (1024 ** 3)
 
 
 def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
@@ -262,6 +306,15 @@ class TaskExecutionAdapter:
     # the instance's own workspace dirs. None leaves production behavior
     # unchanged.
     self.launch_workspace_guard: Callable[[Path], None] | None = None
+    # Background-follow registry, same shape as _launch_inflight: the (session,
+    # run) pairs whose resume follow THIS process currently drives. Maintained
+    # by resume_run — a worker follow leaves when its resume_run finishes, a
+    # manager-turn follow only when its master-queue future resolves. The
+    # end-landing retry's node reconcile pass skips these runs (boot reconcile
+    # assumes no in-process follower; the retry runs while the server is live).
+    self._resume_follows: set[tuple[str, str]] = set()
+    # The end-landing retry tasks: at most one per node (session id -> task).
+    self._landing_retries: dict[str, asyncio.Task] = {}
 
   # ------------------------------------------------------------------
   # The dispatcher seam
@@ -393,6 +446,108 @@ class TaskExecutionAdapter:
     self._arm_launch_settlement(key)
     self._schedule_launch(session_id, run_id, prompt=prompt)
 
+  # ------------------------------------------------------------------
+  # End-landing retry (out-of-space run endings converge without a restart)
+  # ------------------------------------------------------------------
+
+  def start_run_end_landing_retry(self, session_id: str, run_id: str | None = None) -> None:
+    """Start the node's end-landing retry task; a second request is a no-op.
+
+        One retry task per node exists at a time. The task re-runs the node's
+        boot reconcile pass immediately, then every
+        :data:`RUN_END_LANDING_RETRY_INTERVAL_SECONDS`, until a round completes
+        without an out-of-space error — the pass drains dead runs, re-attaches
+        live ones, repairs half-written end metadata, and replays the
+        stable-id-deduped deliveries. No durable state: every round re-derives
+        everything from on-disk facts, the task lives in process memory only,
+        and the next boot's reconcile takes over after a stop.
+        """
+    if session_id in self._landing_retries:
+      return
+    from src.core.tasks import create_logged_task
+
+    self._landing_retries[session_id] = create_logged_task(
+        self._run_end_landing_retry(session_id, run_id),
+        name=f"run-end-landing-retry-{session_id[:8]}")
+
+  async def _run_end_landing_retry(self, session_id: str, run_id: str | None) -> None:
+    """The retry loop: reconcile the node until a round raises no out-of-space.
+
+        A round that raises out-of-space logs ``run_end_landing_retry`` and
+        waits one interval. Any other exception keeps the existing node-error
+        logging and ends the task — a non-space error never retries.
+        """
+    try:
+      while True:
+        try:
+          from src.core import task_recovery
+          counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
+          await task_recovery._reconcile_node(
+              session_id, self._tree, self, counters, self._cfg,
+              is_driven=lambda run: self._drives_run(session_id, run))
+          return  # a clean round ends the retry
+        except asyncio.CancelledError:
+          raise
+        except Exception as exc:
+          if not is_out_of_space_error(exc):
+            log.exception("task_recovery_node_failed", session=session_id)
+            return
+          log.warning(
+              "run_end_landing_retry",
+              session=session_id,
+              run_id=run_id,
+              error=f"{type(exc).__name__}: {exc}"[:500])
+          await asyncio.sleep(RUN_END_LANDING_RETRY_INTERVAL_SECONDS)
+    finally:
+      self._landing_retries.pop(session_id, None)
+
+  def _drives_run(self, session_id: str, run: RunRecord) -> bool:
+    """Whether this process is already driving *run*: its execute task is in
+    flight, or a resume follow (worker or master-queue manager turn) holds it."""
+    key = (session_id, run.id)
+    return key in self._launch_inflight or key in self._resume_follows
+
+  def follow_run_in_background(self, session_id: str, run_id: str) -> None:
+    """Schedule one run's resume follow the way boot reconcile's step 2 does,
+    handing an out-of-space follow failure to the end-landing retry entry.
+
+        The follow pair is registered here, before the task exists: between
+        this schedule and the follow's first slice another coroutine (the
+        end-landing retry's node reconcile pass) can judge the same run, and
+        an unregistered window there would schedule a second follower.
+        """
+    from src.core.tasks import create_logged_task
+
+    self._resume_follows.add((session_id, run_id))
+    create_logged_task(self._follow_run_background(session_id, run_id), name=f"task-resume-{run_id[:8]}")
+
+  async def _follow_run_background(self, session_id: str, run_id: str) -> None:
+    try:
+      await self.resume_run(session_id, run_id)
+    except Exception as exc:
+      if is_out_of_space_error(exc):
+        self.start_run_end_landing_retry(session_id, run_id)
+      raise
+
+  def _track_manager_follow(self, session_id: str, run_id: str, future: asyncio.Future) -> None:
+    """Release the manager-turn follow's registry key when the master queue
+    resolves it, and hand an out-of-space follow failure to the retry entry.
+
+        The future is never awaited — boot reconcile must not wait on the
+        master queue — so the done-callback is the one release point (a worker
+        follow releases in resume_run's own finally).
+        """
+
+    def _follow_done(fut: asyncio.Future) -> None:
+      self._resume_follows.discard((session_id, run_id))
+      if fut.cancelled():
+        return
+      exc = fut.exception()
+      if exc is not None and is_out_of_space_error(exc):
+        self.start_run_end_landing_retry(session_id, run_id)
+
+    future.add_done_callback(_follow_done)
+
   def _schedule_launch(
       self,
       session_id: str,
@@ -413,12 +568,31 @@ class TaskExecutionAdapter:
         # failure instead of polling forever behind it. The exception
         # still propagates (the logging task owner records it).
         self._settle_launch(key, f"failed-to-start: {exc}")
+        if is_out_of_space_error(exc):
+          await self._note_launch_out_of_space(session_id, run_id)
         raise
       finally:
         self._launch_inflight.discard(key)
       self._settle_launch(key, verdict)
 
     create_logged_task(_execute_and_release(), name=f"task-run-{run_id[:8]}")
+
+  async def _note_launch_out_of_space(self, session_id: str, run_id: str) -> None:
+    """Hook 1 of the end-landing retry: the launch path died out of space.
+
+        When the run's process is dead, the worker header timer the finish
+        would have closed stays open — close it here (process memory only, no
+        disk write) — and start the node's retry task so the node reconcile
+        pass drains the run from its raw log and lands the end record once
+        space returns.
+        """
+    run = await self._tree.runs.get_run(session_id, run_id)
+    if run is not None and run.pid is not None:
+      from src.core.runs import read_host_boot_time
+      if not runs.is_run_alive(run.pid, run.pid_start, run.started_at, read_host_boot_time()):
+        from src.core.thinking_state import clear_run_busy
+        clear_run_busy(session_id, run_id)
+    self.start_run_end_landing_retry(session_id, run_id)
 
   async def execute_run(
       self,
@@ -475,6 +649,17 @@ class TaskExecutionAdapter:
           reason = f"run {run_id} has a durable stop request"
           log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
           withheld = (meta, run, reason)
+        else:
+          # Trade-off 1: worker-class runs are the write-heavy launches
+          # (environment installs, test runs) — below the configured free-space
+          # floor they stay queued with a blocked report instead of dying
+          # mid-run. Manager turns always launch: they write little and are the
+          # path that reports the shortage.
+          if meta.profile == "worker" and run.kind in WORKER_KINDS:
+            reason = self._disk_headroom_withhold_reason()
+            if reason is not None:
+              log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
+              withheld = (meta, run, reason)
     if withheld is not None:
       meta, run, reason = withheld
       return await self._record_launch_withheld(meta, run, reason)
@@ -514,6 +699,22 @@ class TaskExecutionAdapter:
       await self._land_launch_failure(meta, run, exc)
       raise
     return LAUNCH_STARTED
+
+  def _disk_headroom_withhold_reason(self) -> str | None:
+    """The worker-class precheck's disk verdict, or None when launching may proceed.
+
+        Both filesystems a worker launch writes to are checked: the one holding
+        the CharlieBot data dir and the one holding the worktree root.
+        ``server.min_free_disk_gib`` 0 disables the check.
+        """
+    min_gib = self._cfg.server.min_free_disk_gib
+    if min_gib <= 0:
+      return None
+    for path in (self._cfg.charliebot_home, Path(self._cfg.paths.worktree_dir)):
+      free_gib = free_disk_gib(path)
+      if free_gib < min_gib:
+        return f"disk free {free_gib:.1f} GiB, below {min_gib} GiB ({path})"
+    return None
 
   async def _record_launch_withheld(self, meta: SessionMetadata, run: RunRecord, reason: str) -> str:
     """Record one withheld launch durably and report it to the parent.
@@ -577,10 +778,38 @@ class TaskExecutionAdapter:
         Withheld and refused launch verdicts never reach this handler: they
         keep their no-terminal-fact semantics. The exception itself still
         propagates to the launch task's logging owner with its traceback.
+
+        A launched run (it has a pid) that failed out of space is the one
+        exception to the immediate landing: only the error evidence is
+        written, the run stays unfinished, and the node reconcile pass drains
+        it from its raw log once space returns — landing a failed end record
+        here could contradict a success fact the delivery stage has yet to
+        read. Any other error keeps today's immediate landing, whose delivery
+        reads the durable outcome (never a literal ``failed``): a run with a
+        success fact that hits a further write error during delivery must not
+        send a contradicting failed report.
         """
     session_id, run_id = meta.id, run.id
     log.error(
         "task_run_launch_failed", session_id=session_id, run_id=run_id, kind=run.kind, error=str(exc), exc_info=True)
+    # The precheck-time record predates the launch: the pid (and worktree
+    # facts) landed during execution, so the durable record decides whether
+    # this run launched.
+    fresh = await self._tree.runs.get_run(session_id, run_id)
+    if fresh is not None:
+      run = fresh
+    if run.pid is not None and is_out_of_space_error(exc):
+      try:
+        error_text = f"{type(exc).__name__}: {exc}"[:2000]
+        await self._record_launch_error_event(session_id, run_id, error_text)
+      except Exception as land_exc:
+        log.error(
+            "task_run_launch_failure_landing_failed",
+            session_id=session_id,
+            run_id=run_id,
+            error=str(land_exc),
+            exc_info=True)
+      return
     try:
       error_text = f"{type(exc).__name__}: {exc}"[:2000]
       await self._record_launch_error_event(session_id, run_id, error_text)
@@ -589,7 +818,10 @@ class TaskExecutionAdapter:
       if fresh is not None:
         run = fresh
       if meta.profile == "worker":
-        await self._after_worker_run(meta, run, "failed")
+        # The durable outcome, exactly as _finalize_worker_run reads it: the
+        # first terminal fact wins over this landing's literal "failed".
+        durable = await self._tree.runs.terminal_outcome_of(session_id, run_id) or "failed"
+        await self._after_worker_run(meta, run, durable)
       else:
         await self._tree.dispatch.dispatch_pending(session_id)
     except Exception as land_exc:
@@ -601,6 +833,11 @@ class TaskExecutionAdapter:
           run_id=run_id,
           error=str(land_exc),
           exc_info=True)
+      if is_out_of_space_error(land_exc):
+        # A run that never launched keeps its queued registration: the node
+        # reconcile pass's dispatch re-dispatches it after space returns, the
+        # same as after a restart today.
+        self.start_run_end_landing_retry(session_id, run_id)
 
   async def _record_launch_error_event(self, session_id: str, run_id: str, error_text: str) -> None:
     """Write the launch error into the run's events log as durable evidence.
@@ -1015,6 +1252,7 @@ class TaskExecutionAdapter:
       *,
       exit_code: int,
       error: str,
+      ended_at: datetime | None = None,
   ) -> str:
     """Land one worker Run's observation and terminal fact; returns the durable outcome.
 
@@ -1038,7 +1276,8 @@ class TaskExecutionAdapter:
         events_ref=str(run_dir / RUN_EVENTS_NAME),
         result_ref=str(raw_path),
     )
-    await self._tree.dispatch.finish_run(session_id, run_id, outcome=outcome, exit_code=exit_code if not error else -1)
+    await self._tree.dispatch.finish_run(
+        session_id, run_id, outcome=outcome, exit_code=exit_code if not error else -1, ended_at=ended_at)
     durable = await self._tree.runs.terminal_outcome_of(session_id, run_id) or outcome
     if error:
       log.warning("task_run_error", session_id=session_id, run_id=run_id, error=error[:500])
@@ -1350,7 +1589,35 @@ class TaskExecutionAdapter:
         the recovery pass re-drives missing follow-ups for terminal Runs
         separately, so a Run whose process ended before its follow-up ran is
         never skipped forever.
+
+        While the follow runs, the (session, run) pair sits in
+        ``_resume_follows`` — the end-landing retry's node reconcile pass skips
+        runs this process is already driving. A worker follow releases the
+        pair when this method's follow finishes; a manager-turn follow releases
+        only when its master-queue future resolves (the follow outlives this
+        call). A process dead on entry is a drain: its ``ended_at`` is the raw
+        log's last write time, not the landing write time.
         """
+    # The follow pair is registered for the whole call — including the
+    # re-checks, so a caller's pre-registered background follow never outlives
+    # an early return — with one release point below, unless the manager-turn
+    # future's done-callback took the ownership (a manager-turn follow
+    # outlives this call).
+    key = (session_id, run_id)
+    self._resume_follows.add(key)
+    future_owned = False
+    try:
+      future_owned = await self._resume_run_checked(session_id, run_id, is_alive)
+    finally:
+      if not future_owned:
+        self._resume_follows.discard(key)
+
+  async def _resume_run_checked(
+      self, session_id: str, run_id: str, is_alive: Callable[[], bool] | None) -> bool:
+    """resume_run's checks and follow; True when the manager-turn future's
+    done-callback took over the caller's follow-pair release."""
+    """resume_run's checks and follow, under the caller's follow-pair
+    registration."""
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
@@ -1359,7 +1626,7 @@ class TaskExecutionAdapter:
       raise TaskInvalidError(f"run {run_id} records no launched process identity; nothing to re-attach")
     events = tree.runs.load_events_sync(session_id)
     if tree.runs.run_has_terminal_fact(run, events):
-      return
+      return False
     if is_alive is None:
       # The re-evaluable probe, not a captured boolean: the follow must
       # observe the matching process ENDING (pid reuse and descendants
@@ -1371,25 +1638,49 @@ class TaskExecutionAdapter:
     meta = await tree.load_meta(session_id)
     if meta is None:
       raise TaskNotFoundError(f"task {session_id} not found")
-    if is_alive():
+    alive_on_entry = is_alive()
+    ended_at: datetime | None = None
+    if alive_on_entry:
       # A re-attached live Run re-marks the busy interval the restart
       # dropped: a worker node's thinking_since re-opens at the Run's
       # recorded started_at (a manager turn's re-attach re-marks through
       # the master queue's own resume enqueue). A drain (is_alive False)
       # converges straight to the durable terminal fact and marks nothing.
       await tree.runs.notify_liveness(session_id, run, launched=True)
+    else:
+      # The drain rule: the process ended unseen, so its end time is the raw
+      # log's last write — never the landing write time. An absent raw log
+      # keeps the write-time default (ended_at stays None).
+      ended_at = runs.raw_completion_time(tree.runs.run_dir(session_id, run_id) / runs.RAW_LOG_NAME)
     option = self._resolve_run_backend(run)
     if meta.profile == "manager" and run.kind == "manager_turn":
-      await self._resume_manager_turn(meta, run, option, is_alive)
-      return
+      future = await self._resume_manager_turn(meta, run, option, is_alive, ended_at=ended_at)
+      # Never awaited: boot reconcile must not wait on the master queue. The
+      # done-callback releases the follow pair and routes an out-of-space
+      # follow failure to the end-landing retry.
+      self._track_manager_follow(session_id, run_id, future)
+      return True
     if meta.profile == "worker" and run.kind in WORKER_KINDS:
-      await self._resume_worker_run(meta, run, option, is_alive)
-      return
+      await self._resume_worker_run(meta, run, option, is_alive, ended_at=ended_at)
+      return False
     raise TaskInvalidError(f"run {run_id} (kind={run.kind}) has no resume adapter")
 
   async def _resume_manager_turn(
-      self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: Callable[[], bool]) -> None:
-    """Re-attach a v2 manager turn through the per-session queue's follow path."""
+      self,
+      meta: SessionMetadata,
+      run: RunRecord,
+      option: BackendOption,
+      is_alive: Callable[[], bool],
+      *,
+      ended_at: datetime | None = None,
+  ) -> asyncio.Future:
+    """Re-attach a v2 manager turn through the per-session queue's follow path.
+
+        Returns the future the queue consumer resolves with the followed
+        turn's result: the caller keeps it (never awaits it) so the follow's
+        out-of-space failure can reach the end-landing retry after this call
+        has returned.
+        """
     from src.agents.master_cc import enqueue_master_resume
     from src.agents.master_cc_state import MasterRunRecord, TaskRunBinding
 
@@ -1418,11 +1709,12 @@ class TaskExecutionAdapter:
           run.id,
           outcome="success" if exit_code == 0 else "failed",
           exit_code=exit_code,
+          ended_at=ended_at,
       )
       # Same serialized-input follow-up as a fresh manager turn.
       await self._tree.dispatch.dispatch_pending(meta.id)
 
-    await enqueue_master_resume(
+    return await enqueue_master_resume(
         self._cfg,
         meta,
         record,
@@ -1435,8 +1727,20 @@ class TaskExecutionAdapter:
     )
 
   async def _resume_worker_run(
-      self, meta: SessionMetadata, run: RunRecord, option: BackendOption, is_alive: Callable[[], bool]) -> None:
-    """Re-attach a worker Run through Worker.resume's tail-follow."""
+      self,
+      meta: SessionMetadata,
+      run: RunRecord,
+      option: BackendOption,
+      is_alive: Callable[[], bool],
+      *,
+      ended_at: datetime | None = None,
+  ) -> None:
+    """Re-attach a worker Run through Worker.resume's tail-follow.
+
+        ``ended_at`` carries the drain rule's end time (the raw log's last
+        write) for a process dead on entry; a live re-attach passes None and
+        keeps the observed-exit write time.
+        """
     session_id, run_id = meta.id, run.id
     run_dir = self._tree.runs.run_dir(session_id, run_id)
     events_log = run_dir / RUN_EVENTS_NAME
@@ -1457,8 +1761,31 @@ class TaskExecutionAdapter:
     # Session-level notices reach the session chat exactly as a fresh run's do.
     worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
     exit_code = await worker.resume(is_alive=is_alive, on_silence=None)
-    durable_outcome = await self._finalize_worker_run(meta, run, option, exit_code=exit_code, error="")
+    durable_outcome = await self._finalize_worker_run(
+        meta, run, option, exit_code=exit_code, error="", ended_at=ended_at)
     await self._after_worker_run(meta, run, durable_outcome)
+
+  async def repair_end_metadata(self, session_id: str, run: RunRecord, outcome: str) -> None:
+    """Fill a terminal Run's half-written end metadata (the node reconcile
+    pass's step-3 repair; the boot reconcile repairs it the same way).
+
+        The ``run_finished`` fact landed but its metadata write failed (out of
+        space), so ``ended_at``/``exit_code`` never reached metadata.json. Both
+        are re-derived from the raw log by the drain rule — the result scan's
+        exit code, the last write time — and ``finish_run``'s repeat path fills
+        only the empty fields; values already written stay unchanged. The
+        outcome argument is advisory only: the durable fact is authoritative.
+        """
+    raw_path = self._tree.runs.run_dir(session_id, run.id) / runs.RAW_LOG_NAME
+    ended_at = runs.raw_completion_time(raw_path)
+    exit_code = -1
+    if raw_path.is_file():
+      option = self._resolve_run_backend(run)
+      _events, _result, scanned = await asyncio.to_thread(
+          runs.scan_result_exit, raw_path, self._fresh_translate(option))
+      exit_code = scanned
+    await self._tree.dispatch.finish_run(
+        session_id, run.id, outcome=outcome, exit_code=exit_code, ended_at=ended_at)
 
   # ------------------------------------------------------------------
   # Post-finish delivery chain

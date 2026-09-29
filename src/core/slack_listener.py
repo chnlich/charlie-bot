@@ -46,7 +46,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
 
-from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
 from src.core import thread_entry, timeouts
@@ -57,7 +56,6 @@ from src.core.master_trigger import trigger_master
 from src.core.models import (
     CreateSessionRequest,
     PendingTrigger,
-    SessionMetadata,
     SessionStatus,
     SlackOrigin,
     TriggerStatus,
@@ -704,48 +702,13 @@ class SlackThreadAdapter(ThreadAdapter):
 SlackReplyError = ThreadReplyError
 
 
-async def _require_slack_thread_session(session_id: str, session_mgr: SessionManager) -> SessionMetadata:
-  """The session named by *session_id* when it exists and carries a Slack thread.
-
-  The reply-path preamble shared by ``assert_thread_fresh``, ``ack_messages``,
-  and ``post_reply``. Refusals raise ``SlackReplyError``: 404 unknown session,
-  409 no Slack thread.
-  """
-  meta = await session_mgr.get_session(session_id)
-  if meta is None:
-    raise SlackReplyError(404, SESSION_NOT_FOUND_DETAIL)
-  if meta.slack_origin is None:
-    raise SlackReplyError(409, "Session has no Slack thread")
-  return meta
-
-
 async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
 
-  The reply-path gate, run by the slack/reply endpoint before ``post_reply``:
-  a reply to a thread the running round has not acked through would answer a
-  stale state, so nothing posts until the ack advances the watermark. Refusals
-  raise ``SlackReplyError``: 404 unknown session, 409 no Slack thread, then 412
-  with the structured ``stale_thread`` payload naming each unread message's ts,
-  user, and a text preview; with a None watermark the whole thread tail counts.
+  One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
+  on the Slack adapter; the refusal shapes live there.
   """
-  meta = await _require_slack_thread_session(session_id, session_mgr)
-  unread = await _fetch_unread_eligible(_bot_client(), meta.slack_origin, cfg, meta.slack_watermark_ts)
-  if not unread:
-    return
-  raise SlackReplyError(
-      412, {
-          "error": "stale_thread",
-          "new_messages":
-              [
-                  {
-                      "ts": m["ts"],
-                      "user": m.get("user"),
-                      "text_preview": (m.get("text") or "")[:_TEXT_PREVIEW_CHARS],
-                  } for m in unread
-              ],
-          "watermark_ts": meta.slack_watermark_ts,
-      })
+  return await thread_entry.assert_thread_fresh(SlackThreadAdapter(_bot_client()), session_id, cfg, session_mgr)
 
 
 async def ack_messages(
@@ -761,7 +724,7 @@ async def ack_messages(
   small ack event lands in the session log for the audit trail, and re-acking
   ids at or below the watermark is an idempotent no-op counted as acked.
   """
-  meta = await _require_slack_thread_session(session_id, session_mgr)
+  meta = await thread_entry.require_thread_session(SLACK, session_id, session_mgr)
   ids = sorted(set(message_ids))
   if not ids:
     raise SlackReplyError(422, "message_ids is empty")
@@ -828,7 +791,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   text plus one line naming any application-route links, which stay as written and
   reach the operator alone.
   """
-  meta = await _require_slack_thread_session(session_id, session_mgr)
+  meta = await thread_entry.require_thread_session(SLACK, session_id, session_mgr)
   if not text.strip():
     raise SlackReplyError(422, "Reply text is empty")
 

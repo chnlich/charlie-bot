@@ -264,6 +264,10 @@ class DiscordClient:
         f"/channels/{channel_id}/messages/{message_id}/reactions/{urllib.parse.quote(emoji, safe='')}/@me",
     )
 
+  async def get_message(self, channel_id: str, message_id: str) -> dict:
+    """GET /channels/{channel_id}/messages/{message_id}; returns the one message object."""
+    return await self._request("GET", f"/channels/{channel_id}/messages/{message_id}")
+
   async def get_messages(self, channel_id: str, *, after: str | None = None, limit: int = 100) -> list[dict]:
     """GET /channels/{channel_id}/messages with optional ``after`` and
     ``limit`` (1 to 100); returned oldest first by integer id, though Discord

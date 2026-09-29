@@ -203,6 +203,20 @@ async def test_too_large_flags_413_and_code_40005():
 
 
 @pytest.mark.asyncio
+async def test_get_message_fetches_one_message_by_id():
+  """get_message GETs the single-message path and returns its object as is."""
+  body = {"id": "222222222222222222", "content": "hello", "author": {"id": "333333333333333333"}}
+
+  def handler(request: httpx.Request) -> httpx.Response:
+    seen["url"] = str(request.url)
+    return httpx.Response(200, json=body)
+
+  seen: dict = {}
+  assert await _client(handler).get_message("111111111111111111", "222222222222222222") == body
+  assert seen["url"] == f"{BASE_URL}/channels/111111111111111111/messages/222222222222222222"
+
+
+@pytest.mark.asyncio
 async def test_get_messages_sorts_oldest_first_by_integer_id():
   """Discord returns newest first; ids of different digit counts sort as integers."""
 

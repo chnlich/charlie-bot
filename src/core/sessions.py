@@ -2364,6 +2364,12 @@ class SessionManager:
 
       create_logged_task(deliver_done(session_id, event, self._cfg, self), name=f"slack-deliver-{session_id}")
 
+      # lazy: discord_listener imports SessionManager from this module at top level
+      from src.core import discord_listener
+
+      create_logged_task(
+          discord_listener.deliver_done(session_id, event, self._cfg, self), name=f"discord-deliver-{session_id}")
+
   async def prime_aggregator(self, session_id: str) -> int:
     """Ensure the live aggregator exists before a durable append; return its epoch.
 

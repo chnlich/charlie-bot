@@ -133,6 +133,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M126 startup task-tree reconcile, closed reviewed nodes | M126 collector below | seconds per closed node of one reconcile_task_tree pass; git fetch invocations per pass | median < 0.005 s per closed node; 0 fetches | — (introduced with its first history row) |
 | M127 server stop latency, unanswered Socket Mode close | M127 collector below | seconds from SIGINT to server process exit with the Slack listener connected to an endpoint that never answers a close frame; slack_listener_ms from the charliebot_shutdown line as the mechanism witness | median < 2.0 s | — (introduced with its first history row) |
 | M128 tree-page activity derivation, warm-index repeat over the runs-bearing corpus | M128 collector below | seconds per repeat `GET /api/sessions/tree` request (warm index, warm caches) over the live corpus's task nodes with their run records (the record's metadata.json only — the derivation reads the record, never a run's raw log or events file); the first timed round is reported, not the metric — the cold pass just derived every node, so it reads the post-bump rebuild, not the repeat | repeat median < max(0.005 s, task nodes × 0.000025 s) (the after band reads 2.52-6.07 ms at 355-366 task nodes — 7-9.5 µs/node quiet, 16.6 µs/node in the load-3.46 round — over the memo-key checks; the line sits ~1.5× over the band top, the M119 line's convention, so a new per-node disk term trips it while host-load noise stays inside) | — (introduced with its first history row) |
+| M129 sidebar root-list changed round | M129 collector below | seconds per `GET /api/sessions/` request with a busy interval closed and the next opened since the previous request (the turn start/stop churn — `thinking_state.mark_busy`/`clear_busy` alternating over two active sessions between timed rounds; round 1 only opens, every later round moves two rows' states, so every round is a whole-body memo miss; scratch M119 corpus, live home read-only); the steady-state memo-hit serve is M119's reading, not this one — the production log shows the served shape is this miss nearly always (908 logged requests over 4.9 h, zero under 3 ms, the state churn the cron fleet and active turns pay) | median < max(0.005 s, rows × 0.0000200 s) (the after band reads 5.03-6.07 ms at 414 rows — 12.2-14.7 µs/row over the projection walk, the two moved rows' re-dumps, the payload assembly and the fresh deflate; the line sits 1.36-1.64× over the band, the M119 line's convention, so a new per-row disk term trips it while host-load noise stays inside; the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -8963,6 +8964,124 @@ finally:
 EOF
 ```
 
+M129 — sidebar root-list changed round. The standing M119 collector times the whole-body memo
+hit; the production log shows the served shape is the miss — under the cron fleet and active turns
+some row's overlay state moves between sidebar fetches nearly always, so every fetch re-renders
+(the 2026-09-29 server log: 908 `GET /api/sessions/` requests over 4.9 h, zero under 3 ms, median
+15 ms). The collector copies the M119 corpus, then times nine requests where each round closes one
+session's busy interval and opens the next — `thinking_state.mark_busy`/`clear_busy`, the same
+in-memory overlay move a turn start and turn end pay — so every round is a memo miss re-rendering
+the corpus, with a parsed-body digest riding the reading:
+```bash
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import asyncio, gzip, hashlib, json, os, shutil, sys, tempfile, time
+from datetime import UTC, datetime
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from fastapi import FastAPI
+from server import _CharlieBotGZipMiddleware
+import src.api.sessions as sessions_api
+from src.api.deps import get_session_manager
+from src.api.sessions import router as sessions_router
+from src.core import thinking_state
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+
+# Root-list changed-round corpus: the M119 snapshot (every session's
+# metadata.json, the active sessions' live chat files, every session's
+# triggers/). Live home read once for the copy, never written; removed on
+# every exit path
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m129-list-home-", dir="/tmp"))
+try:
+    for d in root.iterdir():
+        meta_p = d / "metadata.json"
+        if not meta_p.is_file():
+            continue
+        try:
+            raw = json.loads(meta_p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        dst = home / "sessions" / d.name
+        dst.mkdir(parents=True)
+        shutil.copy2(meta_p, dst / "metadata.json")
+        if raw.get("status") == "active" and (d / "data" / "chat_events.jsonl").is_file():
+            (dst / "data").mkdir()
+            shutil.copy2(d / "data" / "chat_events.jsonl", dst / "data" / "chat_events.jsonl")
+        if (d / "triggers").is_dir():
+            shutil.copytree(d / "triggers", dst / "triggers")
+
+    cfg = CharlieBotConfig(charliebot_home=home)
+    mgr = SessionManager(cfg)
+    app = FastAPI()
+    app.include_router(sessions_router, prefix="/api/sessions")
+    app.dependency_overrides[get_session_manager] = lambda: mgr
+    app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)
+
+    # the movers: two active chat-bearing sessions; each timed round closes
+    # the previous mover's busy interval and opens the next mover's (the turn
+    # start/stop churn the cron fleet pays; round 1 only opens — clear_busy is
+    # idempotent and round 1's close is a no-op), so at least one row's
+    # overlay state moves per round and every round is a memo miss
+    actives = [d.name for d in (home / "sessions").iterdir()
+               if (d / "data" / "chat_events.jsonl").is_file()][:2]
+    if len(actives) < 2:
+        raise SystemExit("M129 FAILED, fewer than two active chat-bearing sessions in the corpus")
+
+    def scope():
+        return {"type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+                "http_version": "1.1", "method": "GET", "scheme": "http",
+                "path": "/api/sessions/", "raw_path": b"/api/sessions/", "query_string": b"", "root_path": "",
+                "headers": [(b"host", b"test"), (b"accept-encoding", b"gzip")],
+                "client": ("test", 123), "server": ("test", 80)}
+
+    async def drive():
+        body = b""
+        out = {"status": 0, "enc": b""}
+
+        async def receive():
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        async def send(msg):
+            nonlocal body
+            if msg["type"] == "http.response.start":
+                out["status"] = msg["status"]
+                out["enc"] = dict(msg.get("headers", [])).get(b"content-encoding", b"")
+            elif msg["type"] == "http.response.body":
+                body += msg.get("body", b"")
+
+        t0 = time.perf_counter()
+        await app(scope(), receive, send)
+        return time.perf_counter() - t0, body, out
+
+    async def main():
+        _, _, cold = await drive()  # cold pass, as at the first sidebar render after a server start; not timed
+        if cold["status"] != 200:
+            raise SystemExit(f"M129 FAILED, cold status {cold['status']}")
+        times, wire_body, out = [], None, None
+        mover = 0
+        for _ in range(9):
+            thinking_state.clear_busy(actives[(mover - 1) % 2])
+            thinking_state.mark_busy(actives[mover % 2], datetime.now(UTC))
+            mover += 1
+            dt, wire_body, out = await drive()
+            times.append(dt)
+        if out["status"] != 200:
+            raise SystemExit(f"M129 FAILED, status {out['status']}")
+        times.sort()
+        wire, enc = len(wire_body), out["enc"]
+        decoded = gzip.decompress(wire_body) if enc == b"gzip" else wire_body
+        digest = hashlib.sha256(json.dumps(json.loads(decoded), sort_keys=True).encode()).hexdigest()[:12]
+        print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {len(json.loads(decoded))} rows, "
+              f"decoded {len(decoded)} B, wire {wire} B, enc {enc.decode() or 'identity'}, digest {digest}; "
+              f"changed-round serve median {times[4] * 1000:.2f} ms, max {times[-1] * 1000:.2f} ms over 9")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(home)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
+EOF
+```
+
 ## Sampling history
 | 2026-09-28 | this PR | M35 / M63 / M80 collectors repaired, the sweep's own machinery (no product-code change): the standing sweep read all 123 defined metrics but six collectors failed — M35 and M63 drove ``GET /api/sessions/{id}/view``, deleted by #2249 (404 / ``AttributeError: get_session_view``), and M7 changed-round, M7 warm-gate, M7 restart-cold and M80 imported ``collect_token_usage``/``_rows_sidecar_name``, retired by the ledger refactor (93d9277e) — so those six metrics read unmeasured. Repairs: M35 drops the view leg (the SPA switch loads through bootstrap since #2249); M63 retires per the M44 precedent (the /view handler was its only subject; the thread-row costs ride the standing M5 threads/list and M36 worker-list lines at the same worst corpus); M80 retargets the busy-turn shape at the page's capture-first path — scratch claude+codex corpus, cold capture into a scratch ``UsageLedger``, ~1 MB line-aligned appends to both files, timed changed-round capture, ledger-row digest across arms. After readings (verbatim collectors, main checkout at origin/main, load 0.2-0.5 one-minute): M35 events median 0.82/0.86/0.88 ms, max 1.41-1.59 ms, digest 0a5ce8209968, bootstrap median 1.08/1.10/1.13 ms, digest eff30ffa2fcf, identical across rounds (events line < 0.004 s); M80 changed-round capture wall 0.0438/0.0442/0.0454/0.0459 s over four rounds, records written {'Claude Code': 1184, 'Codex': 771} and rows digest 24b906fc5dd9 identical every round (line median < 0.30 s). Remainder for a later run: the three M7 sub-shapes still price the retired cache-document collect; their production shapes (corpus move between page loads, first load after a start, the row-memo gate advance) now live in the ledger capture and need their own retargeted harnesses | a collector that fails is a metric whose regression watch does not run; the M97 repair (2026-09-28) pinned the same rule |
 
@@ -9345,3 +9464,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-28 | this PR | M44 retired, the sweep's one unmeasured metric: the collector's raw-ASGI drive of ``GET /api/sessions/scheduled`` asserted ``(404,)`` — 5babc6ce deleted the endpoint and its row-payload memo, moving the schedule fields onto every sidebar row through the ``row_schedule_fields`` join (root list, starred, archived, homepage render); the sweep re-ran the collector twice on fresh scratch wiring, both reads the same 404, the route gone from ``src/api/sessions.py``'s router. The next-run resolution the metric watched now rides the join inside listings the standing sweep already drives with corpus-scaled lines: M119 root list 1.38 ms vs max(0.002 s, 305 × 0.000008 s) (4.5 µs/row, under the 4.8-5.8 after band), M61 archived page 1.34 ms vs 0.003 s and all-sessions 8.66 ms vs max(0.008 s, 1618 × 0.000008 s), M40 starred 0.22 ms, M103 homepage 1.18 ms vs 0.003 s — a join or croniter regression crosses those lines. The definition row and collector block are removed and the four standing cross-references to the M44 protocol/guard reworded to name the technique; history rows untouched | the deletion was deliberate (the sidebar's three views render one project-grouped tree, so a dedicated scheduled listing had no reader), and the metric's subject is gone rather than moved: the serve two standing collectors already price is where the cost now lives, so a retarget would double-cover M119 |
 | 2026-09-28 | this PR | M61 all-sessions, the listing row's stamp and derived fields folded into its one model_copy: interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over the live corpus (1626 cached metas, 319 non-archived, read-only) at load 1.25-1.62 one-minute: all-sessions median 8.84/8.26/7.99 → 7.39/6.99/6.72 ms (median-of-medians 8.26 → 6.99, −15 %, every paired round faster; maxima 10.61/10.33/10.27 → 9.78/9.47/9.25 ms); no-regression witnesses, same interleaved rounds: archived-page 1.42/1.51/1.32 → 1.32/1.37/1.38 ms, single get_session 0.031/0.023/0.027 → 0.032/0.029/0.027 ms, bare listing 0.02-0.03 → 0.02 ms band, M103 GET / 1211/1215/1187 → 1210/1215/1224 µs (the template-render band; the active listing's row build rides the same one-copy shape), M40 starred 0.22/0.23/0.24 → 0.21/0.21/0.23 ms, M119 root list 1.36/1.42/1.86 → 1.55/1.42/1.44 ms (the readonly path's band — the shared fold untouched); row dumps byte-identical across both shapes over five call shapes (unfiltered with and without the status flags, active+scheduled-false, starred, scheduled-only); 1049-passed CI-surface suite plus one test (the listing row carries the thinking stamp and the derived fields and stays a caller-safe copy) — the 7 vfork/antigravity/frontend-js failures are the documented CI-only environmental set, identical on the clean base | the row build copied each meta and then wrote the thinking stamp plus up to five sidebar-derived fields through pydantic's per-field setattr handler — the handler chain, not the copy, was the listing's marginal per-row term at corpus scale (the M61 probe is the shape no production route serves whole, per the 2026-09-17 row, and the filtered routes pay the same per-row build on their subsets); model_copy's update dict rides pydantic's direct __dict__ write, so the row is one copy with no handler calls, the derived map still served by the one shared generation-keyed fold |
 | 2026-09-29 | this PR | M34 events full fetch, the unchanged-log re-open's per-request row render memoized onto the projection's cache entry: interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over the live worst corpus (9.8 MB log, 232 events, live home read-only) at load ~1 one-minute: repeat median 1.03/1.06/1.09 → 0.41/0.42/0.41 ms (median-of-medians 1.06 → 0.41, −61 %, every paired round faster, min/max fully separated), decoded size 112732 B and the after=total shape (0.34-0.37 ms median, 39 B) identical across arms; suite 1142-passed (the 2 frontend-js failures and 25 stash-guard errors are the documented environmental set, identical on the clean base) plus two tests (the unchanged-log re-open rides the stored render byte-identically and re-renders after an append; the store token — entry identity plus snapshot offset — rejects a render whose projection a concurrent poller already advanced) | the endpoint re-rendered every projected row (model_dump + json bytes) on every full fetch and keyed the gzip memo on the freshly built bytes — two memo layers beneath a render the unchanged-log proof already made redundant; the rendered body now rides the events cache entry behind the snapshot's offset==size proof, and a store lands only when the snapshot's token — the entry itself plus its read-time offset — still holds, so a render started before a concurrent append cannot serve the newer projection; a re-open costs the one stat + lookup the after=total shape pays |
+| 2026-09-29 | this PR | M129 sidebar root-list changed round, introduced with this PR: the per-row render memoized on the row's identity and overlay/schedule state — interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the verbatim collector over the live worst corpus (414 rows, 576056 B decoded, live home read-only) at load 1.98-2.36 one-minute: changed-round median 11.32/10.81/10.86 → 6.07/5.03/5.42 ms (median-of-medians 10.86 → 5.42, −50 %, every paired round faster), decoded size identical across arms (576056 B); byte parity driven in-process on the same corpus and states: the memo-served changed-round body equals a forced full re-render's body (digest 35fba47fc1ff both), and the changed round re-dumps 1 row of 414 where the forced render dumps 414 (counted through a model_dump counter); suite 1145-passed — the 1 frontend-js failure and 25 stash-guard errors are the documented environmental set, a subset of the clean base's own failure set — plus one test (the changed round re-dumps only the moved row, serves bytes identical to a full re-render, and a row that leaves the projection drops its slot); same-round regression watch over the same route family: M119 steady-state memo-hit serve 1.61 ms median at 415 rows (line: rows × 8 µs = 3.3 ms), M8 absent-needle search 3 ms median (line 0.5 s), M56 /status 1.07 ms median (line 3 ms), all inside their lines | the production log showed the root list's served shape is the whole-body memo miss nearly always (908 requests over 4.9 h, zero under 3 ms, median 15 ms — the cron fleet's state churn moves some row's overlay between fetches), and the miss re-rendered every row: the phase probe put the per-row model_dump loop at 4.26 ms of the 8.34 ms in-process render; the memo keys on the row identity the manager's fresh check moves exactly when the row's content moves, with the slot holding the row so its id stays pinned, re-stating the render's remaining inputs (the two state tuples) in the slot, so a stale render can only serve a row whose content provably did not move; the prune keeps the map at the served corpus |

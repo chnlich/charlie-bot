@@ -132,7 +132,9 @@ test('a list continued across a blank line never freezes a mid-list cut', async 
 test('the largest on-disk draft paints identically on every step of its replay', async (t) => {
   // The corpus is host-local: a host without ~/.charliebot/sessions (CI, fresh
   // checkouts) has nothing to replay, so the subtest skips instead of failing.
-  if (!fs.existsSync(LIVE_CHAT_ROOT)) t.skip(`no live chat corpus at ${LIVE_CHAT_ROOT} on this host`);
+  // t.skip() only marks the subtest skipped; without the return the collector
+  // below still walks the missing corpus root and the suite fails instead.
+  if (!fs.existsSync(LIVE_CHAT_ROOT)) return t.skip(`no live chat corpus at ${LIVE_CHAT_ROOT} on this host`);
   const context = await loadRendererContext({
     getLanguage: () => null,
     highlightAuto: (code) => ({ value: code }),

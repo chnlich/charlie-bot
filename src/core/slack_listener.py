@@ -715,46 +715,12 @@ async def ack_messages(
     session_id: str, message_ids: list[str], cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
-  The follow round's proof-of-read. Refusals raise ``SlackReplyError``: 404
-  unknown session, 409 no Slack thread, 422 an empty set, an unknown or
-  ineligible id, or an eligible unread id at or below ``max(message_ids)``
-  missing from the set (named) — nothing unread may be jumped over and
-  nothing is persisted on a refusal; the natural batch is the gate refusal's
-  own list. On success the watermark advances to ``max(message_ids)``, a
-  small ack event lands in the session log for the audit trail, and re-acking
-  ids at or below the watermark is an idempotent no-op counted as acked.
+  One-line pass-through to the shared ack (``thread_entry.ack_messages``) on
+  the Slack adapter; the refusal shapes, the ack event, and the readback keys
+  live there.
   """
-  meta = await thread_entry.require_thread_session(SLACK, session_id, session_mgr)
-  ids = sorted(set(message_ids))
-  if not ids:
-    raise SlackReplyError(422, "message_ids is empty")
-  origin = meta.slack_origin
-  messages = await _bot_client().get_thread_replies(origin.channel_id, origin.thread_ts)
-  eligible = {m["ts"] for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)}
-  unknown = [ts for ts in ids if ts not in eligible]
-  if unknown:
-    raise SlackReplyError(422, f"Unknown or ineligible message id: {unknown[0]}")
-  watermark = meta.slack_watermark_ts
-  ceiling = ids[-1]
-  skipped = [ts for ts in sorted(eligible) if (watermark is None or ts > watermark) and ts <= ceiling and ts not in ids]
-  if skipped:
-    raise SlackReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
-  if watermark is None or ceiling > watermark:
-    watermark = ceiling
-    meta.slack_watermark_ts = watermark
-    meta.updated_at = utc_now()
-    await session_mgr.save_metadata(meta)
-  await session_mgr.persist_and_broadcast(
-      session_id, {
-          "type": SLACK.ack_event_type,
-          "content": f"Slack thread ack: {len(ids)} message(s) read through {ceiling}",
-          SLACK.ack_event_type: {
-              "message_ids": ids,
-              "watermark_ts": watermark
-          },
-      })
-  logger.info("slack_thread_acked", session=session_id, acked=len(ids), watermark_ts=watermark)
-  return {"acked": len(ids), "watermark_ts": watermark}
+  return await thread_entry.ack_messages(
+      SlackThreadAdapter(_bot_client()), session_id, message_ids, cfg, session_mgr)
 
 
 def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:

@@ -27,7 +27,7 @@ from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import SessionMetadata
+from src.core.models import SessionMetadata, utc_now
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
@@ -444,6 +444,61 @@ async def assert_thread_fresh(
               ],
           f"watermark_{platform.id_label}": watermark,
       })
+
+
+async def ack_messages(
+    adapter: ThreadAdapter, session_id: str, message_ids: list[str], cfg: CharlieBotConfig,
+    session_mgr: SessionManager) -> dict:
+  """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
+
+  The follow round's proof-of-read. Refusals raise ``ThreadReplyError``: 404
+  unknown session, 409 no platform thread, 422 an empty set, an unknown or
+  ineligible id, or an eligible unread id at or below ``max(message_ids)``
+  missing from the set (named) — nothing unread may be jumped over and
+  nothing is persisted on a refusal; the natural batch is the gate refusal's
+  own list. On success the watermark advances to ``max(message_ids)``, a
+  small ack event lands in the session log for the audit trail, and re-acking
+  ids at or below the watermark is an idempotent no-op counted as acked.
+  """
+  platform = adapter.platform
+  meta = await require_thread_session(platform, session_id, session_mgr)
+  ids = sorted(set(message_ids), key=platform.id_key)
+  if not ids:
+    raise ThreadReplyError(422, "message_ids is empty")
+  eligible = {m.id for m in await adapter.read_eligible(getattr(meta, platform.origin_field), cfg)}
+  unknown = [i for i in ids if i not in eligible]
+  if unknown:
+    raise ThreadReplyError(422, f"Unknown or ineligible message id: {unknown[0]}")
+  watermark = getattr(meta, platform.watermark_field)
+  ceiling = ids[-1]
+  floor = None if watermark is None else platform.id_key(watermark)
+  ceiling_key = platform.id_key(ceiling)
+  skipped = [
+      i for i in sorted(eligible, key=platform.id_key)
+      if (floor is None or platform.id_key(i) > floor) and platform.id_key(i) <= ceiling_key and i not in ids
+  ]
+  if skipped:
+    raise ThreadReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
+  if floor is None or ceiling_key > floor:
+    watermark = ceiling
+    setattr(meta, platform.watermark_field, watermark)
+    meta.updated_at = utc_now()
+    await session_mgr.save_metadata(meta)
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": platform.ack_event_type,
+          "content": f"{platform.display_name} thread ack: {len(ids)} message(s) read through {ceiling}",
+          platform.ack_event_type: {
+              "message_ids": ids,
+              f"watermark_{platform.id_label}": watermark,
+          },
+      })
+  logger.info(
+      f"{platform.name}_thread_acked",
+      session=session_id,
+      acked=len(ids),
+      **{f"watermark_{platform.id_label}": watermark})
+  return {"acked": len(ids), f"watermark_{platform.id_label}": watermark}
 
 
 def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:

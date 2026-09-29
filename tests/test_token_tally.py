@@ -113,40 +113,7 @@ def _capture_all(
 
 
 def test_capture_usage_rows_are_absolutely_correct(tmp_path: Path) -> None:
-  claude = Claude(tmp_path)
-  codex = Codex(tmp_path)
-  usage = {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 40, "output_tokens": 30}
-  claude.write(claude.work, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
-  # Replay of the same message in the ext dir with a new session id: deduped, not double counted.
-  claude.write(claude.ext, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
-  # A subagent file whose session dir is its parent's; one extra response.
-  claude.write(
-      claude.work,
-      "sess2", [],
-      subagents=[
-          [
-              _claude_record(
-                  "sub-id", NAME, "2024-01-02T00:00:00Z", {
-                      "input_tokens": 50,
-                      "cache_creation_input_tokens": 10,
-                      "cache_read_input_tokens": 0,
-                      "output_tokens": 5
-                  })
-          ],
-      ])
-  # Codex: one rollout.
-  codex.write(
-      "rollout", [
-          _codex_meta(),
-          _codex_turn("codex-some"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
-      ])
-
+  claude, codex = _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture_all(ledger, claude, codex, cache=tmp_path / "cache.json") == \
         {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included
@@ -391,14 +358,16 @@ def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, mo
 # ---------------------------------------------------------------------------
 
 
-def _parity_fixture(tmp_path: Path) -> tuple[Claude, Codex]:
+def _claude_codex_corpus(tmp_path: Path) -> tuple[Claude, Codex]:
   """The Claude and Codex corpus: an original response, its verbatim replay in a
   second config dir, a subagent response, and one Codex rollout."""
   claude = Claude(tmp_path)
   codex = Codex(tmp_path)
   usage = {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 40, "output_tokens": 30}
   claude.write(claude.work, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
+  # Replay of the same message in the ext dir with a new session id: deduped, not double counted.
   claude.write(claude.ext, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", usage)])
+  # A subagent file whose session dir is its parent's; one extra response.
   claude.write(
       claude.work,
       "sess2", [],
@@ -449,7 +418,7 @@ def _ledger_row(ledger: UsageLedger, source: str, model: str):
 def test_captured_rows_survive_deleting_the_source_files(tmp_path: Path) -> None:
   """Capturing again over deleted sources leaves every ledger row equal field by field:
   the ledger contains no delete, so its rows outlive the logs they were parsed from."""
-  claude, codex = _parity_fixture(tmp_path)
+  claude, codex = _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     _capture(claude, codex, ledger)
     before = ledger.model_rows()
@@ -463,7 +432,7 @@ def test_captured_rows_survive_deleting_the_source_files(tmp_path: Path) -> None
 def test_second_capture_without_changes_writes_nothing(tmp_path: Path) -> None:
   """A file the ledger already holds at the same signature is skipped: the second capture
   over an unchanged corpus writes zero records."""
-  claude, codex = _parity_fixture(tmp_path)
+  claude, codex = _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     first = _capture(claude, codex, ledger)
     assert first == {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included

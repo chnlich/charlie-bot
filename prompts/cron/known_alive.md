@@ -42,7 +42,6 @@ Known-alive symbols:
   suite-wide conftest autouse that reshapes `headless_render.render_height` into the
   dump-dom drive seam every artifact/plan-height test relies on,
   `_clear_events_cache` (`tests/test_thread_worker_events.py`),
-  `_clear_aggregate_memo` (`tests/test_token_tally.py`),
   `_clear_jsonl_memo` (`tests/test_tui_backend.py`)
   — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their

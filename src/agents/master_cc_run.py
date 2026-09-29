@@ -933,10 +933,13 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # Fail open with a warning — the notice is advisory.
         log.warning("master_cc_fallback_notice_raw_log_missing", session=session_meta.id, raw_log=raw_log)
       else:
-        # The projection is a full read+parse of the turn's raw log (tens of ms
-        # on a multi-MB turn) — off the loop it stops freezing every concurrent
-        # request and WebSocket at turn end, the same shape as the git-diff hop.
-        turn_events = await asyncio.to_thread(runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option))
+        # The projection rides the suffix-advancing scan (the raw log only
+        # appends between turn ends, so the rescan parses the turn's appended
+        # bytes instead of the whole file) — off the loop it stops freezing
+        # every concurrent request and WebSocket at turn end, the same shape as
+        # the git-diff hop.
+        turn_events = await asyncio.to_thread(
+            runs.project_raw_file_incremental, raw_path, lambda: _build_fresh_translate(cfg, option))
         await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
 
   except asyncio.CancelledError:

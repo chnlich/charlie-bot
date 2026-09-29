@@ -81,7 +81,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M71 sidebar search capped name-match response | M71 collector below | seconds per request, worst capped name-match shape (a one-character query matching the cap), snapshot corpus | median < 0.003 s (recalibrated from < 0.006 s: the old line sat on the TestClient harness floor the 2026-09-17 repair removed — the repaired raw-ASGI+middleware drive reads the served path at 1.66-1.89 ms with the body-keyed gzip memo, 2.99-3.13 ms before it; see the 2026-09-17 history row) | — (introduced with its first history row) |
 | M72 file-browser directory listing | M72 collector below | seconds per `GET /absolute_filepath/<dir>` request, worst on-disk listing corpus (the sessions root), the served path (the production gzip middleware mounted, Accept-Encoding: gzip — the browser shape; a bare app without the middleware reads the walk's floor alone, the vacuous-read class the M70 repair called out); the changed-round rebuild (one corpus move since the stored page keyed — a metadata rename into a session dir; the harness drops the page memo per timed round, row memo warm, builder level) | repeat-view median < max(0.008 s, entries × 0.000008 s) (recalibrated from < 0.008 s: the fixed line priced the 2026-09-13 corpus of 1165 entries and the walk scales with the listed entry count — 3.7-4.5 µs/entry measured across the 1165→1296 growth, so the line tracks the corpus the way the M61 all-sessions line does; a tripped reading is still read as host load first — the cron-collision bias the M56 history documents; the 2026-09-15 repair split the TestClient harness floor out of the reading); changed-round median < max(0.007 s, entries × 0.000008 s) (recalibrated from < 0.007 s for the same growth: 4.5-5.5 µs/entry measured from the 2026-09-12 introduction corpus of 1159 entries through this round's 1296, and the fixed line sat at 94 % of a quiet-load reading before the corpus moved again) | — (introduced with its first history row) |
 | M73 plan-verb validation event-loop lag | M73 collector below | seconds of loop lag + wall per amend validation (the registration gate: the DOM assertion set plus the headless-Chrome page-height render), scratch home, copied passing plan page (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.2 s (warm steady state; the first validation after a process start pays the one-time browser launch) | — (introduced with its first history row) |
-| M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (whole read+parse+project of the turn's raw log), worst on-disk master-run raw log among the sessions the turn-end gate scans (backend option claude-family — the `_CLAUDE_RESUME_FLAG_BACKEND_TYPES` check the live call site runs), that session's own fresh translate (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.030 s | — (introduced with its first history row) |
+| M74 master turn-end raw-log rescan | M74 collector below | seconds of loop lag + wall per fallback-notice projection (suffix-advancing scan of the turn's raw log — the first scan after a process start parses whole, later ones parse only the appended complete lines), worst on-disk master-run raw log among the sessions the turn-end gate scans (backend option claude-family — the `_CLAUDE_RESUME_FLAG_BACKEND_TYPES` check the live call site runs), that session's own translate builder | append-round loop-lag median < 0.010 s (the 5 ms ticker floor the M45 history documents is the to_thread handoff itself — the parse hold above it is what the 2026-09-29 landing removed; the pre-fix whole-file shape reads 10.5-11.9 ms and trips), append-round wall median < 0.005 s (the after band reads 0.28-0.31 ms on the collector's ~150 B probe rounds; the pre-fix whole-file re-read of the standing 46.1 MB corpus reads 56-63 ms and trips), parity true every round (the whole-file fresh scan's translate-state contract, asserted per round) | — (introduced with its first history row) |
 | M75 live-aggregator catch-up, first streamed event | M75 collector below | seconds of loop lag + wall per first-`persist_and_broadcast` catch-up (whole read+feed of the live corpus), worst on-disk live chat corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.020 s | — (introduced with its first history row) |
 | M76 finalize-judgment reads, warm chain | M76 collector below | seconds of loop lag + wall per judgment pair (summary-present then master-woke — the two full-history scans the finalize chain runs per worker/reviewer completion), worst on-disk live-events corpus, scratch home (loop lag reads the 5 ms ticker floor like M14) | loop-lag median < 0.010 s; wall median < 0.0005 s | — (introduced with its first history row) |
 | M77 session-switch projection reuse, rotating tabs | M77 collector below | seconds per `get_message_projection` re-entry over a 12-active-session rotation (3 rounds), worst live corpora; the rebuilt count is the eviction shape (a warm re-entry is a dict read + len compare, a rebuild parses the corpus) | re-entry median < 0.5 ms; 0 rebuilt re-entries in a 12-session rotation | — (introduced with its first history row) |
@@ -1908,7 +1908,7 @@ worktree root), the same shape as the M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -3442,7 +3442,7 @@ the worktree root), the same shape as the M26 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.config import CharlieBotConfig
@@ -5068,7 +5068,7 @@ with a concurrent 5 ms ticker reporting the worst gap plus wall:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.core.artifact_check import _ASSERTION_RUNNERS, _Context, _parse_dom
@@ -5163,30 +5163,35 @@ EOF
 ```
 
 M74 — master turn-end raw-log rescan. Every claude-family master turn ends with
-the model-attribution rescan: a whole read+parse+project of the turn's own raw
-log through a fresh backend translate, tens of ms on a multi-MB turn — inline
+the model-attribution rescan: a read+parse+project of the turn's own raw log
+through the run's translate, tens of ms on a multi-MB turn — inline
 on the event loop before the fix, freezing every concurrent request and
 WebSocket at the exact moment the client renders the turn's result (the M14
 pathology on the turn-end path); the fixed site hops to a thread, which trades
 the inline freeze for the GIL-handoff surcharge the M45 history documented
-(~11 ms worst-corpus vs the 5 ms ticker floor on this host). The cost is a
+(~11 ms worst-corpus vs the 5 ms ticker floor on this host). The second fix
+removes the whole-file re-read the hop still paid: the raw log is append-only
+within one attempt (a retry rotates the old log aside), so the turn-end scan
+(`runs.project_raw_file_incremental`, the call shape `src/agents/master_cc_run.py`
+runs) advances the projection by suffix — the first scan parses whole, later
+ones parse only the bytes appended since, continuing the entry's translate
+instance (the live read loop's own shape). The cost is a
 per-turn freeze invisible to the standing HTTP probes, so the collector
 resolves the largest on-disk master-run raw log among the sessions the turn-end
 gate scans — the session's backend option must be claude-family, the
 ``_CLAUDE_RESUME_FLAG_BACKEND_TYPES`` set the live call site checks before
-scanning; other families' logs never reach this scan, so their sizes cannot
-price it (read-only) — and drives the scan through the production call shape
-with the corpus session's own fresh translate and a concurrent 5 ms ticker,
-from the checkout under test: one cold pass, as at a first turn end, then five
-timed scans. The pre-fix numbers in the landing row are the same scan inline (the
-pre-fix call shape, `runs.project_raw_events(runs.parse_raw_lines(...))`
-without the hop). Evidence while the live server runs older code points the
-same collector at the branch checkout (``CHECKOUT`` at the worktree root), the
-same shape as the M18 protocol:
-
+scanning (the live home is read once for the copy, never written) — copies it
+into a scratch dir under /tmp and drives the production call shape with a
+concurrent 5 ms ticker, from the checkout under test: one cold pass, then five
+append-rounds, one appended probe event before each timed call (the turn-end
+shape — a turn's stream lands between two rescans), each asserting the
+incremental result equals a fresh whole-file ``project_raw_file`` of the same
+file (translate-state parity). Evidence points the same collector at the
+before and after checkouts (``CHECKOUT`` at each root), the same shape as the
+M18 protocol:
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, sys, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 import structlog
@@ -5214,45 +5219,57 @@ for p in Path.home().glob(".charliebot/sessions/*/data/master_runs/*/agent.raw.n
         best, best_n, best_backend = p, n, backend
 print(f"worst raw log: {best_n / 1e6:.1f} MB ({best})")
 
-# The corpus session's own option builds the scan's translate, fresh per scan
-# as the call site builds it.
+# The corpus session's own option builds the scan's translate; the memo keeps
+# the instance for the run's lifetime, so one build serves every scan.
 option = cfg.get_backend_option(best_backend)
-print(f"session backend {best_backend!r} -> option {option.id} ({option.type})")
 
 def fresh_translate():
-    return _build_fresh_translate(cfg, option)  # a fresh translate per scan, as the call site builds
+    return _build_fresh_translate(cfg, option)
 
-async def run_once():
-    gaps = []
-    stop = False
-    async def ticker():
-        nonlocal stop
-        prev = time.perf_counter()
-        while not stop:
-            await asyncio.sleep(0.005)
-            now = time.perf_counter()
-            gaps.append(now - prev)
-            prev = now
-    t = asyncio.create_task(ticker())
-    await asyncio.sleep(0.01)  # the ticker must be mid-sleep, or an inline block starves it unrecorded
-    t0 = time.perf_counter()
-    events = await asyncio.to_thread(runs.project_raw_file, best, fresh_translate())
-    wall = time.perf_counter() - t0
-    stop = True
-    await t
-    return len(events), (max(gaps) if gaps else wall), wall
+scratch = Path(tempfile.mkdtemp(prefix="m74-raw-", dir="/tmp"))
+try:
+    shutil.copy2(best, raw := scratch / "agent.raw.ndjson")
 
-async def main():
-    await run_once()  # cold pass, as at a first turn end; not timed
-    results = []
-    for _ in range(5):
-        results.append(await run_once())
-    lags = sorted(r[1] for r in results)
-    walls = sorted(r[2] for r in results)
-    print(f"{results[0][0]} projected events; turn-end rescan loop-lag median {lags[2]:.4f} s, "
-          f"max {lags[-1]:.4f} s; wall median {walls[2]:.4f} s, max {walls[-1]:.4f} s")
+    async def run_once():
+        gaps = []
+        stop = False
+        async def ticker():
+            nonlocal stop
+            prev = time.perf_counter()
+            while not stop:
+                await asyncio.sleep(0.005)
+                now = time.perf_counter()
+                gaps.append(now - prev)
+                prev = now
+        t = asyncio.create_task(ticker())
+        await asyncio.sleep(0.01)  # the ticker must be mid-sleep, or an inline block starves it unrecorded
+        t0 = time.perf_counter()
+        events = await asyncio.to_thread(runs.project_raw_file_incremental, raw, fresh_translate)
+        wall = time.perf_counter() - t0
+        stop = True
+        await t
+        return events, (max(gaps) if gaps else wall), wall
 
-asyncio.run(main())
+    PROBE = json.dumps({"type": "system", "subtype": "m74_probe"}).encode() + b"\n"
+
+    async def main():
+        await run_once()  # cold pass, as at a first turn end after a process start; not timed
+        walls, lags = [], []
+        for i in range(5):
+            with raw.open("ab") as f:
+                f.write(PROBE)
+            os.utime(raw, (time.time() + i + 1,) * 2)
+            events, gap, wall = await run_once()
+            assert events == runs.project_raw_file(raw, fresh_translate()), \
+                f"append round {i}: incremental projection diverged from the whole-file scan"
+            walls.append(wall); lags.append(gap)
+        print(f"checkout {os.environ['CHECKOUT'].rsplit('/', 1)[-1]}: {best_n / 1e6:.1f} MB raw log, parity true over 5 append rounds; "
+              f"append-round wall median {statistics.median(walls) * 1000:.2f} ms, max {max(walls) * 1000:.2f} ms; loop-lag median "
+              f"{statistics.median(lags) * 1000:.2f} ms, max {max(lags) * 1000:.2f} ms")
+
+    asyncio.run(main())
+finally:
+    shutil.rmtree(scratch, ignore_errors=True)  # every exit path removes the scratch copy
 EOF
 ```
 
@@ -5903,7 +5920,7 @@ M18 protocol:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 import orjson
 sys.path.insert(0, os.environ["CHECKOUT"])
@@ -6411,7 +6428,7 @@ M82 row documents and is expected to hold.
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from src.agents.worker import Worker
@@ -8208,7 +8225,7 @@ and the builds-per-burst count the collector prints is its mechanism witness:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import asyncio, json, os, shutil, sys, tempfile, time
+import asyncio, json, os, shutil, statistics, sys, tempfile, time
 from pathlib import Path
 
 # The M120 corpus shape: every session's metadata.json plus each task node's
@@ -9431,3 +9448,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-29 | this PR | M107 collector repaired, the sweep's own machinery (no product-code change): the corpus finder sized directories with a bare `p.stat().st_size` sum, so the worst-dir scan crashed with FileNotFoundError the moment any `*.json` entry was a symlink whose target left storage — this round the whole `~/scripts/20260929_vae_fill_ab/out/step3/traces_pooled/` dir (128 pooled-rank links into a since-vanished `/data` checkpoint mount) tripped it, and every round since that dir landed reported M107 unmeasured; the fix adds the module-level `real_traces` guard (stat each glob hit, drop OSError entries — the same walk rule the M66/M88 corpus finders already carry) and feeds the sizing and the merge from it, so the finder prices readable traces only; verbatim collector, main checkout at origin/main, scratch `CHARLIEBOT_HOME`: before = FileNotFoundError in find_corpus (unmeasured), after = worst dir the 961.9 MB / 12-trace 20260915_webui_freeze_repro corpus, merge build median 4.46 s, max 10.26 s over 3, artifact 77.7 MB, event-identity digest 69328480354c stable across rounds — in range (median < max(8 s, 961.9 MB ÷ 200 MB/s = 4.81 s)) | a pooled-trace dir full of dead checkpoint links is permanent host drift, not a transient mount: the bare-stat sizing turned one stale symlink into a standing-sweep collector that fails every round, and the guard is the pattern the two sibling finders on the same roots already price by |
 | 2026-09-29 | this PR | M112 corpus builder, the sweep's own machinery (no product-code change): the builder's rmtree ran unconditionally, so every hourly round deleted and re-wrote the 4.71 GB / 67-file synthetic corpus the "corpus built once" contract meant to persist — this round's sweep read the builder wall at 58.9 s and the rebuild's write churn at ~4.7 GB/h ≈ 113 GB/day against the root fs the 2026-09-25 scratch-leak row measured at 80 % full; the builder now writes a shape manifest (file count + byte total, a sibling of the corpus so the measured file set stays the builder's output) and every later run verifies with a stat walk before printing, rebuilding only on a mismatch; verbatim builder, main checkout at e9ff4177 for the before arm and this branch for the after arm: before = 58.9 s rebuild every run (this round's sweep block, load ramping 0.6 → 19 one-minute under the sibling stage3 build), after = "no readable corpus manifest; rebuilding" 74.4 s elapsed on the first post-fix run (the same 4.71 GB / 67-file shape, load 12-16) then 0.03 s per verify run over three back-to-back runs printing the same shape; the M112 collector on the reused corpus reads create_backup median 2.5 s, max 3.2 s over 3, 1855 MB/s effective, archive 128 MB (36.9x) — in range (median < max(2.0 s, 4.71 GB ÷ 1200 MB/s = 3.93 s)), the fresh-build corpus's own standing reading this round median 2.3 s, max 2.3 s, 2038 MB/s | the collector's contract named the persistence the code defeated; a persisted synthetic corpus needs a receipt the verify can price, and file count + byte total is the smallest one that catches truncation and stray files |
 | 2026-09-29 | this PR | M98 memory-CLI invocation wall, the run-token path's config/sessions chain priced out: `_resolve_run_scoped_audience` no longer loads the config model stack or the sessions/task-sessions/threads chain — it builds `RunStore` on the env-derived sessions root (`RunStore` takes the path root now; its only config read was `sessions_dir`) and passes `events=None` for a read-only store whose `load_events_sync` falls back to the shared live-log parse (`chat_events_path`), reads the node metadata through a new json_utils `load_model_meta` (the pydantic sibling of `load_json_meta`; task_sessions' `_read_metadata_file` delegates to it), and takes `METADATA_NAME` from runs.py where the layout constants live (threads re-exports); verbatim collector, three interleaved rounds (arm order alternating), main checkout before vs branch worktree after back-to-back at load 1.76-2.28 one-minute: medians 0.270/0.269/0.281 → 0.230/0.242/0.238 s (median-of-medians 0.270 → 0.238, −12 %, every paired round faster; maxima 0.276-0.299 → 0.231-0.268); component attribution (`-X importtime`, one query process carrying a live run token): the token path's import tree reads config 115.9 + sessions 14.1 + task_sessions 7.8 + runs 37.5 + credentials 9.8 ms before, models 108.6 + runs 4.5 + chat_events 0.7 + credentials 9.0 ms after — src.core.config, sessions, task_sessions, and threads absent from the after tree (control_events rides runs.py's own import in both trees); no-regression witnesses interleaved: M92 schedule-trigger --help 0.039 → 0.038 s, M99 import server 0.546 → 0.552 s (band), M115 fresh config+credentials 0.120-0.123 → 0.120-0.124 s over three paired rounds (band); 1178-collected suite: branch = main = 1149 passed + 1 pre-existing environmental failure (the tailwind node build, failing on origin/main identically) + 25 pre-existing git_stash_guard fixture errors (identical on main); ruff and yapf clean | every memory query the cron instructions and master turns issue under a run token paid the config model's pydantic class construction and the sessions chain at import although the resolution reads only paths the home already resolves — the same trade the 2026-09-12 landing made for the store root, extended to the identity path; RunStore's write paths keep the sink-typed constructor (task_sessions wires ControlEventSink unchanged) and the read-only shape fails loud if a write is attempted |
+| 2026-09-29 | this PR | M74 master turn-end raw-log rescan, the whole-file re-read per turn end priced out: the raw log is append-only within one attempt, so the model-attribution rescan (master_cc_run's turn-end notice site, the only per-turn-end caller) moves from `project_raw_file` (full read+parse+project per turn end) to `project_raw_file_incremental` — a per-path memo whose entry carries the consumed offset after the last complete line, the file's (st_dev, st_ino) identity, and the translate instance for the run's lifetime (the one-instance shape project_raw_events' docstring already sanctions for the live read loop); a later call parses only the bytes appended since and continues that translate, a trailing partial line stays unconsumed exactly as parse_raw_lines drops it and completes on a later call, a shrunk file (the retry rotation's fresh log) or a replaced inode invalidates and parses whole (the retry rotation renames the old log aside and spawns a fresh file at the same path, so size alone cannot tell a grown attempt from a replaced one), files ≥ 64 MB never cache so a runaway log cannot pin its bytes in memory, a module lock guards the bounded (8-entry, clear-on-full) map, and the returned list is a fresh shallow copy the caller treats read-only; `scan_result_exit` and `resolve_run` keep the whole-file scan (each scans a given log once per process, so the memo serves nothing there); collector retargeted to the production call shape over a scratch copy (the live home read once for the copy, never written): one cold pass, then five append-rounds of one appended probe event before each timed call, each asserting the incremental result equals a fresh whole-file `project_raw_file` of the same file; verbatim collectors, three interleaved back-to-back rounds (before→after order), main checkout (8438b3b8; #2287 merged mid-round touching scripts only, so the product files both arms drive are identical) vs branch worktree after, over the same corpus (the largest claude-family master-run raw log, 46.1 MB, session e4074308's 09-24 run, stable at 46.1 MB across every arm) at load 0.50-3.08 one-minute: before (whole-file rescan per turn end) wall medians 55.4/56.3/56.7 ms (median-of-medians 56.3; the morning sweep's standing reading was 57.5 ms at the then-9.8 MB corpus — the corpus grew 4.7x during the day and the before wall held), loop-lag medians 10.4/10.3/10.3 ms; after append-round wall medians 0.30/0.29/0.32 ms (median-of-medians 0.30, −99.5 %, maxima 0.32-0.58 ms), append-round loop-lag medians 5.33/5.33/5.37 ms (−48 %, sitting at the 5 ms ticker floor the M45 history documents — the parse hold above it is gone); parity true over all 15 append rounds (the fresh whole-file scan's translate-state contract, asserted per round); witnesses: the runs/run-store suite (23) plus the master-cc and finalize suites (39) passed, the full 1184-collected branch suite read 1156 passed + the tailwind node-build environmental failure + 25 pre-existing git_stash_guard fixture errors (identical on main's suite run; a fresh worktree also needs the untracked _vfkspawn build artifact the main checkout carries), ruff and yapf clean; M99 import server 0.590 vs 0.621 s (band, load 3.6) | every claude-family master turn end re-read and re-projected the run's whole raw log although the log only appends between turn ends — the per-turn cost grows with the conversation (the corpus grew 9.8 → 46.1 MB across today's sweep hours), and the loop-lag half froze concurrent requests and WebSockets for the parse's GIL hold at the exact moment the client renders the turn's result; the suffix advance pays the turn's own appended bytes instead |

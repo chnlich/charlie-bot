@@ -66,6 +66,98 @@ def test_parse_raw_lines_skips_blank_torn_and_non_json() -> None:
   assert events == [{"a": 1}, {"b": 2}]
 
 
+# ---------------------------------------------------------------------------
+# Incremental turn-end projection (suffix-advancing memo)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _reset_raw_projection_memo():
+  runs._raw_projection_memo.clear()
+  yield
+
+
+class _CountingBuilds:
+  """Translate builder counting builds."""
+
+  def __init__(self):
+    self.builds = 0
+
+  def __call__(self):
+    self.builds += 1
+    return _identity
+
+
+class _StatefulBuffer:
+  """Buffers text events until a result arrives, the codex-buffering shape."""
+
+  def __init__(self):
+    self.pending: list[str] = []
+
+  def translate_event(self, event):
+    if event.get("type") == "text":
+      self.pending.append(event["text"])
+      return []
+    if event.get("type") == "result":
+      combined, self.pending = [{"type": "combined", "text": "".join(self.pending), "result": event}], []
+      return combined
+    return [event]
+
+
+def test_incremental_partial_line_holds_until_complete(tmp_path: Path) -> None:
+  raw = _write_raw(tmp_path, ['{"n": 1}'])
+  builds = _CountingBuilds()
+  assert [e["n"] for e in runs.project_raw_file_incremental(raw, builds)] == [1]
+  with raw.open("a", encoding="utf-8") as f:
+    f.write('{"n": 2}')  # no newline yet: the partial line stays unconsumed
+  ts = time.time() + 10
+  os.utime(raw, (ts, ts))
+  assert [e["n"] for e in runs.project_raw_file_incremental(raw, builds)] == [1]
+  with raw.open("a", encoding="utf-8") as f:
+    f.write("\n")  # complete the line
+  os.utime(raw, (time.time() + 10,) * 2)
+  assert [e["n"] for e in runs.project_raw_file_incremental(raw, builds)] == [1, 2]
+
+
+def test_incremental_retry_rotation_and_shrink_invalidate(tmp_path: Path) -> None:
+  raw = _write_raw(tmp_path, ['{"n": 1}', '{"n": 2}', '{"n": 3}'])
+  builds = _CountingBuilds()
+  runs.project_raw_file_incremental(raw, builds)
+  # The retry shape: the old log rotates aside, a fresh file spawns at the same
+  # path — growing past the old consumed offset must not join the two attempts.
+  rotated = raw.with_name(raw.name + ".1")
+  raw.rename(rotated)
+  raw.write_text('{"n": 9}\n{"n": 8}\n', encoding="utf-8")
+  ts = time.time() + 10
+  os.utime(raw, (ts, ts))
+  assert [e["n"] for e in runs.project_raw_file_incremental(raw, builds)] == [9, 8]
+  # A shrunken file (the fresh file scanned before its first write) re-parses too.
+  raw.write_text('{"n": 7}\n', encoding="utf-8")
+  os.utime(raw, (ts, ts))
+  assert [e["n"] for e in runs.project_raw_file_incremental(raw, builds)] == [7]
+
+
+def test_incremental_giant_file_never_caches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  monkeypatch.setattr(runs, "_RAW_PROJECTION_MEMO_FILE_BYTES", 4)
+  raw = _write_raw(tmp_path, ['{"n": 1}'])
+  builds = _CountingBuilds()
+  runs.project_raw_file_incremental(raw, builds)
+  runs.project_raw_file_incremental(raw, builds)
+  assert builds.builds == 2
+
+
+def test_incremental_stateful_translate_parity(tmp_path: Path) -> None:
+  raw = _write_raw(tmp_path, ['{"type": "text", "text": "a"}', '{"type": "text", "text": "b"}'])
+  incremental = _StatefulBuffer()
+  runs.project_raw_file_incremental(raw, lambda: incremental.translate_event)
+  with raw.open("a", encoding="utf-8") as f:
+    f.write('{"type": "result"}\n')
+  os.utime(raw, (time.time() + 10,) * 2)
+  got = runs.project_raw_file_incremental(raw, lambda: incremental.translate_event)
+  want = runs.project_raw_file(raw, _StatefulBuffer().translate_event)
+  assert got == want == [{"type": "combined", "text": "ab", "result": {"type": "result"}}]
+
+
 def test_result_success_matrix() -> None:
   assert runs.result_success({}) is True  # claude omits subtype/is_error on success
   assert runs.result_success({"subtype": "success", "is_error": False}) is True

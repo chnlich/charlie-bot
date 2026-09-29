@@ -17,7 +17,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
-| M7 token-usage page | M7 collector below | seconds per page load; the changed-round collect (one corpus move since the last collect — the hourly cron's shape, scratch cache doc, live corpus read-only); the restart-cold collect (fresh process, the first page load after a server start — scratch copy of the live document, live corpus read-only; the first round after a deploy measures the one-time document-shape upgrade); the warm-gate changed round (a persistent process's warm row memo and proof gate advancing over one turn's db writes between collects — the in-server shape behind the standing changed-round reading under active turns; the standing collector re-seeds a fresh process per round, so this shape needs its own harness — scratch corpus sized to the live db's row count, live db read-only) | median < 3 s; changed-round median < 0.5 s; restart-cold median < max(0.5 s, (document + sidecar bytes) ÷ 25 MB/s) (recalibrated from < 0.5 s: that line priced the matched-signature restart — the db file+WAL signature unchanged since the document was written, the stored partial serving with the sidecar and db unread, 0.29-0.31 s at the 2026-09-15 landing — while the standing collector's copy of the live document is signature-stale whenever an opencode turn ran since the server's last token-usage collect, so under active turns the reading prices the seeded signature-miss path — sidecar parse plus, before the 2026-09-24 four-field-proof landing, the rows-map per-id key diff (~1.0 s already at the landing-day corpus) and after it the tail fetch of the moved rows; the line tracks that shape's corpus the way M78/M84/M101 track theirs, 25 MB/s ≈ 76-88 % of the measured 28.5-33.0 MB/s end-to-end floor — see the 2026-09-16 history row); warm-gate changed-round median < max(0.050 s, rows × 0.0000013 s) (introduced with the tail-fetch gate at the 221,854-row corpus: the after band reads 0.82-0.96 µs/row and the pre-fix full-key-scan shape reads 1.50-1.60 µs/row, so the line sits 1.35-1.6x over the after band and trips the fallback shape its own price; a fallback round also prints its full-scan count); quiet round (the db signature moved, no row did — the probe skip) median < 0.10 s | — (introduced with its first history row) |
+| M7 token-usage page | M7 collector below | seconds per page load; the changed-round capture (one corpus move since the last collect — the hourly cron's shape: scratch copy of the two transcript corpora, per timed round one final-~1 MB line-aligned append to each corpus's largest transcript, timed capture, ledger rows digest as the cross-arm witness; live corpus read once for the copy, never written; the opencode and charlie-bot legs stay on the standing page line); the restart-cold collect (fresh process, the first page load after a server start — scratch cache doc + ledger seeded by one capture over the live corpus read-only, timed from the page's deferred tally-stack import through the ledger read) | median < 3 s; changed-round median < 0.15 s (the retargeted capture reads 70.5-73.9 ms over the 528 MB copied corpus at the 2026-09-29 landing — the line sits ~2x over the band and trips the lost-cache-gate shape, whose full-corpus re-parse prices ~2.1 s at the M78 floor); restart-cold median < 0.35 s (the fresh-process band reads 213-227 ms — the deferred tally-stack import the page pays, the M99 import-floor shape; a lost cache gate re-parses the live corpus, ~2.1 s, and trips). The warm-gate changed round retired with the ledger refactor (2026-09-29): its subject — the in-process row memo and proof gate a persistent server advanced between collects — is gone, every page load reads model_rows from the ledger fresh, and the costs that survive ride these two shapes | — (introduced with its first history row) |
 | M8 sidebar search, absent needle | M8 collector below | seconds per request | median < 0.5 s | — (introduced with its first history row) |
 | M9 ext-usage codex spend rescan, steady state | M9 collector below | seconds per poll round | median < 0.05 s | — (introduced with its first history row) |
 | M10 thread-metadata torn reads | M10 collector below | torn reads per concurrent save stream | 0 torn reads | — (introduced with its first history row) |
@@ -486,196 +486,128 @@ both paths):
 KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); for i in 1 2 3 4 5; do curl -s -o /dev/null -w '%{http_code} %{time_total}\n' -H "Authorization: Bearer $KEY" http://127.0.0.1:18498/token-usage; done | sort -k2 -n | awk '{c[$1]++; a[NR]=$2} END {if (c[200] != NR) {printf "M7 FAILED, non-200 statuses:"; for (s in c) printf " %dx%s", c[s], s; print ""; exit 1} printf "median %.3f s, max %.3f s over %d requests\n", a[int((NR+1)/2)], a[NR], NR}'
 ```
 
-M7 changed-round — the collect behind a page load whose corpus moved since the last one (any
-grown log moves the walk signature): the persisted document re-parses, unchanged files serve
-from it, and the db row memo re-proves its rows. The standing collector's five back-to-back
-requests never cross a corpus move, so the changed round needs its own timing: the harness
-drops the in-process memos per round and restores a scratch copy of the live document (live
-home read once for the copy, never written), keeping the row memos warm as the running
-server's are:
+M7 changed-round — the capture behind a page load whose corpus moved since the last one (the
+hourly cron's shape: the bot's own appends move the active transcripts between loads). Both
+ledger-capture gates advance: the moved files miss the cache parse memo (tail-parse past the
+boundary guard), their ledger sig differs and their records re-upsert (idempotent on the
+record id), and every unmoved file skips both. The harness copies the two transcript corpora
+once (live home read once for the copy, never written) and appends per timed round the way an
+active hour does — each corpus's largest transcript takes its own final ~1 MB, line-aligned —
+so all five rounds cross a move; the opencode and charlie-bot legs stay on the standing page
+line. The ledger rows digest is the cross-arm parity witness (the codex leg keys its record
+ids on the event index, so an appended copy's records are new ids and the digest is not a
+totals assertion):
 
 ```bash
-"$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import shutil, sys, time
-import os
-sys.path.insert(0, os.path.expanduser("~/workspace/charlie-bot"))
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import hashlib, json, os, shutil, sys, tempfile, time
 from pathlib import Path
-import src.core.token_tally as tt
 
-CACHE = Path.home() / ".charliebot" / "cache" / "token_tally.json"
-SCRATCH = Path("/tmp/opencode/m7-changed-round.json")
-SCRATCH.parent.mkdir(parents=True, exist_ok=True)  # a wiped /tmp must not zero the changed-round reading
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.token_tally import capture_usage
+from src.core.usage_ledger import UsageLedger
 
-def changed_round():
-    # The changed-round shape: the walk ran, the aggregate memo is gone, the document's
-    # per-file signatures are stale for exactly the files that moved; the row memos stay
-    # warm, as the long-running server's are.
-    tt._aggregate_memo = None
-    tt._tally_memo = None
-    shutil.copy2(CACHE, SCRATCH)
-    t0 = time.perf_counter()
-    tally = tt.collect_token_usage(cache_path=SCRATCH)
-    return time.perf_counter() - t0, tally
+scratch = Path(tempfile.mkdtemp(prefix="m7-changed-"))
+claude_home, codex_home = scratch / "claude", scratch / "codex"
+shutil.copytree(Path.home() / ".claude" / "projects", claude_home / "projects")
+shutil.copytree(Path.home() / ".codex" / "sessions", codex_home / "sessions")
+LEDGER, CACHE = scratch / "ledger.db", scratch / "cache.json"
 
-changed_round()  # cold pass, as at the first changed round after a server start; not timed
-times = []
-for _ in range(5):
-    dt, tally = changed_round()
-    times.append(dt)
-times.sort()
-print(f"changed-round collect median {times[2]:.3f} s, max {times[-1]:.3f} s over 5, "
-      f"{len(tally.rows)} rows, {tally.scanned_bytes / 1e6:.1f} MB re-read")
-EOF
-```
+def capture():
+    with UsageLedger(LEDGER) as ledger:
+        return capture_usage(ledger, host="m7-changed", claude_homes={"copy": claude_home},
+                             codex_homes={"copy": codex_home}, opencode_db=None,
+                             sessions_dir=None, cache_path=CACHE)
 
-M7 warm-gate changed round — the in-server shape the standing changed-round collector
-cannot see: that collector re-seeds a fresh process per round, so its gate miss takes the
-full key scan, while the server's row memo and proof gate are warm and the hourly page load
-advances them over one turn's db writes. The harness: a scratch message-table corpus sized
-to the live db's row count (read once, never written; turn rows and cache dropped on
-reuse), one warm-up collect, per timed round ten in-place step-finish upserts plus twenty
-appended rows each bumping time_updated above the table's max like drizzle's `$onUpdate`,
-the full key scan counted (a fallback round prints its count and trips the line through its
-own price), then the quiet round (the signature touched, no row moved — the probe skip) and
-a cold replay carrying the rows digest as the parity witness:
+capture()  # cold pass seeds the ledger sigs and the cache parse memos; not timed
 
-```bash
-"$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import hashlib, json, os, sqlite3, sys, time
-from pathlib import Path
-sys.path.insert(0, os.path.expanduser("~/workspace/charlie-bot"))
-import src.core.token_tally as tt
-
-DB = Path(os.path.expanduser("~/.local/share/opencode/opencode.db"))
-SCRATCH = Path("/tmp/opencode/m7-warmgate")
-CORPUS, CACHE = SCRATCH / "db.sqlite", SCRATCH / "cache.json"
-live_rows = sqlite3.connect(f"file:{DB}?mode=ro", uri=True).execute(
-    "select count(*) from message").fetchone()[0]
-
-SCRATCH.mkdir(parents=True, exist_ok=True)
-if not CORPUS.is_file():
-    con = sqlite3.connect(CORPUS)
-    con.execute("create table message (id text primary key, session_id text not null, "
-                "time_created integer not null, time_updated integer not null, data text not null)")
-    rows = [(f"seed-{i}", "sess", 1700000000000 + i, 1700000000000 + i,
-             json.dumps({"role": "assistant" if i % 2 == 0 else "user", "modelID": "oc-m",
-                         "providerID": "prov", "time": {"created": 1700000001000},
-                         "pad": "y" * 120,
-                         **({"tokens": {"input": 100, "output": 20, "cache": {"read": 4, "write": 2}}}
-                            if i % 2 == 0 else {})}))
-            for i in range(live_rows)]
-    con.executemany("insert into message (id, session_id, time_created, time_updated, data) "
-                    "values (?, ?, ?, ?, ?)", rows)
-    con.commit()
-    con.close()
-con = sqlite3.connect(CORPUS)  # a reused corpus drops the last round's turn rows
-con.execute("delete from message where id like 'turn%'")
-con.commit()
-con.close()
-CACHE.unlink(missing_ok=True)
-for stale in SCRATCH.glob("*.opencode_rows.json"):
-    stale.unlink()
-
-KW = dict(opencode_db=CORPUS, cache_path=CACHE, claude_homes={}, codex_homes={},
-          sessions_dir=SCRATCH / "sessions")
-TURN = json.dumps({"role": "assistant", "modelID": "oc-m", "providerID": "prov",
-                   "time": {"created": 1700000001000},
-                   "tokens": {"input": 500, "output": 50, "cache": {"read": 10, "write": 5}}})
-
-
-def synthesize_turn(tag: str) -> None:
-    # Ten in-place step-finish upserts plus twenty appends, every write bumping
-    # time_updated above the table's max like drizzle's $onUpdate.
-    con = sqlite3.connect(CORPUS)
-    tu = con.execute("select max(time_updated) + 1 from message").fetchone()[0]
-    for i, (mid,) in enumerate(con.execute("select id from message limit 10").fetchall()):
-        con.execute("update message set data = ?, time_updated = ? where id = ?", (TURN, tu + i, mid))
-    for i in range(20):
-        con.execute("insert into message (id, session_id, time_created, time_updated, data) "
-                    "values (?, 'sess', ?, ?, ?)", (f"{tag}-{i}", tu + 10 + i, tu + 10 + i, TURN))
-    con.commit()
-    con.close()
-
-
-def rows_digest(tally: tt.TokenTally) -> str:
-    rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output]
-            for r in tally.rows]
+def rows_digest():
+    with UsageLedger(LEDGER) as ledger:
+        rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output]
+                for r in ledger.model_rows()]
     return hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:12]
 
-
-tt.collect_token_usage(**KW)  # cold pass, as at a process start; not timed
-
-full_scans, orig_scan = 0, tt._scan_opencode_rows
-
-
-def counting_scan(con, memo):
-    global full_scans
-    full_scans += 1
-    return orig_scan(con, memo)
-
-
-tt._scan_opencode_rows = counting_scan
-changed, tally = [], None
-for r in range(5):
-    synthesize_turn(f"turn{r}")
-    tt._aggregate_memo = None
-    tt._tally_memo = None
-    t0 = time.perf_counter()
-    tally = tt.collect_token_usage(**KW)
-    changed.append(time.perf_counter() - t0)
-tt._scan_opencode_rows = orig_scan
-changed.sort()
-digest = rows_digest(tally)
-
-quiet = []
+digest, times, written = rows_digest(), [], None
 for _ in range(5):
-    os.utime(CORPUS)  # the WAL-noise shape: the signature moves, no row did
-    tt._aggregate_memo = None
-    tt._tally_memo = None
+    moved = []
+    for root in (claude_home / "projects", codex_home / "sessions"):
+        log = max(root.rglob("*.jsonl"), key=lambda p: p.stat().st_size)
+        with log.open("rb") as fh:  # one hourly append: the file's own final ~1 MB, line-aligned
+            fh.seek(max(0, log.stat().st_size - 1024 * 1024))
+            data = fh.read()
+        with log.open("ab") as fh:
+            fh.write(data[data.find(b"\n") + 1:])
+        moved.append(log.parent.name + "/" + log.name)
     t0 = time.perf_counter()
-    tt.collect_token_usage(**KW)
-    quiet.append(time.perf_counter() - t0)
-quiet.sort()
-
-tt._reset_aggregate_memo()
-replay_digest = rows_digest(tt.collect_token_usage(**KW))
-print(f"{live_rows} corpus rows; warm-gate changed round median "
-      f"{changed[2] * 1000:.1f} ms, max {changed[-1] * 1000:.1f} ms over 5; quiet round "
-      f"(probe skip) median {quiet[2] * 1000:.1f} ms; full key scans {full_scans}; rows "
-      f"digest {digest}, replay digest {replay_digest}, parity {digest == replay_digest}")
+    written = capture()
+    times.append(time.perf_counter() - t0)
+    digest = rows_digest()
+times.sort()
+print(f"changed-round capture median {times[2]:.4f} s, max {times[-1]:.4f} s over 5, "
+      f"moved per round {moved}, records written {written}, rows digest {digest}")
+shutil.rmtree(scratch)
 EOF
 ```
 
+M7 warm-gate changed round — retired with the ledger refactor (the 2026-09-29 history row).
+Its subject was the in-process row memo and proof gate a persistent server advanced between
+collects, and the ledger capture deleted that machinery: every page load reads
+``model_rows()`` from the ledger fresh, so no in-server warm shape remains to time. The costs
+that survive it ride the two shapes beside this note — the cache document parse and the ledger
+sig gate in the restart-cold round, the moved-file tail-parse and re-upsert in the changed
+round.
+
 M7 restart-cold — the collect behind the first page load after a server start: a fresh
-process re-parses the persisted document, rebuilds the row memo from its stored rows map,
-and gates the key diff on the entry's stored proof aggregates — a matching proof tuple, the
-same proof the warm memo's gate takes, skips the key pass entirely, and a miss tail-fetches
-only the rows written after the stored max (a legacy two-field document — a build before the
-maxes were persisted, what the live server writes until its next deploy — seeds without a
-max and its first miss takes the full key diff) (live home read
-once for the copy, never written):
+process pays the page's deferred tally-stack import, loads the cache document the server's
+last capture left on disk, walks the live corpus, and re-parses exactly the files a turn moved
+since the last capture (the signature-stale shape under active turns; a quiet corpus
+re-parses nothing and the round prices the floor). The harness seeds a scratch ledger + cache
+doc with one capture over the live corpus (read-only, never written), then times five
+fresh-process rounds from the deferred import through the ledger read; the rows digest is the
+parity witness:
 
 ```bash
-"$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
-import hashlib, json, shutil, sys, time
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import hashlib, json, os, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
-import os
-sys.path.insert(0, os.path.expanduser("~/workspace/charlie-bot"))
-import src.core.token_tally as tt
 
-CACHE = Path.home() / ".charliebot" / "cache" / "token_tally.json"
-SCRATCH = Path("/tmp/opencode/m7-restart-cold.json")
-SCRATCH.parent.mkdir(parents=True, exist_ok=True)  # the changed-round block must not be this block's dir creator
-shutil.copy2(CACHE, SCRATCH)  # live home read once for the copy, never written
-SIDECAR = CACHE.parent / tt._rows_sidecar_name(tt.DEFAULT_OPENCODE_DB)
-corpus_mb = (CACHE.stat().st_size + SIDECAR.stat().st_size) / 1e6
-t0 = time.perf_counter()
-tally = tt.collect_token_usage(cache_path=SCRATCH)
-wall = time.perf_counter() - t0
-rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output] for r in tally.rows]
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.token_tally import capture_usage
+from src.core.usage_ledger import UsageLedger
+
+scratch = Path(tempfile.mkdtemp(prefix="m7-cold-"))
+LEDGER, CACHE = scratch / "ledger.db", scratch / "cache.json"
+with UsageLedger(LEDGER) as ledger:  # seed pass, as the server's own last capture left them; not timed
+    capture_usage(ledger, host="m7-cold", claude_homes={"live": Path.home() / ".claude"},
+                  codex_homes={"live": Path.home() / ".codex"}, opencode_db=None,
+                  sessions_dir=None, cache_path=CACHE)
+
+CHILD = '''
+import hashlib, json, os, sys, time
+from pathlib import Path
+t0 = time.perf_counter()  # the page collect starts at its deferred imports: the first load after a start
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.token_tally import capture_usage
+from src.core.usage_ledger import UsageLedger
+scratch = Path(sys.argv[1])
+with UsageLedger(scratch / "ledger.db") as ledger:
+    written = capture_usage(ledger, host="m7-cold", claude_homes={"live": Path.home() / ".claude"},
+                            codex_homes={"live": Path.home() / ".codex"}, opencode_db=None,
+                            sessions_dir=None, cache_path=scratch / "cache.json")
+    rows = [[r.source, r.model, r.calls, r.in_fresh, r.cache_write, r.cache_read, r.output]
+            for r in ledger.model_rows()]
 digest = hashlib.sha256(json.dumps(rows, sort_keys=True).encode()).hexdigest()[:12]
-print(f"restart-cold collect wall {wall:.3f} s, {len(tally.rows)} rows, "
-      f"scanned {tally.scanned_bytes / 1e6:.1f} MB, document+sidecar {corpus_mb:.1f} MB, rows digest {digest}")
+print(f"cold round wall {time.perf_counter() - t0:.3f} s, rows {len(rows)}, "
+      f"written {written}, digest {digest}")
+'''
+for _ in range(5):
+    child = subprocess.run([sys.executable, "-c", CHILD, str(scratch)], env=dict(os.environ),
+                           capture_output=True, text=True)
+    if child.returncode != 0:
+        sys.stderr.write(child.stderr)
+        sys.exit(1)
+    print("  " + child.stdout.strip())
+shutil.rmtree(scratch)
 EOF
 ```
 
@@ -9083,6 +9015,7 @@ EOF
 ```
 
 ## Sampling history
+| 2026-09-29 | this PR | M7 changed-round and restart-cold collectors retargeted to the ledger capture, the sweep's own machinery (no product-code change); M7 warm-gate retired. The ledger refactor (93d9277e) deleted the in-process row memo and proof gate those three harnesses priced — they failed with ``collect_token_usage`` / ``_rows_sidecar_name`` AttributeErrors every standing sweep since, the remainder #2255's repair named (2026-09-28). The page's collect is now ``capture_usage`` into a SQLite ``UsageLedger`` plus a fresh ``model_rows()`` read per load, so the warm shape has no subject; its surviving costs (the cache-document parse, the ledger sig gate) ride the retargeted restart-cold round, the moved-file tail-parse and re-upsert the retargeted changed-round. Retargeted shapes: changed-round = scratch copy of the two transcript corpora (528 MB copied once, live home read-only), per timed round one final-~1 MB line-aligned append to each corpus's largest transcript (the hourly move), timed capture, ledger rows digest as the cross-arm witness; restart-cold = scratch cache doc + ledger seeded by one capture over the live corpus read-only, five fresh-process rounds timed from the page's deferred tally-stack import through the ledger read. After readings (verbatim collectors, main checkout at origin/main, load 0.8-1.3 one-minute): changed-round median 66.2-70.5 ms, max 71.2-73.9 ms over 5, rows digest 72b3714bfe5a identical across two independent runs (the codex leg keys record ids on the event index, so an appended copy's records take fresh ids — the digest is the cross-arm witness, not a totals assertion; records written {'Claude Code': 1184, 'Codex': 911} cumulative); restart-cold wall 213-227 ms over five fresh rounds, rows 11, digest 21ab923d4a99 stable across runs, written 0/0 (a quiet corpus — the floor shape; a moved corpus adds the moved files' re-parse and re-upsert on top). Lines set from the bands: changed-round median < 0.15 s (~2x band, trips the lost-cache-gate shape's ~2.1 s full-corpus re-parse at the M78 floor), restart-cold median < 0.35 s (~1.5x band) | a collector that fails is a metric whose regression watch does not run (the rule the M97 repair pinned, 2026-09-28); these three shapes have been dark since the ledger refactor landed |
 | 2026-09-28 | this PR | M35 / M63 / M80 collectors repaired, the sweep's own machinery (no product-code change): the standing sweep read all 123 defined metrics but six collectors failed — M35 and M63 drove ``GET /api/sessions/{id}/view``, deleted by #2249 (404 / ``AttributeError: get_session_view``), and M7 changed-round, M7 warm-gate, M7 restart-cold and M80 imported ``collect_token_usage``/``_rows_sidecar_name``, retired by the ledger refactor (93d9277e) — so those six metrics read unmeasured. Repairs: M35 drops the view leg (the SPA switch loads through bootstrap since #2249); M63 retires per the M44 precedent (the /view handler was its only subject; the thread-row costs ride the standing M5 threads/list and M36 worker-list lines at the same worst corpus); M80 retargets the busy-turn shape at the page's capture-first path — scratch claude+codex corpus, cold capture into a scratch ``UsageLedger``, ~1 MB line-aligned appends to both files, timed changed-round capture, ledger-row digest across arms. After readings (verbatim collectors, main checkout at origin/main, load 0.2-0.5 one-minute): M35 events median 0.82/0.86/0.88 ms, max 1.41-1.59 ms, digest 0a5ce8209968, bootstrap median 1.08/1.10/1.13 ms, digest eff30ffa2fcf, identical across rounds (events line < 0.004 s); M80 changed-round capture wall 0.0438/0.0442/0.0454/0.0459 s over four rounds, records written {'Claude Code': 1184, 'Codex': 771} and rows digest 24b906fc5dd9 identical every round (line median < 0.30 s). Remainder for a later run: the three M7 sub-shapes still price the retired cache-document collect; their production shapes (corpus move between page loads, first load after a start, the row-memo gate advance) now live in the ledger capture and need their own retargeted harnesses | a collector that fails is a metric whose regression watch does not run; the M97 repair (2026-09-28) pinned the same rule |
 
 | Date | PR | Before → after | Note |

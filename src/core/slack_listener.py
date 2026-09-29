@@ -70,7 +70,13 @@ from src.core.tasks import create_logged_task
 
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
-from src.core.thread_entry import ThreadPlatform, ThreadReplyError, chunk_text, summon_prompt_tail
+from src.core.thread_entry import (
+    ThreadPlatform,
+    ThreadReplyError,
+    chunk_text,
+    event_by_id,
+    summon_prompt_tail,
+)
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
 if TYPE_CHECKING:
@@ -712,13 +718,6 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
       name=f"slack-ack-clear-{session_id}")
 
 
-def _event_by_id(events: list[dict], event_id: str) -> dict | None:
-  for ev in events:
-    if ev.get("id") == event_id:
-      return ev
-  return None
-
-
 def _summon_of(slack_block: dict, event_id: str) -> str:
   """The summon a round with this slack block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
   return slack_block.get("nudge_of") or event_id
@@ -1010,7 +1009,7 @@ async def _audit_round(
   this audit.
   """
   summon_id = _summon_of(target, input_event_id)
-  summon = _event_by_id(events, summon_id)
+  summon = event_by_id(events, summon_id)
   if _REPLY_COMMAND not in ((summon or {}).get("content") or ""):
     return False
   if _replied(events, summon_id):

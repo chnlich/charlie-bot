@@ -146,3 +146,11 @@ def chunk_text(text: str, limit: int) -> list[str]:
   # A whitespace-only chunk (possible only from leading input whitespace) is
   # dropped: the platform rejects text-less posts, and no content is lost by it.
   return [c for c in chunks if c.strip()] or chunks
+
+
+def event_by_id(events: list[dict], event_id: str) -> dict | None:
+  """The event with this id, or None."""
+  for ev in events:
+    if ev.get("id") == event_id:
+      return ev
+  return None

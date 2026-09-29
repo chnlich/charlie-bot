@@ -7,7 +7,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 import yaml
-from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, bind_deps_managers, make_home_config
+from conftest import (
+    BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET,
+    bind_deps_managers,
+    create_scheduled_node,
+    make_home_config,
+)
 
 from src.core.backlog_loop import _handle_stale
 from src.core.config import ImprovementLoopConfig, ScheduledTaskConfig
@@ -70,14 +75,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
-  session = await tree.create_task(
-      request_id="scheduled-node:backup",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="backup",
-      backend=None,
-      caller="system")
+  session = await create_scheduled_node(tree, name="backup", backend=None)
   # Base is in the future so croniter's next fire is always after now, removing the minute-boundary
   # race a past base had: with cron "* * * * *" it fired whenever the test ran just after a boundary.
   session.last_scheduled_run = (datetime.now(UTC) + timedelta(minutes=5)).replace(tzinfo=None).isoformat()

@@ -11,6 +11,7 @@ import yaml
 from conftest import (
     OPUS_BACKEND_ID,
     bind_deps_managers,
+    create_scheduled_node,
     make_cron_client,
     make_scheduler_setup,
     write_nightly_prompt,
@@ -71,14 +72,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
-  node = await tree.create_task(
-      request_id="scheduled-node:nightly",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="nightly",
-      backend=OPUS_BACKEND_ID,
-      caller="system")
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   node.last_scheduled_run = "2026-06-07T09:00:00+00:00"
   node.last_scheduled_cron = "0 2 * * *"
   await session_mgr.save_metadata(node)
@@ -114,14 +108,7 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
-  node = await tree.create_task(
-      request_id="scheduled-node:nightly",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="nightly",
-      backend=OPUS_BACKEND_ID,
-      caller="system")
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
   await tree.record_scheduled_fire(node.id, last_scheduled_run=now.isoformat(), cron="* * * * *")
   task_cfg = ScheduledTaskConfig(

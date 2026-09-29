@@ -19,7 +19,7 @@ chunk of the reply posts. ``ack`` marks the given thread messages (Slack ts) as 
 advancing the session's read watermark, and prints the readback JSON
 (``acked``, ``watermark_ts``); every read message's id must be passed — none
 may be skipped. The session resolves per ``resolve_session_id``;
-the reply-format contract is prompts/slack_reply_format.md.
+the reply-format contract is prompts/thread_reply_format.md.
 """
 
 import argparse

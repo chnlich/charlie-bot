@@ -17,6 +17,7 @@ from conftest import (
     FakeSlackClient,
     build_slack_cfg,
     make_task_spawner,
+    stub_credentials,
 )
 from structlog.testing import capture_logs
 
@@ -248,6 +249,19 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
   assert not any(ev["event"] == "slack_reply_posted" for ev in logs)
 
 
+@pytest.mark.asyncio
+async def test_reply_to_an_unknown_session_is_404_without_slack_credentials(tmp_path: Path) -> None:
+  """The refusal precedes any Slack call: a host without Slack credentials gets
+  the 404 for an unknown session, not a credentials.slack.bot_token error."""
+  cfg, session_mgr, _ = _rig(tmp_path)
+  stub_credentials({})  # no slack section: building the bot client raises
+
+  with pytest.raises(SlackReplyError) as excinfo:
+    await post_reply("no-such-session", "hello", cfg, session_mgr)
+
+  assert excinfo.value.status == 404
+
+
 # ---------------------------------------------------------------------------
 # Reply: the publish-lane rewrite before any chunk posts
 # ---------------------------------------------------------------------------
@@ -375,6 +389,18 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
   assert [p["text"] for p in client.posts] == [_NO_REPLY_NOTICE]
   assert len(_notices(session_mgr.load_chat_events_sync(sid))) == 1
   assert not client.reactions[_THREAD]
+
+
+@pytest.mark.asyncio
+async def test_round_end_without_a_slack_thread_answers_false_without_slack_credentials(tmp_path: Path) -> None:
+  """persist_and_broadcast fires deliver_done for every master_done: a host
+  without Slack credentials survives a non-Slack session's round end — the
+  audit answers False and never builds the bot client."""
+  cfg, session_mgr, _ = _rig(tmp_path)
+  stub_credentials({})  # no slack section: building the bot client raises
+  meta = await session_mgr.create_session(CreateSessionRequest(name="plain session"))
+
+  assert await deliver_done(meta.id, _done(None), cfg, session_mgr) is False
 
 
 # ---------------------------------------------------------------------------

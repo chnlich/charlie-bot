@@ -471,6 +471,16 @@ def read_required_text_file(flag_name: str, file_path: str) -> str:
   return content
 
 
+def read_reply_text(file_arg: str) -> str:
+  """The reply verb's ``--file`` read: stdin when the arg is ``-``, else the file's text."""
+  if file_arg == "-":
+    text = sys.stdin.read()
+    if not text.strip():
+      exit_usage_error("--file - read no text from stdin")
+    return text
+  return read_required_text_file("--file", file_arg)
+
+
 def validate_repo_path(parser: argparse.ArgumentParser, value: str) -> None:
   """Reject a --repo value that is not an absolute path or does not exist as a directory.
 

@@ -24,13 +24,11 @@ the reply-format contract is prompts/thread_reply_format.md.
 
 import argparse
 import json
-import sys
 
 from src.cli.common import (
     add_session_arg,
-    exit_usage_error,
     post_internal_api,
-    read_required_text_file,
+    read_reply_text,
     resolve_session_id,
 )
 from src.cli.help_formatter import CliHelpFormatter
@@ -56,18 +54,9 @@ def _build_parser() -> argparse.ArgumentParser:
   return parser
 
 
-def _read_reply_text(file_arg: str) -> str:
-  if file_arg == "-":
-    text = sys.stdin.read()
-    if not text.strip():
-      exit_usage_error("--file - read no text from stdin")
-    return text
-  return read_required_text_file("--file", file_arg)
-
-
 def _cmd_reply(args: argparse.Namespace) -> None:
   session_id = resolve_session_id(args.session)
-  text = _read_reply_text(args.file)
+  text = read_reply_text(args.file)
   result = post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
   print(json.dumps(result))
 

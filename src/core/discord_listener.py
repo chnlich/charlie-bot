@@ -56,21 +56,36 @@ events with no discord block, outside the audit. A DM mention summons nothing
 notice pointing back to the server channels.
 """
 
+import asyncio
+import contextlib
+import json
+import random
 import re
+import sys
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from src.core import event_types as ET
-from src.core import thread_entry
+from src.core import thread_entry, timeouts
 from src.core.config import CharlieBotConfig, get_credentials
-from src.core.discord_client import DiscordClient, message_link, snowflake_key
+from src.core.discord_client import (
+    DiscordClient,
+    message_content_intent_enabled,
+    message_link,
+    missing_permissions,
+    snowflake_key,
+)
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import DiscordOrigin
 from src.core.sessions import SessionManager
 from src.core.thread_entry import ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
 from src.core.triggers import TriggerManager
+
+if TYPE_CHECKING:
+  from websockets.asyncio.client import ClientConnection
 
 logger = LazyStructlogLogger()
 
@@ -498,3 +513,27 @@ async def _backfill_followed_threads(
   ``run_listener`` calls the Slack one.
   """
   return await thread_entry.backfill_followed_threads(DiscordThreadAdapter(client), cfg, session_mgr, trigger_mgr)
+
+
+# ---------------------------------------------------------------------------
+# The gateway loop
+# ---------------------------------------------------------------------------
+
+
+async def _preflight(client: DiscordClient) -> bool:
+  """Check the intent grant and per-guild permissions once per listener start; False means don't start.
+
+  Without the Message Content intent every message arrives content-less, so
+  there is nothing to listen with — the listener refuses to start. A guild
+  missing any required permission only logs: the guilds that do work still
+  should, so the loop keeps running either way.
+  """
+  application = await client.get_current_application()
+  if not message_content_intent_enabled(int(application["flags"])):
+    logger.error("discord_listener_message_content_intent_off")
+    return False
+  for guild in await client.list_current_user_guilds():
+    missing = missing_permissions(int(guild["permissions"]))
+    if missing:
+      logger.error("discord_listener_missing_permissions", guild=guild["id"], missing=missing)
+  return True

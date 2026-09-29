@@ -408,3 +408,71 @@ async def handle_message_create(
       content=_build_summon_prompt(message_link(guild_id, channel_id, message_id), cfg),
       user=author_id,
   )
+
+
+# ---------------------------------------------------------------------------
+# Round side: the wrappers the CLI, the endpoint, and the session manager call
+# ---------------------------------------------------------------------------
+
+
+async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  """Refuse the reply when eligible thread messages sit above the session's watermark.
+
+  One-line pass-through to the shared gate (``thread_entry.assert_thread_fresh``)
+  on a lazily-built Discord adapter; the refusal shapes live there.
+  """
+  return await thread_entry.assert_thread_fresh(DiscordThreadAdapter(), session_id, cfg, session_mgr)
+
+
+async def ack_messages(
+    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
+  """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
+
+  One-line pass-through to the shared ack (``thread_entry.ack_messages``) on a
+  lazily-built Discord adapter; the refusal shapes, the ack event, and the
+  readback keys live there.
+  """
+  return await thread_entry.ack_messages(DiscordThreadAdapter(), session_id, message_ids, cfg, session_mgr)
+
+
+async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
+  """Post *text* to the session's Discord thread and return the readback the CLI prints.
+
+  One-line pass-through to the shared reply path (``thread_entry.post_reply``)
+  on a lazily-built Discord adapter; the rewrite, chunking, attachments,
+  refusals, reply event, and readback live there.
+  """
+  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, session_mgr)
+
+
+async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+  """Round-end audit for one finished round; True when it nudged or posted the notice.
+
+  One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
+  a lazily-built Discord adapter; the audit gate, the nudge, and the notice
+  live there.
+  """
+  return await thread_entry.deliver_done(DiscordThreadAdapter(), session_id, done, cfg, session_mgr)
+
+
+async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+  """Boot pass over every Discord session; returns how many notices and nudges it produced.
+
+  One-line pass-through to the shared boot audit
+  (``thread_entry.backfill_lost_summons``) on a lazily-built Discord adapter;
+  the lost-summon report and the per-round audit live there.
+  """
+  return await thread_entry.backfill_lost_summons(DiscordThreadAdapter(), cfg, session_mgr)
+
+
+async def _backfill_followed_threads(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, client: DiscordClient, trigger_mgr: TriggerManager) -> int:
+  """Arm the follow trigger of every ACTIVE Discord session holding unread messages; return the count.
+
+  One-line pass-through to the shared backfill
+  (``thread_entry.backfill_followed_threads``) on the given client's adapter;
+  the per-thread read, the arming, and the failure logs live there. Kept for
+  the gateway loop (a later step) to call on every (re)connection, the way
+  ``run_listener`` calls the Slack one.
+  """
+  return await thread_entry.backfill_followed_threads(DiscordThreadAdapter(client), cfg, session_mgr, trigger_mgr)

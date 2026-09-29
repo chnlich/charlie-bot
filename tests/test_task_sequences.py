@@ -19,6 +19,7 @@ from conftest import (
     FABLE_MODEL,
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    create_task,
     patch_instructions_content,
     rate_limit_event,
     stub_credentials,
@@ -107,15 +108,8 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """Two iterations: ONE child, two ordered iteration Runs, one final report."""
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.core.models import TaskSpec
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   await tree.dispatch.admit_input(
@@ -185,15 +179,8 @@ async def test_live_goal_change_affects_next_iteration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """The controller re-reads goal.md every iteration: a mid-loop edit steers the next one."""
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.core.models import TaskSpec
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
 
   async def edit_goal_after_first_stream() -> None:
     # After the first build's scripted stream, edit the live goal so the
@@ -253,15 +240,8 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     500, and nothing reserved."""
   from src.core.improve_command import _active_loop_path, _loops_dir, find_running_loop
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  from src.core.models import TaskSpec
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller="operator")
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   payload = {

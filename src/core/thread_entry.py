@@ -1012,6 +1012,44 @@ async def accept_summon(
   return session_id
 
 
+async def follow_message(
+    adapter: ThreadAdapter,
+    session_mgr: SessionManager,
+    trigger_mgr: TriggerManager,
+    session_id: str,
+    message_id: str,
+    *,
+    origin_matches: Callable[[Any], bool],
+) -> str | None:
+  """Arm the session's follow trigger for one eligible thread message; the session id when armed.
+
+  Guards 4 and 5 of the entrypoint's guard chain: the session exists, is
+  ACTIVE, and its origin is set and passes *origin_matches*; the message id
+  sorts strictly above the session's watermark (None passes). A passed message
+  arms (or re-arms) the session's one persisted follow trigger — the chain
+  floor is the message id, the wake label names the thread link — with guards
+  1 to 3 (the event's own shape: subtype, thread targeting, human sender)
+  staying in the entrypoint, which reads them off the raw event.
+  """
+  platform = adapter.platform
+  meta = await session_mgr.get_session(session_id)
+  origin = getattr(meta, platform.origin_field) if meta is not None else None
+  if meta is None or meta.status != SessionStatus.ACTIVE or origin is None or not origin_matches(origin):
+    return None
+  watermark = getattr(meta, platform.watermark_field)
+  if watermark is not None and not (platform.id_key(message_id) > platform.id_key(watermark)):
+    return None
+  link = await adapter.thread_link(origin)
+  trigger = await arm_follow_trigger(
+      platform,
+      trigger_mgr,
+      session_id,
+      floor=message_id,
+      wake_label=lambda floor: adapter.follow_wake_message(floor, link),
+      log_fields=adapter.log_fields(adapter.address_of(origin)))
+  return session_id if trigger is not None else None
+
+
 # The file-service URL prefixes: the mounted mounts with the trailing slash the
 # rewrite gate matches on.
 _FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)

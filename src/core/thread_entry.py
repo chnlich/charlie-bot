@@ -17,10 +17,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from src.api.message_utils import master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
+from src.core.constants import FILE_SERVER_MOUNTS
 
 
 @dataclass(frozen=True)
@@ -255,3 +257,66 @@ def follow_floor(label: str) -> str | None:
   """
   match = _FOLLOW_FLOOR_RE.search(label)
   return match.group(1) if match is not None else None
+
+
+# The file-service URL prefixes: the mounted mounts with the trailing slash the
+# rewrite gate matches on.
+_FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)
+
+# The file-server URL shapes the reply path rewrites: scheme, any host, this
+# server's port, one of the file-service prefixes, then the absolute filesystem
+# path, with the query string and fragment carried onto the published URL unchanged.
+_FILE_SERVER_URL_RE = re.compile(
+    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>" +
+    "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS) +
+    r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
+
+# Any URL naming a port, for the application-route naming: the matches whose port is
+# this server's and whose path is not a file-service prefix reach the operator alone.
+_SERVER_PORT_URL_RE = re.compile(
+    r"https?://(?:\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)(?P<path>/[^\s?#]*)?"
+    r"(?:\?[^\s#]*)?(?:#[^\s]*)?")
+
+
+def rewrite_file_links(text: str, cfg: CharlieBotConfig, swap: Callable[[Path], str]) -> tuple[str, list[str]]:
+  """Rewrite every file-server artifact URL the reply links through *swap*.
+
+  A URL on this server's port under the canonical ``/absolute_filepath/`` prefix names an
+  artifact file. Each existing target goes through *swap* — the text that
+  replaces the URL before its query string and fragment are re-attached — so
+  the reply carries links its readers can open. A match whose target file is
+  gone raises ``ThreadReplyError`` naming the link — nothing of this reply
+  posts — and a refusal raised by *swap* itself (for example an unconfigured
+  publish lane, whose error text names the missing key) propagates the same
+  way. Application-route URLs on the same port (``/diff``, ``/perfetto``,
+  ...) are not static files, so they stay as written and come back named for
+  the readback's operator-alone line.
+  """
+  routes: list[str] = []
+  for m in _SERVER_PORT_URL_RE.finditer(text):
+    if int(m.group("port")) != cfg.server.port:
+      continue
+    if (m.group("path") or "").startswith(_FILE_URL_PREFIXES):
+      continue
+    routes.append(m.group(0))
+
+  out: list[str] = []
+  cursor = 0
+  for m in _FILE_SERVER_URL_RE.finditer(text):
+    if int(m.group("port")) != cfg.server.port:
+      continue
+    fs_path = Path(unquote(m.group("fs_path")))
+    if not fs_path.is_file():
+      raise ThreadReplyError(422, f"reply links a file-server URL whose file is gone: {m.group(0)}")
+    out.append(text[cursor:m.start()])
+    out.append(swap(fs_path) + (m.group("query") or "") + (m.group("fragment") or ""))
+    cursor = m.end()
+  out.append(text[cursor:])
+  return "".join(out), list(dict.fromkeys(routes))
+
+
+def operator_only_note(links: list[str]) -> str | None:
+  """The readback's one line naming the application-route links that reach the operator alone."""
+  if not links:
+    return None
+  return "Application-route links stay as written; the operator alone can open them: " + ", ".join(links)

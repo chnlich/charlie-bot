@@ -40,10 +40,10 @@ import asyncio
 import json
 import re
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
@@ -51,7 +51,6 @@ from src.api.message_utils import build_agent_message_event, master_done_input_e
 from src.core import event_types as ET
 from src.core import timeouts
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
-from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
@@ -80,7 +79,9 @@ from src.core.thread_entry import (
   newest_thread_input,
   noticed,
   nudged,
+  operator_only_note,
   replied,
+  rewrite_file_links,
   summon_of,
   summon_prompt_tail,
   unread_after,
@@ -181,24 +182,6 @@ assert SLACK.ack_event_type == _ACK_EVENT_TYPE
 
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
-
-# The file-service URL prefixes: the mounted mounts with the trailing slash the
-# rewrite gate matches on.
-_FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)
-
-# The file-server URL shapes the reply path rewrites: scheme, any host, this
-# server's port, one of the file-service prefixes, then the absolute filesystem
-# path, with the query string and fragment carried onto the published URL unchanged.
-_FILE_SERVER_URL_RE = re.compile(
-    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>" +
-    "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS) +
-    r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
-
-# Any URL naming a port, for the application-route naming: the matches whose port is
-# this server's and whose path is not a file-service prefix reach the operator alone.
-_SERVER_PORT_URL_RE = re.compile(
-    r"https?://(?:\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)(?P<path>/[^\s?#]*)?"
-    r"(?:\?[^\s#]*)?(?:#[^\s]*)?")
 
 
 def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
@@ -824,57 +807,28 @@ async def ack_messages(
   return {"acked": len(ids), "watermark_ts": watermark}
 
 
-def _rewrite_file_links(text: str, cfg: CharlieBotConfig) -> tuple[str, list[str]]:
-  """Publish every file-server artifact the reply links and swap the URLs to the published ones.
+def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
+  """The Slack swap for the shared link rewrite: publish the file, return its published URL.
 
-  A URL on this server's port under the canonical ``/absolute_filepath/`` prefix names an
-  artifact file. Each existing target is published through the one publish action and
-  the URL replaced by the published one, with the query string and fragment
-  re-attached unchanged. A match whose target file is gone raises ``SlackReplyError``
-  naming the link — nothing of this reply posts — and so does an unconfigured publish
-  lane (the ``PublishError`` text names the missing key). Application-route URLs on
-  the same port (``/diff``, ``/perfetto``, ...) are not static files, so they stay as
-  written and come back named for the readback's operator-alone line.
+  An unconfigured publish lane refuses the whole reply with 422 (the
+  ``PublishError`` text names the missing key).
   """
-  routes: list[str] = []
-  for m in _SERVER_PORT_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server.port:
-      continue
-    if (m.group("path") or "").startswith(_FILE_URL_PREFIXES):
-      continue
-    routes.append(m.group(0))
 
-  out: list[str] = []
-  cursor = 0
-  for m in _FILE_SERVER_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server.port:
-      continue
-    fs_path = Path(unquote(m.group("fs_path")))
-    if not fs_path.is_file():
-      raise SlackReplyError(422, f"reply links a file-server URL whose file is gone: {m.group(0)}")
+  def swap(fs_path: Path) -> str:
     try:
-      published = publish_artifact(fs_path, cfg)
+      return publish_artifact(fs_path, cfg).url
     except PublishError as e:
       raise SlackReplyError(422, str(e)) from e
-    out.append(text[cursor:m.start()])
-    out.append(published.url + (m.group("query") or "") + (m.group("fragment") or ""))
-    cursor = m.end()
-  out.append(text[cursor:])
-  return "".join(out), list(dict.fromkeys(routes))
 
-
-def _operator_only_note(links: list[str]) -> str | None:
-  """The readback's one line naming the application-route links that reach the operator alone."""
-  if not links:
-    return None
-  return "Application-route links stay as written; the operator alone can open them: " + ", ".join(links)
+  return swap
 
 
 async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   Before any chunk posts, file-server URLs in the text are rewritten to published
-  ones (``_rewrite_file_links``), so the thread receives links its readers can open;
+  ones (``rewrite_file_links`` with the publish swap), so the thread receives links
+  its readers can open;
   the refusal paths there — a linked file gone, the publish lane unconfigured —
   raise ``SlackReplyError`` and leave the thread untouched. Refusals raise
   ``SlackReplyError``: 404 unknown session, 409 no Slack thread, 422 blank text, 422
@@ -891,7 +845,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   if not text.strip():
     raise SlackReplyError(422, "Reply text is empty")
 
-  text, operator_only_links = await asyncio.to_thread(_rewrite_file_links, text, cfg)
+  text, operator_only_links = await asyncio.to_thread(rewrite_file_links, text, cfg, _publish_swap(cfg))
 
   # lazy: mirrors the backfill import's agents-package guard
   from src.agents import master_cc_state
@@ -945,7 +899,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   return {
       "posted": True,
       "text": text,
-      "operator_only_note": _operator_only_note(operator_only_links),
+      "operator_only_note": operator_only_note(operator_only_links),
       "chars": len(text),
       "chunks": len(bodies),
       "over_budget": over_budget,

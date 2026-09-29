@@ -17,15 +17,12 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import make_home_config
+from conftest import OPERATOR, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import TaskSpec
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskInvalidError, TaskNotFoundError, TaskTreeManager
-
-OP = CallerIdentity(kind="operator")
 
 
 @pytest_asyncio.fixture
@@ -34,7 +31,7 @@ async def env(tmp_path: Path):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   root = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OP)
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   return tree, session_mgr, root.id
 
 
@@ -77,7 +74,7 @@ async def test_create_notifies_with_the_node_readable_at_signal(env) -> None:
       task=TaskSpec(goal="child goal"),
       name="Child",
       backend=None,
-      caller=OP)
+      caller=OPERATOR)
   assert spy.calls == [(child.id, ET.TASK_CREATED)]
   signal = spy.readable_at_signal[0]
   assert signal["node"] is not None and signal["node"]["id"] == child.id, (
@@ -95,11 +92,11 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
   spy.install()
   with pytest.raises(TaskInvalidError):
     await tree.create_task(
-        request_id="bad", task_parent_id=root_id, profile="boss", task=None, name="Bad", backend=None, caller=OP)
+        request_id="bad", task_parent_id=root_id, profile="boss", task=None, name="Bad", backend=None, caller=OPERATOR)
   assert spy.calls == [], "a failed create never emits a successful-node signal"
   # A worker parent (not a manager) is refused before any publication.
   worker = await tree.create_task(
-      request_id="w0", task_parent_id=root_id, profile="worker", task=None, name="W0", backend=None, caller=OP)
+      request_id="w0", task_parent_id=root_id, profile="worker", task=None, name="W0", backend=None, caller=OPERATOR)
   with pytest.raises(TaskInvalidError):
     await tree.create_task(
         request_id="under-worker",
@@ -108,7 +105,7 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
         task=None,
         name="Nope",
         backend=None,
-        caller=OP)
+        caller=OPERATOR)
   # An unknown parent is refused at the lookup guard.
   with pytest.raises(TaskNotFoundError):
     await tree.create_task(
@@ -118,6 +115,6 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
         task=None,
         name="Nope",
         backend=None,
-        caller=OP)
+        caller=OPERATOR)
   assert spy.calls == [(worker.id, ET.TASK_CREATED)
                       ], ("only the successful publication signaled; every refused create emitted nothing")

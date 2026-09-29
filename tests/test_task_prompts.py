@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, build_env
+from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
 from src.core.memory import (
     assemble_master,
@@ -22,7 +22,6 @@ from src.core.memory import (
     select_worker_memory,
 )
 from src.core.models import PatchSessionTaskRequest, TaskSpec, TaskType
-from src.core.run_token import CallerIdentity
 from src.core.task_prompts import (
     PromptSnapshot,
     assemble_snapshot,
@@ -32,8 +31,6 @@ from src.core.task_prompts import (
 from src.core.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 async def create_task(

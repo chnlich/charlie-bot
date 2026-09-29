@@ -18,17 +18,16 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
+from conftest import OPERATOR
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import sessions as sessions_api
 from src.api.deps import get_run_store, get_session_manager, get_task_manager
 from src.core.models import RunRecord
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
-OP = CallerIdentity(kind="operator")
 BASE = datetime(2026, 1, 1, tzinfo=UTC)
 
 
@@ -39,7 +38,7 @@ async def store_env(tmp_path: Path):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   task = await tree.create_task(
-      request_id="t", task_parent_id=None, profile="worker", task=None, name="T", backend=None, caller=OP)
+      request_id="t", task_parent_id=None, profile="worker", task=None, name="T", backend=None, caller=OPERATOR)
   return tree, task.id
 
 

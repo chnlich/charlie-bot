@@ -8,16 +8,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import build_env
+from conftest import OPERATOR, build_env
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, TaskSpec
-from src.core.run_token import CallerIdentity
 from src.core.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 def prompt_facts(tree: TaskTreeManager, session_id: str) -> list[dict]:

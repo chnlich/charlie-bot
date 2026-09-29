@@ -14,20 +14,17 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import make_home_config
+from conftest import OPERATOR, make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.api import sessions as sessions_api
 from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 class _TaskEnv:

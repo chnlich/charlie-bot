@@ -15,15 +15,12 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import identity_of, live_subprocess, make_home_config
+from conftest import OPERATOR, identity_of, live_subprocess, make_home_config
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
-
-OP = CallerIdentity(kind="operator")
 
 
 @pytest_asyncio.fixture
@@ -32,9 +29,15 @@ async def env(tmp_path: Path):
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   root = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OP)
+      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   worker = await tree.create_task(
-      request_id="w1", task_parent_id=root.id, profile="worker", task=None, name="Worker", backend=None, caller=OP)
+      request_id="w1",
+      task_parent_id=root.id,
+      profile="worker",
+      task=None,
+      name="Worker",
+      backend=None,
+      caller=OPERATOR)
   return tree, session_mgr, root.id, worker.id
 
 

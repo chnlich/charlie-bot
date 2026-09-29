@@ -18,6 +18,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
+    OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
     patch_instructions_content,
@@ -204,7 +205,6 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     the first successful review), while the review's own follow-up replay
     (landing recheck) stays idempotent."""
     from src.core.models import PatchSessionTaskRequest
-    from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -213,7 +213,7 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
         worker.id,
         PatchSessionTaskRequest(
             task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
-        caller=CallerIdentity(kind="operator"))
+        caller=OPERATOR)
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -338,7 +338,6 @@ async def test_recovery_reopened_task_reproves_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A reopened task derives "open" again, so its replayed review follow-up
     runs the full landing proof (the counter observes git_verify_commit_landed)."""
-    from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
 
     cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
@@ -347,7 +346,7 @@ async def test_recovery_reopened_task_reproves_landing(
     await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
     await tree.completion.reopen_task(
         worker.id, request_id="reopen-1", reason="recheck the delivery",
-        caller=CallerIdentity(kind="operator"))
+        caller=OPERATOR)
     assert tree.task_state(worker.id) == "open"
 
     counts = _count_landing_git(monkeypatch)
@@ -382,7 +381,6 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     from conftest import backend_option
 
     from src.core.models import PatchSessionTaskRequest
-    from src.core.run_token import CallerIdentity
     from src.core.task_recovery import reconcile_task_tree
     from tests.test_task_execution import init_repo_with_origin
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -398,7 +396,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
         worker.id,
         PatchSessionTaskRequest(
             task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT)),
-        caller=CallerIdentity(kind="operator"))
+        caller=OPERATOR)
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)

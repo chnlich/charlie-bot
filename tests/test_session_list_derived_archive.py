@@ -12,14 +12,11 @@ from pathlib import Path
 
 import orjson
 import pytest
-from conftest import build_env
+from conftest import OPERATOR, build_env
 
 from src.core.models import RunRecord, SessionStatus
-from src.core.run_token import CallerIdentity
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
-
-OPERATOR = CallerIdentity(kind="operator")
 
 
 async def create(tree: TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):

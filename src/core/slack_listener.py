@@ -55,13 +55,13 @@ from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-  CreateSessionRequest,
-  PendingTrigger,
-  SessionMetadata,
-  SessionStatus,
-  SlackOrigin,
-  TriggerStatus,
-  utc_now,
+    CreateSessionRequest,
+    PendingTrigger,
+    SessionMetadata,
+    SessionStatus,
+    SlackOrigin,
+    TriggerStatus,
+    utc_now,
 )
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
@@ -70,21 +70,21 @@ from src.core.tasks import create_logged_task
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
 from src.core.thread_entry import (
-  ThreadPlatform,
-  ThreadReplyError,
-  chunk_text,
-  event_by_id,
-  follow_floor,
-  lost_summons,
-  newest_thread_input,
-  noticed,
-  nudged,
-  operator_only_note,
-  replied,
-  rewrite_file_links,
-  summon_of,
-  summon_prompt_tail,
-  unread_after,
+    ThreadPlatform,
+    ThreadReplyError,
+    chunk_text,
+    event_by_id,
+    follow_floor,
+    lost_summons,
+    newest_thread_input,
+    noticed,
+    nudged,
+    operator_only_note,
+    replied,
+    rewrite_file_links,
+    summon_of,
+    summon_prompt_tail,
+    unread_after,
 )
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
@@ -712,10 +712,10 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
 # Reply: the master posts to its own thread
 # ---------------------------------------------------------------------------
 
-
 # The shared reply refusal lives in src/core/thread_entry.py; the Slack name
 # stays for the adapter's callers (the server endpoint and the tests).
 SlackReplyError = ThreadReplyError
+
 
 async def _require_slack_thread_session(session_id: str, session_mgr: SessionManager) -> SessionMetadata:
   """The session named by *session_id* when it exists and carries a Slack thread.

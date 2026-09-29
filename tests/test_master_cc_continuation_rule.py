@@ -22,7 +22,7 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.agents import master_cc_run
+from src.agents import master_cc_run, master_cc_state
 from src.agents.backends import base as backend_base
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
@@ -95,6 +95,51 @@ def _callbacks(*, completed_round: bool) -> SessionCallbacks:
   return replace(mock_session_callbacks(), has_completed_round=AsyncMock(return_value=completed_round))
 
 
+async def _run_scripted_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    backend_id: str,
+    native_backend: str | None,
+    login_dir: str | None,
+    completed_round: bool,
+) -> tuple[master_cc_state._WorkItem, list[dict]]:
+  """One scripted continuation-rule turn through _run_cc: the rule config, a session holding
+  native id c1, the build double scripted to land no fresh id, and a work item whose user
+  content is "hello". Returns (item, log); a non-zero exit or error fails here, so every
+  caller's assertions read a completed turn.
+
+  login_dir pins the cc-claude login directory the turn sees: "transcript" creates it with a
+  transcript for c1, "empty" creates it without one, and None leaves no directory (codex
+  turns never read one).
+  """
+  cfg = _rule_cfg(tmp_path)
+  if login_dir is not None:
+    config_dir = tmp_path / "login-dir"
+    if login_dir == "transcript":
+      make_transcript(config_dir, "c1")
+    elif login_dir == "empty":
+      config_dir.mkdir(parents=True)
+    else:
+      raise AssertionError(f"unknown login_dir state: {login_dir}")
+    monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
+  session_meta = SessionMetadata(
+      id="session-id", name="S", backend=backend_id, cc_session_id="c1", native_backend=native_backend)
+  log: list[dict] = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({backend_id: [None]}, log))
+  patch_instructions_content(monkeypatch)
+
+  item = make_work_item(
+      cfg,
+      session_meta,
+      cfg.get_backend_option(backend_id),
+      user_content="hello",
+      callbacks=_callbacks(completed_round=completed_round))
+  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
+  assert exit_code == 0 and error_msg is None
+  return item, log
+
+
 # ---------------------------------------------------------------------------
 # Direct _run_cc rig: the turn-start judgment and the note
 # ---------------------------------------------------------------------------
@@ -104,21 +149,9 @@ def _callbacks(*, completed_round: bool) -> SessionCallbacks:
 async def test_pre_rule_session_resumes_as_today_on_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(a) A pre-rule session (a held id, no recorded producer) on a codex option
   resumes the id as before; no note, no drop."""
-  cfg = _rule_cfg(tmp_path)
-  session_meta = SessionMetadata(id="session-id", name="S", backend="codex-o3", cc_session_id="c1")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  item, log = await _run_scripted_turn(
+      tmp_path, monkeypatch, backend_id="codex-o3", native_backend=None, login_dir=None, completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("codex-o3"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["resume_session_id"] == "c1"
   assert log[0]["prompt"] == "hello"
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
@@ -130,24 +163,14 @@ async def test_pre_rule_session_resumes_as_today_on_claude_with_transcript(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(a) The same pre-rule session on a cc-claude option with its transcript
   present resumes through --resume; no note, no drop."""
-  cfg = _rule_cfg(tmp_path)
-  config_dir = tmp_path / "login-dir"
-  make_transcript(config_dir, "c1")
-  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
-  session_meta = SessionMetadata(id="session-id", name="S", backend="claude-opus-5", cc_session_id="c1")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-opus-5": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  item, log = await _run_scripted_turn(
+      tmp_path,
+      monkeypatch,
+      backend_id="claude-opus-5",
+      native_backend=None,
+      login_dir="transcript",
+      completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("claude-opus-5"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["resume_session_id"] is None
   assert log[0]["extra_flags"] == ["--resume", "c1", "--exclude-dynamic-system-prompt-sections"]
   assert log[0]["prompt"] == "hello"
@@ -160,22 +183,14 @@ async def test_cross_family_without_completed_round_starts_fresh_silently(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(f) A cross-family turn on a session without a completed round of its own:
   fresh, no resume id, and no note."""
-  cfg = _rule_cfg(tmp_path)
-  session_meta = SessionMetadata(
-      id="session-id", name="S", backend="codex-o3", cc_session_id="c1", native_backend="claude-opus-5")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  item, log = await _run_scripted_turn(
+      tmp_path,
+      monkeypatch,
+      backend_id="codex-o3",
+      native_backend="claude-opus-5",
+      login_dir=None,
+      completed_round=False)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("codex-o3"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=False))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["resume_session_id"] is None
   assert log[0]["prompt"] == "hello"
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
@@ -209,22 +224,14 @@ async def test_cross_family_switch_note_carries_the_instruction(
   """A cc-claude session switched to a codex option: the turn starts a fresh
   native conversation whose prompt opens with the full reset note, instruction
   included."""
-  cfg = _rule_cfg(tmp_path)
-  session_meta = SessionMetadata(
-      id="session-id", name="S", backend="codex-o3", cc_session_id="c1", native_backend="claude-opus-5")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  _item, log = await _run_scripted_turn(
+      tmp_path,
+      monkeypatch,
+      backend_id="codex-o3",
+      native_backend="claude-opus-5",
+      login_dir=None,
+      completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("codex-o3"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["resume_session_id"] is None
   note, sep, tail = log[0]["prompt"].partition("\n\n")
   assert sep and tail == "hello"
@@ -237,25 +244,14 @@ async def test_cross_family_switch_note_carries_the_instruction(
 async def test_dropped_resume_note_carries_the_instruction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The could-not-be-resumed path (same producer, transcript gone): the note
   names the dropped resume and still carries the instruction."""
-  cfg = _rule_cfg(tmp_path)
-  config_dir = tmp_path / "login-dir"
-  config_dir.mkdir(parents=True)  # no transcript for c1 in the login directory
-  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
-  session_meta = SessionMetadata(
-      id="session-id", name="S", backend="claude-opus-5", cc_session_id="c1", native_backend="claude-opus-5")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-opus-5": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  _item, log = await _run_scripted_turn(
+      tmp_path,
+      monkeypatch,
+      backend_id="claude-opus-5",
+      native_backend="claude-opus-5",
+      login_dir="empty",
+      completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("claude-opus-5"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   note, sep, tail = log[0]["prompt"].partition("\n\n")
   assert sep and tail == "hello"
   assert note == (
@@ -269,22 +265,9 @@ async def test_switch_back_to_producer_before_sending_resumes_without_note(
   """A session switched away and back before the next message: the recorded
   producer equals the current backend, so the native conversation continues
   and no note is added."""
-  cfg = _rule_cfg(tmp_path)
-  session_meta = SessionMetadata(
-      id="session-id", name="S", backend="codex-o3", cc_session_id="c1", native_backend="codex-o3")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"codex-o3": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  item, log = await _run_scripted_turn(
+      tmp_path, monkeypatch, backend_id="codex-o3", native_backend="codex-o3", login_dir=None, completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("codex-o3"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["resume_session_id"] == "c1"
   assert log[0]["prompt"] == "hello"
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
@@ -296,30 +279,15 @@ async def test_same_login_model_switch_resumes_without_note(tmp_path: Path, monk
   """Two cc-claude options over one login directory (the claude-sonnet-5 to
   claude-opus-5 shape) share one continuation domain: the held conversation
   resumes across the model switch and no note is added."""
-  cfg = _rule_cfg(tmp_path)
-  config_dir = tmp_path / "login-dir"
-  make_transcript(config_dir, "c1")
-  monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
-  session_meta = SessionMetadata(
-      id="session-id", name="S", backend="claude-fable-5", cc_session_id="c1", native_backend="claude-opus-5")
-  log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({"claude-fable-5": [None]}, log))
-  patch_instructions_content(monkeypatch)
+  item, log = await _run_scripted_turn(
+      tmp_path,
+      monkeypatch,
+      backend_id="claude-fable-5",
+      native_backend="claude-opus-5",
+      login_dir="transcript",
+      completed_round=True)
 
-  item = make_work_item(
-      cfg,
-      session_meta,
-      cfg.get_backend_option("claude-fable-5"),
-      user_content="hello",
-      callbacks=_callbacks(completed_round=True))
-  _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)
-
-  assert exit_code == 0 and error_msg is None
   assert log[0]["extra_flags"] == ["--resume", "c1", "--exclude-dynamic-system-prompt-sections"]
   assert log[0]["prompt"] == "hello"
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
-
-
-# ---------------------------------------------------------------------------
-# Through the consumer: round-end persistence of id + producer

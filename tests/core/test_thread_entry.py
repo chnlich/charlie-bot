@@ -362,7 +362,7 @@ class FakeSessions:
     self.meta = SimpleNamespace(
         id=request.session_id,
         name=request.name,
-        group=request.group,
+        group=getattr(request, "group", None),
         status=SessionStatus.ACTIVE,
         updated_at="2026-01-01T00:00:00Z",
         fakechat_origin=getattr(request, "fakechat_origin", None),
@@ -525,6 +525,10 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
   with (
       patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      # The model drops unknown fields again (extra="allow" is gone), so the
+      # stand-in records the keyword arguments the shared core passes and the
+      # assert reads the platform's origin field off them by name.
+      patch("src.core.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
   ):
     sid = await accept_summon(
         adapter,

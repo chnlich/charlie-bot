@@ -54,10 +54,32 @@ def test_fakechat_marker_keys_derive_from_the_name() -> None:
 def test_newest_thread_input_picks_the_newest_fakechat_block() -> None:
   # b1 carries no summon block; s3 carries another platform's block.
   events = [
-      {"id": "b1", "type": ET.AGENT_MESSAGE},
-      {"id": "s1", "type": ET.AGENT_MESSAGE, "fakechat": {"thread": "t1"}},
-      {"id": "s2", "type": ET.AGENT_MESSAGE, "fakechat": {"thread": "t1", "nudge_of": "s1"}},
-      {"id": "s3", "type": ET.AGENT_MESSAGE, "slack": {"thread": "t1"}},
+      {
+          "id": "b1",
+          "type": ET.AGENT_MESSAGE
+      },
+      {
+          "id": "s1",
+          "type": ET.AGENT_MESSAGE,
+          "fakechat": {
+              "thread": "t1"
+          }
+      },
+      {
+          "id": "s2",
+          "type": ET.AGENT_MESSAGE,
+          "fakechat": {
+              "thread": "t1",
+              "nudge_of": "s1"
+          }
+      },
+      {
+          "id": "s3",
+          "type": ET.AGENT_MESSAGE,
+          "slack": {
+              "thread": "t1"
+          }
+      },
   ]
   bound = newest_thread_input(FAKECHAT, events, ["b1", "s1", "s2", "s3"])
   assert bound == ("s2", {"thread": "t1", "nudge_of": "s1"})
@@ -67,10 +89,34 @@ def test_newest_thread_input_picks_the_newest_fakechat_block() -> None:
 
 def test_replied_nudged_noticed_read_the_fakechat_shapes() -> None:
   events = [
-      {"id": "r1", "type": "fakechat_reply", "fakechat_reply": {"answers": "s1"}},
-      {"id": "r2", "type": "fakechat_reply", "fakechat_reply": {"answers": "s2"}},
-      {"id": "n1", "type": ET.AGENT_MESSAGE, "fakechat": {"nudge_of": "s1"}},
-      {"id": "x1", "type": ET.ASSISTANT_ERROR, "fakechat_notice": {ET.INPUT_EVENT_ID: "s1"}},
+      {
+          "id": "r1",
+          "type": "fakechat_reply",
+          "fakechat_reply": {
+              "answers": "s1"
+          }
+      },
+      {
+          "id": "r2",
+          "type": "fakechat_reply",
+          "fakechat_reply": {
+              "answers": "s2"
+          }
+      },
+      {
+          "id": "n1",
+          "type": ET.AGENT_MESSAGE,
+          "fakechat": {
+              "nudge_of": "s1"
+          }
+      },
+      {
+          "id": "x1",
+          "type": ET.ASSISTANT_ERROR,
+          "fakechat_notice": {
+              ET.INPUT_EVENT_ID: "s1"
+          }
+      },
   ]
   assert replied(FAKECHAT, events, "s1")
   assert not replied(FAKECHAT, events, "s9")
@@ -86,8 +132,18 @@ def test_lost_summons_reports_only_the_unanswered_unowned_unmarked() -> None:
       _summon("s2"),
       _summon("s3"),
       _summon("s4"),
-      {"id": "d1", "type": ET.MASTER_DONE, ET.INPUT_EVENT_IDS: ["s1"]},
-      {"id": "m2", "type": ET.ASSISTANT_ERROR, "fakechat_backfill": {ET.INPUT_EVENT_ID: "s2"}},
+      {
+          "id": "d1",
+          "type": ET.MASTER_DONE,
+          ET.INPUT_EVENT_IDS: ["s1"]
+      },
+      {
+          "id": "m2",
+          "type": ET.ASSISTANT_ERROR,
+          "fakechat_backfill": {
+              ET.INPUT_EVENT_ID: "s2"
+          }
+      },
   ]
   lost = lost_summons(FAKECHAT, events, owned={"s3"}, running=set())
   assert [ev["id"] for ev in lost] == ["s4"]
@@ -96,17 +152,35 @@ def test_lost_summons_reports_only_the_unanswered_unowned_unmarked() -> None:
   # A marker under another platform's backfill key marks nothing here.
   events_slack_marked = [
       *events,
-      {"id": "m3", "type": ET.ASSISTANT_ERROR, "slack_backfill": {ET.INPUT_EVENT_ID: "s4"}},
+      {
+          "id": "m3",
+          "type": ET.ASSISTANT_ERROR,
+          "slack_backfill": {
+              ET.INPUT_EVENT_ID: "s4"
+          }
+      },
   ]
   assert [ev["id"] for ev in lost_summons(FAKECHAT, events_slack_marked, owned={"s3"}, running=set())] == ["s4"]
 
 
 def test_unread_after_orders_ids_by_the_platform_key() -> None:
   messages = [
-      {"id": "98", "human": True},
-      {"id": "99", "human": True},
-      {"id": "100", "human": True},
-      {"id": "101", "human": False},
+      {
+          "id": "98",
+          "human": True
+      },
+      {
+          "id": "99",
+          "human": True
+      },
+      {
+          "id": "100",
+          "human": True
+      },
+      {
+          "id": "101",
+          "human": False
+      },
   ]
   kw = {"eligible": lambda m: m["human"], "message_id": lambda m: m["id"], "id_key": int}
   # Integer order: "100" sorts above the "99" watermark (the string sort would not).

@@ -63,16 +63,17 @@ async def test_create_session_persists_discord_origin(tmp_path) -> None:
 def test_discord_reply_renders_as_system_row() -> None:
   agg = MessageAggregator()
   deltas = list(
-      agg.feed({
-          "type": ET.DISCORD_REPLY,
-          "content": "hi there",
-          "discord_reply": {
-              "answers": None,
-              "chars": 8,
-              "chunks": 1
-          },
-          "timestamp": "2026-08-26T08:00:00Z",
-      }))
+      agg.feed(
+          {
+              "type": ET.DISCORD_REPLY,
+              "content": "hi there",
+              "discord_reply": {
+                  "answers": None,
+                  "chars": 8,
+                  "chunks": 1
+              },
+              "timestamp": "2026-08-26T08:00:00Z",
+          }))
   assert len(deltas) == 1
   assert deltas[0]["message"]["role"] == "system"
   assert deltas[0]["message"]["content"] == "Posted to Discord: hi there"

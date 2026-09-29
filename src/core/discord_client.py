@@ -244,8 +244,10 @@ class DiscordClient:
         "POST",
         path,
         data={"payload_json": payload_json},
-        files=[(f"files[{index}]", (file.name, file.read_bytes(), "application/octet-stream"))
-               for index, file in enumerate(files)],
+        files=[
+            (f"files[{index}]", (file.name, file.read_bytes(), "application/octet-stream"))
+            for index, file in enumerate(files)
+        ],
     )
 
   async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:

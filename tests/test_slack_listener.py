@@ -178,8 +178,7 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
 
 
 def test_follow_wake_message_names_thread_reply_docs_and_reply_command() -> None:
-  msg = _build_follow_wake_message(
-      _TS, "https://fake.slack.test/archives/C_TEST/p1700000000000100")
+  msg = _build_follow_wake_message(_TS, "https://fake.slack.test/archives/C_TEST/p1700000000000100")
   assert msg.startswith("slack-thread-follow floor=1700000000.000100\n")
   assert "prompts/thread_reply_redline.md" in msg
   assert "prompts/thread_reply_format.md" in msg

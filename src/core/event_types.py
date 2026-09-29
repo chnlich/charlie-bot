@@ -83,6 +83,13 @@ AGENT_MESSAGE = "agent_message"
 # CONTEXT_READING below.
 SLACK_REPLY = "slack_reply"
 
+# -- Discord -----------------------------------------------------------------
+# A reply the master posted to its session's Discord thread through
+# ``charliebot discord reply``; the same-named ``discord_reply`` payload names
+# the summon it answers, which the round-end audit reads. Both uses share this
+# one constant, as with SLACK_REPLY above.
+DISCORD_REPLY = "discord_reply"
+
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
 CONTEXT_COMPACT_FAILED = "context_compact_failed"

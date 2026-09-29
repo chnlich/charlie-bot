@@ -963,16 +963,19 @@ class Opencode:
         "role": "assistant",
         "modelID": model,
         "providerID": provider,
-        "time": {"created": 1_700_000_000_000},
-        "tokens": {
-            "input": usage["input_tokens"],
-            "output": usage["output_tokens"],
-            "total": usage["input_tokens"] + usage["output_tokens"],
-            "cache": {
-                "write": usage["cache_creation_input_tokens"],
-                "read": usage["cache_read_input_tokens"],
-            },
+        "time": {
+            "created": 1_700_000_000_000
         },
+        "tokens":
+            {
+                "input": usage["input_tokens"],
+                "output": usage["output_tokens"],
+                "total": usage["input_tokens"] + usage["output_tokens"],
+                "cache": {
+                    "write": usage["cache_creation_input_tokens"],
+                    "read": usage["cache_read_input_tokens"],
+                },
+            },
     }
     con = sqlite3.connect(self.db)
     try:
@@ -1094,5 +1097,8 @@ def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
         {"Claude Code": 0, "Codex": 0, "opencode": 0, "charlie-bot": 0}
     # Sources the caller leaves unnamed are absent from the report, not zero-filled.
     assert tt.capture_usage(
-        ledger, host="host-a", claude_homes={}, codex_homes={}, opencode_db=None,
-        sessions_dir=None, cache_path=None) == {"Claude Code": 0, "Codex": 0}
+        ledger, host="host-a", claude_homes={}, codex_homes={}, opencode_db=None, sessions_dir=None,
+        cache_path=None) == {
+            "Claude Code": 0,
+            "Codex": 0
+        }

@@ -1,8 +1,9 @@
-"""Tests for the per-model token usage tally (src/core/token_tally.py).
+"""Tests for the usage capture (src/core/token_tally.py): per-source parsing into the
+usage ledger's records.
 
-Each test builds fixture log directories under tmp_path and points the collector at them directly,
-so no test reads the real home directory. Every assertion checks a named mechanism rather than a
-hard-coded total.
+Each test builds fixture log directories under tmp_path and points the capture at them
+directly, so no test reads the real home directory. Every assertion checks a named
+mechanism rather than a hard-coded total.
 """
 
 from __future__ import annotations
@@ -15,15 +16,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import codex_token_count_event, fresh_state_fixture
+from conftest import codex_token_count_event
 
 from src.core import token_tally as tt
-from src.core.token_tally import collect_token_usage
 from src.core.usage_ledger import UsageLedger
 
 NAME = "claude-model"
-
-_clear_aggregate_memo = fresh_state_fixture(tt._reset_aggregate_memo)
 
 
 def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
@@ -96,31 +94,24 @@ def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
   return codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
 
-def _db_and_cache(tmp_path: Path) -> tuple[Path, Path]:
-  """The scratch on-disk layout every collect round reads: the opencode db and the tally cache."""
-  return tmp_path / "db.sqlite", tmp_path / "cache.json"
-
-
-def _collect(
-    claude: Claude | None,
-    codex: Codex | None,
-    db: Path,
-    cache: Path | None = None,
-    sessions: Path | None = None) -> tt.TokenTally:
-  return collect_token_usage(
+def _capture_all(ledger: UsageLedger,
+                 claude: Claude | None = None,
+                 codex: Codex | None = None,
+                 cache: Path | None = None,
+                 sessions: Path | None = None) -> dict[str, int]:
+  """One capture_usage round over the sources the caller names, under the "host-a" labels."""
+  return tt.capture_usage(
+      ledger,
+      host="host-a",
       claude_homes=claude.dirs if claude else {},
       codex_homes=codex.homes if codex else {},
-      opencode_db=db,
+      opencode_db=None,
+      sessions_dir=sessions,
       cache_path=cache,
-      sessions_dir=sessions if sessions is not None else db.parent / "sessions",
   )
 
 
-def _row(tally: tt.TokenTally, source: str, model: str) -> tt.ModelRow:
-  return next(r for r in tally.rows if r.source == source and r.model == model)
-
-
-def test_tally_is_absolutely_correct(tmp_path: Path) -> None:
+def test_capture_usage_rows_are_absolutely_correct(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   codex = Codex(tmp_path)
   usage = {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 40, "output_tokens": 30}
@@ -155,39 +146,39 @@ def test_tally_is_absolutely_correct(tmp_path: Path) -> None:
               }, {"total_tokens": 47}, "2024-01-03T00:00:00Z"),
       ])
 
-  tally = _collect(claude, codex, tmp_path / "db.sqlite")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_all(ledger, claude, codex, cache=tmp_path / "cache.json") == \
+        {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included
 
-  cl = _row(tally, "Claude Code", NAME)
-  assert cl.calls == 2  # one original + one subagent; the replay is deduped
-  assert cl.in_fresh == 100 + 50
-  assert cl.cache_write == 20 + 10
-  assert cl.cache_read == 40
-  assert cl.output == 30 + 5
-  assert cl.total == cl.in_fresh + cl.cache_write + cl.cache_read + cl.output
-  assert sum(a.total for a in cl.accounts) == cl.total
+    cl = _ledger_row(ledger, "Claude Code", NAME)
+    assert cl.calls == 2  # one original + one subagent; the replay is deduped
+    assert cl.in_fresh == 100 + 50
+    assert cl.cache_write == 20 + 10
+    assert cl.cache_read == 40
+    assert cl.output == 30 + 5
+    assert cl.total == cl.in_fresh + cl.cache_write + cl.cache_read + cl.output
+    assert (cl.first, cl.last) == ("2024-01-01", "2024-01-02")  # the subagent's response is the latest
+    assert sum(a.total for a in cl.accounts) == cl.total
 
-  cx = _row(tally, "Codex", "codex-some")
-  assert cx.in_fresh == 40  # 60 input - 20 cached
-  assert cx.cache_read == 20
-  assert cx.output == 7
-  assert cx.total == 40 + 20 + 7
-
-  assert any(n.startswith("Claude Code") for n in tally.notes)
-  assert any(n.startswith("Codex") for n in tally.notes)
-  assert any(n.startswith("opencode") for n in tally.notes)
+    cx = _ledger_row(ledger, "Codex", "codex-some")
+    assert cx.in_fresh == 40  # 60 input - 20 cached
+    assert cx.cache_read == 20
+    assert cx.output == 7
+    assert (cx.first, cx.last) == ("2024-01-03", "2024-01-03")
+    assert cx.total == 40 + 20 + 7
 
 
 def test_appends_are_visible(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
-  db = tmp_path / "db.sqlite"
-  first = _collect(claude, None, db)
-  before = _row(first, "Claude Code", NAME)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture_all(ledger, claude)
+    before = _ledger_row(ledger, "Claude Code", NAME)
 
-  # A later session file records the same model: its total rises by exactly those tokens.
-  claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
-  second = _collect(claude, None, db)
-  after = _row(second, "Claude Code", NAME)
+    # A later session file records the same model: its total rises by exactly those tokens.
+    claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
+    _capture_all(ledger, claude)
+    after = _ledger_row(ledger, "Claude Code", NAME)
   assert after.total == before.total + 1002
   assert after.calls == before.calls + 1
 
@@ -205,17 +196,19 @@ _REPLAY_STORE_ROWS = [
 def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(100, 10))])
-  db = tmp_path / "db.sqlite"
   cache = tmp_path / "cache.json" if with_cache else None
-  before = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture_all(ledger, claude, cache=cache)
+    before = _ledger_row(ledger, "Claude Code", NAME)
 
-  # Copy the session file verbatim to a new session id (resume/fork behaviour).
-  src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
-  dst = claude.work / "projects" / "rel" / "sess2"
-  dst.mkdir(parents=True, exist_ok=True)
-  (dst / "sess2.jsonl").write_text(src.read_text())
+    # Copy the session file verbatim to a new session id (resume/fork behaviour).
+    src = claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl"
+    dst = claude.work / "projects" / "rel" / "sess2"
+    dst.mkdir(parents=True, exist_ok=True)
+    (dst / "sess2.jsonl").write_text(src.read_text())
 
-  after = _row(_collect(claude, None, db, cache), "Claude Code", NAME)
+    _capture_all(ledger, claude, cache=cache)
+    after = _ledger_row(ledger, "Claude Code", NAME)
   assert after.total == before.total
   assert after.calls == before.calls
 
@@ -248,23 +241,25 @@ def test_parse_lines_multi_chunk_giant_line_parity(monkeypatch: pytest.MonkeyPat
 
 
 def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
-  """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole."""
+  """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole, so the
+  file's records restate its current content. The ledger keeps earlier records (no delete),
+  so the row totals accumulate across the rewrites."""
   claude = _claude_rig(tmp_path)
-  db, cache = _db_and_cache(tmp_path)
-  _collect(claude, None, db, cache)
-  claude.write(  # whole-file rewrite: early content replaced, last line preserved
-      claude.work, "sess1",
-      [_claude_record("m9", NAME, "2024-01-03T00:00:00Z", _usage(7, 7)),
-       _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
-  after = _collect(claude, None, db, cache)
-  reference = _collect(claude, None, db)
-  assert after.rows == reference.rows
-  assert _row(after, "Claude Code", NAME).total == 29
-  claude.write(claude.work, "sess1", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(3, 3))])
-  after = _collect(claude, None, db, cache)
-  reference = _collect(claude, None, db)
-  assert after.rows == reference.rows
-  assert _row(after, "Claude Code", NAME).total == 6
+  cache = tmp_path / "cache.json"
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture_all(ledger, claude, cache=cache)
+    claude.write(  # whole-file rewrite: early content replaced, last line preserved
+        claude.work, "sess1",
+        [_claude_record("m9", NAME, "2024-01-03T00:00:00Z", _usage(7, 7)),
+         _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
+    assert _capture_all(ledger, claude, cache=cache)["Claude Code"] == 2  # both records, re-parsed whole
+    row = _ledger_row(ledger, "Claude Code", NAME)
+    assert (row.calls, row.total) == (2, 29)
+
+    claude.write(claude.work, "sess1", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(3, 3))])
+    assert _capture_all(ledger, claude, cache=cache)["Claude Code"] == 1
+    row = _ledger_row(ledger, "Claude Code", NAME)
+    assert (row.calls, row.total) == (3, 35)  # m2 joins the records the ledger keeps
 
 
 # ---------------------------------------------------------------------------
@@ -379,15 +374,15 @@ def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, mo
       session_ids=[],
       results=[("2026-09-13T20:00:00+00:00", _result_usage(300, 5))])
 
-  tally = _collect(None, None, tmp_path / "db.sqlite", sessions=cb.root)
-
-  recorded = _row(tally, "charlie-bot", "GLM-5.3-Flash")
-  assert recorded.calls == 1 and recorded.total == 105
-  assert [a.name for a in recorded.accounts] == ["charlie-code-glm-flash"]
-  assert _row(tally, "charlie-bot", "GLM-5.4-Flash").total == 205
-  retired = _row(tally, "charlie-bot", "kimi-k3")
-  assert retired.total == 305
-  assert [a.name for a in retired.accounts] == ["charlie-code-kimi-k3"]
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 3
+    recorded = _ledger_row(ledger, "charlie-bot", "GLM-5.3-Flash")
+    assert recorded.calls == 1 and recorded.total == 105
+    assert [a.name for a in recorded.accounts] == ["charlie-code-glm-flash"]
+    assert _ledger_row(ledger, "charlie-bot", "GLM-5.4-Flash").total == 205
+    retired = _ledger_row(ledger, "charlie-bot", "kimi-k3")
+    assert retired.total == 305
+    assert [a.name for a in retired.accounts] == ["charlie-code-kimi-k3"]
 
 
 # ---------------------------------------------------------------------------
@@ -448,23 +443,6 @@ def _capture(claude: Claude | None,
 
 def _ledger_row(ledger: UsageLedger, source: str, model: str):
   return next(r for r in ledger.model_rows() if r.source == source and r.model == model)
-
-
-def test_capture_parity_with_the_collect_rows(tmp_path: Path) -> None:
-  """Every ledger row equals the matching collect row on source, model, the four token
-  fields, calls, first and last: the capture saw exactly what the collect counted."""
-  claude, codex = _parity_fixture(tmp_path)
-  tally = _collect(claude, codex, tmp_path / "db.sqlite")
-  collect_rows = {(r.source, r.model): r for r in tally.rows}
-  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture(claude, codex, ledger)
-    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows()}
-  assert set(ledger_rows) == set(collect_rows)
-  for key, lr in ledger_rows.items():
-    cr = collect_rows[key]
-    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output) == \
-        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output)
-    assert (lr.calls, lr.first, lr.last) == (cr.calls, cr.first, cr.last)
 
 
 def test_captured_rows_survive_deleting_the_source_files(tmp_path: Path) -> None:
@@ -552,9 +530,10 @@ def _codex_rollout(codex: Codex, sid: str, model: str, last: dict, total: dict, 
   return flow / f"rollout-{sid}.jsonl"
 
 
-def test_charliebot_capture_parity_with_the_collect_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """CLC threads plus a CLC master capture give the ledger the same charlie-bot rows
-  (source, model, the four token fields, calls) the collect counted."""
+def test_charliebot_capture_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """CLC threads plus a CLC master capture give the ledger one row per model — the recorded
+  model naming the first thread's row, the config model and the master's context model
+  merging into the second — and an unchanged corpus's second capture writes nothing."""
   _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
   cb = Charliebot(tmp_path)
   cb.thread(
@@ -583,20 +562,17 @@ def test_charliebot_capture_parity_with_the_collect_rows(tmp_path: Path, monkeyp
           },
       ])
   cache = tmp_path / "cache.json"
-
-  tally = _collect(None, None, tmp_path / "db.sqlite", cache, sessions=cb.root)
-  collect_rows = {(r.source, r.model): r for r in tally.rows if r.source == "charlie-bot"}
-  assert set(collect_rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert _capture_charliebot(ledger, cb.root, cache) == 3
     assert _capture_charliebot(ledger, cb.root, cache) == 0  # the unchanged corpus is skipped
-    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "charlie-bot"}
+    rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "charlie-bot"}
 
-  assert set(ledger_rows) == set(collect_rows)
-  for key, lr in ledger_rows.items():
-    cr = collect_rows[key]
-    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output, lr.calls) == \
-        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output, cr.calls)
+  assert set(rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
+  recorded = rows["charlie-bot", "GLM-5.3-Flash"]
+  assert (recorded.calls, recorded.in_fresh, recorded.cache_write, recorded.cache_read, recorded.output) == \
+      (1, 100, 0, 10, 5)
+  merged = rows["charlie-bot", "GLM-5.4-Flash"]
+  assert (merged.calls, merged.in_fresh, merged.output) == (2, 200 + 300, 6 + 7)
 
 
 def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
@@ -1041,26 +1017,23 @@ class Opencode:
       con.close()
 
 
-def test_opencode_capture_parity_with_the_collect_rows(tmp_path: Path) -> None:
-  """Every ledger row equals the matching collect row on source, model, the four token
-  fields and calls: the capture projects the db through the same row function the collect
-  reads, so a zero-token row drops from both and neither invents the other's rows."""
+def test_opencode_capture_rows(tmp_path: Path) -> None:
+  """Every contributing message row becomes one ledger record projected through
+  ``_opencode_row_data``; a zero-token row contributes nothing, so the db's non-usage rows
+  invent no ledger rows."""
   oc = Opencode(tmp_path)
   oc.write("m1", 100, _usage(100, 30))
   oc.write("m2", 200, _usage(50, 5), model="gpt-5", provider="openai")
-  oc.write("m3", 300, _usage(0, 0))  # zero tokens: no record in either path
+  oc.write("m3", 300, _usage(0, 0))  # zero tokens: no record
 
-  tally = _collect(None, None, oc.db)
-  collect_rows = {(r.source, r.model): r for r in tally.rows if r.source == "opencode"}
-  assert set(collect_rows) == {("opencode", NAME), ("opencode", "gpt-5")}
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
-    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "opencode"}
-  assert set(ledger_rows) == set(collect_rows)
-  for key, lr in ledger_rows.items():
-    cr = collect_rows[key]
-    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output, lr.calls) == \
-        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output, cr.calls)
+    rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "opencode"}
+  assert set(rows) == {("opencode", NAME), ("opencode", "gpt-5")}
+  anthropic = rows["opencode", NAME]
+  assert (anthropic.calls, anthropic.in_fresh, anthropic.output) == (1, 100, 30)
+  openai_row = rows["opencode", "gpt-5"]
+  assert (openai_row.calls, openai_row.in_fresh, openai_row.output) == (1, 50, 5)
 
 
 def test_capture_opencode_rereads_updated_rows_and_keeps_deleted_rows_stored(tmp_path: Path) -> None:

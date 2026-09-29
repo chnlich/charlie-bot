@@ -935,18 +935,6 @@ class TreePageResponse(BaseModel):
   tree_revision: str
 
 
-class TreeSearchHit(BaseModel):
-  """One GET /api/sessions/tree/search hit: the row plus its ancestor path."""
-  row: SessionRow
-  ancestors: list[SessionRow]
-
-
-class TreeSearchResponse(BaseModel):
-  """GET /api/sessions/tree/search response."""
-  items: list[TreeSearchHit]
-  tree_revision: str
-
-
 class PendingTaskInput(BaseModel):
   """One pending task input with the source/text facts the acknowledgement UI shows."""
   id: str
@@ -995,24 +983,6 @@ async def get_session_tree(
         limit=limit,
         cursor=cursor,
     )
-  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
-    raise _task_http_error(e) from e
-
-
-@router.get("/tree/search", response_model=TreeSearchResponse)
-async def search_session_tree(
-    q: str = Query(default=''),
-    limit: int = Query(default=20, ge=1, le=100),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> dict:
-  """Task-tree search: each hit ships its complete root→parent row path.
-
-  A match's path is server fact, not client inference: an archived or hidden
-  ancestor cannot be recovered from a partial client tree. Archived tasks
-  match too — search reveals them.
-  """
-  try:
-    return await task_mgr.tree_search(query=q, limit=limit)
   except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
     raise _task_http_error(e) from e
 

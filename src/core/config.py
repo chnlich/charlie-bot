@@ -435,6 +435,15 @@ class SlackConfig(BaseModel):
   allowed_user_ids: list[str] = []  # Slack user ids allowed to summon; empty = nobody
 
 
+class DiscordConfig(BaseModel):
+  """``discord:`` section: the summon entrypoint's user allow-list."""
+
+  model_config = ConfigDict(extra='forbid')
+
+  # Discord summon entrypoint
+  allowed_user_ids: list[str] = []  # Discord user ids allowed to summon; empty = nobody
+
+
 class PublishConfig(BaseModel):
   """``publish:`` section: the outbound static publish lane."""
 
@@ -506,6 +515,7 @@ class CharlieBotConfig(BaseModel):
   code_server: CodeServerConfig = Field(default_factory=CodeServerConfig)
   ui: UiConfig = Field(default_factory=UiConfig)
   slack: SlackConfig = Field(default_factory=SlackConfig)
+  discord: DiscordConfig = Field(default_factory=DiscordConfig)
   publish: PublishConfig = Field(default_factory=PublishConfig)
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 

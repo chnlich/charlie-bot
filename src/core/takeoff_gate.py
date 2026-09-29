@@ -166,16 +166,26 @@ def _settled_user_answers(
   return has_takeoff, pre_takeoff_at, seen_any_user
 
 
+def _gate_now(now: datetime | None) -> datetime:
+  """The gate's comparison clock: the caller's ``now``, else UTC now.
+
+  Naive input is a caller bug: a naive datetime cannot order against the
+  aware stamps the history carries, so it raises instead of silently
+  comparing. Every returned instant is UTC.
+  """
+  effective = now if now is not None else datetime.now(UTC)
+  if effective.tzinfo is None:
+    raise ValueError("authorization check time must be timezone-aware")
+  return effective.astimezone(UTC)
+
+
 def check_takeoff_gate(
     session_id: str,
     session_mgr: SessionManager,
     now: datetime | None = None,
 ) -> None:
   """Verify an active pre-takeoff or ordinary takeoff authorization window."""
-  effective_now = now if now is not None else datetime.now(UTC)
-  if effective_now.tzinfo is None:
-    raise ValueError("authorization check time must be timezone-aware")
-  effective_now = effective_now.astimezone(UTC)
+  effective_now = _gate_now(now)
 
   events = session_mgr.load_chat_events_sync(session_id)
   latest_user_has_takeoff, latest_pre_takeoff_at, _ = _settled_user_answers(events, session_id)
@@ -216,10 +226,7 @@ def check_takeoff_gate_for_task(
   :class:`DelegationBlockedError` otherwise. ``task_meta_of`` returns
   ``(task_parent_id, profile)`` for one node, or (None, None) when unknown.
   """
-  effective_now = now if now is not None else datetime.now(UTC)
-  if effective_now.tzinfo is None:
-    raise ValueError("authorization check time must be timezone-aware")
-  effective_now = effective_now.astimezone(UTC)
+  effective_now = _gate_now(now)
 
   current = start_session_id
   for _ in range(_TASK_ANCESTOR_HOP_LIMIT):

@@ -1122,3 +1122,35 @@ def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
             "Claude Code": 0,
             "Codex": 0
         }
+
+
+def test_capture_opencode_gate_skips_the_probe_until_the_db_files_move(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The signature probe scans the whole message table, so it re-runs only when the db's
+  main file or -wal sidecar moved since the probe that recorded the served signature; a
+  gate hit opens no connection, and a committed row re-probes and re-reads."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 10))
+  oc.write("m2", 200, _usage(200, 20))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+
+    real_connect = sqlite3.connect
+    opens = {"n": 0}
+
+    def counting_connect(*args: Any, **kwargs: Any) -> Any:
+      opens["n"] += 1
+      return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(tt.sqlite3, "connect", counting_connect)
+
+    opens["n"] = 0
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    assert opens["n"] == 0  # gate hit: no probe connection, the recorded signature serves
+
+    oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
+    before = opens["n"]
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
+    assert opens["n"] - before == 1  # the commit moved the files: one probe connection
+    row = _ledger_row(ledger, "opencode", NAME)
+    assert (row.calls, row.in_fresh, row.output) == (2, 322, 32)

@@ -49,7 +49,7 @@ A platform describes itself to the core with one `ThreadPlatform` value and one 
 | `thread_fallback` | Formatted with the summon block when a summon prompt carries no link | `(channel {channel_id}, thread {thread_ts})` | `(guild {guild_id}, thread {thread_id})` |
 | `attaches_files` | True when linked pages are uploaded as attachments instead of published | `False` (publishes and swaps the URLs) | `True` (uploads on the last chunk) |
 
-Three marker keys derive from `name` and so carry no field of their own: `notice_key` (`slack_notice` / `discord_notice`), `backfill_key` (`slack_backfill` / `discord_backfill`), and `ack_event_type` (`slack_ack` / `discord_ack`).
+Three marker keys derive from `name` and so carry no field of their own: `notice_key` and `backfill_key` name the marker payloads the audit predicates and the boot backfill read (the `slack_notice` and `slack_backfill` payloads), and `ack_event_type` names the ack audit record's wire type (`slack_ack`, `discord_ack`).
 
 ### `ThreadAdapter` methods
 

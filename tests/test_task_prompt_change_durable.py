@@ -8,12 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import make_home_config
+from conftest import build_env
 
 from src.core import event_types as ET
 from src.core.models import PatchSessionTaskRequest, TaskSpec
 from src.core.run_token import CallerIdentity
-from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
@@ -21,17 +20,12 @@ pytestmark = pytest.mark.asyncio
 OPERATOR = CallerIdentity(kind="operator")
 
 
-def build_env(tmp_path: Path) -> tuple[object, TaskTreeManager]:
-  cfg = make_home_config(tmp_path)
-  return cfg, TaskTreeManager(cfg, SessionManager(cfg))
-
-
 def prompt_facts(tree: TaskTreeManager, session_id: str) -> list[dict]:
   return [e for e in tree.events.load_events(session_id) if e.get("type") == ET.PROMPT_CHANGED]
 
 
 async def _leaf(tmp_path: Path):
-  cfg, tree = build_env(tmp_path)
+  cfg, _session_mgr, tree = build_env(tmp_path)
   meta = await tree.create_task(
       request_id="leaf",
       task_parent_id=None,

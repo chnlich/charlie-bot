@@ -230,8 +230,6 @@ async def ensure_firing_leaf(
     tree: TaskTreeManager,
     firing: str,
     goal: str,
-    backend: str,
-    model: str | None,
     task_type: TaskType | None = None,
 ) -> SessionMetadata:
   """Create (or re-admit) the ONE worker leaf this firing owns.

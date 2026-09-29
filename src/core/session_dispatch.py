@@ -540,7 +540,7 @@ class TaskInputDispatcher:
         recipient: str | None,
         actor: str = ACTOR_AGENT,
     ) -> tuple[dict, bool]:
-        """Persist one child_report fact to the fixed recipient's log.
+        """Persist one child_report fact to the fixed recipient's log, then wake the parent.
 
         The report id derives from the child event and the recipient, so a
         retry, a recovery pass, or a reparent re-derives the same id and finds
@@ -553,6 +553,12 @@ class TaskInputDispatcher:
         recipient returns (None, False). Only a freshly created report is the
         parent's new durable input, so a wake decision reads created, never
         the report's presence.
+
+        This entry owns the wake: after the lock is released, a created=True
+        delivery wakes the recipient exactly once (wake_parent), so callers
+        never add their own. A replayed delivery (created False) wakes nobody.
+        The locked entry stays wake-free: its callers write further events
+        under the lock and wake themselves after releasing it.
         """
 
         if recipient is None:
@@ -565,6 +571,7 @@ class TaskInputDispatcher:
                 result_refs=result_refs, recipient=recipient, actor=actor)
         if created:
             await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+            await self.wake_parent(recipient, report=report)
         return report, created
 
     async def deliver_child_report_locked(

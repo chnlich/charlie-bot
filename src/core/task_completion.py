@@ -54,7 +54,7 @@ from src.core.control_events import (
     stable_reopen_event_id,
 )
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import RunRecord, SessionMetadata
+from src.core.models import RunRecord, SessionMetadata, TaskType
 from src.core.runs import run_not_found_in_task_text
 
 if TYPE_CHECKING:
@@ -283,11 +283,7 @@ class TaskCompletionManager:
                 blockers.append(
                     f"review run {review_run_id} is not chained to a work Run "
                     "(review_of_run_id is unset; it cannot prove which work it reviewed)")
-        if meta.task is not None and meta.task.task_type is not None:
-            task_type = str(meta.task.task_type.value)
-        else:
-            task_type = None
-        if task_type == "implement":
+        if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT:
             successful_reviews = [
                 r for r in evidence.review_run_ids
                 if r in runs and runs[r].kind == "review"
@@ -866,8 +862,7 @@ class TaskCompletionManager:
         run = await tree.runs.get_run(session_id, run_id)
         if run is None or meta.profile != "worker" or run.kind != "work":
             return
-        task_type = str(meta.task.task_type.value) if (meta.task is not None and meta.task.task_type) else None
-        if task_type == "implement":
+        if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT:
             log.info("worker_delivery_awaits_review", session_id=session_id, run_id=run_id)
             return
         try:

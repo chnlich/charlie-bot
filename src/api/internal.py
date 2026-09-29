@@ -6,58 +6,64 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.api.deps import (
-    bad_request,
-    get_config_on_loop,
-    get_plan_manager,
-    get_session_manager,
-    get_task_manager,
-    get_trigger_manager,
-    require_found,
+  bad_request,
+  get_config_on_loop,
+  get_plan_manager,
+  get_session_manager,
+  get_task_manager,
+  get_trigger_manager,
+  require_found,
 )
 from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
+from src.core import discord_listener
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
+from src.core.discord_commands import check_setup, read_thread
 from src.core.improve_command import (
-    ImproveLoopAlreadyRunningError,
-    ImproveState,
-    loop_goal_path,
-    loop_plan_path,
-    reserve_loop_state,
-    save_loop_state,
+  ImproveLoopAlreadyRunningError,
+  ImproveState,
+  loop_goal_path,
+  loop_plan_path,
+  reserve_loop_state,
+  save_loop_state,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-    DelegateInvocationMetadata,
-    DelegateRequest,
-    ImproveRequest,
-    PlanAmendRequest,
-    PlanApproveRequest,
-    PlanCloseRequest,
-    PlanPresentRequest,
-    ScheduleTriggerRequest,
-    SessionMessageRequest,
-    SlackAckRequest,
-    SlackReplyRequest,
-    TaskType,
-    WatchKind,
+  DelegateInvocationMetadata,
+  DelegateRequest,
+  DiscordCheckRequest,
+  DiscordReadRequest,
+  DiscordReplyRequest,
+  ImproveRequest,
+  PlanAmendRequest,
+  PlanApproveRequest,
+  PlanCloseRequest,
+  PlanPresentRequest,
+  ScheduleTriggerRequest,
+  SessionMessageRequest,
+  SlackAckRequest,
+  SlackReplyRequest,
+  TaskType,
+  WatchKind,
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-    SlackReplyError,
-    ack_messages,
-    assert_thread_fresh,
-    post_reply,
+  SlackReplyError,
+  ack_messages,
+  assert_thread_fresh,
+  post_reply,
 )
 from src.core.spawner import (
-    resolve_requested_subagent_backend_model,
-    select_verify_backend,
+  resolve_requested_subagent_backend_model,
+  select_verify_backend,
 )
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
+from src.core.thread_entry import ThreadReplyError
 from src.core.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
 log = LazyStructlogLogger()
@@ -607,6 +613,74 @@ async def slack_ack(
   try:
     return await ack_messages(req.session_id, req.message_ids, cfg, session_mgr)
   except SlackReplyError as exc:
+    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/discord/reply")
+async def discord_reply(
+    req: DiscordReplyRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+) -> dict:
+  """Post the calling session's reply to its own Discord thread and return the readback.
+
+  The in-process boundary behind ``charliebot discord reply``: the session's
+  ``discord_origin`` names the thread, and the readback (posted, text, chars,
+  chunks, over_budget, answers) is what the CLI prints. Refusals map
+  ThreadReplyError's status (404 unknown session, 409 no Discord thread, 422
+  blank text, 502 Discord rejected the post after retries); nothing is
+  persisted on a refusal. Freshness is gated first: eligible thread messages
+  above the session's watermark refuse with a 412 ``stale_thread`` payload
+  naming each unseen message, before any chunk posts.
+  """
+  try:
+    await discord_listener.assert_thread_fresh(req.session_id, cfg, session_mgr)
+    return await discord_listener.post_reply(req.session_id, req.text, cfg, session_mgr)
+  except ThreadReplyError as exc:
+    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/discord/read")
+async def discord_read(
+    req: DiscordReadRequest,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+) -> dict:
+  """Read the calling session's Discord thread (or the channel *url* names) and return its messages.
+
+  The boundary behind ``charliebot discord read``: without *url* the session's
+  own thread is read oldest first (the thread's starter rides first), the
+  window is *limit* messages starting at the oldest unread one — or the newest
+  *limit* when nothing is unread — and the unread messages returned are marked
+  read (Discord has no separate ack verb), so the readback carries the
+  watermark after the ack plus ``more_unread``. With *url*, the newest *limit*
+  messages of that channel come back all unread-false and nothing is marked.
+  Refusals map ThreadReplyError's status: 404 unknown session, 409 no Discord
+  thread, 422 a *url* that is not a discord.com link, 404 a channel the bot
+  cannot see, 502 Discord refused the read.
+  """
+  try:
+    return await read_thread(req.session_id, req.url, req.limit, cfg, session_mgr)
+  except ThreadReplyError as exc:
+    raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+
+
+@router.post("/discord/check")
+async def discord_check(
+    req: DiscordCheckRequest,
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+) -> dict:
+  """Report the Discord bot token's setup: bot user, message-content intent, per-guild permissions.
+
+  The boundary behind ``charliebot discord check``: ``ok`` is the
+  message-content intent on and no guild missing a required permission. Refusals
+  map ThreadReplyError's status: 409 when ``credentials.discord.bot_token`` is
+  not set, 502 when Discord refuses the token (a 401 means it is invalid). The
+  readback carries no token.
+  """
+  try:
+    return await check_setup(cfg)
+  except ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 

@@ -597,6 +597,20 @@ async def seed_scenario(home: Path) -> dict:
         await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
         await session_mgr.star_session(feature.id)
 
+        # --- the row-menu scenarios' missing row kinds (S30-S32) --------------
+        # An archived ROOT manager (the archived root's Move-to-group menu) and
+        # a named group's root (the group header's + and gear): the two row
+        # kinds the tree above never produces, seeded through the same owner.
+        archived_root = await tree.create_task(
+            request_id="seed-archived-root", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="an archived root manager"), name="Archived root",
+            backend=None, caller=OP)
+        await session_mgr.archive_session(archived_root.id)
+        grouped_root = await tree.create_task(
+            request_id="seed-grouped-root", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="a root inside a named group"), name="Grouped root",
+            backend=None, caller=OP, group="Alpha team")
+
         prompts_dir = home / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         cron_d = home / "config.d" / "cron.d"
@@ -628,7 +642,8 @@ async def seed_scenario(home: Path) -> dict:
                 "live": live.id, "live_parent": live_parent.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
                 "withhold_parent": withhold_parent.id, "withhold_worker": withhold_worker.id,
                 "bound_node": bound_node.id, "paused_node": paused_node.id,
-                "archived_child": archived_child.id,
+                "archived_child": archived_child.id, "archived_root": archived_root.id,
+                "grouped_root": grouped_root.id, "group_name": "Alpha team",
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
                                   "counter": live_counter, "tree": tree,
@@ -861,6 +876,86 @@ async def reveal_row(cdp: CDP, session_id: str, node_id: str) -> None:
     """)
     await wait_for(cdp, session_id, f"document.getElementById('session-{node_id}').offsetParent !== null",
                    timeout=8, label=f"row on screen for {node_id}")
+
+
+async def click_selector_center(cdp: CDP, session_id: str, selector: str, label: str) -> dict:
+    """One real pointer click (move, press, release) on the element *selector*
+    names; the move first, because a row's desktop buttons only take pointers
+    while the row is hovered. The element's box is the click's ground truth."""
+    box = await evaluate(cdp, session_id, f"""
+        (() => {{
+          const el = document.querySelector({json.dumps(selector)});
+          if (!el) return null;
+          const r = el.getBoundingClientRect();
+          if (r.width === 0 && r.height === 0) return null;
+          return {{x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height}};
+        }})()
+    """)
+    assert_true(box is not None, f"{label}: the click target renders: {selector}")
+    await cdp.send("Input.dispatchMouseEvent",
+                   {"type": "mouseMoved", "x": box["x"], "y": box["y"]}, session_id=session_id)
+    for kind in ("mousePressed", "mouseReleased"):
+        await cdp.send("Input.dispatchMouseEvent",
+                       {"type": kind, "x": box["x"], "y": box["y"],
+                        "button": "left", "clickCount": 1}, session_id=session_id)
+    return box
+
+
+async def press_escape(cdp: CDP, session_id: str) -> None:
+    """One real Escape keydown+keyup through the browser's input pipeline."""
+    for kind in ("keyDown", "keyUp"):
+        await cdp.send("Input.dispatchKeyEvent",
+                       {"type": kind, "key": "Escape", "code": "Escape",
+                        "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27},
+                       session_id=session_id)
+
+
+def menu_items_as_text(items: list[dict]) -> list[str]:
+    """The open menu's items in the expected lists' notation: 'sep' for a
+    separator, ' (danger)' appended to a red item's label."""
+    return [("sep" if item["sep"] else
+             (item["label"] or "") + (" (danger)" if item["danger"] else ""))
+            for item in items]
+
+
+async def open_row_menu(cdp: CDP, session_id: str, selector: str, label: str) -> list[str]:
+    """Click the Settings gear *selector* names and read the open .row-menu's
+    items; exactly one menu may exist while it is open."""
+    before = await evaluate(cdp, session_id, "document.querySelectorAll('.row-menu').length")
+    assert_true(before == 0, f"{label}: no menu is open before the click ({before})")
+    await click_selector_center(cdp, session_id, selector, label)
+    await wait_for(cdp, session_id, "document.querySelectorAll('.row-menu').length === 1",
+                   timeout=6, label=f"{label}: the Settings menu opens")
+    items = await evaluate(cdp, session_id, """
+        [...document.querySelectorAll('.row-menu > *')].map(el => ({
+          sep: el.classList.contains('row-menu-sep'),
+          label: el.classList.contains('row-menu-item') ? el.textContent : null,
+          danger: el.classList.contains('row-menu-item-danger'),
+        }))
+    """)
+    return menu_items_as_text(items)
+
+
+async def assert_menu_item_heights(cdp: CDP, session_id: str, label: str) -> float:
+    """Every item of the open menu is a 44px touch row; return the minimum."""
+    min_h = await evaluate(cdp, session_id, """
+        Math.min(...[...document.querySelectorAll('.row-menu .row-menu-item')]
+          .map(b => b.getBoundingClientRect().height))
+    """)
+    assert_true(min_h >= 44, f"{label}: every menu item is at least 44px tall (min {min_h})")
+    return min_h
+
+
+async def close_row_menu(cdp: CDP, session_id: str, label: str) -> None:
+    """Escape closes the open menu and leaves no .row-menu behind."""
+    await press_escape(cdp, session_id)
+    await wait_for(cdp, session_id, "document.querySelectorAll('.row-menu').length === 0",
+                   timeout=6, label=f"{label}: Escape closes the menu")
+
+
+def assert_menu_matches(actual: list[str], expected: list[str], label: str) -> None:
+    assert_true(actual == expected,
+                f"{label}: the menu reads {actual!r}, expected {expected!r}")
 
 
 DIAGNOSTIC_SNAPSHOT = """
@@ -2050,6 +2145,339 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
                 results.record("a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S30: the desktop Settings menus' item lists -------------------
+            # Every row kind's gear opens the one shared .row-menu with the
+            # plan's items -- labels, order, separators and red danger items
+            # compared exactly. The Workspace rows first, then the archived
+            # pair in the Archive view; Escape closes between rows and exactly
+            # one .row-menu ever exists.
+            group_name = ids["group_name"]
+            try:
+                log("  s30: the desktop row menus' item lists")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await expand_to(cdp, session_id, [ids["root"], ids["ops_root"]])
+                measured = []
+                for name, node_id, expected in [
+                        ("unbound root manager", ids["ops_root"],
+                         ["Rename", "Move to group…", "Task & context", "Add schedule…"]),
+                        ("child manager", ids["ops_mid"],
+                         ["Rename", "Task & context", "Add schedule…"]),
+                        ("legacy profile-null row", ids["legacy"],
+                         ["Rename", "Move to group…"]),
+                        ("bound root manager", ids["bound_node"],
+                         ["Rename", "Move to group…", "Task & context", "Edit schedule…"]),
+                ]:
+                    await reveal_row(cdp, session_id, node_id)
+                    actual = await open_row_menu(
+                        cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
+                    assert_menu_matches(actual, expected, name)
+                    measured.append(f"{name} {len(actual)}")
+                    await close_row_menu(cdp, session_id, name)
+                header_selector = f"[data-sgroup-toggle-key='{group_name}'] > button[title='Settings']"
+                await evaluate(cdp, session_id, f"""
+                    document.querySelector("[data-sgroup-toggle-key='{group_name}']").scrollIntoView({{block: 'center'}})
+                """)
+                actual = await open_row_menu(cdp, session_id, header_selector, "named group header")
+                assert_menu_matches(actual, ["New scheduled task", "Rename group", "sep",
+                                             "Delete group (danger)"], "named group header")
+                measured.append("named group header 4")
+                await close_row_menu(cdp, session_id, "named group header")
+
+                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+                await wait_for(cdp, session_id,
+                               f"!!document.getElementById('session-{ids['archived_root']}')"
+                               f" && !!document.getElementById('session-{ids['archived_child']}')",
+                               timeout=12, label="the archived rows render")
+                await expand_to(cdp, session_id, [ids["bound_node"]])
+                for name, node_id, expected in [
+                        ("archived root", ids["archived_root"],
+                         ["Move to group…", "sep", "Delete permanently (danger)"]),
+                        ("archived child", ids["archived_child"],
+                         ["Delete permanently (danger)"]),
+                ]:
+                    await reveal_row(cdp, session_id, node_id)
+                    actual = await open_row_menu(
+                        cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
+                    assert_menu_matches(actual, expected, name)
+                    measured.append(f"{name} {len(actual)}")
+                    await close_row_menu(cdp, session_id, name)
+                shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus")
+                results.record("the desktop Settings menus' item lists", ok=True,
+                               detail=("every row kind's gear opens exactly one .row-menu with the plan's "
+                                       "items (item counts: " + ", ".join(measured) + "); Escape closes each"),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus_FAILED")
+                results.record("the desktop Settings menus' item lists", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S31: touch row actions at 412x915 -----------------------------
+            # The phone input profile (mobile metrics, touch on, hover none and
+            # pointer coarse) drives the drawer sidebar: normal and archived
+            # rows show the Settings gear alone, a starred row keeps its solid
+            # star as a read-only indicator, a worker row keeps Archive, the
+            # named header keeps + and the gear -- every tappable box 44x44 --
+            # and the bound row stays within three name lines. The touch menus
+            # lead with the Later toggle and the touch-only actions; every item
+            # is at least 44px tall.
+            try:
+                log("  s31: touch row actions at 412x915")
+                await cdp.send("Emulation.setDeviceMetricsOverride",
+                               {"mobile": True, "width": 412, "height": 915,
+                                "deviceScaleFactor": 2.625}, session_id=session_id)
+                await cdp.send("Emulation.setTouchEmulationEnabled",
+                               {"enabled": True, "maxTouchPoints": 5}, session_id=session_id)
+                await cdp.send("Emulation.setEmulatedMedia",
+                               {"features": [{"name": "hover", "value": "none"},
+                                             {"name": "pointer", "value": "coarse"}]},
+                               session_id=session_id)
+                emu = json.loads(await evaluate(cdp, session_id, """
+                    JSON.stringify({
+                      hoverNone: matchMedia('(hover: none)').matches,
+                      hoverHover: matchMedia('(hover: hover)').matches,
+                      coarse: matchMedia('(pointer: coarse)').matches,
+                      width: window.innerWidth, height: window.innerHeight,
+                    })
+                """))
+                assert_true(emu["hoverNone"] and not emu["hoverHover"] and emu["coarse"],
+                            f"the emulated media profile is a touch device: {emu}")
+                assert_true((emu["width"], emu["height"]) == (412, 915),
+                            f"the emulated viewport is 412x915: {emu}")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await evaluate(cdp, session_id, "toggleMobileSidebar()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('sidebar').classList.contains('open')",
+                               timeout=6, label="the drawer opens")
+                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+                touch_numbers = []
+
+                async def touch_buttons(node_id: str) -> list[dict]:
+                    raw = await evaluate(cdp, session_id, f"""
+                        (() => {{
+                          const row = document.getElementById('session-{node_id}');
+                          if (!row) return null;
+                          return [...row.querySelectorAll(':scope > button')]
+                            .map(b => {{
+                              const bs = getComputedStyle(b);
+                              const br = b.getBoundingClientRect();
+                              return {{title: b.title, display: bs.display, pe: bs.pointerEvents,
+                                       w: Math.round(br.width * 10) / 10,
+                                       h: Math.round(br.height * 10) / 10}};
+                            }})
+                            .filter(b => b.display !== 'none');
+                        }})()
+                    """)
+                    assert_true(raw is not None, f"the touch row {node_id} renders")
+                    return raw
+
+                def assert_tappable(buttons: list[dict], label: str) -> None:
+                    for b in buttons:
+                        if b["pe"] == "none":
+                            continue
+                        assert_true(b["w"] >= 44 and b["h"] >= 44,
+                                    f"{label}: {b['title']} is a 44x44 target, got {b['w']}x{b['h']}")
+
+                for node_id, label in ((ids["ops_root"], "normal current row"),
+                                       (ids["late_root"], "normal row")):
+                    await reveal_row(cdp, session_id, node_id)
+                    buttons = await touch_buttons(node_id)
+                    assert_true([b["title"] for b in buttons] == ["Settings"],
+                                f"the {label} shows Settings alone: {buttons}")
+                    assert_tappable(buttons, label)
+                    touch_numbers.append(f"{label} gear {buttons[0]['w']}x{buttons[0]['h']}")
+
+                await reveal_row(cdp, session_id, ids["feature"])
+                buttons = await touch_buttons(ids["feature"])
+                assert_true([b["title"] for b in buttons] == ["Star", "Settings"],
+                            f"the starred row shows its star and Settings: {buttons}")
+                assert_true(buttons[0]["pe"] == "none",
+                            f"the rest star is a read-only indicator (pointer-events {buttons[0]['pe']})")
+                assert_tappable(buttons, "starred row")
+                touch_numbers.append(f"star pe {buttons[0]['pe']}, gear {buttons[1]['w']}x{buttons[1]['h']}")
+
+                await reveal_row(cdp, session_id, ids["worker1"])
+                buttons = await touch_buttons(ids["worker1"])
+                assert_true([b["title"] for b in buttons] == ["Archive"],
+                            f"the worker row keeps Archive alone: {buttons}")
+                assert_tappable(buttons, "worker row")
+                touch_numbers.append(f"worker Archive {buttons[0]['w']}x{buttons[0]['h']}")
+
+                header_buttons = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const header = document.querySelector("[data-sgroup-toggle-key='{group_name}']");
+                      if (!header) return null;
+                      return [...header.querySelectorAll(':scope > button')].map(b => {{
+                        const bs = getComputedStyle(b);
+                        const br = b.getBoundingClientRect();
+                        return {{title: b.title, pe: bs.pointerEvents,
+                                 w: Math.round(br.width * 10) / 10,
+                                 h: Math.round(br.height * 10) / 10}};
+                      }});
+                    }})()
+                """)
+                assert_true(header_buttons is not None
+                            and [b["title"] for b in header_buttons] == ["New session in group", "Settings"],
+                            f"the named header keeps + and gear: {header_buttons}")
+                assert_tappable(header_buttons, "named group header")
+                touch_numbers.append("header + {0[0]['w']}x{0[0]['h']}, gear {0[1]['w']}x{0[1]['h']}".format(header_buttons))
+
+                await reveal_row(cdp, session_id, ids["bound_node"])
+                bound = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const row = document.getElementById('session-{ids['bound_node']}');
+                      const r = row.getBoundingClientRect();
+                      const cs = getComputedStyle(row);
+                      const name = row.querySelector('.session-name');
+                      const lh = parseFloat(getComputedStyle(name).lineHeight);
+                      const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+                      return {{h: Math.round(r.height * 10) / 10, padY, lineHeight: lh,
+                               limit: Math.round((padY + 3 * lh) * 10) / 10}};
+                    }})()
+                """)
+                assert_true(bound["h"] <= bound["limit"],
+                            f"the bound touch row stays within three name lines: {bound}")
+                touch_numbers.append(f"bound row {bound['h']}px <= pad {bound['padY']}px + 3x{bound['lineHeight']}px")
+
+                gear = "#session-{} > button[title='Settings']"
+                actual = await open_row_menu(
+                    cdp, session_id, gear.format(ids["ops_root"]), "touch unstarred root manager")
+                assert_menu_matches(actual, ["Add to Later", "New child session", "Rename",
+                                             "Move to group…", "Task & context", "Add schedule…",
+                                             "sep", "Archive"], "touch unstarred root manager")
+                touch_numbers.append(f"root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch unstarred root manager')}px")
+                await close_row_menu(cdp, session_id, "touch unstarred root manager")
+
+                actual = await open_row_menu(
+                    cdp, session_id, gear.format(ids["feature"]), "touch starred row")
+                assert_true(actual[0] == "Remove from Later",
+                            f"the starred row's first item is Remove from Later: {actual}")
+                assert_menu_matches(actual, ["Remove from Later", "New child session", "Rename",
+                                             "Task & context", "Add schedule…", "sep", "Archive"],
+                                    "touch starred row")
+                await assert_menu_item_heights(cdp, session_id, "touch starred row")
+                await close_row_menu(cdp, session_id, "touch starred row")
+
+                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+                await wait_for(cdp, session_id,
+                               f"!!document.getElementById('session-{ids['archived_root']}')"
+                               f" && !!document.getElementById('session-{ids['archived_child']}')",
+                               timeout=12, label="the archived rows render in the drawer")
+                await expand_to(cdp, session_id, [ids["bound_node"]])
+                for node_id in (ids["archived_root"], ids["archived_child"]):
+                    await reveal_row(cdp, session_id, node_id)
+                    buttons = await touch_buttons(node_id)
+                    assert_true([b["title"] for b in buttons] == ["Settings"],
+                                f"the archived touch row shows Settings alone: {buttons}")
+                    assert_tappable(buttons, "archived row")
+                touch_numbers.append("archived gears 44x44")
+
+                await reveal_row(cdp, session_id, ids["archived_root"])
+                actual = await open_row_menu(
+                    cdp, session_id, gear.format(ids["archived_root"]), "touch archived root")
+                assert_menu_matches(actual, ["Add to Later", "Unarchive", "Move to group…", "sep",
+                                             "Delete permanently (danger)"], "touch archived root")
+                touch_numbers.append(f"archived root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived root')}px")
+                shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions")
+                await close_row_menu(cdp, session_id, "touch archived root")
+
+                await reveal_row(cdp, session_id, ids["archived_child"])
+                actual = await open_row_menu(
+                    cdp, session_id, gear.format(ids["archived_child"]), "touch archived child")
+                assert_menu_matches(actual, ["Add to Later", "Unarchive", "sep",
+                                             "Delete permanently (danger)"], "touch archived child")
+                touch_numbers.append(f"archived child menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived child')}px")
+                await close_row_menu(cdp, session_id, "touch archived child")
+
+                results.record("the touch row actions at 412x915", ok=True,
+                               detail=("drawer open at 412x915, hover none + pointer coarse: "
+                                       + "; ".join(touch_numbers)),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions_FAILED")
+                results.record("the touch row actions at 412x915", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S32: the cover screen at 280x800 ------------------------------
+            # Same touch emulation at the Z Fold cover width: the drawer clamps
+            # to the screen (its right edge at most 280) and every visible row
+            # entry lies within 0..280.
+            try:
+                log("  s32: the cover-screen drawer at 280x800")
+                await cdp.send("Emulation.setDeviceMetricsOverride",
+                               {"mobile": True, "width": 280, "height": 800,
+                                "deviceScaleFactor": 2.625}, session_id=session_id)
+                cover = json.loads(await evaluate(cdp, session_id, """
+                    JSON.stringify({
+                      hoverNone: matchMedia('(hover: none)').matches,
+                      width: window.innerWidth, height: window.innerHeight,
+                    })
+                """))
+                assert_true(cover["hoverNone"] and (cover["width"], cover["height"]) == (280, 800),
+                            f"the cover emulation is 280x800 touch: {cover}")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await evaluate(cdp, session_id, "toggleMobileSidebar()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('sidebar').classList.contains('open')",
+                               timeout=6, label="the drawer opens on the cover screen")
+                drawer = await evaluate(cdp, session_id, """
+                    (() => {{
+                      const r = document.getElementById('sidebar').getBoundingClientRect();
+                      return {{left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10,
+                               width: Math.round(r.width * 10) / 10}};
+                    }})()
+                """)
+                assert_true(drawer["right"] <= 280.5,
+                            f"the drawer's right edge stays on the cover screen: {drawer}")
+                # Show the whole (No group) group first: the widest possible row
+                # set is what must fit, not the 5-row preview.
+                sweep = await evaluate(cdp, session_id, """
+                    (() => {
+                      toggleSessionGroupLimit('');
+                      const rows = [...document.querySelectorAll('#session-list a.session-row')]
+                        .filter(a => a.offsetParent !== null)
+                        .map(a => {
+                          const r = a.getBoundingClientRect();
+                          return {id: a.id, x: Math.round(r.x * 10) / 10,
+                                  right: Math.round(r.right * 10) / 10};
+                        });
+                      return {count: rows.length,
+                              leftmost: rows.reduce((m, r) => Math.min(m, r.x), 0),
+                              rightmost: rows.reduce((m, r) => Math.max(m, r.right), 0),
+                              sample: rows.slice(0, 4)};
+                    })()
+                """)
+                assert_true(sweep["count"] > 0, "rows render in the open drawer")
+                assert_true(sweep["leftmost"] >= -0.5 and sweep["rightmost"] <= 280.5,
+                            f"every visible row lies within 0..280: {sweep}")
+                shot = await screenshot(cdp, session_id, results, "s32_cover_drawer")
+                results.record("the cover-screen drawer at 280x800", ok=True,
+                               detail=(f"drawer right edge {drawer['right']}px of 280 "
+                                       f"(width {drawer['width']}px); {sweep['count']} visible rows within "
+                                       f"0..280, leftmost {sweep['leftmost']}px, rightmost {sweep['rightmost']}px"),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s32_cover_drawer_FAILED")
+                results.record("the cover-screen drawer at 280x800", ok=False, detail=repr(exc), screenshot=shot)
+
+            # The touch scenarios leave the desktop emulation behind: the
+            # window's 1440x900 back, media features cleared, touch off.
+            await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=session_id)
+            await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=session_id)
+            await cdp.send("Emulation.setTouchEmulationEnabled",
+                           {"enabled": False}, session_id=session_id)
+            restored = await evaluate(cdp, session_id, """
+                JSON.stringify({
+                  size: window.innerWidth + 'x' + window.innerHeight,
+                  hoverHover: matchMedia('(hover: hover)').matches,
+                  hoverNone: matchMedia('(hover: none)').matches,
+                })
+            """)
+            restored = json.loads(restored)
+            assert_true(restored["size"] == "1440x900" and restored["hoverHover"]
+                        and not restored["hoverNone"],
+                        f"the desktop emulation is restored: {restored}")
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

@@ -57,6 +57,12 @@ HOUSE_TIMEZONE = "America/Los_Angeles"
 # every re-pinning site.
 DEFAULT_TIMEZONE = HOUSE_TIMEZONE
 
+# The profile's config filename, named once: the loader, the reload fingerprint,
+# and ``config_file`` must resolve to the same file, and the preview-home setup
+# (src/core/session_tree_preview.py) writes it by that name. A rename that missed
+# one site would leave that site silently reading a different file.
+CONFIG_FILENAME = "config.yaml"
+
 
 class ImprovementLoopConfig(BaseModel):
   """Declarative config for an improvement-loop cron task."""
@@ -573,7 +579,7 @@ class CharlieBotConfig(BaseModel):
 
   @property
   def config_file(self) -> Path:
-    return self.charliebot_home / "config.yaml"
+    return self.charliebot_home / CONFIG_FILENAME
 
   @property
   def credentials_file(self) -> Path:
@@ -624,7 +630,7 @@ T = TypeVar("T")
 
 def _config_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``config.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint("config.yaml")
+  return _file_fingerprint(CONFIG_FILENAME)
 
 
 def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBotConfig) -> CharlieBotConfig:
@@ -716,7 +722,7 @@ def load_config() -> CharlieBotConfig:
   key path).
   """
   home = charliebot_home_dir()
-  config_path = home / "config.yaml"
+  config_path = home / CONFIG_FILENAME
 
   config_d = home / "config.d"
   if config_d.is_dir():

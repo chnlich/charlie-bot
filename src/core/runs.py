@@ -25,6 +25,7 @@ import asyncio
 import os
 import re
 import signal
+import threading
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
@@ -327,6 +328,75 @@ def project_raw_file(raw_path: Path, translate: Callable[[dict], list[dict]]) ->
   asyncio.to_thread.
   """
   return project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+
+
+# The raw log is append-only within one attempt (a retry rotates the old log
+# aside and spawns a fresh file at the same path), so a projection memo can
+# advance by suffix instead of re-reading the whole file per turn end; entries
+# hold the translate for the run's lifetime (the live read loop's own shape).
+_RAW_PROJECTION_MEMO_FILE_BYTES = 64 << 20
+_raw_projection_memo: dict[Path, dict] = {}
+_RAW_PROJECTION_MEMO_ENTRIES = 8
+_raw_projection_memo_lock = threading.Lock()
+
+
+def _raw_projection_full_parse(
+    raw_path: Path,
+    build_translate: Callable[[], Callable[[dict],
+                                           list[dict]]]) -> tuple[list[dict], int, Callable[[dict], list[dict]]]:
+  """One whole-file pass: consumed offset after the last complete line, events, translate."""
+  data = raw_path.read_bytes()
+  translate = build_translate()
+  consumed = data.rfind(b"\n") + 1
+  return project_raw_events(parse_raw_lines(data[:consumed]), translate), consumed, translate
+
+
+def project_raw_file_incremental(
+    raw_path: Path,
+    build_translate: Callable[[], Callable[[dict], list[dict]]],
+) -> list[dict]:
+  """Turn-end projection that advances by suffix instead of re-reading the file.
+
+  Same output contract as :func:`project_raw_file`: the projected events of the
+  raw log's complete lines, in order. The first call parses whole; later calls
+  parse only the bytes appended since, continuing the entry's translate the way
+  the live read loop does. A trailing partial line stays unconsumed exactly as
+  :func:`parse_raw_lines` drops it, and completes on a later call. The entry is
+  keyed to the file's identity: a retry rotates the old log aside and spawns a
+  fresh file at the same path, so a shrunk file or a replaced inode invalidates
+  the entry and parses whole again. Files above
+  ``_RAW_PROJECTION_MEMO_FILE_BYTES`` never cache, so a runaway log cannot pin
+  its bytes in memory. The returned list is a fresh shallow copy — callers must
+  treat the events as read-only. Event-loop callers reach it through
+  asyncio.to_thread.
+  """
+  with _raw_projection_memo_lock:
+    st = raw_path.stat()
+    if st.st_size > _RAW_PROJECTION_MEMO_FILE_BYTES:
+      events, _, _ = _raw_projection_full_parse(raw_path, build_translate)
+      return events
+    entry = _raw_projection_memo.get(raw_path)
+    if entry is not None and (st.st_size < entry["consumed"] or entry["identity"] != (st.st_dev, st.st_ino)):
+      # Shrunk (the retry rotation's fresh file) or a replaced inode — the
+      # memo's bytes no longer describe this file; parse whole again. Growth
+      # never invalidates: the suffix advance below owns it.
+      entry = None
+    if entry is None:
+      events, consumed, translate = _raw_projection_full_parse(raw_path, build_translate)
+      if len(_raw_projection_memo) >= _RAW_PROJECTION_MEMO_ENTRIES:
+        _raw_projection_memo.clear()  # bounded memory; a cleared run re-parses whole on its next scan
+      entry = {"identity": (st.st_dev, st.st_ino), "consumed": consumed, "events": events, "translate": translate}
+      _raw_projection_memo[raw_path] = entry
+      return list(events)
+    if st.st_size > entry["consumed"]:
+      with raw_path.open("rb") as f:
+        f.seek(entry["consumed"])
+        appended = f.read()
+      newline = appended.rfind(b"\n")
+      if newline >= 0:
+        entry["events"].extend(project_raw_events(parse_raw_lines(appended[:newline + 1]), entry["translate"]))
+        entry["consumed"] = entry["consumed"] + newline + 1
+    return list(entry["events"])
 
 
 def scan_result_exit(

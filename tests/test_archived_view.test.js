@@ -91,6 +91,18 @@ function rowHtml(html, id) {
   return html.slice(start, html.indexOf('</a>', start));
 }
 
+// The Settings button's data attributes, read back off the rendered row: the
+// dataset openSessionRowMenu builds its item list from.
+function settingsDataset(html, id) {
+  const tag = rowHtml(html, id).match(/<button[^>]*title="Settings"[^>]*>/);
+  if (!tag) throw new Error(`Missing rendered Settings button for ${id}`);
+  const dataset = {};
+  for (const m of tag[0].matchAll(/data-([\w-]+)="([^"]*)"/g)) {
+    dataset[m[1].replace(/-(\w)/g, (_, c) => c.toUpperCase())] = m[2];
+  }
+  return dataset;
+}
+
 function anchorOpenTag(html, id) {
   const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
   if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
@@ -204,6 +216,70 @@ test('a context row is not a row the user archived: dimmed, active-tagged, star 
   // The archived row next to it keeps its own form.
   assert.match(rowHtml(rows.innerHTML, 'arch-a'), /title="Unarchive"/);
   assert.doesNotMatch(anchorOpenTag(rows.innerHTML, 'arch-a'), /opacity-60/);
+});
+
+test('an archived row\u2019s direct buttons are Star, Unarchive and the archived Settings', async () => {
+  const sessions = [makeArchivedSession('arch-a', {group: 'Work'})];
+  const {context, nav} = archivedContext([makePage(sessions)]);
+
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const row = rowHtml(nav.children[1].innerHTML, 'arch-a');
+
+  assert.match(row, /title="Star"/);
+  assert.match(row, /title="Unarchive"/);
+  assert.match(row, /title="Settings"/);
+  // The group move and the delete are menu items now: no Set group button and
+  // no direct delete on the row.
+  assert.doesNotMatch(row, /title="Set group"|confirmDeletePermanently/);
+  // The Settings button reuses the normal row's markup and data attributes
+  // (archived.js's [data-current-group] rewrite keys on data-current-group),
+  // plus the marker that selects the archived item list.
+  const tag = row.match(/<button[^>]*title="Settings"[^>]*>/)[0];
+  assert.match(tag, /openSessionRowMenu\(this, 'arch-a'\)/);
+  assert.match(tag, /data-row-menu="archived"/);
+  assert.match(tag, /data-current-group="Work"/);
+  assert.match(tag, /data-task-parent=""/);
+});
+
+test('the archived Settings menu: root moves groups then deletes; a child only deletes', async () => {
+  const sessions = [
+    makeArchivedSession('root', {group: 'Work'}),
+    makeArchivedSession('child', {group: 'Work', task_parent_id: 'root'}),
+  ];
+  const {context, nav} = archivedContext([makePage(sessions)]);
+
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const deletes = [];
+  context.confirmDeletePermanently = (id) => deletes.push(id);
+  let menu = null;
+  context.openRowMenu = (anchor, built) => { menu = built; };
+  const open = (id) => {
+    context.Sidebar.openSessionRowMenu(
+      {dataset: settingsDataset(nav.children[1].innerHTML, id)}, id);
+    const items = [...menu];
+    menu = null;
+    return items;
+  };
+  const click = {preventDefault() {}, stopPropagation() {}};
+
+  // A root archived row: Move to group…, a separator, then the danger
+  // delete -- the menu keeps the old direct buttons' condition and styling.
+  const root = open('root');
+  assert.deepEqual(root.filter((item) => !item.separator).map((item) => item.label),
+    ['Move to group\u2026', 'Delete permanently']);
+  assert.deepEqual(root.map((item) => !!item.separator), [false, true, false]);
+  assert.equal(root[2].danger, true);
+  root[2].onSelect(click);
+  assert.deepEqual(deletes, ['root']);
+
+  // A task-tree child moves with its parent: the delete alone, no separator.
+  const child = open('child');
+  assert.deepEqual(child.map((item) => item.label), ['Delete permanently']);
+  assert.equal(child[0].danger, true);
+  child[0].onSelect(click);
+  assert.deepEqual(deletes, ['root', 'child']);
 });
 
 test('the status poll id set excludes archived rows', async () => {

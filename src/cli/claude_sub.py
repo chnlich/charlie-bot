@@ -11,13 +11,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import signal
 import sys
-import tempfile
 import time
 import uuid
-from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -47,7 +44,10 @@ from src.core.timeouts import (
 # The pty/tui helpers and asyncio ride their call sites, not this import block:
 # the M108 launch floor (docs/perf_baseline.md) is the wall from process start to
 # the argv parse, and the argv-parse probe reaches none of them. Same rule as the
-# src.core.process import inside _terminate_foreground.
+# src.core.process import inside _terminate_foreground, and as shutil/tempfile
+# (tempfile's own module imports shutil, so the two defer together) — the three
+# module-scope value classes below stay plain classes because the dataclasses
+# import they replaced pulls inspect (~7 ms measured, -X importtime).
 if TYPE_CHECKING:
   import asyncio
 
@@ -85,16 +85,34 @@ class SessionMarkerState(StrEnum):
   MIGRATION_BLOCKED = "migration-blocked"
 
 
-@dataclass(frozen=True)
 class ClaudeSubArgs:
-  output_format: str
-  prompt: str = ""
-  model: str | None = None
-  effort: str | None = None
-  session_id: str | None = None
-  resume: str | None = None
-  disallowed_tools: list[str] = field(default_factory=list)
-  settings: list[str] = field(default_factory=list)
+  """One parsed claude-sub argv.
+
+  A plain class, not a dataclass: the M108 launch floor imports this module in
+  every fresh worker process, and the dataclasses import pulls inspect for
+  machinery no consumer calls. No __slots__: the stdin-prompt rebuild reads
+  ``args.__dict__``. Field order and defaults match the dataclass it replaced;
+  a passed list is stored as-is, as ``default_factory`` did.
+  """
+
+  def __init__(
+      self,
+      output_format: str,
+      prompt: str = "",
+      model: str | None = None,
+      effort: str | None = None,
+      session_id: str | None = None,
+      resume: str | None = None,
+      disallowed_tools: list[str] | None = None,
+      settings: list[str] | None = None) -> None:
+    self.output_format = output_format
+    self.prompt = prompt
+    self.model = model
+    self.effort = effort
+    self.session_id = session_id
+    self.resume = resume
+    self.disallowed_tools = [] if disallowed_tools is None else disallowed_tools
+    self.settings = [] if settings is None else settings
 
 
 # Flags whose value can ride in the next argv slot or an "=" suffix. The
@@ -112,12 +130,16 @@ _VALUE_FLAGS = (
 )
 
 
-@dataclass(frozen=True)
 class PaneInfo:
-  pid: int
-  cwd: str
-  command: str
-  dead: bool
+  """One live pane's probe row; a plain class for the same M108 reason."""
+
+  __slots__ = ("command", "cwd", "dead", "pid")
+
+  def __init__(self, pid: int, cwd: str, command: str, dead: bool) -> None:
+    self.pid = pid
+    self.cwd = cwd
+    self.command = command
+    self.dead = dead
 
   @property
   def is_claude(self) -> bool:
@@ -320,6 +342,8 @@ def _read_json_object(path: Path, description: str) -> dict[str, Any]:
 
 
 def _copy_session_file(source: Path, target: Path, description: str) -> None:
+  import shutil
+
   try:
     shutil.copyfile(source, target)
   except OSError as error:
@@ -470,6 +494,7 @@ def _session_settings(args: ClaudeSubArgs) -> str:
 
 async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
   import asyncio
+  import shutil
 
   from src.agents.backends.pty_common import _tmux_client_env
 
@@ -693,6 +718,8 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   requested_resume = args.resume is not None
   resume = await _prepare_tmux_session(session_id, cwd, requested_resume)
   config_dir = _prepare_session_config(session_id, cwd)
+
+  import tempfile
 
   with tempfile.TemporaryDirectory(prefix=f"claude-sub-{session_id[:8]}-") as temporary_dir:
     temporary_root = Path(temporary_dir)

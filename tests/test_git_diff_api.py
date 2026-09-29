@@ -198,22 +198,6 @@ def test_other_repo_outside_workspace_and_memory_rejected(tmp_path: Path) -> Non
   assert resp.status_code == 400
 
 
-def test_repo_outside_workspace_rejected(tmp_path: Path) -> None:
-  repo = _build_repo(tmp_path)
-  # Point the workspace somewhere else so the repo fails the under-workspace check.
-  cfg = CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      paths={"workspace_dirs": [str(tmp_path / "elsewhere")]},
-  )
-  app = FastAPI()
-  app.include_router(git_api.router, prefix="/api/git")
-  apply_config_overrides(app, cfg)
-  client = TestClient(app)
-
-  resp = _get_diff(client, "files", repo, "main", "feature")
-  assert resp.status_code == 400
-
-
 def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
   """The signature moves exactly when ref state moves, and holds still otherwise."""
   repo = _build_repo(tmp_path)

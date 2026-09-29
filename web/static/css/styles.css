@@ -353,7 +353,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   .input-buttons .overflow-toggle { display: inline-flex; }
   .input-buttons .collapsible { display: none; }
   .input-buttons .collapsible.show { display: flex; position: absolute; bottom: 100%; right: 0; background: #1e293b; border: 1px solid #475569; border-radius: 0.75rem; padding: 0.5rem; gap: 0.5rem; margin-bottom: 0.5rem; z-index: 50; }
-  #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: 320px !important; }
+  #sidebar { display: none; position: fixed; top: 0; left: 0; bottom: 0; z-index: 100; width: min(320px, 100vw) !important; }
   #sidebar.open { display: flex; }
   #resize-handle { display: none; }
   #latex-resize-handle { display: none !important; }
@@ -488,14 +488,35 @@ body.resizing { cursor: col-resize; user-select: none; }
   background-image: linear-gradient(rgba(51, 65, 85, 0.5), rgba(51, 65, 85, 0.5));
   box-shadow: 8px 0 0 0 rgb(37, 49, 68);
 }
-/* On touch devices, invisible sidebar action buttons swallow taps.
-   Exclude buttons forced visible via !opacity-100 (starred / active session).
-   The hover reveal's out-of-flow buttons go back into the row flow: touch
-   keeps today's always-visible in-flow actions until the touch slice
-   replaces them. */
+/* Touch (hover: none): the hover reveal cannot exist, so every row and named
+   group header keeps its menu entry always visible, full opacity and
+   tappable, and the other direct actions hide behind that entry's menu. A
+   row with a Settings gear (normal, archived -- the current session
+   included) shows the gear alone, plus a starred row's solid star ahead of
+   it as a read-only indicator; the gear's menu (openSessionRowMenu /
+   openArchivedRowMenu build the touch lists) carries the hidden actions. A
+   row without a gear keeps its one action: a worker row's Archive, an
+   archived-tree context row's Star. Worker-thread rows and the (No group)
+   header render no buttons and stay bare. The 44px touch boxes ride negative
+   margins -- outer size back at the button's desktop box -- so the row and
+   header heights stay put, and the desktop hover cover background is
+   explicitly off (a tap's sticky hover must not paint it). */
 @media (hover: none) {
-  #session-list .group-hover\:opacity-100:not(.\!opacity-100) { opacity: 0.4; pointer-events: auto; }
-  #session-list .session-row > button { position: static; }
+  #session-list .session-row > button { display: none; background: none; box-shadow: none; }
+  #session-list .session-row > [title="Settings"] {
+    display: block; position: static; opacity: 1; pointer-events: auto;
+    padding: 15px; margin: -12px -11px;
+  }
+  #session-list .session-row:not(:has(> [title="Settings"])) > button {
+    display: block; position: static; opacity: 1; pointer-events: auto;
+    padding: 15px; margin: -12px -11px;
+  }
+  #session-list .session-row:has(> [title="Settings"]) > .star-btn.text-yellow-400 {
+    display: block; position: static; pointer-events: none;
+  }
+  #session-list [data-sgroup-toggle-key] > button {
+    opacity: 1; pointer-events: auto; padding: 16px; margin: -14px;
+  }
 }
 /* Prevent overscroll bounce */
 body { overscroll-behavior: none; }

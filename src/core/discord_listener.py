@@ -14,10 +14,12 @@ backfill, and the round side (``post_reply``, ``assert_thread_fresh``,
 describes Discord to the core with the ``DISCORD`` platform and keeps the
 public Discord-named wrappers (``post_reply``, ``assert_thread_fresh``,
 ``ack_messages``, ``deliver_done``, ``backfill_lost_summons``) that the CLI,
-the server endpoint, and the session-manager wiring (a later step) import.
-The gateway connect/receive/reconnect loop and its server wiring are a later
-step too; they call ``handle_message_create`` per payload and
-``_backfill_followed_threads`` per (re)connection, both already in place here.
+the server endpoint, and the session-manager wiring import.
+The gateway connect/receive/reconnect loop (``run_listener`` below) calls
+``handle_message_create`` per payload and ``_backfill_followed_threads`` per
+(re)connection; the server starts it next to the Slack listener whenever the
+Discord bot token and the allowed users are set, and the round-end audit
+hooks the same point the Slack one does.
 
 The master posts to its session's thread itself, through ``charliebot discord
 reply`` -> the ``post_reply`` wrapper, and reads the outcome back in the same
@@ -65,7 +67,7 @@ import sys
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
 from src.core import thread_entry, timeouts
@@ -508,9 +510,8 @@ async def _backfill_followed_threads(
 
   One-line pass-through to the shared backfill
   (``thread_entry.backfill_followed_threads``) on the given client's adapter;
-  the per-thread read, the arming, and the failure logs live there. Kept for
-  the gateway loop (a later step) to call on every (re)connection, the way
-  ``run_listener`` calls the Slack one.
+  the per-thread read, the arming, and the failure logs live there. The
+  gateway loop (``_run_connection``) calls it on every (re)connection.
   """
   return await thread_entry.backfill_followed_threads(DiscordThreadAdapter(client), cfg, session_mgr, trigger_mgr)
 
@@ -539,7 +540,7 @@ async def _preflight(client: DiscordClient) -> bool:
   return True
 
 
-class _StopClose(Exception):
+class _StopCloseError(Exception):
   """A gateway close code from ``_STOP_CLOSE_CODES``: retrying cannot fix it."""
 
   def __init__(self, code: int) -> None:
@@ -547,7 +548,7 @@ class _StopClose(Exception):
     self.code = code
 
 
-class _Dropped(Exception):
+class _DroppedError(Exception):
   """One recoverable connection end; ``saw_ready`` says whether a READY had landed."""
 
   def __init__(self, reason: str, *, saw_ready: bool) -> None:
@@ -629,7 +630,7 @@ async def _run_connection(
       elif op == 11:
         acked = True
       elif op in (7, 9):  # RECONNECT / INVALID_SESSION: drop and identify afresh
-        raise _Dropped(f"gateway op {op}", saw_ready=saw_ready)
+        raise _DroppedError(f"gateway op {op}", saw_ready=saw_ready)
       elif op == 0 and payload.get("t") == "READY":
         saw_ready = True
         bot_user_id = payload["d"]["user"]["id"]
@@ -646,10 +647,56 @@ async def _run_connection(
     close = e.rcvd if e.rcvd is not None else e.sent
     code = close.code if close is not None else None
     if code in _STOP_CLOSE_CODES:
-      raise _StopClose(code) from e
-    raise _Dropped(str(e), saw_ready=saw_ready) from e
+      raise _StopCloseError(code) from e
+    raise _DroppedError(str(e), saw_ready=saw_ready) from e
   finally:
     heartbeat_task.cancel()
     with contextlib.suppress(asyncio.CancelledError):
       await heartbeat_task
-  raise _Dropped("gateway connection closed", saw_ready=saw_ready)
+  raise _DroppedError("gateway connection closed", saw_ready=saw_ready)
+
+
+async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  """Discord gateway connect/receive/reconnect loop; returns only on a stop close code.
+
+  One connection at a time; every (re)connection identifies afresh and
+  re-runs the READY backfill. The reconnect clock mirrors the Slack loop's —
+  1 s doubling to 30 s — with the reset landing after a READY, the point a
+  connection proved itself.
+  """
+  client = _bot_client()
+  trigger_mgr = TriggerManager(cfg, session_mgr)
+  token = str(get_credentials().require("discord", "bot_token"))
+  if not await _preflight(client):
+    return
+  backoff = 1.0
+  while True:
+    try:
+      url = await client.get_gateway_url()
+    except Exception as e:
+      logger.warning("discord_listener_connect_failed", error=str(e))
+      await asyncio.sleep(backoff)
+      backoff = min(backoff * 2, 30.0)
+      continue
+    try:
+      ws = await _connect(url)
+    except Exception as e:
+      logger.warning("discord_listener_connect_failed", error=str(e))
+      await asyncio.sleep(backoff)
+      backoff = min(backoff * 2, 30.0)
+      continue
+    try:
+      await _run_connection(ws, token, cfg, session_mgr, client, trigger_mgr)
+    except _StopCloseError as stop:
+      logger.error("discord_listener_stopped", code=stop.code, reason=_STOP_CLOSE_CODES[stop.code])
+      return
+    except _DroppedError as e:
+      logger.warning("discord_listener_connection_dropped", error=str(e))
+      if e.saw_ready:
+        backoff = 1.0
+    except Exception as e:
+      logger.warning("discord_listener_connection_dropped", error=str(e))
+    finally:
+      await ws.close()
+    await asyncio.sleep(backoff)
+    backoff = min(backoff * 2, 30.0)

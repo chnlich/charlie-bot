@@ -269,24 +269,6 @@ def _local_time() -> str:
   return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
 
 
-async def ensure_slack_group(session_mgr: SessionManager, sid: str, label: str) -> None:
-  """Group a Slack-summon session under its label, unless it already has a group.
-
-  The label is resolved once by ``handle_app_mention`` (the single resolution
-  point) and passed through — this function resolves nothing. It only writes
-  when the session has a slack_origin and an empty group (None or '') — an
-  existing group is never overwritten. Best-effort: any failure logs a warning
-  and is swallowed, so summon, round, and reply behavior are unaffected.
-  """
-  try:
-    meta = await session_mgr.get_session(sid)
-    if meta is None or meta.slack_origin is None or meta.group:
-      return
-    await session_mgr.set_group(sid, label)
-  except Exception as e:
-    logger.warning("slack_group_assignment_failed", session=sid, label=label, error=str(e))
-
-
 async def handle_app_mention(
     event: dict,
     cfg: CharlieBotConfig,
@@ -344,7 +326,7 @@ async def handle_app_mention(
 
   await thread_entry.consume_mention(SLACK, session_mgr, trigger_mgr, sid, event["ts"])
 
-  await ensure_slack_group(session_mgr, sid, label)
+  await thread_entry.ensure_group(SLACK, session_mgr, sid, label)
 
   permalink = await client.get_permalink(channel_id, event["ts"])
   content = _build_summon_prompt(permalink, cfg)

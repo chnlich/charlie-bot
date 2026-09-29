@@ -5,8 +5,9 @@ fresh random session ids and no ``cc_session_id``, so nothing here is live
 state. The backup excludes ``sessions/*/threads``, so the corpus carries one
 token threads subtree priced out of every build.
 
-Run once per host before the M112 collector (the corpus persists under
-/tmp/opencode/m112/home; the builder rebuilds it from scratch each run):
+Run before the M112 collector (the corpus persists under /tmp/opencode/m112/home;
+the first run builds it and writes a shape manifest, every later run verifies the
+persisted shape against that manifest and rebuilds only on a mismatch):
 
     python tests/backup_corpus_builder.py
 """
@@ -18,6 +19,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 HOME = Path("/tmp/opencode/m112/home")
+# The build's receipt lives outside HOME so the measured corpus stays exactly the
+# builder's output: the M112 collector prices the corpus by a plain file walk, and
+# a manifest inside HOME would join it and move every reading.
+MANIFEST = HOME.with_name("corpus_manifest.json")
 
 # Per-session target bytes, chosen to land the whole corpus in the ~5 GB range
 # the healthy range's bytes line prices; six sessions keep the file count in the
@@ -25,6 +30,7 @@ HOME = Path("/tmp/opencode/m112/home")
 _CHAT_TARGET = 550 * 1024 * 1024
 _ARCHIVE_TARGET = 130 * 1024 * 1024
 _RAW_TARGET = 60 * 1024 * 1024
+_TALLY_ROWS = 300_000
 
 _EVENT_KINDS = (
     lambda i: {
@@ -99,7 +105,39 @@ def _write_lines(path: Path, target_bytes: int, session_id: str) -> int:
   return i
 
 
+def _corpus_shape(home: Path) -> tuple[int, int]:
+  files = [p for p in home.rglob("*") if p.is_file()]
+  return len(files), sum(p.stat().st_size for p in files)
+
+
+def _read_manifest() -> dict | None:
+  try:
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+  except (OSError, ValueError):
+    return None
+
+
 def main() -> None:
+  """Build the corpus once per host; verify the persisted shape on every later run."""
+  manifest = _read_manifest()
+  if manifest is not None:
+    try:
+      files, total = _corpus_shape(HOME)
+    except OSError as e:
+      print(f"corpus shape unreadable ({e}); rebuilding")
+    else:
+      if (files, total) == (manifest["files"], manifest["bytes"]):
+        print(f"corpus verified: {total / 1e9:.2f} GB across {files} files at {HOME}")
+        return
+      print(
+          f"corpus shape drifted from the manifest "
+          f"({files} files / {total} bytes vs {manifest['files']} / {manifest['bytes']}); rebuilding")
+  else:
+    print("no readable corpus manifest; rebuilding")
+  _build()
+
+
+def _build() -> None:
   if HOME.exists():
     shutil.rmtree(HOME)
   first_sid = None
@@ -141,7 +179,7 @@ def main() -> None:
           "cache_write": 40000 + i,
           "cache_read": 900000 + i,
           "output": 500 + i % 90
-      } for i in range(300000)
+      } for i in range(_TALLY_ROWS)
   ]
   (cache / "token_tally.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
 
@@ -156,9 +194,9 @@ def main() -> None:
       "cron: '0 * * * *'\n"
       "timezone: America/Los_Angeles\nprompt: hourly probe\n", encoding="utf-8")
 
-  files = [p for p in HOME.rglob("*") if p.is_file()]
-  total = sum(p.stat().st_size for p in files)
-  print(f"corpus built: {total / 1e9:.2f} GB across {len(files)} files at {HOME}")
+  files, total = _corpus_shape(HOME)
+  MANIFEST.write_text(json.dumps({"files": files, "bytes": total}), encoding="utf-8")
+  print(f"corpus built: {total / 1e9:.2f} GB across {files} files at {HOME}")
 
 
 if __name__ == "__main__":

@@ -13,7 +13,6 @@ route against a synthetic instance with a scripted backend.
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -31,6 +30,7 @@ from tests.test_task_execution import (
     init_repo_with_origin,
     install_backends,
     result_event,
+    wait_for_terminal_run,
 )
 
 
@@ -98,14 +98,7 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
 
         # The run executes on the API loop that scheduled it: the wait stays
         # inside the client context (the same rule the execution tests pin).
-        deadline = asyncio.get_event_loop().time() + 15
-        while asyncio.get_event_loop().time() < deadline:
-            if tree.runs.terminal_outcome(
-                    tree.runs.load_events_sync(child_leaf), run_id) is not None:
-                break
-            await asyncio.sleep(0.05)
-        else:
-            pytest.fail("the delegated leaf run never reached a terminal fact")
+        await wait_for_terminal_run(tree, child_leaf, run_id)
 
     # ONE leaf and ONE process for the operation and its replay.
     leaves = [m.id for m in (await tree._get_index()).metas.values()
@@ -244,16 +237,8 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
         assert blocked.status_code == 403
 
         # The verify run launched and settled on the API loop that scheduled it.
-        deadline = asyncio.get_event_loop().time() + 15
-        while asyncio.get_event_loop().time() < deadline:
-            if tree.runs.terminal_outcome(
-                    tree.runs.load_events_sync(verify_leaf), verify_run) is not None:
-                break
-            await asyncio.sleep(0.05)
-        else:
-            pytest.fail("the verify run never launched without an authorization window")
-        assert tree.runs.terminal_outcome(
-            tree.runs.load_events_sync(verify_leaf), verify_run) == "success"
+        _run, outcome = await wait_for_terminal_run(tree, verify_leaf, verify_run)
+        assert outcome == "success"
     # The verify child is repo-less; the blocked repo delegation created nothing.
     leaves = [m for m in (await tree._get_index()).metas.values()
               if m.task_parent_id == child.id]
@@ -266,17 +251,6 @@ async def register_active_run(tree, session_id: str, run_id: str, kind: str = "m
     token stands for (registered, no terminal fact, launch identity pinned)."""
     await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind=kind))
     await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
-
-
-async def wait_terminal(tree, session_id: str, run_id: str, what: str) -> str:
-    """Wait inside the client context for one Run's durable terminal fact."""
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        outcome = tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), run_id)
-        if outcome is not None:
-            return str(outcome)
-        await asyncio.sleep(0.05)
-    pytest.fail(f"{what} never reached a terminal fact")
 
 
 @pytest.mark.asyncio
@@ -305,6 +279,6 @@ async def test_agent_run_token_delegates_verify_without_a_takeoff(
         assert leaf.task_parent_id == child.id
         assert leaf.task is not None
         assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
-        outcome = await wait_terminal(tree, leaf_id, run_id, "the verify run")
+        _run, outcome = await wait_for_terminal_run(tree, leaf_id, run_id)
     assert outcome == "success"
     assert len(builds) == 1

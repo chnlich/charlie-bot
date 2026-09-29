@@ -14,7 +14,6 @@ with scripted backends; no real model or provider takes part.
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -280,14 +279,8 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
     assert leaf_meta is not None and leaf_meta.profile == "worker"
     assert [m.id for m in (await tree._get_index()).metas.values() if m.task_parent_id == grand_id] == [leaf_id]
 
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-      if tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), leaf_run) is not None:
-        break
-      await asyncio.sleep(0.05)
-    else:
-      pytest.fail("the delegated leaf run never reached a terminal fact")
-    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), leaf_run) == "success"
+    _run, outcome = await wait_for_terminal_run(tree, leaf_id, leaf_run)
+    assert outcome == "success"
 
   # The delegation rode the root's single real-user authorization: the child
   # and grandchild never saw a user message.

@@ -2712,8 +2712,8 @@ def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
   return fake_create_logged_task
 
 
-# Shared test helpers, single-homed here: the config builder, the waits, and
-# the settle/reader spies, imported across the suite's test files.
+# Shared test helpers, single-homed here: the waits and the settle/reader
+# spies, imported across the suite's test files.
 def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,

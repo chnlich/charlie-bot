@@ -710,13 +710,10 @@ class TaskTreeManager:
     return self._facts_of(session_id)
 
   def task_state(self, session_id: str) -> str:
-    """The task's derived lifecycle state without a caller-held index."""
+    """The task's derived lifecycle state."""
     return self._facts_of(session_id).task_state
 
-  def task_state_of(self, index: _TreeIndex, session_id: str) -> str:
-    return self._facts_of(session_id).task_state
-
-  def work_state_of(self, index: _TreeIndex, session_id: str) -> WorkState:
+  def work_state_of(self, session_id: str) -> WorkState:
     """idle | running | waiting, from CURRENT unresolved facts.
 
     One half of :meth:`activity_of` — the shared derivation's work verdict.
@@ -889,16 +886,16 @@ class TaskTreeManager:
     meta = self._index_meta(index, session_id)
     child_ids = self._children_of(index, session_id)
     descendants = self._descendants(index, session_id)
-    descendant_work = [self.work_state_of(index, d) for d in descendants]
-    open_count = sum(1 for d in descendants if self.task_state_of(index, d) == "open")
+    descendant_work = [self.work_state_of(d) for d in descendants]
+    open_count = sum(1 for d in descendants if self.task_state(d) == "open")
     running_count = sum(1 for state in descendant_work if state == "running")
     return SessionRow(
         id=meta.id,
         name=meta.name,
         profile=meta.profile,
         task_parent_id=meta.task_parent_id,
-        task_state=self.task_state_of(index, session_id),  # type: ignore[arg-type]
-        work_state=self.work_state_of(index, session_id),
+        task_state=self.task_state(session_id),  # type: ignore[arg-type]
+        work_state=self.work_state_of(session_id),
         archived=self.archived_of(index, meta),
         child_count=len(child_ids),
         open_descendant_count=open_count,
@@ -975,8 +972,8 @@ class TaskTreeManager:
     payload = indexed.model_dump(mode="json")
     payload.update(
         {
-            "task_state": self.task_state_of(index, session_id),
-            "work_state": self.work_state_of(index, session_id),
+            "task_state": self.task_state(session_id),
+            "work_state": self.work_state_of(session_id),
             "archived": self.archived_of(index, indexed),
             "ancestors": [AncestorRef(id=a.id, name=a.name).model_dump() for a in ancestors],
             "prompt_rules": self.prompt_rule_summaries(indexed, index),
@@ -1061,7 +1058,7 @@ class TaskTreeManager:
         if parent_meta.profile == "worker":
           raise TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
-        parent_state = self.task_state_of(index, task_parent_id)
+        parent_state = self.task_state(task_parent_id)
         if parent_state != "open":
           raise TaskConflictError([f"parent task {task_parent_id} is {parent_state}"])
         await self._require_open_ancestry_from_index(index, task_parent_id)
@@ -1234,7 +1231,7 @@ class TaskTreeManager:
       meta = index.metas.get(sid)
       if meta is None:
         return "open"
-      return self.task_state_of(index, sid)
+      return self.task_state(sid)
 
     return check_takeoff_gate_for_task(
         session_id,
@@ -1289,7 +1286,7 @@ class TaskTreeManager:
     async with self.control_lock:
       await self._get_index()
       meta = await self.load_task_meta(session_id)
-      state = self.task_state_of(self._index[0], session_id)
+      state = self.task_state(session_id)
       if state != "open":
         raise TaskConflictError([f"task {session_id} is {state}; only open tasks accept retries"])
       original = await self.runs.get_run(session_id, original_run_id)
@@ -1412,8 +1409,8 @@ class TaskTreeManager:
       target = self._index_meta(index, new_parent_id)
       if target.profile != "manager":
         blockers.append(f"reparent target {new_parent_id} is not a manager task")
-      if self.task_state_of(index, new_parent_id) != "open":
-        blockers.append(f"reparent target {new_parent_id} is {self.task_state_of(index, new_parent_id)}")
+      if self.task_state(new_parent_id) != "open":
+        blockers.append(f"reparent target {new_parent_id} is {self.task_state(new_parent_id)}")
       chain_ids = [a.id for a in self._ancestors(index, new_parent_id)]
       if session_id == new_parent_id or session_id in chain_ids:
         blockers.append(f"reparent target {new_parent_id} is inside {session_id}'s own subtree")
@@ -1501,7 +1498,7 @@ class TaskTreeManager:
 
   def _has_running_work_descendant(self, index: _TreeIndex, session_id: str) -> bool:
     """True when any descendant's current work is running."""
-    return any(self.work_state_of(index, d) == "running" for d in self._descendants(index, session_id))
+    return any(self.work_state_of(d) == "running" for d in self._descendants(index, session_id))
 
   async def tree_page(
       self,

@@ -314,7 +314,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   the same request adds no second notice."""
   from src.core.task_recovery import reconcile_task_tree
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
@@ -336,7 +336,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   assert "close-1" in notice["content"]
   assert f"has unprocessed input: {late['id']}" in notice["content"]
 
-  await reconcile_task_tree(cfg, tree, session_mgr)
+  await reconcile_task_tree(cfg, tree)
   assert tree.task_state(manager.id) == "open"
   assert [e["id"] for e in tree.events.load_events(manager.id) if e["type"] == notice["type"]] == [notice["id"]]
 

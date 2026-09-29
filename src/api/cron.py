@@ -346,7 +346,7 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
 
 
 @router.delete('/tasks/{name}')
-async def delete_cron_task(name: str, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
+async def delete_cron_task(name: str) -> dict:
   """Remove a job by unlinking its config.d/cron.d/<name>.yaml; it archives nothing.
 
   The task's bound node is the user's task-tree node, not the deletion's

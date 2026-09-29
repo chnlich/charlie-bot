@@ -2202,7 +2202,6 @@ async def cancel_session_run(
     session_id: str,
     run_id: str,
     req: CancelRunRequest,
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
     run_store=Depends(get_run_store),
     caller: CallerIdentity = Depends(require_caller),
 ) -> RunCancelResponse:

@@ -55,7 +55,7 @@ async def test_create_session_persists_discord_origin(tmp_path) -> None:
   _, session_mgr, _ = build_env(tmp_path)
   origin = DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   meta = await session_mgr.create_session(CreateSessionRequest(name="d", discord_origin=origin))
-  reloaded = await session_mgr.load_metadata(meta.id)
+  reloaded = await session_mgr.read_metadata_fresh(meta.id)
   assert reloaded.discord_origin == origin
   assert reloaded.discord_watermark_id is None
 

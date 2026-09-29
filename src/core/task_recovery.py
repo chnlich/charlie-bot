@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING
 from src.core import runs
 from src.core.config import CharlieBotConfig
 from src.core.log_once import LazyStructlogLogger
+from src.core.models import TaskType
 from src.core.thinking_state import note_run_backend
 from src.core.threads import METADATA_NAME
 
@@ -239,8 +240,7 @@ async def _replay_followups(
                 # request/close/report ids, so a crash in the finish→follow-up
                 # window is repaired and a repeated pass lands nothing twice.
                 await tree.completion.after_run_finished(session_id, run.id)
-                task_type = meta.task.task_type if meta.task is not None else None
-                if task_type is not None and task_type == "implement" and run.repo_path:
+                if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
                     await adapter._maybe_spawn_review(session_id, run)
             elif outcome in ("failed", "interrupted", "blocked"):
                 await adapter._report_failure_to_parent(session_id, run, outcome)

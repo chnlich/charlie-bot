@@ -52,11 +52,12 @@ def test_fakechat_marker_keys_derive_from_the_name() -> None:
 
 
 def test_newest_thread_input_picks_the_newest_fakechat_block() -> None:
+  # b1 carries no summon block; s3 carries another platform's block.
   events = [
-      {"id": "b1", "type": ET.AGENT_MESSAGE},  # no summon block
+      {"id": "b1", "type": ET.AGENT_MESSAGE},
       {"id": "s1", "type": ET.AGENT_MESSAGE, "fakechat": {"thread": "t1"}},
       {"id": "s2", "type": ET.AGENT_MESSAGE, "fakechat": {"thread": "t1", "nudge_of": "s1"}},
-      {"id": "s3", "type": ET.AGENT_MESSAGE, "slack": {"thread": "t1"}},  # another platform's block
+      {"id": "s3", "type": ET.AGENT_MESSAGE, "slack": {"thread": "t1"}},
   ]
   bound = newest_thread_input(FAKECHAT, events, ["b1", "s1", "s2", "s3"])
   assert bound == ("s2", {"thread": "t1", "nudge_of": "s1"})

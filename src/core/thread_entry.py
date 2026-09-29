@@ -72,6 +72,7 @@ class ThreadReplyError(Exception):
     self.status = status
     self.detail = detail
 
+
 # Fixed citation boundary appended to every platform-sourced summon prompt so
 # the master scopes its citations to the thread and public content only.
 CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
@@ -165,8 +166,7 @@ def summon_of(block: dict, event_id: str) -> str:
   return block.get("nudge_of") or event_id
 
 
-def newest_thread_input(
-    platform: ThreadPlatform, events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
+def newest_thread_input(platform: ThreadPlatform, events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
   """``(event id, summon block)`` of the newest summon-bearing input among *event_ids*, or None.
 
   A round answers a list of inputs (one per queued item it merged); only an

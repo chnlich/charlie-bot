@@ -14,7 +14,10 @@ entrypoint imports this module, never the reverse.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
+
+from src.core.config import CharlieBotConfig
 
 
 @dataclass(frozen=True)
@@ -63,3 +66,44 @@ class ThreadReplyError(Exception):
     super().__init__(str(detail))
     self.status = status
     self.detail = detail
+
+# Fixed citation boundary appended to every platform-sourced summon prompt so
+# the master scopes its citations to the thread and public content only.
+CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
+                     "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
+
+
+def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
+  """Read one prompts doc fresh from disk, raising a ValueError naming the path when missing.
+
+  No caching, so an edit takes effect on the next summon. A missing or
+  unreadable doc raises a ValueError naming the path and its most likely cause
+  (mirrors the worker-prompt loader in src/core/spawner_prompt.py); a prompt
+  without the doc is never built.
+  """
+  path = repo_root / "prompts" / name
+  try:
+    return path.read_text(encoding="utf-8").strip()
+  except OSError as e:
+    raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
+
+
+def summon_prompt_tail(platform_line: str, cfg: CharlieBotConfig) -> str:
+  """The summon prompt's fixed tail: the citation boundary, the PII red line, and the reply-format contract.
+
+  Both docs (prompts/thread_reply_redline.md, prompts/thread_reply_format.md)
+  are read fresh from prompts/ on every call — no caching, so an edit takes
+  effect on the next summon. A missing or unreadable doc raises a ValueError
+  naming the path; a prompt without both docs is never built. The
+  platform-specific facts ride in through *platform_line*; the shared
+  reply-format contract is reused unchanged across platforms.
+  """
+  red_line = load_prompt_doc(
+      cfg.charlie_bot_repo,
+      "thread_reply_redline.md",
+      likely_cause="the repo checkout most likely predates the thread-reply-redline rename commit")
+  reply_format = load_prompt_doc(
+      cfg.charlie_bot_repo,
+      "thread_reply_format.md",
+      likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
+  return f"{platform_line}\n\n{CITATION_BOUNDARY}\n{red_line}\n{reply_format}"

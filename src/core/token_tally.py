@@ -1362,7 +1362,8 @@ _OPENCODE_PROBE_SQL = (
 # re-runs only when the db files moved since the probe whose signature it recorded: a durable
 # commit appends a WAL frame or rewrites the main db, moving one of the two (size, mtime_ns)
 # pairs, while a reader touching only the -shm sidecar moves neither. Process-local, keyed by
-# the resolved db path; a fresh process probes once, which is the pre-gate shape.
+# the caller's path spelling (the same string the ledger's captured_files key uses); a
+# fresh process probes once, which is the pre-gate shape.
 _OpencodeGate = tuple[tuple[int, int], tuple[int, int] | None, str]
 _opencode_probe_gate: dict[str, _OpencodeGate] = {}
 

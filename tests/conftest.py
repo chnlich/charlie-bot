@@ -450,10 +450,9 @@ def append_events(path: Path, events: list[dict]) -> None:
 def read_chat_events(home: Path, session_id: str) -> list[dict]:
   """Parse a session's chat_events.jsonl under a staged CHARLIEBOT_HOME; [] when absent.
 
-  Shared raw reader for the crash-recovery e2e suites (test_restart_recovery_e2e,
-  test_master_restart_recovery_e2e); each event stays an unmodeled dict so tests
-  assert the exact persisted shape. A missing file means the run never wrote
-  events, which callers assert on directly rather than treat as an error.
+  Each event stays an unmodeled dict so tests assert the exact persisted shape.
+  A missing file means the run never wrote events, which callers assert on
+  directly rather than treat as an error.
   """
   path = home / "sessions" / session_id / "data" / "chat_events.jsonl"
   if not path.exists():
@@ -2713,11 +2712,8 @@ def record_create_logged_task(names: list[str]) -> Callable[..., Any]:
   return fake_create_logged_task
 
 
-# Shared test helpers, single-homed here: the waits, readers, and the
-# startup-crash-recovery entry, imported across the restart-recovery and
-# task-tree execution/recovery test files. The A/B protocol's driver side
-# (fake `claude` shim, driver template, launcher) stays in
-# test_restart_recovery_e2e.py.
+# Shared test helpers, single-homed here: the config builder, the waits, and
+# the settle/reader spies, imported across the suite's test files.
 def _cfg(home: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=home,

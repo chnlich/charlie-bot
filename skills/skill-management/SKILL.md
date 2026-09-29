@@ -27,13 +27,16 @@ description: >
 
 ### Deduplication
 
-Three sync targets cover all five CLIs:
+Four sync targets cover all five CLIs:
 
 1. `~/.claude/skills/` — Claude Code
 2. `~/.agents/skills/` — Codex + Gemini (shared open standard)
 3. `~/.gemini/antigravity-cli/skills/` — Antigravity (`agy`)
+4. `~/.charliebot/.claude/skills/` — Claude Code cwd-ancestor root. Claude Code collects `.claude/skills/` from every ancestor of its cwd up to `$HOME`, independent of the logged-in account, and a master session's cwd sits under `~/.charliebot/`, so this one root reaches every Claude account's masters; the per-account config dirs get no target. The same file visible through two roots (this one and `~/.claude/skills/`) loads once.
 
 OpenCode and charlie-code need **no** target: both auto-scan `~/.claude/skills/` and `~/.agents/skills/`, already populated above.
+
+Every real sync ends with a Claude discovery check (skipped under `-n` and when `claude` is not on PATH): `sync-skills.sh` starts `claude` once with an empty `CLAUDE_CONFIG_DIR` from the `~/.charliebot/sessions` cwd — not logged in, zero API calls — and reads K, the project count on the last `Loaded N unique skills (... project: K ...)` line of its debug log, against N, the symlink count in target 4. It prints `Claude discovery: K/N` and exits 1 when the line is missing or K differs from N.
 
 ## Sync Rules
 

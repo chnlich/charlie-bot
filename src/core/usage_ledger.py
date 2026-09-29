@@ -91,15 +91,31 @@ ON CONFLICT(record_id) DO UPDATE SET
 # Counted records: every NATIVE row, plus each FALLBACK row none of whose registered
 # sessions has a NATIVE record (the any-match EXISTS join). An unknown stored kind
 # matches neither arm — and is rejected at read time by the RecordKind conversion.
-_COUNTED_ROWS_SQL = """
-SELECT source, model, account, kind, in_fresh, cache_write, cache_read, output, ts
-FROM usage u
+_COUNTED_WHERE_SQL = """
 WHERE u.kind = 'native'
    OR (u.kind = 'fallback'
        AND NOT EXISTS (
          SELECT 1 FROM fallback_sessions fs
          WHERE fs.record_id = u.record_id
            AND EXISTS (SELECT 1 FROM native_sessions ns WHERE ns.session = fs.session)))
+"""
+
+# The /token-usage page aggregate: one grouped query over the counted records, so the
+# page load folds a few (source, model, account, kind) groups in Python instead of
+# streaming every counted record through it. ``first``/``last`` come from the dated
+# ts prefixes only: NULLIF keeps an empty ts from anchoring either end.
+_MODEL_ROWS_SQL = f"""
+SELECT source, model, account, kind,
+       COUNT(*) AS calls,
+       SUM(in_fresh) AS in_fresh,
+       SUM(cache_write) AS cache_write,
+       SUM(cache_read) AS cache_read,
+       SUM(output) AS output,
+       MIN(NULLIF(SUBSTR(ts, 1, 10), '')) AS first,
+       MAX(NULLIF(SUBSTR(ts, 1, 10), '')) AS last
+FROM usage u
+{_COUNTED_WHERE_SQL}
+GROUP BY source, model, account, kind
 """
 
 
@@ -172,7 +188,11 @@ class LedgerRow:
 
 @dataclass
 class _Sum:
-  """Mutable token accumulator for one bucket; ``total`` is the four token fields."""
+  """Mutable token accumulator for one bucket; ``total`` is the four token fields.
+
+  ``add`` folds one aggregate group row, whose ``calls`` column carries the group's
+  record count.
+  """
 
   calls: int = 0
   in_fresh: int = 0
@@ -181,7 +201,7 @@ class _Sum:
   output: int = 0
 
   def add(self, row: sqlite3.Row) -> None:
-    self.calls += 1
+    self.calls += row["calls"]
     self.in_fresh += row["in_fresh"]
     self.cache_write += row["cache_write"]
     self.cache_read += row["cache_read"]
@@ -283,18 +303,17 @@ class UsageLedger:
     for row in self._conn.execute("SELECT DISTINCT kind FROM usage"):
       RecordKind(row["kind"])
     accs: dict[tuple[str, str], _ModelSum] = {}
-    for row in self._conn.execute(_COUNTED_ROWS_SQL):
-      kind = RecordKind(row["kind"])  # a stored value outside the enum raises here
-      key = (row["source"], row["model"])
-      acc = accs.setdefault(key, _ModelSum())
+    for row in self._conn.execute(_MODEL_ROWS_SQL):
+      kind = RecordKind(row["kind"])
+      acc = accs.setdefault((row["source"], row["model"]), _ModelSum())
       acc.sums.add(row)
-      day = row["ts"][:10]
-      if not acc.first or day < acc.first:
-        acc.first = day
-      if not acc.last or day > acc.last:
-        acc.last = day
+      first, last = row["first"], row["last"]  # NULL when the group has no dated ts
+      if first and (not acc.first or first < acc.first):
+        acc.first = first
+      if last and (not acc.last or last > acc.last):
+        acc.last = last
       if kind == RecordKind.FALLBACK:
-        acc.fallback_calls += 1
+        acc.fallback_calls += row["calls"]
         acc.fallback_output += row["output"]
       acc.accounts.setdefault(row["account"], _Sum()).add(row)
     rows = [

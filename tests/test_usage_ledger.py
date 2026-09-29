@@ -95,6 +95,23 @@ def test_rows_equal_for_either_write_order(tmp_path):
   assert [(a.name, a.total) for a in row.accounts] == [("acct-b", 22), ("acct-a", 20)]
 
 
+def test_empty_ts_never_becomes_first_or_last(tmp_path):
+  empty = _record("rec-empty", RecordKind.NATIVE, sessions=("sess-e",), ts="")
+  early = _record("rec-early", RecordKind.NATIVE, sessions=("sess-a",), ts=TS_A, account="acct-b")
+  late = _record("rec-late", RecordKind.NATIVE, sessions=("sess-b",), ts=TS_B)
+  blank = _record(
+      "rec-blank", RecordKind.NATIVE, sessions=("sess-c",), ts="", model="model-blank")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [empty, early, late, blank])
+    rows = {row.model: row for row in ledger.model_rows()}
+  # The empty-ts record still counts, but never anchors the span: the dated ones do.
+  assert rows["model-a"].calls == 3
+  assert rows["model-a"].first == "2026-01-10"
+  assert rows["model-a"].last == "2026-01-11"
+  # No dated record in the group: no day to anchor, first/last stay empty.
+  assert (rows["model-blank"].first, rows["model-blank"].last) == ("", "")
+
+
 def test_reupserted_native_keeps_first_session_registered(tmp_path):
   first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
   second = _record("rec-1", RecordKind.NATIVE, sessions=("sess-b",))

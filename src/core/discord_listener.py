@@ -57,13 +57,16 @@ notice pointing back to the server channels.
 """
 
 import uuid
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_credentials
-from src.core.discord_client import DiscordClient, snowflake_key
+from src.core.discord_client import DiscordClient, message_link, snowflake_key
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
-from src.core.thread_entry import ThreadPlatform, summon_prompt_tail
+from src.core.models import DiscordOrigin
+from src.core.thread_entry import ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
 
 logger = LazyStructlogLogger()
 
@@ -204,3 +207,89 @@ def _bot_client() -> DiscordClient:
   """The client every outbound path (reply, notice, backfill) posts through."""
   creds = get_credentials()
   return DiscordClient(get_http_client(), bot_token=str(creds.require("discord", "bot_token")))
+
+
+# ---------------------------------------------------------------------------
+# The adapter the shared core works through
+# ---------------------------------------------------------------------------
+
+
+class DiscordThreadAdapter(ThreadAdapter):
+  """The round side's face onto the Discord REST client.
+
+  Discord receives files: its link swap hands the linked page's file name back
+  for the URL and collects the path, and ``post`` rides the last chunk's
+  attachments (``attaches_files``). The client is built lazily — a given one
+  is used as is; without one, ``_bot_client`` runs on the first platform call
+  and is reused, resolved as the module global at that moment so tests can
+  stub the factory.
+  """
+
+  platform = DISCORD
+
+  def __init__(self, client: DiscordClient | None = None) -> None:
+    self._client = client
+
+  def _ensure_client(self) -> DiscordClient:
+    """The bot client every platform call posts through: built once, then reused."""
+    if self._client is None:
+      self._client = _bot_client()
+    return self._client
+
+  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
+    await self._ensure_client().create_message(address["thread_id"], text, files=files)
+
+  async def add_ack(self, block: dict) -> None:
+    await self._ensure_client().add_reaction(block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
+
+  async def remove_ack(self, block: dict) -> None:
+    await self._ensure_client().remove_own_reaction(
+        block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
+
+  async def read_eligible(self, origin: DiscordOrigin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+    """The thread's eligible messages, paged oldest-first through the REST readback.
+
+    Discord returns at most 100 messages per call, so the read pages from id
+    ``"0"`` (before every snowflake), continuing after the page's last id,
+    until a page comes back shorter than the limit. Each page already arrives
+    sorted oldest-first by the client; eligibility is the shared rule.
+    """
+    client = self._ensure_client()
+    messages: list[ThreadMessage] = []
+    after = "0"
+    while True:
+      page = await client.get_messages(origin.thread_id, after=after, limit=100)
+      messages.extend(
+          ThreadMessage(m["id"], m["author"]["id"], m.get("content") or "") for m in page
+          if _eligible_message(m, cfg.discord.allowed_user_ids))
+      if len(page) < 100:
+        return messages
+      after = page[-1]["id"]
+
+  def address_of(self, origin: DiscordOrigin) -> dict:
+    return {"guild_id": origin.guild_id, "thread_id": origin.thread_id}
+
+  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
+    """The attachment swap for the shared link rewrite: keep the file name, collect the path.
+
+    Each distinct linked path is appended once (a path linked twice attaches
+    once) and its URL becomes the bare file name — the attachment rides the
+    same reply, so thread readers see the page without reaching this server.
+    """
+    files: list[Path] = []
+
+    def swap(fs_path: Path) -> str:
+      if fs_path not in files:
+        files.append(fs_path)
+      return fs_path.name
+
+    return swap, files
+
+  def log_fields(self, address: dict) -> dict:
+    return {"guild": address["guild_id"], "thread": address["thread_id"]}
+
+  async def thread_link(self, origin: DiscordOrigin) -> str:
+    return message_link(origin.guild_id, origin.thread_id)
+
+  def follow_wake_message(self, floor: str, link: str) -> str:
+    return _build_follow_wake_message(floor, link)

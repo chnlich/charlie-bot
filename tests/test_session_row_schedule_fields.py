@@ -178,6 +178,7 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   crossed = fire + timedelta(minutes=5)
 
   class _ShiftedDateTime(datetime):
+
     @classmethod
     def now(cls, tz=None):
       return crossed.astimezone(tz)

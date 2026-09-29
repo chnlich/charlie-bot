@@ -781,12 +781,17 @@ _THREAD_EVENTS_CACHE_CAP = 32
 
 
 class _ThreadEventsCacheEntry:
-  __slots__ = ("events", "offset", "tool_id_to_name")
+  __slots__ = ("events", "full_body", "offset", "tool_id_to_name")
 
   def __init__(self) -> None:
     self.events: list[WorkerEvent] = []
     self.offset = 0
     self.tool_id_to_name: dict[str, str] = {}
+    # The full fetch's rendered body, valid only while offset still equals the
+    # log's size: the projection is append-only, so any append (the only
+    # writer, inside read_thread_worker_events) drops it and the next full
+    # fetch re-renders.
+    self.full_body: bytes | None = None
 
 
 _thread_events_cache: BoundedMemo[str, _ThreadEventsCacheEntry] = BoundedMemo(_THREAD_EVENTS_CACHE_CAP)
@@ -823,6 +828,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
             iter_ndjson_events(window[:complete_end].split(b"\n"), log_event=PARSE_SKIP_LOG_EVENT, log_fields={}))
         _append_worker_events(raw_events, entry.events, entry.tool_id_to_name)
         entry.offset += complete_end
+        entry.full_body = None
     _thread_events_cache.store(key, entry)
     return list(entry.events)
 
@@ -853,6 +859,53 @@ def read_thread_worker_events_memo_hit(events_path: Path) -> list[WorkerEvent] |
     return list(entry.events)
   finally:
     _thread_events_lock.release()
+
+
+def stored_thread_events_full_body(events_path: Path) -> bytes | None:
+  """Return the entry's rendered full-fetch body when the log is provably unchanged.
+
+  Same proof as ``read_thread_worker_events_memo_hit`` — one stat against the
+  cached offset — returning the stored body instead of the rows; None when the
+  body is missing (never rendered, or dropped by an append) or the proof fails,
+  so the caller falls back to the row path. Never waits on the lock, for the
+  same mid-file-read reason the memo hit does not.
+  """
+  key = str(events_path)
+  if not _thread_events_lock.acquire(blocking=False):
+    return None
+  try:
+    entry = _thread_events_cache.get(key)
+    if entry is None or entry.full_body is None:
+      return None
+    try:
+      size = events_path.stat().st_size
+    except OSError:
+      return None
+    if size != entry.offset:
+      return None
+    return entry.full_body
+  finally:
+    _thread_events_lock.release()
+
+
+def store_thread_events_full_body(events_path: Path, body: bytes) -> None:
+  """Attach a freshly rendered full-fetch body to the entry, if the log still matches it.
+
+  The render runs outside the lock over a row copy, so an appends may move
+  ``offset`` between render and store; a body whose proof no longer holds is
+  dropped, and the next full fetch re-renders.
+  """
+  key = str(events_path)
+  with _thread_events_lock:
+    entry = _thread_events_cache.get(key)
+    if entry is None:
+      return
+    try:
+      size = events_path.stat().st_size
+    except OSError:
+      return
+    if size == entry.offset:
+      entry.full_body = body
 
 
 def _append_worker_events(
@@ -946,17 +999,26 @@ async def get_thread_events(
     events_path = task_manager().runs.run_dir(v2_run[0], v2_run[1]) / RUN_EVENTS_NAME
   else:
     events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
+  # The full fetch serves the stored render when the log is provably unchanged
+  # (offset == size, the re-open poll's steady state); the render itself skips
+  # the per-request model_dump pass whose cost grows with the projected count.
+  if after is None:
+    body = stored_thread_events_full_body(events_path)
+    if body is None:
+      events = read_thread_worker_events_memo_hit(events_path)
+      if events is None:
+        events = await asyncio.to_thread(read_thread_worker_events, events_path)
+      # Both shapes ride pre-dumped rows through FastJsonResponse: a Response
+      # skips response_model validation, whose jsonable_encoder pass is ~6x
+      # model_dump on mapped returns.
+      body = fast_json_bytes([e.model_dump(mode="json") for e in events])
+      store_thread_events_full_body(events_path, body)
+    return await gzip_body_response(request, body, {}, _events_gzip_memo)
   # The unchanged-log poll is one stat + a lookup; only a miss pays the
   # executor round-trip the incremental read needs.
   events = read_thread_worker_events_memo_hit(events_path)
   if events is None:
     events = await asyncio.to_thread(read_thread_worker_events, events_path)
-  # Both shapes ride pre-dumped rows through FastJsonResponse: a Response skips
-  # response_model validation, whose jsonable_encoder pass is ~6x model_dump on
-  # mapped returns.
-  if after is None:
-    body = fast_json_bytes([e.model_dump(mode="json") for e in events])
-    return await gzip_body_response(request, body, {}, _events_gzip_memo)
   reset = after > len(events)
   start = 0 if reset else after
   return FastJsonResponse(

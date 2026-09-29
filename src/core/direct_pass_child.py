@@ -1,7 +1,7 @@
 """The direct-pass trace build's child process: validate, then compress, off the server's GIL.
 
-The validating parse holds the GIL for its whole run (measured 2.05-2.11 s event-loop stall
-on the 334.3 MB corpus while the parse ran on a server thread), so both passes run here,
+The validating parse holds the GIL for its whole run (a measured event-loop stall
+of 2010-2014 ms on the 334.3 MB corpus while the parse ran on a server thread), so both passes run here,
 in a process whose GIL the server never waits on. The module level stays stdlib-only: the
 parent imports the exit classes and the argv builder at server-import time.
 """

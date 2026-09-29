@@ -545,7 +545,7 @@ def _build_direct_pass_gzip(path: Path, out_path: Path) -> None:
   passes are independent. Both passes run in the child (``direct_pass_child.main``): the
   validating parse holds the GIL for its whole run (a concurrent gzip thread makes no
   progress), and this build runs on a server thread — the in-process parse stalled the event
-  loop 2.05-2.11 s on the 334.3 MB corpus, every concurrent request and WebSocket with it —
+  loop 2010-2014 ms on the 334.3 MB corpus, every concurrent request and WebSocket with it —
   so the parse must leave the process the way the compress already does. The child reports
   its verdict by exit class; this side re-raises the same error types the route's handler
   answered before. Validation parses with orjson, the parser the merge path's build already

@@ -232,6 +232,39 @@ async def test_read_without_unread_returns_the_newest_limit(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: Path) -> None:
+  """A message arriving after the thread read stays out of the readback and breaks nothing.
+
+  The unread set comes from the one fetched message list, so a message Discord
+  serves only to a later read (nothing else unread) cannot name an id the
+  window pick misses: the read returns, the latecomer is not in it, and
+  nothing is marked.
+  """
+  cfg, session_mgr, client = _rig(tmp_path, channels={_THREAD: [_message(1, "first"), _message(2, "second")]})
+  session_id = await _make_session(session_mgr, watermark=_mid(2))  # nothing unread at the read
+  real_get = client.get_messages
+  thread_reads = {"n": 0}
+
+  async def get_messages(channel_id: str, *, after: str | None = None, limit: int = 100) -> list[dict]:
+    page = await real_get(channel_id, after=after, limit=limit)
+    if channel_id == _THREAD:
+      thread_reads["n"] += 1
+      if thread_reads["n"] == 1:  # the new message lands right after the first full read
+        client.channels[_THREAD].append(_message(3, "arrived in between"))
+    return page
+
+  client.get_messages = get_messages
+  with patch(_BOT_CLIENT_TARGET, return_value=client):
+    result = await read_thread(session_id, None, 50, cfg, session_mgr)
+
+  assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
+  assert all(m["unread"] is False for m in result["messages"])
+  assert result["watermark_id"] == _mid(2)
+  assert result["more_unread"] == 0
+  assert _ack_events(session_mgr, session_id) == []
+
+
+@pytest.mark.asyncio
 async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path) -> None:
   """A thread started from a parent message reads its starter first, not counted in *limit*."""
   starter = _message(0, "please plan the release", message_id=_THREAD, global_name="Display Name")

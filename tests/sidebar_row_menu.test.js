@@ -130,18 +130,20 @@ test('items render as role=menuitem buttons, separators as role=separator divs, 
   assert.equal(danger.textContent, 'Archive');
 });
 
-test('choosing an item closes the menu, then calls its onSelect', () => {
+test('choosing an item closes the menu, then calls its onSelect with the click event', () => {
   const {context, body, doc, sessionList, win} = buildContext();
   const events = [];
+  const click = {type: 'click'};
 
   context.openRowMenu(makeAnchor(), [{
     label: 'Rename',
-    onSelect: () => events.push(['select', body.children.length]),
+    onSelect: (event) => events.push([event, body.children.length]),
   }]);
 
-  body.children[0].children[0].fire('click', {});
+  body.children[0].children[0].fire('click', click);
 
-  assert.deepEqual(events, [['select', 0]], 'onSelect ran after the menu was already closed');
+  assert.deepEqual(events, [[click, 0]],
+    'onSelect ran after the menu was already closed, with the item\u2019s click event');
   assertClosed({body, doc, sessionList, win});
 });
 

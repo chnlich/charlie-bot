@@ -37,27 +37,27 @@ import asyncio
 import json
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
-from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
 from src.core import thread_entry, timeouts
-from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
+from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
-from src.core.master_trigger import trigger_master
+
+# trigger_master keeps its importable Slack name for the mention-seam tests.
+from src.core.master_trigger import trigger_master as trigger_master
 from src.core.models import (
-    CreateSessionRequest,
     PendingTrigger,
     SessionStatus,
     SlackOrigin,
 )
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
-from src.core.tasks import create_logged_task
+
+# create_logged_task keeps its importable Slack name for the mention-seam tests.
+from src.core.tasks import create_logged_task as create_logged_task
 
 # _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
 from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
@@ -86,8 +86,6 @@ logger = LazyStructlogLogger()
 SLACK_NS = uuid.UUID("1b4e28ba-2fa1-4d7a-9f0c-8d5e7a3b6c11")
 
 _ACCEPTANCE_REACTION = "eyes"
-
-_LOCAL_TZ = ZoneInfo(HOUSE_TIMEZONE)
 
 # Slack's hard per-message text limit. 40000 is the ceiling, so a long single
 # message is left for the client to collapse; splitting is the above-limit
@@ -264,11 +262,6 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
       f"{summon_prompt_tail(_PLATFORM_LINE, cfg)}")
 
 
-def _local_time() -> str:
-  """Local wall-clock stamp for a session display name."""
-  return datetime.now(_LOCAL_TZ).strftime("%Y-%m-%d %H:%M")
-
-
 async def handle_app_mention(
     event: dict,
     cfg: CharlieBotConfig,
@@ -278,8 +271,8 @@ async def handle_app_mention(
 ) -> str | None:
   """Accept or drop one app_mention. Returns the session id when accepted, else None.
 
-  The summon's channel label is resolved exactly once here, before
-  create_session, and reused for both the session name and the group: a single
+  The summon's channel label is resolved exactly once here, before the shared
+  accept path, and reused for both the session name and the group: a single
   ``Slack #<channel_name>`` label keeps the two display fields in lockstep and
   the resolution count to one lookup per accepted mention. A name that cannot
   be resolved falls back to the channel id.
@@ -290,6 +283,13 @@ async def handle_app_mention(
   (app_mention + message events for the same mention) end clean. When the
   caller passes no trigger manager, an in-process one is constructed, so
   existing four-argument call sites exercise the identical path.
+
+  The permalink and the summon block are resolved here — the session lookup in
+  the shared accept path reads neither — and the summon prompt is built from
+  the permalink before the shared path persists it. The session resolution
+  (create with the ``slack_origin``, unarchive, or reuse), the watermark step,
+  the group assignment, the summon persistence, and the round and ack tasks
+  are the shared core's (``thread_entry.accept_summon``).
   """
   trigger_mgr = trigger_mgr or TriggerManager(cfg, session_mgr)
   channel_id = event.get("channel")
@@ -306,52 +306,24 @@ async def handle_app_mention(
   name = await client.get_channel_name(channel_id)
   label = f"Slack #{name or channel_id}"
 
-  session_meta = await session_mgr.get_session(sid)
-  if session_meta is None:
-    session_name = f"{label} {_local_time()}"
-    await session_mgr.create_session(
-        CreateSessionRequest(
-            session_id=sid,
-            name=session_name,
-            slack_origin=SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts)))
-    logger.info(
-        "slack_mention_session_created", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
-  elif session_meta.status == SessionStatus.ARCHIVED:
-    await session_mgr.unarchive_session(sid)
-    logger.info(
-        "slack_mention_session_unarchived", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
-  else:
-    logger.info(
-        "slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
-
-  await thread_entry.consume_mention(SLACK, session_mgr, trigger_mgr, sid, event["ts"])
-
-  await thread_entry.ensure_group(SLACK, session_mgr, sid, label)
-
   permalink = await client.get_permalink(channel_id, event["ts"])
-  content = _build_summon_prompt(permalink, cfg)
-
-  evt = build_agent_message_event(content, from_session=sid, from_session_name="Slack")
-  evt["slack"] = {
+  block = {
       "channel_id": channel_id,
       "thread_ts": thread_ts,
       "mention_ts": event.get("ts"),
   }
-  await session_mgr.persist_and_broadcast(sid, evt)
-  round_event_id = evt.get("id")
-  logger.info(
-      "slack_mention_round_started",
-      channel=channel_id,
-      thread_ts=thread_ts,
-      slack_user=slack_user,
-      session=sid,
-      user_event_id=round_event_id)
-
-  create_logged_task(
-      trigger_master(sid, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=round_event_id),
-      name=f"slack-round-{sid}")
-  create_logged_task(client.add_reaction(channel_id, _ACCEPTANCE_REACTION, event["ts"]), name=f"slack-ack-{sid}")
-  return sid
+  return await thread_entry.accept_summon(
+      SlackThreadAdapter(client),
+      cfg,
+      session_mgr,
+      trigger_mgr,
+      session_id=sid,
+      label=label,
+      origin=SlackOrigin(team_id=team_id, channel_id=channel_id, thread_ts=thread_ts),
+      block=block,
+      content=_build_summon_prompt(permalink, cfg),
+      user=slack_user,
+  )
 
 
 # ---------------------------------------------------------------------------

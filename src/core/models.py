@@ -484,6 +484,13 @@ class WorkerEvent(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+  # The shared summon path passes the platform's origin field by name
+  # (``**{platform.origin_field: origin}`` in thread_entry.accept_summon): the
+  # declared origins (slack_origin, discord_origin) stay declared, and a
+  # platform whose origin field is not declared here rides model_extra instead
+  # of being dropped.
+  model_config = ConfigDict(extra="allow")
+
   name: str | None = None
   backend: str | None = None
   session_id: str | None = None

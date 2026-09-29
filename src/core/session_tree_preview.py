@@ -99,6 +99,7 @@ from src.core.runs import read_pid_stat
 from src.core.session_aliases import ALIASES_FILE_NAME
 from src.core.task_recovery import reconcile_task_tree
 from src.core.threads import METADATA_NAME
+from src.core.timeouts import PREVIEW_LAUNCHER_PROBE_TIMEOUT, SUBPROCESS_GIT_IDENTITY_TIMEOUT
 from src.core.yaml_utils import load_yaml, save_yaml
 
 log = LazyStructlogLogger()
@@ -222,7 +223,8 @@ def shutil_which(binary: str) -> str | None:
 def _launcher_supports_session_dir(binary: str) -> bool:
   """Whether *binary* advertises ``--session-dir`` (its native session-directory override)."""
   try:
-    proc = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False, timeout=30)
+    proc = subprocess.run(
+        [binary, "--help"], capture_output=True, text=True, check=False, timeout=PREVIEW_LAUNCHER_PROBE_TIMEOUT)
   except (OSError, subprocess.SubprocessError) as e:
     raise PreviewRefusedError(f"the charlie-code launcher at {binary} could not be run: {e}") from e
   return "--session-dir" in (proc.stdout + proc.stderr)
@@ -429,7 +431,13 @@ def _read_source_identity() -> tuple[str, str]:
   """The running checkout's branch and full HEAD SHA (the printed provenance)."""
 
   def git(*args: str) -> str:
-    proc = subprocess.run(["git", *args], cwd=str(REPO_ROOT), capture_output=True, text=True, check=True, timeout=30)
+    proc = subprocess.run(
+        ["git", *args],
+        cwd=str(REPO_ROOT),
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=SUBPROCESS_GIT_IDENTITY_TIMEOUT)
     return proc.stdout.strip()
 
   try:

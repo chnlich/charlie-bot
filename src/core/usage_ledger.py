@@ -30,6 +30,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
+from src.core.timeouts import USAGE_LEDGER_LOCK_WAIT_SECONDS
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage (
   record_id TEXT PRIMARY KEY,
@@ -240,7 +242,7 @@ class UsageLedger:
   def __init__(self, path: Path) -> None:
     self._path = Path(path)
     self._path.parent.mkdir(parents=True, exist_ok=True)
-    self._conn = sqlite3.connect(self._path, timeout=30)
+    self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
     self._conn.row_factory = sqlite3.Row
     self._conn.executescript(_SCHEMA)
     self._conn.commit()

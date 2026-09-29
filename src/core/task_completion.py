@@ -142,7 +142,7 @@ class TaskCompletionManager:
         blockers.extend(
             f"has open descendant task {descendant}"
             for descendant in tree._descendants(index, session_id)
-            if tree.task_state_of(index, descendant) == "open")
+            if tree.task_state(descendant) == "open")
         return blockers
 
     def completion_blockers(
@@ -630,7 +630,7 @@ class TaskCompletionManager:
         async with tree.control_lock:
             index = await tree._get_index()
             tree._index_meta(index, session_id)
-            if tree.task_state_of(index, session_id) != "open":
+            if tree.task_state(session_id) != "open":
                 raise TaskConflictError([f"task {session_id} is no longer open"])
             fresh_blockers = self.completion_blockers(
                 session_id, exclude_run_ids=exclude_run_ids, exclude_input_ids=exclude_input_ids)
@@ -1044,9 +1044,9 @@ class TaskCompletionManager:
         async with tree.control_lock:
             index = await tree._get_index()
             meta = tree._index_meta(index, session_id)
-            if tree.task_state_of(index, session_id) != "open":
+            if tree.task_state(session_id) != "open":
                 raise TaskConflictError(
-                    [(f"task {session_id} is {tree.task_state_of(index, session_id)}; "
+                    [(f"task {session_id} is {tree.task_state(session_id)}; "
                       "only an open task can be cancelled")])
             replay = self._replay_close_request(session_id, request_id)
             if replay is not None:

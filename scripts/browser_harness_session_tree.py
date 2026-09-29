@@ -634,6 +634,19 @@ async def seed_scenario(home: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 
+# The desktop-capture browser runs share one flag set: the 1440x900 capture
+# viewport plus the throttling bans that keep the page fully active - a
+# background-throttled timer or fetch would distort the live-update evidence.
+DESKTOP_CAPTURE_FLAGS = [
+    "--no-first-run", "--no-default-browser-check",
+    "--disable-background-networking", "--window-size=1440,900",
+    "--remote-allow-origins=*",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+]
+
+
 def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str]) -> subprocess.Popen:
     """Start headless chrome with a CDP endpoint and a private profile; return the process.
 
@@ -944,16 +957,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         profile = tmp_path / "chrome-profile"
         profile.mkdir()
         debug_port = pick_free_port()
-        chrome_proc = launch_chrome(chrome, profile, debug_port, [
-            "--no-first-run", "--no-default-browser-check",
-            "--disable-background-networking", "--window-size=1440,900",
-            "--remote-allow-origins=*",
-            # Keep the page fully active: background throttling would delay
-            # timers/fetches and distort the live-update evidence.
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-        ])
+        chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
         try:
             ws_url = await devtools_ws_url(chrome_proc, 20, fail)
             cdp = await connect_cdp(ws_url)

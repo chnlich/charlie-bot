@@ -362,8 +362,7 @@ async def _authorize_verify(
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
   monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
   session_mgr = BackendFakeSessionManager(session_backend)
-  resolved_backend, resolved_model = await internal._authorize_spawn_request(
-      req, session_mgr, _stub_task_manager())
+  resolved_backend, resolved_model = await internal._authorize_spawn_request(req, session_mgr, _stub_task_manager())
   return resolved_backend, resolved_model
 
 

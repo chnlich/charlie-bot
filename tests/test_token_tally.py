@@ -703,3 +703,234 @@ def test_charliebot_capture_skips_unkeyable_threads(tmp_path: Path, monkeypatch:
     assert ledger.model_rows() == []
     assert len(ledger.captured_sigs("host-a")) == 2
     assert _capture_charliebot(ledger, cb.root) == 0
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture (capture_runs)
+# ---------------------------------------------------------------------------
+
+
+class Runs:
+  """Synthetic Run directories: sessions/<sid>/data/runs/<run id>/ with its metadata.json
+  and agent.raw.ndjson written directly, the same layout the Run workers keep."""
+
+  def __init__(self, tmp_path: Path) -> None:
+    self.root = tmp_path / "sessions"
+
+  def run(
+      self,
+      session: str,
+      run_id: str,
+      lines: list[dict],
+      backend: str | None = None,
+      model: str | None = None,
+      native_session_id: str | None = None,
+      started_at: str | None = None,
+  ) -> Path:
+    """One run dir with its metadata fields (the ones the capture reads) and raw NDJSON
+    stream. The lines list takes no default: a mutable default would leak one call's
+    corpus into the next."""
+    run_dir = self.root / session / "data" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    doc: dict = {"id": run_id, "session_id": session}
+    if backend is not None:
+      doc["backend"] = backend
+    if model is not None:
+      doc["model"] = model
+    if native_session_id is not None:
+      doc["native_session_id"] = native_session_id
+    if started_at is not None:
+      doc["started_at"] = started_at
+    (run_dir / "metadata.json").write_text(json.dumps(doc))
+    with (run_dir / "agent.raw.ndjson").open("w") as fh:
+      for line in lines:
+        fh.write(json.dumps(line) + "\n")
+    return run_dir / "agent.raw.ndjson"
+
+
+def _capture_runs(ledger: UsageLedger, sessions_dir: Path) -> int:
+  """One Run capture round against *ledger*."""
+  return tt.capture_runs(ledger, "host-a", sessions_dir)
+
+
+def _cc_claude_init(sid: str) -> dict:
+  """The claude CLI stream's init line, the session id its top level carries."""
+  return {"type": "system", "subtype": "init", "session_id": sid, "model": "claude-opus-5-5"}
+
+
+def _cc_claude_result(sid: str) -> dict:
+  """The claude CLI stream's result line, usage in the Claude envelope keys."""
+  return {
+      "session_id": sid,
+      "type": "result",
+      "usage":
+          {
+              "input_tokens": 4,
+              "cache_creation_input_tokens": 10,
+              "cache_read_input_tokens": 100,
+              "output_tokens": 7
+          },
+  }
+
+
+def test_capture_runs_clc_run_is_native_with_the_cached_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A CLC run records natively on the model its metadata names, its cached reads split
+  out of the result's one input field, and an unchanged run file is never re-parsed."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  runs = Runs(tmp_path)
+  runs.run(
+      "s1",
+      "r1", [{
+          "type": "result",
+          "usage": {
+              "input_tokens": 100,
+              "cached_tokens": 40,
+              "output_tokens": 5
+          }
+      }],
+      backend="charlie-code-glm53-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      started_at="2026-09-27T17:52:48.090388Z")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_runs(ledger, runs.root) == 1
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
+    assert (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.output) == (1, 60, 0, 40, 5)
+    assert _capture_runs(ledger, runs.root) == 0  # the unchanged run file is skipped
+
+
+def test_capture_runs_cc_claude_fallback_retires_when_the_transcript_is_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-claude run is a fallback row keyed on the session ids its metadata and its raw
+  stream's init line carry, counted until the Claude transcript whose stem one of those
+  ids names is captured; either id source retires the run."""
+  _stub_registry(monkeypatch, _Option("claude-opus-5", "cc-claude", "anthropic/claude-opus-5-5"))
+  runs = Runs(tmp_path)
+  runs.run(
+      "s1",
+      "r1", [_cc_claude_result("cl-sess-1")],
+      backend="claude-opus-5",
+      model="claude-opus-5-5",
+      native_session_id="cl-sess-1",
+      started_at="2026-09-27T17:50:39.124791Z")
+  runs.run(
+      "s1",
+      "r2", [_cc_claude_init("cl-sess-2"), _cc_claude_result("cl-sess-2")],
+      backend="claude-opus-5",
+      model=None,
+      started_at="2026-09-28T12:46:23.854576Z")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_runs(ledger, runs.root) == 2  # no transcript yet: both fallback rows count
+    row = _ledger_rows(ledger)["charlie-bot", "claude-opus-5-5"]
+    assert (row.calls, row.fallback_calls, row.in_fresh, row.cache_write, row.cache_read,
+            row.output) == (2, 2, 8, 20, 200, 14)
+
+    claude = Claude(tmp_path)
+    claude.write(claude.work, "cl-sess-1", [_claude_record("m1", NAME, "2026-09-27T17:50:39Z", _usage(4, 404))])
+    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    row = _ledger_rows(ledger)["charlie-bot", "claude-opus-5-5"]
+    assert (row.calls, row.fallback_calls) == (1, 1)  # r1 retired, the stream-id run r2 stays
+
+    claude.write(claude.work, "cl-sess-2", [_claude_record("m2", NAME, "2026-09-28T12:46:23Z", _usage(4, 404))])
+    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    assert ("charlie-bot", "claude-opus-5-5") not in _ledger_rows(ledger)  # r2 retired too
+
+
+def test_capture_runs_codex_sums_turns_and_retires_on_the_captured_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex run sums its turn.completed lines into one fallback row keyed on the codex
+  session id its metadata carries; capturing the rollout whose session id matches retires
+  it, and a run with no turn.completed line contributes no record at all."""
+  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
+  runs = Runs(tmp_path)
+  runs.run(
+      "s1",
+      "r1", [
+          {
+              "type": "thread.started",
+              "thread_id": "th-1"
+          },
+          {
+              "type": "turn.completed",
+              "usage": {
+                  "input_tokens": 100,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 5
+              }
+          },
+          {
+              "type": "turn.completed",
+              "usage": {
+                  "input_tokens": 50,
+                  "cached_input_tokens": 10,
+                  "output_tokens": 3
+              }
+          },
+      ],
+      backend="codex-gpt",
+      model="openai/gpt-5",
+      native_session_id="codex-sid-1",
+      started_at="2026-09-27T17:52:48.090388Z")
+  runs.run(
+      "s1",
+      "r2", [{
+          "type": "thread.started",
+          "thread_id": "th-2"
+      }],
+      backend="codex-gpt",
+      model="openai/gpt-5",
+      started_at="2026-09-27T17:50:24.123837Z")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_runs(ledger, runs.root) == 1  # r2 has no turn.completed line: no record
+    row = _ledger_rows(ledger)["charlie-bot", "gpt-5"]
+    assert (row.calls, row.fallback_calls, row.in_fresh, row.cache_read, row.output) == (1, 1, 120, 30, 8)
+
+    codex = Codex(tmp_path)
+    _codex_rollout(
+        codex, "codex-sid-1", "gpt-5", {
+            "input_tokens": 150,
+            "cached_input_tokens": 30,
+            "output_tokens": 8
+        }, {"total_tokens": 128}, "2026-09-27T18:00:00Z")
+    assert _capture(None, codex, ledger)["Codex"] == 1  # the rollout is captured native
+    assert ("charlie-bot", "gpt-5") not in _ledger_rows(ledger)  # excluded: its session id has a native record
+
+
+def test_capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A run killed before its result line contributes no record yet still records as
+  captured (so it is never re-parsed), and an unchanged corpus's second capture writes
+  nothing."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  runs = Runs(tmp_path)
+  runs.run(
+      "s1",
+      "r-lost", [{
+          "type": "system",
+          "subtype": "init",
+          "session_id": "cl-sess-9"
+      }],
+      backend="charlie-code-glm53-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      started_at="2026-09-29T01:18:11.966557Z")
+  runs.run(
+      "s1",
+      "r-done", [{
+          "type": "result",
+          "usage": {
+              "input_tokens": 30,
+              "cached_tokens": 10,
+              "output_tokens": 2
+          }
+      }],
+      backend="charlie-code-glm53-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      started_at="2026-09-29T01:20:00.000000Z")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_runs(ledger, runs.root) == 1  # only the result-bearing run records
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
+    assert (row.calls, row.in_fresh, row.output) == (1, 20, 2)
+    assert set(ledger.captured_sigs("host-a")) == {
+        str(runs.root / "s1" / "data" / "runs" / "r-lost" / "agent.raw.ndjson"),
+        str(runs.root / "s1" / "data" / "runs" / "r-done" / "agent.raw.ndjson"),
+    }  # the resultless file is marked captured too: never re-parsed
+    assert _capture_runs(ledger, runs.root) == 0

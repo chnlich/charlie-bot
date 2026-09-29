@@ -188,6 +188,34 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
   assert mgr._search_match_memo.get("needle") is not None  # the clean round stores
 
 
+def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  import src.core.sessions as sessions_module
+
+  # A tiny window forces many boundary carries, so the straddle cases run for
+  # real instead of riding one whole-file window.
+  monkeypatch.setattr(sessions_module, "_SEARCH_CHUNK_SIZE", 4)
+  chat = tmp_path / "chat_events.jsonl"
+  prefix = "xxNeeDLe\u00e9tail".encode()  # mixed-case hit; \u00e9 must not disturb it
+  chat.write_bytes(prefix + ("filler" * 10).encode())
+  assert sessions_module._scan_content_for_hit(chat, "s", "needle", 0) is True
+  assert sessions_module._scan_content_for_hit(chat, "s", "zzq9absent", 0) is False
+  # The rescan contract: a start offset past the only hit hides it, and an
+  # append past that offset shows the new hit -- the memo's re-proof window.
+  assert sessions_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is False
+  with chat.open("ab") as out:
+    out.write(b"TailNeedle")
+  assert sessions_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is True
+  # The documented boundary: an ASCII needle does not match U+212A (whose
+  # str.lower() contains an ASCII letter); that codepoint needs the decoded
+  # path, which a non-ASCII needle rides.
+  kelvin = tmp_path / "kelvin.jsonl"
+  kelvin.write_bytes("\u212a".encode() + b"ey")
+  assert sessions_module._scan_content_for_hit(kelvin, "s", "k", 0) is False
+  accents = tmp_path / "accents.jsonl"
+  accents.write_bytes("caf\u00e9".encode())
+  assert sessions_module._scan_content_for_hit(accents, "s", "\u00e9", 0) is True
+
+
 @pytest.mark.asyncio
 async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)

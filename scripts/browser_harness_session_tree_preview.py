@@ -72,6 +72,7 @@ from collections.abc import Callable  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
+    DESKTOP_CAPTURE_FLAGS,
     Results,
     api_request,
     connect_cdp,
@@ -541,14 +542,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             profile = tmp_path / "chrome-profile"
             profile.mkdir()
             debug_port = pick_free_port()
-            chrome_proc = launch_chrome(chrome, profile, debug_port, [
-                "--no-first-run", "--no-default-browser-check",
-                "--disable-background-networking", "--window-size=1440,900",
-                "--remote-allow-origins=*",
-                "--disable-background-timer-throttling",
-                "--disable-backgrounding-occluded-windows",
-                "--disable-renderer-backgrounding",
-            ])
+            chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
             try:
                 await drive_browser(debug_port=debug_port, base=base,
                                     access_key=access_key, results=results, args=args, home=home)

@@ -447,8 +447,8 @@ async def require_thread_session(
   return meta
 
 
-async def unread_messages(
-    adapter: ThreadAdapter, origin: Any, cfg: CharlieBotConfig, watermark: str | None) -> list[ThreadMessage]:
+async def unread_messages(adapter: ThreadAdapter, origin: Any, cfg: CharlieBotConfig,
+                          watermark: str | None) -> list[ThreadMessage]:
   """The thread *origin* names' eligible messages above *watermark*; None passes all.
 
   One readback shared by the freshness gate and the reconnect backfill: the
@@ -834,8 +834,8 @@ _FOLLOW_QUIET_SECONDS = 45
 _FOLLOW_CHAIN_CAP_SECONDS = 300
 
 
-async def armed_follow_triggers(
-    platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> list[PendingTrigger]:
+async def armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: TriggerManager,
+                                session_id: str) -> list[PendingTrigger]:
   """The session's pending thread-follow trigger records (at most one by construction)."""
   return [
       t for t in await trigger_mgr.list_triggers(session_id)
@@ -843,8 +843,7 @@ async def armed_follow_triggers(
   ]
 
 
-async def cancel_armed_follow_triggers(
-    platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> int:
+async def cancel_armed_follow_triggers(platform: ThreadPlatform, trigger_mgr: TriggerManager, session_id: str) -> int:
   """Cancel every armed thread-follow trigger of the session; return how many."""
   armed = await armed_follow_triggers(platform, trigger_mgr, session_id)
   for trigger in armed:
@@ -987,10 +986,7 @@ async def accept_summon(
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
     await session_mgr.create_session(
-        CreateSessionRequest(
-            session_id=session_id,
-            name=session_name,
-            **{platform.origin_field: origin}))
+        CreateSessionRequest(session_id=session_id, name=session_name, **{platform.origin_field: origin}))
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == SessionStatus.ARCHIVED:
     await session_mgr.unarchive_session(session_id)

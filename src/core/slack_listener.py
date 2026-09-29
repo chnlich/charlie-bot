@@ -37,7 +37,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import Callable, Sequence
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from zoneinfo import ZoneInfo
@@ -54,7 +54,6 @@ from src.core.models import (
     PendingTrigger,
     SessionStatus,
     SlackOrigin,
-    TriggerStatus,
     utc_now,
 )
 from src.core.publish import PublishError, publish_artifact
@@ -71,11 +70,10 @@ from src.core.thread_entry import (
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
-    follow_floor,
     lost_summons,
     summon_prompt_tail,
 )
-from src.core.triggers import ArchivedSessionError, TriggerManager
+from src.core.triggers import TriggerManager
 
 if TYPE_CHECKING:
   import httpx
@@ -112,12 +110,6 @@ _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
     f"Per-message limit: {_MAX_POST_CHARS} characters. "
     "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
-
-# Thread-follow windows: a batch sleeps out this quiet delay from the newest
-# message, and a chain never runs past this cap from its first message, so a
-# steady trickle still flushes.
-_FOLLOW_QUIET_SECONDS = 45
-_FOLLOW_CHAIN_CAP_SECONDS = 300
 
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
@@ -396,14 +388,6 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
   return (message.get("subtype") is None and message.get("bot_id") is None and message.get("user") in allowed_user_ids)
 
 
-async def _armed_follow_triggers(trigger_mgr: TriggerManager, session_id: str) -> list[PendingTrigger]:
-  """The session's pending thread-follow trigger records (at most one by construction)."""
-  return [
-      t for t in await trigger_mgr.list_triggers(session_id)
-      if t.status == TriggerStatus.PENDING and t.message.startswith(_FOLLOW_TRIGGER_PREFIX)
-  ]
-
-
 def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
   """The armed follow trigger's label: the chain floor ts, the thread link, and the wake contract.
 
@@ -428,65 +412,25 @@ async def _arm_follow_trigger(
     permalink: str,
     floor_ts: str,
 ) -> PendingTrigger | None:
-  """Cancel-then-create the session's one persisted follow trigger; return the fresh record.
+  """Cancel-then-create the session's one persisted follow trigger; the shared core on the Slack platform.
 
-  The replaced record's ``created_at`` and floor ts are read BEFORE the cancel:
-  the new record is stamped with that same ``created_at`` — the chain's start —
-  so a steady trickle still flushes at ``chain_start + _FOLLOW_CHAIN_CAP_SECONDS``
-  no matter how many re-arms land, and the label keeps the chain's oldest
-  unacked ts as the floor. Returns None without arming when the session was
-  archived mid-flight: the thread-follow stops with its session.
+  Kept as the importable Slack name (the pending-trigger-limit tests call it
+  with the channel/thread arguments); the cancel-then-create mechanics, the
+  chain-start stamp, and the floor parse-back live in the shared core
+  (``thread_entry.arm_follow_trigger``).
   """
-  chain_start: datetime | None = None
-  for old in await _armed_follow_triggers(trigger_mgr, session_id):
-    if chain_start is None:  # exactly one armed record exists by construction
-      chain_start = old.created_at
-      parsed_floor = follow_floor(old.message)
-      if parsed_floor is not None:
-        floor_ts = parsed_floor
-    await trigger_mgr.cancel_trigger(session_id, old.id)
-  now = utc_now()
-  start = chain_start or now
-  fire_at = min(now + timedelta(seconds=_FOLLOW_QUIET_SECONDS), start + timedelta(seconds=_FOLLOW_CHAIN_CAP_SECONDS))
-  delay = max(0, int((fire_at - now).total_seconds()))
-  try:
-    # The re-arm is never rejected by the pending-trigger limit: it replaces its
-    # own record, and a thread's new message must never silently stop waking
-    # its session. Its record still counts toward the limit.
-    trigger = await trigger_mgr.create_trigger(
-        session_id,
-        delay,
-        _build_follow_wake_message(floor_ts, permalink),
-        created_at=start,
-        enforce_pending_limit=False,
-    )
-  except ArchivedSessionError as e:
-    # The archive raced the re-arm between the caller's ACTIVE check and the
-    # create: log and leave without a new trigger record.
-    logger.info(
-        "slack_follow_trigger_not_armed_archived",
-        session=session_id,
-        channel=channel_id,
-        thread_ts=thread_ts,
-        error=str(e))
-    return None
-  logger.info(
-      "slack_follow_trigger_armed",
-      session=session_id,
-      channel=channel_id,
-      thread_ts=thread_ts,
-      floor_ts=floor_ts,
-      fire_at=trigger.fire_at.isoformat(),
-      chain_start=start.isoformat())
-  return trigger
+  return await thread_entry.arm_follow_trigger(
+      SLACK,
+      trigger_mgr,
+      session_id,
+      floor=floor_ts,
+      wake_label=lambda floor: _build_follow_wake_message(floor, permalink),
+      log_fields={"channel": channel_id, "thread_ts": thread_ts})
 
 
 async def _cancel_armed_follow_triggers(trigger_mgr: TriggerManager, session_id: str) -> int:
-  """Cancel every armed thread-follow trigger of the session; return how many."""
-  armed = await _armed_follow_triggers(trigger_mgr, session_id)
-  for trigger in armed:
-    await trigger_mgr.cancel_trigger(session_id, trigger.id)
-  return len(armed)
+  """Cancel every armed thread-follow trigger of the session; the shared core on the Slack platform."""
+  return await thread_entry.cancel_armed_follow_triggers(SLACK, trigger_mgr, session_id)
 
 
 async def _consume_mention(

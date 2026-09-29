@@ -151,6 +151,14 @@ reports the in-process metrics unmeasured rather than measuring a stale tree (a 
 leave the checkout on its own branch after its pull request merges — the 2026-09-17 M108 history
 row is the ghost reading that produces).
 
+The blocks' execution contract homes in the sweep runner, `scripts/perf_sweep.py`: it runs the
+preflight, then every unit below verbatim in doc order, carrying one block's `export K=v` stdout
+lines into the same unit's later blocks (the M35/M55/M70/M71/M112/M120 builder→consumer pairs),
+bounding each block at 600 s, and removing every exported scratch path still on disk when the run
+ends — whatever the exit path. `--from <index|label>` re-runs a tail after a mid-sweep kill. A
+harness that runs the blocks without that contract tears the pairs: the consumer fails on the
+builder's missing env and the scratch copy leaks (priced in the 2026-09-29 history row).
+
 Preflight — pin the default checkout at `origin/main` before the first in-process collector:
 
 ```bash

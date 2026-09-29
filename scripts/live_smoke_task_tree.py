@@ -70,11 +70,16 @@ _REDACTIONS: list[str] = []
 
 
 def redact(text: str) -> str:
-    """Redact the synthetic key and the backend endpoint out of any log line."""
+    """Redact every registered secret out of any log line."""
     for secret in _REDACTIONS:
         if secret:
             text = text.replace(secret, "<redacted>")
     return text
+
+
+def register_secret(*secrets: str) -> None:
+    """Register one secret the log lines must never print; empty strings are dropped."""
+    _REDACTIONS.extend(secret for secret in secrets if secret)
 
 
 def log(message: str) -> None:
@@ -137,9 +142,8 @@ def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int,
     access_key = "smoke-operator-key-" + os.urandom(8).hex()
     (home / "credentials.yaml").write_text(
         f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    _REDACTIONS.extend(
-        secret for secret in (access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
-        if secret)
+    register_secret(
+        access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
     return port, access_key
 
 

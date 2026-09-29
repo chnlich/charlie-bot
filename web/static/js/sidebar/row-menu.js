@@ -3,9 +3,9 @@
 // renders a single div.row-menu appended to document.body, fixed-positioned
 // under the anchor's right edge (flipped above the anchor near the viewport
 // bottom, clamped inside the viewport horizontally), and closeRowMenu removes
-// it. The normal row's Settings button is the first anchor (groups.js's
-// openSessionRowMenu); archived rows and group headers attach in later
-// slices.
+// it. Every anchor is groups.js's: the normal row's openSessionRowMenu, the
+// archived row's variant of it (the button's data-row-menu marker picks the
+// archived item list) and the group header's openGroupHeaderMenu.
 // ---------------------------------------------------------------------------
 (function() {
   const Sidebar = globalThis.Sidebar;

@@ -224,9 +224,10 @@ function renderCronErrorBadge(brokenTasks) {
 // here, not in one renderer.
 const STAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z"/>`;
 
-// The one trash-can outline: real deletion only -- the archived row's Delete
-// permanently and the group header's Delete group below, and through the
-// namespace filters.js's delete-confirm modal (Sidebar.TRASH_SVG_PATH).
+// The one trash-can outline: real deletion only -- through the namespace
+// filters.js's delete-confirm modal (Sidebar.TRASH_SVG_PATH); the archived
+// row's Delete permanently and the group header's Delete group are menu
+// items now, not icons.
 const TRASH_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>`;
 
 // The one archive-box outline: the Archive action button (a normal row's and
@@ -241,9 +242,6 @@ const GEAR_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stro
 // The one right-chevron outline: the session-group collapse toggle and the
 // tree-row expand chevron below. Each call site keeps its own <svg> wrapper.
 const CHEVRON_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>`;
-
-// The one pencil outline: the session-group rename button.
-const PENCIL_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>`;
 
 // The one clock-badge body (face plus hands): renderScheduledBadge below.
 const PLUS_SVG_PATH = `<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>`;
@@ -309,11 +307,15 @@ function renderNewChildButton(s, activeBtnClass) {
 // The row's Settings hover button: opens the shared row menu (row-menu.js)
 // with the facts its items need as data attributes -- current group,
 // task-tree parent, profile, bound schedule task -- because openSessionRowMenu
-// below reads them off the anchor at click time. It owns its markup the way
-// the star does: the frame renderer takes no extra attributes.
-function renderSettingsButton(s, activeBtnClass) {
+// below reads them off the anchor at click time. The optional rowMenu argument
+// marks which item list the anchor's row builds: the archived row reuses the
+// markup and the data attributes (archived.js's [data-current-group] rewrite
+// included) and only the menu differs. It owns its markup the way the star
+// does: the frame renderer takes no extra attributes.
+function renderSettingsButton(s, activeBtnClass, rowMenu) {
+  const menuMarker = rowMenu ? ` data-row-menu="${rowMenu}"` : '';
   return `<button onclick="event.preventDefault(); event.stopPropagation(); openSessionRowMenu(this, '${s.id}')"
-          title="Settings"
+          title="Settings"${menuMarker}
           data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
           data-task-parent="${escapeHtmlAttr(s.task_parent_id || '')}"
           data-profile="${escapeHtmlAttr(s.profile || '')}"
@@ -331,6 +333,12 @@ function renderSettingsButton(s, activeBtnClass) {
 // manager adds one.
 function openSessionRowMenu(anchor, sessionId) {
   const attrs = anchor.dataset;
+  // The archived row reuses the Settings button's markup and data attributes;
+  // its marker picks the archived item list instead of the normal one.
+  if (attrs.rowMenu === 'archived') {
+    openArchivedRowMenu(anchor, sessionId);
+    return;
+  }
   const items = [{label: 'Rename', onSelect: (event) => startRename(event, sessionId)}];
   if (!attrs.taskParent) {
     items.push({label: 'Move to group…',
@@ -347,8 +355,35 @@ function openSessionRowMenu(anchor, sessionId) {
   openRowMenu(anchor, items);
 }
 
-// The one clock-plus outline: the group header's New scheduled task button.
-const CLOCK_PLUS_SVG_PATH = `<circle cx="11" cy="12" r="8" stroke-width="2"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 8v4l2.5 1.5M19 3v4m-2-2h4"/>`;
+// The archived row's Settings menu: each item keeps its old direct button's
+// condition -- a task-tree child moves with its parent (no group move) -- and
+// the delete keeps its red danger styling. A child's menu is the delete alone,
+// with no separator.
+function openArchivedRowMenu(anchor, sessionId) {
+  const attrs = anchor.dataset;
+  const items = [];
+  if (!attrs.taskParent) {
+    items.push({label: 'Move to group…',
+      onSelect: () => showGroupSelector(sessionId, attrs.currentGroup || null)});
+    items.push({separator: true});
+  }
+  items.push({label: 'Delete permanently', danger: true,
+    onSelect: () => confirmDeletePermanently(sessionId)});
+  openRowMenu(anchor, items);
+}
+
+// The named group header's Settings menu: the gear reads the group name off
+// its own data attribute at click time (no module-level state), and each item
+// keeps its old direct button's call.
+function openGroupHeaderMenu(anchor) {
+  const groupName = anchor.dataset.groupName;
+  openRowMenu(anchor, [
+    {label: 'New scheduled task', onSelect: () => createScheduledTaskInGroup(groupName)},
+    {label: 'Rename group', onSelect: () => renameGroup(groupName)},
+    {separator: true},
+    {label: 'Delete group', danger: true, onSelect: () => deleteGroup(groupName)},
+  ]);
+}
 
 // A bound node's clock badge: blue while the task is enabled, grey with the
 // Disabled line when it is not. One markup home for every view's row.
@@ -481,19 +516,9 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
       </button>
       <button data-group-name="${safeKey}"
-              onclick="event.stopPropagation(); createScheduledTaskInGroup(this.dataset.groupName)"
-              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="New scheduled task">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${CLOCK_PLUS_SVG_PATH}</svg>
-      </button>
-      <button data-group-name="${safeKey}"
-              onclick="event.stopPropagation(); renameGroup(this.dataset.groupName)"
-              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-blue-400 transition-opacity" title="Rename group">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PENCIL_SVG_PATH}</svg>
-      </button>
-      <button data-group-name="${safeKey}"
-              onclick="event.stopPropagation(); deleteGroup(this.dataset.groupName)"
-              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-red-400 transition-opacity" title="Delete group">
-        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${TRASH_SVG_PATH}</svg>
+              onclick="event.stopPropagation(); openGroupHeaderMenu(this)"
+              class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${GEAR_SVG_PATH}<circle cx="12" cy="12" r="3"/></svg>
       </button>` : '';
 
     html += `<div class="session-group group" data-sgroup-key="${safeKey}">
@@ -757,12 +782,6 @@ function renderSessionItem(s, filter, options = {}) {
   const activeBtnClass = isActive ? '!opacity-100' : '';
   const timeStr = s.updated_at ? relativeTime(s.updated_at) : '';
   const timeIso = s.updated_at || '';
-  const groupBtn = `
-    <button data-current-group="${s.group ? escapeHtmlAttr(s.group) : ''}"
-            onclick="event.preventDefault(); event.stopPropagation(); showGroupSelector('${s.id}', this.dataset.currentGroup || null)"
-            class="opacity-0 group-hover:opacity-100 p-1 hover:text-purple-400 transition-opacity flex-shrink-0 ${activeBtnClass}" title="Set group">
-      <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A2 2 0 013 12V7a4 4 0 014-4z"/></svg>
-    </button>`;
   // A projected legacy worker-thread row is read-only: no archive, star,
   // rename, group, create-child or Task & context action.
   let actions = '';
@@ -771,21 +790,17 @@ function renderSessionItem(s, filter, options = {}) {
   } else if (isContextRow) {
     actions = renderStarButton(s, activeBtnClass);
   } else if (isArchivedRow) {
+    // The archived row: three direct buttons; the group move and the delete
+    // moved into the archived Settings menu (openArchivedRowMenu above).
     actions = `
       ${renderStarButton(s, activeBtnClass)}
-      ${groupBtn}
       ${renderRowActionButton(
           `event.preventDefault(); event.stopPropagation(); unarchiveSession('${s.id}')`,
           'hover:text-green-400',
           'Unarchive',
           '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M7 10l5-5m0 0l5 5m-5-5v12"/>',
           activeBtnClass)}
-      ${renderRowActionButton(
-          `event.preventDefault(); event.stopPropagation(); confirmDeletePermanently('${s.id}')`,
-          'text-slate-500 hover:text-red-400',
-          'Delete permanently',
-          TRASH_SVG_PATH,
-          activeBtnClass)}`;
+      ${renderSettingsButton(s, activeBtnClass, 'archived')}`;
   } else if (isWorkerRow) {
     actions = renderArchiveButton(s, activeBtnClass);
   } else {
@@ -917,6 +932,7 @@ const GLOBALS = {
   toggleSessionGroupLimit,
   showGroupSelector,
   openSessionRowMenu,
+  openGroupHeaderMenu,
   toggleSessionGroup,
   renameGroup,
   deleteGroup,

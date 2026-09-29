@@ -397,6 +397,8 @@ async def handle_thread_message(
   (4) the session exists, is ACTIVE, and its slack_origin matches the channel;
   (5) the event ts is strictly above the session's watermark — None passes.
   A passed event arms (or re-arms) the session's one persisted follow trigger.
+  Guards 1 to 3 read the raw event here; guards 4 and 5 and the arming itself
+  are the shared core's (``thread_entry.follow_message``).
   """
   channel_id = event.get("channel")
   thread_ts = event.get("thread_ts")
@@ -410,15 +412,14 @@ async def handle_thread_message(
     return None
   team_id = event.get("team") or event.get("team_id")
   sid = summon_session_id(team_id, channel_id, thread_ts)
-  meta = await session_mgr.get_session(sid)
-  if (meta is None or meta.status != SessionStatus.ACTIVE or meta.slack_origin is None or
-      meta.slack_origin.channel_id != channel_id):
-    return None
-  if meta.slack_watermark_ts is not None and not (ts > meta.slack_watermark_ts):
-    return None
-  permalink = await client.get_permalink(channel_id, thread_ts)
-  trigger = await _arm_follow_trigger(trigger_mgr, sid, channel_id, thread_ts, permalink, ts)
-  return sid if trigger is not None else None
+  return await thread_entry.follow_message(
+      SlackThreadAdapter(client),
+      session_mgr,
+      trigger_mgr,
+      sid,
+      ts,
+      origin_matches=lambda origin: origin.channel_id == channel_id,
+  )
 
 
 async def _backfill_followed_threads(

@@ -59,8 +59,9 @@ notice pointing back to the server channels.
 import uuid
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import snowflake_key
+from src.core.config import CharlieBotConfig, get_credentials
+from src.core.discord_client import DiscordClient, snowflake_key
+from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.thread_entry import ThreadPlatform, summon_prompt_tail
 
@@ -177,3 +178,29 @@ def _build_follow_wake_message(floor: str, link: str) -> str:
       f"用 `{_READ_COMMAND}` 读线程里的新消息（本次返回的未读消息随之记为已读，本轮沉默也要先读）；"
       "回复之前从仓库重读 prompts/thread_reply_redline.md 与 prompts/thread_reply_format.md；"
       f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
+
+
+# ---------------------------------------------------------------------------
+# Message eligibility and the bot client
+# ---------------------------------------------------------------------------
+
+
+def _eligible_message(message: dict, allowed_user_ids: list[str]) -> bool:
+  """The message-eligibility rule both the follow path and the adapter's readback apply.
+
+  A message is eligible when a human authored it (no ``bot`` flag on the
+  author, no ``webhook_id`` on the message), it is a plain message or a reply
+  (type 0 or 19), and its author is allowed. Gate eligibility equals guard
+  eligibility, so nothing is demanded of an ack that the session would never
+  consume; the follow side restates the same rule against the raw payload.
+  """
+  author = message.get("author") or {}
+  return (
+      not author.get("bot") and message.get("webhook_id") is None and message.get("type") in (0, 19) and
+      author.get("id") in allowed_user_ids)
+
+
+def _bot_client() -> DiscordClient:
+  """The client every outbound path (reply, notice, backfill) posts through."""
+  creds = get_credentials()
+  return DiscordClient(get_http_client(), bot_token=str(creds.require("discord", "bot_token")))

@@ -40,7 +40,7 @@ import asyncio
 import json
 import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -70,6 +70,8 @@ from src.core.tasks import create_logged_task
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
 from src.core.thread_entry import (
+    ThreadAdapter,
+    ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
     chunk_text,
@@ -162,10 +164,6 @@ _FOLLOW_CHAIN_CAP_SECONDS = 300
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
 
-# Wire type of the persisted ack audit record. It mirrors the ET constants but
-# stays local: the ack record is a pure audit trail, consumed by nothing else.
-_ACK_EVENT_TYPE = "slack_ack"
-
 # The platform description every shared thread helper takes; each value keeps
 # its one home in the constants above.
 SLACK = ThreadPlatform(
@@ -176,9 +174,14 @@ SLACK = ThreadPlatform(
     max_post_chars=_MAX_POST_CHARS,
     follow_trigger_prefix=_FOLLOW_TRIGGER_PREFIX,
     id_key=str,
+    origin_field="slack_origin",
+    watermark_field="slack_watermark_ts",
+    id_label="ts",
+    mention_key="mention_ts",
+    block_keys=("channel_id", "thread_ts", "mention_ts"),
+    thread_fallback="(channel {channel_id}, thread {thread_ts})",
+    attaches_files=False,
 )
-# The derived ack wire type must spell the persisted one.
-assert SLACK.ack_event_type == _ACK_EVENT_TYPE
 
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
@@ -660,6 +663,42 @@ def _bot_client() -> SlackClient:
       app_token=str(creds.require("slack", "app_token")))
 
 
+class SlackThreadAdapter(ThreadAdapter):
+  """The round side's face onto the Slack Web API client.
+
+  Slack never receives files: its link swap publishes the linked pages and
+  swaps the URLs to the published ones, so ``post`` takes no attachment and
+  ``link_swap`` appends to nothing.
+  """
+
+  platform = SLACK
+
+  def __init__(self, client: SlackClient) -> None:
+    self._client = client
+
+  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
+    await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"])
+
+  async def remove_ack(self, block: dict) -> None:
+    await self._client.remove_reaction(block["channel_id"], _ACCEPTANCE_REACTION, block[self.platform.mention_key])
+
+  async def read_eligible(self, origin: SlackOrigin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+    messages = await self._client.get_thread_replies(origin.channel_id, origin.thread_ts)
+    return [
+        ThreadMessage(m["ts"], m.get("user"), m.get("text") or "")
+        for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
+    ]
+
+  def address_of(self, origin: SlackOrigin) -> dict:
+    return {"channel_id": origin.channel_id, "thread_ts": origin.thread_ts}
+
+  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
+    return _publish_swap(cfg), []
+
+  def log_fields(self, address: dict) -> dict:
+    return {"channel": address["channel_id"], "thread_ts": address["thread_ts"]}
+
+
 async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, text: str, *, session_id: str) -> bool:
   """Post one thread reply, retrying on failure; True when Slack accepted it.
 
@@ -796,9 +835,9 @@ async def ack_messages(
     await session_mgr.save_metadata(meta)
   await session_mgr.persist_and_broadcast(
       session_id, {
-          "type": _ACK_EVENT_TYPE,
+          "type": SLACK.ack_event_type,
           "content": f"Slack thread ack: {len(ids)} message(s) read through {ceiling}",
-          "slack_ack": {
+          SLACK.ack_event_type: {
               "message_ids": ids,
               "watermark_ts": watermark
           },

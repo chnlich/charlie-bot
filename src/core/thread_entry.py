@@ -12,8 +12,9 @@ reply, audit, backfill) stays in the entrypoint. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
 
+import abc
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,25 @@ class ThreadPlatform:
   max_post_chars: int
   follow_trigger_prefix: str
   id_key: Callable[[str], Any]
+  # ``SessionMetadata`` attribute holding the thread origin (``slack_origin``)
+  # and the newest consumed message id (``slack_watermark_ts``): the round
+  # side reads and writes both by these names.
+  origin_field: str
+  watermark_field: str
+  # The key naming a message id in readbacks and refusals (``ts`` for Slack):
+  # the 412 payload's per-message key, and the ack readback's
+  # ``watermark_<id_label>`` key.
+  id_label: str
+  # The summon-block key of the mention message (``mention_ts``); a block
+  # without it carries no ack to clear.
+  mention_key: str
+  # The summon-block keys a nudge copies from the summon it re-asks.
+  block_keys: tuple[str, ...]
+  # Formatted with the summon block when a summon prompt carries no link.
+  thread_fallback: str
+  # True when linked pages are uploaded as attachments instead of published
+  # (Slack publishes and swaps the URLs, so its swap appends to nothing).
+  attaches_files: bool
 
   @property
   def notice_key(self) -> str:
@@ -58,6 +78,67 @@ class ThreadPlatform:
   def ack_event_type(self) -> str:
     """Wire type of the platform's persisted ack audit record."""
     return f"{self.name}_ack"
+
+
+@dataclass(frozen=True)
+class ThreadMessage:
+  """One eligible thread message as the round side reads it.
+
+  ``id`` is the platform's message id (a Slack ts, a Discord snowflake), ``user``
+  its author (None when the platform names none), and ``text`` its text
+  (empty when the platform names none).
+  """
+
+  id: str
+  user: str | None
+  text: str
+
+
+class ThreadAdapter(abc.ABC):
+  """The per-platform posting face the round side works through.
+
+  One subclass per entrypoint wraps the platform's client: posting into the
+  thread, clearing the summon ack, reading the thread's eligible messages,
+  naming the thread (the ``address`` dict ``post`` accepts), rewriting the
+  reply's file links, and shaping the log fields that point at the thread.
+  The platform description rides on the class, so every core helper reads it
+  off the adapter it was handed.
+  """
+
+  platform: ThreadPlatform
+
+  @abc.abstractmethod
+  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
+    """Post one message into the thread *address* names.
+
+    *files* carries the attachments for platforms that receive them
+    (``attaches_files``); a platform whose swap publishes the linked pages
+    instead takes none. Raises on failure -- ``post_with_retry`` catches it.
+    """
+
+  @abc.abstractmethod
+  async def remove_ack(self, block: dict) -> None:
+    """Clear the summon ack the summon block *block* carries."""
+
+  @abc.abstractmethod
+  async def read_eligible(self, origin: Any, cfg: CharlieBotConfig) -> list[ThreadMessage]:
+    """The thread *origin* names' eligible messages, in platform order."""
+
+  @abc.abstractmethod
+  def address_of(self, origin: Any) -> dict:
+    """The address dict ``post`` accepts for the thread *origin* names."""
+
+  @abc.abstractmethod
+  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
+    """The rewrite swap for the reply's file links, plus the list it appends the files to attach to.
+
+    A platform whose swap publishes (Slack) appends to nothing; a platform
+    that uploads attachments appends every published-instead-linked file.
+    """
+
+  @abc.abstractmethod
+  def log_fields(self, address: dict) -> dict:
+    """The log fields naming the thread *address* points at."""
 
 
 class ThreadReplyError(Exception):

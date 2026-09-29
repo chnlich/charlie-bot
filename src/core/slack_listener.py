@@ -142,9 +142,6 @@ SLACK = ThreadPlatform(
     attaches_files=False,
 )
 
-# How much of an unread message's text the 412 refusal and the gate list carry.
-_TEXT_PREVIEW_CHARS = 200
-
 
 def summon_session_id(team_id: str, channel_id: str, thread_ts: str) -> str:
   """Return the deterministic session id for a Slack thread."""

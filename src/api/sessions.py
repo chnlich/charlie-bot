@@ -50,6 +50,7 @@ from src.core.config import (
     CharlieBotConfig,
     get_config,
     get_scheduled_tasks,
+    scheduled_tasks_fingerprint,
 )
 from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
@@ -365,6 +366,19 @@ _SCHEDULE_MODEL_NULLS = (
 )
 
 
+# The join's one-entry memo. The fields map is a pure function of the id set
+# and the cron snapshot's fingerprint (scheduled_tasks_fingerprint answers on
+# the same key get_scheduled_tasks reloads on), except schedule_next_run whose
+# answer stays valid until the fire time it names — the _NEXT_RUN_MEMO rule —
+# so the entry carries the earliest served fire and re-derives once now
+# crosses it. Callers read the map and never mutate it (apply_row_schedule
+# updates the row dump from it).
+_ROW_SCHEDULE_MEMO: tuple[object, tuple[str, ...], dict[str, dict], datetime] | None = None
+# An all-unbound answer holds no time-dependent field, so only the fingerprint
+# can retire it.
+_ROW_SCHEDULE_NO_FIRE = datetime.max.replace(tzinfo=UTC)
+
+
 def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
   """The schedule payload per listed row, keyed on ``bound_task_name`` (plan 4.1).
 
@@ -375,11 +389,19 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
   carries ``schedule_task: null`` and none of the four. ``next_run_iso`` serves
   each occurrence until it passes, so a delivered next run never goes stale.
   One snapshot of the task configs feeds both the predicate and the field
-  values, so a hot reload between the two reads cannot split the answer.
+  values, so a hot reload between the two reads cannot split the answer. A
+  repeat of an unchanged question (same id set, snapshot fingerprint, and no
+  served fire passed) serves the stored map whole.
   """
+  ids = tuple(sorted(set(session_ids)))
+  global _ROW_SCHEDULE_MEMO
+  hit = _ROW_SCHEDULE_MEMO
+  if (hit is not None and now_utc < hit[3] and hit[1] == ids and
+      scheduled_tasks_fingerprint() == hit[0]):
+    return hit[2]
   tasks = get_scheduled_tasks()
   out: dict[str, dict] = {}
-  for session_id in set(session_ids):
+  for session_id in ids:
     task_name = bound_task_name(session_id, tasks)
     if task_name is None:
       out[session_id] = {"schedule_task": None}
@@ -394,6 +416,11 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
         "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
         "schedule_allow_failure": task.allow_failure,
     }
+  fires = [
+      datetime.fromisoformat(fields["schedule_next_run"])
+      for fields in out.values() if fields["schedule_task"] is not None]
+  _ROW_SCHEDULE_MEMO = (
+      scheduled_tasks_fingerprint(), ids, out, min(fires) if fires else _ROW_SCHEDULE_NO_FIRE)
   return out
 
 

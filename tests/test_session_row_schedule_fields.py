@@ -137,6 +137,55 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
+    tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The one-entry memo serves the stored map while the question is unchanged.
+
+  Same id set and fingerprint serves the stored dicts whole (the hit the
+  sidebar lists' repeat polls pay); a new id set re-derives; a cron config
+  change re-derives through the fingerprint even inside the served fire
+  window; a now past a served fire re-derives with the next occurrence.
+  """
+  from datetime import UTC, datetime, timedelta
+
+  from src.api.sessions import row_schedule_fields
+
+  cfg, session_mgr, tree = build_env(tmp_path)
+  bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
+  other = await create_task(tree, parent=None, request_id="plain-1", profile="manager", name="Plain")
+  _write_bound_task(temp_home, "synthetic-daily", bound.id)
+  ids = (bound.id, other.id)
+  now = datetime.now(UTC)
+
+  first = row_schedule_fields(ids, now)
+  _assert_bound_row(first[bound.id], "synthetic-daily", enabled=True)
+  second = row_schedule_fields(ids, now + timedelta(seconds=1))
+  assert second == first
+  assert second[other.id] is first[other.id]  # the stored map served whole
+
+  assert set(row_schedule_fields((other.id,), now)) == {other.id}
+
+  _write_bound_task(temp_home, "synthetic-second", other.id)
+  rebound = row_schedule_fields(ids, now + timedelta(seconds=1))
+  assert rebound[other.id]["schedule_task"] == "synthetic-second"
+  assert rebound[bound.id] == first[bound.id]
+
+  # A served fire passing re-derives with the next occurrence: the shift moves
+  # the clock next_run_iso computes from (datetime.now under the task's
+  # timezone), the one source both memo layers read.
+  fire = datetime.fromisoformat(first[bound.id]["schedule_next_run"])
+
+  class _ShiftedDateTime(datetime):
+    @classmethod
+    def now(cls, tz=None):  # noqa: ANN001
+      return (datetime.now(UTC) + timedelta(hours=4)).astimezone(tz)
+
+  monkeypatch.setattr("src.api.cron.datetime", _ShiftedDateTime)
+  advanced = row_schedule_fields(ids, fire + timedelta(minutes=5))
+  assert datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
+
+
+@pytest.mark.asyncio
 async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_gone(
     tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)

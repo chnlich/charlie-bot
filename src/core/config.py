@@ -1279,6 +1279,16 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   return _refresh_cron_snapshot().tasks
 
 
+def scheduled_tasks_fingerprint() -> object:
+  """The current cron snapshot's fingerprint, refreshing the snapshot first.
+
+  The freshness key :func:`get_scheduled_tasks` itself answers on: an equal
+  value proves the task list unchanged since the caller last read it, so
+  derived fields keyed on it stay current until it moves.
+  """
+  return _refresh_cron_snapshot().fingerprint
+
+
 def get_scheduled_task_errors() -> list[ScheduledTaskError]:
   """Return one record per failing cron job file, sorted by name.
 

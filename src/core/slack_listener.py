@@ -38,7 +38,6 @@ log as scheduled-trigger events with no slack block, outside the audit.
 
 import asyncio
 import json
-import re
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta
@@ -65,6 +64,9 @@ from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
+# _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
+from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
+
 # CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
 from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
 from src.core.thread_entry import (
@@ -72,14 +74,9 @@ from src.core.thread_entry import (
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
-    event_by_id,
     follow_floor,
     lost_summons,
     newest_thread_input,
-    noticed,
-    nudged,
-    replied,
-    summon_of,
     summon_prompt_tail,
     unread_after,
 )
@@ -124,22 +121,6 @@ _PLATFORM_LINE = (
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
 
 _LOST_SUMMON_CONTENT = ("这条 Slack 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。")
-
-# Nudge event content: the summon round ended without a reply, so the master is
-# asked once whether the thread should hear something.
-_NUDGE_TEMPLATE = (
-    "Slack thread {link}: the round answering this mention ended without posting a reply\n"
-    "(no `charliebot slack reply` call). Decide now: when the thread should hear something, post it with\n"
-    "`charliebot slack reply --file <path>`; when there is nothing to say, end this round and the thread\n"
-    "gets a one-line notice pointing to this session.")
-
-# Thread-visible end state after a summon round and its nudge round both posted nothing.
-_NO_REPLY_NOTICE = (
-    "No reply was posted for this mention; the details are in the session log. "
-    "Mention me again for a thread answer.")
-
-# Session-log content of the notice marker; its ``slack_notice`` payload names the summon it closes.
-_NO_REPLY_CONTENT = "This Slack mention got no reply from its round or the nudge round; the thread was told so."
 
 # Thread-follow windows: a batch sleeps out this quiet delay from the newest
 # message, and a chain never runs past this cap from its first message, so a
@@ -671,8 +652,8 @@ class SlackThreadAdapter(ThreadAdapter):
   async def read_eligible(self, origin: SlackOrigin, cfg: CharlieBotConfig) -> list[ThreadMessage]:
     messages = await self._client.get_thread_replies(origin.channel_id, origin.thread_ts)
     return [
-        ThreadMessage(m["ts"], m.get("user"), m.get("text") or "")
-        for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
+        ThreadMessage(m["ts"], m.get("user"),
+                      m.get("text") or "") for m in messages if _eligible_thread_message(m, cfg.slack.allowed_user_ids)
     ]
 
   def address_of(self, origin: SlackOrigin) -> dict:
@@ -711,8 +692,7 @@ async def ack_messages(
   the Slack adapter; the refusal shapes, the ack event, and the readback keys
   live there.
   """
-  return await thread_entry.ack_messages(
-      SlackThreadAdapter(_bot_client()), session_id, message_ids, cfg, session_mgr)
+  return await thread_entry.ack_messages(SlackThreadAdapter(_bot_client()), session_id, message_ids, cfg, session_mgr)
 
 
 def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
@@ -746,101 +726,13 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
 # ---------------------------------------------------------------------------
 
 
-def _thread_link(summon: dict | None, slack_block: dict) -> str:
-  """The thread permalink as the summon prompt states it; channel and thread ids when it has none."""
-  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
-  if match is not None:
-    return match.group(0)
-  return f"(channel {slack_block['channel_id']}, thread {slack_block['thread_ts']})"
-
-
-async def _audit_round(
-    adapter: SlackThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
-    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
-  """Act on one finished round whose input carried a slack block; True when it acted.
-
-  Reads the log for the round's summon: a reply answering it ends the audit. A
-  summon round without one gets a nudge (once: a second done for the same
-  summon finds the nudge event); a nudge round without one gets the thread
-  notice (once: the ``slack_notice`` marker, persisted only after the post
-  succeeded, so a failed post leaves the boot audit a retry). A summon issued
-  under the marker contract (its prompt names no reply command) is outside
-  this audit.
-  """
-  summon_id = summon_of(target, input_event_id)
-  summon = event_by_id(events, summon_id)
-  if _REPLY_COMMAND not in ((summon or {}).get("content") or ""):
-    return False
-  if replied(SLACK, events, summon_id):
-    return False
-
-  if "nudge_of" not in target:
-    if nudged(SLACK, events, summon_id):
-      return False
-    content = _NUDGE_TEMPLATE.format(link=_thread_link(summon, target))
-    nudge = build_agent_message_event(content, from_session=session_id, from_session_name="Slack")
-    nudge["slack"] = {key: target[key] for key in ("channel_id", "thread_ts", "mention_ts") if key in target}
-    nudge["slack"]["nudge_of"] = summon_id
-    await session_mgr.persist_and_broadcast(session_id, nudge)
-    create_logged_task(
-        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
-        name=f"slack-nudge-{session_id}")
-    logger.info(
-        "slack_reply_nudge",
-        session=session_id,
-        channel=target["channel_id"],
-        thread_ts=target["thread_ts"],
-        summon_id=summon_id,
-        nudge_id=nudge["id"])
-    return True
-
-  if noticed(SLACK, events, summon_id):
-    return False
-  ok = await thread_entry.post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
-  if not ok:
-    return False  # slack_post_gave_up is logged; no marker, so the boot audit posts it later
-  await session_mgr.persist_and_broadcast(
-      session_id, {
-          "type": ET.ASSISTANT_ERROR,
-          "content": _NO_REPLY_CONTENT,
-          "slack_notice": {
-              ET.INPUT_EVENT_ID: summon_id
-          },
-      })
-  thread_entry.ack_clear(adapter, target, session_id)
-  logger.info(
-      "slack_reply_notice",
-      session=session_id,
-      channel=target["channel_id"],
-      thread_ts=target["thread_ts"],
-      summon_id=summon_id)
-  return True
-
-
 async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
-  Called as a fire-and-forget task from ``persist_and_broadcast`` for every
-  ``master_done``; returns False without acting unless the round belongs to a
-  Slack session and answered a summon or a nudge. Guard-path dones
-  (src/api/chat.py) carry no input_event_id and browser-typed rounds carry no
-  slack block, so both leave the thread alone.
+  One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
+  the Slack adapter; the audit gate, the nudge, and the notice live there.
   """
-  meta = await session_mgr.get_session(session_id)
-  if meta is None or meta.slack_origin is None:
-    return False
-  input_event_ids = master_done_input_event_ids(done)
-  if not input_event_ids:
-    return False
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  # The round-end audit targets the same input the reply binding does: the
-  # newest Slack-bearing one of the batch.
-  bound = newest_thread_input(SLACK, events, input_event_ids)
-  if bound is None:
-    return False
-  input_event_id, target = bound
-  return await _audit_round(SlackThreadAdapter(_bot_client()), session_id, events, target, input_event_id, cfg,
-                            session_mgr)
+  return await thread_entry.deliver_done(SlackThreadAdapter(_bot_client()), session_id, done, cfg, session_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -912,7 +804,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
       if bound is None:
         continue
       done_input_id, target = bound
-      if await _audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
+      if await thread_entry.audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
         reported += 1
         # The action appended an event the next done's predicates must see.
         events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)

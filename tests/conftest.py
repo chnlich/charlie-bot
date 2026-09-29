@@ -1256,6 +1256,11 @@ SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create
 # the stand-in on the src.core.thread_entry module attribute.
 THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.thread_entry.create_logged_task"
 
+# Import-path patch target for the master wake the shared thread core's round-end
+# audit fires (the nudge): once the audit moves into src/core/thread_entry.py, mock
+# setattrs the stand-in on the src.core.thread_entry module attribute.
+THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.core.thread_entry.trigger_master"
+
 # Import-path patch target for the Slack client factory every listener outbound path posts
 # through. src/core/slack_listener.py defines _bot_client at module scope, and its handlers
 # and reply/backfill helpers resolve the name at call time, so mock setattrs the stand-in

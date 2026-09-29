@@ -12,9 +12,8 @@ import pytest
 from conftest import (
     PUBLISH_BASE_URL,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
-    SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
-    SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
     THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
+    THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
     build_slack_cfg,
     make_task_spawner,
@@ -73,9 +72,9 @@ def _listener_seam(
 ) -> Iterator[None]:
   """Patch the slack_listener module seams; the seam wiring lives here and nowhere else.
 
-  ``_bot_client`` always returns *client*. *tasks* feeds ``create_logged_task``'s
-  task spawner (both seams the ack and nudge tasks are created through),
-  *trigger* replaces ``trigger_master``, *queued* pins
+  ``_bot_client`` always returns *client*. *tasks* feeds the thread core's
+  ``create_logged_task`` (the ack and nudge task spawner), *trigger* replaces the
+  thread core's ``trigger_master``, *queued* pins
   ``master_cc.queued_user_event_ids``; each stays unpatched when its argument is
   None. Any further patch a test needs (retry delays, log capture) stays visible
   at the call site as a sibling context.
@@ -83,10 +82,9 @@ def _listener_seam(
   with contextlib.ExitStack() as stack:
     stack.enter_context(patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client))
     if tasks is not None:
-      stack.enter_context(patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
       stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     if trigger is not None:
-      stack.enter_context(patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger))
+      stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, trigger))
     if queued is not None:
       stack.enter_context(patch(_QUEUED_USER_EVENT_IDS_PATCH_TARGET, return_value=queued))
     yield

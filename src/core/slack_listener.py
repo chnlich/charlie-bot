@@ -75,6 +75,7 @@ from src.core.thread_entry import (
     ThreadReplyError,
     chunk_text,
     event_by_id,
+    summon_of,
     summon_prompt_tail,
 )
 from src.core.triggers import ArchivedSessionError, TriggerManager
@@ -718,11 +719,6 @@ def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
       name=f"slack-ack-clear-{session_id}")
 
 
-def _summon_of(slack_block: dict, event_id: str) -> str:
-  """The summon a round with this slack block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
-  return slack_block.get("nudge_of") or event_id
-
-
 # ---------------------------------------------------------------------------
 # Reply: the master posts to its own thread
 # ---------------------------------------------------------------------------
@@ -923,7 +919,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
     if fresh is not None and fresh.master_run is not None:
       input_event_ids = fresh.master_run.user_event_ids
   bound = _newest_slack_input(events, input_event_ids)
-  answers = _summon_of(bound[1], bound[0]) if bound is not None else None
+  answers = summon_of(bound[1], bound[0]) if bound is not None else None
   origin = meta.slack_origin
   client = _bot_client()
   bodies = chunk_text(text, SLACK.max_post_chars)
@@ -1008,7 +1004,7 @@ async def _audit_round(
   under the marker contract (its prompt names no reply command) is outside
   this audit.
   """
-  summon_id = _summon_of(target, input_event_id)
+  summon_id = summon_of(target, input_event_id)
   summon = event_by_id(events, summon_id)
   if _REPLY_COMMAND not in ((summon or {}).get("content") or ""):
     return False

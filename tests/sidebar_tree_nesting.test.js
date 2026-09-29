@@ -300,6 +300,9 @@ test('a normal row\u2019s direct buttons end in Settings carrying the menu facts
 
 test('openSessionRowMenu builds the item list from the button\u2019s data attributes', () => {
   const {context} = buildSidebarIndicatorContext([]);
+  // The touch branch keys off (hover: none) at open time; the desktop list is
+  // asserted with the media query not matching.
+  context.window.matchMedia = (query) => ({matches: false, media: query});
   const calls = [];
   const click = {preventDefault() {}, stopPropagation() {}};
   context.openTaskContextModal = (...args) => calls.push(['taskContext', ...args]);
@@ -350,6 +353,54 @@ test('openSessionRowMenu builds the item list from the button\u2019s data attrib
   calls.length = 0;
   items[2].onSelect(click);
   assert.deepEqual(calls, [['edit', 'task-cron1']]);
+});
+
+test('touch menus lead with the Later toggle and child creation and trail with Archive', () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  context.window.matchMedia = (query) => ({matches: true, media: query});
+  // The starred state is read off the row's star button (filters.js's
+  // in-place repaint flips text-yellow-400); only the starred row's id
+  // resolves here.
+  context.document.getElementById = (id) =>
+    id === 'star-r1' ? createElement({className: 'star-btn text-yellow-400 !opacity-100'}) : null;
+  const calls = [];
+  const click = {preventDefault() {}, stopPropagation() {}};
+  context.toggleSessionStar = (...args) => calls.push(['star', ...args]);
+  context.createChildSession = (...args) => calls.push(['child', ...args]);
+  context.archiveSession = (...args) => calls.push(['archive', ...args]);
+  let items = null;
+  context.openRowMenu = (anchor, built) => { items = built; };
+  const open = (dataset, id) => {
+    context.Sidebar.openSessionRowMenu(createElement({tagName: 'BUTTON', dataset}), id);
+    // Separators render as dashes so the label order reads in one list.
+    return [...items].map((item) => item.separator ? '---' : item.label);
+  };
+
+  // A root manager: the two touch-only leads, the desktop items in their
+  // order, then the separator and Archive.
+  assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'm1'),
+    ['Add to Later', 'New child session', 'Rename', 'Move to group\u2026', 'Task & context',
+     'Add schedule\u2026', '---', 'Archive']);
+  items[0].onSelect(click);
+  items[1].onSelect(click);
+  items[items.length - 1].onSelect(click);
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['star', 'm1', false],
+    ['child', 'm1'],
+    ['archive', 'm1'],
+  ]);
+
+  // A task-tree child keeps the desktop order minus Move to group.
+  assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
+    ['Add to Later', 'New child session', 'Rename', 'Task & context', 'Add schedule\u2026', '---', 'Archive']);
+
+  // A starred row reads its state off the star button (only star-r1 resolves
+  // to the repainted solid star): Remove from Later toggles away from
+  // starred.
+  assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1').slice(0, 1),
+    ['Remove from Later']);
+  items[0].onSelect(click);
+  assert.deepEqual(calls.at(-1), ['star', 'r1', true]);
 });
 
 test('the active session’s ancestors open once per switch and a manual collapse then holds', () => {

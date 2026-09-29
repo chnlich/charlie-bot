@@ -577,10 +577,17 @@ def test_charliebot_capture_parity_with_the_collect_rows(tmp_path: Path, monkeyp
       model=None,
       session_ids=[],
       results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 6))])
-  cb.master("s1", "20260913T000000Z", [
-      {"type": "context", "model": "openai/zai-org/GLM-5.4-Flash"},
-      {"type": "result", "usage": _result_usage(300, 7)},
-  ])
+  cb.master(
+      "s1", "20260913T000000Z", [
+          {
+              "type": "context",
+              "model": "openai/zai-org/GLM-5.4-Flash"
+          },
+          {
+              "type": "result",
+              "usage": _result_usage(300, 7)
+          },
+      ])
   cache = tmp_path / "cache.json"
 
   tally = _collect(None, None, tmp_path / "db.sqlite", cache, sessions=cb.root)
@@ -598,15 +605,20 @@ def test_charliebot_capture_parity_with_the_collect_rows(tmp_path: Path, monkeyp
         (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output, cr.calls)
 
 
-def test_charliebot_codex_thread_excluded_by_the_captured_rollout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A codex-type thread whose session id has a captured rollout is excluded by the ledger's
   any-match rule; deleting the rollout file and re-capturing changes no row — the fallback
   rows stay stored but excluded, and the native rows are never deleted."""
   _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
   sid = "rolloutsid1"
   codex = Codex(tmp_path)
-  _codex_rollout(codex, sid, "codex-gpt5", {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                 {"total_tokens": 47}, "2026-09-10T00:00:00Z")
+  _codex_rollout(
+      codex, sid, "codex-gpt5", {
+          "input_tokens": 60,
+          "cached_input_tokens": 20,
+          "output_tokens": 7
+      }, {"total_tokens": 47}, "2026-09-10T00:00:00Z")
   cb = Charliebot(tmp_path)
   cb.thread(
       "s1",
@@ -628,12 +640,14 @@ def test_charliebot_codex_thread_excluded_by_the_captured_rollout(tmp_path: Path
     assert _ledger_rows(ledger) == rows
 
 
-def test_charliebot_fallback_rows_count_until_the_cli_log_is_captured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_charliebot_fallback_rows_count_until_the_cli_log_is_captured(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A codex-type thread with no rollout anywhere and a claude-type thread with no Claude
   transcript are counted as fallback rows; capturing the Claude transcript whose stem the
   thread's session id names retires that row, while the codex thread's row stays."""
-  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"),
-                 _Option("claude-sonnet", "claude", "anthropic/claude-sonnet-4"))
+  _stub_registry(
+      monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"),
+      _Option("claude-sonnet", "claude", "anthropic/claude-sonnet-4"))
   cb = Charliebot(tmp_path)
   cb.thread(
       "s1",

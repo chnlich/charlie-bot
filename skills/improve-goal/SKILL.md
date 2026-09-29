@@ -25,13 +25,15 @@ When writing the `--goal-file` content for an improve loop:
 
 ## Master Discipline During Loop Execution
 
-On every iteration wake, read the report file at `report_path` and audit it against the live goal: its verdict is present, the goal-declared KPI readings are present, and the work direction is consistent with the goals' priority order. Do not trust the payload summary as the audit input — read the report file itself.
+Each judged iteration delivers one child report to the manager, and the delivery wakes the master. The report summary starts with the header `[Improve loop <loop id> · iteration <i>/<total>] report_valid=<true|false>`; when the iteration is invalid the header continues with `[invalid: <reason>]`, and it always carries `tip=<sha>`, `commits_added=<n>` and `report=<path>` before the closing `Audit per the improve-goal skill.` and the iteration summary. `report_valid`, `tip` and the report path are read from that header.
 
-Drift signals are: `report_valid` being false (in the wake payload), or the semantic audit failing.
+The header is the wake's index, not the audit input. The audit reads the report file at the header's `report` path itself and checks it against the live goal: its verdict is present, the goal-declared KPI readings are present, and the work direction is consistent with the goals' priority order. The delivered summary is never the audit input.
 
-When a drift signal is present, the master may edit `goal.md` without waiting for the user, but only in two allowed shapes: appending constraints to a `## Steering appendix` section at the end of `goal.md` (created on first use), or reordering the existing numbered goals. No other byte of `goal.md` may change — KPI numbers, acceptance lines, the iteration count, and the merge-back setting therefore sit in the immutable region by construction.
+Drift signals are `report_valid=false` in the header, or a failing semantic audit.
 
-Every such edit must be quoted as a full diff in the master's chat report. If the user reverts `goal.md`, the edit is undone and takes effect starting the next iteration.
+When a drift signal is present, the master may edit `goal.md` without waiting for the user, but only in two allowed shapes: appending constraints to a `## Steering appendix` section at the end of `goal.md` (created on first use), or reordering the existing numbered goals. No other byte of `goal.md` may change; KPI numbers, acceptance lines, the iteration count, and the merge-back setting therefore sit in the immutable region by construction.
+
+Every such edit is quoted as a full diff in the master's chat report. If the user reverts `goal.md`, the edit is undone and takes effect starting the next iteration.
 
 Stopping or cancelling the loop still requires explicit user approval. Without a drift signal, no edit.
 

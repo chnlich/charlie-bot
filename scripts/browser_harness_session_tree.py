@@ -1965,7 +1965,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                           return {{
                             row: {{x: r.x, y: r.y, w: r.width, h: r.height,
                                   padLeft: parseFloat(cs.paddingLeft), padRight: parseFloat(cs.paddingRight)}},
-                            name: n ? {{x: n.x, w: n.width, right: n.right}} : null,
+                            name: n ? {{x: n.x, y: n.y, w: n.width, h: n.height, right: n.right}} : null,
                             line: l ? {{w: l.width, right: l.right}} : null,
                             buttons: buttons,
                             starFill: (() => {{
@@ -2050,6 +2050,35 @@ async def run_harness(args: argparse.Namespace) -> None:
                             f"the hovered actions sit on the panel+tint cover: {cover}")
                 assert_true(all(c["coversText"] for c in cover),
                             f"the strip covers the text end (name right {name['right']:.1f}px): {cover}")
+                # The stretched cover: each revealed button's box reaches the
+                # row's top and bottom edges, so no sliver of the name or the
+                # second line shows above or below the strip, and the
+                # hit-test 2px under the name's top edge lands on the cover,
+                # not on the name.
+                extents = sorted(((b["title"], b["y"], b["y"] + b["h"]) for b in hovered["buttons"]),
+                                 key=lambda t: t[1])
+                assert_true(all(b["y"] <= hrow["y"] + 1 and b["y"] + b["h"] >= hrow["y"] + hrow["h"] - 1
+                                for b in hovered["buttons"]),
+                            f"each revealed button spans the row's full height "
+                            f"(row y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px, buttons "
+                            f"{[(t[0], round(t[1], 1), round(t[2], 1)) for t in extents]})")
+                log("    s29 cover extents: row y {:.1f}..{:.1f}px; {}".format(
+                    hrow["y"], hrow["y"] + hrow["h"],
+                    ", ".join(f"{t[0]} y {t[1]:.1f}..{t[2]:.1f}px" for t in extents)))
+                probe = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const row = document.getElementById('session-{ids['ops_mid']}');
+                      const star = row.querySelector('button[title="Star"]');
+                      const nr = row.querySelector('.session-name').getBoundingClientRect();
+                      const sr = star.getBoundingClientRect();
+                      const el = document.elementFromPoint(sr.left + sr.width / 2, nr.top + 2);
+                      return {{found: !!el, inside: !!el && (el === star || star.contains(el)),
+                              tag: el ? el.tagName : null, title: el ? (el.title || '') : null}};
+                    }})()
+                """)
+                assert_true(probe["inside"],
+                            f"elementFromPoint at the Star slot 2px under the name's top edge "
+                            f"(y {hname['y'] + 2:.1f}px) returns the button, not the name: {probe}")
                 await unhover()
                 await wait_for(cdp, session_id, f"""
                     [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
@@ -2179,7 +2208,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("a row's actions take no width until the row is hovered", ok=True,
                                detail=(f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
                                        f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
-                                       f"exposes Star/New child session/Archive/Settings on the opaque cover; "
+                                       f"exposes Star/New child session/Archive/Settings on the opaque cover, each "
+                                       f"button spanning the row's full height y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px; "
                                        f"current row in flow; starred rest star toggles in place, no list repaint"),
                                screenshot=shot)
             except Exception as exc:

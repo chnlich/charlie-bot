@@ -107,8 +107,8 @@ ON CONFLICT(record_id) DO UPDATE SET
 # false, so NOT EXISTS keeps it — and lets the planner scan the covering index
 # usage_group_cover for the GROUP BY outright instead of a MULTI-INDEX OR with a temp
 # B-tree, a plan that also leans on ANALYZE statistics this ledger does not keep. An
-# unknown stored kind is rejected at read time by the RecordKind conversion before
-# this query runs.
+# unknown stored kind is rejected at read time by the RecordKind conversion over the
+# grouped rows this query returns.
 _COUNTED_WHERE_SQL = """
 WHERE NOT EXISTS (
   SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session

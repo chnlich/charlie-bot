@@ -1001,6 +1001,12 @@ def assert_true(cond: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+# The one sidebar-ready gate every navigation in this harness waits on: at least one
+# sidebar row has rendered. The row markup lives in web/static/js/sidebar/groups.js,
+# which is the file whose class names must match this predicate.
+SIDEBAR_READY = "document.querySelectorAll('#session-list .session-name').length >= 1"
+
+
 async def wait_for(cdp: CDP, session_id: str, expression: str, timeout: float = 10.0,
                    label: str | None = None) -> object:
     """Poll a page expression until truthy; a timeout is an explicit failure."""
@@ -1163,7 +1169,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             # ---- S1: desktop load; the session tree is the primary navigation --
             try:
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
                 names = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
@@ -1327,7 +1333,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s20: name readability at depth")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await expand_to(cdp, session_id, [ids["ops_root"]])
 
                 async def assert_readable(node_id: str, label: str) -> dict:
@@ -1393,7 +1399,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .filter(k => !document.getElementById(k + '-{live_parent}').classList.contains('hidden'))
                 """
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await expand_to(cdp, session_id, [ids["root"], live_parent])
                 await reveal_row(cdp, session_id, live)
                 await wait_for(cdp, session_id,
@@ -1549,7 +1555,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s22: legacy thread view")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['legacy']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 row = await evaluate(cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['legacy_thread']}');
@@ -1625,7 +1631,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .filter(k => !document.getElementById(k + '-{ids['feature']}').classList.contains('hidden'))
                 """
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 # Collapsed root: the mark stands in for the child's unread reply.
                 await wait_for(cdp, session_id, f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
                                timeout=60, label="the collapsed root shows the subtree mark for the child's unread reply")
@@ -1675,7 +1681,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s24: withheld run")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 # The worker transcript's Run header reads "withheld · <reason>".
                 withheld_text = f"withheld · task {ids['withhold_worker']} is cancelled"
                 await wait_for(cdp, session_id,
@@ -1704,7 +1710,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s25: the three view pills")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 labels = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#sidebar-filter-pills .filter-pill')].map(b => b.textContent.trim())
                 """)
@@ -1913,7 +1919,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s29: hover reveal action buttons")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await expand_to(cdp, session_id, [ids["ops_root"]])
                 await reveal_row(cdp, session_id, ids["ops_mid"])
                 cdp.drain_list_fetches()
@@ -2177,7 +2183,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             try:
                 log("  s30: the desktop row menus' item lists")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await expand_to(cdp, session_id, [ids["root"], ids["ops_root"]])
                 measured = []
                 for name, node_id, expected in [
@@ -2266,7 +2272,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true((emu["width"], emu["height"]) == (412, 915),
                             f"the emulated viewport is 412x915: {emu}")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await evaluate(cdp, session_id, "toggleMobileSidebar()")
                 await wait_for(cdp, session_id,
                                "document.getElementById('sidebar').classList.contains('open')",
@@ -2442,7 +2448,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(cover["hoverNone"] and (cover["width"], cover["height"]) == (280, 800),
                             f"the cover emulation is 280x800 touch: {cover}")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await wait_for(cdp, session_id, SIDEBAR_READY)
                 await evaluate(cdp, session_id, "toggleMobileSidebar()")
                 await wait_for(cdp, session_id,
                                "document.getElementById('sidebar').classList.contains('open')",
@@ -2501,7 +2507,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                            {"mobile": False, "width": int(base_w), "height": int(base_h),
                             "deviceScaleFactor": 1}, session_id=session_id)
             await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-            await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+            await wait_for(cdp, session_id, SIDEBAR_READY)
             restored = json.loads(await evaluate(cdp, session_id, """
                 JSON.stringify({
                   size: window.innerWidth + 'x' + window.innerHeight,

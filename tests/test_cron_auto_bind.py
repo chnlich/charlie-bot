@@ -26,6 +26,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     apply_config_overrides,
+    bind_deps_managers,
     make_legacy_cron_session,
     patch_instructions_content,
     write_cron_task,
@@ -34,7 +35,6 @@ from conftest import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api import deps
 from src.api.cron import router as cron_router
 from src.api.deps import get_session_manager, get_task_manager
 from src.api.sessions import router as sessions_router
@@ -101,8 +101,7 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
-  monkeypatch.setattr(deps, "_task_manager", tree)
-  monkeypatch.setattr(deps, "_session_manager", session_mgr)
+  bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
   return cfg, session_mgr, tree, scheduler, temp_home
 

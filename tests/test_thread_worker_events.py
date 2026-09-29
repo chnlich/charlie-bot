@@ -63,3 +63,27 @@ def test_partial_trailing_line_waits_for_completion(tmp_path: Path) -> None:
     f.write(' [{"type": "text", "text": "second"}]}}\n')
   events = threads_api.read_thread_worker_events(path)
   assert [e.content for e in events if e.type == "assistant"] == ["first", "second"]
+
+
+def test_full_body_store_requires_the_snapshot_token(tmp_path: Path) -> None:
+  path = tmp_path / "events.jsonl"
+  _write_events(path, [_assistant_block("hello", tool_id="t1")])
+  threads_api.read_thread_worker_events(path)
+  snap = threads_api._thread_events_snapshot(path)
+  assert snap is not None
+  _rows, entry, offset = snap
+
+  # A concurrent poller consumes an append: the projection moves past the
+  # snapshot, and the stale render must not land on it.
+  with path.open("a", encoding="utf-8") as f:
+    f.write(_tool_result_block("t1", "out"))
+  threads_api.read_thread_worker_events(path)
+  threads_api.store_thread_events_full_body(path, b"stale", entry, offset)
+  assert threads_api.stored_thread_events_full_body(path) is None
+
+  # A fresh snapshot's render stores and serves.
+  snap = threads_api._thread_events_snapshot(path)
+  assert snap is not None
+  _rows, entry, offset = snap
+  threads_api.store_thread_events_full_body(path, b"fresh", entry, offset)
+  assert threads_api.stored_thread_events_full_body(path) == b"fresh"

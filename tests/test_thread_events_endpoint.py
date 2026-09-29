@@ -38,7 +38,7 @@ EVENTS = [
 ]
 
 
-async def _client_with_log(tmp_path: Path) -> tuple[TestClient, str]:
+async def _client_with_log(tmp_path: Path) -> tuple[TestClient, str, Path]:
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
   thread_mgr = ThreadManager(cfg)
@@ -50,12 +50,13 @@ async def _client_with_log(tmp_path: Path) -> tuple[TestClient, str]:
   app = FastAPI()
   app.include_router(threads_router, prefix="/api/threads")
   app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
-  return TestClient(app), f"/api/threads/{session.id}/threads/{meta.id}/events"
+  url = f"/api/threads/{session.id}/threads/{meta.id}/events"
+  return TestClient(app), url, path
 
 
 @pytest.mark.asyncio
 async def test_after_envelope_slice_reset_and_rejection(tmp_path: Path) -> None:
-  client, url = await _client_with_log(tmp_path)
+  client, url, _path = await _client_with_log(tmp_path)
   full = client.get(url).json()
   assert isinstance(full, list)  # no-after keeps the plain-list shape
   assert [e["type"] for e in full] == ["assistant", "ping", "complete"]
@@ -68,3 +69,21 @@ async def test_after_envelope_slice_reset_and_rejection(tmp_path: Path) -> None:
   reset = client.get(url, params={"after": 99}).json()
   assert reset["reset"] is True and reset["events"] == full
   assert client.get(url, params={"after": -1}).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_full_fetch_serves_stored_render_and_renders_after_append(tmp_path: Path) -> None:
+  client, url, _path = await _client_with_log(tmp_path)
+  first = client.get(url)
+  second = client.get(url)
+  # The unchanged-log re-open rides the stored render: byte-identical body.
+  assert second.content == first.content
+  assert second.json() == first.json()
+
+  with _path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps({"type": "ping", "timestamp": "2026-09-02T10:00:03Z"}) + "\n")
+  third = client.get(url)
+  # The append dropped the stored render, so the re-render carries the new row.
+  assert [e["type"] for e in third.json()] == ["assistant", "ping", "complete", "ping"]
+  reopened = client.get(url)
+  assert reopened.content == third.content

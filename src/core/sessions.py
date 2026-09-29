@@ -1083,6 +1083,7 @@ class SessionManager:
         name=name,
         backend=backend or self._cfg.backends.options[0].id,
         slack_origin=req.slack_origin,
+        discord_origin=req.discord_origin,
         group=req.group,
         **overrides)
 

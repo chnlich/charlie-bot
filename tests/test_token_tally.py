@@ -10,6 +10,7 @@ from __future__ import annotations
 import io
 import json
 import shutil
+import sqlite3
 from pathlib import Path
 from typing import Any
 
@@ -927,3 +928,171 @@ def test_capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothi
         str(runs.root / "s1" / "data" / "runs" / "r-done" / "agent.raw.ndjson"),
     }  # the resultless file is marked captured too: never re-parsed
     assert _capture_runs(ledger, runs.root) == 0
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture (capture_opencode / capture_usage / capture_local)
+# ---------------------------------------------------------------------------
+
+
+class Opencode:
+  """Synthetic opencode db: the message table schema and rows the real one carries."""
+
+  def __init__(self, tmp_path: Path) -> None:
+    self.db = tmp_path / "opencode.db"
+    con = sqlite3.connect(self.db)
+    try:
+      con.execute(
+          "create table message(id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER,"
+          " time_updated INTEGER, data TEXT)")
+      con.commit()
+    finally:
+      con.close()
+
+  def write(
+      self,
+      mid: str,
+      updated: int,
+      usage: dict,
+      session: str = "sess-a",
+      model: str = NAME,
+      provider: str = "anthropic",
+  ) -> None:
+    """Insert or replace one assistant message row; *updated* is its time_updated."""
+    data = {
+        "role": "assistant",
+        "modelID": model,
+        "providerID": provider,
+        "time": {"created": 1_700_000_000_000},
+        "tokens": {
+            "input": usage["input_tokens"],
+            "output": usage["output_tokens"],
+            "total": usage["input_tokens"] + usage["output_tokens"],
+            "cache": {
+                "write": usage["cache_creation_input_tokens"],
+                "read": usage["cache_read_input_tokens"],
+            },
+        },
+    }
+    con = sqlite3.connect(self.db)
+    try:
+      con.execute(
+          "insert or replace into message(id, session_id, time_created, time_updated, data)"
+          " values (?, ?, ?, ?, ?)", (mid, session, 1_700_000_000_000, updated, json.dumps(data)))
+      con.commit()
+    finally:
+      con.close()
+
+  def delete(self, mid: str) -> None:
+    con = sqlite3.connect(self.db)
+    try:
+      con.execute("delete from message where id = ?", (mid,))
+      con.commit()
+    finally:
+      con.close()
+
+
+def test_opencode_capture_parity_with_the_collect_rows(tmp_path: Path) -> None:
+  """Every ledger row equals the matching collect row on source, model, the four token
+  fields and calls: the capture projects the db through the same row function the collect
+  reads, so a zero-token row drops from both and neither invents the other's rows."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 30))
+  oc.write("m2", 200, _usage(50, 5), model="gpt-5", provider="openai")
+  oc.write("m3", 300, _usage(0, 0))  # zero tokens: no record in either path
+
+  tally = _collect(None, None, oc.db)
+  collect_rows = {(r.source, r.model): r for r in tally.rows if r.source == "opencode"}
+  assert set(collect_rows) == {("opencode", NAME), ("opencode", "gpt-5")}
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "opencode"}
+  assert set(ledger_rows) == set(collect_rows)
+  for key, lr in ledger_rows.items():
+    cr = collect_rows[key]
+    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output, lr.calls) == \
+        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output, cr.calls)
+
+
+def test_capture_opencode_rereads_updated_rows_and_keeps_deleted_rows_stored(tmp_path: Path) -> None:
+  """A row moved to a higher time_updated is re-read and upserted over its stored record;
+  rows deleted from the db afterwards leave the ledger rows untouched — the ledger contains
+  no DELETE, so its rows outlive the db they were parsed from."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 10))
+  oc.write("m2", 200, _usage(200, 20))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+
+    oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
+    row = _ledger_row(ledger, "opencode", NAME)
+    assert (row.in_fresh, row.output, row.calls) == (100 + 222, 10 + 22, 2)
+
+    before = ledger.model_rows()
+    oc.delete("m1")
+    oc.delete("m2")
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    assert ledger.model_rows() == before
+
+
+def test_capture_opencode_skips_an_unchanged_db_and_never_writes_to_it(tmp_path: Path) -> None:
+  """A db whose probe signature the ledger already recorded writes nothing on the second
+  call; the db opens read-only, so the capture leaves its bytes, mtime and directory
+  untouched, and a missing db contributes nothing."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 10))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert tt.capture_opencode(ledger, "host-a", tmp_path / "absent.sqlite") == 0
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1
+
+    sig_before = (oc.db.stat().st_mtime_ns, oc.db.stat().st_size)
+    files_before = sorted(p.name for p in tmp_path.iterdir())
+    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    assert (oc.db.stat().st_mtime_ns, oc.db.stat().st_size) == sig_before
+    assert sorted(p.name for p in tmp_path.iterdir()) == files_before
+
+
+def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """One call over Claude, Codex, opencode and a charlie-bot sessions dir writes each
+  source's records and reports the per-source counts; a second call over the unchanged
+  corpus writes all zeros."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.3-Flash"))
+  claude = Claude(tmp_path)
+  codex = Codex(tmp_path)
+  oc = Opencode(tmp_path)
+  cb = Charliebot(tmp_path)
+  claude.write(claude.work, "sess1", [_claude_record("m1-id", NAME, "2024-01-01T00:00:00Z", _usage(100, 30))])
+  _codex_rollout(
+      codex, "codex-sid-1", "gpt-5", {
+          "input_tokens": 60,
+          "cached_input_tokens": 20,
+          "output_tokens": 8
+      }, {"total_tokens": 47}, "2024-01-03T00:00:00Z")
+  oc.write("m1", 100, _usage(50, 5))
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-glm-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 6))])
+  cache = tmp_path / "cache.json"
+  round_args = dict(
+      host="host-a",
+      claude_homes=claude.dirs,
+      codex_homes=codex.homes,
+      opencode_db=oc.db,
+      sessions_dir=cb.root,
+      cache_path=cache,
+  )
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert tt.capture_usage(ledger, **round_args) == \
+        {"Claude Code": 1, "Codex": 1, "opencode": 1, "charlie-bot": 1}
+    assert tt.capture_usage(ledger, **round_args) == \
+        {"Claude Code": 0, "Codex": 0, "opencode": 0, "charlie-bot": 0}
+    # Sources the caller leaves unnamed are absent from the report, not zero-filled.
+    assert tt.capture_usage(
+        ledger, host="host-a", claude_homes={}, codex_homes={}, opencode_db=None,
+        sessions_dir=None, cache_path=None) == {"Claude Code": 0, "Codex": 0}

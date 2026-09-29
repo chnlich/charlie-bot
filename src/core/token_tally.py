@@ -137,6 +137,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import sqlite3
 import time
 from collections import defaultdict
@@ -2693,3 +2694,112 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
     record = _run_record(objects, meta, registry, backend, Path(path).parent.name) if backend else None
     written += ledger.record_file(host, path, sig, [record] if record is not None else [])
   return written
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture: the opencode db, and the one capture entry point
+# ---------------------------------------------------------------------------
+
+
+def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
+  """Copy the opencode db's message-table usage into the SQLite usage ledger, so the page's
+  rows survive deletion of the db itself (see the ledger's module docstring).
+
+  The db opens read-only (mode=ro) — the capture never writes to it. The whole message
+  table signs with the probe aggregates ``_OPENCODE_PROBE_SQL`` projects, the same gate the
+  collect's incremental read uses; a db whose signature the ledger already recorded for this
+  host is skipped. Otherwise every row at or above the previous capture's max time_updated
+  is re-read through ``_opencode_row_data`` — the exact projection the collect reads — and
+  each contributing row upserts on ``opencode:<message id>``: an updated row moves its
+  ledger record, a deleted row leaves the stored rows untouched (the ledger contains no
+  DELETE). A missing db contributes nothing; a parse or read failure raises, because the
+  capture runs in the collector, not the page load.
+
+  Returns the records written.
+  """
+  if not db.exists():
+    return 0
+  con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+  try:
+    sig = ":".join(map(str, con.execute(_OPENCODE_PROBE_SQL).fetchone()))
+    captured = ledger.captured_sigs(host).get(str(db))
+    if captured == sig:
+      return 0
+    floor = int(captured.split(":")[2]) if captured is not None else 0
+    records: list[UsageRecord] = []
+    for mid, session_id, _time_updated, data in con.execute(
+        "select id, session_id, time_updated, data from message where time_updated >= ?", (floor,)):
+      rec, _nbytes = _opencode_row_data(data)
+      if rec is None:
+        continue
+      records.append(
+          UsageRecord(
+              record_id=f"opencode:{mid}",
+              kind=RecordKind.NATIVE,
+              source=USAGE_SOURCE_OPENCODE,
+              model=rec[0],
+              account=rec[1],
+              ts=rec[2] or "",
+              in_fresh=rec[3],
+              cache_write=rec[4],
+              cache_read=rec[5],
+              output=rec[6],
+              sessions=(session_id,)))
+  finally:
+    con.close()
+  return ledger.record_file(host, str(db), sig, records)
+
+
+def capture_usage(
+    ledger: UsageLedger,
+    *,
+    host: str,
+    claude_homes: dict[str, Path],
+    codex_homes: dict[str, Path],
+    opencode_db: Path | None,
+    sessions_dir: Path | None,
+    cache_path: Path | None,
+) -> dict[str, int]:
+  """Capture every source the caller names into the ledger — the one entry point the page's
+  sweep gate, the cron capture and the CLI share (see the ledger's module docstring).
+
+  The serve rides the collect's own cache document: it loads the TallyCache from
+  *cache_path* (None collects cacheless) and saves it back after the sources run, so a
+  caller pointing the collect and the capture at one cache path pays each parse once.
+  ``capture_jsonl_sources`` always runs; the opencode db is captured when *opencode_db* is
+  given; the charlie-bot threads and the run directories when *sessions_dir* is. Every
+  error raises: the capture runs in the collector, not the page load.
+
+  Returns the records written per source label; the charlie-bot label sums the thread and
+  run captures, whose records carry that source.
+  """
+  notes: list[str] = []
+  cache = TallyCache.load(cache_path, notes) if cache_path is not None else None
+  written = capture_jsonl_sources(ledger, host, claude_homes, codex_homes, cache)
+  if opencode_db is not None:
+    written[USAGE_SOURCE_OPENCODE] = capture_opencode(ledger, host, opencode_db)
+  if sessions_dir is not None:
+    written[USAGE_SOURCE_CHARLIE_BOT] = (
+        capture_charliebot(ledger, host, sessions_dir, cache) + capture_runs(ledger, host, sessions_dir))
+  if cache is not None:
+    cache.save(cache_path)
+  return written
+
+
+def capture_local(ledger: UsageLedger) -> dict[str, int]:
+  """Capture this host's own sources with this host's defaults: the discovered Claude
+  config dirs and Codex homes, the default opencode db, the config's session tree, and a
+  tally cache under ``cache/usage_capture/`` — a directory of its own, because
+  ``TallyCache.save`` sweeps unreferenced rows sidecars there and the page's tally cache
+  keeps its sidecar in ``cache/`` beside the page's own document.
+  """
+  claude_homes, codex_homes = discover_homes(DEFAULT_CLAUDE_DIR, DEFAULT_CODEX_HOME)
+  return capture_usage(
+      ledger,
+      host=socket.gethostname(),
+      claude_homes=claude_homes,
+      codex_homes=codex_homes,
+      opencode_db=DEFAULT_OPENCODE_DB,
+      sessions_dir=get_config().sessions_dir,
+      cache_path=get_config().charliebot_home / "cache" / "usage_capture" / "tally.json",
+  )

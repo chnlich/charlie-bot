@@ -105,6 +105,12 @@ Known-alive symbols:
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level
   `pytest.mark.asyncio` assignments that pytest's collection reads by attribute name; each name
   appears only at its assignment site, so vulture flags each as an unused variable (60% confidence).
+- `pytest_runtest_setup`, `pytest_runtest_call`, `pytest_runtest_teardown` (`tests/conftest.py`)
+  — one shared `@pytest.hookimpl(wrapper=True)` wrapper bound under the three stage names;
+  pluggy resolves the hook name from the module attribute (pytest requires the `pytest_`
+  prefix), so each binding surfaces to vulture as an unused variable. Removing a binding
+  silently drops that stage's wall time from the budget accrual `pytest_runtest_makereport`
+  enforces.
 - `do_POST`, `log_message` (`tests/test_cli_restart_contract.py`) —
   `http.server.BaseHTTPRequestHandler` overrides: the stdlib handler dispatches to them by
   string (`'do_' + self.command` through `getattr`, `log_message` by name). Vulture flags each

@@ -319,6 +319,26 @@ async def _async_noop(*args, **kwargs) -> None:
     return None
 
 
+async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, content) -> list:
+    """The launch rig the implement and quick-edit tests share: silent-broadcast
+    executor, the parent-manager build double, the instructions patch, the
+    operator credentials, and the user takeoff message through admit_input.
+
+    Ordering is load-bearing: the executor sits in place before admit_input
+    dispatches, and the build double before the manager turn builds. Returns
+    the pm_builds list for tests that assert the parent turn built one.
+    """
+    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+    pm_builds = []
+    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
+    patch_instructions_content(monkeypatch)
+    stub_credentials({"charliebot": {"access_key": "op-secret"}})
+    # The work-run launch re-judges the nearest-user authorization gate; the
+    # manager carries the real user takeoff message the delegation rode in on.
+    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content=content, actor="user")
+    return pm_builds
+
+
 @pytest.mark.asyncio
 async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -707,16 +727,8 @@ async def test_implement_delivery_requires_review_and_real_landing(
     }
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    # The work-run launch re-judges the nearest-user authorization gate; the
-    # manager carries the real user takeoff message the delegation rode in on.
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER,
-        content="Take off and implement the marker file.", actor="user")
+    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
+                                           "Take off and implement the marker file.")
 
     # The work run holds until the test has committed the implementation into
     # the isolated worktree (the fake backend writes no commits itself).
@@ -874,16 +886,8 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
     }
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    # The work-run launch re-judges the nearest-user authorization gate; the
-    # manager carries the real user takeoff message the delegation rode in on.
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER,
-        content="Take off and implement the marker file.", actor="user")
+    await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
+                               "Take off and implement the marker file.")
 
     # Origin gains a commit from a second clone while the fixture repo's local
     # main stays put: local main is strictly behind origin/main.
@@ -951,14 +955,8 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
     }
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER,
-        content="Take off and implement the marker file.", actor="user")
+    await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
+                               "Take off and implement the marker file.")
 
     # One unpushed commit on the fixture repo's local main: origin does not
     # have it, so the base check fails closed.
@@ -1025,14 +1023,8 @@ async def test_repo_less_implement_delivers_after_review_passes(
     }
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER,
-        content="Take off and refresh the host lint config.", actor="user")
+    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
+                                           "Take off and refresh the host lint config.")
 
     report = ("Created: /tmp/lint/ruff.toml\n"
               "Modified: /tmp/lint/setup.cfg\n"
@@ -1152,13 +1144,8 @@ async def test_repo_less_quick_edit_closes_without_review(
     task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
     worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
                                task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off and bump it.", actor="user")
+    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
+                                           "Take off and bump it.")
 
     work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
     install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)

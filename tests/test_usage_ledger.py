@@ -185,3 +185,18 @@ def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path)
 
   monkeypatch.setattr(config_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
   assert default_ledger_path() == tmp_path / "home" / "usage" / "ledger.sqlite3"
+
+def test_ledger_without_index_gains_it_on_reopen(tmp_path):
+  """A ledger file created before the cover index gains it on its next open."""
+  rec = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
+    before = ledger.model_rows()
+    ledger._conn.execute("DROP INDEX usage_group_cover")
+    ledger._conn.commit()
+  with UsageLedger(path) as ledger:
+    names = {row["name"] for row in ledger._conn.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'index'")}
+    assert "usage_group_cover" in names
+    assert ledger.model_rows() == before

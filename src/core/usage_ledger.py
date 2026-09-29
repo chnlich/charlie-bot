@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS usage (
   origin TEXT NOT NULL,
   captured_at TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS usage_group_cover ON usage(kind, source, model, account, ts, in_fresh, cache_write, cache_read, output);
 CREATE TABLE IF NOT EXISTS captured_files (
   host TEXT NOT NULL,
   path TEXT NOT NULL,

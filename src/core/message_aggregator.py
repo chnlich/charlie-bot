@@ -450,6 +450,11 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "role": "system",
             "content": f"Posted to Slack: {ev.get('content', '')}",
         },
+    ET.DISCORD_REPLY:
+        lambda ev: {
+            "role": "system",
+            "content": f"Posted to Discord: {ev.get('content', '')}",
+        },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
     ET.BACKEND_OVERLAY_INACTIVE:

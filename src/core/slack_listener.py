@@ -56,18 +56,21 @@ from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
 from src.core.models import (
-    CreateSessionRequest,
-    PendingTrigger,
-    SessionMetadata,
-    SessionStatus,
-    SlackOrigin,
-    TriggerStatus,
-    utc_now,
+  CreateSessionRequest,
+  PendingTrigger,
+  SessionMetadata,
+  SessionStatus,
+  SlackOrigin,
+  TriggerStatus,
+  utc_now,
 )
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
-from src.core.thread_entry import ThreadReplyError
+
+# CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
+from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
+from src.core.thread_entry import ThreadReplyError, summon_prompt_tail
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
 if TYPE_CHECKING:
@@ -80,11 +83,6 @@ logger = LazyStructlogLogger()
 # across process restarts; changing it would orphan every existing Slack-backed
 # session.
 SLACK_NS = uuid.UUID("1b4e28ba-2fa1-4d7a-9f0c-8d5e7a3b6c11")
-
-# Fixed citation boundary appended to every Slack-sourced prompt so the master
-# scopes its citations to the channel/thread and public content only.
-CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
-                     "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
 
 _ACCEPTANCE_REACTION = "eyes"
 
@@ -291,21 +289,6 @@ class SlackClient:
     return name
 
 
-def _load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
-  """Read one prompts doc fresh from disk, raising a ValueError naming the path when missing.
-
-  No caching, so an edit takes effect on the next summon. A missing or
-  unreadable doc raises a ValueError naming the path and its most likely cause
-  (mirrors the worker-prompt loader in src/core/spawner_prompt.py); a prompt
-  without the doc is never built.
-  """
-  path = repo_root / "prompts" / name
-  try:
-    return path.read_text(encoding="utf-8").strip()
-  except OSError as e:
-    raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
-
-
 def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   """The persisted summon: the thread link plus a self-fetch hint, ending at the fixed notices.
 
@@ -313,24 +296,15 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   its slack skill when the round runs — a snapshot persisted here would go
   stale as the thread keeps changing after the mention.
 
-  Both the PII red line and the reply-format contract are read fresh from
+  The tail after the platform line (citation boundary, PII red line,
+  reply-format contract) is the shared one from thread_entry, read fresh from
   prompts/ on every call — no caching, so an edit takes effect on the next
-  summon. A missing or unreadable doc raises a ValueError naming the path; a
-  prompt without both docs is never built.
+  summon.
   """
-  red_line = _load_prompt_doc(
-      cfg.charlie_bot_repo,
-      "thread_reply_redline.md",
-      likely_cause="the repo checkout most likely predates the thread-reply-redline rename commit")
-  reply_format = _load_prompt_doc(
-      cfg.charlie_bot_repo,
-      "thread_reply_format.md",
-      likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
   return (
       f"Slack 线程召唤：{permalink}\n\n"
       "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-      f"{_PLATFORM_LINE}\n\n"
-      f"{CITATION_BOUNDARY}\n{red_line}\n{reply_format}")
+      f"{summon_prompt_tail(_PLATFORM_LINE, cfg)}")
 
 
 def _local_time() -> str:

@@ -8,9 +8,11 @@ than a hard-coded total.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
+from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord, default_ledger_path
 
 SOURCE = "src-a"
 HOST = "host-a"
@@ -175,3 +177,11 @@ def test_native_start_ignores_fallback_only_spans(tmp_path):
     ledger.record_file(HOST, "/logs/native.jsonl", "sig-n", [native])
     starts = ledger.native_start()
   assert starts == {SOURCE: "2026-01-11"}
+
+
+def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path):
+  """The CLI's default ledger resolves per call from the config's charliebot home."""
+  import src.core.config as config_module
+
+  monkeypatch.setattr(config_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
+  assert default_ledger_path() == tmp_path / "home" / "usage" / "ledger.sqlite3"

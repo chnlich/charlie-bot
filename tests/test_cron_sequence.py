@@ -29,7 +29,8 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.core import claude_accounts, event_types as ET
+from src.core import claude_accounts
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
 from src.core.control_events import stable_run_id
 from src.core.models import RunRecord, TaskSpec

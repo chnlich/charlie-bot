@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 from conftest import (
     FABLE_MODEL,
-    POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     create_task,
     patch_instructions_content,

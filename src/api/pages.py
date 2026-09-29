@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import time
 import types
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -66,7 +67,7 @@ from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION
 if TYPE_CHECKING:
   from fastapi.templating import Jinja2Templates
 
-  from src.core.token_tally import TokenTally
+  from src.core.usage_ledger import LedgerRow
 
 log = LazyStructlogLogger()
 
@@ -128,9 +129,9 @@ def _probe_home_service(url: str) -> bool:
     return False
 
 
-# Single-flight holder for the current in-flight token-usage collection. Concurrent requests
-# await the same task and share one scan; it is cleared on completion so the next request scans
-# afresh rather than re-servicing a stale snapshot.
+# Single-flight holder for the current in-flight token-usage capture+read. Concurrent requests
+# await the same task and share one capture; it is cleared on completion so the next request
+# captures afresh rather than re-servicing a stale snapshot.
 _token_usage_task: asyncio.Task | None = None
 
 # Single-flight registry for in-flight Perfetto cache builds, keyed by cache key. Concurrent
@@ -152,11 +153,6 @@ _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
 def _perfetto_merge_cache_dir() -> Path:
   """This profile's Perfetto merge cache. Resolved per call, never at import."""
   return get_config().charliebot_home / "cache" / "perfetto_merge"
-
-
-def _token_tally_cache_path() -> Path:
-  """This profile's token-tally cache. Resolved per call, never at import."""
-  return get_config().charliebot_home / "cache" / "token_tally.json"
 
 
 def _get_git_version() -> str:
@@ -700,13 +696,34 @@ _USAGE_SOURCES = (USAGE_SOURCE_CLAUDE_CODE, USAGE_SOURCE_CODEX, USAGE_SOURCE_OPE
 _USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
 
 
-def _token_usage_context(tally: TokenTally) -> dict:
-  """Prepare the display context for the token_usage template from one tally.
+def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, int], float]:
+  """Capture this host's new usage into the ledger, then read the page rows from the ledger
+  alone — so the numbers survive deletion of the logs they were parsed from.
+
+  Runs in a thread as the page's single-flight task body. Capture and read errors propagate
+  to the awaiting request: the page fails loudly instead of rendering stale rows.
+  """
+  # The ledger + capture stack (sqlite3, the token_tally walkers) rides the page like
+  # croniter rides its next-run resolutions: the M99 server import floor carries no
+  # tally stack for a page that may never load.
+  from src.core.token_tally import capture_local
+  from src.core.usage_ledger import UsageLedger, default_ledger_path
+
+  started = time.monotonic()
+  with UsageLedger(default_ledger_path()) as ledger:
+    written = capture_local(ledger)
+    rows = ledger.model_rows()
+    native_starts = ledger.native_start()
+  return rows, native_starts, written, time.monotonic() - started
+
+
+def _token_usage_context(
+    rows: list[LedgerRow], native_starts: dict[str, str], written: dict[str, int], elapsed_s: float) -> dict:
+  """Prepare the display context for the token_usage template from one ledger read.
 
   Computes the aggregate stats the page renders server-side (hero, tiles, conclusions),
   the compact number strings, and the serialized JS payload for the charts and table.
   """
-  rows = tally.rows
   tot = {
       "in_fresh": sum(r.in_fresh for r in rows),
       "cache_write": sum(r.cache_write for r in rows),
@@ -730,6 +747,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
         "output": sum(r.output for r in sub),
         "models": len(sub),
         "share": sum(r.total for r in sub) / tot["total"] * 100 if tot["total"] else 0.0,
+        "native_start": native_starts.get(src, ""),
     }
   payload = {
       "rows":
@@ -743,6 +761,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
                   "cache_write": r.cache_write,
                   "cache_read": r.cache_read,
                   "calls": r.calls,
+                  "fallback_output": r.fallback_output,
                   "accounts":
                       [{
                           "name": a.name,
@@ -773,8 +792,8 @@ def _token_usage_context(tally: TokenTally) -> dict:
       "top_compact": _compact(top.total) if top else "0",
       "top_out_escaped": top_out.model if top_out else "",
       "top_out_compact": _compact(top_out.output) if top_out else "0",
-      "elapsed_s": tally.elapsed_s,
-      "scanned_compact": _compact(tally.scanned_bytes),
+      "elapsed_s": elapsed_s,
+      "captured_now": f"{sum(written.values()):,}",
   }
   return {
       "ctx": ctx,
@@ -783,7 +802,7 @@ def _token_usage_context(tally: TokenTally) -> dict:
       "window_str": f"{window[0]} → {window[1]}" if rows else "",
       "cache_share": cache_share,
       "generated": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
-      "notes": tally.notes,
+      "notes": [f"{src}: {written.get(src, 0):,} records written this load" for src in _USAGE_SOURCES],
   }
 
 
@@ -791,20 +810,15 @@ def _token_usage_context(tally: TokenTally) -> dict:
 async def token_usage_viewer(request: Request) -> HTMLResponse:
   """Render the per-model token usage tally page.
 
-  Runs the collection in a thread pool (never on the event loop) and, when a collection is
-  already in flight, awaits and shares it instead of starting a second scan.
+  Captures new usage into the ledger and reads the rows back from it, in a thread pool
+  (never on the event loop); when a capture is already in flight, later requests await
+  and share it instead of starting a second one.
   """
   global _token_usage_task
   task = _token_usage_task
   if task is None:
-    # The tally stack (sqlite3, orjson walkers) rides the page like croniter
-    # rides its next-run resolutions: the M99 server import floor carries no
-    # tally stack for a page that may never load.
-    from src.core.token_tally import collect_token_usage
-
-    task = _token_usage_task = asyncio.create_task(
-        asyncio.to_thread(collect_token_usage, cache_path=_token_tally_cache_path()))
-  tally = await task
+    task = _token_usage_task = asyncio.create_task(asyncio.to_thread(_capture_ledger_rows))
+  rows, native_starts, written, elapsed_s = await task
   if _token_usage_task is task:
     # Only the last joiner to observe its own task still installed clears it; a joiner that
     # resumes after a newer task has already replaced it must not clobber that newer task.
@@ -812,7 +826,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
   return _templates().TemplateResponse(
       request,
       "token_usage.html",
-      context=_token_usage_context(tally),
+      context=_token_usage_context(rows, native_starts, written, elapsed_s),
   )
 
 

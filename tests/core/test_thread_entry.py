@@ -333,7 +333,13 @@ class FakeTriggers:
     self.cancelled.append((session_id, trigger_id))
 
   async def create_trigger(
-      self, session_id: str, delay: int, message: str, *, created_at, enforce_pending_limit: bool = False,
+      self,
+      session_id: str,
+      delay: int,
+      message: str,
+      *,
+      created_at,
+      enforce_pending_limit: bool = False,
   ) -> SimpleNamespace:
     record = SimpleNamespace(id=f"tr{len(self.created) + 1}", message=message, fire_at=created_at)
     self.created.append(record)
@@ -537,7 +543,10 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
         triggers,
         session_id="s1",
         label="Fakechat #c1",
-        origin={"channel_id": "c1", "thread_ts": "t1"},
+        origin={
+            "channel_id": "c1",
+            "thread_ts": "t1"
+        },
         block=block,
         content="fakechat summon",
         user="u1",

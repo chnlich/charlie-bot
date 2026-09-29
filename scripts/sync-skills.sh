@@ -13,6 +13,7 @@ TARGETS=(
   "$HOME/.claude/skills"
   "$HOME/.agents/skills"
   "$HOME/.gemini/antigravity-cli/skills"  # Antigravity CLI (agy) global skills root
+  "$HOME/.charliebot/.claude/skills"  # Claude Code ancestor root: collected from every master session cwd, whatever the account
 )
 
 # --- Flags ---
@@ -128,3 +129,48 @@ done
 
 # --- Summary ---
 echo "Done: $created created, $updated updated, $removed removed, $skipped skipped"
+
+# --- Claude Code discovery check ---
+# The ancestor root only helps if Claude Code actually collects it. The probe
+# starts claude with an empty CLAUDE_CONFIG_DIR from the master session cwd:
+# not logged in, it loads skills from the cwd ancestors first, writes the
+# debug log, and fails authentication before any API call. K is the project
+# count on the last "Loaded N unique skills" log line; N is the symlink count
+# in the ancestor root. K must equal N.
+if (( DRY_RUN )); then
+  exit 0
+fi
+
+if ! command -v claude >/dev/null 2>&1; then
+  echo "Claude discovery: skipped (claude not on PATH)"
+  exit 0
+fi
+
+discovery_config=$(mktemp -d)
+discovery_log=$(mktemp)
+trap 'rm -rf "$discovery_config" "$discovery_log"' EXIT
+
+# The probe cwd is the master session root; setup.sh runs this sync before
+# init_charliebot_home provisions the home layout, so create it when absent.
+mkdir -p "$HOME/.charliebot/sessions"
+cd "$HOME/.charliebot/sessions"
+CLAUDE_CONFIG_DIR="$discovery_config" timeout 60 claude -p --no-session-persistence --debug-file "$discovery_log" x >/dev/null 2>&1 || true
+
+# grep misses must not abort under set -euo pipefail before the check reports.
+loaded_line=$(grep -E 'Loaded [0-9]+ unique skills' "$discovery_log" | tail -n 1 || true)
+loaded=$(sed -nE 's/.*project: ([0-9]+).*/\1/p' <<<"$loaded_line")
+expected=$(find "$HOME/.charliebot/.claude/skills" -mindepth 1 -maxdepth 1 -type l | wc -l)
+
+reproduce_cmd='cd $HOME/.charliebot/sessions && CLAUDE_CONFIG_DIR=$(mktemp -d) timeout 60 claude -p --no-session-persistence --debug-file <tmp-log> x'
+
+if [[ -z "$loaded" ]]; then
+  echo "Claude discovery: FAILED - no 'Loaded N unique skills (... project: K ...)' line in the debug log; reproduce with: $reproduce_cmd" >&2
+  exit 1
+fi
+
+echo "Claude discovery: $loaded/$expected"
+
+if (( loaded != expected )); then
+  echo "Claude discovery: FAILED - claude loaded $loaded of the $expected ancestor-root skills; reproduce with: $reproduce_cmd" >&2
+  exit 1
+fi

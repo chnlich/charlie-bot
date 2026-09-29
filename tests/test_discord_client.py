@@ -16,6 +16,7 @@ import httpx
 import pytest
 
 from src.core.discord_client import (
+    BASE_URL,
     REQUIRED_PERMISSIONS,
     DiscordAPIError,
     DiscordClient,
@@ -219,12 +220,12 @@ async def test_thread_name_truncated_to_100_chars():
 
   def handler(request: httpx.Request) -> httpx.Response:
     seen["body"] = json.loads(request.read())
-    seen["path"] = request.url.path
+    seen["url"] = str(request.url)
     return httpx.Response(200, json={"id": "777777777777777777"})
 
   seen: dict = {}
   await _client(handler).start_thread_from_message("333333333333333333", "222222222222222222", "x" * 140)
-  assert seen["path"] == "/channels/333333333333333333/messages/222222222222222222/threads"
+  assert seen["url"] == f"{BASE_URL}/channels/333333333333333333/messages/222222222222222222/threads"
   assert seen["body"] == {"name": "x" * 100, "auto_archive_duration": 10080}
 
 
@@ -234,13 +235,14 @@ async def test_reaction_emoji_is_url_encoded():
   seen: dict = {}
 
   def handler(request: httpx.Request) -> httpx.Response:
-    seen[request.method] = request.url.path
+    seen[request.method] = str(request.url)
     return httpx.Response(204)
 
   client = _client(handler)
   assert await client.add_reaction("333333333333333333", "222222222222222222", "\U0001F440") is None
   assert await client.remove_own_reaction("333333333333333333", "222222222222222222", "\U0001F440") is None
-  assert seen["PUT"] == "/channels/333333333333333333/messages/222222222222222222/reactions/%F0%9F%91%80/@me"
+  reaction_path = "/channels/333333333333333333/messages/222222222222222222/reactions/%F0%9F%91%80/@me"
+  assert seen["PUT"] == f"{BASE_URL}{reaction_path}"
   assert seen["DELETE"] == seen["PUT"]
 
 

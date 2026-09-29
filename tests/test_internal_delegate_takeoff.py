@@ -285,7 +285,7 @@ async def test_delegate_task_repo_less_request_passes_the_schema_gate(
   _patch_resolve_rig(monkeypatch)
   captured: dict = {}
 
-  async def fake_delegate_task_tree(req, meta, cfg, task_mgr, session_mgr, caller, backend, model):
+  async def fake_delegate_task_tree(req, task_mgr, session_mgr, caller, backend, model):
     captured["repo_path"] = req.repo_path
     captured["base_branch"] = req.base_branch
     return {
@@ -362,7 +362,7 @@ async def _authorize_verify(
   req = _build_request(task_type=TaskType.VERIFY, repo_path=None, base_branch=None, backend=backend)
   monkeypatch.setattr(internal, "get_config", lambda: _build_verify_cfg(preference))
   session_mgr = BackendFakeSessionManager(session_backend)
-  _meta, _cfg, resolved_backend, resolved_model = await internal._authorize_spawn_request(
+  resolved_backend, resolved_model = await internal._authorize_spawn_request(
       req, session_mgr, _stub_task_manager())
   return resolved_backend, resolved_model
 

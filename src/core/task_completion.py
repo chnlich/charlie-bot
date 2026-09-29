@@ -261,7 +261,7 @@ class TaskCompletionManager:
                 "completion requires delivery run evidence (run_ids); "
                 "failed Runs are not completion evidence")
         for ref in evidence.result_refs:
-            blockers.extend(self._structured_ref_blockers(meta, ref, runs, outcomes, facts, evidence))
+            blockers.extend(self._structured_ref_blockers(meta, ref, runs, facts, evidence))
         claimed_work_ids = set(evidence.run_ids)
         for review_run_id in evidence.review_run_ids:
             review = runs.get(review_run_id)
@@ -313,7 +313,6 @@ class TaskCompletionManager:
         meta: SessionMetadata,
         ref: str,
         runs: dict,
-        outcomes: dict[str, str | None],
         facts: object,
         evidence: CompletionEvidence,
     ) -> list[str]:

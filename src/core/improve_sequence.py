@@ -274,7 +274,7 @@ async def run_improve_sequence(
                     # pending request (resume/retry uses the existing policy;
                     # the whole loop is never automatically restarted).
                     await _settle_withheld_iteration(
-                        tree, session_id, cfg, loop_id, child_id, goal, i, run.id,
+                        tree, session_id, cfg, loop_id, goal, i, run.id,
                         observation.withheld, previous_summaries, iterations)
                     return
                 outcome = observation.outcome
@@ -384,7 +384,6 @@ async def _settle_withheld_iteration(
     session_id: str,
     cfg: CharlieBotConfig,
     loop_id: int,
-    child_id: str,
     goal: str,
     iteration: int,
     run_id: str,

@@ -345,6 +345,22 @@ async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager
   log.info("slack_backfill_done", count=reported)
 
 
+async def _run_discord_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
+  """Report Discord summons lost across the restart, once recovery has had its chance.
+
+  Waits on the crash-recovery task first so re-attach and the user-message
+  replay have already answered everything they can; whatever is still
+  unanswered after that is genuinely lost and gets a notice in its thread.
+  """
+  from src.core.discord_listener import (
+      backfill_lost_summons,  # lazy: avoids import cycle at module scope
+  )
+
+  await recovery_task
+  reported = await backfill_lost_summons(cfg, session_mgr)
+  log.info("discord_backfill_done", count=reported)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
@@ -459,6 +475,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     else:
       log.info("slack_entrypoint_off")
 
+    discord_listener_task = None
+    if creds.get("discord", "bot_token") and cfg.discord.allowed_user_ids:
+      from src.core.discord_listener import (
+          run_listener,  # lazy: avoids import cycle at module scope
+      )
+
+      discord_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="discord-listener")
+      app.state.discord_listener_task = discord_listener_task
+      app.state.discord_backfill_task = create_logged_task(
+          _run_discord_backfill(cfg, session_mgr, app.state.recovery_task), name="discord-backfill")
+      log.info("discord_entrypoint_started")
+    else:
+      log.info("discord_entrypoint_off")
+
     log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
     yield
 
@@ -479,6 +509,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await timed_step("speech_ms", lambda: cancel_and_wait(speech_model_task))
     await timed_step("slack_listener_ms", lambda: cancel_and_wait(getattr(app.state, "slack_listener_task", None)))
     await timed_step("slack_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "slack_backfill_task", None)))
+    await timed_step("discord_listener_ms", lambda: cancel_and_wait(getattr(app.state, "discord_listener_task", None)))
+    await timed_step("discord_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "discord_backfill_task", None)))
     await timed_step("ext_usage_ms", ext_usage.stop_poller)
     await timed_step("host_auth_ms", host_auth.stop_poller)
     await timed_step("http_client_ms", close_http_client)

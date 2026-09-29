@@ -12,7 +12,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord, default_ledger_path
+from src.core.usage_ledger import (
+    _MODEL_ROWS_SQL,
+    RecordKind,
+    UsageLedger,
+    UsageRecord,
+    default_ledger_path,
+)
 
 SOURCE = "src-a"
 HOST = "host-a"
@@ -200,3 +206,20 @@ def test_ledger_without_index_gains_it_on_reopen(tmp_path):
     names = {row["name"] for row in ledger._conn.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
     assert "usage_group_cover" in names
     assert ledger.model_rows() == before
+
+
+def test_model_rows_plan_scans_the_cover_index_without_analyze(tmp_path):
+  """The counted-rows query scans usage_group_cover outright on a fresh ledger.
+
+  No ANALYZE has ever run here (sqlite_stat1 absent), so the OR-free NOT EXISTS form
+  must be what keeps the planner off the MULTI-INDEX OR + temp-B-tree plan.
+  """
+  native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",))
+  kept = _record("rec-fb-kept", RecordKind.FALLBACK, sessions=("sess-b",), model="model-kept")
+  excluded = _record("rec-fb-excluded", RecordKind.FALLBACK, sessions=("sess-a",), model="model-excluded", ts=TS_B)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [native, kept, excluded])
+    assert not ledger._conn.execute("SELECT 1 FROM sqlite_master WHERE name = 'sqlite_stat1'").fetchone()
+    plan = [row["detail"] for row in ledger._conn.execute("EXPLAIN QUERY PLAN " + _MODEL_ROWS_SQL)]
+  assert any("SCAN" in detail and "usage_group_cover" in detail for detail in plan)
+  assert not any("MULTI-INDEX OR" in detail for detail in plan)

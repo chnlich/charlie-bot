@@ -74,13 +74,14 @@ def test_still_thinking_master_done_yields_separator_without_seconds() -> None:
   assert deltas == [
       {
           "type": "message",
-          "message": {
-              "role": "separator",
-              "thinking_seconds": None,
-              "event_index": 0,
-              "id": "legacy:0",
-              "timestamp": "t1",
-          },
+          "message":
+              {
+                  "role": "separator",
+                  "thinking_seconds": None,
+                  "event_index": 0,
+                  "id": "legacy:0",
+                  "timestamp": "t1",
+              },
       }
   ]
 
@@ -91,13 +92,35 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
   # renders its separator like any other, so the queued user sits in the span
   # the answering round closes instead of below the final separator.
   events = [
-      {"type": ET.USER, "content": "first question", "timestamp": "t1"},
-      {**_assistant_text_event("first answer"), "timestamp": "t2"},
-      {"type": ET.USER, "content": "second question", "timestamp": "t3"},
-      {**_assistant_text_event("mid-round answer"), "timestamp": "t4"},
-      {"type": ET.MASTER_DONE, "still_thinking": True, "timestamp": "t5"},
-      {**_assistant_text_event("second answer"), "timestamp": "t6"},
-      {"type": ET.MASTER_DONE, "thinking_seconds": 7, "timestamp": "t7"},
+      {
+          "type": ET.USER,
+          "content": "first question",
+          "timestamp": "t1"
+      },
+      {
+          **_assistant_text_event("first answer"), "timestamp": "t2"
+      },
+      {
+          "type": ET.USER,
+          "content": "second question",
+          "timestamp": "t3"
+      },
+      {
+          **_assistant_text_event("mid-round answer"), "timestamp": "t4"
+      },
+      {
+          "type": ET.MASTER_DONE,
+          "still_thinking": True,
+          "timestamp": "t5"
+      },
+      {
+          **_assistant_text_event("second answer"), "timestamp": "t6"
+      },
+      {
+          "type": ET.MASTER_DONE,
+          "thinking_seconds": 7,
+          "timestamp": "t7"
+      },
   ]
 
   messages = events_to_messages(events)

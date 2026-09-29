@@ -45,7 +45,7 @@ function switchTab(tab) {
     const chatEl = document.getElementById('tab-chat');
     if (tab === 'chat-backlog' || tab === 'chat-tex') {
       chatEl.classList.add('hidden');
-    } else if (showChat) {
+    } else {
       chatEl.classList.remove('hidden');
     }
   }

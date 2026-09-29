@@ -1050,6 +1050,49 @@ async def follow_message(
   return session_id if trigger is not None else None
 
 
+async def backfill_followed_threads(
+    adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager, trigger_mgr: TriggerManager) -> int:
+  """Arm the follow trigger of every ACTIVE session holding unread messages; return the count.
+
+  Runs once per successful (re)connection: one eligible read per followed
+  thread closes the socket-down window, which persisted triggers cannot cover
+  (no events arrive while the socket is down). A session whose thread shows no
+  unread eligible message arms nothing, and each armed session arms exactly
+  once, independent of its unread count.
+  """
+  platform = adapter.platform
+  armed = 0
+  # The ACTIVE filter rides the listing so the backfill never copies+stamps
+  # the archived majority it drops on the line below.
+  for meta in await session_mgr.list_sessions(status=SessionStatus.ACTIVE):
+    origin = getattr(meta, platform.origin_field)
+    if origin is None:
+      continue
+    try:
+      unread = await unread_messages(adapter, origin, cfg, getattr(meta, platform.watermark_field))
+      if not unread:
+        continue
+      link = await adapter.thread_link(origin)
+      trigger = await arm_follow_trigger(
+          platform,
+          trigger_mgr,
+          meta.id,
+          floor=unread[0].id,
+          wake_label=lambda floor: adapter.follow_wake_message(floor, link),
+          log_fields=adapter.log_fields(adapter.address_of(origin)))
+      if trigger is not None:
+        armed += 1
+    except Exception as e:
+      logger.warning(
+          f"{platform.name}_follow_backfill_thread_failed",
+          session=meta.id,
+          **adapter.log_fields(adapter.address_of(origin)),
+          error=str(e))
+  if armed:
+    logger.info(f"{platform.name}_follow_backfill_armed", sessions=armed)
+  return armed
+
+
 # The file-service URL prefixes: the mounted mounts with the trailing slash the
 # rewrite gate matches on.
 _FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)

@@ -48,11 +48,7 @@ from src.core.log_once import LazyStructlogLogger
 
 # trigger_master keeps its importable Slack name for the mention-seam tests.
 from src.core.master_trigger import trigger_master as trigger_master
-from src.core.models import (
-    PendingTrigger,
-    SessionStatus,
-    SlackOrigin,
-)
+from src.core.models import PendingTrigger, SlackOrigin
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 
@@ -430,39 +426,12 @@ async def _backfill_followed_threads(
 ) -> int:
   """Arm the follow trigger of every ACTIVE Slack session holding unread messages; return the count.
 
-  Runs once per successful Socket Mode (re)connection: one conversations.replies
-  read per followed thread closes the socket-down window, which persisted
-  triggers cannot cover (no events arrive while the socket is down). A session
-  whose thread shows no unread eligible message arms nothing, and each armed
-  session arms exactly once, independent of its unread count.
+  One-line pass-through to the shared backfill
+  (``thread_entry.backfill_followed_threads``) on the Slack adapter; the
+  per-thread read, the arming, and the failure logs live there. Kept as the
+  module global ``run_listener`` calls on every (re)connection.
   """
-  adapter = SlackThreadAdapter(client)
-  armed = 0
-  # The ACTIVE filter rides the listing so the backfill never copies+stamps
-  # the archived majority it drops on the line below.
-  for meta in await session_mgr.list_sessions(status=SessionStatus.ACTIVE):
-    if meta.slack_origin is None:
-      continue
-    origin = meta.slack_origin
-    try:
-      unread = await thread_entry.unread_messages(adapter, origin, cfg, meta.slack_watermark_ts)
-      if not unread:
-        continue
-      permalink = await client.get_permalink(origin.channel_id, origin.thread_ts)
-      trigger = await _arm_follow_trigger(
-          trigger_mgr, meta.id, origin.channel_id, origin.thread_ts, permalink, unread[0].id)
-      if trigger is not None:
-        armed += 1
-    except Exception as e:
-      logger.warning(
-          "slack_follow_backfill_thread_failed",
-          session=meta.id,
-          channel=origin.channel_id,
-          thread_ts=origin.thread_ts,
-          error=str(e))
-  if armed:
-    logger.info("slack_follow_backfill_armed", sessions=armed)
-  return armed
+  return await thread_entry.backfill_followed_threads(SlackThreadAdapter(client), cfg, session_mgr, trigger_mgr)
 
 
 # ---------------------------------------------------------------------------

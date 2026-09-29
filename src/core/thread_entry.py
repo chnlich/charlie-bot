@@ -13,6 +13,7 @@ entrypoint imports this module, never the reverse.
 """
 
 import abc
+import asyncio
 import re
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -24,6 +25,10 @@ from src.api.message_utils import master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
+from src.core.log_once import LazyStructlogLogger
+from src.core.tasks import create_logged_task
+
+logger = LazyStructlogLogger()
 
 
 @dataclass(frozen=True)
@@ -338,6 +343,61 @@ def follow_floor(label: str) -> str | None:
   """
   match = _FOLLOW_FLOOR_RE.search(label)
   return match.group(1) if match is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Round side: the posting, ack, freshness-gate, reply, audit, and backfill
+# machinery every platform entrypoint shares, working through one adapter.
+# ---------------------------------------------------------------------------
+
+# Waits between the retries of one platform call; the answer stays readable in
+# the session log either way, so exhausting them logs an error rather than raising.
+_RETRY_DELAYS = (1.0, 4.0)
+
+
+async def post_with_retry(
+    adapter: ThreadAdapter, address: dict, text: str, *, session_id: str, files: Sequence[Path] = ()) -> bool:
+  """Post one thread reply, retrying on failure; True when the platform accepted it.
+
+  Exhausting the retries logs an error and returns False instead of raising:
+  the caller decides what a failed post means (a 502 to the CLI, a notice
+  left for the boot audit), and the event funnel is never broken by one.
+  """
+  name = adapter.platform.name
+  attempts = len(_RETRY_DELAYS) + 1
+  for attempt in range(attempts):
+    try:
+      await adapter.post(address, text, files)
+      return True
+    except Exception as e:
+      if attempt == attempts - 1:
+        logger.error(
+            f"{name}_post_gave_up",
+            session=session_id,
+            **adapter.log_fields(address),
+            attempts=attempts,
+            error=str(e))
+        return False
+      logger.warning(
+          f"{name}_post_retry",
+          session=session_id,
+          **adapter.log_fields(address),
+          attempt=attempt + 1,
+          error=str(e))
+      await asyncio.sleep(_RETRY_DELAYS[attempt])
+  raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
+
+
+def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:
+  """Clear the summon eye once its question is closed (reply landed, notice posted, or lost).
+
+  Fires the remove as its own logged task — a failure there only leaves one
+  stale eye plus a background_task_failed log and never touches the caller's
+  result. Skipped when the persisted block carries no platform mention key.
+  """
+  if block.get(adapter.platform.mention_key) is None:
+    return
+  create_logged_task(adapter.remove_ack(block), name=f"{adapter.platform.name}-ack-clear-{session_id}")
 
 
 # The file-service URL prefixes: the mounted mounts with the trailing slash the

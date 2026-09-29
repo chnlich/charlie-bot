@@ -44,6 +44,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 - code-server proxying (browser VS Code)
 - Anthropic Messages-compatible proxy endpoint (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`) fronting OpenAI-compatible backends
+- Slack and Discord summon entrypoints on a shared thread core — see [docs/discord.md](docs/discord.md) and [docs/chat-platforms.md](docs/chat-platforms.md)
 
 ## Screenshots
 
@@ -80,6 +81,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot artifact` — check a page's genre DOM assertions and cold-read probe, or wrap a content fragment into a genre page
 - `charliebot config` — print a config key's value through the loader (`config get <key>`)
 - `charliebot delegate` — delegate a task to a worker agent
+- `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
 - `charliebot improve` — start an iterative improvement loop
 - `charliebot memory` — query and lint the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans

@@ -390,6 +390,18 @@ async def post_with_retry(
   raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
 
 
+def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:
+  """Clear the summon eye once its question is closed (reply landed, notice posted, or lost).
+
+  Fires the remove as its own logged task — a failure there only leaves one
+  stale eye plus a background_task_failed log and never touches the caller's
+  result. Skipped when the persisted block carries no platform mention key.
+  """
+  if block.get(adapter.platform.mention_key) is None:
+    return
+  create_logged_task(adapter.remove_ack(block), name=f"{adapter.platform.name}-ack-clear-{session_id}")
+
+
 # How much of an unread message's text the 412 refusal and the gate list carry.
 _TEXT_PREVIEW_CHARS = 200
 
@@ -449,182 +461,6 @@ async def assert_thread_fresh(
 # replies should stay under this many chars, with the depth going to a page.
 # This is the single measurement point for that budget.
 _REPLY_BUDGET_CHARS = 500
-
-# Nudge event content: the summon round ended without a reply, so the master is
-# asked once whether the thread should hear something.
-_NUDGE_TEMPLATE = (
-    "{platform} thread {link}: the round answering this mention ended without posting a reply\n"
-    "(no `{command}` call). Decide now: when the thread should hear something, post it with\n"
-    "`{command} --file <path>`; when there is nothing to say, end this round and the thread\n"
-    "gets a one-line notice pointing to this session.")
-
-# Thread-visible end state after a summon round and its nudge round both posted nothing.
-_NO_REPLY_NOTICE = (
-    "No reply was posted for this mention; the details are in the session log. "
-    "Mention me again for a thread answer.")
-
-# Session-log content of the notice marker; its notice payload names the summon it closes.
-_NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the nudge round; the thread was told so."
-
-_LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
-
-_LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。"
-
-
-async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
-  """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
-
-  First the summons lost while queued: the startup replay covers ``ET.USER``
-  only (src/core/init_master_recovery.py), so a summon injection sitting in the
-  queue when the process died is picked up by nothing else and gets the
-  lost-summon notice. Then the round-end audit over every finished round, which
-  closes the crash windows between a done and its nudge, and between a nudge
-  round's done and its notice. Every predicate reads the log, so a second pass
-  finds nothing. Runs once per boot, after re-attach and replay have had their
-  chance.
-  """
-  platform = adapter.platform
-  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
-
-  sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
-  reported = 0
-  for meta in sessions:
-    if getattr(meta, platform.origin_field) is None:
-      continue
-    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-    lost = lost_summons(
-        platform,
-        events,
-        owned=master_cc.queued_user_event_ids(meta.id),
-        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
-    for ev in lost:
-      # Persist the marker before posting: a crash in between costs one notice,
-      # while posting first would re-post it on every boot until the marker landed.
-      await session_mgr.persist_and_broadcast(
-          meta.id, {
-              "type": ET.ASSISTANT_ERROR,
-              "content": _LOST_SUMMON_CONTENT.format(platform=platform.display_name),
-              platform.backfill_key: {
-                  ET.INPUT_EVENT_ID: ev["id"]
-              },
-          })
-      block = ev[platform.name]
-      await post_with_retry(adapter, block, _LOST_SUMMON_NOTICE, session_id=meta.id)
-      ack_clear(adapter, block, meta.id)
-      reported += 1
-      logger.info(
-          f"{platform.name}_backfill_lost_summon",
-          session=meta.id,
-          **adapter.log_fields(block),
-          input_event_id=ev["id"])
-    if lost:
-      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-
-    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
-    for done in dones:
-      bound = newest_thread_input(platform, events, master_done_input_event_ids(done))
-      if bound is None:
-        continue
-      done_input_id, target = bound
-      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
-        reported += 1
-        # The action appended an event the next done's predicates must see.
-        events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-  return reported
-
-
-def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> str:
-  """The thread link as the summon prompt states it; the platform's fallback ids when it has none."""
-  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
-  if match is not None:
-    return match.group(0)
-  return platform.thread_fallback.format(**block)
-
-
-async def audit_round(
-    adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
-    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
-  """Act on one finished round whose input carried a summon block; True when it acted.
-
-  Reads the log for the round's summon: a reply answering it ends the audit. A
-  summon round without one gets a nudge (once: a second done for the same
-  summon finds the nudge event); a nudge round without one gets the thread
-  notice (once: the notice marker, persisted only after the post
-  succeeded, so a failed post leaves the boot audit a retry). A summon issued
-  under the marker contract (its prompt names no reply command) is outside
-  this audit.
-  """
-  platform = adapter.platform
-  summon_id = summon_of(target, input_event_id)
-  summon = event_by_id(events, summon_id)
-  if platform.reply_command not in ((summon or {}).get("content") or ""):
-    return False
-  if replied(platform, events, summon_id):
-    return False
-
-  if "nudge_of" not in target:
-    if nudged(platform, events, summon_id):
-      return False
-    content = _NUDGE_TEMPLATE.format(
-        platform=platform.display_name, link=thread_link(platform, summon, target), command=platform.reply_command)
-    nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
-    nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
-    nudge[platform.name]["nudge_of"] = summon_id
-    await session_mgr.persist_and_broadcast(session_id, nudge)
-    create_logged_task(
-        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
-        name=f"{platform.name}-nudge-{session_id}")
-    logger.info(
-        f"{platform.name}_reply_nudge",
-        session=session_id,
-        **adapter.log_fields(target),
-        summon_id=summon_id,
-        nudge_id=nudge["id"])
-    return True
-
-  if noticed(platform, events, summon_id):
-    return False
-  ok = await post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
-  if not ok:
-    return False  # the platform's post_gave_up log is the only trace; no marker, so the boot audit retries
-  await session_mgr.persist_and_broadcast(
-      session_id, {
-          "type": ET.ASSISTANT_ERROR,
-          "content": _NO_REPLY_CONTENT.format(platform=platform.display_name),
-          platform.notice_key: {
-              ET.INPUT_EVENT_ID: summon_id
-          },
-      })
-  ack_clear(adapter, target, session_id)
-  logger.info(f"{platform.name}_reply_notice", session=session_id, **adapter.log_fields(target), summon_id=summon_id)
-  return True
-
-
-async def deliver_done(
-    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
-  """Round-end audit for one finished round; True when it nudged or posted the notice.
-
-  Called as a fire-and-forget task from ``persist_and_broadcast`` for every
-  ``master_done``; returns False without acting unless the round belongs to a
-  thread-bound session and answered a summon or a nudge. Guard-path dones
-  (src/api/chat.py) carry no input_event_id and browser-typed rounds carry no
-  summon block, so both leave the thread alone.
-  """
-  platform = adapter.platform
-  meta = await session_mgr.get_session(session_id)
-  if meta is None or getattr(meta, platform.origin_field) is None:
-    return False
-  input_event_ids = master_done_input_event_ids(done)
-  if not input_event_ids:
-    return False
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  # The round-end audit targets the same input the reply binding does: the
-  # newest thread-bearing one of the batch.
-  bound = newest_thread_input(platform, events, input_event_ids)
-  if bound is None:
-    return False
-  input_event_id, target = bound
-  return await audit_round(adapter, session_id, events, target, input_event_id, cfg, session_mgr)
 
 
 async def post_reply(
@@ -771,16 +607,182 @@ async def ack_messages(
   return {"acked": len(ids), f"watermark_{platform.id_label}": watermark}
 
 
-def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:
-  """Clear the summon eye once its question is closed (reply landed, notice posted, or lost).
+# Nudge event content: the summon round ended without a reply, so the master is
+# asked once whether the thread should hear something.
+_NUDGE_TEMPLATE = (
+    "{platform} thread {link}: the round answering this mention ended without posting a reply\n"
+    "(no `{command}` call). Decide now: when the thread should hear something, post it with\n"
+    "`{command} --file <path>`; when there is nothing to say, end this round and the thread\n"
+    "gets a one-line notice pointing to this session.")
 
-  Fires the remove as its own logged task — a failure there only leaves one
-  stale eye plus a background_task_failed log and never touches the caller's
-  result. Skipped when the persisted block carries no platform mention key.
+# Thread-visible end state after a summon round and its nudge round both posted nothing.
+_NO_REPLY_NOTICE = (
+    "No reply was posted for this mention; the details are in the session log. "
+    "Mention me again for a thread answer.")
+
+# Session-log content of the notice marker; its notice payload names the summon it closes.
+_NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the nudge round; the thread was told so."
+
+
+def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> str:
+  """The thread link as the summon prompt states it; the platform's fallback ids when it has none."""
+  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
+  if match is not None:
+    return match.group(0)
+  return platform.thread_fallback.format(**block)
+
+
+async def audit_round(
+    adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
+    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+  """Act on one finished round whose input carried a summon block; True when it acted.
+
+  Reads the log for the round's summon: a reply answering it ends the audit. A
+  summon round without one gets a nudge (once: a second done for the same
+  summon finds the nudge event); a nudge round without one gets the thread
+  notice (once: the notice marker, persisted only after the post
+  succeeded, so a failed post leaves the boot audit a retry). A summon issued
+  under the marker contract (its prompt names no reply command) is outside
+  this audit.
   """
-  if block.get(adapter.platform.mention_key) is None:
-    return
-  create_logged_task(adapter.remove_ack(block), name=f"{adapter.platform.name}-ack-clear-{session_id}")
+  platform = adapter.platform
+  summon_id = summon_of(target, input_event_id)
+  summon = event_by_id(events, summon_id)
+  if platform.reply_command not in ((summon or {}).get("content") or ""):
+    return False
+  if replied(platform, events, summon_id):
+    return False
+
+  if "nudge_of" not in target:
+    if nudged(platform, events, summon_id):
+      return False
+    content = _NUDGE_TEMPLATE.format(
+        platform=platform.display_name, link=thread_link(platform, summon, target), command=platform.reply_command)
+    nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
+    nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
+    nudge[platform.name]["nudge_of"] = summon_id
+    await session_mgr.persist_and_broadcast(session_id, nudge)
+    create_logged_task(
+        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
+        name=f"{platform.name}-nudge-{session_id}")
+    logger.info(
+        f"{platform.name}_reply_nudge",
+        session=session_id,
+        **adapter.log_fields(target),
+        summon_id=summon_id,
+        nudge_id=nudge["id"])
+    return True
+
+  if noticed(platform, events, summon_id):
+    return False
+  ok = await post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
+  if not ok:
+    return False  # the platform's post_gave_up log is the only trace; no marker, so the boot audit retries
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": _NO_REPLY_CONTENT.format(platform=platform.display_name),
+          platform.notice_key: {
+              ET.INPUT_EVENT_ID: summon_id
+          },
+      })
+  ack_clear(adapter, target, session_id)
+  logger.info(f"{platform.name}_reply_notice", session=session_id, **adapter.log_fields(target), summon_id=summon_id)
+  return True
+
+
+async def deliver_done(
+    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+  """Round-end audit for one finished round; True when it nudged or posted the notice.
+
+  Called as a fire-and-forget task from ``persist_and_broadcast`` for every
+  ``master_done``; returns False without acting unless the round belongs to a
+  thread-bound session and answered a summon or a nudge. Guard-path dones
+  (src/api/chat.py) carry no input_event_id and browser-typed rounds carry no
+  summon block, so both leave the thread alone.
+  """
+  platform = adapter.platform
+  meta = await session_mgr.get_session(session_id)
+  if meta is None or getattr(meta, platform.origin_field) is None:
+    return False
+  input_event_ids = master_done_input_event_ids(done)
+  if not input_event_ids:
+    return False
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  # The round-end audit targets the same input the reply binding does: the
+  # newest thread-bearing one of the batch.
+  bound = newest_thread_input(platform, events, input_event_ids)
+  if bound is None:
+    return False
+  input_event_id, target = bound
+  return await audit_round(adapter, session_id, events, target, input_event_id, cfg, session_mgr)
+
+
+_LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
+
+_LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。"
+
+
+async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+  """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
+
+  First the summons lost while queued: the startup replay covers ``ET.USER``
+  only (src/core/init_master_recovery.py), so a summon injection sitting in the
+  queue when the process died is picked up by nothing else and gets the
+  lost-summon notice. Then the round-end audit over every finished round, which
+  closes the crash windows between a done and its nudge, and between a nudge
+  round's done and its notice. Every predicate reads the log, so a second pass
+  finds nothing. Runs once per boot, after re-attach and replay have had their
+  chance.
+  """
+  platform = adapter.platform
+  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+
+  sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
+  reported = 0
+  for meta in sessions:
+    if getattr(meta, platform.origin_field) is None:
+      continue
+    events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+    lost = lost_summons(
+        platform,
+        events,
+        owned=master_cc.queued_user_event_ids(meta.id),
+        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
+    for ev in lost:
+      # Persist the marker before posting: a crash in between costs one notice,
+      # while posting first would re-post it on every boot until the marker landed.
+      await session_mgr.persist_and_broadcast(
+          meta.id, {
+              "type": ET.ASSISTANT_ERROR,
+              "content": _LOST_SUMMON_CONTENT.format(platform=platform.display_name),
+              platform.backfill_key: {
+                  ET.INPUT_EVENT_ID: ev["id"]
+              },
+          })
+      block = ev[platform.name]
+      await post_with_retry(adapter, block, _LOST_SUMMON_NOTICE, session_id=meta.id)
+      ack_clear(adapter, block, meta.id)
+      reported += 1
+      logger.info(
+          f"{platform.name}_backfill_lost_summon",
+          session=meta.id,
+          **adapter.log_fields(block),
+          input_event_id=ev["id"])
+    if lost:
+      events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+
+    dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
+    for done in dones:
+      bound = newest_thread_input(platform, events, master_done_input_event_ids(done))
+      if bound is None:
+        continue
+      done_input_id, target = bound
+      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
+        reported += 1
+        # The action appended an event the next done's predicates must see.
+        events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+  return reported
 
 
 # The file-service URL prefixes: the mounted mounts with the trailing slash the

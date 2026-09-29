@@ -473,6 +473,16 @@ body.resizing { cursor: col-resize; user-select: none; }
 /* The current session's buttons and the starred star keep their flow slot
    and stay clickable at rest. */
 .session-row > button.\!opacity-100 { position: static; pointer-events: auto; }
+/* Scope the reveal to the hovered row: the buttons' Tailwind group-hover
+   class rides every ancestor carrying the `group` class, and each group
+   section wrapper (groups.js's <div class="session-group group">) carries
+   one, so hovering anything inside a group section would set every row's
+   out-of-flow buttons in it to opacity 1, painted over those rows' text
+   without their hover cover. This reset out-specifies that class (it adds
+   the element), so a row's buttons reveal only while the row itself is
+   hovered; the !opacity-100 pins above are exempt, and the touch block
+   below re-wins through its ID selectors. */
+.session-row:not(:hover) > button:not(.\!opacity-100) { opacity: 0; }
 /* Hover: the revealed buttons cover the text end with the hovered row's own
    composite — the sidebar panel (slate-850) under the row's hover tint — as
    a color layer plus image so the browser blends it exactly like the row

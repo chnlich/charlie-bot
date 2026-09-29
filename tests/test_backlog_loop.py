@@ -222,9 +222,6 @@ async def test_scan_fallback(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# test_next_id_with_prefix
-
-# ---------------------------------------------------------------------------
 # test_missing_backlog_generates
 # ---------------------------------------------------------------------------
 
@@ -249,7 +246,3 @@ async def test_malformed_backlog_fails_loud(tmp_path: Path) -> None:
 
   with pytest.raises(ValueError, match=r'backlog\.yaml: expected a YAML list of backlog items, got dict'):
     await determine_action(backlog, cfg, tmp_path)
-
-
-# ---------------------------------------------------------------------------
-# test_language_rule_zh_cn

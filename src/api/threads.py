@@ -386,8 +386,7 @@ _thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict, bytes]]] = Bo
 # The one home of the list body's JSON options. The encoder's per-element text
 # is context-free, so a row's standalone rendering is byte-identical to its
 # rendering inside the whole-body array dump (the _EventBatcher property in
-# trace_merge); the joined fragments and the whole dump are pinned equal by
-# test_list_body_splice_matches_whole_dump.
+# trace_merge).
 _ROW_DUMPS_OPTS = {"ensure_ascii": False, "allow_nan": False, "separators": (",", ":")}
 
 
@@ -479,8 +478,7 @@ def _list_body(rows: list[tuple[dict, bytes]]) -> bytes:
 
   The body is the fragments joined inside array brackets, not a whole-array
   dumps — a changed poll would otherwise re-encode every unmoved row (the
-  encoder's per-element text is context-free, so the join is byte-identical;
-  pinned by test_list_body_splice_matches_whole_dump).
+  encoder's per-element text is context-free, so the join is byte-identical).
   """
   combined = list(rows)
   combined.sort(key=lambda pair: pair[0]["created_at"], reverse=True)

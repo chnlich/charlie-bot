@@ -392,8 +392,8 @@ def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, mo
 
 
 def _parity_fixture(tmp_path: Path) -> tuple[Claude, Codex]:
-  """The Claude and Codex corpus of test_tally_is_absolutely_correct: an original response,
-  its verbatim replay in a second config dir, a subagent response, and one Codex rollout."""
+  """The Claude and Codex corpus: an original response, its verbatim replay in a
+  second config dir, a subagent response, and one Codex rollout."""
   claude = Claude(tmp_path)
   codex = Codex(tmp_path)
   usage = {"input_tokens": 100, "cache_creation_input_tokens": 20, "cache_read_input_tokens": 40, "output_tokens": 30}

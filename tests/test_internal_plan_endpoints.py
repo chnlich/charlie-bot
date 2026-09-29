@@ -180,8 +180,7 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 # ThreadMetadata.task_type is set on delegate-created threads
 
 # ---------------------------------------------------------------------------
-# List endpoint contract (A2) — 404 unknown / 200+errors corrupt; the
-# "200+empty errors normal" leg is asserted by test_get_plans_endpoint_returns_registry
+# List endpoint contract (A2) — 404 unknown / 200+errors corrupt
 # ---------------------------------------------------------------------------
 
 

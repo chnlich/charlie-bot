@@ -1735,7 +1735,10 @@ class TaskExecutionAdapter:
       return
     if summary is None:
       summary = await self._worker_failure_summary(session_id, run)
-    report, created = await self._tree.dispatch.deliver_child_report(
+    # The delivery entry owns the wake: a freshly created report wakes the
+    # parent's next serialized turn (dispatcher for a task-tree parent, the
+    # legacy master wake for a legacy parent); a replayed one wakes nobody.
+    await self._tree.dispatch.deliver_child_report(
         session_id,
         source_event=source,
         outcome=outcome,
@@ -1743,13 +1746,6 @@ class TaskExecutionAdapter:
         result_refs=[f"{RUN_REF_PREFIX}{run.id}"],
         recipient=meta.task_parent_id,
     )
-    if not created:
-      return
-    # The freshly created failure report is the parent's new durable input:
-    # wake its next serialized turn (dispatcher for a task-tree parent, the
-    # legacy master wake for a legacy parent). Only a freshly created report
-    # wakes, so a recovery re-delivery never wakes twice.
-    await self._tree.dispatch.wake_parent(meta.task_parent_id, report=report)
 
   async def _worker_failure_summary(self, session_id: str, run: RunRecord) -> str:
     """The failed run's own closing words (or its error, or the bare outcome).

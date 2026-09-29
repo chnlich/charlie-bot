@@ -50,3 +50,16 @@ class ThreadPlatform:
   def ack_event_type(self) -> str:
     """Wire type of the platform's persisted ack audit record."""
     return f"{self.name}_ack"
+
+
+class ThreadReplyError(Exception):
+  """A reply the endpoint refuses or the platform did not accept; ``status`` is the HTTP status it maps to.
+
+  ``detail`` becomes the HTTPException detail; the 412 refusal carries the
+  structured ``stale_thread`` payload instead of a plain string.
+  """
+
+  def __init__(self, status: int, detail: str | dict) -> None:
+    super().__init__(str(detail))
+    self.status = status
+    self.detail = detail

@@ -67,6 +67,7 @@ from src.core.models import (
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
+from src.core.thread_entry import ThreadReplyError
 from src.core.triggers import ArchivedSessionError, TriggerManager
 
 if TYPE_CHECKING:
@@ -778,18 +779,9 @@ def _summon_of(slack_block: dict, event_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-class SlackReplyError(Exception):
-  """A reply the endpoint refuses or Slack did not accept; ``status`` is the HTTP status it maps to.
-
-  ``detail`` becomes the HTTPException detail; the 412 refusal carries the
-  structured ``stale_thread`` payload instead of a plain string.
-  """
-
-  def __init__(self, status: int, detail: str | dict) -> None:
-    super().__init__(str(detail))
-    self.status = status
-    self.detail = detail
-
+# The shared reply refusal lives in src/core/thread_entry.py; the Slack name
+# stays for the adapter's callers (the server endpoint and the tests).
+SlackReplyError = ThreadReplyError
 
 def _newest_slack_input(events: list[dict], event_ids: list[str]) -> tuple[str, dict] | None:
   """``(event id, slack block)`` of the newest Slack-bearing input among *event_ids*, or None.

@@ -765,6 +765,28 @@ class SlackAckRequest(BaseModel):
   message_ids: list[str]
 
 
+class DiscordReplyRequest(BaseModel):
+  """Request body for the internal discord/reply endpoint: the calling session posts *text* to its own thread."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  text: str
+
+
+class DiscordReadRequest(BaseModel):
+  """Request body for the internal discord/read endpoint: the session reads its own thread, or the channel *url* names."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  url: str | None = None
+  limit: int = Field(50, ge=1, le=100)
+
+
+class DiscordCheckRequest(BaseModel):
+  """Request body for the internal discord/check endpoint: reports the bot token's setup, carrying no fields."""
+  model_config = ConfigDict(extra="forbid")
+
+
 # ---------------------------------------------------------------------------
 # Plan Registry Request Models
 # ---------------------------------------------------------------------------

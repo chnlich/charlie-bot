@@ -1632,8 +1632,9 @@ async def run_harness(args: argparse.Namespace) -> None:
 
             # ---- S26: a bound node's schedule rides its Workspace row ---------
             # The enabled bound node shows the blue clock, the "Next:" line and
-            # the truncated cron · timezone line, with the Edit schedule gear;
-            # the disabled one goes grey with "Disabled" and no next run.
+            # the truncated cron · timezone line, with the Settings gear (its
+            # menu carries Edit schedule); the disabled one goes grey with
+            # "Disabled" and no next run.
             try:
                 log("  s26: bound nodes' schedule rows in Workspace")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
@@ -1653,7 +1654,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                             title: clock ? clock.getAttribute('title') : null,
                             next: row.textContent.includes('Next: '),
                             cronTz: row.textContent.includes('0 9 * * * · America/Los_Angeles'),
-                            edit: !!row.querySelector('button[title="Edit schedule"]'),
+                            settings: !!row.querySelector('button[title="Settings"]'),
                       }});
                     }})()
                 """)
@@ -1662,7 +1663,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                             f"the bound row shows the blue clock naming its task ({bound})")
                 assert_true(bound["next"] and bound["cronTz"],
                             f"the bound row shows the Next line and the cron · timezone line ({bound})")
-                assert_true(bound["edit"], "the bound row carries the Edit schedule hover button")
+                assert_true(bound["settings"], "the bound row carries the Settings hover button")
                 paused_row = await evaluate(cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['paused_node']}');
@@ -1680,7 +1681,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                             f"the disabled bound row goes grey, says Disabled, and names no next run ({paused})")
                 shot = await screenshot(cdp, session_id, results, "s26_bound_rows_workspace")
                 results.record("a bound node's schedule rides its Workspace row; disabled goes grey", ok=True,
-                               detail="blue clock + Next + cron·timezone + Edit schedule; the disabled row is grey with Disabled",
+                               detail="blue clock + Next + cron·timezone + Settings; the disabled row is grey with Disabled",
                                screenshot=shot)
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s26_FAILED")

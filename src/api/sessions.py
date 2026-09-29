@@ -49,8 +49,7 @@ from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
     get_config,
-    get_scheduled_tasks,
-    scheduled_tasks_fingerprint,
+    scheduled_tasks_snapshot,
 )
 from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
@@ -396,10 +395,10 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
   ids = tuple(sorted(set(session_ids)))
   global _ROW_SCHEDULE_MEMO
   hit = _ROW_SCHEDULE_MEMO
+  tasks, fingerprint = scheduled_tasks_snapshot()
   if (hit is not None and now_utc < hit[3] and hit[1] == ids and
-      scheduled_tasks_fingerprint() == hit[0]):
+      fingerprint == hit[0]):
     return hit[2]
-  tasks = get_scheduled_tasks()
   out: dict[str, dict] = {}
   for session_id in ids:
     task_name = bound_task_name(session_id, tasks)
@@ -419,8 +418,7 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
   fires = [
       datetime.fromisoformat(fields["schedule_next_run"])
       for fields in out.values() if fields["schedule_task"] is not None]
-  _ROW_SCHEDULE_MEMO = (
-      scheduled_tasks_fingerprint(), ids, out, min(fires) if fires else _ROW_SCHEDULE_NO_FIRE)
+  _ROW_SCHEDULE_MEMO = (fingerprint, ids, out, min(fires) if fires else _ROW_SCHEDULE_NO_FIRE)
   return out
 
 

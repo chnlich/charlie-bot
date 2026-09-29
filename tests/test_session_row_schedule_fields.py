@@ -150,7 +150,7 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
 
   from src.api.sessions import row_schedule_fields
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_mgr, tree = build_env(tmp_path)
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
   other = await create_task(tree, parent=None, request_id="plain-1", profile="manager", name="Plain")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
@@ -170,18 +170,20 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   assert rebound[other.id]["schedule_task"] == "synthetic-second"
   assert rebound[bound.id] == first[bound.id]
 
-  # A served fire passing re-derives with the next occurrence: the shift moves
+  # A served fire passing re-derives with the next occurrence: the shift pins
   # the clock next_run_iso computes from (datetime.now under the task's
-  # timezone), the one source both memo layers read.
+  # timezone) 5 minutes past the served fire, so the crossing holds at any
+  # wall-clock run instant.
   fire = datetime.fromisoformat(first[bound.id]["schedule_next_run"])
+  crossed = fire + timedelta(minutes=5)
 
   class _ShiftedDateTime(datetime):
     @classmethod
-    def now(cls, tz=None):  # noqa: ANN001
-      return (datetime.now(UTC) + timedelta(hours=4)).astimezone(tz)
+    def now(cls, tz=None):
+      return crossed.astimezone(tz)
 
   monkeypatch.setattr("src.api.cron.datetime", _ShiftedDateTime)
-  advanced = row_schedule_fields(ids, fire + timedelta(minutes=5))
+  advanced = row_schedule_fields(ids, crossed)
   assert datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
 
 

@@ -1279,14 +1279,17 @@ def get_scheduled_tasks() -> list[ScheduledTaskConfig]:
   return _refresh_cron_snapshot().tasks
 
 
-def scheduled_tasks_fingerprint() -> object:
-  """The current cron snapshot's fingerprint, refreshing the snapshot first.
+def scheduled_tasks_snapshot() -> tuple[list[ScheduledTaskConfig], object]:
+  """The current snapshot's ``(tasks, fingerprint)``, from one refresh read.
 
-  The freshness key :func:`get_scheduled_tasks` itself answers on: an equal
-  value proves the task list unchanged since the caller last read it, so
-  derived fields keyed on it stay current until it moves.
+  The fingerprint is the freshness key :func:`get_scheduled_tasks` itself
+  answers on: an equal value proves the task list unchanged since the caller
+  last read it, so derived fields keyed on it stay current until it moves.
+  Both values come from the one snapshot so a consumer cannot stamp one
+  generation's fingerprint on another's answer.
   """
-  return _refresh_cron_snapshot().fingerprint
+  snapshot = _refresh_cron_snapshot()
+  return snapshot.tasks, snapshot.fingerprint
 
 
 def get_scheduled_task_errors() -> list[ScheduledTaskError]:

@@ -250,11 +250,11 @@ test('a worker leaf row shows the leaf icon and keeps the archive action alone',
   const leaf = rowHtml(nav.innerHTML, 'w-new');
   assert.match(leaf, /Worker \(implementation leaf\)/);
   assert.match(leaf, /title="Archive"/);
-  assert.doesNotMatch(leaf, /star-btn|title="Rename"|title="Set group"|title="Edit task config"/);
+  assert.doesNotMatch(leaf, /star-btn|title="Rename"|title="Set group"|title="Settings"|title="Edit task config"/);
   const parent = rowHtml(nav.innerHTML, 'r1');
   assert.doesNotMatch(parent, /Worker \(implementation leaf\)/);
   assert.match(parent, /star-btn/);
-  assert.match(parent, /title="Set group"/);
+  assert.match(parent, /title="Settings"/);
 });
 
 test('search results stay flat: no nesting, no chevron', () => {
@@ -276,17 +276,80 @@ test('a logical row offers New child session; a worker leaf does not', () => {
   assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /New child session|createChildSession/);
 });
 
-test('a logical row offers Task & context between New child session and Archive; a worker leaf does not', () => {
+test('a normal row\u2019s direct buttons end in Settings carrying the menu facts; a worker leaf has none', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
-  context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), meta('legacy')], 'all');
+  context.renderSessionList([manager('r1', null, 10), worker('w-new', 'r1', 11), legacy('old1', 9)], 'all');
 
   const r1 = rowHtml(nav.innerHTML, 'r1');
-  assert.match(r1, /title="Task &amp; context"/);
-  assert.ok(r1.indexOf("createChildSession('r1')") < r1.indexOf("openTaskContextModal('r1')"));
-  assert.ok(r1.indexOf("openTaskContextModal('r1')") < r1.indexOf("archiveSession('r1')"));
-  assert.match(rowHtml(nav.innerHTML, 'legacy'), /openTaskContextModal\('legacy'\)/);
-  assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /Task &amp; context|openTaskContextModal/);
+  const at = (mark) => r1.indexOf(mark);
+  assert.ok(at('title="Star"') > -1 && at('title="Star"') < at('title="New child session"')
+    && at('title="New child session"') < at('title="Archive"') && at('title="Archive"') < at('title="Settings"'),
+    `the four direct buttons render in order: ${r1}`);
+  assert.match(r1, /openSessionRowMenu\(this, 'r1'\)/);
+  // The facts openSessionRowMenu builds the items from.
+  assert.match(r1, /data-current-group="Work"/);
+  assert.match(r1, /data-task-parent=""/);
+  assert.match(r1, /data-profile="manager"/);
+  assert.match(r1, /data-schedule-task=""/);
+  // A legacy row's Settings carries the empty profile; a worker leaf keeps
+  // the archive action alone.
+  assert.match(rowHtml(nav.innerHTML, 'old1'), /data-profile=""/);
+  assert.doesNotMatch(rowHtml(nav.innerHTML, 'w-new'), /title="Settings"|openSessionRowMenu/);
+});
+
+test('openSessionRowMenu builds the item list from the button\u2019s data attributes', () => {
+  const {context} = buildSidebarIndicatorContext([]);
+  const calls = [];
+  const click = {preventDefault() {}, stopPropagation() {}};
+  context.openTaskContextModal = (...args) => calls.push(['taskContext', ...args]);
+  context.openCronEditor = (...args) => calls.push(['edit', ...args]);
+  context.openCronAdder = (...args) => calls.push(['add', ...args]);
+  context.startRename = (...args) => calls.push(['rename', ...args]);
+  let items = null;
+  context.openRowMenu = (anchor, built) => { items = built; };
+  const open = (dataset, id) => {
+    context.Sidebar.openSessionRowMenu(createElement({tagName: 'BUTTON', dataset}), id);
+    // Spread into an outer-realm array: a vm array carries the vm's
+    // Array.prototype and deepStrictEqual rejects the cross-realm twin.
+    return [...items].map((item) => item.label);
+  };
+
+  // A root manager, unbound: all four items, each onSelect wired to its old
+  // direct button's call. (Move to group runs groups.js-local
+  // showGroupSelector, outside this harness's reach; the browser harness
+  // covers it.)
+  assert.deepEqual(open({currentGroup: 'Work', profile: 'manager'}, 'r1'),
+    ['Rename', 'Move to group\u2026', 'Task & context', 'Add schedule\u2026']);
+  items[0].onSelect(click);
+  items[2].onSelect(click);
+  items[3].onSelect(click);
+  // JSON-normalized: openCronAdder's {sessionId} literal is built inside the
+  // vm and carries the vm's Object.prototype, which deepStrictEqual rejects.
+  assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+    ['rename', {}, 'r1'],
+    ['taskContext', 'r1'],
+    ['add', {sessionId: 'r1'}],
+  ]);
+  assert.equal(calls[0][1], click, 'rename takes the item\u2019s click event');
+
+  // A child manager moves with its parent: no Move to group.
+  assert.deepEqual(open({taskParent: 'r1', profile: 'manager'}, 'c1'),
+    ['Rename', 'Task & context', 'Add schedule\u2026']);
+  calls.length = 0;
+  items[1].onSelect(click);
+  assert.deepEqual(calls, [['taskContext', 'c1']]);
+
+  // A legacy row (profile null, unbound): the group move stays (it has no
+  // task-tree parent), but no Task & context and no schedule item.
+  assert.deepEqual(open({}, 'old1'), ['Rename', 'Move to group\u2026']);
+
+  // A bound row edits its own task instead of adding one.
+  assert.deepEqual(open({scheduleTask: 'task-cron1'}, 'cron1'),
+    ['Rename', 'Move to group\u2026', 'Edit schedule\u2026']);
+  calls.length = 0;
+  items[2].onSelect(click);
+  assert.deepEqual(calls, [['edit', 'task-cron1']]);
 });
 
 test('the active session’s ancestors open once per switch and a manual collapse then holds', () => {
@@ -395,9 +458,10 @@ test('a legacy session row keeps its actions but shows no Task & context button'
   const legacyRow = rowHtml(nav.innerHTML, 'old1');
   assert.match(legacyRow, /star-btn/);
   assert.match(legacyRow, /title="New child session"/);
+  assert.match(legacyRow, /data-profile=""/);
   assert.doesNotMatch(legacyRow, /openTaskContextModal/);
   const managerRow = rowHtml(nav.innerHTML, 'mgr');
-  assert.match(managerRow, /openTaskContextModal/);
+  assert.match(managerRow, /data-profile="manager"/);
 });
 
 // ---------------------------------------------------------------------------
@@ -429,7 +493,8 @@ test('a bound node nests its firing leaves under it, collapsed, and keeps the bo
   assert.match(anchorOpenTag(html, 'cron1') + rowHtml(html, 'cron1'),
       /data-tree-toggle="cron1"[^>]*aria-expanded="false"/);
   assert.match(rowHtml(html, 'cron1'), /Scheduled: task-cron1/);
-  assert.match(rowHtml(html, 'cron1'), /title="Edit schedule"/);
+  assert.match(rowHtml(html, 'cron1'), /title="Settings"/);
+  assert.match(rowHtml(html, 'cron1'), /data-schedule-task="task-cron1"/);
   // A projected leaf stays read-only: no star, rename, archive or schedule
   // button, and its click opens that thread's transcript in the main chat view.
   for (const t of ['t1', 't2', 't3']) {
@@ -461,14 +526,14 @@ test('a bound node’s clock and lines follow the task state: disabled goes grey
   assert.doesNotMatch(rowHtml(html, 'cron2'), /Next: /);
 });
 
-test('an unbound manager row carries the Add schedule hover button, a bound row the Edit one', () => {
+test('a bound row\u2019s Settings names its schedule task; an unbound manager row names none', () => {
   const {context, nav} = buildSidebarIndicatorContext([]);
 
   context.renderSessionList([boundNode('cron1', 10), manager('mgr', null, 9)], 'all');
 
-  assert.match(rowHtml(nav.innerHTML, 'cron1'), /title="Edit schedule"/);
-  assert.match(rowHtml(nav.innerHTML, 'mgr'), /title="Add schedule"/);
-  assert.match(rowHtml(nav.innerHTML, 'mgr'), /openCronAdder\(\{sessionId: 'mgr'\}\)/);
+  assert.match(rowHtml(nav.innerHTML, 'cron1'), /data-schedule-task="task-cron1"/);
+  assert.match(rowHtml(nav.innerHTML, 'mgr'), /data-schedule-task=""/);
+  assert.match(rowHtml(nav.innerHTML, 'mgr'), /data-profile="manager"/);
 });
 
 test('a grouped paint records the tree maps, refreshes tree indicators, and keeps expand state across repaints', () => {

@@ -339,7 +339,8 @@ _WALK_KINDS = (
 )
 
 
-def _iter_charliebot_logs(sessions: Path, notes: list[str]) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
+def _iter_charliebot_logs(sessions: Path,
+                          notes: list[str]) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
   """Yield ``(kind, path, stat, error)`` over the charlie-bot corpus: every session directory's
   thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
   captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
@@ -680,7 +681,7 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
 
   *prev* is the file's cached entry under an older signature; when the guard proves the
   prefix unchanged, only the appended tail parses and the cached records ride forward with
-  the model context, is_root and self-check state the prefix settled.
+  the model context the prefix settled.
   """
   if prev is not None:
     tail = _tail_parse(path, prev, _CODEX_MARKERS)
@@ -998,8 +999,7 @@ def capture_jsonl_sources(
   notes: list[str] = []
 
   rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, notes)
-  walked = _walk_source(
-      notes, USAGE_SOURCE_CLAUDE_CODE, "claude", claude_homes, rows, cache, _claude_file_contribution)
+  walked = _walk_source(notes, USAGE_SOURCE_CLAUDE_CODE, "claude", claude_homes, rows, cache, _claude_file_contribution)
   for path, account, entry, _hit in walked:
     if entry is None:
       continue
@@ -1350,7 +1350,6 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
 # usage ledger capture: the opencode db, and the one capture entry point
 # ---------------------------------------------------------------------------
 
-
 # The whole message table's gate, one probe query: the four aggregates sign the db for the
 # capture, and the max time_updated is the floor a re-read starts from. Every insert and
 # every time_updated bump carries the write's own wall-clock ms (drizzle $onUpdate), so a
@@ -1358,6 +1357,7 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
 _OPENCODE_PROBE_SQL = (
     "select count(*), coalesce(sum(time_updated), 0), "
     "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
+
 
 def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
   """Copy the opencode db's message-table usage into the SQLite usage ledger, so the page's

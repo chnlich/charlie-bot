@@ -94,11 +94,12 @@ def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
   return codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
 
-def _capture_all(ledger: UsageLedger,
-                 claude: Claude | None = None,
-                 codex: Codex | None = None,
-                 cache: Path | None = None,
-                 sessions: Path | None = None) -> dict[str, int]:
+def _capture_all(
+    ledger: UsageLedger,
+    claude: Claude | None = None,
+    codex: Codex | None = None,
+    cache: Path | None = None,
+    sessions: Path | None = None) -> dict[str, int]:
   """One capture_usage round over the sources the caller names, under the "host-a" labels."""
   return tt.capture_usage(
       ledger,
@@ -185,7 +186,7 @@ def test_appends_are_visible(tmp_path: Path) -> None:
 
 # Rows are the two stores the replay dedup must hold across: the sqlite row
 # store alone, and the row store with the json cache written beside it by the
-# first collect.
+# first capture.
 _REPLAY_STORE_ROWS = [
     pytest.param(False, id="row-store-only"),
     pytest.param(True, id="row-store-plus-cache"),
@@ -268,7 +269,7 @@ def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
 
 
 class _Option:
-  """One config.yaml backend option's shape the tally reads (id / type / model)."""
+  """One config.yaml backend option's shape the capture reads (id / type / model)."""
 
   def __init__(self, option_id: str, option_type: str, model: str | None = None) -> None:
     self.id, self.type, self.model = option_id, option_type, model
@@ -431,7 +432,7 @@ def _capture(claude: Claude | None,
              ledger: UsageLedger,
              cache: Path | None = None) -> dict[str, int]:
   """One capture round against *ledger*; *cache*, when given, is loaded and saved like the
-  collect's own document, so the capture rides the same cache-gated serve."""
+  capture's own document, so every round rides the same cache-gated serve."""
   notes: list[str] = []
   tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
   written = tt.capture_jsonl_sources(
@@ -505,8 +506,8 @@ def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: P
 
 
 def _capture_charliebot(ledger: UsageLedger, sessions_dir: Path, cache: Path | None = None) -> int:
-  """One charlie-bot capture round against *ledger*; *cache* rides like the collect's own
-  document, so the capture shares the collect's cache-gated serve."""
+  """One charlie-bot capture round against *ledger*; *cache* rides like the capture's own
+  document, so every round shares the same cache-gated serve."""
   notes: list[str] = []
   tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
   written = tt.capture_charliebot(ledger, "host-a", sessions_dir, tally_cache)

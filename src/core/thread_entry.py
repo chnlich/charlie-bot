@@ -434,6 +434,21 @@ async def require_thread_session(
   return meta
 
 
+async def unread_messages(
+    adapter: ThreadAdapter, origin: Any, cfg: CharlieBotConfig, watermark: str | None) -> list[ThreadMessage]:
+  """The thread *origin* names' eligible messages above *watermark*; None passes all.
+
+  One readback shared by the freshness gate and the reconnect backfill: the
+  adapter's eligible read, filtered to ids sorting strictly above the
+  watermark under the platform's id key.
+  """
+  messages = await adapter.read_eligible(origin, cfg)
+  if watermark is None:
+    return messages
+  floor = adapter.platform.id_key(watermark)
+  return [m for m in messages if adapter.platform.id_key(m.id) > floor]
+
+
 async def assert_thread_fresh(
     adapter: ThreadAdapter, session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
   """Refuse the reply when eligible thread messages sit above the session's watermark.
@@ -449,9 +464,7 @@ async def assert_thread_fresh(
   platform = adapter.platform
   meta = await require_thread_session(platform, session_id, session_mgr)
   watermark = getattr(meta, platform.watermark_field)
-  messages = await adapter.read_eligible(getattr(meta, platform.origin_field), cfg)
-  floor = None if watermark is None else platform.id_key(watermark)
-  unread = [m for m in messages if floor is None or platform.id_key(m.id) > floor]
+  unread = await unread_messages(adapter, getattr(meta, platform.origin_field), cfg, watermark)
   if not unread:
     return
   raise ThreadReplyError(

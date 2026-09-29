@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.api.message_utils import master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 
@@ -197,3 +198,25 @@ def nudged(platform: ThreadPlatform, events: list[dict], summon_id: str) -> bool
 def noticed(platform: ThreadPlatform, events: list[dict], summon_id: str) -> bool:
   """Whether the log holds the thread's no-reply notice marker for *summon_id*."""
   return any((ev.get(platform.notice_key) or {}).get(ET.INPUT_EVENT_ID) == summon_id for ev in events)
+
+
+def lost_summons(platform: ThreadPlatform, events: list[dict], *, owned: set[str], running: set[str]) -> list[dict]:
+  """The summon injections in one session's log that nothing will ever answer.
+
+  A summon (or a nudge: it carries the same summon block) is lost when no
+  master_done names it (any id of a merged round's list counts as answered),
+  this process does not already own it (queued or running), the session's
+  master_run record does not name it among its whole input list (alive but not
+  followable), and no earlier backfill marked it. The marker is the
+  ``<name>_backfill`` payload, never a synthetic master_done: that event is
+  the cut point replay uses to decide which user messages are still unanswered.
+  """
+  answered: set[str] = set()
+  for ev in events:
+    if ev.get("type") == ET.MASTER_DONE:
+      answered.update(master_done_input_event_ids(ev))
+  marked = {ev[platform.backfill_key].get(ET.INPUT_EVENT_ID) for ev in events if platform.backfill_key in ev}
+  return [
+      ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and platform.name in ev and ev["id"] not in answered and
+      ev["id"] not in marked and ev["id"] not in owned and ev["id"] not in running
+  ]

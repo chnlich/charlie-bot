@@ -525,3 +525,167 @@ def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: P
   assert written["Claude Code"] == 2  # m1 re-upserts beside the appended m2
   assert after.calls == 2 and after.output == 7
   assert (after.first, after.last) == ("2024-01-01", "2024-01-02")
+
+
+# ---------------------------------------------------------------------------
+# usage ledger capture (capture_charliebot)
+# ---------------------------------------------------------------------------
+
+
+def _capture_charliebot(ledger: UsageLedger, sessions_dir: Path, cache: Path | None = None) -> int:
+  """One charlie-bot capture round against *ledger*; *cache* rides like the collect's own
+  document, so the capture shares the collect's cache-gated serve."""
+  notes: list[str] = []
+  tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
+  written = tt.capture_charliebot(ledger, "host-a", sessions_dir, tally_cache)
+  if tally_cache is not None:
+    tally_cache.save(cache)
+  return written
+
+
+def _ledger_rows(ledger: UsageLedger) -> dict:
+  return {(r.source, r.model): r for r in ledger.model_rows()}
+
+
+def _codex_rollout(codex: Codex, sid: str, model: str, last: dict, total: dict, ts: str) -> Path:
+  """One Codex rollout named for its session id — the name the real homes carry and the
+  capture's session registration parses."""
+  flow = codex.home / "sessions" / f"rollout-{sid}"
+  flow.mkdir(parents=True, exist_ok=True)
+  with (flow / f"rollout-{sid}.jsonl").open("w") as fh:
+    for line in (_codex_meta(), _codex_turn(model), _codex_count(last, total, ts)):
+      fh.write(json.dumps(line) + "\n")
+  return flow / f"rollout-{sid}.jsonl"
+
+
+def test_charliebot_capture_parity_with_the_collect_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """CLC threads plus a CLC master capture give the ledger the same charlie-bot rows
+  (source, model, the four token fields, calls) the collect counted."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-glm-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5, cache_read=10))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="charlie-code-glm-flash",
+      model=None,
+      session_ids=[],
+      results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 6))])
+  cb.master("s1", "20260913T000000Z", [
+      {"type": "context", "model": "openai/zai-org/GLM-5.4-Flash"},
+      {"type": "result", "usage": _result_usage(300, 7)},
+  ])
+  cache = tmp_path / "cache.json"
+
+  tally = _collect(None, None, tmp_path / "db.sqlite", cache, sessions=cb.root)
+  collect_rows = {(r.source, r.model): r for r in tally.rows if r.source == "charlie-bot"}
+  assert set(collect_rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root, cache) == 3
+    assert _capture_charliebot(ledger, cb.root, cache) == 0  # the unchanged corpus is skipped
+    ledger_rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "charlie-bot"}
+
+  assert set(ledger_rows) == set(collect_rows)
+  for key, lr in ledger_rows.items():
+    cr = collect_rows[key]
+    assert (lr.in_fresh, lr.cache_write, lr.cache_read, lr.output, lr.calls) == \
+        (cr.in_fresh, cr.cache_write, cr.cache_read, cr.output, cr.calls)
+
+
+def test_charliebot_codex_thread_excluded_by_the_captured_rollout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex-type thread whose session id has a captured rollout is excluded by the ledger's
+  any-match rule; deleting the rollout file and re-capturing changes no row — the fallback
+  rows stay stored but excluded, and the native rows are never deleted."""
+  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
+  sid = "rolloutsid1"
+  codex = Codex(tmp_path)
+  _codex_rollout(codex, sid, "codex-gpt5", {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
+                 {"total_tokens": 47}, "2026-09-10T00:00:00Z")
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt",
+      model=None,
+      session_ids=[sid],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture(None, codex, ledger)["Codex"] == 1  # the rollout is captured native
+    assert _capture_charliebot(ledger, cb.root) == 1  # the thread's fallback row is stored
+    rows = _ledger_rows(ledger)
+    assert ("charlie-bot", "gpt-5") not in rows  # excluded: the session id has a native record
+    assert rows["Codex", "codex-gpt5"].calls == 1
+
+    shutil.rmtree(codex.home)
+    assert _capture(None, codex, ledger)["Codex"] == 0  # the native rows survive the deletion
+    assert _capture_charliebot(ledger, cb.root) == 0  # the unchanged thread file is skipped
+    assert _ledger_rows(ledger) == rows
+
+
+def test_charliebot_fallback_rows_count_until_the_cli_log_is_captured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex-type thread with no rollout anywhere and a claude-type thread with no Claude
+  transcript are counted as fallback rows; capturing the Claude transcript whose stem the
+  thread's session id names retires that row, while the codex thread's row stays."""
+  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"),
+                 _Option("claude-sonnet", "claude", "anthropic/claude-sonnet-4"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt",
+      model=None,
+      session_ids=["orphan-sid"],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="claude-sonnet",
+      model=None,
+      session_ids=["cl-sess"],
+      results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 6))])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 2
+    codex_fb = _ledger_rows(ledger)["charlie-bot", "gpt-5"]
+    claude_fb = _ledger_rows(ledger)["charlie-bot", "claude-sonnet-4"]
+    assert (codex_fb.calls, codex_fb.fallback_calls, codex_fb.in_fresh, codex_fb.output) == (1, 1, 100, 5)
+    assert (claude_fb.calls, claude_fb.fallback_calls) == (1, 1)
+
+    claude = Claude(tmp_path)
+    claude.write(claude.work, "cl-sess", [_claude_record("m1", NAME, "2026-09-12T20:00:00Z", _usage(200, 6))])
+    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    rows = _ledger_rows(ledger)
+    assert ("charlie-bot", "claude-sonnet-4") not in rows  # excluded: the transcript is captured
+    assert rows["charlie-bot", "gpt-5"].fallback_calls == 1  # the codex thread stays counted
+
+
+def test_charliebot_capture_skips_unkeyable_threads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex-type thread with no session ids (nothing to key the any-match exclusion on) and
+  a thread whose backend id neither the registry nor a type prefix can classify contribute
+  no records; both files are still recorded as captured so they are never re-parsed."""
+  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt",
+      model=None,
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  cb.thread(
+      "s1",
+      "t2",
+      backend="mystery-backend",
+      model=None,
+      session_ids=["sid-x"],
+      results=[("2026-09-12T20:00:00+00:00", _result_usage(200, 6))])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 0
+    assert ledger.model_rows() == []
+    assert len(ledger.captured_sigs("host-a")) == 2
+    assert _capture_charliebot(ledger, cb.root) == 0

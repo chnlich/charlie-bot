@@ -2321,7 +2321,8 @@ def collect_token_usage(
 
 
 # ---------------------------------------------------------------------------
-# usage ledger capture: the Claude Code and Codex jsonl copied into the SQLite ledger
+# usage ledger capture: the Claude Code and Codex jsonl, and the charlie-bot corpus, copied
+# into the SQLite ledger
 # ---------------------------------------------------------------------------
 
 
@@ -2405,4 +2406,92 @@ def capture_jsonl_sources(
             sessions=(sid,)) for i, (model, ts, in_fresh, cache_read, output) in enumerate(entry["records"])
     ]
     written[USAGE_SOURCE_CODEX] += ledger.record_file(host, path, sig, records)
+  return written
+
+
+def capture_charliebot(ledger: UsageLedger, host: str, sessions_dir: Path, cache: TallyCache | None) -> int:
+  """Copy the charlie-bot thread event logs and master-run captures into the SQLite usage
+  ledger, so a thread's result totals survive deletion of its own event log (see the
+  ledger's module docstring).
+
+  The serve reuses the collect's walk and cache-gated parse (``cache`` is the collect's own
+  TallyCache or None); a parsed file whose stat signature the ledger already recorded for
+  this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
+  is recorded with that signature — also one whose content yields no records, so an empty
+  thread is never re-parsed. A classification the collect only notes (no metadata.json, an
+  unclassifiable backend id) contributes no records here; an unreadable file or a parse
+  failure raises: the capture runs in the collector, not the page load.
+
+  The record kind restates the collect's inclusion rules for the ledger:
+    master capture  one NATIVE record, no sessions — a master run has no CLI log behind it.
+    "include" thread  NATIVE, no sessions — the charlie-bot thread log is the only home the
+      usage has, so nothing can restate it.
+    "codex" / "skip" thread  FALLBACK carrying the thread's session ids: the CLI log behind
+      it may still exist, and the ledger's any-match exclusion retires the fallback the
+      moment any of those ids has a NATIVE record of its own — which replaces the collect's
+      rollout-on-disk reconciliation once the Codex rollouts are captured. A thread with no
+      ids cannot key that exclusion and contributes nothing.
+
+  Returns the records written.
+  """
+  registry = _backend_registry()
+  captured = ledger.captured_sigs(host)
+  probe = _Tally()
+  written = 0
+  for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, probe):
+    if mtime_ns is None:
+      raise OSError(f"charlie-bot: unreadable {path}: {error}")
+    sig = f"{mtime_ns}:{size}"
+    if captured.get(path) == sig:
+      continue
+    entry = cache.lookup_sig(USAGE_SOURCE_CHARLIE_BOT, path, [mtime_ns, size]) if cache is not None else None
+    if entry is None:
+      prev = cache.prev(USAGE_SOURCE_CHARLIE_BOT, path) if cache is not None else None
+      parse = _thread_contribution if kind == "thread" else _master_contribution
+      entry, _nbytes = parse(path, registry, prev)
+      if cache is not None:
+        cache.store_sig(USAGE_SOURCE_CHARLIE_BOT, path, entry)
+    records: list[UsageRecord]
+    if kind == "master":
+      parts = Path(path).parts
+      records = [
+          UsageRecord(
+              record_id=f"master:{parts[-5]}/{parts[-2]}",
+              kind=RecordKind.NATIVE,
+              source=USAGE_SOURCE_CHARLIE_BOT,
+              model=model,
+              account=account,
+              ts=ts,
+              in_fresh=in_fresh,
+              cache_write=cache_write,
+              cache_read=cache_read,
+              output=output) for model, account, ts, in_fresh, cache_write, cache_read, output in entry["records"]
+      ]
+    else:
+      records = []
+      meta = entry["meta"]
+      backend = meta.get("backend") if meta is not None else None
+      verdict = _classify_backend(backend, registry) if backend else None
+      # A codex- or skip-verdict thread without ids cannot key the any-match exclusion: an
+      # unexcludable fallback would double count once the CLI log is captured.
+      if verdict == "include" or (verdict is not None and entry["ids"]):
+        native = verdict == "include"
+        parts = Path(path).parts
+        sessions = () if native else tuple(entry["ids"])
+        records = [
+            UsageRecord(
+                record_id=f"thread:{parts[-5]}/{parts[-3]}/{i}",
+                kind=RecordKind.NATIVE if native else RecordKind.FALLBACK,
+                source=USAGE_SOURCE_CHARLIE_BOT,
+                model=model,
+                account=account,
+                ts=ts or "",
+                in_fresh=in_fresh,
+                cache_write=cache_write,
+                cache_read=cache_read,
+                output=output,
+                sessions=sessions)
+            for i, (model, account, ts, in_fresh, cache_write, cache_read, output) in enumerate(entry["records"])
+        ]
+    written += ledger.record_file(host, path, sig, records)
   return written

@@ -11,6 +11,7 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from src.core import claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.git import (
@@ -58,6 +59,10 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "out-of-token",
     "insufficient tokens",
     "tokens exhausted",
+    # The pre-spawn pool exhaustion (claude_relay.pool_exhausted_message rides
+    # the run's events-log error event): one home for the phrase, so the
+    # classification and the message cannot drift apart.
+    claude_relay.POOL_EXHAUSTED_PHRASE.lower(),
 )
 
 # ---------------------------------------------------------------------------

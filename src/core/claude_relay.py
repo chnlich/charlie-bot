@@ -58,6 +58,12 @@ LOGIN_FAILED = "login_failed"
 LOGIN_REASON_AUTH_FAILED = "auth_failed"
 LOGIN_REASON_EMPTY_CREDENTIALS = "empty_credentials"
 
+# The one pool-exhausted phrase: ``pool_exhausted_message`` renders it and the
+# improve quota classification (improve_command's pattern table) matches its
+# lowercase form, so a pre-spawn exhaustion ends a loop for the same quota
+# reason a mid-run rejection does.
+POOL_EXHAUSTED_PHRASE = "Claude account pool has no available account"
+
 
 def _is_tool_result_event(event: dict) -> bool:
   """A Claude Code ``user`` event whose content carries a tool_result block: the relay safe point."""
@@ -130,7 +136,7 @@ class RelayWatch:
 def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None) -> str:
   reset = claude_accounts.earliest_reset(cfg, now)
   when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC" if reset else "no reset time known"
-  return f"Claude account pool has no available account ({when}); this run did not complete."
+  return f"{POOL_EXHAUSTED_PHRASE} ({when}); this run did not complete."
 
 
 def relay_limit_message() -> str:

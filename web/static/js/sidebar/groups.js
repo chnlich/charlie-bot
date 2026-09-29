@@ -388,7 +388,9 @@ function openThreadView(sessionId, threadId) {
 // closing tag.
 // A markup change to the row frame lands here, not in one renderer.
 // indicators and line are prebuilt strings — the status column and the content
-// after the name span — and actions the trailing button column.
+// after the name span — and actions the trailing button column. The anchor's
+// session-row class is the plain-CSS hook styles.css's hover reveal keys on
+// (positioning context for the row's out-of-flow action buttons).
 function renderSessionRowShell(s, {filter, activeClass, options, indicators, line, actions}) {
   const extraClass = options.extraClass ? ' ' + options.extraClass : '';
   const extraAttrs = options.extraAttrs ? ' ' + options.extraAttrs : '';
@@ -400,7 +402,7 @@ function renderSessionRowShell(s, {filter, activeClass, options, indicators, lin
     : `switchSession('${s.id}')`;
   const dblclick = s.worker_thread ? '' : ` ondblclick="startRename(event, '${s.id}')"`;
   return `<a href="/?session=${s.id}&filter=${filter}"
-     class="group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"${dblclick}
+     class="session-row group flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors ${activeClass}${extraClass}"${dblclick}
      onclick="event.preventDefault(); ${click}"
      id="session-${s.id}"${extraAttrs}>
     ${indicators}

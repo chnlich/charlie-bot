@@ -537,3 +537,119 @@ async def _preflight(client: DiscordClient) -> bool:
     if missing:
       logger.error("discord_listener_missing_permissions", guild=guild["id"], missing=missing)
   return True
+
+
+class _StopClose(Exception):
+  """A gateway close code from ``_STOP_CLOSE_CODES``: retrying cannot fix it."""
+
+  def __init__(self, code: int) -> None:
+    super().__init__(f"gateway closed with code {code}")
+    self.code = code
+
+
+class _Dropped(Exception):
+  """One recoverable connection end; ``saw_ready`` says whether a READY had landed."""
+
+  def __init__(self, reason: str, *, saw_ready: bool) -> None:
+    super().__init__(reason)
+    self.saw_ready = saw_ready
+
+
+async def _connect(url: str) -> ClientConnection:
+  """Open one gateway websocket; the seam tests patch instead of the network.
+
+  websockets rides first use — only ``run_listener`` reaches here — because
+  the server import-time floor (docs/perf_baseline.md) depends on it staying
+  out of the import chain.
+  """
+  import websockets
+
+  return await websockets.connect(
+      f"{url}/?v=10&encoding=json", max_size=None, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT)
+
+
+async def _run_connection(
+    ws: ClientConnection,
+    token: str,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    client: DiscordClient,
+    trigger_mgr: TriggerManager,
+) -> None:
+  """Drive one gateway connection from HELLO to close; every end raises.
+
+  ``_StopClose`` carries a close code in ``_STOP_CLOSE_CODES`` (the listener
+  stops); ``_Dropped`` is every other end (the listener reconnects, resetting
+  its backoff when a READY had landed). There is no RESUME: every connection
+  identifies afresh, and the READY backfill covers anything the gap lost.
+  """
+  from websockets.exceptions import ConnectionClosed  # lazy: rides first use with _connect
+
+  hello = json.loads(await ws.recv())
+  if hello.get("op") != 10:
+    logger.warning("discord_listener_expected_hello", received=hello.get("op"))
+  interval_s = hello["d"]["heartbeat_interval"] / 1000
+  last_seq: int | None = None
+  acked = True
+  saw_ready = False
+  bot_user_id = ""
+
+  async def beat() -> None:
+    """Send the heartbeat every interval; no op 11 since the previous beat closes the socket."""
+    nonlocal acked
+    await asyncio.sleep(interval_s * random.random())
+    while True:
+      try:
+        if not acked:
+          await ws.close(4000)
+          return
+        acked = False
+        await ws.send(json.dumps({"op": 1, "d": last_seq}))
+      except ConnectionClosed:
+        return  # the receive loop's exception already reports the dead socket
+
+  heartbeat_task = asyncio.create_task(beat())
+  try:
+    await ws.send(
+        json.dumps({
+            "op": 2,
+            "d": {
+                "token": token,
+                "intents": _INTENTS,
+                "properties": {"os": sys.platform, "browser": "charlie-bot", "device": "charlie-bot"},
+            },
+        }))
+    async for raw in ws:
+      payload = json.loads(raw)
+      if payload.get("s") is not None:
+        last_seq = payload["s"]
+      op = payload.get("op")
+      if op == 1:  # the server demands a heartbeat; answer at once
+        await ws.send(json.dumps({"op": 1, "d": last_seq}))
+      elif op == 11:
+        acked = True
+      elif op in (7, 9):  # RECONNECT / INVALID_SESSION: drop and identify afresh
+        raise _Dropped(f"gateway op {op}", saw_ready=saw_ready)
+      elif op == 0 and payload.get("t") == "READY":
+        saw_ready = True
+        bot_user_id = payload["d"]["user"]["id"]
+        logger.info("discord_listener_connected")
+        await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)
+      elif op == 0 and payload.get("t") == "MESSAGE_CREATE":
+        message = payload["d"]
+        try:
+          sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=bot_user_id)
+          logger.info("discord_listener_message_handled", channel=message.get("channel_id"), session=sid)
+        except Exception as e:
+          logger.exception("discord_listener_message_handle_failed", channel=message.get("channel_id"), error=str(e))
+  except ConnectionClosed as e:
+    close = e.rcvd if e.rcvd is not None else e.sent
+    code = close.code if close is not None else None
+    if code in _STOP_CLOSE_CODES:
+      raise _StopClose(code) from e
+    raise _Dropped(str(e), saw_ready=saw_ready) from e
+  finally:
+    heartbeat_task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+      await heartbeat_task
+  raise _Dropped("gateway connection closed", saw_ready=saw_ready)

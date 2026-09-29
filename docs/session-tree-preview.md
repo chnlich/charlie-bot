@@ -95,7 +95,7 @@ the whole launch, additions included, as one structured diagnostic.
 
 ## Automated trials over a preview
 
-Three repo-owned harnesses verify the preview surfaces end to end; each is an
+Three repo-owned harnesses drive a preview instance end to end; each is an
 executable verification recipe, never a mock:
 
 - `scripts/live_preview_task_tree.py` — the live execution trial: a root
@@ -110,21 +110,33 @@ executable verification recipe, never a mock:
   never its expansion state, and icons clearing after finish), goal-derived row names (never a raw
   Markdown heading in any worker-facing title), and list rows that already
   carry each task-tree node's `work_state` on first paint.
-- `scripts/browser_harness_session_tree.py` — the synthetic tree harness: the
-  real shipped app over an isolated in-process server with a seeded task tree,
-  driving Chrome over CDP. It asserts tree nesting and expansion, the live
-  worker's transcript cycle, and the parent-row icon rule: a running worker's
-  parent shows the gear expanded and collapsed alike, an unread reply in a
-  child manager lights the root's hollow `subtree-unread` mark collapsed and
-  expanded alike while the child shows its own dot, and opening the child
-  clears both in one paint.
+- `scripts/browser_harness_session_tree_preview.py` — the fresh-home browser
+  trial: the full operator walk on real Chrome over CDP — first login, the
+  creation toolbar and the one-click New Session flow (drafts kept, the
+  dropdown's selected model carried on the create), explicit child/worker
+  creation, goal and rule editing, node switching, Context and run history,
+  the completion/refusal/reopen/move controls, a reload with selection, the
+  narrow viewport, and the live spinner/gear motion proven on the animation
+  timeline (advance equals wall time; any restart or stall fails), under
+  `prefers-reduced-motion` too — plus one created-and-run task per selected
+  backend.
 
-Both share the preview's isolation guarantees: the trial home is a fresh
-temporary directory, the port a free one (the production port 18498 is
-refused explicitly), the harness env is scrubbed of production identity
-variables, the production service is never started, stopped, restarted or
-contacted, the production homes (`~/.charliebot`,
-`~/.charliebot-session-task-tree`) are never written, and an independent
-sentinel home plus a host native-store snapshot prove nothing outside the
-trial changed. Evidence (screenshots, assertion JSON, the tested commit) goes
-to `--evidence-dir`, never into git.
+All three share the preview's isolation guarantees: the trial home is a fresh
+temporary directory, the port a free one (18498 — the source home's configured
+server port — is refused explicitly), the harness env is scrubbed of
+production identity variables, the production service is never started,
+stopped, restarted or contacted, and the production homes (`~/.charliebot`,
+`~/.charliebot-session-task-tree`) are never written. The two live trials
+additionally assert an independent sentinel home plus a host native-store
+snapshot, so nothing outside the trial changes. Evidence (screenshots,
+assertion JSON, the tested commit) goes to `--evidence-dir`, never into git.
+
+The same task-tree surfaces also have an in-process sibling trial that starts
+no preview instance, `scripts/browser_harness_session_tree.py`: the real
+shipped app over an isolated in-process server with a seeded task tree,
+driving Chrome over CDP. It asserts tree nesting and expansion, the live
+worker's transcript cycle, and the parent-row icon rule: a running worker's
+parent shows the gear expanded and collapsed alike, an unread reply in a
+child manager lights the root's hollow `subtree-unread` mark collapsed and
+expanded alike while the child shows its own dot, and opening the child
+clears both in one paint.

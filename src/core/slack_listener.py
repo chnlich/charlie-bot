@@ -54,7 +54,6 @@ from src.core.models import (
     PendingTrigger,
     SessionStatus,
     SlackOrigin,
-    utc_now,
 )
 from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
@@ -343,7 +342,7 @@ async def handle_app_mention(
     logger.info(
         "slack_mention_session_existing", channel=channel_id, thread_ts=thread_ts, slack_user=slack_user, session=sid)
 
-  await _consume_mention(session_mgr, trigger_mgr, sid, event["ts"])
+  await thread_entry.consume_mention(SLACK, session_mgr, trigger_mgr, sid, event["ts"])
 
   await ensure_slack_group(session_mgr, sid, label)
 
@@ -426,27 +425,6 @@ async def _arm_follow_trigger(
       floor=floor_ts,
       wake_label=lambda floor: _build_follow_wake_message(floor, permalink),
       log_fields={"channel": channel_id, "thread_ts": thread_ts})
-
-
-async def _cancel_armed_follow_triggers(trigger_mgr: TriggerManager, session_id: str) -> int:
-  """Cancel every armed thread-follow trigger of the session; the shared core on the Slack platform."""
-  return await thread_entry.cancel_armed_follow_triggers(SLACK, trigger_mgr, session_id)
-
-
-async def _consume_mention(
-    session_mgr: SessionManager, trigger_mgr: TriggerManager, session_id: str, mention_ts: str) -> None:
-  """The mention round consumes its own ts: advance the watermark to it and cancel armed follows."""
-  meta = await session_mgr.get_session(session_id)
-  # A None here would silently skip the watermark advance, leaving the summon's own
-  # mention permanently unread; the invariant break fails loudly instead.
-  assert meta is not None, "unreachable: the summon path resolves the session just before this call"
-  if meta.slack_watermark_ts is None or meta.slack_watermark_ts < mention_ts:
-    meta.slack_watermark_ts = mention_ts
-    meta.updated_at = utc_now()
-    await session_mgr.save_metadata(meta)
-  cancelled = await _cancel_armed_follow_triggers(trigger_mgr, session_id)
-  if cancelled:
-    logger.info("slack_follow_trigger_cancelled_for_mention", session=session_id, cancelled=cancelled)
 
 
 async def handle_thread_message(

@@ -22,6 +22,11 @@ SUBPROCESS_GIT_WRITE_TIMEOUT = 60.0  # seconds — worktree creation, commit+pus
 # Git version info used at startup (rev-parse --short HEAD, git log).
 SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks server startup
 
+# The session-tree preview's checkout-identity reads (`git rev-parse` for the
+# branch and HEAD SHA it prints as the preview's provenance); a failure refuses
+# the preview instead of starting one with an unknown identity.
+SUBPROCESS_GIT_IDENTITY_TIMEOUT = 30  # seconds
+
 # ---------------------------------------------------------------------------
 # LaTeX compilation
 # ---------------------------------------------------------------------------
@@ -323,7 +328,15 @@ WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
 SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
 
 # ---------------------------------------------------------------------------
-# SQLite lock waits (storage_cool's opencode-db pass)
+# Session-tree preview probes
+# ---------------------------------------------------------------------------
+
+# The `charlie-code --help` probe that validates the launcher's --session-dir
+# support; the preview refuses to run when the launcher cannot be executed.
+PREVIEW_LAUNCHER_PROBE_TIMEOUT = 30  # seconds
+
+# ---------------------------------------------------------------------------
+# SQLite lock waits
 # ---------------------------------------------------------------------------
 
 # sqlite3.connect(timeout=...) installs the connection's busy handler, so the
@@ -333,3 +346,8 @@ SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
 # which take the lock for longer stretches — hence the shorter ms value.
 SQLITE_LOCK_WAIT_SECONDS = 5.0  # seconds — connect through the DELETE loop
 SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for VACUUM
+
+# The usage ledger's connections keep sqlite3.connect's busy handler for their
+# whole life (no busy_timeout pragma lowers it): the scheduler's capture upserts
+# wait out a concurrent reader's transaction instead of failing the capture.
+USAGE_LEDGER_LOCK_WAIT_SECONDS = 30  # seconds

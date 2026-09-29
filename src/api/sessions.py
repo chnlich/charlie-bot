@@ -364,7 +364,6 @@ _SCHEDULE_MODEL_NULLS = (
     "schedule_allow_failure",
 )
 
-
 # The join's one-entry memo. The fields map is a pure function of the id set
 # and the cron snapshot's fingerprint (scheduled_tasks_fingerprint answers on
 # the same key get_scheduled_tasks reloads on), except schedule_next_run whose
@@ -396,8 +395,7 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
   global _ROW_SCHEDULE_MEMO
   hit = _ROW_SCHEDULE_MEMO
   tasks, fingerprint = scheduled_tasks_snapshot()
-  if (hit is not None and now_utc < hit[3] and hit[1] == ids and
-      fingerprint == hit[0]):
+  if (hit is not None and now_utc < hit[3] and hit[1] == ids and fingerprint == hit[0]):
     return hit[2]
   out: dict[str, dict] = {}
   for session_id in ids:
@@ -417,7 +415,9 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
     }
   fires = [
       datetime.fromisoformat(fields["schedule_next_run"])
-      for fields in out.values() if fields["schedule_task"] is not None]
+      for fields in out.values()
+      if fields["schedule_task"] is not None
+  ]
   _ROW_SCHEDULE_MEMO = (fingerprint, ids, out, min(fires) if fires else _ROW_SCHEDULE_NO_FIRE)
   return out
 

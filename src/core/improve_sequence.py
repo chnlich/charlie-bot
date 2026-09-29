@@ -14,10 +14,11 @@ Boundaries this module pins:
 
 - Progression stays with this controller: each iteration is launched through
   the shared execution adapter and awaited to its durable terminal fact, then
-  judged by the same mechanical validity/quota rules as before. No per-iteration
-  master wake exists on the v2 path — each result is recorded (run fact + loop
-  report + chat progress event) and only the final sequence result is delivered
-  through the common report owner, once, to the fixed parent.
+  judged by the same mechanical validity/quota rules as before. Every judged
+  iteration is delivered to the fixed parent as ONE child_report through the
+  common report owner — the delivery wakes the parent's master with that
+  iteration's audit input — and the final sequence result is delivered the
+  same way, once, at the end. The loop never waits for the audit.
 - One successful iteration never closes the child: the controller decides the
   overall outcome after the loop ends. Exhausting the iterations without
   proving the goal is NOT successful delivery — the final report says so
@@ -40,6 +41,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -197,8 +199,11 @@ async def run_improve_sequence(
     The child and the loop state already exist (the API handler reserved both
     under the stable ids). Each iteration launches through the shared adapter,
     is awaited to its terminal fact, and is judged by the existing mechanical
-    rules; the loop ends on exhaustion, user stop, or a quota blocker, and the
-    ONE final result is delivered to the parent through the report owner.
+    rules; every judged iteration is delivered to the parent as one
+    child_report (the delivery wakes the parent's master, which audits the
+    iteration while the loop moves on), the loop ends on exhaustion, user
+    stop, or a quota blocker, and the ONE final result is delivered to the
+    parent through the report owner.
     """
     from src.core.task_execution import TaskExecutionAdapter
 
@@ -292,11 +297,13 @@ async def run_improve_sequence(
                 # A non-quota failure is recorded and the loop continues, as
                 # the legacy controller did.
 
-            summary = await _judge_iteration(
+            judgment = await _judge_iteration(
                 tree, child_id, run.id, i, wt_path, loop_dir, tip_before)
-            previous_summaries.append(summary)
+            previous_summaries.append(judgment.summary)
             await _broadcast_iteration_progress(
-                tree, session_id, child_id, run.id, i, iterations, outcome, summary, loop_dir)
+                tree, session_id, child_id, run.id, i, iterations, outcome, judgment.summary, loop_dir)
+            await _deliver_iteration_report(
+                tree, session_id, child_id, loop_id, run, i, iterations, outcome, judgment)
 
         state = await improve_command.require_loop_state(session_id, loop_id, cfg)
         stopped_by_user = state.status == 'stopped'
@@ -415,22 +422,46 @@ async def _settle_withheld_iteration(
     await tree.sessions.deliver_to_successor(session_id, payload)
 
 
+@dataclass(frozen=True)
+class IterationJudgment:
+    """One iteration's mechanical judgment and the evidence its report carries.
+
+    ``tip`` is the work branch head after the iteration and ``commits_added``
+    the commits over the tip the iteration started from; ``invalid_reason`` is
+    None exactly when ``report_valid`` is true.
+    """
+
+    summary: str
+    report_valid: bool
+    invalid_reason: str | None
+    tip: str
+    commits_added: int
+    report_path: Path
+
+
 async def _judge_iteration(
     tree: TaskTreeManager, child_id: str, run_id: str, iteration: int,
     wt_path: Path, loop_dir: Path, tip_before: str,
-) -> str:
+) -> IterationJudgment:
     """The mechanical iteration judgment: report validity over the git delta.
 
     Same rules as the legacy controller (report file + commit count over the
     worktree tip this iteration started from), sourced from the Run's shared
-    worktree and the loop's report file.
+    worktree and the loop's report file. The git delta is computed and the
+    verdict decided on every path. On the no-report path the verdict is
+    decided BEFORE the fallback file is written (the legacy controller's
+    ordering), so the placeholder the controller writes never flips it: the
+    verdict is invalid with the reason "no report file".
     """
     report_path = loop_dir / f'iter_{iteration:04d}.md'
+    tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
+    del diffstat
     if not await asyncio.to_thread(report_path.exists):
-        # The worker wrote no report: fall back to its own closing words, as
-        # the legacy controller did, and leave the same marked fallback file.
-        events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
+        # The worker wrote no report: the verdict above is final (the fallback
+        # below never flips it). Fall back to the worker's own closing words,
+        # as the legacy controller did, and leave the same marked fallback file.
         fallback = f"Iteration {iteration} finished without a report file."
+        events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
         if events_path.is_file():
             text = await asyncio.to_thread(
                 improve_command._extract_iteration_summary,
@@ -439,15 +470,19 @@ async def _judge_iteration(
                 fallback = text
         await asyncio.to_thread(
             report_path.write_text, improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
-        return fallback
-    tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
-    del diffstat
+        return IterationJudgment(
+            summary=fallback, report_valid=False, invalid_reason="no report file",
+            tip=tip_after, commits_added=commits_added, report_path=report_path)
     report_valid, invalid_reason = await improve_command._iter_report_validity(
         report_path, iteration, commits_added)
     if report_valid:
-        return (await asyncio.to_thread(report_path.read_text))[:500]
-    return improve_command._invalid_iteration_summary(
-        iteration, invalid_reason, commits_added, tip_before, tip_after, report_path)
+        summary = (await asyncio.to_thread(report_path.read_text))[:500]
+    else:
+        summary = improve_command._invalid_iteration_summary(
+            iteration, invalid_reason, commits_added, tip_before, tip_after, report_path)
+    return IterationJudgment(
+        summary=summary, report_valid=report_valid, invalid_reason=invalid_reason,
+        tip=tip_after, commits_added=commits_added, report_path=report_path)
 
 
 async def _broadcast_iteration_progress(
@@ -456,8 +491,9 @@ async def _broadcast_iteration_progress(
 ) -> None:
     """The per-iteration progress event: chat visibility only, never an input.
 
-    The v2 loop has no per-iteration master wake — the manager sees each
-    result as chat history and receives the one final report as input.
+    The per-iteration master input is the delivered child report
+    (:func:`_deliver_iteration_report`), not this event; the final sequence
+    result reaches the manager as input through the same owner.
     """
     report_path = loop_dir / f'iter_{iteration:04d}.md'
     await tree.sessions.deliver_to_successor(session_id, {
@@ -470,6 +506,53 @@ async def _broadcast_iteration_progress(
         "child_session_id": child_id,
         "run_id": run_id,
     })
+
+
+async def _deliver_iteration_report(
+    tree: TaskTreeManager, session_id: str, child_id: str, loop_id: int, run: RunRecord,
+    iteration: int, iterations: int, outcome: str, judgment: IterationJudgment,
+) -> None:
+    """The ONE per-iteration report: the parent's wake and audit input.
+
+    Delivered through the common report owner right after the chat progress
+    event; a freshly created report wakes the parent's next serialized turn
+    (the master's per-iteration audit), a replayed one (created False) wakes
+    nobody. The source event id carries the ``improve-iteration:`` prefix over
+    this Run's own ``run_finished`` event id, so it never collides with the
+    final report's id (the raw latest ``run_finished``) and a replay dedups to
+    the same stable id. A delivery error propagates: the loop ends failed and
+    its final report carries the error, so a missed audit never passes
+    silently.
+    """
+    from src.core.task_completion import RUN_REF_PREFIX
+    meta = await tree.load_meta(child_id)
+    if meta is None or not meta.task_parent_id:
+        log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
+        return
+    events = tree.runs.load_events_sync(child_id)
+    finished = next(
+        (e for e in reversed(events)
+         if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run.id), None)
+    if finished is None:
+        raise RuntimeError(
+            f"improve loop {loop_id} iteration {iteration} (run {run.id}) has no "
+            "run_finished event to source its report from")
+    header = (f"[Improve loop {loop_id} · iteration {iteration}/{iterations}] "
+              f"report_valid={'true' if judgment.report_valid else 'false'}")
+    if not judgment.report_valid:
+        header += f" [invalid: {judgment.invalid_reason}]"
+    header += (f" tip={judgment.tip} commits_added={judgment.commits_added} "
+               f"report={judgment.report_path} Audit per the improve-goal skill.")
+    await tree.dispatch.deliver_child_report(
+        child_id,
+        source_event={"id": f"improve-iteration:{finished['id']}"},
+        outcome=outcome,
+        summary=f"{header}\n\n{judgment.summary}",
+        result_refs=[f"loop:{loop_id}", f"{RUN_REF_PREFIX}{run.id}"],
+        recipient=meta.task_parent_id,
+    )
+    log.info("improve_sequence_iteration_report_delivered", session=session_id, child=child_id,
+             loop_id=loop_id, iteration=iteration, outcome=outcome)
 
 
 async def _deliver_sequence_report(

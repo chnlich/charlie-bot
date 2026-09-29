@@ -455,13 +455,28 @@ body.resizing { cursor: col-resize; user-select: none; }
    — the current session's actions and a starred row's solid star — stay in
    flow, so the name truncates before them; the same class flips are all the
    star toggle and the highlight move paint with (no list repaint).
-   Geometry: a button is 22px (p-1 around its 14px glyph), the row's flex gap
-   is 8px and its horizontal padding 12px, so one stack pitch is 30px. The
-   offsets run from the row's padding edge right-to-left in reverse DOM order;
+   Geometry: a button's icon slot is 22px (p-1 around its 14px glyph), the
+   row's flex gap is 8px and its horizontal padding 12px, so one stack pitch
+   is 30px; each out-of-flow box stretches over the row's full height and its
+   flex centering keeps that slot vertically centered in it. The offsets run
+   from the row's padding edge right-to-left in reverse DOM order;
    nth-last-of-type keeps non-button trailing spans (the archived tree's
    active tag) out of the count. */
 .session-row { position: relative; }
 .session-row > button { position: absolute; right: 12px; pointer-events: none; }
+/* Each out-of-flow button stretches over the row's full height (top to
+   bottom of the row box), its own flex keeping the icon slot vertically
+   centered, so the hovered cover is one continuous block from the row's top
+   edge to its bottom edge -- no sliver of the name or the second line shows
+   above or below the buttons. The rule skips the static !opacity-100 pins:
+   top/bottom would be inert on their static boxes, but the flex flip would
+   change their in-flow layout. */
+.session-row > button:not(.\!opacity-100) {
+  top: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+}
 .session-row > button:nth-last-of-type(2) { right: 42px; }
 .session-row > button:nth-last-of-type(3) { right: 72px; }
 .session-row > button:nth-last-of-type(4) { right: 102px; }
@@ -487,7 +502,9 @@ body.resizing { cursor: col-resize; user-select: none; }
    composite — the sidebar panel (slate-850) under the row's hover tint — as
    a color layer plus image so the browser blends it exactly like the row
    behind; each button's shadow fills the 8px flex gap to its right, keeping
-   the strip continuous. The transitions ride the row's transition-colors
+   the strip continuous, and the boxes span the row's full height, so the
+   cover runs from the row's top edge to its bottom edge and no text sliver
+   shows above or below it. The transitions ride the row's transition-colors
    beat (they replace the buttons' transition-opacity, opacity included). */
 .session-row > button {
   transition: opacity 0.15s, background-color 0.15s, box-shadow 0.15s;

@@ -279,8 +279,13 @@ def _iteration_reports(tree, manager_id: str) -> list[dict]:
 
 
 def _final_reports(tree, manager_id: str) -> list[dict]:
-  """The loop's final child reports: no iteration header."""
-  return [e for e in _child_reports(tree, manager_id) if "· iteration" not in str(e.get("summary"))]
+  """The loop's final child reports: the "[Improve loop <id>]" prefix without
+  the iteration header the per-iteration reports carry (a failed iteration
+  Run has no adapter failure report: the adapter's delivery chain skips
+  iteration Runs, so the loop's reports are the only ones on the manager)."""
+  return [e for e in _child_reports(tree, manager_id)
+          if str(e.get("summary")).startswith("[Improve loop")
+          and "· iteration" not in str(e.get("summary"))]
 
 
 async def _wait_for_final_report(tree, manager_id: str, timeout: float = 30.0) -> dict:
@@ -607,6 +612,51 @@ async def test_iteration_report_header_carries_the_judgment(
   assert f" report={loop_dir / 'iter_0002.md'} Audit per the improve-goal skill." in second["summary"]
   assert " commits_added=0 " in second["summary"]
   assert "## Iter 2" in second["summary"]
+
+
+@pytest.mark.asyncio
+async def test_failed_iteration_still_delivers_its_report_and_continues(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """A non-quota failed iteration is judged and delivered like any other
+  (outcome failed, the worker's own closing words as the body) and the loop
+  continues: only a quota blocker or a withheld launch skips the delivery
+  point."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  failed = result_event("the build broke")
+  failed["is_error"] = True  # an error result lands the failed durable outcome
+  backends = [
+      SpawningScriptedBackend([failed], exit_code=1),
+      SpawningScriptedBackend([result_event("recovered words")]),
+  ]
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  _body, child_id = await _start_loop(
+      cfg, session_mgr, tree, manager, monkeypatch,
+      payload_overrides={"work_branch": "improve/failed-iter"},
+      wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
+
+  final = await _wait_for_final_report(tree, manager.id)
+  iteration_reports = _iteration_reports(tree, manager.id)
+  assert [e["outcome"] for e in iteration_reports] == ["failed", "success"]
+  assert iteration_reports[0]["summary"].startswith(
+      "[Improve loop 1 · iteration 1/2] report_valid=false [invalid: no report file] ")
+  assert iteration_reports[0]["summary"].endswith("\n\nthe build broke")
+  # The loop ran past the failure: both iterations exist and the loop ended
+  # its own way (exhausted without a proven landing, not the iteration's
+  # failure).
+  records = tree.runs.list_run_records_sync(child_id)
+  assert [r.kind for r in records] == ["iteration", "iteration"]
+  assert final["outcome"] == "blocked"
 
 
 @pytest.mark.asyncio

@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.agents.worker import QuotaExhaustedError, Worker
-from src.core import claude_relay, git, review, runs, task_prompts
+from src.core import claude_accounts, claude_relay, git, review, runs, task_prompts
 from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig, configured_access_key
@@ -61,6 +61,7 @@ from src.core.control_events import (
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import (
     BackendOption,
+    ClaudeAccount,
     RunRecord,
     SessionMetadata,
     TaskType,
@@ -951,6 +952,16 @@ class TaskExecutionAdapter:
     worker: Worker | None = None
     try:
       working_dir = Path(review_worktree) if review_worktree else run_dir
+      # A pooled cc-claude backend launches on the pool account with the most
+      # headroom, so the Worker's relay loop (src/core/claude_relay.py) can
+      # move the run when that login is rejected mid-run. The selection sits
+      # inside this try: with no account available the run fails before any
+      # process starts, through the pool-exhausted branch below.
+      claude_account: ClaudeAccount | None = None
+      if claude_accounts.is_pooled(option, self._cfg):
+        claude_account = claude_accounts.select(self._cfg, option.model)
+        if claude_account is None:
+          raise claude_relay.PoolExhaustedError(claude_relay.pool_exhausted_message(self._cfg))
       worker = Worker(
           binding,  # type: ignore[arg-type]
           working_dir,
@@ -958,6 +969,7 @@ class TaskExecutionAdapter:
           prompt,
           self._cfg,
           backend_option=option,
+          claude_account=claude_account,
           on_spawned=on_spawned,
           extra_env=self._child_env(session_id, run_id, meta.name),
           instructions_content=snapshot.instructions_text,
@@ -972,6 +984,9 @@ class TaskExecutionAdapter:
         await worker.terminate()
       error = str(exc)
       log.warning("task_run_pool_exhausted", session_id=session_id, run_id=run_id, error=error)
+      # The run's own events log carries the evidence: the failure-summary
+      # reader and the improve quota classification read this event.
+      await self._record_launch_error_event(session_id, run_id, error)
     except QuotaExhaustedError as exc:
       if worker is not None:
         await worker.terminate()

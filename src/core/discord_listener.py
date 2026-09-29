@@ -226,7 +226,7 @@ def _build_follow_wake_message(floor: str, link: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _eligible_message(message: dict, allowed_user_ids: list[str]) -> bool:
+def eligible_message(message: dict, allowed_user_ids: list[str]) -> bool:
   """The message-eligibility rule both the follow path and the adapter's readback apply.
 
   A message is eligible when a human authored it (no ``bot`` flag on the
@@ -299,7 +299,7 @@ class DiscordThreadAdapter(ThreadAdapter):
       page = await client.get_messages(origin.thread_id, after=after, limit=100)
       messages.extend(
           ThreadMessage(m["id"], m["author"]["id"],
-                        m.get("content") or "") for m in page if _eligible_message(m, cfg.discord.allowed_user_ids))
+                        m.get("content") or "") for m in page if eligible_message(m, cfg.discord.allowed_user_ids))
       if len(page) < 100:
         return messages
       after = page[-1]["id"]
@@ -395,7 +395,7 @@ async def handle_message_create(
   channel_id = message.get("channel_id")
   message_id = message.get("id")
   author_id = (message.get("author") or {}).get("id")
-  if not _eligible_message(message, cfg.discord.allowed_user_ids):
+  if not eligible_message(message, cfg.discord.allowed_user_ids):
     return None
   mentioned = bot_user_id in _mention_ids(message)
 

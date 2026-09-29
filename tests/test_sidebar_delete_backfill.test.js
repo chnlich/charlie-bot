@@ -20,18 +20,6 @@ function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
 }
 
-function makeBoundNode(id, overrides = {}) {
-  return makeSession(id, {
-    profile: 'manager',
-    schedule_task: `task-${id}`,
-    schedule_cron: '0 9 * * *',
-    schedule_timezone: 'America/Los_Angeles',
-    schedule_next_run: '2026-04-03T04:00:00Z',
-    schedule_enabled: true,
-    ...overrides,
-  });
-}
-
 function rowStubs(ids) {
   return ids.map((id) => createElement({tagName: 'A', id: 'session-' + id}));
 }

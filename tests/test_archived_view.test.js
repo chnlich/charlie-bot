@@ -249,6 +249,9 @@ test('the archived Settings menu: root moves groups then deletes; a child only d
   ];
   const {context, nav} = archivedContext([makePage(sessions)]);
 
+  // The touch branch keys off (hover: none) at open time; the desktop list is
+  // asserted with the media query not matching.
+  context.window.matchMedia = (query) => ({matches: false, media: query});
   context.switchSidebarFilter('archived');
   await new Promise(setImmediate);
   const deletes = [];
@@ -280,6 +283,49 @@ test('the archived Settings menu: root moves groups then deletes; a child only d
   assert.equal(child[0].danger, true);
   child[0].onSelect(click);
   assert.deepEqual(deletes, ['root', 'child']);
+});
+
+test('touch archived menus lead with the Later toggle and Unarchive; a child keeps the separator', async () => {
+  const sessions = [
+    makeArchivedSession('root', {group: 'Work'}),
+    makeArchivedSession('child', {group: 'Work', task_parent_id: 'root'}),
+  ];
+  const {context, nav} = archivedContext([makePage(sessions)]);
+
+  context.window.matchMedia = (query) => ({matches: true, media: query});
+  context.switchSidebarFilter('archived');
+  await new Promise(setImmediate);
+  const calls = [];
+  const click = {preventDefault() {}, stopPropagation() {}};
+  context.toggleSessionStar = (...args) => calls.push(['star', ...args]);
+  context.unarchiveSession = (...args) => calls.push(['unarchive', ...args]);
+  context.confirmDeletePermanently = (id) => calls.push(['delete', id]);
+  let menu = null;
+  context.openRowMenu = (anchor, built) => { menu = built; };
+  const open = (id) => {
+    context.Sidebar.openSessionRowMenu(
+      {dataset: settingsDataset(nav.children[1].innerHTML, id)}, id);
+    const items = [...menu];
+    menu = null;
+    return items;
+  };
+
+  // A root archived row: the two touch leads, the group move, then the
+  // separator and the danger delete.
+  const root = open('root');
+  assert.deepEqual(root.map((item) => item.separator ? '---' : item.label),
+    ['Add to Later', 'Unarchive', 'Move to group\u2026', '---', 'Delete permanently']);
+  assert.equal(root[4].danger, true);
+  root[0].onSelect(click);
+  root[1].onSelect(click);
+  root[4].onSelect(click);
+  assert.deepEqual(calls, [['star', 'root', false], ['unarchive', 'root'], ['delete', 'root']]);
+
+  // A task-tree child: the group move drops out, the separator stays.
+  const child = open('child');
+  assert.deepEqual(child.map((item) => item.separator ? '---' : item.label),
+    ['Add to Later', 'Unarchive', '---', 'Delete permanently']);
+  assert.equal(child[3].danger, true);
 });
 
 test('the status poll id set excludes archived rows', async () => {

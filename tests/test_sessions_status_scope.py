@@ -146,7 +146,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sessions_api._sessions_list_row_render.clear()
   cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  stay = await session_mgr.create_session(CreateSessionRequest(name="Steady"))
+  await session_mgr.create_session(CreateSessionRequest(name="Steady"))
   mover = await session_mgr.create_session(CreateSessionRequest(name="Churning"))
   leaving = await session_mgr.create_session(CreateSessionRequest(name="Departing"))
   counts = {"dump": 0}

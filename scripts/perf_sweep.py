@@ -138,8 +138,15 @@ class SweepRunner:
     seconds = time.monotonic() - started
     if out.strip():
       print(out, flush=True)
+    # The exporter lines are corpus-derived (the M71 query is one raw session-name
+    # character, the M55/M70 names are artifact filenames), so an unparseable one is
+    # this unit's failure, not the sweep's: the unit fails loudly and the rest run.
+    try:
+      self._absorb_exports(out, env)
+    except ValueError as exc:
+      print(f"perf-sweep: {label} block {index + 1}/{total}: {exc} — the unit fails, the sweep continues", flush=True)
+      rc = 1
     print(f"--- {label} block {index + 1}/{total} rc={rc} {seconds:.1f}s", flush=True)
-    self._absorb_exports(out, env)
     return rc, seconds, out
 
   def _absorb_exports(self, out: str, env: dict[str, str]) -> None:

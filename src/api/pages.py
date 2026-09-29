@@ -710,8 +710,7 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
   started = time.monotonic()
   with UsageLedger(default_ledger_path()) as ledger:
     written = capture_local(ledger)
-    rows = ledger.model_rows()
-    native_starts = ledger.native_start()
+    rows, native_starts = ledger.model_rows_with_native_starts()
   return rows, native_starts, written, time.monotonic() - started
 
 

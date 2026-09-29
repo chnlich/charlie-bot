@@ -646,6 +646,10 @@ async def seed_scenario(home: Path) -> dict:
 # The desktop-capture browser runs share one flag set: the 1440x900 capture
 # viewport plus the throttling bans that keep the page fully active - a
 # background-throttled timer or fetch would distort the live-update evidence.
+# The blink-settings pair gives headless chrome the input profile the desktop
+# viewport stands for - a hover-capable fine pointer, what a real operator's
+# mouse presents; bare headless reports (hover: none), which would run the
+# styles.css touch fallback and shadow the desktop hover reveal.
 DESKTOP_CAPTURE_FLAGS = [
     "--no-first-run", "--no-default-browser-check",
     "--disable-background-networking", "--window-size=1440,900",
@@ -653,6 +657,8 @@ DESKTOP_CAPTURE_FLAGS = [
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
+    "--blink-settings=primaryHoverType=2,availableHoverTypes=2,"
+    "primaryPointerType=4,availablePointerTypes=4",
 ]
 
 
@@ -1040,7 +1046,6 @@ async def run_harness(args: argparse.Namespace) -> None:
             await cdp.send("Emulation.setDeviceMetricsOverride", {
                 "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
             }, session_id=session_id)
-
             base = f"http://127.0.0.1:{server_port}"
 
             # ---- S1: desktop load; the session tree is the primary navigation --
@@ -1783,6 +1788,268 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s28_FAILED")
                 results.record("the Archive tree with a dimmed context node", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S29: a row's actions take no width until the row is hovered --
+            # The quantified hover-reveal contract on the seeded ops tree: at
+            # rest an unstarred non-current row's name and second-line spans
+            # reach the row's right edge with the four actions out of flow and
+            # invisible; hovering covers the text end with the four buttons on
+            # an opaque cover while the row's height and text layout stay put;
+            # the current row keeps its buttons in flow; a starred row shows
+            # its solid star at rest; and the star toggles in place, with no
+            # list repaint, in both directions.
+            try:
+                log("  s29: hover reveal action buttons")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await expand_to(cdp, session_id, [ids["ops_root"]])
+                await reveal_row(cdp, session_id, ids["ops_mid"])
+                cdp.drain_list_fetches()
+
+                # One geometry read per state: row box and paddings, the name
+                # and second-line spans, and every direct action button with
+                # its computed position/opacity.
+                async def row_geo(node_id: str) -> dict:
+                    raw = await evaluate(cdp, session_id, f"""
+                        (() => {{
+                          const row = document.getElementById('session-{node_id}');
+                          if (!row) return null;
+                          const r = row.getBoundingClientRect();
+                          const cs = getComputedStyle(row);
+                          const name = row.querySelector('.session-name');
+                          const n = name ? name.getBoundingClientRect() : null;
+                          const line = name ? name.nextElementSibling : null;
+                          const l = line ? line.getBoundingClientRect() : null;
+                          const buttons = [...row.querySelectorAll(':scope > button')].map(b => {{
+                            const bs = getComputedStyle(b);
+                            const br = b.getBoundingClientRect();
+                            return {{title: b.title, position: bs.position, opacity: bs.opacity,
+                                     x: br.x, y: br.y, w: br.width, h: br.height,
+                                     left: br.left, right: br.right}};
+                          }});
+                          return {{
+                            row: {{x: r.x, y: r.y, w: r.width, h: r.height,
+                                  padLeft: parseFloat(cs.paddingLeft), padRight: parseFloat(cs.paddingRight)}},
+                            name: n ? {{x: n.x, w: n.width, right: n.right}} : null,
+                            line: l ? {{w: l.width, right: l.right}} : null,
+                            buttons: buttons,
+                            starFill: (() => {{
+                              const svg = row.querySelector('button[title="Star"] svg');
+                              return svg ? svg.getAttribute('fill') : null;
+                            }})()}};
+                        }})()
+                    """)
+                    assert_true(raw is not None, f"row {node_id} renders")
+                    return raw
+
+                rest = await row_geo(ids["ops_mid"])
+                row, name, line = rest["row"], rest["name"], rest["line"]
+                assert_true(len(rest["buttons"]) == 4,
+                            f"the unstarred row renders its four actions: {[b['title'] for b in rest['buttons']]}")
+                assert_true(all(b["position"] == "absolute" for b in rest["buttons"]),
+                            f"the actions are out of flow at rest: {[(b['title'], b['position']) for b in rest['buttons']]}")
+                assert_true(all(float(b["opacity"]) == 0.0 for b in rest["buttons"]),
+                            f"the actions are invisible at rest: {[(b['title'], b['opacity']) for b in rest['buttons']]}")
+                # The name spans exactly the row minus its paddings and the
+                # lead the icons occupy (name.left - content left), and the
+                # second-line span reaches the same right edge.
+                lead = name["x"] - row["x"] - row["padLeft"]
+                expected = row["w"] - row["padLeft"] - row["padRight"] - lead
+                assert_true(abs(name["w"] - expected) <= 0.5,
+                            f"at rest the name spans the row minus lead icons and paddings: "
+                            f"name {name['w']:.1f}px, expected {expected:.1f}px, row {row['w']:.1f}px")
+                assert_true(abs(line["w"] - name["w"]) <= 0.5,
+                            f"the second-line span reaches the row's right edge too "
+                            f"({line['w']:.1f}px vs name {name['w']:.1f}px)")
+
+                async def hover_row(node_id: str) -> None:
+                    geo = await row_geo(node_id)
+                    await cdp.send("Input.dispatchMouseEvent", {
+                        "type": "mouseMoved",
+                        "x": geo["row"]["x"] + geo["row"]["w"] / 2,
+                        "y": geo["row"]["y"] + geo["row"]["h"] / 2,
+                    }, session_id=session_id)
+
+                async def unhover() -> None:
+                    await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 6, "y": 6},
+                                   session_id=session_id)
+
+                # Hover through the input pipeline: the four buttons appear
+                # over the text end while the row's height and the text lines
+                # keep their rest layout.
+                await hover_row(ids["ops_mid"])
+                await wait_for(cdp, session_id, f"""
+                    [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
+                      .every(b => getComputedStyle(b).opacity === '1')
+                """, timeout=4, label="s29 hover reveals the four buttons")
+                hovered = await row_geo(ids["ops_mid"])
+                hrow, hname, hline = hovered["row"], hovered["name"], hovered["line"]
+                assert_true(abs(hrow["h"] - row["h"]) <= 0.5,
+                            f"the row's height is identical at rest and on hover ({row['h']:.1f}px -> {hrow['h']:.1f}px)")
+                assert_true(abs(hname["w"] - name["w"]) <= 0.5 and abs(hline["w"] - line["w"]) <= 0.5,
+                            f"the text lines keep their rest layout on hover "
+                            f"({name['w']:.1f}/{line['w']:.1f}px -> {hname['w']:.1f}/{hline['w']:.1f}px)")
+                titles = sorted(b["title"] for b in hovered["buttons"])
+                assert_true(titles == sorted(["Star", "New child session", "Archive", "Settings"]),
+                            f"hover exposes exactly the four actions: {titles}")
+                assert_true(all(b["position"] == "absolute" for b in hovered["buttons"]),
+                            "the revealed actions stack out of flow (no reflow)")
+                right_edge = hrow["x"] + hrow["w"] - hrow["padRight"]
+                assert_true(all(abs(b["right"] - (right_edge - 30 * i)) <= 0.5
+                                for i, b in enumerate(sorted(hovered["buttons"], key=lambda b: -b["right"]))),
+                            f"the actions stack right-to-left on the 30px pitch: "
+                            f"{[round(b['right'] - right_edge, 1) for b in hovered['buttons']]}")
+                assert_true(all(b["y"] >= hrow["y"] - 0.5 and b["y"] + b["h"] <= hrow["y"] + hrow["h"] + 0.5
+                                for b in hovered["buttons"]),
+                            "the revealed actions stay inside the row's box")
+                cover = await evaluate(cdp, session_id, f"""
+                    [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
+                      .map(b => {{
+                        const cs = getComputedStyle(b);
+                        const br = b.getBoundingClientRect();
+                        return {{bg: cs.backgroundColor, image: cs.backgroundImage.startsWith('linear-gradient'),
+                                 coversText: br.left < {name['right']}, opaqueRight: br.right <= {right_edge} + 8.5}};
+                      }})
+                """)
+                assert_true(all(c["bg"] == "rgb(23, 32, 51)" and c["image"] for c in cover),
+                            f"the hovered actions sit on the panel+tint cover: {cover}")
+                assert_true(all(c["coversText"] for c in cover),
+                            f"the strip covers the text end (name right {name['right']:.1f}px): {cover}")
+                await unhover()
+                await wait_for(cdp, session_id, f"""
+                    [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
+                      .every(b => getComputedStyle(b).opacity === '0')
+                """, timeout=4, label="s29 the actions hide again off hover")
+
+                # The current session keeps its four buttons in flow at rest,
+                # with the name truncating before them.
+                current = await row_geo(ids["ops_root"])
+                assert_true(len(current["buttons"]) == 4
+                            and all(b["position"] == "static" and float(b["opacity"]) == 1.0
+                                    for b in current["buttons"]),
+                            f"the current row shows its buttons at rest in flow: "
+                            f"{[(b['title'], b['position'], b['opacity']) for b in current['buttons']]}")
+                cur_edge = current["row"]["x"] + current["row"]["w"] - current["row"]["padRight"]
+                assert_true(abs(max(b["right"] for b in current["buttons"]) - cur_edge) <= 0.5,
+                            "the current row's actions end at the row's right content edge")
+                assert_true(current["name"]["right"] <= min(b["left"] for b in current["buttons"]) + 0.5,
+                            f"the current row's name truncates before its buttons "
+                            f"(name right {current['name']['right']:.1f}px, first button left "
+                            f"{min(b['left'] for b in current['buttons']):.1f}px)")
+
+                # A starred row shows its solid star at rest, in flow at the
+                # row end, with the other three actions still out of flow.
+                # feature nests under the root manager: its level's container
+                # starts collapsed on a fresh load, so open it before the
+                # reveal walks up to the group's Show-all.
+                await expand_to(cdp, session_id, [ids["root"]])
+                await reveal_row(cdp, session_id, ids["feature"])
+                starred = await row_geo(ids["feature"])
+                star = next(b for b in starred["buttons"] if b["title"] == "Star")
+                others = [b for b in starred["buttons"] if b["title"] != "Star"]
+                assert_true(star["position"] == "static" and float(star["opacity"]) == 1.0,
+                            f"the starred row shows its star at rest: {star}")
+                assert_true(starred["starFill"] == "currentColor",
+                            f"the rest star is solid (fill {starred['starFill']})")
+                star_edge = starred["row"]["x"] + starred["row"]["w"] - starred["row"]["padRight"]
+                assert_true(abs(star["right"] - star_edge) <= 0.5,
+                            f"the rest star sits at the row's right end "
+                            f"(right {star['right']:.1f}px vs edge {star_edge:.1f}px)")
+                assert_true(starred["name"]["right"] <= star["left"] + 0.5,
+                            f"the name truncates before the rest star "
+                            f"(name right {starred['name']['right']:.1f}px vs star left {star['left']:.1f}px)")
+                assert_true(all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in others),
+                            f"the starred row's other actions stay out of flow at rest: "
+                            f"{[(b['title'], b['position'], b['opacity']) for b in others]}")
+
+                # Star the unstarred row through a real pointer click on the
+                # revealed strip: the in-place toggle paints the rest star, the
+                # pointer leaving leaves it visible, and no list repaint rides
+                # either direction.
+                async def click_star(node_id: str, expect_visible: bool) -> dict:
+                    await hover_row(node_id)
+                    await wait_for(cdp, session_id, f"""
+                        [...document.getElementById('session-{node_id}').querySelectorAll(':scope > button')]
+                          .every(b => getComputedStyle(b).opacity === '1')
+                    """, timeout=4, label="s29 strip revealed for the star click")
+                    geo = await row_geo(node_id)
+                    btn = next(b for b in geo["buttons"] if b["title"] == "Star")
+                    sx, sy = btn["left"] + btn["w"] / 2, btn["y"] + btn["h"] / 2
+                    for kind in ("mousePressed", "mouseReleased"):
+                        await cdp.send("Input.dispatchMouseEvent", {
+                            "type": kind, "x": sx, "y": sy, "button": "left", "clickCount": 1,
+                        }, session_id=session_id)
+                    wanted = ["!opacity-100", "text-yellow-400"] if expect_visible else ["hover:text-yellow-400"]
+                    wanted_js = "[" + ", ".join(json.dumps(w) for w in wanted) + "]"
+                    await wait_for(cdp, session_id, f"""
+                        (() => {{
+                          const btn = document.getElementById('star-{node_id}');
+                          return btn && {wanted_js}.every(c => btn.classList.contains(c));
+                        }})()
+                    """, timeout=6, label=f"s29 star toggle painted {'the rest star' if expect_visible else 'the unstar'} in place")
+                    await unhover()
+                    # The reveal fades over 150ms: measure only once the
+                    # not-forced buttons have finished fading out.
+                    await wait_for(cdp, session_id, f"""
+                        [...document.getElementById('session-{node_id}').querySelectorAll(':scope > button')]
+                          .filter(b => !b.classList.contains('!opacity-100'))
+                          .every(b => getComputedStyle(b).opacity === '0')
+                    """, timeout=4, label="s29 the revealed actions faded out again")
+                    return await row_geo(node_id)
+
+                async def wait_for_mutation(suffix: str, mark: int) -> dict:
+                    deadline = time.monotonic() + 8
+                    while time.monotonic() < deadline:
+                        hits = [m for m in cdp.mutations_since(mark) if m["url"].endswith(suffix)]
+                        if hits:
+                            return hits[0]
+                        await asyncio.sleep(0.2)
+                    raise AssertionError(f"no API mutation against {suffix} within 8s")
+
+                # The starred-row reveal scrolled the list: bring the row
+                # under the pointer back on screen before the clicks.
+                await reveal_row(cdp, session_id, ids["ops_mid"])
+                mark = cdp.mutation_mark()
+                toggled = await click_star(ids["ops_mid"], expect_visible=True)
+                star_post = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/star", mark)
+                assert_true(star_post["method"] == "POST", f"the click starred the row through the API: {star_post}")
+                tstar = next(b for b in toggled["buttons"] if b["title"] == "Star")
+                assert_true(tstar["position"] == "static" and float(tstar["opacity"]) == 1.0,
+                            f"the pointer away, the solid star stays at rest: {tstar}")
+                assert_true(toggled["starFill"] == "currentColor",
+                            f"the rest star is solid (fill {toggled['starFill']})")
+                t_edge = toggled["row"]["x"] + toggled["row"]["w"] - toggled["row"]["padRight"]
+                assert_true(abs(tstar["right"] - t_edge) <= 0.5, "the toggled star sits at the row's right end")
+                assert_true(toggled["name"]["right"] <= tstar["left"] + 0.5,
+                            "the name truncates before the toggled rest star")
+                t_others = [b for b in toggled["buttons"] if b["title"] != "Star"]
+                assert_true(all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in t_others),
+                            "the starred row's other actions hid again off hover")
+                fetches = cdp.drain_list_fetches()
+                assert_true(fetches == [], f"the star toggle repainted no list: {fetches}")
+
+                mark = cdp.mutation_mark()
+                untoggled = await click_star(ids["ops_mid"], expect_visible=False)
+                star_unpost = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/unstar", mark)
+                assert_true(star_unpost["method"] == "POST", f"the second click unstarred the row: {star_unpost}")
+                ustar = next(b for b in untoggled["buttons"] if b["title"] == "Star")
+                assert_true(ustar["position"] == "absolute" and float(ustar["opacity"]) == 0.0,
+                            f"unstarred, the star hides from the rest state again: {ustar}")
+                assert_true(untoggled["starFill"] == "none",
+                            f"the unstarred star is hollow again (fill {untoggled['starFill']})")
+                fetches = cdp.drain_list_fetches()
+                assert_true(fetches == [], f"the unstar repainted no list: {fetches}")
+
+                shot = await screenshot(cdp, session_id, results, "s29_hover_reveal")
+                results.record("a row's actions take no width until the row is hovered", ok=True,
+                               detail=(f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
+                                       f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
+                                       f"exposes Star/New child session/Archive/Settings on the opaque cover; "
+                                       f"current row in flow; starred rest star toggles in place, no list repaint"),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
+                results.record("a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
 
             # The CDP collector records console.error calls and uncaught page
             # exceptions from Runtime.enable onward — this list is the only

@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import uuid
-from dataclasses import dataclass, field
 from enum import IntEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -131,25 +130,56 @@ def _tool_result_content(value: Any) -> Any:
   return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-@dataclass
 class HookTurnState:
-  """In-memory state machine for one Claude Code turn."""
+  """In-memory state machine for one Claude Code turn.
 
-  expected_session_id: str
-  expected_cwd: str
-  expected_prompt: str
-  model: str = ""
-  expected_source: str = "startup"
-  delivery: PromptDelivery = PromptDelivery.UNKNOWN
-  session_started: bool = False
-  correlation_id: str | None = None
-  correlation_field: str | None = None
-  stop_seen: bool = False
-  stop_candidate: str | None = None
-  idle_seen: bool = False
-  active: bool = False
-  failure: HookBridgeError | None = None
-  _seen_message_batches: set[tuple[str, int]] = field(default_factory=set)
+  A plain class, not a dataclass: the bridge is src.cli.claude_sub's
+  module-level import, the M108 launch floor (docs/perf_baseline.md) pays that
+  import in every fresh worker process, and the dataclasses import pulls
+  inspect for machinery no consumer calls.
+  """
+
+  __slots__ = (
+      "_seen_message_batches",
+      "active",
+      "correlation_field",
+      "correlation_id",
+      "delivery",
+      "expected_cwd",
+      "expected_prompt",
+      "expected_session_id",
+      "expected_source",
+      "failure",
+      "idle_seen",
+      "model",
+      "session_started",
+      "stop_candidate",
+      "stop_seen",
+  )
+
+  def __init__(
+      self,
+      expected_session_id: str,
+      expected_cwd: str,
+      expected_prompt: str,
+      model: str = "",
+      expected_source: str = "startup",
+  ) -> None:
+    self.expected_session_id = expected_session_id
+    self.expected_cwd = expected_cwd
+    self.expected_prompt = expected_prompt
+    self.model = model
+    self.expected_source = expected_source
+    self.delivery = PromptDelivery.UNKNOWN
+    self.session_started = False
+    self.correlation_id = None
+    self.correlation_field = None
+    self.stop_seen = False
+    self.stop_candidate = None
+    self.idle_seen = False
+    self.active = False
+    self.failure = None
+    self._seen_message_batches = set()
 
   def _validate_common(self, event_name: str, payload: dict[str, Any]) -> None:
     hook_event_name = _required_string(payload, "hook_event_name")

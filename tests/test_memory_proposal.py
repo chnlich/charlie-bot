@@ -7,11 +7,10 @@ Every refusal must exit 1 with the reason on stderr and leave the live
 checkout, the branch, and the worktree exactly as they were.
 """
 
-import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import legacy_memory_entry_text
+from conftest import legacy_memory_entry_text, run_git
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
@@ -23,13 +22,6 @@ from src.core import memory_proposal
 _CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
 
 
-def _git(repo: Path, *args: str, check: bool = True) -> str:
-  result = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
-  if check and result.returncode != 0:
-    raise AssertionError(f"git {' '.join(args)} failed in {repo}: {result.stderr.strip()}")
-  return result.stdout
-
-
 def _build_store(home: Path) -> Path:
   """One committed store-shaped repo at <home>/memory, on branch main."""
   mem = home / "memory"
@@ -37,11 +29,11 @@ def _build_store(home: Path) -> Path:
   _write_entry(mem, "profile", "dark-mode")
   (mem / "staging").mkdir()
   (mem / ".gitignore").write_text("staging/\n", encoding="utf-8")
-  _git(mem, "init", "-q", "-b", "main")
-  _git(mem, "config", "user.email", "t@t.t")
-  _git(mem, "config", "user.name", "t")
-  _git(mem, "add", "-A")
-  _git(mem, "commit", "-qm", "base")
+  run_git(mem, "init", "-q", "-b", "main")
+  run_git(mem, "config", "user.email", "t@t.t")
+  run_git(mem, "config", "user.name", "t")
+  run_git(mem, "add", "-A")
+  run_git(mem, "commit", "-qm", "base")
   return mem
 
 
@@ -101,8 +93,8 @@ def _live_commit(store: Path, rel_path: Path, text: str, message: str) -> None:
   target = store / rel_path
   target.parent.mkdir(parents=True, exist_ok=True)
   target.write_text(text, encoding="utf-8")
-  _git(store, "add", rel_path.as_posix())
-  _git(store, "commit", "-qm", message)
+  run_git(store, "add", rel_path.as_posix())
+  run_git(store, "commit", "-qm", message)
 
 
 # --- open ---------------------------------------------------------------------
@@ -119,15 +111,15 @@ def test_first_open_creates_branch_and_worktree(store: Path, monkeypatch, capsys
   assert Path(fields["worktree"]) == worktree
   assert worktree.is_dir()
   # The branch exists at base and the worktree checked it out.
-  assert _git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal").strip() == _git(store, "rev-parse",
-                                                                                           "main").strip()
-  assert _git(worktree, "symbolic-ref", "--short", "HEAD").strip() == "proposal"
+  assert run_git(store, "rev-parse", "--verify", "-q",
+                 "refs/heads/proposal").strip() == run_git(store, "rev-parse", "main").strip()
+  assert run_git(worktree, "symbolic-ref", "--short", "HEAD").strip() == "proposal"
 
 
 def test_open_with_commits_ahead_and_unchanged_base_keeps_them(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   _pr_commit(store, Path("entries/profile/new-entry.md"), _entry_text("new-entry", "body\n"), "add new")
-  head_before = _git(store, "rev-parse", "proposal").strip()
+  head_before = run_git(store, "rev-parse", "proposal").strip()
   code, out, _err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 0
   fields = _fields(out)
@@ -138,18 +130,18 @@ def test_open_with_commits_ahead_and_unchanged_base_keeps_them(store: Path, monk
 def test_open_rebases_onto_moved_base(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   _pr_commit(store, Path("entries/profile/rebased.md"), _entry_text("rebased", "body\n"), "add rebased")
-  pr_head = _git(store, "rev-parse", "proposal").strip()
+  pr_head = run_git(store, "rev-parse", "proposal").strip()
   # The base moves by a non-conflicting commit on the live checkout.
   _live_commit(store, Path("entries/profile/base-side.md"), _entry_text("base-side", "base body\n"), "advance base")
-  new_base = _git(store, "rev-parse", "main").strip()
+  new_base = run_git(store, "rev-parse", "main").strip()
 
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 0, err
   fields = _fields(out)
   assert fields["ahead"] == "1"
   # The PR commit now sits on the new base.
-  assert _git(store, "rev-parse", "proposal~1").strip() == new_base
-  assert _git(store, "rev-parse", "proposal").strip() != pr_head
+  assert run_git(store, "rev-parse", "proposal~1").strip() == new_base
+  assert run_git(store, "rev-parse", "proposal").strip() != pr_head
 
 
 def test_open_conflicting_base_keeps_branch_at_old_sha(store: Path, monkeypatch, capsys) -> None:
@@ -158,17 +150,17 @@ def test_open_conflicting_base_keeps_branch_at_old_sha(store: Path, monkeypatch,
   worktree = memory_proposal.proposal_worktree(store)
   (worktree / "topics").write_text("profile resident PR edit\nworkflow resident\n", encoding="utf-8")
   memory_proposal.commit(store, "topics", _message_file(store, "edit topics on the PR"))
-  pr_head = _git(store, "rev-parse", "proposal").strip()
+  pr_head = run_git(store, "rev-parse", "proposal").strip()
   (store / "topics").write_text("profile resident live edit\nworkflow resident\n", encoding="utf-8")
-  _git(store, "commit", "-qam", "conflicting base edit")
+  run_git(store, "commit", "-qam", "conflicting base edit")
 
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 1
   assert "conflicted" in err
-  assert _git(store, "rev-parse", "proposal").strip() == pr_head
+  assert run_git(store, "rev-parse", "proposal").strip() == pr_head
   # The rebase was aborted: no rebase left in progress, nothing staged.
-  assert _git(worktree, "rev-parse", "-q", "--verify", "REBASE_HEAD", check=False).strip() == ""
-  assert not _git(worktree, "status", "--porcelain").strip()
+  assert run_git(worktree, "rev-parse", "-q", "--verify", "REBASE_HEAD", check=False).strip() == ""
+  assert not run_git(worktree, "status", "--porcelain").strip()
 
 
 def test_open_refuses_uncommitted_live_change_and_touches_nothing(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -182,7 +174,7 @@ def test_open_refuses_uncommitted_live_change_and_touches_nothing(tmp_path: Path
   assert "uncommitted" in err
   # Nothing was created: no worktree, no proposal branch.
   assert not memory_proposal.proposal_worktree(store).exists()
-  assert _git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
+  assert run_git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
 
 
 def test_open_refuses_detached_live_checkout(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -190,8 +182,8 @@ def test_open_refuses_detached_live_checkout(tmp_path: Path, monkeypatch, capsys
   home.mkdir()
   store = _build_store(home)
   monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
-  head = _git(store, "rev-parse", "HEAD").strip()
-  _git(store, "checkout", "-q", "--detach", head)
+  head = run_git(store, "rev-parse", "HEAD").strip()
+  run_git(store, "checkout", "-q", "--detach", head)
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 1
   assert "not on a branch" in err
@@ -203,17 +195,17 @@ def test_open_foreign_worktree_refuses_and_creates_no_branch(store: Path, monkey
   before anything is created: no proposal branch, the stranger repo untouched."""
   worktree = memory_proposal.proposal_worktree(store)
   worktree.mkdir()
-  _git(worktree, "init", "-q", "-b", "main")
-  _git(worktree, "config", "user.email", "t@t.t")
-  _git(worktree, "config", "user.name", "t")
+  run_git(worktree, "init", "-q", "-b", "main")
+  run_git(worktree, "config", "user.email", "t@t.t")
+  run_git(worktree, "config", "user.name", "t")
   (worktree / "foreign.txt").write_text("mine\n", encoding="utf-8")
-  _git(worktree, "add", "-A")
-  _git(worktree, "commit", "-qm", "foreign")
+  run_git(worktree, "add", "-A")
+  run_git(worktree, "commit", "-qm", "foreign")
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 1
   # The refusal fires on the worktree validation, before the branch is created.
   assert "is a worktree on 'main', not 'proposal'" in err
-  assert _git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
+  assert run_git(store, "rev-parse", "--verify", "-q", "refs/heads/proposal", check=False).strip() == ""
   assert (worktree / "foreign.txt").read_text(encoding="utf-8") == "mine\n"
 
 
@@ -231,8 +223,8 @@ def test_commit_accepts_new_entry_file(store: Path, monkeypatch, capsys) -> None
       str(_message_file(store, "admit profile/new-entry (New Entry)")))
   assert code == 0, err
   fields = _fields(out)
-  assert fields["committed"] == _git(store, "rev-parse", "proposal").strip()
-  assert _git(worktree, "ls-tree", "-r", "HEAD", "--name-only").splitlines() == [
+  assert fields["committed"] == run_git(store, "rev-parse", "proposal").strip()
+  assert run_git(worktree, "ls-tree", "-r", "HEAD", "--name-only").splitlines() == [
       ".gitignore", "entries/profile/dark-mode.md", "entries/profile/new-entry.md", "topics"
   ]
 
@@ -264,7 +256,7 @@ def test_commit_resolves_a_relative_message_file_against_the_caller_cwd(
   monkeypatch.chdir(caller_cwd)
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", "message.txt")
   assert code == 0, err
-  assert _git(worktree, "log", "-1", "--format=%B").strip() == "admit via a relative message file"
+  assert run_git(worktree, "log", "-1", "--format=%B").strip() == "admit via a relative message file"
 
 
 def test_commit_refuses_reworded_pr_line_and_lists_it(store: Path, monkeypatch, capsys) -> None:
@@ -280,7 +272,7 @@ def test_commit_refuses_reworded_pr_line_and_lists_it(store: Path, monkeypatch, 
   # The refusal lists the line the PR added and the worktree lost.
   assert "alpha bravo" in err
   # Nothing was committed.
-  assert len(_git(store, "rev-list", "main..proposal").splitlines()) == 1
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
 
 
 def test_commit_refuses_line_reworded_to_the_base_wording(store: Path, monkeypatch, capsys) -> None:
@@ -300,7 +292,7 @@ def test_commit_refuses_line_reworded_to_the_base_wording(store: Path, monkeypat
       monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "restore")))
   assert code == 1
   assert "reworded body" in err
-  assert len(_git(store, "rev-list", "main..proposal").splitlines()) == 1
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
 
 
 def test_commit_counts_line_occurrences_as_a_multiset(store: Path, monkeypatch, capsys) -> None:
@@ -328,7 +320,7 @@ def test_commit_refuses_deleted_pr_created_entry(store: Path, monkeypatch, capsy
       monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "delete")))
   assert code == 1
   assert "keep me" in err
-  assert len(_git(store, "rev-list", "main..proposal").splitlines()) == 1
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
 
 
 # --- land ---------------------------------------------------------------------
@@ -346,21 +338,21 @@ def _three_pr_commits(store: Path) -> list[str]:
 def test_land_middle_commit_moves_live_head_and_keeps_the_rest(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   _first, middle, _last = _three_pr_commits(store)
-  old_base = _git(store, "rev-parse", "main").strip()
+  old_base = run_git(store, "rev-parse", "main").strip()
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "land", middle)
   assert code == 0, err
   fields = _fields(out)
   assert fields["commits"] == "2"
   assert fields["remaining"] == "1"
   assert fields["landed"] == (
-      f"{_git(store, 'rev-parse', '--short', old_base).strip()}.."
-      f"{_git(store, 'rev-parse', '--short', middle).strip()}")
+      f"{run_git(store, 'rev-parse', '--short', old_base).strip()}.."
+      f"{run_git(store, 'rev-parse', '--short', middle).strip()}")
   # The live head is exactly the approved SHA, on the base branch.
-  assert _git(store, "rev-parse", "HEAD").strip() == middle
-  assert _git(store, "symbolic-ref", "--short", "HEAD").strip() == "main"
+  assert run_git(store, "rev-parse", "HEAD").strip() == middle
+  assert run_git(store, "symbolic-ref", "--short", "HEAD").strip() == "main"
   # The last commit stays on the proposal branch for the next PR.
-  assert _git(store, "rev-list", "--count", f"{middle}..proposal").strip() == "1"
-  _git(store, "cat-file", "-e", "proposal:entries/profile/numbered-3.md")
+  assert run_git(store, "rev-list", "--count", f"{middle}..proposal").strip() == "1"
+  run_git(store, "cat-file", "-e", "proposal:entries/profile/numbered-3.md")
 
 
 def test_land_refuses_sha_not_on_proposal(store: Path, monkeypatch, capsys) -> None:
@@ -368,22 +360,22 @@ def test_land_refuses_sha_not_on_proposal(store: Path, monkeypatch, capsys) -> N
   _three_pr_commits(store)
   # A commit on the live checkout that the proposal branch never carried.
   _live_commit(store, Path("entries/profile/base-side.md"), _entry_text("base-side", "base body\n"), "live-side")
-  live_head = _git(store, "rev-parse", "HEAD").strip()
+  live_head = run_git(store, "rev-parse", "HEAD").strip()
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "land", live_head)
   assert code == 1
   assert "not on the 'proposal' branch" in err
-  assert _git(store, "rev-parse", "main").strip() == live_head
+  assert run_git(store, "rev-parse", "main").strip() == live_head
 
 
 def test_land_refuses_dirty_live_checkout(store: Path, monkeypatch, capsys) -> None:
   _run_cli(monkeypatch, capsys, "proposal", "open")
   _first, middle, _last = _three_pr_commits(store)
-  live_head = _git(store, "rev-parse", "HEAD").strip()
+  live_head = run_git(store, "rev-parse", "HEAD").strip()
   (store / "topics").write_text("dirty edit\n", encoding="utf-8")
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "land", middle)
   assert code == 1
   assert "not clean" in err
-  assert _git(store, "rev-parse", "HEAD").strip() == live_head
+  assert run_git(store, "rev-parse", "HEAD").strip() == live_head
 
 
 def test_land_refuses_tree_failing_lint(store: Path, monkeypatch, capsys) -> None:
@@ -393,12 +385,12 @@ def test_land_refuses_tree_failing_lint(store: Path, monkeypatch, capsys) -> Non
   rel = Path("entries/profile/legacy.md")
   (worktree / rel).write_text(legacy_memory_entry_text("profile", "legacy"), encoding="utf-8")
   memory_proposal.commit(store, rel.as_posix(), _message_file(store, "admit legacy"))
-  head_before = _git(store, "rev-parse", "HEAD").strip()
-  pr_head = _git(store, "rev-parse", "proposal").strip()
+  head_before = run_git(store, "rev-parse", "HEAD").strip()
+  pr_head = run_git(store, "rev-parse", "proposal").strip()
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "land", pr_head)
   assert code == 1
   assert "store lint" in err
-  assert _git(store, "rev-parse", "HEAD").strip() == head_before
+  assert run_git(store, "rev-parse", "HEAD").strip() == head_before
 
 
 # --- status -------------------------------------------------------------------
@@ -410,14 +402,14 @@ def test_status_prints_every_field(store: Path, monkeypatch, capsys) -> None:
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "status")
   assert code == 0, err
   fields = _fields(out)
-  head = _git(store, "rev-parse", "proposal").strip()
+  head = run_git(store, "rev-parse", "proposal").strip()
   assert list(fields) == ["worktree", "base", "head", "ahead", "opened", "dirty", "diff_path"]
   assert Path(fields["worktree"]) == memory_proposal.proposal_worktree(store)
   assert fields["base"] == "main"
   assert fields["head"] == head
   assert fields["ahead"] == "1"
   # The opened date is the oldest ahead commit's committer date, YYYY-MM-DD.
-  expected_date = _git(store, "show", "--no-patch", "--date=short", "--format=%cd", head).strip()
+  expected_date = run_git(store, "show", "--no-patch", "--date=short", "--format=%cd", head).strip()
   assert fields["opened"] == expected_date
   assert fields["dirty"] == "no"
   assert fields["diff_path"] == f"/diff?repo={store}&base=main&head={head}"
@@ -438,7 +430,7 @@ def test_status_dirty_dash_when_worktree_absent(store: Path, monkeypatch, capsys
   _run_cli(monkeypatch, capsys, "proposal", "open")
   _pr_commit(store, Path("entries/profile/detached-worktree.md"), _entry_text("detached-worktree", "body\n"), "add")
   worktree = memory_proposal.proposal_worktree(store)
-  _git(store, "worktree", "remove", str(worktree))
+  run_git(store, "worktree", "remove", str(worktree))
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "status")
   assert code == 0, err
   fields = _fields(out)

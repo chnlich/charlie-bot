@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import create_task, patch_instructions_content, stub_credentials
+from conftest import create_task, patch_instructions_content, run_git, stub_credentials
 
 from src.agents.worker import GIT_STASH_GUARD_DIR
 from src.core import event_types as ET
@@ -88,11 +88,6 @@ def _guard_run(repo: Path, argv: list[str], env: dict[str, str]) -> subprocess.C
   return subprocess.run([str(WRAPPER), *argv], cwd=repo, env=child_env, capture_output=True, check=False)
 
 
-def _git(repo: Path, env: dict[str, str], *args: str) -> str:
-  proc = subprocess.run(["git", "-C", str(repo), *args], env=env, capture_output=True, text=True, check=True)
-  return proc.stdout.strip()
-
-
 @pytest.fixture
 def guard_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
   """A fresh repo with one seeded stash entry and a dirty tracked file.
@@ -124,8 +119,8 @@ def guard_repo(tmp_path: Path) -> tuple[Path, dict[str, str]]:
 
 def _stash_state(repo: Path, env: dict[str, str]) -> tuple[str, str]:
   """refs/stash's sha and its reflog, the state a refusal must not move."""
-  ref = _git(repo, env, "rev-parse", "refs/stash")
-  reflog = _git(repo, env, "reflog", "show", "refs/stash")
+  ref = run_git(repo, "rev-parse", "refs/stash", env=env)
+  reflog = run_git(repo, "reflog", "show", "refs/stash", env=env)
   return ref, reflog
 
 
@@ -144,8 +139,8 @@ def test_stash_write_forms_are_refused(guard_repo, tmp_path, argv) -> None:
 
 def test_repo_level_alias_chain_is_refused(guard_repo) -> None:
   repo, env = guard_repo
-  _git(repo, env, "config", "alias.r1", "r2")
-  _git(repo, env, "config", "alias.r2", "stash")
+  run_git(repo, "config", "alias.r1", "r2", env=env)
+  run_git(repo, "config", "alias.r2", "stash", env=env)
   before = _stash_state(repo, env)
 
   proc = _guard_run(repo, ["r1"], env)
@@ -244,7 +239,6 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       SpawningScriptedBackend,
       _adapter_with_silent_broadcast,
       build_env,
-      git,
       init_repo_with_origin,
       install_backends,
       make_pm_build,
@@ -295,8 +289,8 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
     pytest.fail("the work run never recorded its worktree")
   wt = Path(run.worktree_path)
   (wt / "marker.txt").write_text("implemented\n")
-  git(wt, "add", "-A")
-  git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  run_git(wt, "add", "-A")
+  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
   committed.set()
 
   deadline = asyncio.get_event_loop().time() + 15

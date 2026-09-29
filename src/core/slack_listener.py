@@ -75,6 +75,7 @@ from src.core.thread_entry import (
     ThreadReplyError,
     chunk_text,
     event_by_id,
+    lost_summons,
     newest_thread_input,
     noticed,
     nudged,
@@ -1059,25 +1060,12 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
 
 
 def _lost_summons(events: list[dict], *, owned: set[str], running: set[str]) -> list[dict]:
-  """The Slack injections in one session's log that nothing will ever answer.
+  """The lost Slack summons of one session's log; the shared check on the Slack platform.
 
-  A summon (or a nudge: it carries the same slack block) is lost when no
-  master_done names it (any id of a merged round's list counts as answered),
-  this process does not already own it (queued or running), the session's
-  master_run record does not name it among its whole input list (alive but not
-  followable), and no earlier backfill marked it. The marker is the
-  ``slack_backfill`` payload, never a synthetic master_done: that event is
-  the cut point replay uses to decide which user messages are still unanswered.
+  Kept as the importable Slack name (tests call it with the owned/running
+  keywords); the boot backfill goes through the shared core directly.
   """
-  answered: set[str] = set()
-  for ev in events:
-    if ev.get("type") == ET.MASTER_DONE:
-      answered.update(master_done_input_event_ids(ev))
-  marked = {ev["slack_backfill"].get(ET.INPUT_EVENT_ID) for ev in events if "slack_backfill" in ev}
-  return [
-      ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE and "slack" in ev and ev["id"] not in answered and
-      ev["id"] not in marked and ev["id"] not in owned and ev["id"] not in running
-  ]
+  return lost_summons(SLACK, events, owned=owned, running=running)
 
 
 async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
@@ -1100,7 +1088,8 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
     if meta.slack_origin is None:
       continue
     events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
-    lost = _lost_summons(
+    lost = lost_summons(
+        SLACK,
         events,
         owned=master_cc.queued_user_event_ids(meta.id),
         running=set(meta.master_run.user_event_ids) if meta.master_run else set())

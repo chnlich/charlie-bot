@@ -1128,7 +1128,7 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
   return body
 
 
-# The switch fetches (view, bootstrap) and the sidebar's status poll (/status)
+# The switch fetch (bootstrap) and the sidebar's status poll (/status)
 # rebuild their payload per request, so unlike the
 # events page there is no projection generation to key a gzip form on; the
 # rendered body bytes are their own invalidation ground — a memo hit proves

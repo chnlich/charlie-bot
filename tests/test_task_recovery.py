@@ -272,17 +272,17 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
     its reviewed branch landed on origin's base — the durable state every server
     restart reconciles: every Run terminal, the review's follow-up owed to the
     replay. The worktree is already gone from disk, as a delivered task's is."""
-    from tests.test_task_execution import git as repo_git
+    from conftest import run_git
 
     cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
         tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
     repo, _origin = init_repo_with_origin(tmp_path / "repo")
     # The reviewer's landing: the reviewed branch fast-forwards origin's base.
-    repo_git(repo, "checkout", "-q", "-b", "task/work")
+    run_git(repo, "checkout", "-q", "-b", "task/work")
     (repo / "marker.txt").write_text("implemented\n")
-    repo_git(repo, "add", "-A")
-    repo_git(repo, "commit", "-q", "-m", "implement marker")
-    repo_git(repo, "push", "-q", "origin", "task/work:main")
+    run_git(repo, "add", "-A")
+    run_git(repo, "commit", "-q", "-m", "implement marker")
+    run_git(repo, "push", "-q", "origin", "task/work:main")
     install_backends(
         monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)

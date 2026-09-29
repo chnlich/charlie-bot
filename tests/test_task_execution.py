@@ -33,6 +33,7 @@ from conftest import (
     patch_instructions_content,
     pool_cfg,
     rate_limit_event,
+    run_git,
     stub_credentials,
 )
 from conftest import OPERATOR as OP_CALLER
@@ -214,23 +215,18 @@ async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: 
     pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
 
 
-def git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
-    return proc.stdout.strip()
-
-
 def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
     """A synthetic repo with a bare origin carrying main (the landing target)."""
     origin = tmp_path / "origin.git"
     subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
     repo = tmp_path / "repo"
     subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True)
-    git(repo, "config", "user.email", "t@example.com")
-    git(repo, "config", "user.name", "t")
+    run_git(repo, "config", "user.email", "t@example.com")
+    run_git(repo, "config", "user.name", "t")
     (repo / "seed.txt").write_text("seed\n")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "seed")
-    git(repo, "push", "-q", "origin", "main")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "-q", "-m", "seed")
+    run_git(repo, "push", "-q", "origin", "main")
     return repo, origin
 
 
@@ -245,8 +241,8 @@ def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
     """The implement backend's side effect: commit marker.txt on the work branch."""
     wt = work_run_worktree(tree, worker_id)
     (wt / "marker.txt").write_text("implemented\n")
-    git(wt, "add", "-A")
-    git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+    run_git(wt, "add", "-A")
+    run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
 
 
 # ---------------------------------------------------------------------------
@@ -773,9 +769,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
         for args in (("fetch", "-q", "origin"),
                      ("rebase", "-q", "origin/main"),
                      ("push", "-q", "origin", f"{record.branch_name}:main")):
-            proc = subprocess.run(["git", "-C", str(work_wt), *args],
-                                  capture_output=True, text=True)
-            assert proc.returncode == 0, (args, proc.stderr)
+            run_git(work_wt, *args)
 
     review_backend = SpawningScriptedBackend([result_event("review ok")], pre_run=reviewer_push)
     review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
@@ -801,8 +795,8 @@ async def test_implement_delivery_requires_review_and_real_landing(
     wt = Path(run.worktree_path)
     assert Path(run.worktree_path).is_dir()
     (wt / "marker.txt").write_text("implemented\n")
-    git(wt, "add", "-A")
-    git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+    run_git(wt, "add", "-A")
+    run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
     work_committed.set()
 
     deadline = asyncio.get_event_loop().time() + 10
@@ -883,13 +877,13 @@ def _advance_origin_from_second_clone(tmp_path: Path, origin: Path, filename: st
     """Push one commit to the bare origin from a second clone; returns the new tip."""
     second = tmp_path / "second-clone"
     subprocess.run(["git", "clone", "-q", str(origin), str(second)], check=True)
-    git(second, "config", "user.email", "t@example.com")
-    git(second, "config", "user.name", "t")
+    run_git(second, "config", "user.email", "t@example.com")
+    run_git(second, "config", "user.name", "t")
     (second / filename).write_text("advance\n")
-    git(second, "add", "-A")
-    git(second, "commit", "-q", "-m", f"advance origin via {filename}")
-    git(second, "push", "-q", "origin", "main")
-    return git(second, "rev-parse", "refs/heads/main")
+    run_git(second, "add", "-A")
+    run_git(second, "commit", "-q", "-m", f"advance origin via {filename}")
+    run_git(second, "push", "-q", "origin", "main")
+    return run_git(second, "rev-parse", "refs/heads/main")
 
 
 @pytest.mark.integration
@@ -917,7 +911,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
     # Origin gains a commit from a second clone while the fixture repo's local
     # main stays put: local main is strictly behind origin/main.
     origin_tip = _advance_origin_from_second_clone(tmp_path, origin, "ahead.txt")
-    local_main = git(repo, "rev-parse", "main")
+    local_main = run_git(repo, "rev-parse", "main")
     assert local_main != origin_tip
 
     work_backend = SpawningScriptedBackend([result_event("implemented")])
@@ -934,8 +928,8 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
     assert work_run.worktree_path
     work_wt = Path(work_run.worktree_path)
     # The work branch started at the new origin tip, never at the stale local main.
-    assert git(work_wt, "rev-parse", "HEAD") == origin_tip
-    assert git(repo, "rev-parse", "main") == local_main
+    assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
+    assert run_git(repo, "rev-parse", "main") == local_main
 
     # The header the worker page projects for the launched Run: plain success,
     # both refs pointing at the files the launch produced.
@@ -986,9 +980,9 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
     # One unpushed commit on the fixture repo's local main: origin does not
     # have it, so the base check fails closed.
     (repo / "local_only.txt").write_text("local work\n")
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
-    local_tip = git(repo, "rev-parse", "main")
+    run_git(repo, "add", "-A")
+    run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
+    local_tip = run_git(repo, "rev-parse", "main")
 
     work_backend = SpawningScriptedBackend([result_event("never runs")])
     install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -1220,7 +1214,7 @@ async def test_landing_verification_negative_cases(tmp_path: Path) -> None:
     from src.core.git import git_verify_commit_landed
 
     repo, _origin = init_repo_with_origin(tmp_path)
-    base_sha = git(repo, "rev-parse", "HEAD")
+    base_sha = run_git(repo, "rev-parse", "HEAD")
     # The base commit IS landed on origin/main.
     landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
     assert landed is True
@@ -1228,11 +1222,11 @@ async def test_landing_verification_negative_cases(tmp_path: Path) -> None:
     landed, reason = await git_verify_commit_landed(repo, "origin/main", "f" * 40)
     assert landed is False and "existence" in reason
     # A real but unmerged commit fails ancestry.
-    git(repo, "checkout", "-q", "-b", "feature")
+    run_git(repo, "checkout", "-q", "-b", "feature")
     (repo / "unmerged.txt").write_text("x\n")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "unmerged")
-    unmerged = git(repo, "rev-parse", "HEAD")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "-q", "-m", "unmerged")
+    unmerged = run_git(repo, "rev-parse", "HEAD")
     landed, reason = await git_verify_commit_landed(repo, "origin/main", unmerged)
     assert landed is False and "ancestry" in reason
     # A commit on a different branch target fails.
@@ -1262,12 +1256,12 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
     await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
     # A real commit that exists but is NOT on the target branch: ancestry must
     # reject it just as strictly as a nonexistent hash.
-    git(repo, "checkout", "-q", "-b", "side-work")
+    run_git(repo, "checkout", "-q", "-b", "side-work")
     (repo / "unlanded.txt").write_text("x\n")
-    git(repo, "add", "-A")
-    git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
-    unlanded = git(repo, "rev-parse", "HEAD")
-    git(repo, "checkout", "-q", "main")
+    run_git(repo, "add", "-A")
+    run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
+    unlanded = run_git(repo, "rev-parse", "HEAD")
+    run_git(repo, "checkout", "-q", "main")
     evidence = CompletionEvidence(
         summary="forged",
         result_refs=["run:run-work", f"landed:main@{unlanded}"],
@@ -1835,8 +1829,8 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")
     # The failure's exact shape: the local base branch diverges from origin.
     (repo / "local.txt").write_text("local work\n")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "local-only")
+    run_git(repo, "add", ".")
+    run_git(repo, "commit", "-q", "-m", "local-only")
 
     await tree.dispatch.admit_input(
         manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")

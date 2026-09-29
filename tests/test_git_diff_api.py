@@ -5,7 +5,7 @@ from pathlib import Path
 
 import httpx
 import pytest
-from conftest import apply_config_overrides
+from conftest import apply_config_overrides, run_git
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -13,31 +13,27 @@ from src.api import git as git_api
 from src.core.config import CharlieBotConfig
 
 
-def _git(repo: Path, *args: str) -> None:
-  subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, text=True)
-
-
 def _build_repo(workspace: Path) -> Path:
   """Create a repo with a `main` and `feature` branch covering add/modify/delete/rename."""
   repo = workspace / "repo"
   repo.mkdir(parents=True)
-  _git(repo, "init", "-q", "-b", "main")
-  _git(repo, "config", "user.email", "t@t.t")
-  _git(repo, "config", "user.name", "t")
+  run_git(repo, "init", "-q", "-b", "main")
+  run_git(repo, "config", "user.email", "t@t.t")
+  run_git(repo, "config", "user.name", "t")
   (repo / "keep.txt").write_text("line1\nline2\nline3\n")
   (repo / "torename.txt").write_text("old content\nsecond\n")
   (repo / "todelete.txt").write_text("to be deleted\n")
-  _git(repo, "add", "-A")
-  _git(repo, "commit", "-qm", "base")
+  run_git(repo, "add", "-A")
+  run_git(repo, "commit", "-qm", "base")
 
-  _git(repo, "checkout", "-q", "-b", "feature")
+  run_git(repo, "checkout", "-q", "-b", "feature")
   (repo / "keep.txt").write_text("line1\nline2 changed\nline3\nline4\n")
-  _git(repo, "mv", "torename.txt", "renamed.txt")
+  run_git(repo, "mv", "torename.txt", "renamed.txt")
   (repo / "renamed.txt").write_text("old content\nsecond\nthird\n")
-  _git(repo, "rm", "-q", "todelete.txt")
+  run_git(repo, "rm", "-q", "todelete.txt")
   (repo / "added.txt").write_text("brand new\nfile\n")
-  _git(repo, "add", "-A")
-  _git(repo, "commit", "-qm", "feature")
+  run_git(repo, "add", "-A")
+  run_git(repo, "commit", "-qm", "feature")
   return repo
 
 
@@ -148,8 +144,8 @@ def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: 
   first = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
 
   (repo / "added.txt").write_text("brand new\nfile\nthird\n")
-  _git(repo, "add", "-A")
-  _git(repo, "commit", "-qm", "advance feature")
+  run_git(repo, "add", "-A")
+  run_git(repo, "commit", "-qm", "advance feature")
 
   second = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
   # The files response carries the moved SHA; the file response carries only the
@@ -207,17 +203,17 @@ def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
   assert git_api._refs_signature(repo) == before
 
   # A commit rewrites the branch ref.
-  _git(repo, "commit", "-q", "--allow-empty", "-m", "advance")
+  run_git(repo, "commit", "-q", "--allow-empty", "-m", "advance")
   after_commit = git_api._refs_signature(repo)
   assert after_commit != before
 
   # A checkout rewrites HEAD.
-  _git(repo, "checkout", "-q", "main")
+  run_git(repo, "checkout", "-q", "main")
   assert git_api._refs_signature(repo) != after_commit
 
   # Packing rewrites packed-refs and removes the loose ref files, then holds still.
   before_pack = git_api._refs_signature(repo)
-  _git(repo, "pack-refs", "--all")
+  run_git(repo, "pack-refs", "--all")
   after_pack = git_api._refs_signature(repo)
   assert after_pack != before_pack
   assert git_api._refs_signature(repo) == after_pack

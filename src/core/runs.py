@@ -853,7 +853,7 @@ class RunStore:
       if self.withheld_reason(events, run.id) is not None:
         return "withheld"
       return "queued"
-    if self.run_is_active(run, events, host_boot):
+    if self.run_is_active(run, host_boot):
       return "running"
     return "attention"
 
@@ -889,7 +889,7 @@ class RunStore:
     """Whether a durable run_stop_requested fact exists (optionally one request_id's)."""
     return stop_requested_in_events(events, run_id, request_id)
 
-  def run_is_active(self, run: RunRecord, events: list[dict], host_boot_time: datetime) -> bool:
+  def run_is_active(self, run: RunRecord, host_boot_time: datetime) -> bool:
     """Whether *run* holds a verified-live process (queued and dead are both false)."""
     return is_run_alive(run.pid, run.pid_start, run.started_at, host_boot_time)
 

@@ -86,6 +86,21 @@ The adapter is not the whole platform module. Each platform also owns:
 
 ## Adding a platform
 
+A new platform repeats the shape Slack and Discord already fill. Work down this checklist in order; each step instantiates one item of the adapter contract above.
+
+1. Describe the platform with one `ThreadPlatform` value — every field of the first table — built from the module's own constants, so each value keeps one home.
+2. Subclass `ThreadAdapter` over the platform's client, implementing every method of the second table against the same platform value.
+3. Add the origin model to `src/core/models.py`: the origin type, the `origin_field` on `SessionMetadata` and `CreateSessionRequest`, and the `watermark_field` on `SessionMetadata`.
+4. Write the event parsing and drop rules: the summon handler and the follow handler, with the eligibility rule shared between the follow guard and the adapter's readback (gate eligibility equals read eligibility, so nothing is demanded of an ack the session would never consume).
+5. Write the connection loop (`run_listener`): connect, reconnect with backoff, and run `backfill_followed_threads` on every (re)connection.
+6. Pick the session-id namespace and `summon_session_id`, and resolve the session label once per accepted summon.
+7. Write the summon prompt and its platform line (reusing `summon_prompt_tail` unchanged), the summon block keys, and the follow wake label.
+8. Wire the server start and stop in `server.py`: the listener task plus the boot-backfill task, behind the platform's credentials and allowed users.
+9. Hook the round end: a `deliver_done` task in `SessionManager.persist_and_broadcast`.
+10. Add the CLI verbs and the internal endpoints for reply and ack (or the platform's read equivalent, as Discord's `read` is).
+11. Add the reply event type constant in `src/core/event_types.py` and its session-view row in `src/core/message_aggregator.py`.
+12. Add the tests. The shared core is already covered platform-neutrally by the synthetic platform in `tests/core/test_thread_entry.py` ("fakechat", an integer id sort that is not the string sort); the platform's own tests mirror `tests/core/test_discord_listener.py`.
+
 ---
 
 ## Telegram mapping

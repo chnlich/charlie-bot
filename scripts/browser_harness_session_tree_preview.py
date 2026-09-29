@@ -73,6 +73,7 @@ from collections.abc import Callable  # noqa: E402
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
+    EVIDENCE_ROOT_DEFAULT,
     Results,
     api_request,
     connect_cdp,
@@ -81,15 +82,13 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     launch_chrome,
     log,
     open_cdp_page,
+    open_evidence_dir,
     pick_free_port,
+    resolve_chrome,
     screenshot,
     wait_for,
 )
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
-
-# Evidence defaults to a host temp directory so the public repo carries no
-# host path; pass --evidence-dir to keep evidence with its owning session.
-EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 
 # The dropdown's id->label map, read from the live page after login.
 BACKEND_LABELS: dict[str, str] = {}
@@ -496,14 +495,10 @@ async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console:
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
-    if not chrome:
-        raise SystemExit("google-chrome is not installed; install it or pass --chrome (no fake output)")
+    chrome = resolve_chrome(args.chrome, fail)
 
     evidence_dir = Path(args.evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
-                            capture_output=True, text=True, check=True).stdout.strip()
+    commit = open_evidence_dir(evidence_dir)
 
     with tempfile.TemporaryDirectory(prefix="charliebot-preview-harness-") as tmp:
         tmp_path = Path(tmp)

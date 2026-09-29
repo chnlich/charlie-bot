@@ -38,17 +38,17 @@ import hashlib  # noqa: E402
 import json  # noqa: E402
 import os  # noqa: E402
 import subprocess  # noqa: E402
-import tempfile  # noqa: E402
 import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree import (  # noqa: E402
+    EVIDENCE_ROOT_DEFAULT,
+    open_evidence_dir,
+    pick_free_port,
+)
 
-# Evidence defaults to a host temp directory so the public repo carries no
-# host path; pass --evidence-dir to keep evidence with its owning session.
-EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 DEFAULT_BACKEND = "charlie-code-glm-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
 WORKER_PHRASE = "LIVE-PREVIEW-WORKER-OK-9K2D"
@@ -175,9 +175,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     from src.core.constants import INHERITED_IDENTITY_ENV_VARS
 
     evidence_dir = Path(args.evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
-                            capture_output=True, text=True, check=True).stdout.strip()
+    commit = open_evidence_dir(evidence_dir)
 
     tmp_path = trial_home_root("charliebot-live-preview-", keep=args.keep)
     source = tmp_path / "source-home"

@@ -61,6 +61,15 @@ from datetime import datetime, timezone  # noqa: E402
 EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-evidence"
 
 
+def open_evidence_dir(evidence_dir: Path) -> str:
+    """Create the run's evidence directory and return the commit it documents (the
+    checkout's HEAD), so every artifact names the code it was produced from.
+    """
+    evidence_dir.mkdir(parents=True, exist_ok=True)
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
 def log(message: str) -> None:
     print(message, flush=True)
 
@@ -661,6 +670,17 @@ def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str])
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
+def resolve_chrome(explicit: str | None, fail: Callable[[str], None]) -> str:
+    """Resolve the chrome binary a harness drives: --chrome wins, then the two
+    google-chrome installs. *fail* is the caller's own failure exit (the
+    devtools_ws_url convention), so the refusal keeps the harness's prefix.
+    """
+    chrome = explicit or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+    if not chrome:
+        fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
+    return chrome
+
+
 async def devtools_ws_url(chrome_proc: subprocess.Popen, timeout_s: float,
                           fail: Callable[[str], None]) -> str:
     """Read chrome's stderr until the DevTools websocket endpoint appears.
@@ -896,14 +916,10 @@ async def wait_for(cdp: CDP, session_id: str, expression: str, timeout: float = 
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
-    if not chrome:
-        fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
+    chrome = resolve_chrome(args.chrome, fail)
 
     evidence_dir = Path(args.evidence_dir)
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
-                            capture_output=True, text=True, check=True).stdout.strip()
+    commit = open_evidence_dir(evidence_dir)
     results = Results(evidence_dir, commit,
                       browser="google-chrome headless (CDP)",
                       results_name="session_tree_browser_results.json")

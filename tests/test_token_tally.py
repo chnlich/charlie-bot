@@ -930,6 +930,52 @@ def test_capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothi
     assert _capture_runs(ledger, runs.root) == 0
 
 
+def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An unchanged run file's second capture decides on its stat pair alone —
+  _prefiltered_jsonl is never called — and an appended result line moves the stat, so the
+  capture re-parses and upserts the run's record on the new usage."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  runs = Runs(tmp_path)
+  log = runs.run(
+      "s1",
+      "r1", [{
+          "type": "result",
+          "usage": {
+              "input_tokens": 100,
+              "cached_tokens": 40,
+              "output_tokens": 5
+          }
+      }],
+      backend="charlie-code-glm53-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      started_at="2026-09-27T17:52:48.090388Z")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_runs(ledger, runs.root) == 1
+
+    def _refuse_parse(path: str, markers: tuple[bytes, ...]) -> tuple:
+      raise AssertionError(f"unchanged corpus re-parsed a run log: {path}")
+
+    real_parse = tt._prefiltered_jsonl
+    monkeypatch.setattr(tt, "_prefiltered_jsonl", _refuse_parse)
+    assert _capture_runs(ledger, runs.root) == 0  # the stat pair alone decides the skip
+    monkeypatch.setattr(tt, "_prefiltered_jsonl", real_parse)
+
+    with log.open("a") as fh:
+      fh.write(
+          json.dumps({
+              "type": "result",
+              "usage": {
+                  "input_tokens": 200,
+                  "cached_tokens": 10,
+                  "output_tokens": 9
+              }
+          }) + "\n")
+    assert _capture_runs(ledger, runs.root) == 1  # the append moved the stat: re-parsed
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
+    assert (row.calls, row.in_fresh, row.cache_read, row.output) == (1, 190, 10, 9)
+
+
 # ---------------------------------------------------------------------------
 # usage ledger capture (capture_opencode / capture_usage / capture_local)
 # ---------------------------------------------------------------------------

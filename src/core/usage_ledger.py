@@ -86,15 +86,17 @@ ON CONFLICT(record_id) DO UPDATE SET
 """
 
 # Counted records: every NATIVE row, plus each FALLBACK row none of whose registered
-# sessions has a NATIVE record (the any-match EXISTS join). An unknown stored kind
-# matches neither arm — and is rejected at read time by the RecordKind conversion.
+# sessions has a NATIVE record (the any-match EXISTS join). The OR-free NOT EXISTS
+# form is equivalent — for a NATIVE row the subquery's u.kind = 'fallback' arm is
+# false, so NOT EXISTS keeps it — and lets the planner scan the covering index
+# usage_group_cover for the GROUP BY outright instead of a MULTI-INDEX OR with a temp
+# B-tree, a plan that also leans on ANALYZE statistics this ledger does not keep. An
+# unknown stored kind is rejected at read time by the RecordKind conversion before
+# this query runs.
 _COUNTED_WHERE_SQL = """
-WHERE u.kind = 'native'
-   OR (u.kind = 'fallback'
-       AND NOT EXISTS (
-         SELECT 1 FROM fallback_sessions fs
-         WHERE fs.record_id = u.record_id
-           AND EXISTS (SELECT 1 FROM native_sessions ns WHERE ns.session = fs.session)))
+WHERE NOT EXISTS (
+  SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+  WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)
 """
 
 # The /token-usage page aggregate: one grouped query over the counted records, so the

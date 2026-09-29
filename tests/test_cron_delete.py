@@ -8,6 +8,7 @@ from conftest import (
     append_events,
     apply_config_overrides,
     bind_deps_managers,
+    create_scheduled_node,
     cron_d_dir,
     dump_yaml,
     make_legacy_cron_session,
@@ -67,14 +68,7 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   write_nightly_task(temp_home)
-  node = await tree.create_task(
-      request_id="scheduled-node:nightly",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="nightly",
-      backend=OPUS_BACKEND_ID,
-      caller="system")
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
 
   with make_cron_sessions_client(cfg, session_mgr) as client:
@@ -99,14 +93,7 @@ async def test_delete_keeps_the_node_dir_and_history(tmp_path: Path, temp_home: 
   from src.core.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   write_nightly_task(temp_home)
-  node = await tree.create_task(
-      request_id="scheduled-node:nightly",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name="nightly",
-      backend=OPUS_BACKEND_ID,
-      caller="system")
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   events_path = session_mgr.get_chat_events_path(node.id)
   append_events(events_path, [user_event("e0")])
 

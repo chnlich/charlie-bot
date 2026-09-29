@@ -17,26 +17,14 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     bind_deps_managers,
+    create_scheduled_node,
 )
 
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import SessionMetadata
 from src.core.scheduler import TASK_HANDLERS, Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
-
-
-async def _bound_node(tree: TaskTreeManager, task_name: str) -> SessionMetadata:
-  """The task's manager node, created the way the auto-bind creates it."""
-  return await tree.create_task(
-      request_id=f"scheduled-node:{task_name}",
-      task_parent_id=None,
-      profile="manager",
-      task=None,
-      name=task_name,
-      backend=OPUS_BACKEND_ID,
-      caller="system")
 
 
 def _count_event_lines(path: Path) -> int:
@@ -74,7 +62,7 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
   """The fire's durable bookkeeping (last_scheduled_run) and its event land on
   the injected instance, so the read paths' cache sees them."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
-  meta = await _bound_node(tree, "nightly")
+  meta = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe", session_id=meta.id)
 
   from unittest.mock import patch
@@ -95,7 +83,7 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
 async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> None:
   """After a scheduled round, the read-path cache must still match the file on disk."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
-  meta = await _bound_node(tree, "probe")
+  meta = await create_scheduled_node(tree, name="probe", backend=OPUS_BACKEND_ID)
 
   task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe", session_id=meta.id)
   from unittest.mock import patch

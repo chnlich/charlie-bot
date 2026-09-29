@@ -854,6 +854,24 @@ async def create_task(
       caller=OPERATOR)
 
 
+async def create_scheduled_node(tree: TaskTreeManager, *, name: str, backend: str | None):
+  """The manager node one ScheduledTaskConfig binds to, created the auto-bind way.
+
+  request_id rides the scheduler's auto-bind prefix over the task name alone
+  (``_AUTO_BIND_REQUEST_PREFIX`` in src/core/scheduler.py: a re-created task
+  replays into the same node), and the caller is the scheduler's ``"system"``
+  sentinel — actor ``system`` on the task_created fact, no agent authorization.
+  """
+  return await tree.create_task(
+      request_id=f"scheduled-node:{name}",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name=name,
+      backend=backend,
+      caller="system")
+
+
 def live_subprocess() -> subprocess.Popen:
   """An owned, isolated sleeper: the only process identity any test here signals."""
   return subprocess.Popen(["/bin/sleep", "30"])

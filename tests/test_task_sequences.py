@@ -283,9 +283,10 @@ def _final_reports(tree, manager_id: str) -> list[dict]:
   the iteration header the per-iteration reports carry (a failed iteration
   Run has no adapter failure report: the adapter's delivery chain skips
   iteration Runs, so the loop's reports are the only ones on the manager)."""
-  return [e for e in _child_reports(tree, manager_id)
-          if str(e.get("summary")).startswith("[Improve loop")
-          and "· iteration" not in str(e.get("summary"))]
+  return [
+      e for e in _child_reports(tree, manager_id)
+      if str(e.get("summary")).startswith("[Improve loop") and "· iteration" not in str(e.get("summary"))
+  ]
 
 
 async def _wait_for_final_report(tree, manager_id: str, timeout: float = 30.0) -> dict:
@@ -522,8 +523,15 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
   _body, child_id = await _start_loop(
-      cfg, session_mgr, tree, manager, monkeypatch,
-      payload_overrides={"iterations": 3, "work_branch": "improve/three"},
+      cfg,
+      session_mgr,
+      tree,
+      manager,
+      monkeypatch,
+      payload_overrides={
+          "iterations": 3,
+          "work_branch": "improve/three"
+      },
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
   final = await _wait_for_final_report(tree, manager.id)
@@ -547,8 +555,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   # loop + run refs; the final report keeps its loop-only ref.
   records = tree.runs.list_run_records_sync(child_id)
   assert [r.kind for r in records] == ["iteration", "iteration", "iteration"]
-  assert [e["result_refs"] for e in iteration_reports] == [
-      ["loop:1", f"run:{r.id}"] for r in records]
+  assert [e["result_refs"] for e in iteration_reports] == [["loop:1", f"run:{r.id}"] for r in records]
   assert final["result_refs"] == ["loop:1"]
 
 
@@ -586,7 +593,11 @@ async def test_iteration_report_header_carries_the_judgment(
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
   _body, _child_id = await _start_loop(
-      cfg, session_mgr, tree, manager, monkeypatch,
+      cfg,
+      session_mgr,
+      tree,
+      manager,
+      monkeypatch,
       payload_overrides={"work_branch": "improve/header"},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
@@ -595,8 +606,7 @@ async def test_iteration_report_header_carries_the_judgment(
   first, second = iteration_reports
   # Iteration 1: no report file. The header says invalid with the reason, and
   # the body keeps the worker's own closing words (the fallback text).
-  assert first["summary"].startswith(
-      "[Improve loop 1 · iteration 1/2] report_valid=false [invalid: no report file] ")
+  assert first["summary"].startswith("[Improve loop 1 · iteration 1/2] report_valid=false [invalid: no report file] ")
   assert f" report={loop_dir / 'iter_0001.md'} Audit per the improve-goal skill." in first["summary"]
   assert " tip=" in first["summary"] and " commits_added=0 " in first["summary"]
   assert first["summary"].endswith("\n\niter one words")
@@ -606,8 +616,7 @@ async def test_iteration_report_header_carries_the_judgment(
   assert "iter one words" in fallback
   # Iteration 2: a well-formed report is valid; the header carries the same
   # fields and the body is the report head.
-  assert second["summary"].startswith(
-      "[Improve loop 1 · iteration 2/2] report_valid=true tip=")
+  assert second["summary"].startswith("[Improve loop 1 · iteration 2/2] report_valid=true tip=")
   assert "[invalid:" not in second["summary"]
   assert f" report={loop_dir / 'iter_0002.md'} Audit per the improve-goal skill." in second["summary"]
   assert " commits_added=0 " in second["summary"]
@@ -641,7 +650,11 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
   _body, child_id = await _start_loop(
-      cfg, session_mgr, tree, manager, monkeypatch,
+      cfg,
+      session_mgr,
+      tree,
+      manager,
+      monkeypatch,
       payload_overrides={"work_branch": "improve/failed-iter"},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
@@ -674,8 +687,15 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
   _body, child_id = await _start_loop(
-      cfg, session_mgr, tree, manager, monkeypatch,
-      payload_overrides={"iterations": 1, "work_branch": "improve/replay"},
+      cfg,
+      session_mgr,
+      tree,
+      manager,
+      monkeypatch,
+      payload_overrides={
+          "iterations": 1,
+          "work_branch": "improve/replay"
+      },
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
   await _wait_for_final_report(tree, manager.id)

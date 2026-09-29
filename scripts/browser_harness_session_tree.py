@@ -610,13 +610,24 @@ async def seed_scenario(home: Path) -> dict:
             request_id="seed-grouped-root", task_parent_id=None, profile="manager",
             task=TaskSpec(goal="a root inside a named group"), name="Grouped root",
             backend=None, caller=OP, group="Alpha team")
+        # The hover-scope scenario hovers one row of a named group and checks
+        # its neighbours, so the group needs at least three roots.
+        alpha_second = await tree.create_task(
+            request_id="seed-alpha-second", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="a root inside the named group"), name="Alpha second",
+            backend=None, caller=OP, group="Alpha team")
+        alpha_third = await tree.create_task(
+            request_id="seed-alpha-third", task_parent_id=None, profile="manager",
+            task=TaskSpec(goal="a root inside the named group"), name="Alpha third",
+            backend=None, caller=OP, group="Alpha team")
 
         prompts_dir = home / "prompts"
         prompts_dir.mkdir(parents=True, exist_ok=True)
         cron_d = home / "config.d" / "cron.d"
         cron_d.mkdir(parents=True, exist_ok=True)
-        for task_name, node_id, enabled in (("harness-daily", bound_node.id, True),
-                                            ("harness-paused", paused_node.id, False)):
+        for task_name, node_id, enabled, allow_failure in (
+                ("harness-daily", bound_node.id, True, False),
+                ("harness-paused", paused_node.id, False, True)):
             (prompts_dir / f"{task_name}.md").write_text(
                 f"synthetic prompt for {task_name}\n", encoding="utf-8")
             (cron_d / f"{task_name}.yaml").write_text(json.dumps({
@@ -624,8 +635,19 @@ async def seed_scenario(home: Path) -> dict:
                 "prompt_file": str(prompts_dir / f"{task_name}.md"),
                 "timezone": "America/Los_Angeles",
                 "enabled": enabled,
+                "allow_failure": allow_failure,
                 "session_id": node_id,
             }, indent=2), encoding="utf-8")
+        # The paused node's firing bookkeeping (the touch Last-line scenario):
+        # one recorded fire with a failed status and a timestamp, through the
+        # same owner entry the scheduler itself calls; the task's
+        # allow_failure makes the row carry the "(review needed)" suffix, the
+        # longest the Last line renders. The enabled bound node stays
+        # unseeded, so its row keeps carrying no Last line.
+        from src.core.models import LastRunStatus
+        await tree.record_scheduled_fire(
+            paused_node.id, last_scheduled_run=(base + timedelta(minutes=1500)).isoformat(),
+            last_run_status=LastRunStatus.FAILED)
         # The broken file: an inline prompt is a load error, so the loader
         # surfaces one error entry and the Workspace badge counts it.
         (cron_d / "harness-broken.yaml").write_text(json.dumps({
@@ -644,6 +666,7 @@ async def seed_scenario(home: Path) -> dict:
                 "bound_node": bound_node.id, "paused_node": paused_node.id,
                 "archived_child": archived_child.id, "archived_root": archived_root.id,
                 "grouped_root": grouped_root.id, "group_name": "Alpha team",
+                "alpha_second": alpha_second.id, "alpha_third": alpha_third.id,
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
                                   "counter": live_counter, "tree": tree,
@@ -2233,6 +2256,104 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus_FAILED")
                 results.record("the desktop Settings menus' item lists", ok=False, detail=repr(exc), screenshot=shot)
 
+            # ---- S30b: the hover reveal stays scoped to the hovered row -------
+            # The live check this slice fixes: the row buttons reveal with
+            # Tailwind's group-hover, which rides every ancestor carrying the
+            # `group` class -- each group section wrapper carries one -- so
+            # hovering anything inside a group section set every row's
+            # out-of-flow buttons in it to opacity 1, painted over those
+            # rows' text without their hover cover. In the seeded named group
+            # (three roots): hovering one row's NAME reveals that row's four
+            # actions alone; hovering the named group header reveals no row's
+            # buttons, while the header's own + and gear keep today's
+            # section-hover reveal.
+            try:
+                log("  s30b: hover scope stays on the hovered row")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await reveal_row(cdp, session_id, ids["alpha_second"])
+                cdp.drain_list_fetches()
+
+                # One read per hover state: every visible row's non-pinned
+                # buttons (the !opacity-100 pins excluded) with their
+                # computed opacity.
+                async def visible_button_matrix() -> list[dict]:
+                    raw = await evaluate(cdp, session_id, """
+                        (() => {
+                          const rows = [...document.querySelectorAll('#session-list a.session-row')]
+                            .filter(a => a.offsetParent !== null);
+                          return JSON.stringify(rows.map(row => ({
+                            id: row.id,
+                            buttons: [...row.querySelectorAll(':scope > button')]
+                              .filter(b => !b.classList.contains('!opacity-100'))
+                              .map(b => ({title: b.title, opacity: getComputedStyle(b).opacity})),
+                          })));
+                        })()
+                    """)
+                    return json.loads(raw)
+
+                async def hover_point(x: float, y: float) -> None:
+                    await cdp.send("Input.dispatchMouseEvent",
+                                   {"type": "mouseMoved", "x": x, "y": y}, session_id=session_id)
+                    await asyncio.sleep(0.3)
+
+                async def hover_name(node_id: str) -> None:
+                    box = json.loads(await evaluate(cdp, session_id, f"""
+                        (() => {{
+                          const r = document.querySelector('#session-{node_id} .session-name')
+                            .getBoundingClientRect();
+                          return JSON.stringify({{x: r.x + r.width / 2, y: r.y + r.height / 2}});
+                        }})()
+                    """))
+                    await hover_point(box["x"], box["y"])
+
+                async def assert_hover_scope(hovered_id: str | None,
+                                             label: str) -> tuple[int, int]:
+                    matrix = await visible_button_matrix()
+                    if hovered_id is None:
+                        lit = [(r["id"], b["title"], b["opacity"]) for r in matrix
+                               for b in r["buttons"] if float(b["opacity"]) != 0.0]
+                        assert_true(lit == [], f"the {label} lights row buttons: {lit[:6]}")
+                    else:
+                        hovered = next(r for r in matrix if r["id"] == f"session-{hovered_id}")
+                        titles = sorted(b["title"] for b in hovered["buttons"])
+                        assert_true(titles == ["Archive", "New child session", "Settings", "Star"],
+                                    f"the hovered row reveals its four actions: {titles}")
+                        assert_true(all(float(b["opacity"]) == 1.0 for b in hovered["buttons"]),
+                                    f"the hovered row's actions are visible: {hovered['buttons']}")
+                        lit = [(r["id"], b["title"], b["opacity"])
+                               for r in matrix if r["id"] != f"session-{hovered_id}"
+                               for b in r["buttons"] if float(b["opacity"]) != 0.0]
+                        assert_true(lit == [], f"the {label} lights other rows' buttons: {lit[:6]}")
+                    return len(matrix), sum(len(r["buttons"]) for r in matrix)
+
+                await hover_name(ids["alpha_second"])
+                rows_h, buttons_h = await assert_hover_scope(ids["alpha_second"], "row hover")
+
+                header_box = json.loads(await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const r = document.querySelector(
+                        "[data-sgroup-toggle-key='{ids['group_name']}']").getBoundingClientRect();
+                      return JSON.stringify({{x: r.x + r.width / 2, y: r.y + r.height / 2}});
+                    }})()
+                """))
+                await hover_point(header_box["x"], header_box["y"])
+                rows_g, buttons_g = await assert_hover_scope(None, "group-header hover")
+                await hover_point(6, 6)
+
+                shot = await screenshot(cdp, session_id, results, "s30b_hover_scope")
+                results.record("the hover reveal stays scoped to the hovered row", ok=True,
+                               detail=(f"hovering one row's name lights its Star/New child session/"
+                                       f"Archive/Settings alone ({rows_h} visible rows, {buttons_h} "
+                                       f"non-pinned buttons checked); hovering the named group header "
+                                       f"lights no row's buttons ({rows_g} rows, {buttons_g} buttons "
+                                       f"checked)"),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s30b_hover_scope_FAILED")
+                results.record("the hover reveal stays scoped to the hovered row", ok=False,
+                               detail=repr(exc), screenshot=shot)
+
             # ---- S31: touch row actions at 412x915 -----------------------------
             # The phone input profile (mobile metrics, touch on, hover none and
             # pointer coarse) drives the drawer sidebar: normal and archived
@@ -2423,6 +2544,80 @@ async def run_harness(args: argparse.Namespace) -> None:
             except Exception as exc:
                 shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions_FAILED")
                 results.record("the touch row actions at 412x915", ok=False, detail=repr(exc), screenshot=shot)
+
+            # ---- S31b: the scheduled row's Last line at 412x915 ----------------
+            # The second live check this slice fixes: the seeded fire's Last
+            # line was the one schedule line without truncate, so it wrapped
+            # to a second row line on the touch drawer. The paused node
+            # carries the seeded fire (failed + timestamp through
+            # record_scheduled_fire, allow_failure on the task), so its row
+            # shows the four text lines -- name, Disabled, cron - timezone,
+            # Last -- each one line tall, with the Last line truncating like
+            # the cron line above it and carrying its full text in title.
+            try:
+                log("  s31b: the scheduled row's Last line at 412x915")
+                await cdp.send("Emulation.setDeviceMetricsOverride",
+                               {"mobile": True, "width": 412, "height": 915,
+                                "deviceScaleFactor": 2.625}, session_id=session_id)
+                await cdp.send("Emulation.setTouchEmulationEnabled",
+                               {"enabled": True, "maxTouchPoints": 5}, session_id=session_id)
+                await cdp.send("Emulation.setEmulatedMedia",
+                               {"features": [{"name": "hover", "value": "none"},
+                                             {"name": "pointer", "value": "coarse"}]},
+                               session_id=session_id)
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                await evaluate(cdp, session_id, "toggleMobileSidebar()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('sidebar').classList.contains('open')",
+                               timeout=6, label="the drawer opens")
+                await reveal_row(cdp, session_id, ids["paused_node"])
+                raw = await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const row = document.getElementById('session-{ids['paused_node']}');
+                      if (!row) return null;
+                      const name = row.querySelector('.session-name');
+                      const lines = [...name.parentElement.children].map(el => {{
+                        const cs = getComputedStyle(el);
+                        const b = el.getBoundingClientRect();
+                        return {{text: el.textContent, h: Math.round(b.height * 10) / 10,
+                                 lineHeight: parseFloat(cs.lineHeight), whiteSpace: cs.whiteSpace,
+                                 textOverflow: cs.textOverflow, title: el.getAttribute('title') || ''}};
+                      }});
+                      return JSON.stringify({{
+                        rowH: Math.round(row.getBoundingClientRect().height * 10) / 10,
+                        lines}});
+                    }})()
+                """)
+                assert_true(raw is not None, "the paused scheduled row renders in the drawer")
+                measured = json.loads(raw)
+                lines = measured["lines"]
+                texts = [l["text"] for l in lines]
+                assert_true(len(lines) == 4 and texts[1].startswith("Disabled")
+                            and texts[2].startswith("0 9 * * *") and texts[3].startswith("Last: "),
+                            f"the paused row renders name, Disabled, cron and Last lines: {texts}")
+                for line in lines:
+                    assert_true(line["h"] <= line["lineHeight"] + 1,
+                                f"each text line is one line tall: {line}")
+                last, cron = lines[3], lines[2]
+                assert_true(last["whiteSpace"] == "nowrap" and last["textOverflow"] == "ellipsis"
+                            and last["whiteSpace"] == cron["whiteSpace"]
+                            and last["textOverflow"] == cron["textOverflow"],
+                            f"the Last line truncates like the cron line above it: {last} vs {cron}")
+                assert_true(last["title"] == last["text"] and last["title"].startswith("Last: "),
+                            f"the Last line's title carries its full text: {last!r}")
+                shot = await screenshot(cdp, session_id, results, "s31b_last_line")
+                results.record("the scheduled row's Last line stays on one line at 412x915", ok=True,
+                               detail=(f"paused row {measured['rowH']}px tall; line heights "
+                                       + "/".join(f"{l['h']}" for l in lines)
+                                       + f"px at line-height {lines[0]['lineHeight']}px; the Last line "
+                                         "truncates with an ellipsis like the cron line and its title "
+                                         f"carries the full text ({last['title']})"),
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s31b_last_line_FAILED")
+                results.record("the scheduled row's Last line stays on one line at 412x915", ok=False,
+                               detail=repr(exc), screenshot=shot)
 
             # ---- S32: the cover screen at 280x800 ------------------------------
             # Same touch emulation at the Z Fold cover width: the drawer clamps

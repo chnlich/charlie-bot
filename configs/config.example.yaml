@@ -25,6 +25,12 @@ server:
   # bounds swap use separately (0 = no swap).
   session_memory_max_mb: 12288
   session_swap_max_mb: 0
+  # Worker-class launch precheck, GiB: the filesystems holding the CharlieBot
+  # data dir and the worktree root must hold at least this much free space, or
+  # the run stays queued with a blocked report to its parent. 0 disables the
+  # check. Manager turns never check (they write little and are the path that
+  # reports the shortage).
+  min_free_disk_gib: 10
 
 # Paths: repos to scan and where worker worktrees live.
 paths:

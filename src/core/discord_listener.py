@@ -56,17 +56,21 @@ events with no discord block, outside the audit. A DM mention summons nothing
 notice pointing back to the server channels.
 """
 
+import re
 import uuid
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from src.core import event_types as ET
+from src.core import thread_entry
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.discord_client import DiscordClient, message_link, snowflake_key
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import DiscordOrigin
+from src.core.sessions import SessionManager
 from src.core.thread_entry import ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
+from src.core.triggers import TriggerManager
 
 logger = LazyStructlogLogger()
 
@@ -293,3 +297,114 @@ class DiscordThreadAdapter(ThreadAdapter):
 
   def follow_wake_message(self, floor: str, link: str) -> str:
     return _build_follow_wake_message(floor, link)
+
+
+# ---------------------------------------------------------------------------
+# The gateway MESSAGE_CREATE handler
+# ---------------------------------------------------------------------------
+
+# The mention tokens a thread name strips: <@id> (user), <@!id> (nickname),
+# and <@&id> (role).
+_MENTION_TOKEN_RE = re.compile(r"<@[!&]?\d+>")
+
+
+def _mention_ids(message: dict) -> list[str]:
+  """The ids the payload's ``mentions`` user objects carry; the bot's own among them marks a mention."""
+  return [m["id"] for m in message.get("mentions") or []]
+
+
+def _thread_name(content: str) -> str:
+  """The name for a thread started from one mention message.
+
+  The content minus its mention tokens, whitespace collapsed, cut to
+  ``_THREAD_NAME_CHARS``; a content of only tokens names the thread
+  CharlieBot.
+  """
+  return " ".join(_MENTION_TOKEN_RE.sub("", content).split())[:_THREAD_NAME_CHARS] or "CharlieBot"
+
+
+async def handle_message_create(
+    message: dict,
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    client: DiscordClient,
+    trigger_mgr: TriggerManager,
+    *,
+    bot_user_id: str,
+) -> str | None:
+  """Accept or drop one gateway MESSAGE_CREATE payload; returns the session id when it summoned or armed a follow.
+
+  Guard chain, in order — the payload is dropped when any check fails:
+  (1) the sender is human (no ``bot`` flag on the author, no ``webhook_id``)
+  and the message is a plain message or a reply (type 0 or 19);
+  (2) the author is allowed;
+  (3) a DM (no ``guild_id``) never summons — there is no guild thread to bind
+  — so an allowed mention there earns the one-line DM notice and nothing
+  else, and no session is touched either way;
+  (4) an unmentioned message is follow traffic for an existing thread: the
+  shared follow path arms (or re-arms) the session's one persisted follow
+  trigger when the session exists, is ACTIVE, matches the channel, and the id
+  sorts above the watermark.
+
+  A mentioned payload summons. The channel holding the mention decides the
+  shape: types 10, 11, and 12 are threads (the summon binds that thread, the
+  label names the parent channel); types 0 and 5 start a thread from the
+  mention message, named from the stripped content (the label names the
+  channel); any other type drops with an info log. The summon block carries
+  the channel holding the mention, the thread the session binds, and the
+  mention message id (the ack reaction's target). The session resolution
+  (create with the ``discord_origin``, unarchive, or reuse), the watermark
+  step, the group assignment, the summon persistence, and the round and ack
+  tasks are the shared core's (``thread_entry.accept_summon``).
+  """
+  guild_id = message.get("guild_id")
+  channel_id = message.get("channel_id")
+  message_id = message.get("id")
+  author_id = (message.get("author") or {}).get("id")
+  if not _eligible_message(message, cfg.discord.allowed_user_ids):
+    return None
+  mentioned = bot_user_id in _mention_ids(message)
+
+  if guild_id is None:
+    if mentioned:
+      await client.create_message(channel_id, _DM_NOTICE)
+      logger.info("discord_dm_notice_posted", channel=channel_id, user=author_id)
+    return None
+
+  if not mentioned:
+    return await thread_entry.follow_message(
+        DiscordThreadAdapter(client),
+        session_mgr,
+        trigger_mgr,
+        summon_session_id(guild_id, channel_id),
+        message_id,
+        origin_matches=lambda origin: origin.thread_id == channel_id,
+    )
+
+  channel = await client.get_channel(channel_id)
+  if channel["type"] in (10, 11, 12):  # the mention already sits in a thread
+    thread_id = channel_id
+    parent_channel_id = channel["parent_id"]
+    parent = await client.get_channel(parent_channel_id)
+  elif channel["type"] in (0, 5):  # a text or announcement mention starts its own thread
+    thread = await client.start_thread_from_message(channel_id, message_id, _thread_name(message["content"]))
+    thread_id = thread["id"]
+    parent_channel_id = channel_id
+    parent = channel
+  else:
+    logger.info(
+        "discord_mention_dropped_channel_type", guild=guild_id, channel=channel_id, channel_type=channel["type"])
+    return None
+
+  return await thread_entry.accept_summon(
+      DiscordThreadAdapter(client),
+      cfg,
+      session_mgr,
+      trigger_mgr,
+      session_id=summon_session_id(guild_id, thread_id),
+      label=f"Discord #{parent['name']}",
+      origin=DiscordOrigin(guild_id=guild_id, parent_channel_id=parent_channel_id, thread_id=thread_id),
+      block={"guild_id": guild_id, "channel_id": channel_id, "thread_id": thread_id, "mention_id": message_id},
+      content=_build_summon_prompt(message_link(guild_id, channel_id, message_id), cfg),
+      user=author_id,
+  )

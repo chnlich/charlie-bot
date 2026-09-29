@@ -231,7 +231,7 @@ A raw log that stops growing while the process is still alive is what the server
 ### 10.1 Code Style
 - **Standard**: Google Code Style (2-space indent, 120 column limit)
 - **Python**: formatted by YAPF (`.style.yapf`), lint-enforced by ruff
-  (`[tool.ruff.lint]` in `pyproject.toml`, CI runs `uv run ruff check src`):
+  (`[tool.ruff.lint]` in `pyproject.toml`, CI runs `uv run ruff check src tests`):
   ```ini
   [style]
   based_on_style = google

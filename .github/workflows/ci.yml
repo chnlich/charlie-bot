@@ -61,7 +61,7 @@ jobs:
         run: uv sync
 
       - name: Lint
-        run: uv run ruff check src
+        run: uv run ruff check src tests
 
       - name: Test
         run: uv run pytest -q -m "not local_only"

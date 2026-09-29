@@ -154,3 +154,8 @@ def event_by_id(events: list[dict], event_id: str) -> dict | None:
     if ev.get("id") == event_id:
       return ev
   return None
+
+
+def summon_of(block: dict, event_id: str) -> str:
+  """The summon a round with this summon block answers: the block's ``nudge_of`` for a nudge, else the event itself."""
+  return block.get("nudge_of") or event_id

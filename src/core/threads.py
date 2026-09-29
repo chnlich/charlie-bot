@@ -17,10 +17,6 @@ from src.core.sidebar_state import mark_sidebar_dirty
 
 log = LazyStructlogLogger()
 
-# The JSON metadata file every session directory and each of its thread
-# directories carries. Readers stat it by name and writers publish it through
-# the atomic tmp rename, so both sides must agree on this one name.
-
 # The sessions-tree directory holding a session's thread directories. The
 # creation skeleton lays it down and every scanner (sidebar probe, storage-cool
 # scan, boot recovery) walks it by name, so all sides must agree on this name.

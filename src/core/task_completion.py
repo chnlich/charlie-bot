@@ -369,7 +369,7 @@ class TaskCompletionManager:
     # Landing verification (the git truth behind a landed: claim)
     # ------------------------------------------------------------------
 
-    def _landing_claims(self, meta: SessionMetadata, evidence: CompletionEvidence) -> list[tuple[str, str, str | None]]:
+    def _landing_claims(self, evidence: CompletionEvidence) -> list[tuple[str, str, str | None]]:
         """Every (branch, commit, repo_path override) landing claim one completion carries.
 
         The structured ``landed:<branch>@<commit>`` result refs and the
@@ -402,7 +402,7 @@ class TaskCompletionManager:
         blockers: list[str] = []
         from src.core.git import git_verify_commit_landed
 
-        claims = self._landing_claims(meta, evidence)
+        claims = self._landing_claims(evidence)
         if not claims:
             return blockers
         fallback_repo = meta.task.repo_path if meta.task is not None else None
@@ -483,7 +483,7 @@ class TaskCompletionManager:
                 raise TaskInvalidError(f"caller run {claims.run_id} not found in task {session_id}")
             events = tree.runs.load_events_sync(session_id)
             if tree.runs.run_has_terminal_fact(run, events) or not tree.runs.run_is_active(
-                    run, events, tree._host_boot_time()):
+                    run, tree._host_boot_time()):
                 raise TaskConflictError(
                     [f"caller run {claims.run_id} is not active; it cannot request closure"])
             caller_run_id = claims.run_id

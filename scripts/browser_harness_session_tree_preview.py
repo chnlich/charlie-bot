@@ -545,7 +545,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
             try:
                 await drive_browser(debug_port=debug_port, base=base,
-                                    access_key=access_key, results=results, args=args, home=home)
+                                    access_key=access_key, results=results, home=home)
             except Exception as exc:
                 # A harness error must stay visible in the evidence, not be
                 # masked by the failed-scenario exit below; the finally block's
@@ -581,8 +581,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 
 async def drive_browser(debug_port: int, base: str,
-                        access_key: str, results: Results, args: argparse.Namespace,
-                        home: Path) -> None:
+                        access_key: str, results: Results, home: Path) -> None:
     deadline = time.monotonic() + 20
     ws_url = None
     while time.monotonic() < deadline and ws_url is None:

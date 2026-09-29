@@ -1,133 +1,60 @@
-"""Tally token usage per model across every agent log on this host.
+"""Parse every agent log on this host into the usage ledger's records.
 
-One model is one row: the same model served by several subscriptions (Claude config dirs, Codex
-homes) is merged, with the per-account split kept as a secondary breakdown on each row.
+This module is the ledger's writing side (src/core/usage_ledger.py is the reading and
+aggregation side): it reads each source's logs, turns every usage-bearing line into a
+UsageRecord, and hands the records to the ledger, whose rows outlive the logs they were
+parsed from. The entry points are ``capture_local`` (this host's own sources, the call the
+page's sweep gate, the scheduler and the CLI share) and ``capture_usage`` (the sources the
+caller names); captures run in the collector, so every parse or read failure raises
+instead of noting-and-continuing.
 
 Sources, all local logs (no vendor usage API is called):
   Claude Code  <config_dir>/projects/**/*.jsonl   assistant message.usage + message.model
   Codex        ~/.codex/sessions/**/*.jsonl       token_count events, model from turn_context
   opencode     ~/.local/share/opencode/opencode.db   table message, JSON data.tokens + modelID
-  charlie-bot  ~/.charliebot/sessions/*/threads/*/data/events.jsonl thread result events, and
-               ~/.charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson master-run captures
+  charlie-bot  ~/.charliebot/sessions/*/threads/*/data/events.jsonl thread result events,
+               ~/.charliebot/sessions/*/data/master_runs/*/agent.raw.ndjson master-run captures,
+               ~/.charliebot/sessions/*/data/runs/*/agent.raw.ndjson Run captures
 
-Three accounting traps this handles:
-  1. Claude Code replays history verbatim on resume and fork, so responses are deduped on
-     message.id (falling back to requestId, then uuid). About half of all usage lines on this
-     host are replays.
-  2. Codex subagent threads inherit the parent's cumulative total_token_usage, so per-request
-     last_token_usage is summed instead; total_token_usage only cross-checks root sessions.
-  3. The charlie-bot source and the CLI sources describe overlapping runs: a cc-claude /
-     codex / opencode-type thread's result event restates what the CLI's own log records, so
-     those thread types are not collected here. codex-type threads whose rollout files are
-     gone from disk (history pruned) have their usage only in the thread log; each one is
-     admitted only when none of the codex session ids its event log carries matches a
-     rollout-*.jsonl file name still under the Codex homes — any match skips the whole
-     thread, which keeps a partially-pruned multi-session thread from being counted twice.
+Record ids — the ledger upserts on them, so a re-parsed file re-writes what it stored
+before, a message seen twice counts once, and an updated source row moves its record:
+  claude:<message id, falling back to requestId, then uuid>  per response. Claude Code
+      replays history verbatim on resume and fork — about half of all usage lines on this
+      host — so responses dedupe on the id, within a file and across config dirs alike
+  codex:<session id>:<event index>  per token_count event. The session id comes off the
+      rollout-*.jsonl file name (its last five dash-separated segments) or, for any other
+      name, the path relative to its home. Subagent threads inherit the parent's
+      cumulative total_token_usage, so per-request last_token_usage is summed instead
+  opencode:<message id>  per contributing db row; zero-token rows contribute nothing
+  thread:<session>/<thread>/<i>  per charlie-bot thread result event
+  master:<session>/<run>  per master-run capture's trailing result
+  run:<run id>  per Run capture, at most one
+
+The fallback rule — the charlie-bot source and the CLI sources describe overlapping runs,
+and a thread's or run's CLI log can disappear (history pruned) after the capture:
+  NATIVE     usage only the charlie-bot log holds: CLC thread results, master-run
+             captures, and a CLC Run's trailing result line. No sessions — nothing can
+             restate it.
+  FALLBACK   a codex-, cc-claude- or opencode-type thread or run, whose CLI log may still
+             exist. The record carries the session ids its log names, and the ledger's
+             any-match exclusion retires it the moment any of those ids has a NATIVE
+             record of its own. A codex-type thread is admitted only when none of the
+             session ids its event log carries matches a rollout-*.jsonl file name still
+             under the Codex homes — any match skips the whole thread, which keeps a
+             partially-pruned multi-session thread from being counted twice. A fallback
+             candidate with no ids cannot key that exclusion and contributes nothing.
 
 Cache — one JSON document of per-file Claude, Codex and charlie-bot contributions (the
-gigabyte-scale, hundred-megabyte-scale and many-small-files sources) plus the opencode db's
-entry, so a page load re-parses only the sources that changed. The db's rows map lives in a
-sidecar document beside the cache (see ``rows`` below). On top of that document, an in-process
-aggregate memo holds the merged Claude+Codex partial of the last
-collect, keyed on the walk signature:
-the home pairs, every log file's (path, mtime_ns, size), and the walk's own error strings.
-A hit serves the sums, spans and notes without replaying a single cached record; misses to
-the full path follow the per-file cache's own visibility contract: appends, deletes, renames
-and directory-permission changes all move the signature, while a file-level chmod that
-leaves (mtime_ns, size) untouched keeps serving the cached parse. The memo is order-safe
-under an unstable walk order: cross-file dedupe arbitrates verbatim replays, which carry
-identical token values, so first-wins cannot move a sum. The opencode db stays outside that
-corpus memo: its WAL sidecar moves under plain serve traffic, and the miss path is incremental
-per message row (see row memo below). Its document entry re-stores only when the row memo
-moved: a WAL write over unchanged rows keeps the stored entry, so the document rewrite waits
-for a real contribution change.
-One more memo sits above both: the whole-tally memo, keyed on the walk signature, the opencode
-db signature its rows were read at, and the row memo's change epoch, holds the built rows and
-notes of the last collect. Two hits serve the tally without loading the persisted document,
-replaying a record, or re-reading a row: the db signature still matching means no write landed
-since the read (a stat-only check); a moved signature whose row memo the scan just proved
-unchanged means the WAL wrote rows the tally never reads — the epoch counts row-memo changes,
-so an unchanged epoch re-serves the rows and re-signs them at the scan's own signature. Only
-memos built from a scan carry that epoch proof; rows served from the persisted document sign
-into the key by signature alone. The walk signature and the charlie-bot serve share one
-walk's rows per collect. Each walked directory's listing memoizes on the directory's own
-(mtime_ns, size) — one stat validates a remembered listing, since an entry's create, delete
-or rename moves it — and every corpus file re-stats per collect, so an append still moves
-the signature.
-Vocabulary (opencode row memo):
-  key         ``(message id, time_updated)`` of one row in the db's message table. opencode
-              (drizzle ORM, ``$onUpdate(() => Date.now())`` on the column) bumps time_updated
-              to epoch ms on every write, insert and upsert alike, so the pair identifies the
-              row's content: a collect re-reads only rows whose pair moved since the previous
-              collect and drops ids absent from a ``select id, time_updated`` pass (cascade
-              deletes). A terminal pair of writes to one row inside one millisecond can carry
-              the same time_updated; the second write then never reaches the memo. Only
-              finish metadata (error/completed) rides such writes on observed opencode write
-              paths — token fields change exactly once, at the step-finish write that starts
-              the pair — so the three projected token buckets the tally sums cannot go stale,
-              and any later write to the row re-reads it.
-  partial     the opencode source's accumulated buckets plus its contributing-record count,
-              kept against the rows the last merge served: a scan-path merge rebuilds it from
-              the row memo's fold (in lockstep with the memo), an entry-served merge adopts
-              or rebuilds it from the entry it serves, and every merge ends with the partial
-              describing exactly the rows that merge folded.
-Vocabulary:
-  signature   ``[mtime_ns, size]`` for a log file; a file re-scans whole whenever either value
-              moves. The opencode db signs as ``[mtime_ns, size, wal_sig]`` with ``wal_sig`` the
-              ``-wal`` sidecar's ``[mtime_ns, size]`` or None — a WAL-mode write grows the
-              sidecar without touching the main file, so the main file pair alone cannot see it
-  end         the byte offset a file's parse actually stopped at — after its last complete
-              line, which can sit past the signature's size when the writer appended mid-read
-  guard       the append-tail fast path's prefix proof: the sha256 of the file's final
-              ``_TAIL_WINDOW`` bytes at the parsed offset. These jsonl logs only grow by
-              appends, so a tail round re-hashes that window (and requires the boundary
-              newline) before parsing only the appended lines; a replaced, truncated or
-              mid-line prefix fails the check and re-parses whole
-  entry       a source's parsed contribution: ``{"sig", "records", "dupes", "end", "guard"}``
-              for a Claude file (dupes is the within-file replay count), ``{"sig", "records",
-              "check", "model_ctx", "is_root", "final_total", "walked", "end", "guard"}`` for a
-              Codex file (check is the root-session self-check pair ``[walked, final_total]``
-              or None; the tail round carries the model context, rootness and self-check state
-              the prefix settled), ``{"sig", "rows_file", "partial", "probe"}`` for the opencode db
-   rows       the opencode db's per-row map, ``{message id: [time_updated, record or None]}`` —
-              the row memo's persisted form, held in the sidecar document the entry's
-              ``rows_file`` names (beside the cache, one stable name per db path) so the main
-              document stays at the Claude+Codex corpus's size. A process restart parses the
-              sidecar only when a signature miss demands a seed, rebuilds the row memo from
-              it, and gates the key diff on the entry's ``probe`` aggregates: a matching
-              proof tuple proves the rows unchanged and the key pass skips, so only a proof
-              miss or a moved row fetches rows that moved since the sidecar was written
-              instead of re-reading every data blob
-   probe      the opencode db's proof aggregates ``[count, sum(time_updated), max(time_updated),
-              max(rowid)]`` at the time the entry's rows were stored — the seeded restart's
-              gate input (see ``rows``) and the tail fetch's floor (see
-              _increment_opencode_rows); a document from a build that stored only the first
-              two fields seeds without a max and takes the full key diff once
-   records    Claude: ``[key, model, ts, in_fresh, cache_write, cache_read, output]`` per
-               response, replay-deduped within the file; Codex: ``[model, ts, in_fresh,
-               cache_read, output]`` per token_count event, model resolved by file position;
-               opencode v1 entries: ``[model, account, ts, in_fresh, cache_write, cache_read,
-               output]`` per assistant message with token counts (v2 entries carry the same
-               records as the values of ``rows``); charlie-bot: ``[model, account, ts,
-               in_fresh, cache_write, cache_read, output]`` per result event (account carries
-               the backend id; a master-run entry holds at most one record, its trailing
-               result)
-Cross-file replay dedupe happens at merge (first record wins in walk order), which composed
-with within-file first-wins gives exactly the global first-wins a cacheless scan computes.
-
-The merged Claude+Codex buckets are themselves incremental per file (source partials):
-  partial     one file's contribution to the merged buckets: the bucket deltas its records
-              added (post dedupe), the (source, model) span they covered, its record and
-              within-file-dupe counts, and per replay key the copy count its records carry
-  key counts  corpus-wide per-key copy counts plus, per key, the contributing file, its
-              record values (first fold wins; an earlier-walked newcomer takes the credit, as
-              a fresh fold credits the first carrier) and the copy holders. A contributing
-              file that moves while a copy survives elsewhere hands the contribution to an
-              orphan pool anchored at the earliest-walked surviving holder — verbatim replays
-              carry identical token values, so only the account label changes. Each round
-              releases the dead partials and key copies, re-folds only those files, and the
-              partial sums always equal a fresh fold of the current corpus.
- """
+gigabyte-scale, hundred-megabyte-scale and many-small-files sources), so a capture
+re-parses only the files that changed. An entry stores one file's parsed records under
+its stat signature ([mtime_ns, size]); ``lookup_sig`` serves an entry only while the
+caller's signature matches and copies the hit into the next document, ``store_sig`` adds
+fresh scans there, and the saved document holds only files seen this run — deleted logs
+drop out without a separate sweep. These logs only grow by appends, so a moved file first
+tries the append-tail fast path: the sha256 of the final window at the last parsed offset
+(the boundary guard) must re-hash equal and end on a newline before only the appended
+lines parse; a replaced, truncated or mid-line prefix fails the check and re-parses whole.
+"""
 
 from __future__ import annotations
 
@@ -139,12 +66,10 @@ import os
 import re
 import socket
 import sqlite3
-import time
 from collections import defaultdict
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import BinaryIO, NamedTuple, TypeVar
+from typing import BinaryIO, TypeVar
 
 import orjson
 
@@ -172,105 +97,11 @@ from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 DEFAULT_CLAUDE_DIR = default_claude_dir()
 DEFAULT_OPENCODE_DB = Path.home() / ".local/share/opencode/opencode.db"
 
-FIELDS = ("in_fresh", "cache_write", "cache_read", "output", "calls")
-
-
-@dataclass(frozen=True)
-class AccountRow:
-  """Usage for one subscription account of a model."""
-
-  name: str
-  calls: int
-  output: int
-  total: int
-
-
-@dataclass(frozen=True)
-class ModelRow:
-  """Usage for one model, with the merge key and the per-account split."""
-
-  model: str
-  source: str
-  calls: int
-  in_fresh: int
-  cache_write: int
-  cache_read: int
-  output: int
-  total: int
-  first: str
-  last: str
-  accounts: list[AccountRow]
-
-
-@dataclass(frozen=True)
-class TokenTally:
-  """Result of one full collection, with per-source self-check notes."""
-
-  rows: list[ModelRow]
-  notes: list[str]
-  elapsed_s: float
-  scanned_bytes: int
-
-
-@dataclass
-class _Tally:
-  """Mutable accumulator shared while a collection is in flight."""
-
-  by_model: defaultdict = field(default_factory=lambda: defaultdict(lambda: dict.fromkeys(FIELDS, 0)))
-  by_account: defaultdict = field(default_factory=lambda: defaultdict(lambda: dict.fromkeys(FIELDS, 0)))
-  span: defaultdict = field(default_factory=lambda: defaultdict(lambda: [None, None]))
-  notes: list[str] = field(default_factory=list)
-  scanned_bytes: int = 0
-
-  def add(self, source: str, model: str, account: str, ts: str | None, **vals: int) -> None:
-    for tgt in (self.by_model[(source, model)], self.by_account[(source, model, account)]):
-      for key, value in vals.items():
-        tgt[key] += value
-      tgt["calls"] += 1
-    if ts:
-      span = self.span[(source, model)]
-      span[0] = ts if span[0] is None or ts < span[0] else span[0]
-      span[1] = ts if span[1] is None or ts > span[1] else span[1]
-
-
-class _SourceAggregate(NamedTuple):
-  """The merged Claude+Codex partial of one collect; see the module docstring for the memo."""
-
-  by_model: dict
-  by_account: dict
-  span: dict
-  notes: list
-
-  @classmethod
-  def snapshot(cls, t: _Tally, notes_from: int) -> _SourceAggregate:
-    """Copy the source partial out of the accumulator; notes before ``notes_from`` are not its."""
-    return cls(
-        by_model={
-            k: dict(v) for k, v in t.by_model.items()
-        },
-        by_account={
-            k: dict(v) for k, v in t.by_account.items()
-        },
-        span={
-            k: tuple(v) for k, v in t.span.items()
-        },
-        notes=list(t.notes[notes_from:]),
-    )
-
-  def apply(self, t: _Tally) -> None:
-    """Merge a snapshot into a fresh accumulator, copying so later adds never alias the memo."""
-    for tgt, src in ((t.by_model, self.by_model), (t.by_account, self.by_account)):
-      for key, val in src.items():
-        tgt[key] = dict(val)
-    for key, val in self.span.items():
-      t.span[key] = list(val)
-    t.notes.extend(self.notes)
-
 
 def discover_homes(claude_default: Path, codex_default: Path) -> tuple[dict[str, Path], dict[str, Path]]:
   """Claude config dirs and Codex homes from config.yaml plus the on-disk defaults.
 
-  Reading the account list keeps a newly added pool account in the tally without an edit here;
+  Reading the account list keeps a newly added pool account in the capture without an edit here;
   the default is always included, and codex always runs from its default home.
   """
   cfg = get_config()
@@ -299,29 +130,25 @@ def _account_label(path: Path, stem: str) -> str:
 
 
 class TallyCache:
-  """Per-file tally contributions keyed by file signature, persisted as one JSON document.
+  """Per-file parsed contributions keyed by file signature, persisted as one JSON document.
 
-  ``lookup_sig`` serves an entry only while the caller's signature matches and copies the hit
-  into the next document; ``store_sig`` adds fresh scans there. The saved document
+  ``lookup_sig`` serves an entry only while the caller's signature matches and copies the
+  hit into the next document; ``store_sig`` adds fresh scans there. The saved document
   therefore holds only files seen this run — deleted logs drop out without a separate sweep.
-  The opencode db's rows map (the document's bulk at ~170k rows) lives in a sidecar document
-  beside the cache instead: its only reader is the restart seed, which parses the sidecar
-  only when a signature miss demands a seed.
   """
 
   SCHEMA_VERSION = 3
 
-  def __init__(self, sources: dict[str, dict[str, dict]], cache_dir: Path) -> None:
+  def __init__(self, sources: dict[str, dict[str, dict]]) -> None:
     self._sources = sources
     self._next: dict[str, dict[str, dict]] = defaultdict(dict)
-    self.cache_dir = cache_dir
 
   @classmethod
   def load(cls, path: Path, notes: list[str]) -> TallyCache:
     """Read the persisted document; an unreadable or stale-schema file starts a cold cache.
 
-    Version 1 and 2 documents still serve: their opencode entries carry the rows inline or
-    as a records list, and the first scan-path store rewrites them in the current shape.
+    Version 1 and 2 documents still serve: their entries carry the same records under
+    older shapes, and the first store rewrites them in the current one.
     """
     try:
       doc = orjson.loads(path.read_bytes())
@@ -331,23 +158,8 @@ class TallyCache:
       notes.append(f"Tally cache: unreadable {path} ({exc}); rebuilt from the logs")
       doc = None
     if not isinstance(doc, dict) or doc.get("version") not in (1, 2, cls.SCHEMA_VERSION):
-      return cls({}, path.parent)
-    return cls(doc.get("sources", {}), path.parent)
-
-  def entry_rows(self, entry: dict, notes: list[str]) -> dict | None:
-    """The entry's rows map for the restart seed.
-
-    Version 2 entries carry it inline; current entries name the sidecar document beside the
-    cache. None seeds the row memo from a full scan — the same contract a missing entry
-    follows, and the sidecar read's failure mode (surfaced as a note, never silent).
-    """
-    rows = entry.get("rows")
-    if rows is not None:
-      return rows
-    name = entry.get("rows_file")
-    if name is None:
-      return None
-    return _read_rows_sidecar(self.cache_dir, name, notes)
+      return cls({})
+    return cls(doc.get("sources", {}))
 
   def save(self, path: Path) -> None:
     """Persist the next document atomically when it moved, creating the cache directory."""
@@ -356,23 +168,6 @@ class TallyCache:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = orjson.dumps({"version": self.SCHEMA_VERSION, "sources": self._next})
     atomic_write_stream(path, lambda stream: stream.write(payload))
-    self._sweep_rows_sidecars(path.parent)
-
-  def _sweep_rows_sidecars(self, cache_dir: Path) -> None:
-    """Unlink rows sidecars no stored entry references anymore.
-
-    A db whose entry dropped from the document (deleted, moved, unreadable) otherwise
-    leaves its rows bulk — up to tens of MB — on disk forever, breaking the
-    drop-out-without-a-sweep invariant the document's own entries follow."""
-    referenced = {
-        entry["rows_file"]
-        for files in self._next.values()
-        for entry in files.values()
-        if isinstance(entry.get("rows_file"), str)
-    }
-    for candidate in cache_dir.glob("*.opencode_rows.json"):
-      if candidate.name not in referenced:
-        candidate.unlink()
 
   def lookup_sig(self, source: str, key: str, sig: list) -> dict | None:
     """The cached entry for *key* when its stored signature equals *sig*, else None.
@@ -403,16 +198,16 @@ class TallyCache:
 
 
 def _unreadable_note(notes: list[str], source: str, label: str, exc: object) -> None:
-  """Append the tally's unreadable note for one path; the single home of its wording."""
+  """Append the walk's unreadable note for one path; the single home of its wording."""
   notes.append(f"{source}: unreadable {label}: {exc}")
 
 
-def _walk_error_hook(t: _Tally, source: str, label: str, root_name: str) -> Callable[[OSError], None]:
+def _walk_error_hook(notes: list[str], source: str, label: str, root_name: str) -> Callable[[OSError], None]:
   """The os.walk onerror hook turning an unreadable directory into a per-account note."""
 
   def _onerror(exc: OSError) -> None:
     if not isinstance(exc, FileNotFoundError):
-      _unreadable_note(t.notes, source, f"{label}/{root_name}", exc)
+      _unreadable_note(notes, source, f"{label}/{root_name}", exc)
 
   return _onerror
 
@@ -480,7 +275,7 @@ def _jsonl_listing(dirpath: str, suffixes: tuple[str, ...]) -> tuple[list[str], 
   return _memoized_listing(_jsonl_dir_memo, (dirpath, suffixes), dirpath, scan)
 
 
-def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
+def _iter_jsonl_stats(root: Path, notes: list[str], source: str,
                       label: str) -> Iterator[tuple[str, os.stat_result | None, str | None]]:
   """Yield ``(path, stat, error)`` for every ``.jsonl`` file under *root*, recording
   a note when a directory is unreadable.
@@ -489,12 +284,12 @@ def _iter_jsonl_stats(root: Path, t: _Tally, source: str,
   unreadable directory would vanish silently instead of surfacing. ``os.walk``'s ``onerror`` hook
   gets the error instead, which becomes a per-account note; a missing directory is not an error
   here (``discover_homes`` already filters those out for the real on-disk layout). Paths are
-  plain strings carrying each file's stat, so both consumers — the corpus signature and the
-  per-file serve walk — pay one syscall per file and never build a Path per entry. Each
+  plain strings carrying each file's stat, so the serve walk pays one syscall per file and
+  never builds a Path per entry. Each
   directory's listing is memoized on the directory's own stat pair (``_jsonl_listing``), so a
   repeat walk over an unchanged tree pays one stat per directory and one per candidate file.
   """
-  hook = _walk_error_hook(t, source, label, root.name)
+  hook = _walk_error_hook(notes, source, label, root.name)
   stack = [str(root)]
   while stack:
     dirpath = stack.pop()
@@ -532,11 +327,11 @@ def _charliebot_listing(dirpath: str) -> list[str]:
 
 
 # The walk's per-kind (kind, container under the session dir, candidate file name), built
-# once at import: the per-session loop re-entered it ~1k times per collect, re-joining the
+# once at import: the per-session loop re-entered it ~1k times per capture, re-joining the
 # two constant paths each time. Candidate and container paths are entry.path (os.scandir's
 # absolute form, never ending in the separator) plus one separator plus a relative
 # constant, so concatenation replaces os.path.join's case analysis at the walk's ~19k
-# per-collect call sites — the walk's largest Python slice after the stat syscalls.
+# per-capture call sites — the walk's largest Python slice after the stat syscalls.
 _WALK_SEP = os.sep
 _WALK_KINDS = (
     ("thread", THREADS_DIR_NAME, os.path.join(DATA_DIR_NAME, EVENTS_LOG_NAME)),
@@ -544,7 +339,7 @@ _WALK_KINDS = (
 )
 
 
-def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
+def _iter_charliebot_logs(sessions: Path, notes: list[str]) -> Iterator[tuple[str, str, os.stat_result | None, str | None]]:
   """Yield ``(kind, path, stat, error)`` over the charlie-bot corpus: every session directory's
   thread event logs (``threads/*/data/events.jsonl``, kind ``"thread"``) and master raw
   captures (``data/master_runs/*/agent.raw.ndjson``, kind ``"master"``).
@@ -567,7 +362,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
     session_listing = _charliebot_listing(str(sessions))
   except OSError as exc:
     if not isinstance(exc, FileNotFoundError):
-      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, str(sessions), exc)
+      _unreadable_note(notes, USAGE_SOURCE_CHARLIE_BOT, str(sessions), exc)
     return
   for session_path in session_listing:
     for kind, container, name in _WALK_KINDS:
@@ -575,7 +370,7 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
         listing = _charliebot_listing(session_path + _WALK_SEP + container)
       except OSError as exc:
         if not isinstance(exc, FileNotFoundError):
-          _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, f"{session_path}/{container}", exc)
+          _unreadable_note(notes, USAGE_SOURCE_CHARLIE_BOT, f"{session_path}/{container}", exc)
         continue
       for entry_path in listing:
         path = entry_path + _WALK_SEP + name
@@ -587,263 +382,17 @@ def _iter_charliebot_logs(sessions: Path, t: _Tally) -> Iterator[tuple[str, str,
           yield kind, path, None, repr(exc)
 
 
-def _walk_charliebot(sessions: Path, t: _Tally) -> list[tuple[str, str, int | None, int | None, str | None]]:
+def _walk_charliebot(sessions: Path, notes: list[str]) -> list[tuple[str, str, int | None, int | None, str | None]]:
   """The charlie-bot corpus in one pass: ``(kind, path, mtime_ns, size, error)`` per file,
-  the stat pair None on an unreadable file. The corpus signature and collect_charliebot
-  consume the same rows, so a collect walks the corpus once."""
+  the stat pair None on an unreadable file. ``capture_charliebot`` consumes the rows, so a
+  capture walks the corpus once."""
   rows: list[tuple[str, str, int | None, int | None, str | None]] = []
-  for kind, path, st, error in _iter_charliebot_logs(sessions, t):
+  for kind, path, st, error in _iter_charliebot_logs(sessions, notes):
     if st is None:
       rows.append((kind, path, None, None, error))
     else:
       rows.append((kind, path, st.st_mtime_ns, st.st_size, None))
   return rows
-
-
-def _charliebot_signature(
-    sessions: Path, rows: list[tuple[str, str, int | None, int | None, str | None]], notes: tuple[str, ...]) -> tuple:
-  """Walk signature of the charlie-bot corpus from the shared walk's rows: the root, every
-  corpus file's (kind, path, stat pair), and the walk's own error strings. Thread event logs
-  and master captures only — a metadata.json rewrite never moves it (its backend/model fields
-  are write-once, and the parse reads them on the round the log itself moves)."""
-  entries = tuple(
-      sorted((kind, path, m, s) if m is not None else (kind, path, None, err) for kind, path, m, s, err in rows))
-  return (USAGE_SOURCE_CHARLIE_BOT, str(sessions), entries, notes)
-
-
-def _corpus_signature(
-    claude_homes: dict[str, Path], codex_homes: dict[str, Path], sessions: Path, claude_rows: _JsonlRows,
-    codex_rows: _JsonlRows, charliebot_rows: list[tuple[str, str, int | None, int | None, str | None]],
-    charliebot_notes: tuple[str, ...], claude_notes: tuple[str, ...], codex_notes: tuple[str, ...]) -> tuple:
-  """Walk signature of the Claude+Codex+charlie-bot corpus from the shared walks' rows: home
-  pairs, every log file's stat pair, and the walks' own error strings. Any corpus or
-  permission move changes the tuple. The claude, codex and charlie-bot components arrive
-  pre-walked: the caller's one pass per tree feeds both this signature and the serve, so a
-  collect never walks a corpus twice."""
-  sig = []
-  for source, homes, rows_by_account, walk_notes in (
-      (USAGE_SOURCE_CLAUDE_CODE, claude_homes, claude_rows, claude_notes),
-      (USAGE_SOURCE_CODEX, codex_homes, codex_rows, codex_notes),
-  ):
-    entries = tuple(
-        (
-            label,
-            tuple(
-                sorted(
-                    (path, mtime_ns, size) if mtime_ns is not None else (path, None, error)
-                    for path, mtime_ns, size, error in rows_by_account[label])))
-        for label in homes)
-    home_pairs = tuple(sorted((label, str(path)) for label, path in homes.items()))
-    sig.append((source, home_pairs, entries, walk_notes))
-  sig.append(_charliebot_signature(sessions, charliebot_rows, charliebot_notes))
-  return tuple(sig)
-
-
-# The aggregate memo pair (walk signature, partial); see the module docstring.
-_aggregate_memo: tuple[tuple, _SourceAggregate] | None = None
-
-# The whole-tally memo: ((walk signature, opencode db signature, row epoch, scan-sourced),
-# rows, notes) of the last collect; see the module docstring for the key's contract. The db
-# half of the key is the signature the rows were read at, not a pre-walk lookup value; the
-# epoch is the row memo's change count as of the build, and only a scan-built memo carries a
-# proof an epoch comparison can honor. Served tallies copy out of the stored containers via
-# ``_materialize_rows``.
-_tally_memo: tuple[tuple, list[dict], list[str]] | None = None
-
-# Per-row memo for the opencode message table: db path -> {message id: (time_updated, record
-# or None)}; see the module docstring for the key's contract. A seeded entry's values are the
-# sidecar's parsed [time_updated, record] lists adopted in place — same positional shape, see
-# _advance_opencode_rows.
-_opencode_row_memos: dict[str, dict[str, tuple[int, list | None] | list]] = {}
-
-# Per-db change count of the row memo: the epoch a scan-built whole-tally memo keys its rows
-# on. It advances exactly when a scan moves the memo (a row landed, moved, or vanished), so
-# an equal epoch proves the memo's records — and the rows built from them — still current.
-_opencode_row_epochs: dict[str, int] = {}
-
-# Per-db proof aggregates of the row memo's last advance: (row count, sum of time_updated,
-# max of time_updated). The pair (count, sum) is a strictly weaker proof than the key scan's
-# per-id diff: every single-row move changes it, while a data-only rewrite with an unchanged
-# time_updated is invisible to the key scan itself — but a multi-row coincidence whose count
-# and sum both net to zero (a delete and an insert landing in the same millisecond, the only
-# window where the inserted row's time_updated can equal the deleted row's last write) dodges
-# the probe where the per-id diff would see it, and that wrong serve stands until a proof
-# miss's full key scan — the self-heal round, a residual mismatch, or a restart seed. The one
-# same-row shape both miss is a terminal pair of writes inside
-# one millisecond, the class the row memo vocabulary documents above. Equal aggregates skip
-# the per-row key read; a miss whose gate carries the max advances from the tail fetch below
-# and proves itself with the same triple — see _increment_opencode_rows. The rowid max rides
-# the scan for free (the table is a rowid table) and closes the plain delete-and-insert
-# dodge: the insert's fresh rowid moves it unless the deleted row held the max rowid and the
-# insert reuses it, the one shape _OPENCODE_FULL_SCAN_EVERY's self-heal exists for.
-_OPENCODE_PROBE_SQL = (
-    "select count(*), coalesce(sum(time_updated), 0), "
-    "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
-# Rows written after the stored gate's max, with their blobs: every insert and every
-# time_updated bump carries the write's own wall-clock ms (drizzle $onUpdate), so a row the
-# memo has not seen must sit above that max unless the clock stepped backward — a shape the
-# residual check hands to the full key scan.
-_OPENCODE_TAIL_SQL = "select rowid, id, time_updated, data from message where time_updated > ?"
-# Every Nth warm proof miss takes the full key scan instead of the tail fetch: the residual
-# proof's dodge classes (a triple-netting delete-and-insert, a clock stepped backward) leave
-# a wrong serve no later round can see, and this bounds its lifetime the way the pre-tail
-# gate's next-miss re-scan did. One full scan per N changed rounds prices ~0.3 s at the
-# 221k-row corpus against a gate that never re-reads it otherwise.
-_OPENCODE_FULL_SCAN_EVERY = 16
-_opencode_probes: dict[str, tuple[int, int, int, int]] = {}
-_opencode_miss_counts: dict[str, int] = {}
-
-# Per-db opencode partial of the last merge, corresponding to the row memo's current state
-# (buckets by model and account, per-model spans, contributing-record count). A scan that
-# moves the memo reports the per-row deltas; the next merge adjusts these buckets by them
-# instead of replaying every record. Absent means the next merge must replay.
-_opencode_partials: dict[str, _OpencodePartial | None] = {}
-
-
-class _OpencodePartial(NamedTuple):
-  """The opencode source's accumulated buckets, kept adjacent to the row memo it sums."""
-
-  by_model: dict
-  by_account: dict
-  span: dict
-  count: int
-
-
-def _snapshot_opencode_partial(t: _Tally, count: int) -> _OpencodePartial:
-  """Copy the opencode source's buckets out of the accumulator. The stored partial must never
-  alias a served tally's containers, so every bucket copies."""
-  return _OpencodePartial(
-      by_model={
-          k: dict(v) for k, v in t.by_model.items() if k[0] == USAGE_SOURCE_OPENCODE
-      },
-      by_account={
-          k: dict(v) for k, v in t.by_account.items() if k[0] == USAGE_SOURCE_OPENCODE
-      },
-      span={
-          k: tuple(v) for k, v in t.span.items() if k[0] == USAGE_SOURCE_OPENCODE
-      },
-      count=count)
-
-
-def _partial_to_doc(partial: _OpencodePartial) -> dict:
-  """The partial's persisted form. The bucket keys are tuples in memory; the document nests
-  them by model (then account) so the JSON encoding stays collision-free without a separator
-  convention model names would have to honor."""
-  accounts: dict[str, dict] = {}
-  for (_, model, account), bucket in partial.by_account.items():
-    accounts.setdefault(model, {})[account] = bucket
-  return {
-      "by_model": {
-          model: bucket for (_, model), bucket in partial.by_model.items()
-      },
-      "by_account": accounts,
-      "span": {
-          model: list(pair) for (_, model), pair in partial.span.items()
-      },
-      "count": partial.count,
-  }
-
-
-def _partial_from_doc(doc: object) -> _OpencodePartial | None:
-  """The stored partial back as buckets, or None when the entry carries none (a v1 entry, or
-  a document from before the field existed). Absent means the next merge replays instead of
-  adjusting — the same contract an in-process partial absence follows."""
-  if not isinstance(doc, dict):
-    return None
-  return _OpencodePartial(
-      by_model={
-          (USAGE_SOURCE_OPENCODE, model): bucket for model, bucket in doc["by_model"].items()
-      },
-      by_account={
-          (USAGE_SOURCE_OPENCODE, model, account): bucket for model, buckets in doc["by_account"].items()
-          for account, bucket in buckets.items()
-      },
-      span={
-          (USAGE_SOURCE_OPENCODE, model): tuple(pair) for model, pair in doc["span"].items()
-      },
-      count=doc["count"])
-
-
-def _adopt_stored_partial(key: str, doc: dict) -> _OpencodePartial | None:
-  """Seed the partial registry from a stored document's partial; return the adopted partial.
-
-  Adoption applies only while the registry holds no partial for the key: an in-process
-  partial is always the fresher one, and overwriting it with the document's older buckets
-  would regress the served tally. None means nothing was adopted — either the registry
-  already holds a partial, or the document carries none (a v1 entry, per _partial_from_doc)
-  — and the caller then works from whatever the registry holds after its scan.
-  """
-  if _opencode_partials.get(key) is not None:
-    return None
-  stored = _partial_from_doc(doc.get("partial"))
-  if stored is not None:
-    _opencode_partials[key] = stored
-  return stored
-
-
-def _entry_records(entry: dict) -> list:
-  """The entry's records under either legacy entry shape: v2's inline ``rows`` map values, or
-  the v1 ``records`` list. A current entry (``rows_file``, ``partial``) never reaches here —
-  its stored partial serves the merge — so one carrying neither field is a store contract
-  violation, not a shape to serve from."""
-  rows = entry.get("rows")
-  if rows is not None:
-    return [row[1] for row in rows.values() if row[1] is not None]
-  records = entry.get("records")
-  if records is None:
-    raise ValueError(f"opencode cache entry carries neither rows nor records: {sorted(entry)}")
-  return records
-
-
-class _OpencodeScan(NamedTuple):
-  """One row-memo advance. ``ok`` is False when the db is absent or sqlite-unreadable
-  (``error`` carries the message the collect note needs). ``deltas`` carries the scan's
-  per-row record moves as (old, new) record pairs — (None, new) for a row that landed,
-  (old, None) for one that vanished; None means the memo was cold and the caller replays
-  whole."""
-
-  sig: list | None
-  epoch: int
-  nbytes: int
-  ok: bool
-  error: str | None
-  deltas: list | None = None
-
-
-# Per-cache-path in-process document memo: the parsed per-file entry maps of the document
-# this process last loaded or saved. The multi-MB JSON re-parses on every changed round
-# otherwise; entries are immutable once stored (stores replace, never mutate), so rounds
-# share the maps and each save adopts the round's next-document state as the new memo.
-_tally_cache_docs: dict[str, dict[str, dict[str, dict]]] = {}
-
-# Whether the cache document's opencode entry holds this db's current row memo. A probe hit
-# proves the rows unchanged since the entry was stored, so re-storing it would only re-sign
-# the document — a multi-MB rewrite for a WAL signature the next write stales anyway — and
-# the entry keeps its stored signature, leaving the save's equality check to skip the
-# rewrite. Any scan that changes the row memo sets False, forcing the next cached merge to
-# re-store current records.
-_opencode_doc_synced: dict[str, bool] = {}
-
-
-def _reset_aggregate_memo() -> None:
-  """Drop the collection's process-wide memos (test isolation)."""
-  global _aggregate_memo, _tally_memo
-  _aggregate_memo = None
-  _tally_memo = None
-  _opencode_row_memos.clear()
-  _opencode_row_epochs.clear()
-  _opencode_partials.clear()
-  _opencode_probes.clear()
-  _opencode_miss_counts.clear()
-  _tally_cache_docs.clear()
-  _opencode_doc_synced.clear()
-  _source_partials.clear()
-  _charliebot_dir_memo.clear()
-  _claude_key_counts.clear()
-  _claude_key_records.clear()
-  _claude_key_loc.clear()
-  _claude_key_holders.clear()
-  _claude_orphan.clear()
 
 
 # The append-tail fast path's prefix proof window: the guard hashes this many final
@@ -992,14 +541,13 @@ def _usage_counts(usage: dict) -> list[int]:
   ]
 
 
-def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
-  """Fold prefiltered Claude records into tally rows, deduped against *seen*.
+def _claude_records(recs: list[dict], seen: set) -> list[list]:
+  """Fold prefiltered Claude records into ledger records, deduped against *seen*.
 
-  Returns (records, within-file dupe count). *seen* carries the keys already counted —
-  the empty set on a full parse, the cached records' keys on an append-tail round.
+  *seen* carries the keys already counted — the empty set on a full parse, the cached
+  records' keys on an append-tail round.
   """
   records: list[list] = []
-  dupes = 0
   for rec in recs:
     msg = rec.get("message")
     if not isinstance(msg, dict):
@@ -1009,11 +557,10 @@ def _claude_records(recs: list[dict], seen: set) -> tuple[list[list], int]:
       continue
     key = msg.get("id") or rec.get("requestId") or rec.get("uuid")
     if key in seen:
-      dupes += 1
       continue
     seen.add(key)
     records.append([key, model, rec.get("timestamp"), *_usage_counts(usage)])
-  return records, dupes
+  return records
 
 
 _CLAUDE_MARKERS = (b'"usage"',)
@@ -1029,166 +576,19 @@ def _claude_file_contribution(path: str, prev: dict | None = None) -> tuple[dict
     tail = _tail_parse(path, prev, _CLAUDE_MARKERS)
     if tail is not None:
       recs, sig, end = tail
-      records, dupes = _claude_records(recs, {rec[0] for rec in prev["records"]})
-      entry = {"sig": sig, "records": prev["records"] + records, "dupes": prev.get("dupes", 0) + dupes, "end": end}
+      records = _claude_records(recs, {rec[0] for rec in prev["records"]})
+      entry = {"sig": sig, "records": prev["records"] + records, "end": end}
       entry["guard"] = _boundary_guard(path, end)
       return entry, end - prev["end"]
   sig, recs, end = _prefiltered_jsonl(path, _CLAUDE_MARKERS)
-  records, dupes = _claude_records(recs, set())
-  entry = {"sig": sig, "records": records, "dupes": dupes, "end": end}
+  entry = {"sig": sig, "records": _claude_records(recs, set()), "end": end}
   entry["guard"] = _boundary_guard(path, end)
   return entry, end
 
 
-class _FilePartial(NamedTuple):
-  """One log file's contribution to the merged source buckets (see the module docstring).
-  ``keys`` (Claude only) counts, per replay key, every copy the file's records carry, so a
-  release can decrement the corpus counts exactly."""
-
-  by_model: dict
-  by_account: dict
-  spans: dict
-  n_records: int
-  entry_dupes: int
-  keys: dict | None
-
-
-# Per-file partials keyed (source, account, path); the shared Claude replay-key state; and the
-# orphan pool of contributions whose file moved while a copy survives elsewhere (key -> [record
-# values] — the anchor resolves at merge time).
-_source_partials: dict[tuple[str, str, str], _FilePartial] = {}
-_claude_key_counts: dict[str, int] = {}
-_claude_key_records: dict[str, list] = {}
-_claude_key_loc: dict[str, tuple] = {}
-_claude_key_holders: dict[str, set] = {}
-_claude_orphan: dict[str, list] = {}
-_ORPHAN = ("", "")  # _claude_key_loc sentinel: the contribution lives in _claude_orphan
-
-
-def _add_record(t: _Tally, source: str, account: str, rec: list) -> None:
-  t.add(source, rec[1], account, rec[2], in_fresh=rec[3], cache_write=rec[4], cache_read=rec[5], output=rec[6])
-
-
-def _transfer_credit(key: str, old_loc: tuple, new_loc: tuple, new_account: str, fold: _Tally) -> None:
-  """Move a replay key's contribution to an earlier-walked carrier — a fresh fold credits the
-  first carrier in walk order, so a file appearing before the credited one takes the credit."""
-  source, old_account, _ = old_loc
-  rec = _claude_key_records[key]
-  old = _source_partials[old_loc]
-  vals = {"in_fresh": rec[3], "cache_write": rec[4], "cache_read": rec[5], "output": rec[6]}
-  for map_key in ((source, rec[1], old_account), (source, rec[1])):
-    buckets = old.by_account if len(map_key) == 3 else old.by_model
-    bucket = buckets[map_key]
-    for f, v in vals.items():
-      bucket[f] -= v
-    bucket["calls"] -= 1
-    if not any(bucket.values()):
-      del buckets[map_key]
-  _add_record(fold, source, new_account, rec)
-  _claude_key_loc[key] = new_loc
-  _claude_key_holders[key].discard(new_loc)
-  _claude_key_holders[key].add(old_loc)
-
-
-def _fold_file_partial(source: str, account: str, path_key: tuple, entry: dict, order: dict) -> _FilePartial:
-  """Fold one file's records into a fresh partial, registering every replay-key copy with the
-  corpus counts; Claude dedupes corpus-wide (first fold wins), Codex always contributes."""
-  fold = _Tally()
-  keys = None
-  if source == USAGE_SOURCE_CLAUDE_CODE:
-    keys = {}
-    for rec in entry["records"]:
-      key = rec[0]
-      keys[key] = keys.get(key, 0) + 1
-      prev = _claude_key_counts.get(key, 0)
-      _claude_key_counts[key] = prev + 1
-      if prev:
-        _claude_key_holders.setdefault(key, set()).add(path_key)
-        loc = _claude_key_loc[key]
-        if loc != _ORPHAN and order[path_key] < order[loc]:
-          _transfer_credit(key, loc, path_key, account, fold)
-      else:
-        _claude_key_records[key] = rec
-        _claude_key_loc[key] = path_key
-        _add_record(fold, source, account, rec)
-  else:
-    for model, ts, in_fresh, cache_read, output in entry["records"]:
-      fold.add(source, model, account, ts, in_fresh=in_fresh, cache_read=cache_read, output=output)
-  return _FilePartial(fold.by_model, fold.by_account, fold.span, len(entry["records"]), entry.get("dupes", 0), keys)
-
-
-def _release_partial(path_key: tuple, partial: _FilePartial) -> None:
-  """Retract one file's replay-key copies from the corpus counts; a contribution whose file
-  moves survives via a surviving copy (the orphan pool), the last copy drops it."""
-  if partial.keys is None:
-    return
-  for key, copies in partial.keys.items():
-    remaining = _claude_key_counts[key] - copies
-    if remaining:
-      _claude_key_counts[key] = remaining
-      holders = _claude_key_holders.get(key)
-      if holders is not None:
-        holders.discard(path_key)
-        if not holders:
-          del _claude_key_holders[key]
-      if _claude_key_loc[key] == path_key:
-        if not holders:
-          raise AssertionError(f"released replay key {key!r} with copies but no surviving holder")
-        _claude_key_loc[key] = _ORPHAN
-        _claude_orphan[key] = _claude_key_records[key]
-    else:
-      loc = _claude_key_loc.pop(key)
-      del _claude_key_counts[key], _claude_key_records[key]
-      _claude_key_holders.pop(key, None)
-      if loc == _ORPHAN:
-        del _claude_orphan[key]
-
-
-def _apply_partial(t: _Tally, partial: _FilePartial) -> None:
-  """Merge one surviving partial's buckets and span into the in-flight tally."""
-  for src, tgt_map in ((partial.by_model, t.by_model), (partial.by_account, t.by_account)):
-    for key, vals in src.items():
-      tgt = tgt_map[key]
-      for name in FIELDS:
-        tgt[name] += vals[name]
-  for key, (lo, hi) in partial.spans.items():
-    span = t.span[key]
-    span[0] = lo if span[0] is None or lo < span[0] else span[0]
-    span[1] = hi if span[1] is None or hi > span[1] else span[1]
-
-
-def _reconcile_partials(t: _Tally, source: str, walked: list[tuple[str, str, dict | None, bool]], order: dict) -> None:
-  """Rebuild the source's merged buckets from the per-file partial state: a partial survives
-  only its cache hit with an unchanged account; the rest release, the re-parsed, relabelled
-  and brand-new files re-fold, and the tally sums the survivors plus the orphan pool —
-  exactly what a fresh fold of the current corpus computes (module docstring)."""
-  seen = {w[0]: w for w in walked if w[3] and w[2] is not None}
-  for state_key in [k for k in _source_partials if k[0] == source]:
-    entry_row = seen.get(state_key[2])
-    if entry_row is not None and entry_row[1] == state_key[1]:
-      continue
-    _release_partial(state_key, _source_partials.pop(state_key))
-  for path_str, account, entry, _ in walked:
-    if entry is None or (source, account, path_str) in _source_partials:
-      continue
-    state_key = (source, account, path_str)
-    _source_partials[state_key] = _fold_file_partial(source, account, state_key, entry, order)
-  for state_key, partial in _source_partials.items():
-    if state_key[0] == source:
-      _apply_partial(t, partial)
-  if source == USAGE_SOURCE_CLAUDE_CODE:
-    for key, record in _claude_orphan.items():
-      holders = _claude_key_holders.get(key)
-      if not holders:
-        raise AssertionError(f"orphaned replay key {key!r} with no surviving holder")
-      # The earliest-walked surviving holder is the account a fresh scan would credit.
-      anchor = min(holders, key=order.__getitem__)
-      _add_record(t, source, anchor[1], record)
-
-
 # One source walk's rows: account -> (path, mtime_ns, size, error) per file, the stat pair
-# None with the error string on an unreadable file. The shared shape of _walk_jsonl_logs's
-# return and the consumers that take it pre-walked.
+# None with the error string on an unreadable file. The shape of _walk_jsonl_logs's return,
+# which _walk_source takes pre-walked.
 _JsonlRows = dict[str, list[tuple[str, int | None, int | None, str | None]]]
 
 
@@ -1196,43 +596,41 @@ def _walk_jsonl_logs(
     sub: str,
     homes: dict[str, Path],
     source: str,
-    t: _Tally,
+    notes: list[str],
 ) -> _JsonlRows:
   """Walk every home's *sub* tree once: ``account -> [(path, mtime_ns, size, error)]`` per
-  file, the stat pair None with the error string on an unreadable file. The corpus signature
-  and ``_walk_source`` consume the same rows, so a collect walks each tree once — the
-  charlie-bot walk's one-pass contract (``_walk_charliebot``)."""
+  file, the stat pair None with the error string on an unreadable file. ``_walk_source``
+  consumes the rows, so a capture walks each tree once — the charlie-bot walk's one-pass
+  contract (``_walk_charliebot``)."""
   rows: dict[str, list[tuple[str, int | None, int | None, str | None]]] = {}
   for account, home in homes.items():
     per_home: list[tuple[str, int | None, int | None, str | None]] = []
-    for path, st, error in _iter_jsonl_stats(home / sub, t, source, account):
+    for path, st, error in _iter_jsonl_stats(home / sub, notes, source, account):
       per_home.append((path, st.st_mtime_ns, st.st_size, None) if st is not None else (path, None, None, error))
     rows[account] = per_home
   return rows
 
 
 def _walk_source(
-    t: _Tally,
+    notes: list[str],
     source: str,
     cache_key: str,
     homes: dict[str, Path],
     rows_by_account: _JsonlRows,
     cache: TallyCache | None,
     parse: Callable,
-) -> tuple[list[tuple[str, str, dict | None, bool]], dict]:
+) -> list[tuple[str, str, dict | None, bool]]:
   """Serve every walked log file, cache hits and parse misses; returns one row per file —
-  (path, account, entry or None on a failed parse, cache-hit flag) — plus the walk order.
+  (path, account, entry or None on a failed parse, cache-hit flag).
 
-  The rows arrive pre-walked (``_walk_jsonl_logs``), the same pass the corpus signature
-  consumed, so the serve pays no directory listing at all — one cache-gated lookup per file,
-  a parse only on a miss.
+  The rows arrive pre-walked (``_walk_jsonl_logs``), so the serve pays no directory listing
+  at all — one cache-gated lookup per file, a parse only on a miss.
   """
   walked: list[tuple[str, str, dict | None, bool]] = []
-  order: dict[tuple, int] = {}
   for account in homes:
     for path, mtime_ns, size, error in rows_by_account[account]:
       if mtime_ns is None:
-        _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", error)
+        _unreadable_note(notes, source, f"{account}/{os.path.basename(path)}", error)
         walked.append((path, account, None, False))
         continue
       entry = (cache.lookup_sig(cache_key, path, [mtime_ns, size]) if cache is not None else None)
@@ -1240,48 +638,28 @@ def _walk_source(
       if entry is None:
         prev = cache.prev(cache_key, path) if cache is not None else None
         try:
-          entry, nbytes = parse(path, prev)
+          entry, _nbytes = parse(path, prev)
         except OSError as exc:
-          _unreadable_note(t.notes, source, f"{account}/{os.path.basename(path)}", exc)
+          _unreadable_note(notes, source, f"{account}/{os.path.basename(path)}", exc)
           walked.append((path, account, None, False))
           continue
-        t.scanned_bytes += nbytes
         if cache is not None:
           cache.store_sig(cache_key, path, entry)
-      state_key = (source, account, path)
-      order[state_key] = len(order)
       walked.append((path, account, entry, hit))
-  return walked, order
+  return walked
 
 
-def collect_claude(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
-  walked, order = _walk_source(
-      t, USAGE_SOURCE_CLAUDE_CODE, "claude", homes, rows_by_account, cache, _claude_file_contribution)
-  _reconcile_partials(t, USAGE_SOURCE_CLAUDE_CODE, walked, order)
-  n_records = sum(p.n_records for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
-  entry_dupes = sum(p.entry_dupes for k, p in _source_partials.items() if k[0] == USAGE_SOURCE_CLAUDE_CODE)
-  distinct = len(_claude_key_counts)
-  t.notes.append(
-      f"Claude Code: {distinct:,} unique API responses over {len(homes)} config dirs, "
-      f"{entry_dupes + n_records - distinct:,} replayed lines skipped")
-
-
-# Every record the tally reads (session_meta, turn_context, token_count) serializes
-# its type as a quoted literal in the raw line, so the substring filter cannot skip a
-# record the full parse would see; it only skips parsing irrelevant lines.
 _CODEX_MARKERS = tuple(f'"{name}"'.encode() for name in (CODEX_SESSION_META, CODEX_TURN_CONTEXT, CODEX_TOKEN_COUNT))
 
 
-def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> tuple[int, int, str | None]:
-  """Fold prefiltered Codex records into token_count rows, appending to *records*.
-
-  Returns (walked sum, final_total high-water, trailing model context). *model* is the
-  context in force at the first record — None on a full parse, the cached entry's trailing
-  context on an append-tail round; session_meta and turn_context records update it in file
-  order, and every token_count row resolves against the context at its own line.
+def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> str | None:
+  """Fold prefiltered Codex records into ledger records, appending to *records*; returns
+  the trailing model context. *model* is the context in force at the first record — None
+  on a full parse, the cached entry's trailing context on an append-tail round;
+  session_meta and turn_context records update it in file order, and every token_count row
+  resolves against the context at its own line. Subagent threads inherit the parent's
+  cumulative total_token_usage, so per-request last_token_usage is summed instead.
   """
-  walked = 0
-  final_total = 0
   for rec in recs:
     if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT):
       model = (rec.get("payload") or {}).get("model") or model
@@ -1289,15 +667,12 @@ def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> 
     payload = codex_token_count_payload(rec)
     if payload is None:
       continue
-    info = payload.get("info") or {}
-    last, total = info.get("last_token_usage") or {}, info.get("total_token_usage") or {}
-    final_total = max(final_total, total.get("total_tokens", 0) or 0)
+    last = (payload.get("info") or {}).get("last_token_usage") or {}
     cached = last.get("cached_input_tokens", 0) or 0
     fresh = (last.get("input_tokens", 0) or 0) - cached
     out = last.get("output_tokens", 0) or 0
-    walked += cached + fresh + out
     records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out])
-  return walked, final_total, model
+  return model
 
 
 def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict, int]:
@@ -1312,27 +687,11 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
     if tail is not None:
       recs, sig, end = tail
       records: list[list] = []
-      walked, final_total, model = _codex_records(recs, prev.get("model_ctx"), records)
-      total_walked = prev.get("walked", 0) + walked
-      total_final = max(prev.get("final_total", 0), final_total)
-      is_root = prev.get("is_root", False)
-      entry = {
-          "sig": sig,
-          "records": prev["records"] + records,
-          "check": [total_walked, total_final] if total_final and is_root else None,
-          "model_ctx": model,
-          "is_root": is_root,
-          "final_total": total_final,
-          "walked": total_walked,
-          "end": end
-      }
+      model = _codex_records(recs, prev.get("model_ctx"), records)
+      entry = {"sig": sig, "records": prev["records"] + records, "model_ctx": model, "end": end}
       entry["guard"] = _boundary_guard(path, end)
       return entry, end - prev["end"]
   sig, recs, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
-  meta = next((rec for rec in recs if rec.get("type") == CODEX_SESSION_META), None)
-  mp = (meta or {}).get("payload") or {}
-  source = json.dumps(mp.get("source") or {})
-  is_root = not (mp.get("forked_from_id") or mp.get("parent_thread_id") or "subagent" in source)
   # The model context opens at the file's first declared model, so a token_count
   # preceding the first turn_context still carries it.
   model = next(
@@ -1343,38 +702,17 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
       None,
   )
   records = []
-  walked, final_total, model = _codex_records(recs, model, records)
-  entry = {
-      "sig": sig,
-      "records": records,
-      "check": [walked, final_total] if final_total and is_root else None,
-      "model_ctx": model,
-      "is_root": is_root,
-      "final_total": final_total,
-      "walked": walked,
-      "end": end
-  }
+  model = _codex_records(recs, model, records)
+  entry = {"sig": sig, "records": records, "model_ctx": model, "end": end}
   entry["guard"] = _boundary_guard(path, end)
   return entry, end
-
-
-def collect_codex(t: _Tally, homes: dict[str, Path], cache: TallyCache | None, rows_by_account: _JsonlRows) -> None:
-  walked, order = _walk_source(t, USAGE_SOURCE_CODEX, "codex", homes, rows_by_account, cache, _codex_file_contribution)
-  _reconcile_partials(t, USAGE_SOURCE_CODEX, walked, order)
-  check = [tuple(entry["check"]) for _, _, entry, _ in walked if entry is not None and entry["check"] is not None]
-  if check:
-    w = sum(x for x, _ in check)
-    f = sum(y for _, y in check)
-    t.notes.append(
-        f"Codex: per-request sum {w:,} vs session totals {f:,} ({(w - f) / f * 100:+.2f}% over "
-        f"{len(check)} root sessions; /compact resets a session total, so the per-request sum leads)")
 
 
 # ---------------------------------------------------------------------------
 # charlie-bot source: this host's own thread event logs and master raw captures
 # ---------------------------------------------------------------------------
 
-# Every record the tally reads (thread result events, the bare session-id event, the
+# Every record the parser reads (thread result events, the bare session-id event, the
 # claude-style init envelope, master-run context/result lines) serializes its type as a
 # quoted literal with a space after the colon — charlie-bot writes json.dumps defaults —
 # so the substring filter cannot skip a record the full parse would see; it only skips
@@ -1394,12 +732,12 @@ def _bare_model(model: str) -> str:
 
 
 def _backend_registry() -> dict[str, object]:
-  """config.yaml's backend options by id. Re-read per collect: a backend added or retired
-  reclassifies the corpus on the next fresh fold without touching any cached parse."""
+  """config.yaml's backend options by id. Re-read per capture: a backend added or retired
+  reclassifies a moved file on its next parse without touching any cached parse."""
   return {opt.id: opt for opt in get_config().backends.options}
 
 
-# Backend id type prefixes with the collect disposition of an id off config (a retired id):
+# Backend id type prefixes with the fallback disposition of an id off config (a retired id):
 # the id rule (BackendsConfig in src/core/config.py) keeps the prefix on every id, so an id
 # that left config still names its backend type.
 _BACKEND_ID_PREFIXES = (("charlie-code-", "include"), ("codex-", "codex"), ("claude-", "skip"), ("opencode-", "skip"))
@@ -1428,8 +766,8 @@ def _thread_row_model(meta: dict, registry: dict) -> str:
 
 def _thread_metadata(path: str) -> dict | None:
   """The thread's ``{backend, model}`` pair from its metadata.json, or None when the file is
-  absent. Any other read/parse failure propagates: the collect loop notes it and skips the
-  thread, same contract as an unreadable log file."""
+  absent. Any other read/parse failure propagates: the capture raises, same contract as an
+  unreadable log file."""
   meta_path = Path(path).parent.parent / METADATA_NAME
   try:
     with open(meta_path, "rb") as fh:
@@ -1450,7 +788,7 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
   the same field the envelope names). Session ids come off every line carrying one at top
   level: the codex translation emits one session-adopt event per thread.started (the typed
   ``session_attached`` signal, or its bare pre-typed spelling in older logs), and
-  the claude-style init envelope embeds its own — both feed the rollout reconciliation.
+  the claude-style init envelope embeds its own — both key the fallback's exclusion.
   """
   if meta is None:
     return [], []
@@ -1476,7 +814,7 @@ def _thread_contribution(path: str, registry: dict, prev: dict | None) -> tuple[
   prefix unchanged, only the appended tail parses, the cached records ride forward, and the
   classification they were parsed under rides with them (metadata's backend/model are
   write-once). A first parse reads metadata.json beside the log; a thread without one yields
-  an entry with no records and meta None, which the fold skips with a note.
+  an entry with no records and meta None, which contributes no records.
   """
   if prev is not None:
     tail = _tail_parse(path, prev, _CHARLIEBOT_THREAD_MARKERS)
@@ -1489,7 +827,6 @@ def _thread_contribution(path: str, registry: dict, prev: dict | None) -> tuple[
           "records": prev["records"] + records,
           "ids": sorted(set(prev["ids"]) | set(ids)),
           "meta": meta,
-          "dupes": 0,
           "end": end,
       }
       entry["guard"] = _boundary_guard(path, end)
@@ -1497,7 +834,7 @@ def _thread_contribution(path: str, registry: dict, prev: dict | None) -> tuple[
   meta = _thread_metadata(path)
   sig, objects, end = _prefiltered_jsonl(path, _CHARLIEBOT_THREAD_MARKERS)
   records, ids = _thread_records(objects, meta, registry)
-  entry = {"sig": sig, "records": records, "ids": ids, "meta": meta, "dupes": 0, "end": end}
+  entry = {"sig": sig, "records": records, "ids": ids, "meta": meta, "end": end}
   entry["guard"] = _boundary_guard(path, end)
   return entry, end
 
@@ -1549,39 +886,22 @@ def _master_contribution(path: str, registry: dict, prev: dict | None = None) ->
           "sig": sig,
           "records": records or prev["records"],
           "model_ctx": model,
-          "dupes": 0,
           "end": end,
       }
       entry["guard"] = _boundary_guard(path, end)
       return entry, end - prev["end"]
   sig, objects, end = _prefiltered_jsonl(path, _CHARLIEBOT_MASTER_MARKERS)
   records, model = _master_records(objects, path, registry)
-  entry = {"sig": sig, "records": records, "model_ctx": model, "dupes": 0, "end": end}
+  entry = {"sig": sig, "records": records, "model_ctx": model, "end": end}
   entry["guard"] = _boundary_guard(path, end)
   return entry, end
 
 
-def _rollout_session_ids(codex_homes: dict[str, Path], t: _Tally) -> set[str]:
-  """The codex session ids whose rollout files are still on disk, taken from the file names
-  (``rollout-<started>-<session id>.jsonl`` — the id is the last five dash-separated
-  segments; a bare ``rollout-<session id>.jsonl`` names the same five). The same homes the
-  Codex source walks, so a rollout the CLI source can see is exactly one the reconciliation
-  can see."""
-  ids: set[str] = set()
-  for label, home in codex_homes.items():
-    for path, _st, _error in _iter_jsonl_stats(home / "sessions", t, USAGE_SOURCE_CHARLIE_BOT, f"{label} rollouts"):
-      name = os.path.basename(path)
-      if not name.startswith("rollout-") or not name.endswith(".jsonl"):
-        continue
-      stem = name[len("rollout-"):-len(".jsonl")]
-      ids.add("-".join(stem.rsplit("-", 5)[-5:]))
-  return ids
-
-
 def _classify_backend(backend: str, registry: dict) -> str | None:
-  """One thread backend id's disposition: ``"include"`` (charlie-code type or prefix),
-  ``"codex"`` (rollout reconciliation first), ``"skip"`` (the CLI sources already carry
-  those runs), or None when neither the registry nor the id prefix can name the type."""
+  """One thread or run backend id's disposition: ``"include"`` (charlie-code type or
+  prefix — usage only the charlie-bot log holds), ``"codex"``/``"skip"`` (both captured as
+  fallback records keyed on session ids), or None when neither the registry nor the id
+  prefix can name the type."""
   opt = registry.get(backend)
   btype = str(opt.type) if opt is not None else None
   if btype is None:
@@ -1596,136 +916,14 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
   return "skip"
 
 
-def _fold_records(t: _Tally, source: str, records: list) -> int:
-  """Fold one entry's records into the accumulator; returns the folded count.
-
-  Every record is (model, account, ts, in_fresh, cache_write, cache_read, output) — the
-  shape both the charlie-bot log parses and the opencode row projection append.
-  """
-  for model, account, ts, in_fresh, cache_write, cache_read, output in records:
-    t.add(source, model, account, ts, in_fresh=in_fresh, cache_write=cache_write, cache_read=cache_read, output=output)
-  return len(records)
-
-
-def _fold_charliebot_records(t: _Tally, records: list[list]) -> int:
-  """Fold one charlie-bot entry's records into the accumulator; returns the folded count."""
-  return _fold_records(t, USAGE_SOURCE_CHARLIE_BOT, records)
-
-
-def collect_charliebot(
-    t: _Tally, codex_homes: dict[str, Path], cache: TallyCache | None,
-    rows: list[tuple[str, str, int | None, int | None, str | None]]) -> None:
-  """Tally the charlie-bot corpus into the accumulator: thread event logs and master raw
-  captures, served per file from the cache document like the CLI sources. *rows* is the
-  caller's shared walk (``_walk_charliebot``) — the same pass the corpus signature consumed.
-
-  Inclusion is decided per collect, not baked into the entries: charlie-code-type threads
-  fold, codex-type threads fold only when none of the session ids their event log carries
-  matches a rollout file still on disk (the CLI source owns those runs), claude/opencode
-  types never fold, and a backend id neither the registry nor its prefix can classify is
-  reported in the notes instead of any row. Master captures fold only their CLC shape.
-  """
-  registry = _backend_registry()
-  rollout_ids = _rollout_session_ids(codex_homes, t)
-  folded = 0
-  undetermined: dict[str, int] = {}
-  clc_master = 0
-  for kind, path, mtime_ns, size, error in rows:
-    if mtime_ns is None:
-      _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, error)
-      continue
-    entry = cache.lookup_sig(USAGE_SOURCE_CHARLIE_BOT, path, [mtime_ns, size]) if cache is not None else None
-    if entry is None:
-      prev = cache.prev(USAGE_SOURCE_CHARLIE_BOT, path) if cache is not None else None
-      parse = _thread_contribution if kind == "thread" else _master_contribution
-      try:
-        entry, nbytes = parse(path, registry, prev)
-      except (OSError, ValueError) as exc:
-        _unreadable_note(t.notes, USAGE_SOURCE_CHARLIE_BOT, path, exc)
-        continue
-      t.scanned_bytes += nbytes
-      if cache is not None:
-        cache.store_sig(USAGE_SOURCE_CHARLIE_BOT, path, entry)
-    if kind == "master":
-      folded += _fold_charliebot_records(t, entry["records"])
-      clc_master += sum(1 for rec in entry["records"] if rec[1] == _CLC_MASTER_ACCOUNT)
-      continue
-    meta = entry["meta"]
-    if meta is None:
-      t.notes.append(f"charlie-bot: skipped thread {Path(path).parts[-3]}: no metadata.json")
-      continue
-    records = entry["records"]
-    if not records:
-      continue
-    backend = meta.get("backend")
-    verdict = _classify_backend(backend, registry) if backend else None
-    if verdict is None and not backend:
-      # No id to classify: the metadata model is the only witness. Registered backends'
-      # models are unique strings, so a match names both the type and the row.
-      opt = next((o for o in registry.values() if o.model == meta.get("model")), None) \
-          if meta.get("model") else None
-      if opt is not None:
-        backend = opt.id
-        verdict = _classify_backend(backend, registry)
-        # The recovered id is the records' account; relabel the fold's copies (never the
-        # cached entry's lists).
-        records = [[*rec[:1], backend, *rec[2:]] for rec in records]
-    if verdict is None:
-      label = backend or f"thread {Path(path).parts[-3]} (no backend id)"
-      undetermined[label] = undetermined.get(label, 0) + len(records)
-      continue
-    if verdict == "skip":
-      continue
-    if verdict == "codex":
-      on_disk = sorted(set(entry["ids"]) & rollout_ids)
-      if on_disk:
-        t.notes.append(
-            f"charlie-bot: skipped codex thread {backend} ({Path(path).parts[-3]}): "
-            f"session id {', '.join(on_disk)} has a rollout on disk")
-        continue
-    folded += _fold_charliebot_records(t, records)
-  for label, count in sorted(undetermined.items()):
-    t.notes.append(
-        f"charlie-bot: backend id {label} not classifiable (not in config.yaml, prefix unknown) "
-        f"— {count} results not counted")
-  if clc_master:
-    t.notes.append(
-        f"charlie-bot: {clc_master} master results matched no charlie-code backend in "
-        f"config.yaml, counted as {_CLC_MASTER_ACCOUNT}")
-  t.notes.append(f"charlie-bot: {folded:,} usage results (CLC + offline codex)")
-
-
-# The cold-pass scan projects each matching row's tally fields inside SQLite: json_extract
-# in C there beats a Python round trip plus json.loads per row (measured ~4x slower over this
-# host's 36k-row message table). json_valid guards the query: the LIKE
-# prefilter can match a malformed row, and skipping it must not error the query. Non-object
-# tokens project NULLs, dropped by the row filter below. The trailing id/time_updated columns
-# seed the row memo; rows the WHERE clause drops are known non-contributors and memoize as
-# None without a re-read. _opencode_row_data must project an identical record per row.
-_OPENCODE_SCAN_SQL = """
-select json_extract(data, '$.modelID'), json_extract(data, '$.providerID'),
-       json_extract(data, '$.time.created'),
-       json_extract(data, '$.tokens.input'), json_extract(data, '$.tokens.output'),
-       json_extract(data, '$.tokens.total'),
-       json_extract(data, '$.tokens.cache.write'), json_extract(data, '$.tokens.cache.read'),
-       length(data), id, time_updated
-from message
-where data like '%"tokens"%'
-  and json_valid(data)
-  and json_extract(data, '$.role') = 'assistant'
-"""
-
-# Row keys the incremental path diffs against the memo; a leaf-page scan that never touches
-# the data blobs' overflow pages (~0.03 s warm over this host's table).
-_OPENCODE_KEYS_SQL = "select id, time_updated from message"
-
-# ASCII-case-insensitive mirror of the scan SQL's LIKE '%"tokens"%' prefilter (SQLite folds
-# only A-Z, so str.lower would mismatch marks SQLite leaves distinct).
+# The row prefilter: a blob without a tokens key cannot carry token counts. ASCII-case-
+# insensitive, mirroring SQLite's LIKE folding — str.lower would mismatch marks SQLite
+# leaves distinct.
 _OPENCODE_TOKENS_LIKE = re.compile(r'"[tT][oO][kK][eE][nN][sS]"').search
 
 
 def _opencode_row(row: tuple) -> list | None:
-  """Tally record for one projected message row, or None when it contributes nothing."""
+  """Ledger record for one projected message row, or None when it contributes nothing."""
   model, provider, created, in_fresh, output, total, cache_write, cache_read = row
   if not (in_fresh or output or total):
     return None
@@ -1741,584 +939,31 @@ def _strict_json_constant(name: str) -> None:
   raise ValueError(f"invalid JSON constant: {name}")
 
 
-def _opencode_row_data(data: str) -> tuple[list | None, int]:
-  """One message row's (record, bytes counted) from its data blob, as the scan SQL projects.
+def _opencode_row_data(data: str) -> list | None:
+  """One message row's ledger record from its data blob, or None when it contributes nothing.
 
-  Byte-counted exactly when the SQL filter chain (LIKE prefilter, json_valid, assistant role)
-  would return the row; the record is then _opencode_row over the same eight projections.
+  The same filter chain the db's own gate would apply: the tokens prefilter, a strict JSON
+  parse (the NaN/Infinity literals json.loads admits but SQLite's json_valid rejects), and
+  the assistant role; the record is then ``_opencode_row`` over the same eight projections.
   """
   if _OPENCODE_TOKENS_LIKE(data) is None:
-    return None, 0
+    return None
   try:
     obj = json.loads(data, parse_constant=_strict_json_constant)
   except (ValueError, RecursionError):
-    return None, 0
+    return None
   if not isinstance(obj, dict) or obj.get("role") != "assistant":
-    return None, 0
+    return None
   tokens = obj.get("tokens")
   tokens = tokens if isinstance(tokens, dict) else {}
   cache = tokens.get("cache")
   cache = cache if isinstance(cache, dict) else {}
   created = obj.get("time")
   created = created.get("created") if isinstance(created, dict) else None
-  rec = _opencode_row(
+  return _opencode_row(
       (
           obj.get("modelID"), obj.get("providerID"), created, tokens.get("input"), tokens.get("output"),
           tokens.get("total"), cache.get("write"), cache.get("read")))
-  return rec, len(data)
-
-
-def _opencode_db_signature(db: Path) -> list | None:
-  """The db's cache signature: main file stat plus the ``-wal`` sidecar's.
-
-  A WAL-mode write grows the sidecar without touching the main file; a checkpoint rewrites the
-  main file and truncates or removes the sidecar. Both moves change the composite, so a change
-  the read path could observe always invalidates. None signals a stat failure (no caching).
-  """
-  try:
-    st = db.stat()
-  except OSError:
-    return None
-  try:
-    wal = db.with_name(db.name + "-wal").stat()
-    wal_sig: list | None = [wal.st_mtime_ns, wal.st_size]
-  except OSError:
-    wal_sig = None
-  return [st.st_mtime_ns, st.st_size, wal_sig]
-
-
-def _rows_sidecar_name(db: Path) -> str:
-  """The rows sidecar's file name for *db*: one stable name per db path, so a rewrite
-  replaces the sidecar in place and no per-round siblings accumulate."""
-  return hashlib.sha1(str(db).encode()).hexdigest()[:16] + ".opencode_rows.json"
-
-
-_ROWS_SIDECAR_NOTE_PREFIX = "Tally cache: rows sidecar"
-
-
-def _sidecar_seed_note(notes: list[str], name: str, reason: str) -> None:
-  """Append the sidecar seed-failure note; *reason* names what the read hit."""
-  notes.append(f"{_ROWS_SIDECAR_NOTE_PREFIX} {name} {reason}; seeding from a full scan")
-
-
-def _read_rows_sidecar(cache_dir: Path, name: str, notes: list[str]) -> dict | None:
-  """The sidecar document's rows map, or None when unreadable — the seed then falls back to
-  the full scan (the no-seed contract), with the failure surfaced as a note."""
-  try:
-    doc = orjson.loads((cache_dir / name).read_bytes())
-  except FileNotFoundError:
-    _sidecar_seed_note(notes, name, "is missing")
-    return None
-  except (OSError, ValueError) as exc:
-    _sidecar_seed_note(notes, name, f"unreadable ({exc})")
-    return None
-  rows = doc.get("rows") if isinstance(doc, dict) else None
-  if not isinstance(rows, dict):
-    _sidecar_seed_note(notes, name, "carries no rows map")
-    return None
-  return rows
-
-
-def _write_rows_sidecar(cache_dir: Path, name: str, rows: dict, notes: list[str]) -> bool:
-  """Persist the rows map beside the cache; False when the write failed, which leaves the
-  entry without a rows_file and the next restart seeding from a full scan."""
-  try:
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    payload = orjson.dumps({"version": 1, "rows": rows})
-    atomic_write_stream(cache_dir / name, lambda stream: stream.write(payload))
-  except OSError as exc:
-    notes.append(f"{_ROWS_SIDECAR_NOTE_PREFIX} write failed: {exc}")
-    return False
-  return True
-
-
-def _increment_opencode_rows(
-    con: sqlite3.Connection,
-    memo: dict[str, tuple[int, list | None] | list],
-    gate: tuple[int, int, int, int],
-) -> tuple[int, list[tuple[list | None, list | None]], tuple[int, int, int, int]] | None:
-  """Advance the warm memo from a proof-miss round by re-reading only rows written after the
-  stored gate's max time_updated. Returns (bytes read, per-row deltas, the round's probe) or
-  None when the read cannot prove the memo complete — the caller then runs the full key scan.
-
-  Every insert and every time_updated bump carries the write's own wall-clock ms, so a row
-  the memo has not seen sits above the stored max unless the clock stepped backward; a delete
-  or a backward write subtracts a sum term the fetch never saw. A matching (count, sum,
-  max rowid) residual therefore proves the fetch was the whole move of everything the triple
-  can see. The triple's coincidence classes (a delete and an insert landing in the same
-  millisecond with the deleted row holding the max rowid; a clock stepped backward) dodge it
-  where the full key scan's per-id diff would see the moves — the wrong serve then stands
-  until a residual mismatch, the _OPENCODE_FULL_SCAN_EVERY self-heal, or a restart re-scan.
-  """
-  expected_sum = gate[1]
-  expected_count = gate[0]
-  expected_max_rowid = gate[3]
-  fetched: list[tuple[str, int, list | None, list | None]] = []
-  nbytes = 0
-  for rowid, mid, tu, data in con.execute(_OPENCODE_TAIL_SQL, (gate[2],)):
-    rec, n = _opencode_row_data(data)
-    nbytes += n
-    old = memo.get(mid)
-    if old is None:
-      expected_count += 1
-      expected_max_rowid = max(expected_max_rowid, rowid)
-    expected_sum += tu - (old[0] if old is not None else 0)
-    fetched.append((mid, tu, rec, old[1] if old is not None else None))
-  probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
-  if (probe[0], probe[1], probe[3]) != (expected_count, expected_sum, expected_max_rowid):
-    return None
-  deltas = [(old_rec, rec) for _mid, _tu, rec, old_rec in fetched]
-  for mid, tu, rec, _old_rec in fetched:
-    memo[mid] = (tu, rec)
-  return nbytes, deltas, probe
-
-
-def _advance_opencode_rows(
-    db: Path,
-    seed: dict | None = None,
-    seed_probe: tuple[int, ...] | None = None,
-) -> _OpencodeScan:
-  """Advance the db's row memo to its message table's current rows, bumping the epoch when any
-  row moved. Read-only: the scan never writes. Absent or unreadable dbs advance nothing and
-  return ``ok=False``. A warm memo first checks the proof aggregates: unchanged (count, sum)
-  proves every row move the aggregates can see is absent and the scan is skipped — a weaker
-  proof than the key scan's per-id diff (see the probe comment), traded for not reading
-  221k keys on the WAL-noise rounds that are the steady state this gate exists for. A proof
-  miss on a warm gate advances from the tail fetch (see _increment_opencode_rows) and falls
-  back to the full key scan when the fetch cannot prove itself complete or when the miss is
-  the self-heal round (every _OPENCODE_FULL_SCAN_EVERY-th); a seeded memo's stored proof
-  tail-fetches from the same maxes when the document carried them all, while a two-field
-  seed — a document from a build before the maxes were persisted — has no max to fetch
-  from, so its first proof miss takes the full key scan and the gate it stores carries
-  one for every round after.
-
-  *seed* is the persisted document's ``rows`` map for this db. A cold memo seeded from it
-  skips the whole-blob cold scan: the memo starts at the document's rows and the warm key
-  diff fetches only rows that moved since the document was written. *seed_probe* is the
-  proof aggregates stored beside that seed; when it matches the live snapshot the seeded
-  memo takes the same gate the warm memo takes and the key scan skips (the stored proof's
-  own caveat: a multi-row coincidence whose count and sum both net to zero dodges it).
-  """
-  key = str(db)
-  sig = _opencode_db_signature(db)
-  try:
-    con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
-    try:
-      memo = _opencode_row_memos.setdefault(key, {})
-      seeded = not memo and seed is not None
-      if seeded:
-        # The seed's parsed rows are [time_updated, record] pairs, and every memo consumer
-        # reads values positionally ([0]/[1] and two-name unpacking), so the map adopts
-        # directly: the per-row tuple rebuild cost ~0.35 s at a 190k-row sidecar, and a
-        # value is only ever replaced whole, never mutated, so the parsed lists alias
-        # safely into the memo.
-        memo.update(seed)
-      con.execute("begin")  # one snapshot: the stored proof must describe the scanned state
-      probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone()) if memo else None
-      gate = seed_probe if seeded else _opencode_probes.get(key)
-      if probe is not None and gate is not None and tuple(gate) == probe[:len(gate)]:
-        # The stored proof matches the snapshot: the seeded memo describes the live rows
-        # and the key scan skips, the same trade the warm gate makes.
-        _opencode_probes[key] = probe
-        con.commit()
-        return _OpencodeScan(sig, _opencode_row_epochs.get(key, 0), 0, ok=True, error=None, deltas=[])
-      misses = _opencode_miss_counts.get(key, 0) + 1
-      _opencode_miss_counts[key] = misses
-      advanced = _increment_opencode_rows(con, memo, gate) \
-          if (probe is not None and gate is not None and len(gate) == 4
-              and misses % _OPENCODE_FULL_SCAN_EVERY != 0) else None
-      if advanced is not None:
-        nbytes, deltas, probe = advanced
-        if any(old is not None or new is not None for old, new in deltas):
-          # (None, None) pairs are non-contributing rows whose key moved; the records the
-          # document holds are unchanged, so only a record-bearing move unsyncs the entry.
-          _opencode_doc_synced[key] = False
-      else:
-        nbytes, deltas = _scan_opencode_rows(con, memo)
-        if probe is None:  # cold memo: the scan's snapshot is the state the memo now describes
-          probe = tuple(con.execute(_OPENCODE_PROBE_SQL).fetchone())
-          _opencode_doc_synced[key] = False
-        elif any(old is not None or new is not None for old, new in deltas):
-          _opencode_doc_synced[key] = False
-      _opencode_probes[key] = probe
-      con.commit()
-    finally:
-      con.close()
-  except sqlite3.Error as exc:
-    # A failed scan leaves its memo partially advanced at worst; dropping the partial forces
-    # the next merge down the full replay, which rebuilds both from whatever the memo holds.
-    # The stored proof describes a state the failed scan never reached, so it drops too.
-    _opencode_probes.pop(key, None)
-    _opencode_miss_counts.pop(key, None)
-    _opencode_partials[key] = None
-    return _OpencodeScan(sig, 0, 0, ok=False, error=str(exc))
-  epoch = _opencode_row_epochs.get(key, 0)
-  if deltas:
-    epoch += 1
-    _opencode_row_epochs[key] = epoch
-  return _OpencodeScan(sig, epoch, nbytes, ok=True, error=None, deltas=deltas)
-
-
-def _replay_opencode_records(t: _Tally, records: list) -> None:
-  """Fold an opencode record list into the accumulator (the cold and cache-document paths)."""
-  _fold_records(t, USAGE_SOURCE_OPENCODE, records)
-
-
-def _merge_opencode(
-    t: _Tally,
-    db: Path,
-    cache: TallyCache | None,
-    scan: _OpencodeScan | None,
-) -> tuple[list | None, int, bool]:
-  """Tally the opencode db into the accumulator. Scans unless ``scan`` already advanced the
-  row memo this collect, or the cache document's entry still matches the file. Returns
-  (the signature the rows were read at, the row epoch, scan-sourced); the signature is None
-  when no signature applies (absent, unstatable, or unreadable db), so the whole-tally memo
-  never signs rows it cannot key. A scan-reported delta set with a current partial adjusts
-  the source's buckets instead of replaying every record; an entry-served merge adopts the
-  partial the same way (the partial's rows are the served entry's — see the entry comment);
-  the partial always ends the merge describing the rows that merge served."""
-  if not db.exists():
-    t.notes.append("opencode: db absent")
-    return None, 0, False
-  sig = _opencode_db_signature(db)
-  key = str(db)
-  entry = cache.lookup_sig(USAGE_SOURCE_OPENCODE, key, sig) if cache is not None and sig is not None else None
-  epoch = 0
-  from_scan = False
-  if entry is not None:
-    # The signature is taken before the read and stored with the rows, so an entry can only
-    # be served while the file still matches it, and a row move writes the db or its WAL
-    # sidecar, which moves that signature — a served entry's records are therefore unchanged
-    # since the merge that stored them, so a partial built from those records (by the replay
-    # below or a scan-path fold) sums exactly what this merge would fold, and its buckets
-    # adopt in place of the per-record fold. The row memo itself is still only ever advanced
-    # by scans.
-    epoch = _opencode_row_epochs.get(key, 0)
-    partial = _opencode_partials.get(key)
-    if partial is None:
-      partial = _adopt_stored_partial(key, entry)
-    if partial is None:
-      records = _entry_records(entry)
-      _replay_opencode_records(t, records)
-      count = len(records)
-      _opencode_partials[key] = _snapshot_opencode_partial(t, count)
-    else:
-      count = _adjust_opencode_partial(t, _opencode_row_memos.setdefault(key, {}), partial, [])
-    t.notes.append(f"opencode: {count:,} assistant messages with token counts")
-    return sig, epoch, from_scan
-  if scan is None:
-    seed = None
-    seed_probe = None
-    prev = cache.prev(USAGE_SOURCE_OPENCODE, key) if cache is not None else None
-    if prev is not None:
-      # The seed is a cold-memo device: a warm row memo is already at least as fresh as any
-      # stored rows, so reading the multi-MB sidecar here would serve nothing.
-      if not _opencode_row_memos.get(key):
-        seed = cache.entry_rows(prev, t.notes)
-        stored_probe = prev.get("probe")
-        # A four-field proof carries the tail fetch's maxes; a two-field one is a legacy
-        # document — it seeds without a max and its first miss takes the full key diff.
-        if isinstance(stored_probe, list) and len(stored_probe) in (2, 4):
-          seed_probe = tuple(stored_probe)
-      _adopt_stored_partial(key, prev)
-    scan = _advance_opencode_rows(db, seed, seed_probe)
-  if not scan.ok:
-    t.notes.append(f"opencode: unreadable db: {scan.error}")
-    return None, scan.epoch, False
-  memo = _opencode_row_memos[key]
-  t.scanned_bytes += scan.nbytes
-  epoch = scan.epoch
-  from_scan = True
-  partial = _opencode_partials.get(key)
-  if scan.deltas is None or partial is None:
-    records = [rec for _, rec in memo.values() if rec is not None]
-    _replay_opencode_records(t, records)
-    count = len(records)
-  else:
-    count = _adjust_opencode_partial(t, memo, partial, scan.deltas)
-  # The stored partial must never alias a served tally's containers, so it copies out; the
-  # store below persists it, so it lands before the entry is built.
-  _opencode_partials[key] = _snapshot_opencode_partial(t, count)
-  if cache is not None and sig is not None:
-    entry = cache.prev(USAGE_SOURCE_OPENCODE, key)
-    if entry is not None and _opencode_doc_synced.get(key):
-      # The probe proved the rows unchanged since this entry was stored: its signature is
-      # stale only by WAL writes to rows the tally never reads, and re-signing it would
-      # rewrite the multi-MB sidecar for a signature the next WAL write stales anyway.
-      cache.store_sig(USAGE_SOURCE_OPENCODE, key, entry)
-    else:
-      stored = {
-          "sig": sig,
-          "partial": _partial_to_doc(_opencode_partials[key]),
-      }
-      # The proof aggregates ride the entry beside the rows they describe: the restart seed
-      # gates its key diff on them, so a restart whose rows did not move skips the scan and
-      # a moved round tail-fetches from the stored maxes like the warm gate does. The
-      # sidecar name is stable and the sidecar writes before the entry stores, so the
-      # stored proof always describes the rows the named sidecar holds.
-      probe = _opencode_probes.get(key)
-      if probe is not None:
-        stored["probe"] = list(probe)
-      prev_rows_file = entry.get("rows_file") if entry is not None else None
-      # The sidecar rewrites only when the rows moved under it (a cold scan rebuilds them
-      # whole): a scan with no row move leaves the stored rows exact, so the stored name
-      # keeps referencing them and the ~170k-row dump is skipped.
-      if prev_rows_file is None or scan.deltas is None or scan.deltas:
-        name = _rows_sidecar_name(db)
-        if _write_rows_sidecar(cache.cache_dir, name, dict(memo), t.notes):
-          stored["rows_file"] = name
-      else:
-        stored["rows_file"] = prev_rows_file
-      cache.store_sig(USAGE_SOURCE_OPENCODE, key, stored)
-      _opencode_doc_synced[key] = True
-  t.notes.append(f"opencode: {count:,} assistant messages with token counts")
-  return sig, epoch, from_scan
-
-
-def _adjust_opencode_partial(
-    t: _Tally,
-    memo: dict[str, tuple[int, list | None] | list],
-    partial: _OpencodePartial,
-    deltas: list[tuple[list | None, list | None]],
-) -> int:
-  """Carry the partial across one scan's row moves: fold every delta out of and into a copy
-  of the buckets, re-derive spans a removal invalidated, drop buckets whose last record went
-  away, and feed the result into *t*. Returns the contributing-record count. An empty delta
-  set is the entry-served merge's adoption: the buckets feed *t* unchanged."""
-  by_model = {k: dict(v) for k, v in partial.by_model.items()}
-  by_account = {k: dict(v) for k, v in partial.by_account.items()}
-  span = {k: tuple(v) for k, v in partial.span.items()}
-  rederive: set = set()
-  for old, new in deltas:
-    for rec, sign in ((old, -1), (new, 1)):
-      if rec is None:
-        continue
-      # Fold one record out (−1) or in (+1); a subtraction touching a span boundary marks
-      # the bucket for re-derivation from the row memo.
-      model, account, ts, in_fresh, cache_write, cache_read, output = rec
-      vals = {"in_fresh": in_fresh, "cache_write": cache_write, "cache_read": cache_read, "output": output}
-      model_key = (USAGE_SOURCE_OPENCODE, model)
-      for key, bucket in ((model_key, by_model), ((USAGE_SOURCE_OPENCODE, model, account), by_account)):
-        tgt = bucket.setdefault(key, dict.fromkeys(FIELDS, 0)) if sign > 0 else bucket[key]
-        for name, value in vals.items():
-          tgt[name] += sign * value
-        tgt["calls"] += sign
-      if ts:
-        lo, hi = span.get(model_key, (None, None))
-        if sign > 0:
-          span[model_key] = (ts if lo is None or ts < lo else lo, ts if hi is None or ts > hi else hi)
-        elif ts in (lo, hi):
-          rederive.add(model_key)
-  for span_key in rederive:
-    lo = hi = None
-    for _, rec in memo.values():
-      if rec is not None and rec[0] == span_key[1] and rec[2]:
-        lo = rec[2] if lo is None or rec[2] < lo else lo
-        hi = rec[2] if hi is None or rec[2] > hi else hi
-    span[span_key] = (lo, hi)
-  for key in [k for k, v in by_model.items() if v["calls"] == 0]:
-    del by_model[key]
-    span.pop(key, None)
-  for key in [k for k, v in by_account.items() if v["calls"] == 0]:
-    del by_account[key]
-  count = partial.count + sum(1 for _, new in deltas if new is not None) \
-      - sum(1 for old, _ in deltas if old is not None)
-  t.by_model.update({k: dict(v) for k, v in by_model.items()})
-  t.by_account.update({k: dict(v) for k, v in by_account.items()})
-  t.span.update({k: [lo, hi] for k, (lo, hi) in span.items()})
-  return count
-
-
-def _scan_opencode_rows(
-    con: sqlite3.Connection,
-    memo: dict[str, tuple[int, list | None] | list],
-) -> tuple[int, list[tuple[list | None, list | None]] | None]:
-  """Advance *memo* to the message table's current rows; return the bytes this pass read and
-  the per-row record deltas ``(old, new)`` — rows whose ``(id, time_updated)`` key moved, and
-  ``(old, None)`` for ids that vanished. With an empty memo the SQL scan projects every
-  contributing row (the cold pass, as at a process start), rows it filters out memoize as
-  None, and deltas come back None — the caller replays whole. All reads happen before any
-  memo write, so a failure mid-scan leaves the memo — and the partial keyed to it —
-  untouched.
-  """
-  live = dict(con.execute(_OPENCODE_KEYS_SQL))
-  nbytes = 0
-  if not memo:
-    fresh: dict[str, tuple[int, list | None]] = {}
-    for row in con.execute(_OPENCODE_SCAN_SQL):
-      nbytes += row[8]
-      fresh[row[9]] = (row[10], _opencode_row(row[:8]))
-    for mid, tu in live.items():
-      if mid not in fresh:
-        fresh[mid] = (tu, None)
-    memo.update(fresh)
-    return nbytes, None
-  removed_ids = [mid for mid in memo if mid not in live]
-  changed_ids = [mid for mid, tu in live.items() if memo.get(mid, (None,))[0] != tu]
-  fetched: list[tuple[str, int, list | None]] = []
-  for mid in changed_ids:
-    row = con.execute("select data from message where id = ?", (mid,)).fetchone()
-    rec, n = (None, 0) if row is None else _opencode_row_data(row[0])
-    nbytes += n
-    fetched.append((mid, live[mid], rec))
-  deltas = [(memo[mid][1] if mid in memo else None, rec) for mid, _, rec in fetched]
-  deltas += [(memo[mid][1], None) for mid in removed_ids]
-  for mid in removed_ids:
-    del memo[mid]
-  for mid, tu, rec in fetched:
-    memo[mid] = (tu, rec)
-  return nbytes, deltas
-
-
-def _build(t: _Tally) -> list[dict]:
-  rows: list[dict] = []
-  for (source, model), c in t.by_model.items():
-    lo, hi = t.span[(source, model)]
-    accts: dict[str, dict] = {a: dict(v) for (s, m, a), v in t.by_account.items() if s == source and m == model}
-    total = c["in_fresh"] + c["cache_write"] + c["cache_read"] + c["output"]
-    acct_rows = [
-        AccountRow(
-            name=a,
-            calls=v["calls"],
-            output=v["output"],
-            total=v["in_fresh"] + v["cache_write"] + v["cache_read"] + v["output"],
-        ) for a, v in sorted(
-            accts.items(),
-            key=lambda kv: -(kv[1]["in_fresh"] + kv[1]["cache_write"] + kv[1]["cache_read"] + kv[1]["output"]))
-    ]
-    rows.append(
-        {
-            "source": source,
-            "model": model,
-            **{
-                k: c[k] for k in FIELDS
-            },
-            "total": total,
-            "first": (lo or "")[:10],
-            "last": (hi or "")[:10],
-            "accounts": acct_rows,
-        })
-    rows.sort(key=lambda r: -r["total"])
-  return rows
-
-
-def _materialize_rows(rows: list[dict]) -> list[ModelRow]:
-  """One ModelRow set per collect from the built row dicts; the accounts list copies, so a
-  served tally never shares a mutable container with the whole-tally memo's stored rows."""
-  return [ModelRow(**{**row, "accounts": list(row["accounts"])}) for row in rows]
-
-
-def collect_token_usage(
-    cache_path: Path | None,
-    claude_homes: dict[str, Path] | None = None,
-    codex_homes: dict[str, Path] | None = None,
-    opencode_db: Path | None = None,
-    sessions_dir: Path | None = None,
-) -> TokenTally:
-  """A failing source records a note instead of raising; see the module docstring for the cache.
-
-  Roots default to this host's on-disk layout: data is discovered from config.yaml plus the
-  defaults ``~/.claude``, ``~/.codex`` and the opencode database; the charlie-bot corpus root
-  is the config's own session tree (``charliebot_home`` / ``sessions`` — no separate knob).
-  Tests pass explicit roots. ``cache_path`` is the only state the collection persists: the
-  per-file contribution document described at module level. None collects cacheless.
-  """
-  start = time.perf_counter()
-  if claude_homes is None or codex_homes is None:
-    discovered_claude, discovered_codex = discover_homes(DEFAULT_CLAUDE_DIR, DEFAULT_CODEX_HOME)
-    claude_homes = claude_homes if claude_homes is not None else discovered_claude
-    codex_homes = codex_homes if codex_homes is not None else discovered_codex
-  if opencode_db is None:
-    opencode_db = DEFAULT_OPENCODE_DB
-  if sessions_dir is None:
-    sessions_dir = get_config().sessions_dir
-
-  global _aggregate_memo, _tally_memo
-  charliebot_probe = _Tally()
-  charliebot_rows = _walk_charliebot(sessions_dir, charliebot_probe)
-  claude_probe = _Tally()
-  codex_probe = _Tally()
-  claude_rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, claude_probe)
-  codex_rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, codex_probe)
-  signature = _corpus_signature(
-      claude_homes, codex_homes, sessions_dir, claude_rows, codex_rows, charliebot_rows, tuple(charliebot_probe.notes),
-      tuple(claude_probe.notes), tuple(codex_probe.notes))
-  lookup_sig = _opencode_db_signature(opencode_db)
-  tally_memo = _tally_memo
-  if lookup_sig is not None and tally_memo is not None and tally_memo[0][:2] == (signature, lookup_sig):
-    _, rows, notes = tally_memo
-    return TokenTally(
-        rows=_materialize_rows(rows),
-        notes=list(notes),
-        elapsed_s=time.perf_counter() - start,
-        scanned_bytes=0,
-    )
-  fresh_sources = _aggregate_memo is None or _aggregate_memo[0] != signature
-  scan: _OpencodeScan | None = None
-  if not fresh_sources and lookup_sig is not None and tally_memo is not None \
-          and tally_memo[0][0] == signature and tally_memo[0][3]:
-    # The db signature moved, so the fast hit missed; the row memo's key diff is the cheap
-    # proof of whether the WAL wrote rows the tally reads. An unchanged epoch re-serves the
-    # memo and re-signs it at the scan's own signature.
-    scan = _advance_opencode_rows(opencode_db)
-    if scan.ok and scan.epoch == tally_memo[0][2]:
-      _, rows, notes = tally_memo
-      _tally_memo = ((signature, scan.sig, scan.epoch, True), rows, list(notes))
-      return TokenTally(
-          rows=_materialize_rows(rows),
-          notes=list(notes),
-          elapsed_s=time.perf_counter() - start,
-          scanned_bytes=0,
-      )
-  t = _Tally()
-  cache = None
-  if fresh_sources and cache_path is not None:
-    # The parsed document memoizes per cache path: a changed round re-parses zero document
-    # bytes and serves unchanged files from the adopted entry maps.
-    key = str(cache_path)
-    sources = _tally_cache_docs.get(key)
-    if sources is None:
-      sources = TallyCache.load(cache_path, t.notes)._sources
-      _tally_cache_docs[key] = sources
-    cache = TallyCache(sources, cache_path.parent)
-  if fresh_sources:
-    notes_from = len(t.notes)
-    # The shared walk's dir-level error notes ride the fresh round (the rows carry only
-    # per-file errors); the memo captures them here and serves them on hit rounds.
-    t.notes.extend(charliebot_probe.notes)
-    t.notes.extend(claude_probe.notes)
-    t.notes.extend(codex_probe.notes)
-    collect_claude(t, claude_homes, cache, claude_rows)
-    collect_codex(t, codex_homes, cache, codex_rows)
-    collect_charliebot(t, codex_homes, cache, charliebot_rows)
-    _aggregate_memo = (signature, _SourceAggregate.snapshot(t, notes_from))
-  else:
-    _aggregate_memo[1].apply(t)
-  read_sig, epoch, from_scan = _merge_opencode(t, opencode_db, cache, scan)
-  # Save only on the source-walk path: its lookups refreshed the next document. A memo hit's
-  # only fresh entry is the opencode db's, whose WAL sig the next load recomputes anyway.
-  if cache is not None:
-    try:
-      cache.save(cache_path)
-      # Adopt the round's next document as the memo only where the save succeeded — the
-      # on-disk state now describes it, and entries this round stopped seeing (deleted
-      # logs) drop out with it. A failed save leaves the previous memo: its per-file
-      # signatures gate every lookup, so moved files re-scan and correctness never rides
-      # the document.
-      _tally_cache_docs[str(cache_path)] = {source: dict(files) for source, files in cache._next.items()}
-    except OSError as exc:
-      t.notes.append(f"Tally cache: save failed: {exc}")
-  rows = _build(t)
-  if read_sig is not None:
-    _tally_memo = ((signature, read_sig, epoch, from_scan), rows, list(t.notes))
-  elapsed = time.perf_counter() - start
-  return TokenTally(
-      rows=_materialize_rows(rows),
-      notes=t.notes,
-      elapsed_s=elapsed,
-      scanned_bytes=t.scanned_bytes,
-  )
 
 
 # ---------------------------------------------------------------------------
@@ -2337,7 +982,7 @@ def capture_jsonl_sources(
   """Copy the Claude Code and Codex jsonl usage into the SQLite usage ledger, so the page's
   rows survive deletion of the source logs (see the ledger's module docstring).
 
-  The serve reuses the collect's walk and cache-gated parse (``cache`` is the collect's own
+  The serve rides the shared walk and cache-gated parse (``cache`` is the caller's
   TallyCache or None); a parsed file whose content signature the ledger already recorded for
   this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
   is written atomically with that signature. Each record dedupes on its record_id — Claude
@@ -2350,11 +995,11 @@ def capture_jsonl_sources(
   """
   written: dict[str, int] = {USAGE_SOURCE_CLAUDE_CODE: 0, USAGE_SOURCE_CODEX: 0}
   captured = ledger.captured_sigs(host)
-  probe = _Tally()
+  notes: list[str] = []
 
-  rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, probe)
-  walked, _order = _walk_source(
-      probe, USAGE_SOURCE_CLAUDE_CODE, "claude", claude_homes, rows, cache, _claude_file_contribution)
+  rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, notes)
+  walked = _walk_source(
+      notes, USAGE_SOURCE_CLAUDE_CODE, "claude", claude_homes, rows, cache, _claude_file_contribution)
   for path, account, entry, _hit in walked:
     if entry is None:
       continue
@@ -2378,8 +1023,8 @@ def capture_jsonl_sources(
     ]
     written[USAGE_SOURCE_CLAUDE_CODE] += ledger.record_file(host, path, sig, records)
 
-  rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, probe)
-  walked, _order = _walk_source(probe, USAGE_SOURCE_CODEX, "codex", codex_homes, rows, cache, _codex_file_contribution)
+  rows = _walk_jsonl_logs("sessions", codex_homes, USAGE_SOURCE_CODEX, notes)
+  walked = _walk_source(notes, USAGE_SOURCE_CODEX, "codex", codex_homes, rows, cache, _codex_file_contribution)
   for path, account, entry, _hit in walked:
     if entry is None:
       continue
@@ -2388,7 +1033,7 @@ def capture_jsonl_sources(
       continue
     name = os.path.basename(path)
     if name.startswith("rollout-") and name.endswith(".jsonl"):
-      # The session id the file name carries, parsed exactly as _rollout_session_ids does.
+      # The session id the file name carries: its last five dash-separated segments.
       sid = "-".join(name[len("rollout-"):-len(".jsonl")].rsplit("-", 5)[-5:])
     else:
       sid = os.path.relpath(path, str(codex_homes[account]))
@@ -2415,31 +1060,31 @@ def capture_charliebot(ledger: UsageLedger, host: str, sessions_dir: Path, cache
   ledger, so a thread's result totals survive deletion of its own event log (see the
   ledger's module docstring).
 
-  The serve reuses the collect's walk and cache-gated parse (``cache`` is the collect's own
+  The serve rides the shared walk and cache-gated parse (``cache`` is the caller's
   TallyCache or None); a parsed file whose stat signature the ledger already recorded for
   this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
   is recorded with that signature — also one whose content yields no records, so an empty
-  thread is never re-parsed. A classification the collect only notes (no metadata.json, an
-  unclassifiable backend id) contributes no records here; an unreadable file or a parse
+  thread is never re-parsed. A thread with no metadata.json and one whose
+  backend id cannot be classified contribute no records here; an unreadable file or a parse
   failure raises: the capture runs in the collector, not the page load.
 
-  The record kind restates the collect's inclusion rules for the ledger:
+  The record kind states the inclusion rules for the ledger:
     master capture  one NATIVE record, no sessions — a master run has no CLI log behind it.
     "include" thread  NATIVE, no sessions — the charlie-bot thread log is the only home the
       usage has, so nothing can restate it.
     "codex" / "skip" thread  FALLBACK carrying the thread's session ids: the CLI log behind
       it may still exist, and the ledger's any-match exclusion retires the fallback the
-      moment any of those ids has a NATIVE record of its own — which replaces the collect's
-      rollout-on-disk reconciliation once the Codex rollouts are captured. A thread with no
+      moment any of those ids has a NATIVE record of its own — which also covers Codex
+      rollouts pruned from disk once the surviving ones are captured. A thread with no
       ids cannot key that exclusion and contributes nothing.
 
   Returns the records written.
   """
   registry = _backend_registry()
   captured = ledger.captured_sigs(host)
-  probe = _Tally()
+  notes: list[str] = []
   written = 0
-  for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, probe):
+  for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, notes):
     if mtime_ns is None:
       raise OSError(f"charlie-bot: unreadable {path}: {error}")
     sig = f"{mtime_ns}:{size}"
@@ -2671,7 +1316,7 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
   survive deletion of its own raw log (see the ledger's module docstring).
 
   The corpus is ``<session>/data/runs/<run id>/agent.raw.ndjson`` — the execution record
-  the Run workers write, which the collect never scanned. One record per run at most,
+  the Run workers write. One record per run at most,
   deduped on the run id; the backend verdict in the run's metadata picks the usage arm (see
   ``_run_record``). Each candidate is stat'ed before anything opens it: its
   ``st_mtime_ns:st_size`` pair is the signature, and one ``captured_sigs`` (read once per
@@ -2706,16 +1351,23 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+# The whole message table's gate, one probe query: the four aggregates sign the db for the
+# capture, and the max time_updated is the floor a re-read starts from. Every insert and
+# every time_updated bump carries the write's own wall-clock ms (drizzle $onUpdate), so a
+# row the last capture has not seen sits above that max unless the clock stepped backward.
+_OPENCODE_PROBE_SQL = (
+    "select count(*), coalesce(sum(time_updated), 0), "
+    "coalesce(max(time_updated), 0), coalesce(max(rowid), 0) from message")
+
 def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
   """Copy the opencode db's message-table usage into the SQLite usage ledger, so the page's
   rows survive deletion of the db itself (see the ledger's module docstring).
 
   The db opens read-only (mode=ro) — the capture never writes to it. The whole message
-  table signs with the probe aggregates ``_OPENCODE_PROBE_SQL`` projects, the same gate the
-  collect's incremental read uses; a db whose signature the ledger already recorded for this
-  host is skipped. Otherwise every row at or above the previous capture's max time_updated
-  is re-read through ``_opencode_row_data`` — the exact projection the collect reads — and
-  each contributing row upserts on ``opencode:<message id>``: an updated row moves its
+  table signs with the probe aggregates ``_OPENCODE_PROBE_SQL`` projects; a db whose
+  signature the ledger already recorded for this host is skipped. Otherwise every row at or
+  above the previous capture's max time_updated is re-read through ``_opencode_row_data``
+  and each contributing row upserts on ``opencode:<message id>``: an updated row moves its
   ledger record, a deleted row leaves the stored rows untouched (the ledger contains no
   DELETE). A missing db contributes nothing; a parse or read failure raises, because the
   capture runs in the collector, not the page load.
@@ -2734,7 +1386,7 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
     records: list[UsageRecord] = []
     for mid, session_id, _time_updated, data in con.execute(
         "select id, session_id, time_updated, data from message where time_updated >= ?", (floor,)):
-      rec, _nbytes = _opencode_row_data(data)
+      rec = _opencode_row_data(data)
       if rec is None:
         continue
       records.append(
@@ -2768,9 +1420,9 @@ def capture_usage(
   """Capture every source the caller names into the ledger — the one entry point the page's
   sweep gate, the cron capture and the CLI share (see the ledger's module docstring).
 
-  The serve rides the collect's own cache document: it loads the TallyCache from
-  *cache_path* (None collects cacheless) and saves it back after the sources run, so a
-  caller pointing the collect and the capture at one cache path pays each parse once.
+  The serve rides one cache document: it loads the TallyCache from *cache_path* (None
+  captures cacheless) and saves it back after the sources run, so callers pointing several
+  captures at one cache path pay each parse once.
   ``capture_jsonl_sources`` always runs; the opencode db is captured when *opencode_db* is
   given; the charlie-bot threads and the run directories when *sessions_dir* is. Every
   error raises: the capture runs in the collector, not the page load.
@@ -2794,9 +1446,8 @@ def capture_usage(
 def capture_local(ledger: UsageLedger) -> dict[str, int]:
   """Capture this host's own sources with this host's defaults: the discovered Claude
   config dirs and Codex homes, the default opencode db, the config's session tree, and a
-  tally cache under ``cache/usage_capture/`` — a directory of its own, because
-  ``TallyCache.save`` sweeps unreferenced rows sidecars there and the page's tally cache
-  keeps its sidecar in ``cache/`` beside the page's own document.
+  tally cache under ``cache/usage_capture/`` — a directory of its own, so the capture's
+  document never shares a path with any other component's cache.
   """
   claude_homes, codex_homes = discover_homes(DEFAULT_CLAUDE_DIR, DEFAULT_CODEX_HOME)
   return capture_usage(

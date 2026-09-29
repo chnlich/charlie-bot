@@ -21,11 +21,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
+from src.core.models import SessionMetadata
+from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 
 logger = LazyStructlogLogger()
@@ -386,6 +389,61 @@ async def post_with_retry(
           error=str(e))
       await asyncio.sleep(_RETRY_DELAYS[attempt])
   raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
+
+
+# How much of an unread message's text the 412 refusal and the gate list carry.
+_TEXT_PREVIEW_CHARS = 200
+
+
+async def require_thread_session(
+    platform: ThreadPlatform, session_id: str, session_mgr: SessionManager) -> SessionMetadata:
+  """The session named by *session_id* when it exists and carries a platform thread.
+
+  The reply-path preamble shared by ``assert_thread_fresh``, ``ack_messages``,
+  and ``post_reply``. Refusals raise ``ThreadReplyError``: 404 unknown session,
+  409 no platform thread.
+  """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None:
+    raise ThreadReplyError(404, SESSION_NOT_FOUND_DETAIL)
+  if getattr(meta, platform.origin_field) is None:
+    raise ThreadReplyError(409, f"Session has no {platform.display_name} thread")
+  return meta
+
+
+async def assert_thread_fresh(
+    adapter: ThreadAdapter, session_id: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  """Refuse the reply when eligible thread messages sit above the session's watermark.
+
+  The reply-path gate, run by the reply endpoint before ``post_reply``:
+  a reply to a thread the running round has not acked through would answer a
+  stale state, so nothing posts until the ack advances the watermark. Refusals
+  raise ``ThreadReplyError``: 404 unknown session, 409 no platform thread, then
+  412 with the structured ``stale_thread`` payload naming each unread message's
+  id, user, and a text preview; with a None watermark the whole thread tail
+  counts.
+  """
+  platform = adapter.platform
+  meta = await require_thread_session(platform, session_id, session_mgr)
+  watermark = getattr(meta, platform.watermark_field)
+  messages = await adapter.read_eligible(getattr(meta, platform.origin_field), cfg)
+  floor = None if watermark is None else platform.id_key(watermark)
+  unread = [m for m in messages if floor is None or platform.id_key(m.id) > floor]
+  if not unread:
+    return
+  raise ThreadReplyError(
+      412, {
+          "error": "stale_thread",
+          "new_messages":
+              [
+                  {
+                      platform.id_label: m.id,
+                      "user": m.user,
+                      "text_preview": m.text[:_TEXT_PREVIEW_CHARS],
+                  } for m in unread
+              ],
+          f"watermark_{platform.id_label}": watermark,
+      })
 
 
 def ack_clear(adapter: ThreadAdapter, block: dict, session_id: str) -> None:

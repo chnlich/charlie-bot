@@ -22,11 +22,12 @@ from typing import Any
 from urllib.parse import unquote
 
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
-from src.api.message_utils import master_done_input_event_ids
+from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import FILE_SERVER_MOUNTS
 from src.core.log_once import LazyStructlogLogger
+from src.core.master_trigger import trigger_master
 from src.core.models import SessionMetadata, utc_now
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
@@ -375,18 +376,10 @@ async def post_with_retry(
     except Exception as e:
       if attempt == attempts - 1:
         logger.error(
-            f"{name}_post_gave_up",
-            session=session_id,
-            **adapter.log_fields(address),
-            attempts=attempts,
-            error=str(e))
+            f"{name}_post_gave_up", session=session_id, **adapter.log_fields(address), attempts=attempts, error=str(e))
         return False
       logger.warning(
-          f"{name}_post_retry",
-          session=session_id,
-          **adapter.log_fields(address),
-          attempt=attempt + 1,
-          error=str(e))
+          f"{name}_post_retry", session=session_id, **adapter.log_fields(address), attempt=attempt + 1, error=str(e))
       await asyncio.sleep(_RETRY_DELAYS[attempt])
   raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
 
@@ -451,6 +444,116 @@ async def assert_thread_fresh(
 # This is the single measurement point for that budget.
 _REPLY_BUDGET_CHARS = 500
 
+# Nudge event content: the summon round ended without a reply, so the master is
+# asked once whether the thread should hear something.
+_NUDGE_TEMPLATE = (
+    "{platform} thread {link}: the round answering this mention ended without posting a reply\n"
+    "(no `{command}` call). Decide now: when the thread should hear something, post it with\n"
+    "`{command} --file <path>`; when there is nothing to say, end this round and the thread\n"
+    "gets a one-line notice pointing to this session.")
+
+# Thread-visible end state after a summon round and its nudge round both posted nothing.
+_NO_REPLY_NOTICE = (
+    "No reply was posted for this mention; the details are in the session log. "
+    "Mention me again for a thread answer.")
+
+# Session-log content of the notice marker; its notice payload names the summon it closes.
+_NO_REPLY_CONTENT = "This {platform} mention got no reply from its round or the nudge round; the thread was told so."
+
+
+def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> str:
+  """The thread link as the summon prompt states it; the platform's fallback ids when it has none."""
+  match = re.search(r"https?://\S+", (summon or {}).get("content") or "")
+  if match is not None:
+    return match.group(0)
+  return platform.thread_fallback.format(**block)
+
+
+async def audit_round(
+    adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
+    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+  """Act on one finished round whose input carried a summon block; True when it acted.
+
+  Reads the log for the round's summon: a reply answering it ends the audit. A
+  summon round without one gets a nudge (once: a second done for the same
+  summon finds the nudge event); a nudge round without one gets the thread
+  notice (once: the notice marker, persisted only after the post
+  succeeded, so a failed post leaves the boot audit a retry). A summon issued
+  under the marker contract (its prompt names no reply command) is outside
+  this audit.
+  """
+  platform = adapter.platform
+  summon_id = summon_of(target, input_event_id)
+  summon = event_by_id(events, summon_id)
+  if platform.reply_command not in ((summon or {}).get("content") or ""):
+    return False
+  if replied(platform, events, summon_id):
+    return False
+
+  if "nudge_of" not in target:
+    if nudged(platform, events, summon_id):
+      return False
+    content = _NUDGE_TEMPLATE.format(
+        platform=platform.display_name, link=thread_link(platform, summon, target), command=platform.reply_command)
+    nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
+    nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
+    nudge[platform.name]["nudge_of"] = summon_id
+    await session_mgr.persist_and_broadcast(session_id, nudge)
+    create_logged_task(
+        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
+        name=f"{platform.name}-nudge-{session_id}")
+    logger.info(
+        f"{platform.name}_reply_nudge",
+        session=session_id,
+        **adapter.log_fields(target),
+        summon_id=summon_id,
+        nudge_id=nudge["id"])
+    return True
+
+  if noticed(platform, events, summon_id):
+    return False
+  ok = await post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
+  if not ok:
+    return False  # the platform's post_gave_up log is the only trace; no marker, so the boot audit retries
+  await session_mgr.persist_and_broadcast(
+      session_id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": _NO_REPLY_CONTENT.format(platform=platform.display_name),
+          platform.notice_key: {
+              ET.INPUT_EVENT_ID: summon_id
+          },
+      })
+  ack_clear(adapter, target, session_id)
+  logger.info(f"{platform.name}_reply_notice", session=session_id, **adapter.log_fields(target), summon_id=summon_id)
+  return True
+
+
+async def deliver_done(
+    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+  """Round-end audit for one finished round; True when it nudged or posted the notice.
+
+  Called as a fire-and-forget task from ``persist_and_broadcast`` for every
+  ``master_done``; returns False without acting unless the round belongs to a
+  thread-bound session and answered a summon or a nudge. Guard-path dones
+  (src/api/chat.py) carry no input_event_id and browser-typed rounds carry no
+  summon block, so both leave the thread alone.
+  """
+  platform = adapter.platform
+  meta = await session_mgr.get_session(session_id)
+  if meta is None or getattr(meta, platform.origin_field) is None:
+    return False
+  input_event_ids = master_done_input_event_ids(done)
+  if not input_event_ids:
+    return False
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  # The round-end audit targets the same input the reply binding does: the
+  # newest thread-bearing one of the batch.
+  bound = newest_thread_input(platform, events, input_event_ids)
+  if bound is None:
+    return False
+  input_event_id, target = bound
+  return await audit_round(adapter, session_id, events, target, input_event_id, cfg, session_mgr)
+
 
 async def post_reply(
     adapter: ThreadAdapter, session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
@@ -499,7 +602,8 @@ async def post_reply(
   address = adapter.address_of(getattr(meta, platform.origin_field))
   bodies = chunk_text(text, platform.max_post_chars)
   for index, body in enumerate(bodies, start=1):
-    ok = await post_with_retry(adapter, address, body, session_id=session_id, files=files if index == len(bodies) else ())
+    ok = await post_with_retry(
+        adapter, address, body, session_id=session_id, files=files if index == len(bodies) else ())
     if not ok:
       raise ThreadReplyError(
           502, f"{platform.display_name} did not accept chunk {index} of {len(bodies)} after {len(_RETRY_DELAYS) + 1} "

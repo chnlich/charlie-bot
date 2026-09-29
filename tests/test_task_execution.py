@@ -224,6 +224,21 @@ def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
     return repo, origin
 
 
+def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> Path:
+    """The one work-kind run's worktree path (asserts exactly one work run)."""
+    work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
+    assert len(work) == 1 and work[0].worktree_path
+    return Path(work[0].worktree_path)
+
+
+def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
+    """The implement backend's side effect: commit marker.txt on the work branch."""
+    wt = work_run_worktree(tree, worker_id)
+    (wt / "marker.txt").write_text("implemented\n")
+    git(wt, "add", "-A")
+    git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+
+
 # ---------------------------------------------------------------------------
 # Manager turns: durable dispatch to actual execution
 # ---------------------------------------------------------------------------

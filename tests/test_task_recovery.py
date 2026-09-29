@@ -11,6 +11,7 @@ instance's data and owned processes stay untouched.
 from __future__ import annotations
 
 import asyncio
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -30,7 +31,7 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
-    git,
+    implement_marker_commit,
     init_repo_with_origin,
     install_backends,
     make_pm_build,
@@ -458,21 +459,11 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
     monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
     patch_instructions_content(monkeypatch)
 
-    def worktree() -> Path:
-        work = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"]
-        assert len(work) == 1 and work[0].worktree_path
-        return Path(work[0].worktree_path)
-
-    def implement() -> None:
-        wt = worktree()
-        (wt / "marker.txt").write_text("implemented\n")
-        git(wt, "add", "-A")
-        git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
-
     # The reviewer never pushes, so the landing check fails on every pass.
     install_backends(
         monkeypatch,
-        [SpawningScriptedBackend([result_event("implemented")], pre_run=implement),
+        [SpawningScriptedBackend([result_event("implemented")],
+                                 pre_run=partial(implement_marker_commit, tree, worker.id)),
          SpawningScriptedBackend([result_event("review ok")])],
         WORKER_BUILD_BACKEND_PATCH_TARGET)
 

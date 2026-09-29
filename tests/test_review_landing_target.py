@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
@@ -29,10 +30,12 @@ from tests.test_task_execution import (
     _adapter_with_silent_broadcast,
     build_env,
     git,
+    implement_marker_commit,
     init_repo_with_origin,
     install_backends,
     result_event,
     wait_for_terminal_run,
+    work_run_worktree,
 )
 
 
@@ -67,24 +70,14 @@ async def _reviewed_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   # The work-run launch judges the nearest-user authorization on the manager.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and add the marker.", actor="user")
 
-  def worktree() -> Path:
-    work = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work"]
-    assert len(work) == 1 and work[0].worktree_path
-    return Path(work[0].worktree_path)
-
-  def implement() -> None:
-    wt = worktree()
-    (wt / "marker.txt").write_text("implemented\n")
-    git(wt, "add", "-A")
-    git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
-
   def publish() -> None:
     if reviewer_pushes:
-      git(worktree(), "push", "-q", "origin", "HEAD:main")
+      git(work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
 
   install_backends(
       monkeypatch, [
-          SpawningScriptedBackend([result_event("implemented")], pre_run=implement),
+          SpawningScriptedBackend(
+              [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),
           SpawningScriptedBackend([result_event("review ok")], pre_run=publish),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")

@@ -899,6 +899,24 @@ async def arm_follow_trigger(
   return trigger
 
 
+async def consume_mention(
+    platform: ThreadPlatform, session_mgr: SessionManager, trigger_mgr: TriggerManager, session_id: str,
+    mention_id: str) -> None:
+  """The mention round consumes its own id: advance the watermark to it and cancel armed follows."""
+  meta = await session_mgr.get_session(session_id)
+  # A None here would silently skip the watermark advance, leaving the summon's own
+  # mention permanently unread; the invariant break fails loudly instead.
+  assert meta is not None, "unreachable: the summon path resolves the session just before this call"
+  watermark = getattr(meta, platform.watermark_field)
+  if watermark is None or platform.id_key(watermark) < platform.id_key(mention_id):
+    setattr(meta, platform.watermark_field, mention_id)
+    meta.updated_at = utc_now()
+    await session_mgr.save_metadata(meta)
+  cancelled = await cancel_armed_follow_triggers(platform, trigger_mgr, session_id)
+  if cancelled:
+    logger.info(f"{platform.name}_follow_trigger_cancelled_for_mention", session=session_id, cancelled=cancelled)
+
+
 # The file-service URL prefixes: the mounted mounts with the trailing slash the
 # rewrite gate matches on.
 _FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)

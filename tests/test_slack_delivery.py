@@ -14,6 +14,7 @@ from conftest import (
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
     SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET,
     SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET,
+    THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
     FakeSlackClient,
     build_slack_cfg,
     make_task_spawner,
@@ -45,7 +46,7 @@ from src.core.slack_listener import (
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
 _TEAM = "T_TEST"
-_RETRY_DELAYS_PATCH_TARGET = "src.core.slack_listener._RETRY_DELAYS"
+_RETRY_DELAYS_PATCH_TARGET = "src.core.thread_entry._RETRY_DELAYS"
 _QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/thread_reply_format.md, which names the reply
@@ -73,7 +74,8 @@ def _listener_seam(
   """Patch the slack_listener module seams; the seam wiring lives here and nowhere else.
 
   ``_bot_client`` always returns *client*. *tasks* feeds ``create_logged_task``'s
-  task spawner, *trigger* replaces ``trigger_master``, *queued* pins
+  task spawner (both seams the ack and nudge tasks are created through),
+  *trigger* replaces ``trigger_master``, *queued* pins
   ``master_cc.queued_user_event_ids``; each stays unpatched when its argument is
   None. Any further patch a test needs (retry delays, log capture) stays visible
   at the call site as a sibling context.
@@ -82,6 +84,7 @@ def _listener_seam(
     stack.enter_context(patch(SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client))
     if tasks is not None:
       stack.enter_context(patch(SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
+      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
     if trigger is not None:
       stack.enter_context(patch(SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET, trigger))
     if queued is not None:

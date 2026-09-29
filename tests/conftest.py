@@ -1250,6 +1250,12 @@ CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.cli.common.CLI_CONNECT_TOTA
 SLACK_LISTENER_TRIGGER_MASTER_PATCH_TARGET = "src.core.slack_listener.trigger_master"
 SLACK_LISTENER_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.slack_listener.create_logged_task"
 
+# Import-path patch target for the logged-task spawner the shared thread core
+# (src/core/thread_entry.py) fires: the round side's ack-clear and nudge tasks
+# are created there once the round side moves into the core, so mock setattrs
+# the stand-in on the src.core.thread_entry module attribute.
+THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.thread_entry.create_logged_task"
+
 # Import-path patch target for the Slack client factory every listener outbound path posts
 # through. src/core/slack_listener.py defines _bot_client at module scope, and its handlers
 # and reply/backfill helpers resolve the name at call time, so mock setattrs the stand-in

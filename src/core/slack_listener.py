@@ -49,7 +49,7 @@ from zoneinfo import ZoneInfo
 from src.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.core import event_types as ET
-from src.core import timeouts
+from src.core import thread_entry, timeouts
 from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
@@ -130,10 +130,6 @@ _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
     f"Per-message limit: {_MAX_POST_CHARS} characters. "
     "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
-
-# Waits between the retries of one Slack call; the answer stays readable in the
-# session log either way, so exhausting them logs an error rather than raising.
-_RETRY_DELAYS = (1.0, 4.0)
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
 
@@ -699,54 +695,6 @@ class SlackThreadAdapter(ThreadAdapter):
     return {"channel": address["channel_id"], "thread_ts": address["thread_ts"]}
 
 
-async def _post_with_retry(client: SlackClient, channel: str, thread_ts: str, text: str, *, session_id: str) -> bool:
-  """Post one thread reply, retrying on failure; True when Slack accepted it.
-
-  Exhausting the retries logs an error and returns False instead of raising:
-  the caller decides what a failed post means (a 502 to the CLI, a notice
-  left for the boot audit), and the event funnel is never broken by one.
-  """
-  attempts = len(_RETRY_DELAYS) + 1
-  for attempt in range(attempts):
-    try:
-      await client.post_message(channel, text, thread_ts=thread_ts)
-      return True
-    except Exception as e:
-      if attempt == attempts - 1:
-        logger.error(
-            "slack_post_gave_up",
-            session=session_id,
-            channel=channel,
-            thread_ts=thread_ts,
-            attempts=attempts,
-            error=str(e))
-        return False
-      logger.warning(
-          "slack_post_retry",
-          session=session_id,
-          channel=channel,
-          thread_ts=thread_ts,
-          attempt=attempt + 1,
-          error=str(e))
-      await asyncio.sleep(_RETRY_DELAYS[attempt])
-  raise AssertionError("unreachable: the last loop iteration returns (attempt == attempts - 1)")
-
-
-def _ack_clear(client: SlackClient, slack_block: dict, session_id: str) -> None:
-  """Clear the summon eye once its question is closed (reply landed, notice posted, or lost).
-
-  Fires the remove as its own logged task — a failure there only leaves one
-  stale eye plus a background_task_failed log and never touches the caller's
-  result. Skipped when the persisted slack block carries no mention_ts.
-  """
-  mention_ts = slack_block.get("mention_ts")
-  if mention_ts is None:
-    return
-  create_logged_task(
-      client.remove_reaction(slack_block["channel_id"], _ACCEPTANCE_REACTION, mention_ts),
-      name=f"slack-ack-clear-{session_id}")
-
-
 # ---------------------------------------------------------------------------
 # Reply: the master posts to its own thread
 # ---------------------------------------------------------------------------
@@ -903,13 +851,14 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   bound = newest_thread_input(SLACK, events, input_event_ids)
   answers = summon_of(bound[1], bound[0]) if bound is not None else None
   origin = meta.slack_origin
-  client = _bot_client()
+  adapter = SlackThreadAdapter(_bot_client())
+  address = adapter.address_of(origin)
   bodies = chunk_text(text, SLACK.max_post_chars)
   for index, body in enumerate(bodies, start=1):
-    ok = await _post_with_retry(client, origin.channel_id, origin.thread_ts, body, session_id=session_id)
+    ok = await thread_entry.post_with_retry(adapter, address, body, session_id=session_id)
     if not ok:
       raise SlackReplyError(
-          502, f"Slack did not accept chunk {index} of {len(bodies)} after {len(_RETRY_DELAYS) + 1} "
+          502, f"Slack did not accept chunk {index} of {len(bodies)} after {len(thread_entry._RETRY_DELAYS) + 1} "
           "attempts; nothing was persisted")
 
   await session_mgr.persist_and_broadcast(
@@ -923,7 +872,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
           },
       })
   if bound is not None:
-    _ack_clear(client, bound[1], session_id)
+    thread_entry.ack_clear(adapter, bound[1], session_id)
   over_budget = len(text) > _REPLY_BUDGET_CHARS
   logger.info(
       "slack_reply_posted",
@@ -960,8 +909,8 @@ def _thread_link(summon: dict | None, slack_block: dict) -> str:
 
 
 async def _audit_round(
-    session_id: str, events: list[dict], target: dict, input_event_id: str, cfg: CharlieBotConfig,
-    session_mgr: SessionManager, client: SlackClient) -> bool:
+    adapter: SlackThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
+    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
   """Act on one finished round whose input carried a slack block; True when it acted.
 
   Reads the log for the round's summon: a reply answering it ends the audit. A
@@ -1001,8 +950,7 @@ async def _audit_round(
 
   if noticed(SLACK, events, summon_id):
     return False
-  ok = await _post_with_retry(
-      client, target["channel_id"], target["thread_ts"], _NO_REPLY_NOTICE, session_id=session_id)
+  ok = await thread_entry.post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
   if not ok:
     return False  # slack_post_gave_up is logged; no marker, so the boot audit posts it later
   await session_mgr.persist_and_broadcast(
@@ -1013,7 +961,7 @@ async def _audit_round(
               ET.INPUT_EVENT_ID: summon_id
           },
       })
-  _ack_clear(client, target, session_id)
+  thread_entry.ack_clear(adapter, target, session_id)
   logger.info(
       "slack_reply_notice",
       session=session_id,
@@ -1045,7 +993,8 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
   if bound is None:
     return False
   input_event_id, target = bound
-  return await _audit_round(session_id, events, target, input_event_id, cfg, session_mgr, _bot_client())
+  return await _audit_round(SlackThreadAdapter(_bot_client()), session_id, events, target, input_event_id, cfg,
+                            session_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -1076,7 +1025,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
   sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
-  client = _bot_client()
+  adapter = SlackThreadAdapter(_bot_client())
   reported = 0
   for meta in sessions:
     if meta.slack_origin is None:
@@ -1099,8 +1048,8 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
               },
           })
       slack = ev["slack"]
-      await _post_with_retry(client, slack["channel_id"], slack["thread_ts"], _LOST_SUMMON_NOTICE, session_id=meta.id)
-      _ack_clear(client, slack, meta.id)
+      await thread_entry.post_with_retry(adapter, slack, _LOST_SUMMON_NOTICE, session_id=meta.id)
+      thread_entry.ack_clear(adapter, slack, meta.id)
       reported += 1
       logger.info(
           "slack_backfill_lost_summon",
@@ -1117,7 +1066,7 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
       if bound is None:
         continue
       done_input_id, target = bound
-      if await _audit_round(meta.id, events, target, done_input_id, cfg, session_mgr, client):
+      if await _audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
         reported += 1
         # The action appended an event the next done's predicates must see.
         events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)

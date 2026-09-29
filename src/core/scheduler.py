@@ -89,9 +89,30 @@ async def _cool_storage_handler() -> str:
   return summary
 
 
+async def _usage_ledger_handler() -> str:
+  """Built-in handler: capture this host's token usage into the usage ledger."""
+  # usage_ledger (sqlite3, token_tally) rides the handler like croniter: the
+  # M99 server import floor carries no ledger stack for a handler that may
+  # never fire.
+  from src.core.token_tally import capture_local
+  from src.core.usage_ledger import UsageLedger, default_ledger_path
+
+  loop = asyncio.get_running_loop()
+
+  def capture() -> dict[str, int]:
+    with UsageLedger(default_ledger_path()) as ledger:
+      return capture_local(ledger)
+
+  written = await loop.run_in_executor(None, capture)
+  summary = "; ".join(f"{source} {count}" for source, count in written.items())
+  log.info('usage_ledger_handler_done', sources=written)
+  return summary
+
+
 TASK_HANDLERS: dict[str, callable] = {
     'backup': _backup_handler,
     'cool_storage': _cool_storage_handler,
+    'usage_ledger': _usage_ledger_handler,
 }
 
 

@@ -6,6 +6,7 @@ cold rule reads only existing metadata fields, a dry run leaves every byte and e
 database page untouched, and one failing file or statement never stops the run.
 """
 
+import asyncio
 import json
 import os
 import sqlite3
@@ -59,6 +60,13 @@ def cool_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> CharlieBotConfi
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / CLAUDE_HOME))
   monkeypatch.setattr(storage_cool, "DEFAULT_OPENCODE_DB", tmp_path / "opencode.db")
   return build_cfg(tmp_path)
+
+
+@pytest.fixture(autouse=True)
+def no_real_usage_capture(monkeypatch: pytest.MonkeyPatch) -> None:
+  """No sweep reads the real home's ledger: the pre-sweep capture is a no-op unless
+  a test overrides it."""
+  monkeypatch.setattr(storage_cool, "_capture_usage_before_sweep", lambda: {})
 
 
 def write_session_meta(cfg: CharlieBotConfig, sid: str, meta: dict) -> Path:
@@ -316,6 +324,61 @@ def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path
 
 
 # ---------------------------------------------------------------------------
+# Usage ledger capture before deletion
+# ---------------------------------------------------------------------------
+
+
+def test_real_sweep_aborts_without_deleting_when_capture_fails(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The capture guards every deletion: if it raises, the sweep deletes nothing."""
+  cfg = cool_env
+  _seed_every_category(tmp_path, cfg)
+  sessions_before = tree_bytes_snapshot(cfg.sessions_dir)
+  claude_before = tree_bytes_snapshot(tmp_path / CLAUDE_HOME)
+  codex_before = tree_bytes_snapshot(tmp_path / CODEX_HOME)
+  db = tmp_path / "opencode.db"
+  db_bytes = db.read_bytes()
+
+  def failing_capture() -> dict[str, int]:
+    raise RuntimeError("ledger capture failed")
+
+  monkeypatch.setattr(storage_cool, "_capture_usage_before_sweep", failing_capture)
+
+  with pytest.raises(RuntimeError, match="ledger capture failed"):
+    run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert tree_bytes_snapshot(cfg.sessions_dir) == sessions_before
+  assert tree_bytes_snapshot(tmp_path / CLAUDE_HOME) == claude_before
+  assert tree_bytes_snapshot(tmp_path / CODEX_HOME) == codex_before
+  assert db.read_bytes() == db_bytes
+
+
+def test_real_sweep_captures_once_before_first_deletion_dry_run_never(
+    tmp_path: Path, cool_env: CharlieBotConfig, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A real sweep captures exactly once while every cold-session file is still
+  there; a dry run never captures."""
+  cfg = cool_env
+  _seed_every_category(tmp_path, cfg)
+  transport = master_run_dir(cfg, SID_COLD) / RAW_LOG_NAME
+  existed_at_capture: list[bool] = []
+
+  def recording_capture() -> dict[str, int]:
+    existed_at_capture.append(transport.exists())
+    return {"claude": 1}
+
+  monkeypatch.setattr(storage_cool, "_capture_usage_before_sweep", recording_capture)
+
+  run_cool_sweep(cfg=cfg, now=NOW)
+
+  assert existed_at_capture == [True]
+  assert not transport.exists()
+
+  existed_at_capture.clear()
+  run_cool_sweep(cfg=cfg, now=NOW, dry_run=True)
+  assert existed_at_capture == []
+
+
+# ---------------------------------------------------------------------------
 # Failure isolation
 
 # ---------------------------------------------------------------------------
@@ -327,6 +390,28 @@ def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(tmp_path: Path
 # ---------------------------------------------------------------------------
 # Migrated run references: retention-protected evidence
 # ---------------------------------------------------------------------------
+
+
+def test_usage_ledger_handler_summarizes_and_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The scheduler's daily capture returns one line per source and never swallows
+  a capture failure."""
+  from src.core.scheduler import TASK_HANDLERS
+
+  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
+  monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
+
+  summary = asyncio.run(TASK_HANDLERS["usage_ledger"]())
+
+  assert summary == "claude 3; opencode 7"
+  assert (tmp_path / "ledger.sqlite3").exists()
+
+  def failing(ledger: object) -> dict[str, int]:
+    raise RuntimeError("ledger capture failed")
+
+  monkeypatch.setattr("src.core.token_tally.capture_local", failing)
+  with pytest.raises(RuntimeError, match="ledger capture failed"):
+    asyncio.run(TASK_HANDLERS["usage_ledger"]())
 
 
 def test_run_reference_to_outside_path_is_ignored_not_created(cool_env: CharlieBotConfig) -> None:

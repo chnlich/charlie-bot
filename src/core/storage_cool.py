@@ -29,7 +29,9 @@ The sweep never compacts on its own: VACUUM of the opencode store is a manual
 Everything else a cold session holds — chat events, archives, thread events, fork
 references, artifacts, uploads, HTML, metadata — is left byte-identical, so no read
 path changes. Per session, per file, per statement the sweep is best effort: one
-failure logs and the run continues.
+failure logs and the run continues. The one ordering the sweep enforces globally: a
+real run first captures this host's token usage into the usage ledger and aborts
+without deleting anything if that capture raises; a dry run never captures.
 """
 
 import os
@@ -902,6 +904,18 @@ def _opencode_freelist_bytes(db: Path) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _capture_usage_before_sweep() -> dict[str, int]:
+  """Capture this host's token usage into the usage ledger; raises on failure so
+  the sweep aborts before it can delete any source it is about to read."""
+  # Deferred like the scheduler handlers defer their stacks: only a real sweep
+  # opens the ledger, and a --dry-run round opens nothing at all.
+  from src.core.token_tally import capture_local
+  from src.core.usage_ledger import UsageLedger, default_ledger_path
+
+  with UsageLedger(default_ledger_path()) as ledger:
+    return capture_local(ledger)
+
+
 def run_cool_sweep(
     *,
     dry_run: bool = False,
@@ -915,8 +929,9 @@ def run_cool_sweep(
   """Run one storage sweep over cold sessions and unreferenced backend records.
 
   Args:
-    dry_run: Report what would be freed without deleting anything or issuing any
-      SQL that changes the database; combines with *vacuum* by skipping it.
+    dry_run: Report what would be freed without deleting anything, capturing
+      usage, or issuing any SQL that changes the database; combines with
+      *vacuum* by skipping it.
     min_idle_days: Idle age a session must reach, on top of being archived, to
       count as cold.
     session_id: Limit the whole sweep to one session; the cold rule still applies,
@@ -932,6 +947,11 @@ def run_cool_sweep(
     Per-category counts and freed bytes, plus the opencode store's freelist bytes.
   """
   now = now or datetime.now(UTC)
+  if not dry_run:
+    # The ledger capture guards every deletion: it runs before the scan and any
+    # sweep step, and a failure propagates so the round reports an error and
+    # this sweep deletes nothing.
+    _capture_usage_before_sweep()
   facts = _scan_sessions(cfg, now, min_idle_days)
   references = _scan_references(cfg, facts)
   if session_id is not None:

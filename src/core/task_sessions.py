@@ -52,7 +52,7 @@ from src.core.control_events import (
     stable_task_id,
 )
 from src.core.event_types import is_real_user_message
-from src.core.json_utils import atomic_write_text
+from src.core.json_utils import atomic_write_text, load_model_meta
 from src.core.models import (
     AncestorRef,
     EventRef,
@@ -350,7 +350,7 @@ class TaskTreeManager:
     self.control_lock = asyncio.Lock()
     self.events = ControlEventSink(session_mgr)
     self.aliases = SessionAliasStore(cfg.sessions_dir)
-    self.runs = RunStore(cfg, self.control_lock, self.events, self.aliases)
+    self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events, self.aliases)
     # The run owner's terminal/stop/identity reads see the full fact history
     # (archived segments included), so a rotated acknowledgement never un-dones
     # itself and a repeat finish stays idempotent across rotation.
@@ -1203,10 +1203,7 @@ class TaskTreeManager:
 
   @staticmethod
   def _read_metadata_file(path) -> SessionMetadata | None:
-    try:
-      return SessionMetadata.model_validate_json(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-      return None
+    return load_model_meta(path, SessionMetadata)
 
   async def check_task_authorization(self, session_id: str, now: datetime | None = None) -> str:
     """The nearest-real-user-ancestor gate for a v2 task caller (takeoff_gate).

@@ -36,12 +36,13 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.core import event_types as ET
+from src.core.chat_events import chat_events_path
 from src.core.constants import BackendType
 from src.core.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
 from src.core.json_utils import atomic_write_text
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, ensure_utc, utc_now
-from src.core.ndjson import parse_ndjson_line
+from src.core.ndjson import parse_ndjson_file, parse_ndjson_line
 from src.core.run_token import b64url_decode, b64url_encode
 from src.core.session_aliases import SessionAliasStore
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -64,6 +65,11 @@ CURSOR_NAME = "agent.raw.cursor"
 # these names.
 DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
+
+# The per-session metadata filename (threads.py's node records, the task tree's
+# files). It homes here so the lean importers (the memory CLI's run-token path)
+# read it without threads.py's config chain; threads re-exports it.
+METADATA_NAME = "metadata.json"
 
 # Backend types whose event transport does not go through the shared base read
 # loop (opencode serves events over its own HTTP SSE; antigravity and tui-cli
@@ -673,12 +679,15 @@ class RunStore:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      sessions_dir: Path,
       control_lock: asyncio.Lock,
-      events: ControlEventSink,
+      events: ControlEventSink | None,
       aliases: SessionAliasStore,
   ) -> None:
-    self._cfg = cfg
+    """*sessions_dir* is the store's path root; *events* None wires a read-only
+    store (the CLI's run-token identity resolution): the reads fall back to the
+    live chat log's parse and the write paths fail loud on the missing sink."""
+    self._sessions_dir = sessions_dir
     self._lock = control_lock  # the one short control write lock, shared with the tree owner
     self._events = events
     self._aliases = aliases
@@ -724,7 +733,7 @@ class RunStore:
   # -- paths ---------------------------------------------------------------
 
   def runs_root(self, session_id: str) -> Path:
-    return self._cfg.sessions_dir / session_id / DATA_DIR_NAME / RUNS_DIR_NAME
+    return self._sessions_dir / session_id / DATA_DIR_NAME / RUNS_DIR_NAME
 
   def run_dir(self, session_id: str, run_id: str) -> Path:
     return self.runs_root(session_id) / run_id
@@ -833,7 +842,11 @@ class RunStore:
     tree owner installs the reader; the live log before that)."""
     if self._fact_history_loader is not None:
       return self._fact_history_loader(session_id)
-    return self._events.load_events(session_id)
+    if self._events is not None:
+      return self._events.load_events(session_id)
+    # Read-only store: the same live log the sink's SessionManager read serves,
+    # through the shared parse.
+    return parse_ndjson_file(chat_events_path(self._sessions_dir / session_id))
 
   def run_display_state(self, run: RunRecord, events: list[dict], host_boot: datetime) -> str:
     """One run's UI-facing state, derived only from facts.

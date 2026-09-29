@@ -182,7 +182,6 @@ async def test_cross_family_without_completed_round_starts_fresh_silently(
   assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
 
 
-
 # ---------------------------------------------------------------------------
 # The note itself and the v1 turn-start notes
 # ---------------------------------------------------------------------------
@@ -201,8 +200,7 @@ def test_context_reset_note_assembles_history_note_and_instruction() -> None:
   with_goal = (
       "[Context reset: this task's managed instructions changed. The task is: ship the parser. "
       f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
-  assert context_reset_note(
-      "this task's managed instructions changed", task_goal="ship the parser") == with_goal
+  assert context_reset_note("this task's managed instructions changed", task_goal="ship the parser") == with_goal
 
 
 @pytest.mark.asyncio
@@ -236,8 +234,7 @@ async def test_cross_family_switch_note_carries_the_instruction(
 
 
 @pytest.mark.asyncio
-async def test_dropped_resume_note_carries_the_instruction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dropped_resume_note_carries_the_instruction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The could-not-be-resumed path (same producer, transcript gone): the note
   names the dropped resume and still carries the instruction."""
   cfg = _rule_cfg(tmp_path)
@@ -295,8 +292,7 @@ async def test_switch_back_to_producer_before_sending_resumes_without_note(
 
 
 @pytest.mark.asyncio
-async def test_same_login_model_switch_resumes_without_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_same_login_model_switch_resumes_without_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Two cc-claude options over one login directory (the claude-sonnet-5 to
   claude-opus-5 shape) share one continuation domain: the held conversation
   resumes across the model switch and no note is added."""
@@ -323,6 +319,7 @@ async def test_same_login_model_switch_resumes_without_note(
   assert log[0]["prompt"] == "hello"
   events = [c.args[1] for c in item.callbacks.persist_and_broadcast.await_args_list]
   assert [e for e in events if e["type"] == ET.RESUME_CONTEXT_DROPPED] == []
+
 
 # ---------------------------------------------------------------------------
 # Through the consumer: round-end persistence of id + producer

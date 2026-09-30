@@ -14,7 +14,11 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import backend_option
+from conftest import (
+    TOKEN_TALLY_CAPTURE_LOCAL_PATCH_TARGET,
+    USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET,
+    backend_option,
+)
 
 from src.core import storage_cool
 from src.core.config import CharlieBotConfig
@@ -397,8 +401,8 @@ def test_usage_ledger_handler_summarizes_and_propagates(tmp_path: Path, monkeypa
   a capture failure."""
   from src.core.scheduler import TASK_HANDLERS
 
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
-  monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
+  monkeypatch.setattr(USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET, lambda: tmp_path / "ledger.sqlite3")
+  monkeypatch.setattr(TOKEN_TALLY_CAPTURE_LOCAL_PATCH_TARGET, lambda ledger: {"claude": 3, "opencode": 7})
 
   summary = asyncio.run(TASK_HANDLERS["usage_ledger"]())
 
@@ -408,7 +412,7 @@ def test_usage_ledger_handler_summarizes_and_propagates(tmp_path: Path, monkeypa
   def failing(ledger: object) -> dict[str, int]:
     raise RuntimeError("ledger capture failed")
 
-  monkeypatch.setattr("src.core.token_tally.capture_local", failing)
+  monkeypatch.setattr(TOKEN_TALLY_CAPTURE_LOCAL_PATCH_TARGET, failing)
   with pytest.raises(RuntimeError, match="ledger capture failed"):
     asyncio.run(TASK_HANDLERS["usage_ledger"]())
 

@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS fallback_sessions (
   session TEXT NOT NULL,
   PRIMARY KEY (record_id, session)
 );
+CREATE TABLE IF NOT EXISTS ledger_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
@@ -131,6 +135,15 @@ SELECT source, model, account, kind,
 FROM usage u
 {_COUNTED_WHERE_SQL}
 GROUP BY source, model, account, kind
+"""
+
+# The currently-excluded fallback rows. The fold diffs this set against the memo's
+# and stands down to the full pass on any difference: retirement cannot be patched
+# incrementally, so any set change re-prices the page from the table.
+_EXCLUDED_FALLBACK_IDS_SQL = """
+SELECT u.record_id FROM usage u WHERE u.kind = 'fallback' AND EXISTS (
+  SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+  WHERE fs.record_id = u.record_id)
 """
 
 
@@ -229,14 +242,100 @@ class _Sum:
 
 @dataclass
 class _ModelSum:
-  """Per-(source, model) accumulator: every counted row plus the fallback split."""
+  """Per-(source, model) accumulator: every counted row plus the fallback split.
+
+  ``native_first`` is the earliest dated day across the group's NATIVE rows alone,
+  so the source's native start can be re-derived after a fold without re-reading
+  the table.
+  """
 
   sums: _Sum = field(default_factory=_Sum)
   fallback_calls: int = 0
   fallback_output: int = 0
   first: str = ""
   last: str = ""
+  native_first: str = ""
   accounts: dict[str, _Sum] = field(default_factory=dict)
+
+
+def _fold_grouped_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row | dict) -> None:
+  """Fold one grouped pass row (calls carries the group's record count) into the accs."""
+  kind = RecordKind(row["kind"])
+  acc = accs.setdefault((row["source"], row["model"]), _ModelSum())
+  acc.sums.add(row)
+  first, last = row["first"], row["last"]  # NULL when the group has no dated ts
+  if first and (not acc.first or first < acc.first):
+    acc.first = first
+  if last and (not acc.last or last > acc.last):
+    acc.last = last
+  if kind is RecordKind.FALLBACK:
+    acc.fallback_calls += row["calls"]
+    acc.fallback_output += row["output"]
+  if kind is RecordKind.NATIVE and first and (not acc.native_first or first < acc.native_first):
+    acc.native_first = first
+  acc.accounts.setdefault(row["account"], _Sum()).add(row)
+
+
+def _fold_raw_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row) -> None:
+  """Fold one raw usage row (the delta read's shape, one record) into the accs."""
+  day = row["ts"][:10] or None  # the grouped pass's NULLIF(SUBSTR(ts, 1, 10), '')
+  grouped = {
+      k: row[k] for k in ("source", "model", "account", "kind", "in_fresh", "cache_write", "cache_read", "output")
+  }
+  grouped.update(calls=1, first=day, last=day)
+  _fold_grouped_row(accs, grouped)
+
+
+def _rows_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> list[LedgerRow]:
+  """The page rows from the accumulators, sorted by total descending with the keys as tiebreakers."""
+  rows = [
+      LedgerRow(
+          source=source,
+          model=model,
+          in_fresh=acc.sums.in_fresh,
+          cache_write=acc.sums.cache_write,
+          cache_read=acc.sums.cache_read,
+          output=acc.sums.output,
+          calls=acc.sums.calls,
+          total=acc.sums.total,
+          first=acc.first,
+          last=acc.last,
+          fallback_calls=acc.fallback_calls,
+          fallback_output=acc.fallback_output,
+          accounts=sorted(
+              (
+                  LedgerAccount(name=name, calls=s.calls, output=s.output, total=s.total)
+                  for name, s in acc.accounts.items()),
+              key=lambda a: (-a.total, a.name)),
+      )
+      for (source, model), acc in accs.items()
+  ]
+  rows.sort(key=lambda r: (-r.total, r.source, r.model))
+  return rows
+
+
+def _native_starts_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> dict[str, str]:
+  """Each source's earliest native day across its groups; fallback-only sources are absent."""
+  starts: dict[str, str] = {}
+  for (source, _model), acc in accs.items():
+    if acc.native_first and (source not in starts or acc.native_first < starts[source]):
+      starts[source] = acc.native_first
+  return starts
+
+
+@dataclass
+class _RowsMemo:
+  """The page-rows read's served state, one entry for the one production ledger path."""
+
+  path: str
+  identity: tuple[int, int]
+  generation: int
+  rows: list[LedgerRow]
+  native_starts: dict[str, str]
+  accs: dict[tuple[str, str], _ModelSum]
+  rowcount: int
+  excluded_fallback: frozenset[str]
+  rewrite_epoch: int
 
 
 def default_ledger_path() -> Path:
@@ -267,10 +366,20 @@ class UsageLedger:
   # The (size, mtime_ns) gate is the same witness class the capture gates store
   # (``capture_gates``), and an mtime_ns collision across two real writes is the
   # accepted risk those gates already carry.
-  _rows_memo: tuple[str, tuple[int, int], int, list[LedgerRow], dict[str, str]] | None = None
+  #
+  # A miss whose only change is this process's own inserts extends the memo by the
+  # row delta (``_try_fold_rows``) instead of re-running the full grouped pass --
+  # the page's own capture makes that the common shape under active turns. Any
+  # other change falls back to the full pass: an in-place value rewrite bumps the
+  # ledger's rewrite epoch (``_rewrite_epoch``), which the memo stores and the
+  # fold compares -- a re-captured record upserts the same values and bumps
+  # nothing; a foreign writer's inserts and every deletion fail the row-count
+  # witness; WAL silences the stat pair and stores no memo.
+  _rows_memo: _RowsMemo | None = None
   _write_generation: int = 0
 
   def __init__(self, path: Path) -> None:
+    self._inserted_ids: set[str] = set()
     self._path = Path(path)
     self._path.parent.mkdir(parents=True, exist_ok=True)
     self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
@@ -331,8 +440,35 @@ class UsageLedger:
     for the collector's skip decision.
     """
     captured_at = datetime.now(UTC).isoformat()
+    # Two witnesses ride every write, and the row-delta fold consumes both. (1) The
+    # inserted ids: an upsert that lands on an existing record_id updates that row in
+    # place, so only the ids absent here are new rows -- the fold's delta. (2) The
+    # value witness: an upsert that changes an existing row's aggregated values
+    # invalidates every aggregate built before it, and no delta can see the change --
+    # the fold's poison. A re-captured record upserts the same values (the parse is
+    # deterministic), so the witness stamps the poison only on a real change. The
+    # existing rows come back batched, 900 ids per read, not one query per record:
+    # the capture's wall is the page's wall.
+    existing: dict[str, tuple] = {}
+    ids = [rec.record_id for rec in records]
+    for start in range(0, len(ids), 900):  # SQLite's host-parameter ceiling
+      chunk = ids[start:start + 900]
+      marks = ",".join("?" * len(chunk))
+      for row in self._conn.execute(
+          f"SELECT record_id, kind, source, model, account, ts, in_fresh, cache_write, cache_read,"
+          f" output FROM usage WHERE record_id IN ({marks})", chunk):
+        existing[row["record_id"]] = tuple(row)[1:]
+    rewrote = False
     with self._conn:
       for rec in records:
+        new_values = (
+            rec.kind.value, rec.source, rec.model, rec.account, rec.ts, rec.in_fresh, rec.cache_write, rec.cache_read,
+            rec.output)
+        old_values = existing.get(rec.record_id)
+        if old_values is None:
+          self._inserted_ids.add(rec.record_id)
+        elif old_values != new_values:
+          rewrote = True
         self._conn.execute(
             _UPSERT_USAGE_SQL, (
                 rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
@@ -345,6 +481,12 @@ class UsageLedger:
           for session in rec.sessions:
             self._conn.execute(
                 "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
+      if rewrote:
+        # A value rewrite invalidates every aggregate built before it in any process,
+        # so the witness lives in the database, not in this process.
+        self._conn.execute(
+            "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
+            " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
@@ -360,6 +502,16 @@ class UsageLedger:
     st = self._path.stat()
     return (st.st_size, st.st_mtime_ns)
 
+  def _rewrite_epoch(self) -> int:
+    """The ledger's in-place value-rewrite counter, one row in ledger_meta.
+
+    The counter lives in the database, not in the process: a foreign writer's
+    value rewrite must poison a memo this process built, and no process-local
+    witness can see it.
+    """
+    row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'rewrite_epoch'").fetchone()
+    return 0 if row is None else int(row["value"])
+
   def _journal_mode(self) -> str:
     return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
 
@@ -368,7 +520,9 @@ class UsageLedger:
 
     Repeat reads while the ledger file sits byte-still since the last read are
     served from the class-level memo (see its comment for the validity
-    witnesses); the grouped pass below runs only on a memo miss.
+    witnesses); the grouped pass below runs only on a memo miss. A miss caused
+    by this process's own inserts extends the memo by the row delta instead
+    (``_try_fold_rows``); the full pass is the fallback for every other miss.
 
     Rows and accounts are both sorted by total descending, with the group keys as
     tiebreakers so the same ledger content always yields the same ordering.
@@ -382,58 +536,99 @@ class UsageLedger:
     identity = self._file_stat_identity()
     generation = UsageLedger._write_generation
     memo = UsageLedger._rows_memo
-    if (memo is not None and memo[0] == str(self._path) and memo[1] == identity and memo[2] == generation and
-        self._journal_mode() != "wal"):
-      return memo[3], memo[4]
+    wal = self._journal_mode() == "wal"
+    if (memo is not None and memo.path == str(self._path) and memo.identity == identity and
+        memo.generation == generation and not wal):
+      return memo.rows, memo.native_starts
+    if memo is not None and memo.path == str(self._path) and not wal:
+      folded = self._try_fold_rows(memo, identity, generation)
+      if folded is not None:
+        return folded
+    # The full pass below covers every insert this instance tracked, tracked or not.
+    self._inserted_ids.clear()
     accs: dict[tuple[str, str], _ModelSum] = {}
-    native_starts: dict[str, str] = {}
     for row in self._conn.execute(_MODEL_ROWS_SQL):
       # The grouped rows enumerate every kind stored (retirement only ever drops
       # kind='fallback' rows): an unknown stored value raises on this read's own
       # pass instead of surfacing silently dropped from the page.
-      kind = RecordKind(row["kind"])
-      acc = accs.setdefault((row["source"], row["model"]), _ModelSum())
-      acc.sums.add(row)
-      first, last = row["first"], row["last"]  # NULL when the group has no dated ts
-      if first and (not acc.first or first < acc.first):
-        acc.first = first
-      if last and (not acc.last or last > acc.last):
-        acc.last = last
-      if kind == RecordKind.FALLBACK:
-        acc.fallback_calls += row["calls"]
-        acc.fallback_output += row["output"]
-      if kind == RecordKind.NATIVE and first and (row["source"] not in native_starts or
-                                                  first < native_starts[row["source"]]):
-        native_starts[row["source"]] = first
-      acc.accounts.setdefault(row["account"], _Sum()).add(row)
-    rows = [
-        LedgerRow(
-            source=source,
-            model=model,
-            in_fresh=acc.sums.in_fresh,
-            cache_write=acc.sums.cache_write,
-            cache_read=acc.sums.cache_read,
-            output=acc.sums.output,
-            calls=acc.sums.calls,
-            total=acc.sums.total,
-            first=acc.first,
-            last=acc.last,
-            fallback_calls=acc.fallback_calls,
-            fallback_output=acc.fallback_output,
-            accounts=sorted(
-                (
-                    LedgerAccount(name=name, calls=s.calls, output=s.output, total=s.total)
-                    for name, s in acc.accounts.items()),
-                key=lambda a: (-a.total, a.name)),
-        )
-        for (source, model), acc in accs.items()
-    ]
-    rows.sort(key=lambda r: (-r.total, r.source, r.model))
+      _fold_grouped_row(accs, row)
+    rows = _rows_from_accs(accs)
+    native_starts = _native_starts_from_accs(accs)
     # Store only a read the file provably covered: the pre-read stat must survive
     # to the post-read check (a writer in between would leave the read consistent
     # with the pre-write state), and never under WAL, whose commits the stat pair
     # cannot see.
     if (generation == UsageLedger._write_generation and self._file_stat_identity() == identity and
         self._journal_mode() != "wal"):
-      UsageLedger._rows_memo = (str(self._path), identity, generation, rows, native_starts)
+      excluded = frozenset(row["record_id"] for row in self._conn.execute(_EXCLUDED_FALLBACK_IDS_SQL))
+      rowcount = self._conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
+      UsageLedger._rows_memo = _RowsMemo(
+          path=str(self._path),
+          identity=identity,
+          generation=generation,
+          rows=rows,
+          native_starts=native_starts,
+          accs=accs,
+          rowcount=rowcount,
+          excluded_fallback=excluded,
+          rewrite_epoch=self._rewrite_epoch())
+    return rows, native_starts
+
+  def _try_fold_rows(self, memo: _RowsMemo, identity: tuple[int, int],
+                     generation: int) -> tuple[list[LedgerRow], dict[str, str]] | None:
+    """Extend the memo's aggregates by the rows this process inserted since it was built.
+
+    Returns the folded rows, or None when any fold witness fails -- the caller
+    then re-runs the full pass, which is correct against every ledger state. The
+    delta reads only the tracked inserted ids, so its cost scales with what the
+    capture wrote, not with the table. A foreign writer's inserts are invisible
+    to this process's tracking, so the row-count witness refuses the fold and
+    the full pass prices them.
+    """
+    if generation == memo.generation or self._rewrite_epoch() != memo.rewrite_epoch:
+      return None
+    rowcount = self._conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
+    if rowcount != memo.rowcount + len(self._inserted_ids):
+      return None  # rows moved under us beyond this instance's own inserts
+    delta: list[sqlite3.Row] = []
+    ids = sorted(self._inserted_ids)
+    for start in range(0, len(ids), 900):  # SQLite's host-parameter ceiling
+      chunk = ids[start:start + 900]
+      marks = ",".join("?" * len(chunk))
+      delta.extend(
+          self._conn.execute(
+              f"""SELECT source, model, account, kind, ts, in_fresh, cache_write, cache_read, output
+              FROM usage u WHERE u.record_id IN ({marks}) AND NOT EXISTS (
+                SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+                WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)""", chunk))
+    accs = memo.accs
+    for row in delta:
+      _fold_raw_row(accs, row)
+    if any(row["kind"] == RecordKind.NATIVE.value for row in delta):
+      # A new native session can retire a fallback row the memo counted; the
+      # touched groups cannot be patched incrementally, so the fold stands down
+      # and the full pass re-aggregates them.
+      excluded_now = frozenset(row["record_id"] for row in self._conn.execute(_EXCLUDED_FALLBACK_IDS_SQL))
+      if excluded_now != memo.excluded_fallback:
+        return None
+    else:
+      excluded_now = memo.excluded_fallback
+    rows = _rows_from_accs(accs)
+    native_starts = _native_starts_from_accs(accs)
+    # The same coverage rule the full pass stores under: the fold's reads must
+    # have seen exactly the state between the memo and now, with no writer since.
+    if (generation != UsageLedger._write_generation or self._file_stat_identity() != identity or
+        self._journal_mode() == "wal"):
+      return None
+    UsageLedger._rows_memo = _RowsMemo(
+        path=memo.path,
+        identity=identity,
+        generation=generation,
+        rows=rows,
+        native_starts=native_starts,
+        accs=accs,
+        rowcount=rowcount,
+        excluded_fallback=excluded_now,
+        rewrite_epoch=memo.rewrite_epoch)
+    self._inserted_ids.clear()
     return rows, native_starts

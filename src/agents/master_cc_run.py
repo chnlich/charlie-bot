@@ -473,17 +473,13 @@ def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
   session-scoped CLIs the master runs resolve to it wherever the shell cd's to
   (``src.cli.common.resolve_session_id``). ``claude_supervisor_env`` strips any
   inherited value first, so a server started from inside another session's
-  environment hands down no stale id.
+  environment hands down no stale id. PATH is the inherited one: it already
+  carries the ``charliebot`` shim (``src.core.agent_environment``), and a venv
+  bin directory on it would give uv an install target.
   """
   env = claude_supervisor_env(os.environ)
   env[SESSION_ID_ENV_VAR] = session_id
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
-
-  venv_bin = cfg.charlie_bot_repo / ".venv" / "bin"
-  if venv_bin.is_dir():
-    existing_path = env.get("PATH")
-    env["PATH"] = str(venv_bin) if not existing_path else f"{venv_bin}{os.pathsep}{existing_path}"
-
   return env
 
 

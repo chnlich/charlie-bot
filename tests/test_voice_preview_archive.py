@@ -124,7 +124,6 @@ class FakeLiveBackend(TranscriptionBackend):
     self._partial_text = partial_text
     self._gate = gate
     self._early_after_chunks = early_after_chunks
-    self.chunks: list[bytes] = []
     self.closed = False
 
   async def transcribe(
@@ -136,8 +135,7 @@ class FakeLiveBackend(TranscriptionBackend):
   ) -> AsyncIterator[TranscriptEvent]:
     try:
       seen = 0
-      async for chunk in audio:
-        self.chunks.append(chunk)
+      async for _chunk in audio:
         seen += 1
         if self._early_after_chunks is not None and seen >= self._early_after_chunks:
           yield TranscriptEvent(kind="final", text=self.final_text)

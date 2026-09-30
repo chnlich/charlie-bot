@@ -30,6 +30,7 @@ from src.core import event_types as ET
 from src.core.improve_command import load_loop_state
 from src.core.models import SessionMetadata, TaskSpec
 from src.core.runs import RUN_EVENTS_NAME
+from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     OP_HEADERS,
@@ -50,6 +51,12 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
   return install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event(text)]) for text in outcomes],
       WORKER_BUILD_BACKEND_PATCH_TARGET)
+
+
+async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> None:
+  """The operator's first user message; its dispatch runs the manager's takeoff turn."""
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
 
 
 async def _start_loop(
@@ -102,8 +109,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
 
   async def _wait_done(client, body):
     child_id = body["child_session_id"]
@@ -190,8 +196,7 @@ async def test_live_goal_change_affects_next_iteration(
   # script it through the registry builder so no external process starts.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   with make_api_client(cfg, session_mgr, tree) as client:
     resp = client.post(
         "/api/internal/improve",
@@ -329,8 +334,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
   recorder.install(monkeypatch)
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
 
   async def wait_done(_client, body):
     # Both iterations terminal and the one final report delivered, while the
@@ -382,8 +386,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   assert claude_accounts.select(cfg, FABLE_MODEL) is None
 
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   body, child_id = await _start_loop(
       cfg,
       session_mgr,
@@ -455,8 +458,7 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
       session_mgr,
@@ -513,8 +515,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words", "iter three words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
       session_mgr,
@@ -584,8 +585,7 @@ async def test_iteration_report_header_carries_the_judgment(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   _body, _child_id = await _start_loop(
       cfg,
       session_mgr,
@@ -642,8 +642,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
       session_mgr,
@@ -680,8 +679,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   _worker_backends(monkeypatch, ["iter one words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
-  await tree.dispatch.admit_input(
-      manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
+  await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
       session_mgr,

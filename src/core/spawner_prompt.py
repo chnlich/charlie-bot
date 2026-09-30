@@ -2,7 +2,7 @@
 
 This is the v1 (legacy session) worker assembly. It stays a compatibility caller during
 the task-tree migration; the v2 task assembly lives in :mod:`src.core.task_prompts`. The
-section sources are shared: the common execution rules moved to ``prompts/task_base.md``
+section sources are shared: the common execution rules live in ``prompts/task_base.md``
 (their single maintained home) and this loader merges that file's sections with
 ``prompts/worker.md``'s, so both assemblies read one set of canonical sections.
 """

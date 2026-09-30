@@ -249,9 +249,9 @@ async def trigger_master(
       )
       return
 
-    # The scheduled-task duties (weekly recycle, firing-report prefix) moved to
+    # The scheduled-task duties (weekly recycle, firing-report prefix) live in
     # the bound node's dispatched wake (apply_bound_wake_duties); this legacy
-    # writer has no scheduled branch left.
+    # writer has no scheduled branch.
     await run_message_with_resume_recovery(
         cfg,
         session_meta,

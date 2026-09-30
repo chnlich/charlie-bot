@@ -16,6 +16,7 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
     bind_deps_managers,
     create_scheduled_node,
 )
@@ -52,7 +53,7 @@ def scheduler_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   bind_deps_managers(monkeypatch, tree, session_mgr)
   # The scheduler reloads the process config on every fire; pin the reload to
   # the synthetic home's in-memory cfg.
-  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   scheduler = Scheduler(cfg, session_mgr)
   return cfg, session_mgr, tree, scheduler, monkeypatch
 

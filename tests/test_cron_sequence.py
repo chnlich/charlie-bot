@@ -433,10 +433,7 @@ async def reopen_task_node(tree: TaskTreeManager, session_id: str, request_id: s
 
 
 def blocked_reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:
-  return [
-      e for e in tree.events.load_events(manager_id)
-      if e.get("type") == ET.CHILD_REPORT and e.get("outcome") == "blocked"
-  ]
+  return [e for e in _child_reports(tree, manager_id) if e.get("outcome") == "blocked"]
 
 
 @pytest.mark.asyncio
@@ -601,11 +598,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   else:
     pytest.fail("the repaired close never landed")
   assert len(builds) == 1
-  kinds = [
-      (e.get("outcome"), str(e.get("summary"))[:60])
-      for e in tree.events.load_events(manager.id)
-      if e.get("type") == ET.CHILD_REPORT
-  ]
+  kinds = [(e.get("outcome"), str(e.get("summary"))[:60]) for e in _child_reports(tree, manager.id)]
   assert len(kinds) == 2
   assert sorted(o for o, _ in kinds) == ["blocked", "completed"]
   assert tree.task_state(leaf.id) == "completed"

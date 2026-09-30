@@ -440,10 +440,15 @@ class IterationJudgment:
 
 
 async def _judge_iteration(
-    tree: TaskTreeManager, child_id: str, run_id: str, iteration: int,
-    wt_path: Path, loop_dir: Path, tip_before: str,
+    tree: TaskTreeManager,
+    child_id: str,
+    run_id: str,
+    iteration: int,
+    wt_path: Path,
+    loop_dir: Path,
+    tip_before: str,
 ) -> IterationJudgment:
-    """The mechanical iteration judgment: report validity over the git delta.
+  """The mechanical iteration judgment: report validity over the git delta.
 
     Same rules as the legacy controller (report file + commit count over the
     worktree tip this iteration started from), sourced from the Run's shared
@@ -453,66 +458,87 @@ async def _judge_iteration(
     ordering), so the placeholder the controller writes never flips it: the
     verdict is invalid with the reason "no report file".
     """
-    report_path = loop_dir / f'iter_{iteration:04d}.md'
-    tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
-    del diffstat
-    if not await asyncio.to_thread(report_path.exists):
-        # The worker wrote no report: the verdict above is final (the fallback
-        # below never flips it). Fall back to the worker's own closing words,
-        # as the legacy controller did, and leave the same marked fallback file.
-        fallback = f"Iteration {iteration} finished without a report file."
-        events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
-        if events_path.is_file():
-            text = await asyncio.to_thread(
-                improve_command._extract_iteration_summary,
-                improve_command._newest_first_events(events_path), iteration, "finished")
-            if text:
-                fallback = text
-        await asyncio.to_thread(
-            report_path.write_text, improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
-        return IterationJudgment(
-            summary=fallback, report_valid=False, invalid_reason="no report file",
-            tip=tip_after, commits_added=commits_added, report_path=report_path)
-    report_valid, invalid_reason = await improve_command._iter_report_validity(
-        report_path, iteration, commits_added)
-    if report_valid:
-        summary = (await asyncio.to_thread(report_path.read_text))[:500]
-    else:
-        summary = improve_command._invalid_iteration_summary(
-            iteration, invalid_reason, commits_added, tip_before, tip_after, report_path)
+  report_path = loop_dir / f'iter_{iteration:04d}.md'
+  tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
+  del diffstat
+  if not await asyncio.to_thread(report_path.exists):
+    # The worker wrote no report: the verdict above is final (the fallback
+    # below never flips it). Fall back to the worker's own closing words,
+    # as the legacy controller did, and leave the same marked fallback file.
+    fallback = f"Iteration {iteration} finished without a report file."
+    events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
+    if events_path.is_file():
+      text = await asyncio.to_thread(
+          improve_command._extract_iteration_summary, improve_command._newest_first_events(events_path), iteration,
+          "finished")
+      if text:
+        fallback = text
+    await asyncio.to_thread(report_path.write_text, improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
     return IterationJudgment(
-        summary=summary, report_valid=report_valid, invalid_reason=invalid_reason,
-        tip=tip_after, commits_added=commits_added, report_path=report_path)
+        summary=fallback,
+        report_valid=False,
+        invalid_reason="no report file",
+        tip=tip_after,
+        commits_added=commits_added,
+        report_path=report_path)
+  report_valid, invalid_reason = await improve_command._iter_report_validity(report_path, iteration, commits_added)
+  if report_valid:
+    summary = (await asyncio.to_thread(report_path.read_text))[:500]
+  else:
+    summary = improve_command._invalid_iteration_summary(
+        iteration, invalid_reason, commits_added, tip_before, tip_after, report_path)
+  return IterationJudgment(
+      summary=summary,
+      report_valid=report_valid,
+      invalid_reason=invalid_reason,
+      tip=tip_after,
+      commits_added=commits_added,
+      report_path=report_path)
 
 
 async def _broadcast_iteration_progress(
-    tree: TaskTreeManager, session_id: str, child_id: str, run_id: str,
-    iteration: int, iterations: int, status: str, summary: str, loop_dir: Path,
+    tree: TaskTreeManager,
+    session_id: str,
+    child_id: str,
+    run_id: str,
+    iteration: int,
+    iterations: int,
+    status: str,
+    summary: str,
+    loop_dir: Path,
 ) -> None:
-    """The per-iteration progress event: chat visibility only, never an input.
+  """The per-iteration progress event: chat visibility only, never an input.
 
     The per-iteration master input is the delivered child report
     (:func:`_deliver_iteration_report`), not this event; the final sequence
     result reaches the manager as input through the same owner.
     """
-    report_path = loop_dir / f'iter_{iteration:04d}.md'
-    await tree.sessions.deliver_to_successor(session_id, {
-        "type": ET.IMPROVE_ITERATION_COMPLETED,
-        "iteration": iteration,
-        "total_iterations": iterations,
-        "status": status,
-        "summary": summary[:200],
-        "report_path": str(report_path),
-        "child_session_id": child_id,
-        "run_id": run_id,
-    })
+  report_path = loop_dir / f'iter_{iteration:04d}.md'
+  await tree.sessions.deliver_to_successor(
+      session_id, {
+          "type": ET.IMPROVE_ITERATION_COMPLETED,
+          "iteration": iteration,
+          "total_iterations": iterations,
+          "status": status,
+          "summary": summary[:200],
+          "report_path": str(report_path),
+          "child_session_id": child_id,
+          "run_id": run_id,
+      })
 
 
 async def _deliver_iteration_report(
-    tree: TaskTreeManager, session_id: str, child_id: str, loop_id: int, run: RunRecord,
-    iteration: int, iterations: int, outcome: str, judgment: IterationJudgment,
+    tree: TaskTreeManager,
+    session_id: str,
+    child_id: str,
+    loop_id: int,
+    run: RunRecord,
+    iteration: int,
+    iterations: int,
+    outcome: str,
+    judgment: IterationJudgment,
 ) -> None:
-    """The ONE per-iteration report: the parent's wake and audit input.
+  """The ONE per-iteration report: the parent's wake and audit input.
 
     Delivered through the common report owner right after the chat progress
     event; a freshly created report wakes the parent's next serialized turn
@@ -524,35 +550,40 @@ async def _deliver_iteration_report(
     its final report carries the error, so a missed audit never passes
     silently.
     """
-    from src.core.task_completion import RUN_REF_PREFIX
-    meta = await tree.load_meta(child_id)
-    if meta is None or not meta.task_parent_id:
-        log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
-        return
-    events = tree.runs.load_events_sync(child_id)
-    finished = next(
-        (e for e in reversed(events)
-         if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run.id), None)
-    if finished is None:
-        raise RuntimeError(
-            f"improve loop {loop_id} iteration {iteration} (run {run.id}) has no "
-            "run_finished event to source its report from")
-    header = (f"[Improve loop {loop_id} · iteration {iteration}/{iterations}] "
-              f"report_valid={'true' if judgment.report_valid else 'false'}")
-    if not judgment.report_valid:
-        header += f" [invalid: {judgment.invalid_reason}]"
-    header += (f" tip={judgment.tip} commits_added={judgment.commits_added} "
-               f"report={judgment.report_path} Audit per the improve-goal skill.")
-    await tree.dispatch.deliver_child_report(
-        child_id,
-        source_event={"id": f"improve-iteration:{finished['id']}"},
-        outcome=outcome,
-        summary=f"{header}\n\n{judgment.summary}",
-        result_refs=[f"loop:{loop_id}", f"{RUN_REF_PREFIX}{run.id}"],
-        recipient=meta.task_parent_id,
-    )
-    log.info("improve_sequence_iteration_report_delivered", session=session_id, child=child_id,
-             loop_id=loop_id, iteration=iteration, outcome=outcome)
+  from src.core.task_completion import RUN_REF_PREFIX
+  meta = await tree.load_meta(child_id)
+  if meta is None or not meta.task_parent_id:
+    log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
+    return
+  events = tree.runs.load_events_sync(child_id)
+  finished = next((e for e in reversed(events) if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run.id), None)
+  if finished is None:
+    raise RuntimeError(
+        f"improve loop {loop_id} iteration {iteration} (run {run.id}) has no "
+        "run_finished event to source its report from")
+  header = (
+      f"[Improve loop {loop_id} · iteration {iteration}/{iterations}] "
+      f"report_valid={'true' if judgment.report_valid else 'false'}")
+  if not judgment.report_valid:
+    header += f" [invalid: {judgment.invalid_reason}]"
+  header += (
+      f" tip={judgment.tip} commits_added={judgment.commits_added} "
+      f"report={judgment.report_path} Audit per the improve-goal skill.")
+  await tree.dispatch.deliver_child_report(
+      child_id,
+      source_event={"id": f"improve-iteration:{finished['id']}"},
+      outcome=outcome,
+      summary=f"{header}\n\n{judgment.summary}",
+      result_refs=[f"loop:{loop_id}", f"{RUN_REF_PREFIX}{run.id}"],
+      recipient=meta.task_parent_id,
+  )
+  log.info(
+      "improve_sequence_iteration_report_delivered",
+      session=session_id,
+      child=child_id,
+      loop_id=loop_id,
+      iteration=iteration,
+      outcome=outcome)
 
 
 async def _deliver_sequence_report(
@@ -564,28 +595,27 @@ async def _deliver_sequence_report(
     summary: str,
     previous_summaries: list[str],
 ) -> None:
-    """The ONE final sequence result, delivered through the common report owner.
+  """The ONE final sequence result, delivered through the common report owner.
 
     The child itself stays open: its evidence (the iteration Runs and loop
     reports) remains, and the parent — or the operator — closes it through the
     common closure guards.
     """
-    meta = await tree.load_meta(child_id)
-    if meta is None or not meta.task_parent_id:
-        log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
-        return
-    source = tree.dispatch.report_source_event(child_id, "improve child")
-    detail = ("\n\nIteration summaries:\n" + "\n\n".join(previous_summaries)) if previous_summaries else ""
-    await tree.dispatch.deliver_child_report(
-        child_id,
-        source_event=source,
-        outcome=outcome,
-        summary=f"[Improve loop {loop_id}] {summary}{detail}",
-        result_refs=[f"loop:{loop_id}"],
-        recipient=meta.task_parent_id,
-    )
-    log.info("improve_sequence_report_delivered", session=session_id, child=child_id,
-             loop_id=loop_id, outcome=outcome)
+  meta = await tree.load_meta(child_id)
+  if meta is None or not meta.task_parent_id:
+    log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
+    return
+  source = tree.dispatch.report_source_event(child_id, "improve child")
+  detail = ("\n\nIteration summaries:\n" + "\n\n".join(previous_summaries)) if previous_summaries else ""
+  await tree.dispatch.deliver_child_report(
+      child_id,
+      source_event=source,
+      outcome=outcome,
+      summary=f"[Improve loop {loop_id}] {summary}{detail}",
+      result_refs=[f"loop:{loop_id}"],
+      recipient=meta.task_parent_id,
+  )
+  log.info("improve_sequence_report_delivered", session=session_id, child=child_id, loop_id=loop_id, outcome=outcome)
 
 
 # ---------------------------------------------------------------------------
@@ -594,9 +624,11 @@ async def _deliver_sequence_report(
 
 
 async def reconcile_interrupted_sequences(
-    cfg: CharlieBotConfig, tree: TaskTreeManager, boot_pid: int | None = None,
+    cfg: CharlieBotConfig,
+    tree: TaskTreeManager,
+    boot_pid: int | None = None,
 ) -> int:
-    """Mark every improve loop whose controller died with the old process.
+  """Mark every improve loop whose controller died with the old process.
 
     The loop CONTINUATION is an explicit non-goal (the existing improve
     boundary): a restart never resumes the loop. What recovery owes is
@@ -608,42 +640,45 @@ async def reconcile_interrupted_sequences(
     A loop whose state says running under THIS process's pid has a live
     controller and is left alone.
     """
-    pid = boot_pid if boot_pid is not None else os.getpid()
-    repaired = 0
-    sessions_dir = cfg.sessions_dir
-    if not sessions_dir.is_dir():
-        return 0
-    for session_dir in sorted(sessions_dir.iterdir()):
-        if not session_dir.is_dir():
-            continue
-        loops_dir = session_dir / "loops"
-        if not loops_dir.is_dir():
-            continue
-        session_id = session_dir.name
-        for loop_id in await asyncio.to_thread(improve_command._find_state_loop_ids_sync, loops_dir):
-            state = await improve_command.load_loop_state(session_id, loop_id, cfg)
-            if state is None or state.status != "running":
-                continue
-            if state.server_pid == pid:
-                continue  # this process's own controller is alive
-            state.status = "interrupted"
-            await improve_command.save_loop_state(session_id, state, cfg)
-            active = improve_command._active_loop_path(session_id, cfg)
-            if await asyncio.to_thread(active.exists):
-                await asyncio.to_thread(active.unlink)
-            repaired += 1
-            log.warning("improve_sequence_interrupted", session=session_id, loop_id=loop_id,
-                        recorded_pid=state.server_pid)
-            meta = await tree.load_meta(session_id)
-            if meta is not None:
-                await tree.sessions.deliver_to_successor(session_id, {
-                    "type": ET.IMPROVE_FAILED,
-                    "goal": state.goal,
-                    "error": (
+  pid = boot_pid if boot_pid is not None else os.getpid()
+  repaired = 0
+  sessions_dir = cfg.sessions_dir
+  if not sessions_dir.is_dir():
+    return 0
+  for session_dir in sorted(sessions_dir.iterdir()):
+    if not session_dir.is_dir():
+      continue
+    loops_dir = session_dir / "loops"
+    if not loops_dir.is_dir():
+      continue
+    session_id = session_dir.name
+    for loop_id in await asyncio.to_thread(improve_command._find_state_loop_ids_sync, loops_dir):
+      state = await improve_command.load_loop_state(session_id, loop_id, cfg)
+      if state is None or state.status != "running":
+        continue
+      if state.server_pid == pid:
+        continue  # this process's own controller is alive
+      state.status = "interrupted"
+      await improve_command.save_loop_state(session_id, state, cfg)
+      active = improve_command._active_loop_path(session_id, cfg)
+      if await asyncio.to_thread(active.exists):
+        await asyncio.to_thread(active.unlink)
+      repaired += 1
+      log.warning("improve_sequence_interrupted", session=session_id, loop_id=loop_id, recorded_pid=state.server_pid)
+      meta = await tree.load_meta(session_id)
+      if meta is not None:
+        await tree.sessions.deliver_to_successor(
+            session_id, {
+                "type":
+                    ET.IMPROVE_FAILED,
+                "goal":
+                    state.goal,
+                "error":
+                    (
                         f"Improve loop {loop_id} was interrupted by a server restart; the loop is "
                         "NOT resumed automatically (the existing improve boundary). Its state is "
                         "marked interrupted, the stale lock is cleared, and the launched "
                         "iteration's terminal fact was reconciled. Restart the loop explicitly "
                         "if you want it to continue."),
-                })
-    return repaired
+            })
+  return repaired

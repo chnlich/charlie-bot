@@ -302,8 +302,8 @@ class ChatEventStore:
         # save_chat_event is the single append funnel and every whole-file
         # rewrite (archive rotation, fork, delete) drops the cache in the same
         # flow, so a warm cache is the file's parsed truth — the same trust
-        # load_chat_events_sync's consumers (projection, usage, finalize
-        # folds) already place in it. parse_ndjson_range's islice counts
+        # load_chat_events_sync's consumers (projection, usage) already
+        # place in it. parse_ndjson_range's islice counts
         # physical lines instead, so the disk read both re-parses the whole
         # prefix per call (the recap's per-divider cost) and skews its window
         # by any malformed lines the cached count never charged.

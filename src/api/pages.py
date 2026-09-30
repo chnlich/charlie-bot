@@ -11,6 +11,7 @@ import os
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import types
 from collections.abc import Awaitable, Callable
@@ -39,7 +40,7 @@ from src.api.sessions import (
     project_worker_threads,
     row_schedule_fields,
 )
-from src.core import direct_pass_child
+from src.core import direct_pass_child, trace_merge_child
 from src.core.buildinfo import read_repo_head_sha
 from src.core.config import CharlieBotConfig, configured_access_key, get_config
 from src.core.constants import (
@@ -147,6 +148,12 @@ _merge_tasks: dict[str, asyncio.Task] = {}
 # stack for a pool that may never build.
 _merge_executor_instance: concurrent.futures.ProcessPoolExecutor | None = None
 _MERGE_POOL_WORKERS = min(4, os.cpu_count() or 2)
+
+# The single-trace build children are the same big-memory work the merge pool's
+# max_workers capped, so they wait on the same bound; without it a burst of
+# distinct merged-view requests spawns unbounded parses against the session's
+# memory-capped cgroup.
+_merge_build_gate = threading.BoundedSemaphore(_MERGE_POOL_WORKERS)
 
 
 def _perfetto_merge_cache_dir() -> Path:
@@ -524,13 +531,33 @@ async def _cached_merge(paths: list[Path], slim: bool) -> Path:
 
   async def build(temp_path: Path) -> None:
     if len(paths) == 1:
-      await asyncio.get_running_loop().run_in_executor(
-          _merge_executor(),
-          _trace_merge().merge_traces, paths, temp_path, slim)
+      await asyncio.get_running_loop().run_in_executor(None, _build_single_trace_merge, paths, temp_path, slim)
       return
     await _build_multi_trace_merge(paths, slim, temp_path)
 
   return await _cached_gzip_build(_merge_cache_key(paths, slim, "merge"), build)
+
+
+def _build_single_trace_merge(paths: list[Path], out_path: Path, slim: bool) -> None:
+  """Build the single-trace merged artifact in its own lean child process.
+
+  The child is a fresh address space per build — the property the merge pool's
+  ``max_tasks_per_child=1`` exists for (a build's freed arenas stay mapped in a
+  reused worker, the next build OOMs the cgroup) — without the spawn worker's
+  per-build re-import of this process's ``__main__``, the full server module the
+  M99 floor prices (~0.6 s on every first view; a forkserver child pays it too).
+  The gate keeps the concurrency bound the pool's max_workers was.
+  """
+  argv = trace_merge_child.parent_argv(paths, out_path, slim, str(Path(__file__).resolve().parents[2]))
+  with _merge_build_gate:
+    proc = subprocess.Popen(argv, stderr=subprocess.PIPE)
+    _, stderr = proc.communicate()
+  detail = stderr.decode(errors="replace").strip()
+  if proc.returncode == trace_merge_child.EXIT_OK:
+    return
+  if proc.returncode == trace_merge_child.EXIT_NOT_A_TRACE:
+    raise _trace_merge().NotATraceError(detail)
+  raise RuntimeError(f"merged-trace build child failed rc={proc.returncode}: {detail}")
 
 
 async def _build_multi_trace_merge(paths: list[Path], slim: bool, out_path: Path) -> None:

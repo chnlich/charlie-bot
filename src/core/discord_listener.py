@@ -119,10 +119,6 @@ _ACCEPTANCE_EMOJI = "👀"
 # posted piece stays under it without a fallback split.
 _MAX_POST_CHARS = 2000
 
-# The command the reply-format contract (prompts/thread_reply_format.md) names
-# for posting a reply. A summon prompt embeds that contract, so a summon whose
-# content names the command was issued under it; the round-end audit enforces
-# only that contract and leaves rounds issued under the earlier one alone.
 _REPLY_COMMAND = "charliebot discord reply"
 
 # The command the summon prompt and the follow wake name for reading the
@@ -171,11 +167,6 @@ def summon_session_id(guild_id: str, thread_id: str) -> str:
 # Prompt texts
 # ---------------------------------------------------------------------------
 
-# The summon prompt's platform line. The shared reply-format contract
-# (prompts/thread_reply_format.md) defers the platform-specific facts to
-# this line: platform name, reply command, per-message limit, and how
-# linked pages reach readers (the shared ``LINKED_PAGES_LINE``). Another
-# platform's entrypoint states its own line and reuses the contract unchanged.
 _PLATFORM_LINE = (
     f"Platform: Discord. Reply command: `{_REPLY_COMMAND} --file <path>`. "
     f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")

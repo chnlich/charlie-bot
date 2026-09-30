@@ -1319,7 +1319,7 @@ class SessionManager:
 
   async def list_sessions_readonly(
       self,
-      status: SessionStatus | None = None,
+      status: SessionStatus | None,
       starred: bool | None = None,
       scheduled: bool | None = None,
       include_running_status: bool = False,

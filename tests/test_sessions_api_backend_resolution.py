@@ -22,7 +22,7 @@ from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager
 
 
-async def _seed_parent(session_mgr: SessionManager, *, backend: str = OPUS_BACKEND_ID) -> str:
+async def _seed_parent(session_mgr: SessionManager, *, backend: str) -> str:
   parent = await session_mgr.create_session(CreateSessionRequest(name="Parent"), backend=backend)
   events_path = session_mgr.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)

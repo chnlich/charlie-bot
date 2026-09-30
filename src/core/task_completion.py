@@ -149,8 +149,8 @@ class TaskCompletionManager:
         self,
         session_id: str,
         *,
-        exclude_run_ids: set[str] | None = None,
-        exclude_input_ids: set[str] | None = None,
+        exclude_run_ids: set[str] | None,
+        exclude_input_ids: set[str] | None,
     ) -> list[str]:
         """The closure blockers of one task, from current facts (lock held by caller).
 

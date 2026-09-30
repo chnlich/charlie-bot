@@ -416,7 +416,7 @@ def _newest_reading(*readings: RateLimitReading | None) -> RateLimitReading | No
   return max(present, key=lambda reading: reading.at) if present else None
 
 
-def headroom(label: str, model: str | None, now: datetime | None = None) -> float:
+def headroom(label: str, model: str | None, now: datetime | None) -> float:
   """Remaining share of the tightest window, 0 while a rejection's reset is ahead.
 
   An account nobody has read yet scores a full window: it is tried first and

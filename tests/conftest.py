@@ -2828,3 +2828,31 @@ def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
 
   monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
   return read_paths
+
+
+class NotificationSpy:
+  """Records the tree notifications the sink emits, capturing what an observer
+  can read from the tree projection at signal time: the notified row and its
+  parent row, each ``None`` when the projection does not hold it yet."""
+
+  def __init__(self, tree: TaskTreeManager) -> None:
+    self.calls: list[tuple[str, str | None]] = []
+    self.rows_at_signal: list[dict] = []
+    self._tree = tree
+    self._orig = tree.events.notify_tree_changed
+
+  async def _spy(self, session_id: str, event_type: str | None) -> None:
+    self.calls.append((session_id, event_type))
+    meta = await self._tree.load_meta(session_id)
+    index = await self._tree._get_index()
+    row = self._tree.session_row(index, session_id) if meta is not None else None
+    parent_row = (self._tree.session_row(index, row.task_parent_id) if row is not None and row.task_parent_id else None)
+    self.rows_at_signal.append(
+        {
+            "node": row.model_dump() if row else None,
+            "parent": parent_row.model_dump() if parent_row else None,
+        })
+    await self._orig(session_id, event_type)
+
+  def install(self) -> None:
+    self._tree.events.notify_tree_changed = self._spy  # type: ignore[method-assign]

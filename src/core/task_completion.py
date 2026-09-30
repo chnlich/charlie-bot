@@ -900,15 +900,13 @@ class TaskCompletionManager:
         active Runs, open children, and any input that arrived after the
         acknowledgement keep blocking.
         """
-        from src.core.run_token import CallerIdentity
         from src.core.task_sessions import (
             TaskConflictError,
-            TaskForbiddenError,
             TaskInvalidError,
+            require_operator,
         )
 
-        if not isinstance(caller, CallerIdentity) or not caller.is_operator:
-            raise TaskForbiddenError("acknowledging task input requires operator credentials")
+        require_operator(caller, "acknowledging task input requires operator credentials")
         if not request_id:
             raise TaskInvalidError("request_id is required for input acknowledgement")
         if not input_ids:
@@ -1108,15 +1106,13 @@ class TaskCompletionManager:
         history. Duplicate operation ids — including retries after later
         close/reopen events — replay the original outcome.
         """
-        from src.core.run_token import CallerIdentity
         from src.core.task_sessions import (
             TaskConflictError,
-            TaskForbiddenError,
             TaskInvalidError,
+            require_operator,
         )
 
-        if not isinstance(caller, CallerIdentity) or not caller.is_operator:
-            raise TaskForbiddenError("task reopen requires operator credentials")
+        require_operator(caller, "task reopen requires operator credentials")
         if not request_id:
             raise TaskInvalidError("request_id is required for reopen")
         tree = self._tree

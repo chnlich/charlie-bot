@@ -1,5 +1,7 @@
 import asyncio
 import contextlib
+import importlib
+import io
 import json
 import os
 import re
@@ -1996,6 +1998,25 @@ def patched_cli_post(cfg: object, argv: list[str], **post_kw: object) -> Iterato
 def schedule_trigger_argv(message: str, *extra: str) -> list[str]:
   """The schedule_trigger CLI argv the CLI tests share: session s1, --max-wait 60, --message."""
   return ["schedule_trigger", "--session", "s1", "--max-wait", "60", "--message", message, *extra]
+
+
+def run_reply_stdin_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str,
+    readback: dict[str, Any]) -> None:
+  """Drive one platform reply CLI's ``--file -`` arm with the reply piped on stdin.
+
+  The reply mains share their transport (src.cli.common's read_reply_text and
+  post_internal_api, the one-JSON-line readback print), so the stdin contract
+  is asserted once here per verb: the piped text is the body's ``text``, the
+  readback prints unmodified, and the post names the platform's endpoint.
+  """
+  cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
+  monkeypatch.setattr("sys.stdin", io.StringIO("piped reply\n"))
+  with patched_cli_post(cfg, [verb, "reply", "--file", "-"], return_value=make_json_response(readback)) as post_mock:
+    importlib.import_module(f"src.cli.{verb}").main()
+  assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
+  assert post_mock.call_args.kwargs["json"]["text"] == "piped reply\n"
+  assert json.loads(capsys.readouterr().out) == readback
 
 
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:

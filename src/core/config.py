@@ -473,10 +473,10 @@ class PublishConfig(BaseModel):
   model_config = ConfigDict(extra='forbid')
 
   # Publish lane — the pair the outbound-link rewrite consumes (src/core/publish.py):
-  # dir is the directory the host's 443 static lane serves, and public_base_url
-  # is the base of the links readers outside the operator's devices open. Unconfigured
-  # (either one) makes publish unavailable; the reply path then refuses instead of
-  # falling back to a server-port link.
+  # dir is the directory the host serves (a `tailscale serve` path, or a host-local
+  # static server a serve rule proxies to), and public_base_url is the base of the
+  # links readers outside the operator's devices open. Unconfigured (either one) makes
+  # publish unavailable; the reply path then refuses instead of falling back to a server-port link.
   dir: Path | None = None
   public_base_url: str | None = None
 

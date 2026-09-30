@@ -34,8 +34,15 @@ Examples:
 ## Publish Lane
 
 Links that reach readers beyond the operator come from `charliebot publish <artifact-path>`: the
-command copies the file into the publish directory and prints the published URL, and the Slack
-reply path rewrites the file-server URLs of an outbound reply to published ones on its own. The
+command copies the file to `<publish.dir>/<token>/<basename>` and prints the published URL,
+`<publish.public_base_url>/<token>/<basename>`. The token is 22 random URL-safe characters, fresh
+per publish, so publishing the same file twice gives two links and overwrites nothing. The host
+serves the publish directory publicly, so anyone holding a link opens it, and a link cannot be
+guessed from the page name. Publishing refuses unless `<publish.dir>/index.html` exists: without
+it the host's static server would list the directory, and that listing would expose every link.
+
+The Slack reply path publishes every file-server URL of an outbound reply through this lane on
+its own and swaps in the published URLs; a publish refusal refuses the whole reply. The
 server-port links above serve the operator's own review in the browser and the chat embeds.
 
 ## Behavior

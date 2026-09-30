@@ -2,17 +2,15 @@
 
   charliebot publish <artifact-path>
 
-Copies the file into the configured publish directory (mode 0644, same-name
-overwrite) through the one publish action (src/core/publish.py) and prints the
-published URL on stdout. A differing file replaced under the same name is reported
-as a note naming the replaced file. A preflight failure — publish lane
-unconfigured, artifact missing — prints a JSON error naming the missing item on
-stderr and exits 1; nothing is published and no URL falls back to the server port.
+Copies the file to ``<publish.dir>/<token>/<basename>`` — a fresh unguessable
+directory per call, so nothing is overwritten — through the one publish action
+(src/core/publish.py) and prints the published URL on stdout. A preflight
+failure — publish lane unconfigured or its index.html missing, artifact missing
+— prints a JSON error naming the missing item on stderr and exits 1; nothing is
+published and no URL falls back to the server port.
 """
 
 import argparse
-import json
-import sys
 
 from src.cli import common as cli_common
 from src.cli.help_formatter import CliHelpFormatter
@@ -34,8 +32,6 @@ def main() -> None:
   except PublishError as e:
     cli_common.exit_error(str(e))
   print(result.url)
-  if result.overwrote:
-    print(json.dumps({"note": f"overwrote a differing file with the same name: {result.path}"}), file=sys.stderr)
 
 
 if __name__ == "__main__":

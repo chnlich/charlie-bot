@@ -6,7 +6,8 @@ NVIDIA GPUs; it needs the gpu-voice dependency group, which only GPU hosts insta
 every torch/transformers import here is lazy and branch-local.
 
 Decoding is offline: transcribe_pcm_offline takes a complete recording, segments it with
-the bundle's VAD, and decodes each segment in one shot. There is no incremental state.
+the bundle's VAD, and decodes each segment in one shot over the bundle's recognizer pool.
+There is no incremental state.
 """
 
 from __future__ import annotations
@@ -52,6 +53,17 @@ SEGMENT_DECODE_PAD_SAMPLES = 6_400
 # a replayed sentence's opening.
 OFFLINE_VAD_FEED_SAMPLES = 2048
 
+# The CPU decode pool's shape on this host (8 logical CPUs, the M113 protocol in
+# docs/perf_baseline.md, the worst on-disk recording): four recognizers at two ONNX
+# threads each decode the 102 s corpus in 18.3 s quiet / 23.5 s contended where one
+# recognizer at four threads reads 22.9 / 36.3 s, because the autoregressive decoder
+# steps interleave across instances where one session's intra-op barriers stall. The
+# worker cap bounds the resident weight copies (~1.1 GB each) and the boot build
+# (~3.5 s each); threads = cpu / workers keeps the pool at one thread per logical CPU.
+_DECODE_WORKER_CAP = 4
+_DECODE_WORKERS = max(1, min(_DECODE_WORKER_CAP, (os.cpu_count() or 1) // 2))
+_DECODE_THREADS = max(1, min(_DECODE_WORKER_CAP, (os.cpu_count() or 1) // _DECODE_WORKERS))
+
 QWEN3_ASR_DIR_NAME = "sherpa-onnx-qwen3-asr-0.6B-int8-2026-03-25"
 QWEN3_ASR_ARCHIVE_NAME = f"{QWEN3_ASR_DIR_NAME}.tar.bz2"
 QWEN3_ASR_URL = (
@@ -85,10 +97,15 @@ class VoiceModelPaths:
 
 @dataclass
 class _SpeechModelBundle:
-  recognizer: object
+  # One recognizer per pool worker; the CPU engine builds _DECODE_WORKERS of them,
+  # the GPU engine exactly one (concurrent generate calls serialize on the device).
+  recognizers: tuple[object, ...]
   vad_config: object
-  decode_lock: threading.Lock
-  # The engine whose decoder actually produced `recognizer` — 'sherpa' after a GPU
+  # One lock per recognizer: a pool worker owns its instance for a decode, and the
+  # same-instance lock keeps every other caller (the hotwords bundle's replay
+  # decodes, the GPU engine's request thread) off a busy recognizer.
+  decode_locks: tuple[threading.Lock, ...]
+  # The engine whose decoder actually produced the pool — 'sherpa' after a GPU
   # fallback even when cfg.voice.engine is 'qwen3_hf' — and the model id behind it.
   engine: str
   model_id: str
@@ -284,7 +301,8 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   segment decodes in one shot over the padded window the pipeline has always used
   (5 s of pause before the segment, 0.4 s tail after, the left edge clipped against
   the previous segment's right edge so windows never overlap), and the segment texts
-  join in order. No state survives the call.
+  join in window order — the windows fan out round-robin over the bundle's recognizer
+  pool, so decode order never reaches the transcript. No state survives the call.
   """
   if len(pcm_bytes) % 2 != 0:
     raise ValueError("invalid PCM frame: byte length must be even")
@@ -292,11 +310,28 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   # The buffer is sized to the whole recording, so the detector's internal buffer
   # cannot wrap no matter how long the input is.
   vad = _open_vad(bundle.vad_config, samples.size / SAMPLE_RATE + 10)
-  texts: list[str] = []
-  for _start, _end, left, right in offline_decode_windows(vad, samples):
-    text = _decode_samples(bundle, samples[left:right].astype(np.float32) / 32768.0)
-    if text:
-      texts.append(text)
+  windows = offline_decode_windows(vad, samples)
+  texts: list[str] = [""] * len(windows)
+  errors: list[BaseException] = []
+
+  def _decode_slice(worker: int) -> None:
+    try:
+      for index in range(worker, len(windows), len(bundle.recognizers)):
+        _start, _end, left, right = windows[index]
+        texts[index] = _decode_samples(bundle, samples[left:right].astype(np.float32) / 32768.0, worker)
+    except BaseException as exc:  # re-raised on the caller's thread below
+      errors.append(exc)
+
+  threads = [
+      threading.Thread(target=_decode_slice, args=(worker,))
+      for worker in range(min(len(bundle.recognizers), len(windows)))
+  ]
+  for thread in threads:
+    thread.start()
+  for thread in threads:
+    thread.join()
+  if errors:
+    raise errors[0]
   return _join_segments(*texts)
 
 
@@ -417,21 +452,24 @@ def create_sherpa_bundle(paths: VoiceModelPaths, hotwords: str = "") -> _SpeechM
   # Dense 20s Chinese segments decode to ~140 tokens, so the 128-token sherpa
   # default can truncate; 256 new tokens plus a 1024-position KV cache covers
   # the 20s max VAD segment with headroom.
-  recognizer = sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
-      conv_frontend=str(paths.qwen3_conv_frontend),
-      encoder=str(paths.qwen3_encoder),
-      decoder=str(paths.qwen3_decoder),
-      tokenizer=str(paths.qwen3_tokenizer),
-      num_threads=4,
-      sample_rate=SAMPLE_RATE,
-      max_total_len=1024,
-      max_new_tokens=256,
-      hotwords=hotwords,
-  )
+  def _build_recognizer() -> object:
+    return sherpa_onnx.OfflineRecognizer.from_qwen3_asr(
+        conv_frontend=str(paths.qwen3_conv_frontend),
+        encoder=str(paths.qwen3_encoder),
+        decoder=str(paths.qwen3_decoder),
+        tokenizer=str(paths.qwen3_tokenizer),
+        num_threads=_DECODE_THREADS,
+        sample_rate=SAMPLE_RATE,
+        max_total_len=1024,
+        max_new_tokens=256,
+        hotwords=hotwords,
+    )
+
+  recognizers = tuple(_build_recognizer() for _ in range(_DECODE_WORKERS))
   return _SpeechModelBundle(
-      recognizer=recognizer,
+      recognizers=recognizers,
       vad_config=_create_vad_config(paths),
-      decode_lock=threading.Lock(),
+      decode_locks=tuple(threading.Lock() for _ in recognizers),
       engine="sherpa",
       model_id=QWEN3_ASR_DIR_NAME,
   )
@@ -451,9 +489,9 @@ def create_qwen3_hf_bundle(cfg: CharlieBotConfig, paths: VoiceModelPaths) -> _Sp
   model = AutoModelForMultimodalLM.from_pretrained(snapshot, dtype=torch.bfloat16)
   model.to("cuda").eval()
   return _SpeechModelBundle(
-      recognizer=_Qwen3HfRecognizer(processor, model),
+      recognizers=(_Qwen3HfRecognizer(processor, model),),
       vad_config=_create_vad_config(paths),
-      decode_lock=threading.Lock(),
+      decode_locks=(threading.Lock(),),
       engine="qwen3_hf",
       model_id=cfg.voice.model_id,
   )
@@ -511,14 +549,15 @@ class _Qwen3HfRecognizer:
     stream.result.text = self._processor.decode(generated_ids, return_format="transcription_only")[0]
 
 
-def _decode_samples(bundle: _SpeechModelBundle, samples: np.ndarray) -> str:
+def _decode_samples(bundle: _SpeechModelBundle, samples: np.ndarray, worker: int) -> str:
   if samples.size == 0:
     return ""
   contiguous = np.ascontiguousarray(samples, dtype=np.float32)
-  with bundle.decode_lock:
-    stream = bundle.recognizer.create_stream()
+  with bundle.decode_locks[worker]:
+    recognizer = bundle.recognizers[worker]
+    stream = recognizer.create_stream()
     stream.accept_waveform(SAMPLE_RATE, contiguous)
-    bundle.recognizer.decode_stream(stream)
+    recognizer.decode_stream(stream)
     text = stream.result.text
   return " ".join(text.strip().split())
 
@@ -535,13 +574,17 @@ WARMUP_FREQUENCY_HZ = 440.0
 
 
 def warm_up_bundle(bundle: _SpeechModelBundle) -> None:
-  """Decode one deterministic 0.5 s 440 Hz sine through the bundle and discard the text.
+  """Decode one deterministic 0.5 s 440 Hz sine through every pool instance.
 
-  Serves server._provision_speech_models: it moves the first-decode cold cost (CUDA
-  kernel init + memory allocation, measured ~5 s) from the first real request to
-  boot. The decoded text carries no signal — a same-shape sine pays the identical
-  cold cost — so it is dropped; this is not a transcription correctness check.
+  Serves server._provision_speech_models: it moves each instance's first-decode
+  cold cost (CUDA kernel init + memory allocation on the GPU engine, measured ~5 s;
+  ONNX arena allocation on the CPU engine, measured ~0.5 s) from the first real
+  request to boot. The decoded text carries no signal — a same-shape sine pays the
+  identical cold cost — so it is dropped; this is not a transcription correctness
+  check.
   """
   positions = np.arange(int(SAMPLE_RATE * WARMUP_SECONDS), dtype=np.float64)
   samples = np.sin(2 * np.pi * WARMUP_FREQUENCY_HZ * positions / SAMPLE_RATE)
-  _decode_samples(bundle, samples.astype(np.float32))
+  sine = samples.astype(np.float32)
+  for worker in range(len(bundle.recognizers)):
+    _decode_samples(bundle, sine, worker)

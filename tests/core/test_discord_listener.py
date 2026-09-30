@@ -437,6 +437,46 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
     _shut_down(trigger_mgr)
 
 
+@pytest.mark.asyncio
+async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_path: Path) -> None:
+  """An archived thread session's eligible unmentioned message revives it: the
+  unarchive precedes the arm, the session is ACTIVE again, and the follow
+  trigger is armed exactly as for an active session (the revived session
+  returns to the Threads view)."""
+  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  meta = await session_mgr.create_session(
+      CreateSessionRequest(
+          session_id=summon_session_id(_GUILD, _THREAD),
+          name="discord session",
+          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+  await session_mgr.archive_session(meta.id)
+  message = {
+      "id": "1000000000000000100",
+      "guild_id": _GUILD,
+      "channel_id": _THREAD,
+      "author": {
+          "id": _USER
+      },
+      "type": 0,
+      "content": "the follow-up",
+      "mentions": [],
+  }
+
+  try:
+    sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+
+    armed = [
+        t for t in await trigger_mgr.list_triggers(meta.id)
+        if t.status == TriggerStatus.PENDING and t.message.startswith("discord-thread-follow")
+    ]
+    assert sid == meta.id
+    revived = await session_mgr.get_session(meta.id)
+    assert revived is not None and revived.status == SessionStatus.ACTIVE
+    assert len(armed) == 1
+  finally:
+    _shut_down(trigger_mgr)
+
+
 # ---------------------------------------------------------------------------
 # Round side
 # ---------------------------------------------------------------------------

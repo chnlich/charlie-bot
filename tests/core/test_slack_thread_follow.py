@@ -21,6 +21,7 @@ from src.core.models import (
     CreateSessionRequest,
     PendingTrigger,
     SessionMetadata,
+    SessionStatus,
     SlackOrigin,
     TriggerStatus,
     utc_now,
@@ -132,15 +133,12 @@ async def test_watermark_persists_through_metadata_json(tmp_path: Path) -> None:
         "delete_subtype",
         "bot_authored",
         "disallowed_user",
-        "archived_session",
         "at_watermark",
         "below_watermark",
     ])
 async def test_thread_message_guard_chain_drops(tmp_path: Path, case: str) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
-  if case == "archived_session":
-    await session_mgr.archive_session(meta.id)
   overrides: dict = {"ts": _ts(150)}
   if case == "edit_subtype":
     overrides["subtype"] = "message_changed"
@@ -159,6 +157,26 @@ async def test_thread_message_guard_chain_drops(tmp_path: Path, case: str) -> No
 
   assert sid is None
   assert await _armed(trigger_mgr, meta.id) == []
+  _shut_down(trigger_mgr)
+
+
+@pytest.mark.asyncio
+async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: Path) -> None:
+  """An archived thread session's eligible follow message revives it: the unarchive
+  precedes the arm, the session is ACTIVE again, and the follow trigger is armed
+  exactly as for an active session (the message lands on the Threads view)."""
+  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_mgr)
+  await session_mgr.archive_session(meta.id)
+
+  sid = await handle_thread_message(_message_event(), cfg, session_mgr, client, trigger_mgr)
+
+  assert sid == meta.id
+  revived = await session_mgr.get_session(meta.id)
+  assert revived is not None and revived.status == SessionStatus.ACTIVE
+  armed = await _armed(trigger_mgr, meta.id)
+  assert len(armed) == 1
+  assert f"floor={_ts(150)}" in armed[0].message
   _shut_down(trigger_mgr)
 
 

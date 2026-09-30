@@ -380,8 +380,10 @@ async def handle_message_create(
   else, and no session is touched either way;
   (4) an unmentioned message is follow traffic for an existing thread: the
   shared follow path arms (or re-arms) the session's one persisted follow
-  trigger when the session exists, is ACTIVE, matches the channel, and the id
-  sorts above the watermark.
+  trigger when the session exists, matches the channel, and the id sorts above
+  the watermark — an archived session is unarchived first (revived, its
+  task-tree change broadcast), so the arm lands as for an active one and the
+  session returns to the Threads view.
 
   A mentioned payload summons. The channel holding the mention decides the
   shape: types 10, 11, and 12 are threads (the summon binds that thread, the
@@ -509,12 +511,16 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
 
 async def _backfill_followed_threads(
     cfg: CharlieBotConfig, session_mgr: SessionManager, client: DiscordClient, trigger_mgr: TriggerManager) -> int:
-  """Arm the follow trigger of every ACTIVE Discord session holding unread messages; return the count.
+  """Arm the follow trigger of every followed Discord session holding unread messages; return the count.
 
-  One-line pass-through to the shared backfill
-  (``thread_entry.backfill_followed_threads``) on the given client's adapter;
-  the per-thread read, the arming, and the failure logs live there. The
-  gateway loop (``_run_connection``) calls it on every (re)connection.
+  Active and archived sessions both ride the backfill: an archived session
+  with an unread eligible message is revived (unarchived, its task-tree change
+  broadcast) and armed like an active one, so a message posted while the
+  gateway was down still wakes its thread. One-line pass-through to the shared
+  backfill (``thread_entry.backfill_followed_threads``) on the given client's
+  adapter; the per-thread read, the revival, the arming, and the failure logs
+  live there. The gateway loop (``_run_connection``) calls it on every
+  (re)connection.
   """
   return await thread_entry.backfill_followed_threads(DiscordThreadAdapter(client), cfg, session_mgr, trigger_mgr)
 

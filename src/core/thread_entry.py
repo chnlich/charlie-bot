@@ -15,8 +15,12 @@ reconnect backfill (``backfill_followed_threads``) — and the round side: the
 reply path (``post_reply``), the freshness gate (``assert_thread_fresh``), the
 ack (``ack_messages``), the round-end audit (``deliver_done`` over
 ``audit_round``), and the lost-summon backfill (``backfill_lost_summons``).
-The per-platform entrypoint (``src.core.slack_listener`` today) describes its
-platform with one ``ThreadPlatform`` instance built from its own constants and
+The follow side wakes its session whatever the session's stored status: an
+archived thread session is revived first (unarchived, logged, its task-tree
+change broadcast), so any eligible thread message brings the session back to
+the sidebar's Threads view. The per-platform entrypoint
+(``src.core.slack_listener`` today) describes its platform with one
+``ThreadPlatform`` instance built from its own constants and
 hands platform plus adapter to these functions. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
@@ -898,8 +902,9 @@ async def arm_follow_trigger(
         enforce_pending_limit=False,
     )
   except ArchivedSessionError as e:
-    # The archive raced the re-arm between the caller's ACTIVE check and the
-    # create: log and leave without a new trigger record.
+    # The archive raced the re-arm between the caller's status check (and any
+    # revival it performed) and the create: log and leave without a new
+    # trigger record.
     logger.info(f"{platform.name}_follow_trigger_not_armed_archived", session=session_id, **log_fields, error=str(e))
     return None
   logger.info(
@@ -994,6 +999,10 @@ async def accept_summon(
   elif session_meta.status == SessionStatus.ARCHIVED:
     await session_mgr.unarchive_session(session_id)
     logger.info(f"{platform.name}_mention_session_unarchived", **fields, session=session_id)
+    # The unarchive write alone notifies nobody: an open sidebar refetches its
+    # current filter only on a task-tree notification, so the revived session
+    # reappears on Threads (or vanishes from Archive) without a manual refresh.
+    await session_mgr.broadcast_task_tree_changed(session_id, "session_unarchived")
   else:
     logger.info(f"{platform.name}_mention_session_existing", **fields, session=session_id)
 
@@ -1014,6 +1023,44 @@ async def accept_summon(
   return session_id
 
 
+async def revive_and_arm_follow(
+    platform: ThreadPlatform,
+    adapter: ThreadAdapter,
+    session_mgr: SessionManager,
+    trigger_mgr: TriggerManager,
+    meta: SessionMetadata,
+    *,
+    session_id: str,
+    floor: str,
+    log_fields: dict,
+) -> PendingTrigger | None:
+  """Revive an archived thread session, then arm its follow trigger; the fresh record.
+
+  The one home of the revival sequence the two follow paths share (the live
+  thread message and the reconnect backfill; the @ summon's unarchive branch
+  repeats the unarchive-log-broadcast trio itself, arming nothing): an
+  ARCHIVED session is unarchived first — the
+  order is forced, ``create_trigger`` rejects an archived session — the
+  unarchive is logged, and a ``task_tree_changed`` notification rides it, so
+  an open sidebar refetches its current filter and the revived session
+  reappears on Threads without a manual refresh. An ACTIVE session arms
+  directly.
+  """
+  if meta.status == SessionStatus.ARCHIVED:
+    await session_mgr.unarchive_session(session_id)
+    logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
+    await session_mgr.broadcast_task_tree_changed(session_id, "session_unarchived")
+  origin = getattr(meta, platform.origin_field)
+  link = await adapter.thread_link(origin)
+  return await arm_follow_trigger(
+      platform,
+      trigger_mgr,
+      session_id,
+      floor=floor,
+      wake_label=lambda floor: adapter.follow_wake_message(floor, link),
+      log_fields=log_fields)
+
+
 async def follow_message(
     adapter: ThreadAdapter,
     session_mgr: SessionManager,
@@ -1025,48 +1072,61 @@ async def follow_message(
 ) -> str | None:
   """Arm the session's follow trigger for one eligible thread message; the session id when armed.
 
-  Guards 4 and 5 of the entrypoint's guard chain: the session exists, is
-  ACTIVE, and its origin is set and passes *origin_matches*; the message id
-  sorts strictly above the session's watermark (None passes). A passed message
-  arms (or re-arms) the session's one persisted follow trigger — the chain
-  floor is the message id, the wake label names the thread link — with guards
-  1 to 3 (the event's own shape: subtype, thread targeting, human sender)
-  staying in the entrypoint, which reads them off the raw event.
+  Guards 4 and 5 of the entrypoint's guard chain: the session exists, its
+  origin is set and passes *origin_matches*, and the message id sorts strictly
+  above the session's watermark (None passes). An ARCHIVED session is revived
+  first (:func:`revive_and_arm_follow` — unarchived, logged, its task-tree
+  change broadcast), so the arm lands exactly as for an active session and the
+  revived session reappears on the Threads view. A passed message arms (or
+  re-arms) the session's one persisted follow trigger — the chain floor is the
+  message id, the wake label names the thread link — with guards 1 to 3 (the
+  event's own shape: subtype, thread targeting, human sender) staying in the
+  entrypoint, which reads them off the raw event.
   """
   platform = adapter.platform
   meta = await session_mgr.get_session(session_id)
   origin = getattr(meta, platform.origin_field) if meta is not None else None
-  if meta is None or meta.status != SessionStatus.ACTIVE or origin is None or not origin_matches(origin):
+  if meta is None or origin is None or not origin_matches(origin):
     return None
   watermark = getattr(meta, platform.watermark_field)
   if watermark is not None and not (platform.id_key(message_id) > platform.id_key(watermark)):
     return None
-  link = await adapter.thread_link(origin)
-  trigger = await arm_follow_trigger(
+  trigger = await revive_and_arm_follow(
       platform,
+      adapter,
+      session_mgr,
       trigger_mgr,
-      session_id,
+      meta,
+      session_id=session_id,
       floor=message_id,
-      wake_label=lambda floor: adapter.follow_wake_message(floor, link),
       log_fields=adapter.log_fields(adapter.address_of(origin)))
   return session_id if trigger is not None else None
 
 
 async def backfill_followed_threads(
     adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager, trigger_mgr: TriggerManager) -> int:
-  """Arm the follow trigger of every ACTIVE session holding unread messages; return the count.
+  """Arm the follow trigger of every followed session holding unread messages; return the count.
 
   Runs once per successful (re)connection: one eligible read per followed
   thread closes the socket-down window, which persisted triggers cannot cover
-  (no events arrive while the socket is down). A session whose thread shows no
-  unread eligible message arms nothing, and each armed session arms exactly
-  once, independent of its unread count.
+  (no events arrive while the socket is down). Both statuses ride the listing:
+  an archived session whose thread shows an unread eligible message is revived
+  through the same sequence the live follow path uses
+  (:func:`revive_and_arm_follow` — unarchive, log, broadcast, arm), so a
+  message posted while the socket was down still wakes its session; an
+  archived session with no unread message stays archived. A session whose
+  thread shows no unread eligible message arms nothing, and each armed session
+  arms exactly once, independent of its unread count.
   """
   platform = adapter.platform
   armed = 0
-  # The ACTIVE filter rides the listing so the backfill never copies+stamps
-  # the archived majority it drops on the line below.
-  for meta in await session_mgr.list_sessions(status=SessionStatus.ACTIVE):
+  # Both status filters ride the readonly listings: the shared cached metas
+  # are handed out uncopied (the backfill only reads them) and the corpus
+  # outside the followed threads is never copied+stamped.
+  for meta in [
+      *(await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)),
+      *(await session_mgr.list_sessions_readonly(status=SessionStatus.ARCHIVED)),
+  ]:
     origin = getattr(meta, platform.origin_field)
     if origin is None:
       continue
@@ -1074,13 +1134,14 @@ async def backfill_followed_threads(
       unread = await unread_messages(adapter, origin, cfg, getattr(meta, platform.watermark_field))
       if not unread:
         continue
-      link = await adapter.thread_link(origin)
-      trigger = await arm_follow_trigger(
+      trigger = await revive_and_arm_follow(
           platform,
+          adapter,
+          session_mgr,
           trigger_mgr,
-          meta.id,
+          meta,
+          session_id=meta.id,
           floor=unread[0].id,
-          wake_label=lambda floor: adapter.follow_wake_message(floor, link),
           log_fields=adapter.log_fields(adapter.address_of(origin)))
       if trigger is not None:
         armed += 1

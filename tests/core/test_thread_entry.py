@@ -31,6 +31,7 @@ from src.core.thread_entry import (
     ThreadReplyError,
     accept_summon,
     ack_messages,
+    backfill_followed_threads,
     chunk_text,
     consume_mention,
     deliver_done,
@@ -322,10 +323,13 @@ class FakeTriggers:
   records list, cancels, and creates record; a created record carries the
   label the core built and answers the armed log's ``fire_at`` read."""
 
-  def __init__(self, armed: list | None = None) -> None:
+  def __init__(self, armed: list | None = None, order: list[str] | None = None) -> None:
     self.armed = list(armed or [])
     self.cancelled: list[tuple[str, str]] = []
     self.created: list[SimpleNamespace] = []
+    # Shared with the sessions double by the revival tests: the append order
+    # across the two doubles is the unarchive-before-arm ordering proof.
+    self.order = order if order is not None else []
 
   async def list_triggers(self, session_id: str) -> list:
     return list(self.armed)
@@ -342,6 +346,7 @@ class FakeTriggers:
       created_at,
       enforce_pending_limit: bool = False,
   ) -> SimpleNamespace:
+    self.order.append("create")
     record = SimpleNamespace(id=f"tr{len(self.created) + 1}", message=message, fire_at=created_at)
     self.created.append(record)
     return record
@@ -354,15 +359,36 @@ class FakeSessions:
   ``groups``. A None *meta* is the no-session-yet state the summon create
   resolves."""
 
-  def __init__(self, meta: SimpleNamespace | None) -> None:
+  def __init__(self, meta: SimpleNamespace | None, order: list[str] | None = None) -> None:
     self.meta = meta
     self.events: list[dict] = []
     self.persisted: list[dict] = []
     self.created: list = []
     self.groups: list[tuple[str, str]] = []
+    self.unarchived: list[str] = []
+    self.broadcasts: list[tuple[str, str | None]] = []
+    # Shared with the triggers double by the revival tests: the append order
+    # across the two doubles is the unarchive-before-arm ordering proof.
+    self.order = order if order is not None else []
 
   async def get_session(self, session_id: str) -> SimpleNamespace | None:
     return self.meta
+
+  async def unarchive_session(self, session_id: str) -> None:
+    self.unarchived.append(session_id)
+    if self.meta is not None:
+      self.meta.status = SessionStatus.ACTIVE
+    self.order.append("unarchive")
+
+  async def broadcast_task_tree_changed(self, session_id: str, event_type: str | None) -> None:
+    self.broadcasts.append((session_id, event_type))
+    self.order.append("broadcast")
+
+  async def list_sessions_readonly(
+      self, status: SessionStatus | None = None, **_: object) -> list:
+    if self.meta is None or (status is not None and self.meta.status != status):
+      return []
+    return [self.meta]
 
   async def create_session(self, request) -> None:
     self.created.append(request)
@@ -519,6 +545,122 @@ async def test_follow_message_drops_below_the_watermark_and_arms_above_it() -> N
 
   assert armed == "s1"
   assert [rec.message for rec in triggers.created] == ["fakechat-thread-follow floor=101\nhttps://fakechat.test/t1"]
+
+
+@pytest.mark.asyncio
+async def test_follow_message_revives_an_archived_session_and_arms_after_the_unarchive() -> None:
+  adapter = FakeAdapter()
+  order: list[str] = []
+  sessions = FakeSessions(_fake_meta(), order=order)
+  sessions.meta.status = SessionStatus.ARCHIVED
+  triggers = FakeTriggers(order=order)
+  origin_matches = lambda origin: origin == sessions.meta.fakechat_origin  # noqa: E731  (a one-line guard shape)
+
+  armed = await follow_message(adapter, sessions, triggers, "s1", "105", origin_matches=origin_matches)
+
+  assert armed == "s1"
+  assert sessions.meta.status == SessionStatus.ACTIVE
+  assert sessions.unarchived == ["s1"]
+  assert sessions.broadcasts == [("s1", "session_unarchived")]
+  assert len(triggers.created) == 1
+  # The order is forced: create_trigger rejects an archived session, so the
+  # unarchive (and its sidebar-refresh broadcast) must land before the arm.
+  assert order == ["unarchive", "broadcast", "create"]
+
+
+@pytest.mark.asyncio
+async def test_accept_summon_unarchive_broadcasts_the_task_tree_change() -> None:
+  adapter = FakeAdapter()
+  sessions = FakeSessions(_fake_meta())
+  sessions.meta.status = SessionStatus.ARCHIVED
+  triggers = FakeTriggers()
+  block = {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}
+  tasks: list[asyncio.Task] = []
+
+  with (
+      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
+      patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      patch("src.core.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
+  ):
+    sid = await accept_summon(
+        adapter,
+        None,
+        sessions,
+        triggers,
+        session_id="s1",
+        label="Fakechat #c1",
+        origin={
+            "channel_id": "c1",
+            "thread_ts": "t1"
+        },
+        block=block,
+        content="fakechat summon",
+        user="u1",
+    )
+    await asyncio.gather(*tasks)
+
+  assert sid == "s1"
+  assert sessions.meta.status == SessionStatus.ACTIVE
+  assert sessions.unarchived == ["s1"]
+  # The mention path's unarchive notifies the sidebar the same way the follow
+  # path's does: an open Threads view refetches on the task-tree notification.
+  assert sessions.broadcasts == [("s1", "session_unarchived")]
+
+
+@pytest.mark.asyncio
+async def test_backfill_revives_an_archived_session_with_unread_messages() -> None:
+  adapter = FakeAdapter()
+  adapter.thread = [ThreadMessage("105", "u", "posted while the socket was down")]
+  order: list[str] = []
+  sessions = FakeSessions(_fake_meta(), order=order)
+  sessions.meta.id = "s1"
+  sessions.meta.status = SessionStatus.ARCHIVED
+  triggers = FakeTriggers(order=order)
+
+  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+
+  assert armed_count == 1
+  assert sessions.meta.status == SessionStatus.ACTIVE
+  assert sessions.unarchived == ["s1"]
+  assert sessions.broadcasts == [("s1", "session_unarchived")]
+  assert len(triggers.created) == 1
+  assert order == ["unarchive", "broadcast", "create"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_arms_an_active_session_without_a_revival() -> None:
+  adapter = FakeAdapter()
+  adapter.thread = [ThreadMessage("105", "u", "hello")]
+  order: list[str] = []
+  sessions = FakeSessions(_fake_meta(), order=order)
+  sessions.meta.id = "s1"
+  sessions.meta.status = SessionStatus.ACTIVE
+  triggers = FakeTriggers(order=order)
+
+  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+
+  assert armed_count == 1
+  assert sessions.unarchived == [] and sessions.broadcasts == []
+  assert len(triggers.created) == 1
+  assert order == ["create"]
+
+
+@pytest.mark.asyncio
+async def test_backfill_leaves_an_archived_session_without_unread_archived() -> None:
+  adapter = FakeAdapter()
+  order: list[str] = []
+  sessions = FakeSessions(_fake_meta(), order=order)
+  sessions.meta.id = "s1"
+  sessions.meta.status = SessionStatus.ARCHIVED
+  triggers = FakeTriggers(order=order)
+
+  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+
+  assert armed_count == 0
+  assert sessions.meta.status == SessionStatus.ARCHIVED
+  assert sessions.unarchived == [] and sessions.broadcasts == []
+  assert triggers.created == []
+  assert order == []
 
 
 @pytest.mark.asyncio

@@ -395,11 +395,13 @@ async def handle_thread_message(
   (1) subtype absent — edits, deletes, and every other subtype drop;
   (2) the event targets a thread this session follows;
   (3) the sender is human (bot_id drops) and in the allowed list;
-  (4) the session exists, is ACTIVE, and its slack_origin matches the channel;
+  (4) the session exists and its slack_origin matches the channel — an
+  archived session is unarchived first, so the arm lands as for an active one
+  and the session returns to the Threads view;
   (5) the event ts is strictly above the session's watermark — None passes.
   A passed event arms (or re-arms) the session's one persisted follow trigger.
-  Guards 1 to 3 read the raw event here; guards 4 and 5 and the arming itself
-  are the shared core's (``thread_entry.follow_message``).
+  Guards 1 to 3 read the raw event here; guards 4 and 5, the revival, and the
+  arming itself are the shared core's (``thread_entry.follow_message``).
   """
   channel_id = event.get("channel")
   thread_ts = event.get("thread_ts")
@@ -429,12 +431,16 @@ async def _backfill_followed_threads(
     client: SlackClient,
     trigger_mgr: TriggerManager,
 ) -> int:
-  """Arm the follow trigger of every ACTIVE Slack session holding unread messages; return the count.
+  """Arm the follow trigger of every followed Slack session holding unread messages; return the count.
 
-  One-line pass-through to the shared backfill
-  (``thread_entry.backfill_followed_threads``) on the Slack adapter; the
-  per-thread read, the arming, and the failure logs live there. Kept as the
-  module global ``run_listener`` calls on every (re)connection.
+  Active and archived sessions both ride the backfill: an archived session
+  with an unread eligible message is revived (unarchived, its task-tree change
+  broadcast) and armed like an active one, so a message posted while the
+  socket was down still wakes its thread. One-line pass-through to the shared
+  backfill (``thread_entry.backfill_followed_threads``) on the Slack adapter;
+  the per-thread read, the revival, the arming, and the failure logs live
+  there. Kept as the module global ``run_listener`` calls on every
+  (re)connection.
   """
   return await thread_entry.backfill_followed_threads(SlackThreadAdapter(client), cfg, session_mgr, trigger_mgr)
 

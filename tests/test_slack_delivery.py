@@ -16,6 +16,7 @@ from conftest import (
     THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
     build_slack_cfg,
+    deploy_publish_lane,
     make_task_spawner,
     stub_credentials,
 )
@@ -272,8 +273,7 @@ _FILE_HOST = "https://agent.example.test:18498"
 
 def _pub_cfg(tmp_path: Path) -> CharlieBotConfig:
   """The slack rig's cfg with the publish lane deployed under tmp_path."""
-  lane = tmp_path / "publish"
-  lane.mkdir(parents=True, exist_ok=True)
+  lane = deploy_publish_lane(tmp_path)
   return build_slack_cfg(tmp_path).model_copy(update={"publish": PublishConfig(dir=lane, public_base_url=_PUB_BASE)})
 
 
@@ -296,7 +296,7 @@ async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: P
   assert f"{_FILE_HOST}/absolute_filepath/{gone}" in excinfo.value.detail
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
-  assert not any(cfg.publish.dir.iterdir())
+  assert list(cfg.publish.dir.iterdir()) == [cfg.publish.dir / "index.html"]  # nothing was published
 
 
 # ---------------------------------------------------------------------------

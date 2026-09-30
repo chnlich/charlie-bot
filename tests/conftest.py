@@ -1853,17 +1853,22 @@ def build_worktree_cfg(tmp_path: Path) -> CharlieBotConfig:
 PUBLISH_BASE_URL = "https://pub.example.test/charliebot_pub"
 
 
-def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig with the publish lane deployed under tmp_path: publish_dir
-  (``tmp_path / "publish"``) created the way the host's deployment step leaves it,
-  ``PUBLISH_BASE_URL`` set.
-  """
+def deploy_publish_lane(tmp_path: Path) -> Path:
+  """Create ``tmp_path / "publish"`` the way the host's deployment step leaves it (the directory
+  plus its blank index.html) and return it."""
   publish_dir = tmp_path / "publish"
   publish_dir.mkdir(parents=True, exist_ok=True)
+  (publish_dir / "index.html").write_text("", encoding="utf-8")
+  return publish_dir
+
+
+def build_publish_cfg(tmp_path: Path) -> CharlieBotConfig:
+  """CharlieBotConfig with the publish lane deployed under tmp_path (``deploy_publish_lane``) and
+  ``PUBLISH_BASE_URL`` set."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       publish={
-          "dir": publish_dir,
+          "dir": deploy_publish_lane(tmp_path),
           "public_base_url": PUBLISH_BASE_URL
       },
   )

@@ -1,6 +1,7 @@
-"""Tests for src/cli/publish.py — URL on stdout, overwrite note, preflight failure exit codes."""
+"""Tests for src/cli/publish.py — URL on stdout, preflight failure exit codes."""
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,9 +19,10 @@ def test_publish_prints_the_url_on_stdout_and_exits_zero(tmp_path: Path, capsys:
     main()
 
   out = capsys.readouterr()
-  assert out.out == PUBLISH_BASE_URL + "/page.html\n"
+  match = re.fullmatch(re.escape(PUBLISH_BASE_URL) + r"/([A-Za-z0-9_-]{22})/page\.html\n", out.out)
+  assert match is not None, out.out
   assert out.err == ""
-  assert (tmp_path / "publish" / "page.html").read_text(encoding="utf-8") == "<p>hello</p>"
+  assert (tmp_path / "publish" / match.group(1) / "page.html").read_text(encoding="utf-8") == "<p>hello</p>"
 
 
 def test_missing_artifact_exits_non_zero_naming_the_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

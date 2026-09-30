@@ -8,10 +8,12 @@ never enumerate the whole directory.
 import os
 from pathlib import Path
 
+import orjson
 import pytest
 from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
+from src.api import sessions as sessions_api
 from src.core import sidebar_state, thinking_state
 from src.core.models import CreateSessionRequest, SessionMetadata
 from src.core.sessions import SessionManager, _iter_trigger_stats, selective_probe_sidebar_state
@@ -94,6 +96,58 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
       })
   fifth = await session_mgr.resolve_sidebar_state([session], **flags)
   assert fifth is not fourth
+
+
+@pytest.mark.asyncio
+async def test_status_body_memo_serves_whole_between_state_bumps(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  """A clean poll serves the last rendered body bytes; any state bump re-renders.
+
+  The body memo is the poll's byte-level freshness boundary on top of the
+  fold's: a bump that failed to re-render would serve a stale thinking_since
+  for a full memo lifetime, and a memo that never hit would silently return
+  the poll to the per-request render it used to pay.
+  """
+  sidebar_state.reset_for_tests()
+  cfg = build_tui_sessions_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Body memo"))
+  renders: list[object] = []
+
+  def count_render(content: object) -> bytes:
+    renders.append(content)
+    return orjson.dumps(content)
+
+  monkeypatch.setattr(sessions_api, "fast_json_bytes", count_render)
+
+  with _build_client(cfg, session_mgr) as client:
+    first = client.get(f"/api/sessions/status?ids={session.id}")
+    assert first.status_code == 200
+    assert first.json()[session.id]["thinking_since"] is None
+    assert len(renders) == 1
+
+    # The first poll's own probe store bumps the generation past its key (the
+    # fold's warm-up shape), so the second re-render is the one the next poll
+    # serves whole.
+    second = client.get(f"/api/sessions/status?ids={session.id}")
+    assert second.content == first.content
+    assert len(renders) == 2
+
+    third = client.get(f"/api/sessions/status?ids={session.id}")
+    assert third.content == first.content
+    assert len(renders) == 2  # unchanged generation: the stored body serves whole
+
+    thinking_state.mark_busy(session.id)
+    fourth = client.get(f"/api/sessions/status?ids={session.id}")
+    assert fourth.json()[session.id]["thinking_since"] is not None
+    assert len(renders) == 3  # the bump forces the re-render
+
+    thinking_state.clear_busy(session.id)
+    fifth = client.get(f"/api/sessions/status?ids={session.id}")
+    assert fifth.json()[session.id]["thinking_since"] is None
+    assert len(renders) == 4
 
 
 @pytest.mark.asyncio

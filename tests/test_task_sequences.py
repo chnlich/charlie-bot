@@ -37,7 +37,6 @@ from tests.test_task_execution import (
     _adapter_with_silent_broadcast,
     build_env,
     build_pooled_env,
-    init_repo_with_origin,
     install_backends,
     make_api_client,
     make_pm_build,
@@ -52,7 +51,8 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
       WORKER_BUILD_BACKEND_PATCH_TARGET)
 
 
-async def _start_loop(cfg, session_mgr, tree, manager, monkeypatch, payload_overrides=None, wait_effect=None):
+async def _start_loop(
+    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -65,7 +65,7 @@ async def _start_loop(cfg, session_mgr, tree, manager, monkeypatch, payload_over
       "session_id": manager.id,
       "goal": "## Goal\n\nimprove the thing\n",
       "iterations": 2,
-      "repo_path": str(tmp_repo),
+      "repo_path": str(repo),
       "base_branch": "main",
       "work_branch": "improve/test-branch",
   }
@@ -90,16 +90,6 @@ async def _start_loop(cfg, session_mgr, tree, manager, monkeypatch, payload_over
       else:
         pytest.fail("the sequence controller never registered its first iteration run")
   return body, child_id
-
-
-tmp_repo: Path = Path("/")  # replaced per-test by the fixture
-
-
-@pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-  global tmp_repo
-  tmp_repo, _origin = init_repo_with_origin(tmp_path / "improve-repo")
-  return tmp_repo
 
 
 @pytest.mark.asyncio
@@ -127,7 +117,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
         f"the sequence never finished: runs={[(r.id, r.kind) for r in tree.runs.list_run_records_sync(child_id)]} "
         f"reports={_child_reports(tree, manager.id)}")
 
-  body, child_id = await _start_loop(cfg, session_mgr, tree, manager, monkeypatch, wait_effect=_wait_done)
+  body, child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
 
   records = tree.runs.list_run_records_sync(child_id)
   assert [r.kind for r in records] == ["iteration", "iteration"]
@@ -354,7 +344,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
       await asyncio.sleep(0.1)
     pytest.fail("both iterations never finished")
 
-  body, _child_id = await _start_loop(cfg, session_mgr, tree, manager, monkeypatch, wait_effect=wait_done)
+  body, _child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=wait_done)
 
   report = await _wait_for_final_report(tree, manager.id)
   assert report["outcome"] in ("completed", "blocked", "cancelled", "failed")
@@ -398,6 +388,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
 
@@ -470,6 +461,7 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       payload_overrides=payload_overrides,
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
@@ -527,6 +519,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       payload_overrides={
           "iterations": 3,
@@ -597,6 +590,7 @@ async def test_iteration_report_header_carries_the_judgment(
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       payload_overrides={"work_branch": "improve/header"},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
@@ -654,6 +648,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       payload_overrides={"work_branch": "improve/failed-iter"},
       wait_effect=lambda _client, _body: _wait_for_final_report(tree, manager.id))
@@ -691,6 +686,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
       session_mgr,
       tree,
       manager,
+      repo,
       monkeypatch,
       payload_overrides={
           "iterations": 1,

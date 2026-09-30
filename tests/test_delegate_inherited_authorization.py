@@ -27,7 +27,6 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
-    init_repo_with_origin,
     install_backends,
     result_event,
     wait_for_terminal_run,
@@ -53,12 +52,6 @@ async def make_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         request_id="child", task_parent_id=root.id, profile="manager",
         task=TaskSpec(goal="feature"), name="Feature", backend=None, caller="operator")
     return cfg, session_mgr, tree, root, child
-
-
-@pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-    r, _origin = init_repo_with_origin(tmp_path / "authz-repo")
-    return r
 
 
 @pytest.mark.asyncio

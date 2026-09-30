@@ -892,6 +892,28 @@ def run_git(cwd: Path | str, *args: str, check: bool = True, env: dict[str, str]
   return result.stdout.strip()
 
 
+def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
+  """A synthetic repo with a bare origin carrying main (the landing target)."""
+  origin = tmp_path / "origin.git"
+  subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
+  repo = tmp_path / "repo"
+  subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True)
+  run_git(repo, "config", "user.email", "t@example.com")
+  run_git(repo, "config", "user.name", "t")
+  (repo / "seed.txt").write_text("seed\n")
+  run_git(repo, "add", ".")
+  run_git(repo, "commit", "-q", "-m", "seed")
+  run_git(repo, "push", "-q", "origin", "main")
+  return repo, origin
+
+
+@pytest.fixture()
+def repo(tmp_path: Path) -> Path:
+  """One synthetic git repo for a delegate or landing target test."""
+  r, _origin = init_repo_with_origin(tmp_path / "authz-repo")
+  return r
+
+
 def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edit") -> dict:
   """The /api/internal/delegate request body one test delegation sends."""
   return {

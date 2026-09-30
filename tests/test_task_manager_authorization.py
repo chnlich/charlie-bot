@@ -37,7 +37,6 @@ from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
-    init_repo_with_origin,
     install_backends,
     make_api_client,
     result_event,
@@ -100,12 +99,6 @@ async def create_child_via_api(client, parent_id: str, token: dict, request_id: 
           "profile": profile,
       },
       headers=token)
-
-
-@pytest.fixture()
-def repo(tmp_path: Path) -> Path:
-  r, _origin = init_repo_with_origin(tmp_path / "authz-repo")
-  return r
 
 
 # ---------------------------------------------------------------------------

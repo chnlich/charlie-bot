@@ -41,16 +41,16 @@ from src.core.thinking_state import note_run_backend
 from src.core.threads import METADATA_NAME
 
 if TYPE_CHECKING:
-    from src.core.task_execution import TaskExecutionAdapter
-    from src.core.task_sessions import TaskTreeManager
+  from src.core.task_execution import TaskExecutionAdapter
+  from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
 
 def _is_out_of_space(exc: BaseException) -> bool:
-    """The one predicate's recovery-side name: task_execution owns the definition."""
-    from src.core.task_execution import is_out_of_space_error
-    return is_out_of_space_error(exc)
+  """The one predicate's recovery-side name: task_execution owns the definition."""
+  from src.core.task_execution import is_out_of_space_error
+  return is_out_of_space_error(exc)
 
 
 async def reconcile_task_tree(
@@ -58,47 +58,47 @@ async def reconcile_task_tree(
     tree: TaskTreeManager,
     adapter: TaskExecutionAdapter | None = None,
 ) -> dict:
-    """Reconcile every v2 node this instance owns. Returns pass counters."""
-    from src.core.improve_sequence import reconcile_interrupted_sequences
+  """Reconcile every v2 node this instance owns. Returns pass counters."""
+  from src.core.improve_sequence import reconcile_interrupted_sequences
 
-    adapter = adapter if adapter is not None else tree.dispatch.executor
-    counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
-    if not cfg.sessions_dir.is_dir():
-        return counters
-
-    # The sequence controllers' honest verdicts come first: a recovered
-    # "interrupted" improve state must not race the Run reconciliation below.
-    await reconcile_interrupted_sequences(cfg, tree)
-
-    for session_dir in sorted(cfg.sessions_dir.iterdir()):
-        if not session_dir.is_dir():
-            continue
-        meta_path = session_dir / METADATA_NAME
-        if not meta_path.is_file():
-            continue
-        try:
-            from src.core.json_utils import load_json_meta
-            raw = load_json_meta(meta_path, "task_recovery_meta_unreadable")
-        except Exception:
-            log.exception("task_recovery_meta_read_failed", session=session_dir.name)
-            continue
-        if raw is None:
-            continue
-        if not raw.get("profile"):
-            continue  # a v1 session: the legacy recovery owns it during the branch
-        session_id = session_dir.name
-        counters["nodes"] += 1
-        try:
-            await _reconcile_node(session_id, tree, adapter, counters, cfg)
-        except Exception as exc:
-            log.exception("task_recovery_node_failed", session=session_id)
-            # An out-of-space node pass enters the end-landing retry: the
-            # retry re-runs this pass until a round survives, so the node
-            # converges once space returns (a restart would repair it the
-            # same way — the retry just does it without waiting for one).
-            if adapter is not None and _is_out_of_space(exc):
-                adapter.start_run_end_landing_retry(session_id)
+  adapter = adapter if adapter is not None else tree.dispatch.executor
+  counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
+  if not cfg.sessions_dir.is_dir():
     return counters
+
+  # The sequence controllers' honest verdicts come first: a recovered
+  # "interrupted" improve state must not race the Run reconciliation below.
+  await reconcile_interrupted_sequences(cfg, tree)
+
+  for session_dir in sorted(cfg.sessions_dir.iterdir()):
+    if not session_dir.is_dir():
+      continue
+    meta_path = session_dir / METADATA_NAME
+    if not meta_path.is_file():
+      continue
+    try:
+      from src.core.json_utils import load_json_meta
+      raw = load_json_meta(meta_path, "task_recovery_meta_unreadable")
+    except Exception:
+      log.exception("task_recovery_meta_read_failed", session=session_dir.name)
+      continue
+    if raw is None:
+      continue
+    if not raw.get("profile"):
+      continue  # a v1 session: the legacy recovery owns it during the branch
+    session_id = session_dir.name
+    counters["nodes"] += 1
+    try:
+      await _reconcile_node(session_id, tree, adapter, counters, cfg)
+    except Exception as exc:
+      log.exception("task_recovery_node_failed", session=session_id)
+      # An out-of-space node pass enters the end-landing retry: the
+      # retry re-runs this pass until a round survives, so the node
+      # converges once space returns (a restart would repair it the
+      # same way — the retry just does it without waiting for one).
+      if adapter is not None and _is_out_of_space(exc):
+        adapter.start_run_end_landing_retry(session_id)
+  return counters
 
 
 async def _reconcile_node(
@@ -109,7 +109,7 @@ async def _reconcile_node(
     cfg: CharlieBotConfig,
     is_driven: Callable[[RunRecord], bool] | None = None,
 ) -> None:
-    """Reconcile one node from its durable facts.
+  """Reconcile one node from its durable facts.
 
     ``is_driven`` marks the runs this process is already driving (an execute
     task in flight, or a resume follow). Boot reconcile omits it — its premise
@@ -118,80 +118,80 @@ async def _reconcile_node(
     must skip runs whose driver this process already holds (steps 3 and 4 stay
     unskipped: they dedupe by stable ids).
     """
-    meta = await tree.load_meta(session_id)
-    if meta is None:
-        return
-    events = tree.runs.load_events_sync(session_id)
-    run_records = tree.runs.list_run_records_sync(session_id)
-    # Warm the display-backend map: a fresh boot has seen no Run liveness
-    # notification, and the sidebar row and header badge show this node's
-    # newest Run's backend (the persisted metadata.backend is never rewritten).
-    newest = tree.runs.newest_run_record_sync(session_id)
-    if newest is not None:
-        note_run_backend(session_id, newest.backend)
+  meta = await tree.load_meta(session_id)
+  if meta is None:
+    return
+  events = tree.runs.load_events_sync(session_id)
+  run_records = tree.runs.list_run_records_sync(session_id)
+  # Warm the display-backend map: a fresh boot has seen no Run liveness
+  # notification, and the sidebar row and header badge show this node's
+  # newest Run's backend (the persisted metadata.backend is never rewritten).
+  newest = tree.runs.newest_run_record_sync(session_id)
+  if newest is not None:
+    note_run_backend(session_id, newest.backend)
 
-    # --- 0. an interrupted prompt edit lands its missing fact --------------
-    # Idempotent: a landed fact appends nothing, so repeated recovery and
-    # concurrent double-reconcile never duplicate a prompt_changed event.
-    async with tree.control_lock:
-        locked_meta = await tree.load_meta(session_id)
-        if locked_meta is not None:
-            for scope in ("subtree", "node"):
-                await tree._ensure_prompt_changed_fact(session_id, locked_meta, scope)
+  # --- 0. an interrupted prompt edit lands its missing fact --------------
+  # Idempotent: a landed fact appends nothing, so repeated recovery and
+  # concurrent double-reconcile never duplicate a prompt_changed event.
+  async with tree.control_lock:
+    locked_meta = await tree.load_meta(session_id)
+    if locked_meta is not None:
+      for scope in ("subtree", "node"):
+        await tree._ensure_prompt_changed_fact(session_id, locked_meta, scope)
 
-    # --- 1. stop requests take precedence over any launch or follow --------
-    for run in run_records:
-        if is_driven is not None and is_driven(run):
-            continue  # this process already drives it: its driver owns the stop
-        if tree.runs.run_has_terminal_fact(run, events):
-            continue
-        if tree.runs.stop_requested(events, run.id):
-            # The owner's reconcile: a queued run never launches (it keeps the
-            # request and claims nothing); a launched run is identity-checked,
-            # signalled, and its observed exit lands as the terminal fact.
-            await tree.runs.reconcile_stop_request(session_id, run.id)
+  # --- 1. stop requests take precedence over any launch or follow --------
+  for run in run_records:
+    if is_driven is not None and is_driven(run):
+      continue  # this process already drives it: its driver owns the stop
+    if tree.runs.run_has_terminal_fact(run, events):
+      continue
+    if tree.runs.stop_requested(events, run.id):
+      # The owner's reconcile: a queued run never launches (it keeps the
+      # request and claims nothing); a launched run is identity-checked,
+      # signalled, and its observed exit lands as the terminal fact.
+      await tree.runs.reconcile_stop_request(session_id, run.id)
 
-    # --- 2. launched, non-terminal Runs re-attach or drain -----------------
-    for run in run_records:
-        if is_driven is not None and is_driven(run):
-            continue  # this process already drives it: never a second follower
-        if run.pid is None:
-            continue  # queued (never launched): step 4's dispatch decides
-        if tree.runs.run_has_terminal_fact(run, events):
-            continue
-        if tree.runs.stop_requested(events, run.id):
-            continue  # step 1 already drove this stop through
-        if adapter is None:
-            raise RuntimeError("task execution adapter is not installed; cannot reconcile a launched run")
-        if runs.is_run_alive(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time()):
-            counters["resumed"] += 1
-            log.info("task_recovery_resume", session=session_id, run_id=run.id)
-            # The follow MUST NOT be awaited inline: a live run's tail-follow
-            # ends only when its process ends, so awaiting it here would hold
-            # the whole server startup (the lifespan awaits this pass) until
-            # every live v2 run finished. Scheduling it attaches the follow
-            # before any door opens, and the recorded pid keeps holding the
-            # node's serialized slot (no competing dispatch) until the follow
-            # converges and lands the run's durable terminal fact.
-            adapter.follow_run_in_background(session_id, run.id)
-        else:
-            # The process ended before its terminal fact landed (crash in the
-            # follow). The drain converges to the durable result — raw-stream
-            # truth where it exists, an honest interrupted/failed outcome
-            # where it does not. It is never relaunched.
-            counters["drained"] += 1
-            log.warning("task_recovery_drain", session=session_id, run_id=run.id)
-            await adapter.resume_run(session_id, run.id, is_alive=lambda: False)
+  # --- 2. launched, non-terminal Runs re-attach or drain -----------------
+  for run in run_records:
+    if is_driven is not None and is_driven(run):
+      continue  # this process already drives it: never a second follower
+    if run.pid is None:
+      continue  # queued (never launched): step 4's dispatch decides
+    if tree.runs.run_has_terminal_fact(run, events):
+      continue
+    if tree.runs.stop_requested(events, run.id):
+      continue  # step 1 already drove this stop through
+    if adapter is None:
+      raise RuntimeError("task execution adapter is not installed; cannot reconcile a launched run")
+    if runs.is_run_alive(run.pid, run.pid_start, run.started_at, runs.read_host_boot_time()):
+      counters["resumed"] += 1
+      log.info("task_recovery_resume", session=session_id, run_id=run.id)
+      # The follow MUST NOT be awaited inline: a live run's tail-follow
+      # ends only when its process ends, so awaiting it here would hold
+      # the whole server startup (the lifespan awaits this pass) until
+      # every live v2 run finished. Scheduling it attaches the follow
+      # before any door opens, and the recorded pid keeps holding the
+      # node's serialized slot (no competing dispatch) until the follow
+      # converges and lands the run's durable terminal fact.
+      adapter.follow_run_in_background(session_id, run.id)
+    else:
+      # The process ended before its terminal fact landed (crash in the
+      # follow). The drain converges to the durable result — raw-stream
+      # truth where it exists, an honest interrupted/failed outcome
+      # where it does not. It is never relaunched.
+      counters["drained"] += 1
+      log.warning("task_recovery_drain", session=session_id, run_id=run.id)
+      await adapter.resume_run(session_id, run.id, is_alive=lambda: False)
 
-    # --- 3. terminal Runs replay their missing follow-up once --------------
-    await _replay_followups(session_id, tree, adapter, counters, cfg)
+  # --- 3. terminal Runs replay their missing follow-up once --------------
+  await _replay_followups(session_id, tree, adapter, counters, cfg)
 
-    # --- 4. pending reports and pending inputs -----------------------------
-    await tree.dispatch.recover_pending_reports(session_id)
-    # The dispatch is the deterministic repair for admitted-but-unclaimed
-    # input (a reservation whose claim was lost) and for queued work: the
-    # same launch checks every fresh dispatch passes, no new message needed.
-    await tree.dispatch.dispatch_pending(session_id)
+  # --- 4. pending reports and pending inputs -----------------------------
+  await tree.dispatch.recover_pending_reports(session_id)
+  # The dispatch is the deterministic repair for admitted-but-unclaimed
+  # input (a reservation whose claim was lost) and for queued work: the
+  # same launch checks every fresh dispatch passes, no new message needed.
+  await tree.dispatch.dispatch_pending(session_id)
 
 
 async def _replay_cron_firing(
@@ -200,13 +200,13 @@ async def _replay_cron_firing(
     run: object,
     cfg: CharlieBotConfig,
 ) -> None:
-    """Re-drive one firing's chain/boundary through its owning module."""
-    from src.core import cron_sequence
+  """Re-drive one firing's chain/boundary through its owning module."""
+  from src.core import cron_sequence
 
-    seq = run.sequence_ref
-    if seq is None or not seq.owner_ref.startswith("cron:"):
-        return
-    await cron_sequence.redrive_firing(session_id, tree, cfg)
+  seq = run.sequence_ref
+  if seq is None or not seq.owner_ref.startswith("cron:"):
+    return
+  await cron_sequence.redrive_firing(session_id, tree, cfg)
 
 
 async def _replay_followups(

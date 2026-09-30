@@ -477,7 +477,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       log.info("slack_entrypoint_off")
 
     discord_listener_task = None
-    if creds.get("discord", "bot_token") and cfg.discord.allowed_user_ids:
+    if creds.get("discord", "bot_token") and cfg.discord.allowed_users:
       from src.core.discord_listener import (
           run_listener,  # lazy: avoids import cycle at module scope
       )

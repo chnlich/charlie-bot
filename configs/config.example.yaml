@@ -110,9 +110,10 @@ ui:
 slack:
   allowed_user_ids: []
 
-# Discord: the summon entrypoint's user allow-list.
+# Discord: the summon entrypoint's account map (Discord user id -> the person
+# that account belongs to).
 discord:
-  allowed_user_ids: []
+  allowed_users: {}
 
 # Publish: the outbound static publish lane (dir the static lane serves, base of
 # the links readers outside the operator's devices open).

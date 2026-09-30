@@ -70,6 +70,10 @@ class ThreadPlatform:
   reply_event_type: str
   reply_command: str
   max_post_chars: int
+  # The platform's scope doc under prompts/ (what personal information may
+  # enter the platform's threads): read fresh into every summon prompt and
+  # named by every follow wake.
+  scope_doc: str
   follow_trigger_prefix: str
   id_key: Callable[[str], Any]
   # ``SessionMetadata`` attribute holding the thread origin (``slack_origin``)
@@ -194,12 +198,6 @@ class ThreadReplyError(Exception):
     self.detail = detail
 
 
-# Fixed citation boundary appended to every platform-sourced summon prompt so
-# the master scopes its citations to the thread and public content only.
-CITATION_BOUNDARY = ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
-                     "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。")
-
-
 def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
   """Read one prompts doc fresh from disk, raising a ValueError naming the path when missing.
 
@@ -215,16 +213,21 @@ def load_prompt_doc(repo_root: Path, name: str, *, likely_cause: str) -> str:
     raise ValueError(f"{name} prompt not found at {path} — {likely_cause}") from e
 
 
-def summon_prompt_tail(platform_line: str, cfg: CharlieBotConfig) -> str:
-  """The summon prompt's fixed tail: the citation boundary, the PII red line, and the reply-format contract.
+def summon_prompt_tail(platform: ThreadPlatform, platform_line: str, cfg: CharlieBotConfig) -> str:
+  """The summon prompt's fixed tail: the platform's scope doc, the PII red line, and the reply-format contract.
 
-  Both docs (prompts/thread_reply_redline.md, prompts/thread_reply_format.md)
-  are read fresh from prompts/ on every call — no caching, so an edit takes
-  effect on the next summon. A missing or unreadable doc raises a ValueError
-  naming the path; a prompt without both docs is never built. The
-  platform-specific facts ride in through *platform_line*; the shared
-  reply-format contract is reused unchanged across platforms.
+  All three docs (the platform's scope doc, prompts/thread_reply_redline.md,
+  prompts/thread_reply_format.md) are read fresh from prompts/ on every call —
+  no caching, so an edit takes effect on the next summon. A missing or
+  unreadable doc raises a ValueError naming the path; a prompt without all
+  three docs is never built. The platform-specific facts ride in through
+  *platform_line* and the scope doc name through *platform*; the red line and
+  the reply-format contract are shared unchanged across platforms.
   """
+  scope_doc = load_prompt_doc(
+      cfg.charlie_bot_repo,
+      platform.scope_doc,
+      likely_cause=f"the repo checkout most likely predates the {platform.scope_doc} addition commit")
   red_line = load_prompt_doc(
       cfg.charlie_bot_repo,
       "thread_reply_redline.md",
@@ -233,7 +236,7 @@ def summon_prompt_tail(platform_line: str, cfg: CharlieBotConfig) -> str:
       cfg.charlie_bot_repo,
       "thread_reply_format.md",
       likely_cause="the repo checkout most likely predates the thread-reply-format rename commit")
-  return f"{platform_line}\n\n{CITATION_BOUNDARY}\n{red_line}\n{reply_format}"
+  return f"{platform_line}\n\n{scope_doc}\n{red_line}\n{reply_format}"
 
 
 def chunk_text(text: str, limit: int) -> list[str]:

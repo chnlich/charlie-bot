@@ -59,8 +59,6 @@ from src.core.sessions import SessionManager
 # _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
 from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
 
-# CITATION_BOUNDARY keeps its importable Slack name for the summon-prompt tests.
-from src.core.thread_entry import CITATION_BOUNDARY as CITATION_BOUNDARY
 from src.core.thread_entry import (
     ThreadAdapter,
     ThreadMessage,
@@ -116,6 +114,7 @@ SLACK = ThreadPlatform(
     reply_event_type=ET.SLACK_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
+    scope_doc="slack_reply_scope.md",
     follow_trigger_prefix=_FOLLOW_TRIGGER_PREFIX,
     id_key=str,
     origin_field="slack_origin",
@@ -248,15 +247,15 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
   its slack skill when the round runs — a snapshot persisted here would go
   stale as the thread keeps changing after the mention.
 
-  The tail after the platform line (citation boundary, PII red line,
-  reply-format contract) is the shared one from thread_entry, read fresh from
-  prompts/ on every call — no caching, so an edit takes effect on the next
-  summon.
+  The tail after the platform line (the platform's scope doc, the PII red
+  line, the reply-format contract) is the shared one from thread_entry, read
+  fresh from prompts/ on every call — no caching, so an edit takes effect on
+  the next summon.
   """
   return (
       f"Slack 线程召唤：{permalink}\n\n"
       "用 slack 技能按链接读线程（conversations.replies，channel 与 thread_ts 从链接解析）。\n\n"
-      f"{summon_prompt_tail(_PLATFORM_LINE, cfg)}")
+      f"{summon_prompt_tail(SLACK, _PLATFORM_LINE, cfg)}")
 
 
 async def handle_app_mention(
@@ -351,7 +350,8 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
       f"{_FOLLOW_TRIGGER_PREFIX} floor={floor_ts}\n"
       f"Slack 线程跟帖唤醒：{permalink}\n"
       "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；"
-      "回复之前从仓库重读 prompts/thread_reply_redline.md 与 prompts/thread_reply_format.md；"
+      f"回复之前从仓库重读 prompts/{SLACK.scope_doc}、prompts/thread_reply_redline.md 与 "
+      "prompts/thread_reply_format.md；"
       "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；"
       f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 

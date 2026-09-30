@@ -29,6 +29,10 @@ _OTHER_CHANNEL = "800000000000000004"
 _OTHER_GUILD = "800000000000000005"
 _USER = "700000000000000001"
 _BOT = "600000000000000001"
+# Placeholder account and person names for the discord.allowed_users map: no real identity.
+_PERSON = "tester"
+_OTHER_USER = "700000000000000002"
+_UNLISTED = "700000000000000003"
 
 # The factory the commands resolve at call time, so patching it hands every
 # path the same fake client.
@@ -105,11 +109,14 @@ class FakeDiscordClient:
 
 
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """Config with the home under tmp_path, the stubbed test token, and one allowed user."""
+  """Config with the home under tmp_path, the stubbed test token, and one mapped account."""
   stub_credentials({"discord": {"bot_token": "test-bot-token"}})
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      discord={"allowed_user_ids": [_USER]},
+      discord={"allowed_users": {
+          _USER: _PERSON,
+          _OTHER_USER: "tester-two"
+      }},
       backends=fake_backends(),
   )
 
@@ -288,6 +295,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
       "id": _THREAD,
       "author_id": _USER,
       "author": "Display Name",
+      "person": _PERSON,
       "timestamp": "2026-08-26T00:00:00Z",
       "content": "please plan the release",
       "attachments": [],
@@ -298,6 +306,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
       "id": _mid(1),
       "author_id": _USER,
       "author": "plain-name",
+      "person": _PERSON,
       "timestamp": "2026-08-26T00:00:01Z",
       "content": "first follow up",
       "attachments": [],
@@ -318,6 +327,29 @@ async def test_read_skips_a_404_starter(tmp_path: Path) -> None:
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
   assert [m["unread"] for m in result["messages"]] == [True, True]
+
+
+@pytest.mark.asyncio
+async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_path: Path) -> None:
+  """person is the account's configured name; an author outside the map reads as None everywhere."""
+  cfg, session_mgr, client = _rig(
+      tmp_path,
+      channels={
+          _THREAD: [_message(1, "mine"), _message(2, "unlisted", author=_UNLISTED)],
+          _OTHER_CHANNEL: [_message(3, "linked", author=_UNLISTED)],
+      })
+  session_id = await _make_session(session_mgr)
+
+  with patch(_BOT_CLIENT_TARGET, return_value=client):
+    own = await read_thread(session_id, None, 5, cfg, session_mgr)
+    linked = await read_thread(
+        session_id, f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}", 5, cfg, session_mgr)
+
+  persons = {m["id"]: m["person"] for m in own["messages"]}
+  assert persons[_mid(1)] == _PERSON
+  assert persons[_mid(2)] is None
+  # The --url readback carries person the same way.
+  assert linked["messages"][0]["person"] is None
 
 
 # ---------------------------------------------------------------------------

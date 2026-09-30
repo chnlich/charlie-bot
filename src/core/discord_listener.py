@@ -152,6 +152,7 @@ DISCORD = ThreadPlatform(
     reply_event_type=ET.DISCORD_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
+    scope_doc="discord_reply_scope.md",
     follow_trigger_prefix=_FOLLOW_TRIGGER_PREFIX,
     id_key=snowflake_key,
     origin_field="discord_origin",
@@ -193,15 +194,15 @@ def _build_summon_prompt(link: str, cfg: CharlieBotConfig) -> str:
   changing after the mention, and the gateway payload that started the round
   carries only one message of it.
 
-  The tail after the platform line (citation boundary, PII red line,
-  reply-format contract) is the shared one from thread_entry, read fresh from
-  prompts/ on every call — no caching, so an edit takes effect on the next
-  summon.
+  The tail after the platform line (the platform's scope doc, the PII red
+  line, the reply-format contract) is the shared one from thread_entry, read
+  fresh from prompts/ on every call — no caching, so an edit takes effect on
+  the next summon.
   """
   return (
       f"Discord 线程召唤：{link}\n\n"
       f"用 `{_READ_COMMAND}` 读这条线程（服务端代读，返回 bot 在这条线程里能看到的消息，未读的随之记为已读）。\n\n"
-      f"{summon_prompt_tail(_PLATFORM_LINE, cfg)}")
+      f"{summon_prompt_tail(DISCORD, _PLATFORM_LINE, cfg)}")
 
 
 def _build_follow_wake_message(floor: str, link: str) -> str:
@@ -217,7 +218,8 @@ def _build_follow_wake_message(floor: str, link: str) -> str:
       f"{_FOLLOW_TRIGGER_PREFIX} floor={floor}\n"
       f"Discord 线程跟帖唤醒：{link}\n"
       f"用 `{_READ_COMMAND}` 读线程里的新消息（本次返回的未读消息随之记为已读，本轮沉默也要先读）；"
-      "回复之前从仓库重读 prompts/thread_reply_redline.md 与 prompts/thread_reply_format.md；"
+      f"回复之前从仓库重读 prompts/{DISCORD.scope_doc}、prompts/thread_reply_redline.md 与 "
+      "prompts/thread_reply_format.md；"
       f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 
 
@@ -226,19 +228,20 @@ def _build_follow_wake_message(floor: str, link: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def eligible_message(message: dict, allowed_user_ids: list[str]) -> bool:
+def eligible_message(message: dict, allowed_users: dict[str, str]) -> bool:
   """The message-eligibility rule both the follow path and the adapter's readback apply.
 
   A message is eligible when a human authored it (no ``bot`` flag on the
   author, no ``webhook_id`` on the message), it is a plain message or a reply
-  (type 0 or 19), and its author is allowed. Gate eligibility equals guard
-  eligibility, so nothing is demanded of an ack that the session would never
-  consume; the follow side restates the same rule against the raw payload.
+  (type 0 or 19), and its author's id is a key of the ``discord.allowed_users``
+  map. Gate eligibility equals guard eligibility, so nothing is demanded of an
+  ack that the session would never consume; the follow side restates the same
+  rule against the raw payload.
   """
   author = message.get("author") or {}
   return (
       not author.get("bot") and message.get("webhook_id") is None and message.get("type") in (0, 19) and
-      author.get("id") in allowed_user_ids)
+      author.get("id") in allowed_users)
 
 
 def _bot_client() -> DiscordClient:
@@ -299,7 +302,7 @@ class DiscordThreadAdapter(ThreadAdapter):
       page = await client.get_messages(origin.thread_id, after=after, limit=100)
       messages.extend(
           ThreadMessage(m["id"], m["author"]["id"],
-                        m.get("content") or "") for m in page if eligible_message(m, cfg.discord.allowed_user_ids))
+                        m.get("content") or "") for m in page if eligible_message(m, cfg.discord.allowed_users))
       if len(page) < 100:
         return messages
       after = page[-1]["id"]
@@ -395,7 +398,7 @@ async def handle_message_create(
   channel_id = message.get("channel_id")
   message_id = message.get("id")
   author_id = (message.get("author") or {}).get("id")
-  if not eligible_message(message, cfg.discord.allowed_user_ids):
+  if not eligible_message(message, cfg.discord.allowed_users):
     return None
   mentioned = bot_user_id in _mention_ids(message)
 

@@ -20,8 +20,10 @@ chunk of the reply posts.
 
 ``read`` posts the session, an optional Discord link and the page size to the
 internal discord/read endpoint and prints the readback JSON: ``messages`` (each
-with ``id``, ``author_id``, ``author``, ``timestamp``, ``content``, ``attachments``
-and ``unread``), ``watermark_id`` and ``more_unread``. Without ``--url`` it reads
+with ``id``, ``author_id``, ``author``, ``person`` (the name the
+``discord.allowed_users`` map gives the author's account, null when the account
+is not in the map), ``timestamp``, ``content``, ``attachments`` and ``unread``),
+``watermark_id`` and ``more_unread``. Without ``--url`` it reads
 the session's own thread and marks the unread messages it returned as read; with
 ``--url`` it reads the linked channel or thread and marks nothing. ``--limit`` is
 the page size, 1..100, default 50.

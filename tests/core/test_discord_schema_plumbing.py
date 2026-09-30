@@ -17,14 +17,22 @@ _THREAD = "100000000000000003"
 _WATERMARK = "100000000000000004"
 
 
-def test_config_without_discord_key_yields_empty_allow_list() -> None:
+def test_config_without_discord_key_yields_an_empty_map() -> None:
   cfg = CharlieBotConfig.model_validate({})
-  assert cfg.discord.allowed_user_ids == []
+  assert cfg.discord.allowed_users == {}
 
 
 def test_discord_unknown_keys_are_rejected() -> None:
   with pytest.raises(ValidationError):
     CharlieBotConfig.model_validate({"discord": {"allowed_channels": ["x"]}})
+
+
+def test_discord_legacy_allow_list_key_is_rejected_with_its_successor_named() -> None:
+  """The retired discord.allowed_user_ids list fails at load, naming the map that replaced it."""
+  with pytest.raises(ValidationError) as excinfo:
+    CharlieBotConfig.model_validate({"discord": {"allowed_user_ids": ["700000000000000001"]}})
+  assert "discord.allowed_user_ids" in str(excinfo.value)
+  assert "discord.allowed_users" in str(excinfo.value)
 
 
 def test_discord_bot_token_comes_from_credentials() -> None:

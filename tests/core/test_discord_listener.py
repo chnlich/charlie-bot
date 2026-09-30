@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    ROOT,
     THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
     THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     fake_backends,
@@ -24,6 +25,7 @@ from src.core.discord_listener import (
     _DM_NOTICE,
     _REPLY_COMMAND,
     DiscordThreadAdapter,
+    _build_follow_wake_message,
     deliver_done,
     handle_message_create,
     post_reply,
@@ -106,7 +108,9 @@ def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   stub_credentials({"discord": {"bot_token": "test-bot-token"}})
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      discord={"allowed_user_ids": [_USER]},
+      discord={"allowed_users": {
+          _USER: "tester"
+      }},
       backends=fake_backends(),
   )
 
@@ -231,6 +235,39 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> 
   trigger.assert_awaited_once()
   assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
   assert link in trigger.await_args.args[1]
+
+
+@pytest.mark.asyncio
+async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_old_boundary(tmp_path: Path) -> None:
+  """The tail's scope slot holds the Discord scope doc verbatim; the old fixed citation boundary is gone."""
+  cfg, session_mgr, trigger_mgr, client = _rig(
+      tmp_path, channels={_PARENT: {
+          "id": _PARENT,
+          "type": 0,
+          "name": "general"
+      }})
+  tasks: list[asyncio.Task] = []
+
+  with _round_seam(tasks):
+    sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    await _drain(tasks)
+
+  events = session_mgr.load_chat_events_sync(sid)
+  content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
+  scope = (ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
+  red_line = (ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
+  reply_format = (ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()
+  assert content.endswith(f"{scope}\n{red_line}\n{reply_format}")
+  # The old platform-neutral citation boundary no longer rides the Discord prompt.
+  assert "已成文的私有内容不引用" not in content
+
+
+def test_follow_wake_names_the_discord_scope_doc_and_the_shared_docs() -> None:
+  """The wake orders the scope doc, the red line, and the reply format re-read before any reply."""
+  msg = _build_follow_wake_message("1000000000000000100", f"https://discord.com/channels/{_GUILD}/{_PARENT}")
+  assert "prompts/discord_reply_scope.md" in msg
+  assert "prompts/thread_reply_redline.md" in msg
+  assert "prompts/thread_reply_format.md" in msg
 
 
 @pytest.mark.asyncio

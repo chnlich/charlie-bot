@@ -6,55 +6,18 @@ import pytest
 from conftest import (
     OPUS_BACKEND_ID,
     append_events,
-    apply_config_overrides,
     bind_deps_managers,
     create_scheduled_node,
     cron_d_dir,
-    dump_yaml,
+    make_cron_sessions_client,
     make_legacy_cron_session,
     make_scheduler_setup,
     read_chat_events,
     user_event,
-    write_cron_task,
-    write_nightly_prompt,
+    write_nightly_task,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api.cron import router as cron_router
-from src.api.deps import get_session_manager
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig
 from src.core.models import SessionStatus
-from src.core.sessions import SessionManager
-
-
-def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
-  """TestClient mounting the cron router plus the sessions router (the scheduled listing and
-  unarchive endpoints) with cfg/session_mgr as dependency overrides."""
-  app = FastAPI()
-  app.include_router(cron_router, prefix="/api/cron")
-  app.include_router(sessions_router, prefix="/api/sessions")
-  apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  return TestClient(app)
-
-
-def write_nightly_task(home: Path) -> Path:
-  """Seed one healthy 'nightly' cron job (pointer-backed host file, as production files look)
-  and return its yaml path."""
-  prompt_path = write_nightly_prompt(home, "nightly prompt")
-  return write_cron_task(
-      home,
-      "nightly",
-      dump_yaml(
-          {
-              "cron": "0 3 * * *",
-              "prompt_file": str(prompt_path),
-              "timezone": "America/Los_Angeles",
-              "enabled": True,
-          }),
-  )
 
 
 @pytest.mark.asyncio
@@ -71,7 +34,7 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
 
-  with make_cron_sessions_client(cfg, session_mgr) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.delete("/api/cron/tasks/nightly")
 
   assert response.status_code == 200
@@ -97,7 +60,7 @@ async def test_delete_keeps_the_node_dir_and_history(tmp_path: Path, temp_home: 
   events_path = session_mgr.get_chat_events_path(node.id)
   append_events(events_path, [user_event("e0")])
 
-  with make_cron_sessions_client(cfg, session_mgr) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.delete("/api/cron/tasks/nightly")
 
   assert response.status_code == 200

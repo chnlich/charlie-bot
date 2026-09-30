@@ -5468,8 +5468,8 @@ from src.core.sessions import SessionManager
 from src.core import finalize_effects
 
 # Worst judgment corpus: the session whose LIVE chat file carries the most
-# events; every delegation's finalize chain scans exactly this session's
-# history (the delegating master session is the busiest chat file).
+# events; the scans' cost is O(history), so the busiest chat file is the
+# corpus the per-event line prices.
 root = Path.home() / ".charliebot" / "sessions"
 best, best_n = None, -1
 for d in root.iterdir():
@@ -5517,7 +5517,7 @@ async def run_once():
     return present, woke, (max(gaps) if gaps else wall), wall
 
 async def main():
-    await run_once()  # cold pass, as at the first finalize after a server start; not timed
+    await run_once()  # warm-up: one untimed cold pass so the timed rounds read the warm cache
     results = []
     for _ in range(5):
         results.append(await run_once())

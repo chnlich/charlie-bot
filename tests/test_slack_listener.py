@@ -258,12 +258,12 @@ async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
 
 # --- Socket Mode close wait ---------------------------------------------------
 #
-# The listener's cancel exits `websockets.connect(...)`, whose close handshake
-# waits close_timeout for the peer's close frame. Slack's Socket Mode endpoint
-# never answers one, so the wait used to be websockets' 10 s default on every
-# server stop and every refresh reconnect. Both tests here drive the real
-# run_listener against the conftest stand-in (WsServerNeverAnswersClose) with
-# the SlackClient.open_connection seam pointed at it and the thread backfill
+# Slack's Socket Mode endpoint never answers a client close frame, so the
+# close handshake `websockets.connect(...)` exits through can never complete;
+# the listener's session exit aborts the transport instead of waiting out
+# close_timeout. Both tests here drive the real run_listener against the
+# conftest stand-in (WsServerNeverAnswersClose) with the
+# SlackClient.open_connection seam pointed at it and the thread backfill
 # stubbed.
 
 _WS_HELLO = [{"type": "hello"}]
@@ -302,10 +302,9 @@ async def _await_listener_cancel(task: asyncio.Task) -> float:
 
 
 @pytest.mark.asyncio
-async def test_listener_cancel_waits_only_the_configured_close_timeout(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Cancelling the listener waits WS_CLIENT_CLOSE_TIMEOUT for the peer's close
-  frame, not websockets' 10 s default: the stand-in never answers one."""
+async def test_listener_cancel_skips_the_close_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Cancelling the listener aborts the transport instead of waiting out
+  WS_CLIENT_CLOSE_TIMEOUT for the close frame the stand-in never answers."""
   from src.core import timeouts
 
   monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
@@ -317,9 +316,9 @@ async def test_listener_cancel_waits_only_the_configured_close_timeout(
         await asyncio.sleep(0.02)
     await asyncio.sleep(0.05)  # hello round trip: the listener parks in its receive await
     elapsed = await _await_listener_cancel(task)
-    assert elapsed < timeouts.WS_CLIENT_CLOSE_TIMEOUT + 0.5, (
-        f"listener cancel took {elapsed:.3f}s; the close wait did not honor "
-        f"WS_CLIENT_CLOSE_TIMEOUT={timeouts.WS_CLIENT_CLOSE_TIMEOUT}")
+    assert elapsed < timeouts.WS_CLIENT_CLOSE_TIMEOUT, (
+        f"listener cancel took {elapsed:.3f}s; the session exit paid the "
+        f"WS_CLIENT_CLOSE_TIMEOUT={timeouts.WS_CLIENT_CLOSE_TIMEOUT} close wait")
   finally:
     await stand_in.stop()
 

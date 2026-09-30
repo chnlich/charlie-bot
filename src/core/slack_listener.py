@@ -639,53 +639,73 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
 
     try:
       async with websockets.connect(url, max_size=None, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as ws:
-        await _expect_hello(ws)
-        logger.info("slack_listener_connected")
-        await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)
-        async for raw in ws:
-          envelope = json.loads(raw)
-          envelope_id = envelope.get("envelope_id")
-          if envelope.get("type") == "disconnect":
-            logger.info("slack_listener_disconnect")
-            break
-          logger.debug("slack_listener_envelope", envelope_id=envelope_id)
-          if envelope_id is not None:
-            await ws.send(json.dumps({"envelope_id": envelope_id}))
-          inner = None
-          if envelope.get("type") == "events_api":
-            payload = envelope.get("payload") or {}
-            inner = payload.get("event")
-          if inner and inner.get("type") == "app_mention":
-            channel = inner.get("channel")
-            thread_ts = inner.get("thread_ts") or inner.get("ts")
-            slack_user = inner.get("user")
-            try:
-              sid = await handle_app_mention(inner, cfg, session_mgr, client, trigger_mgr)
-              logger.info(
-                  "slack_listener_app_mention_handled",
-                  channel=channel,
-                  thread_ts=thread_ts,
-                  slack_user=slack_user,
-                  session=sid)
-            except Exception as e:
-              logger.exception(
-                  "slack_listener_app_mention_handle_failed",
-                  channel=channel,
-                  thread_ts=thread_ts,
-                  slack_user=slack_user,
-                  error=str(e))
-          elif inner and inner.get("type") == "message":
-            try:
-              await handle_thread_message(inner, cfg, session_mgr, client, trigger_mgr)
-            except Exception as e:
-              logger.exception(
-                  "slack_listener_message_handle_failed",
-                  channel=inner.get("channel"),
-                  thread_ts=inner.get("thread_ts"),
-                  slack_user=inner.get("user"),
-                  error=str(e))
+        try:
+          await _serve_socket_mode(ws, cfg, session_mgr, client, trigger_mgr)
+        finally:
+          # Slack's Socket Mode endpoint never answers a client close frame, so
+          # the context manager's graceful close would wait out close_timeout
+          # on every session exit — each server stop and each refresh
+          # reconnect. Aborting the transport fires the connection-lost waiter
+          # that close's wait polls, ending the close immediately (websockets
+          # asyncio implementation, v16: no public abort on the connection).
+          ws.transport.abort()
     except Exception as e:
       logger.warning("slack_listener_connection_dropped", error=str(e))
 
     await asyncio.sleep(backoff)
     backoff = min(backoff * 2, 30.0)
+
+
+async def _serve_socket_mode(
+    ws: ClientConnection, cfg: CharlieBotConfig, session_mgr: SessionManager, client: SlackClient,
+    trigger_mgr: TriggerManager) -> None:
+  """One Socket Mode connection's serve: hello, thread backfill, envelope loop.
+
+  Returns on the server-sent disconnect; every other exit raises and the
+  reconnect loop in ``run_listener`` owns it.
+  """
+  await _expect_hello(ws)
+  logger.info("slack_listener_connected")
+  await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)
+  async for raw in ws:
+    envelope = json.loads(raw)
+    envelope_id = envelope.get("envelope_id")
+    if envelope.get("type") == "disconnect":
+      logger.info("slack_listener_disconnect")
+      return
+    logger.debug("slack_listener_envelope", envelope_id=envelope_id)
+    if envelope_id is not None:
+      await ws.send(json.dumps({"envelope_id": envelope_id}))
+    inner = None
+    if envelope.get("type") == "events_api":
+      payload = envelope.get("payload") or {}
+      inner = payload.get("event")
+    if inner and inner.get("type") == "app_mention":
+      channel = inner.get("channel")
+      thread_ts = inner.get("thread_ts") or inner.get("ts")
+      slack_user = inner.get("user")
+      try:
+        sid = await handle_app_mention(inner, cfg, session_mgr, client, trigger_mgr)
+        logger.info(
+            "slack_listener_app_mention_handled",
+            channel=channel,
+            thread_ts=thread_ts,
+            slack_user=slack_user,
+            session=sid)
+      except Exception as e:
+        logger.exception(
+            "slack_listener_app_mention_handle_failed",
+            channel=channel,
+            thread_ts=thread_ts,
+            slack_user=slack_user,
+            error=str(e))
+    elif inner and inner.get("type") == "message":
+      try:
+        await handle_thread_message(inner, cfg, session_mgr, client, trigger_mgr)
+      except Exception as e:
+        logger.exception(
+            "slack_listener_message_handle_failed",
+            channel=inner.get("channel"),
+            thread_ts=inner.get("thread_ts"),
+            slack_user=inner.get("user"),
+            error=str(e))

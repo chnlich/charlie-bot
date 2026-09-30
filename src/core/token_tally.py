@@ -139,6 +139,15 @@ class TallyCache:
 
   SCHEMA_VERSION = 3
 
+  # Loaded-document memo, one entry per cache path: a repeat load whose document file
+  # sits byte-still since the load that parsed it reuses that parse. The (size, mtime_ns)
+  # pair is the same witness class the ledger's page-rows memo stores. A stale hit is
+  # harmless by construction -- lookup_sig serves an entry only while the source file's
+  # own stat signature matches the entry's -- so an outdated document costs re-parses,
+  # never wrong numbers. The stored dict is shared read-only between the instances that
+  # serve from it: nothing writes _sources.
+  _load_memo: dict[str, tuple[tuple[int, int], dict[str, dict[str, dict]]]] = {}
+
   def __init__(self, sources: dict[str, dict[str, dict]]) -> None:
     self._sources = sources
     self._next: dict[str, dict[str, dict]] = defaultdict(dict)
@@ -151,6 +160,17 @@ class TallyCache:
     older shapes, and the first store rewrites them in the current one.
     """
     try:
+      st = path.stat()
+    except FileNotFoundError:
+      st = None
+    except OSError as exc:
+      notes.append(f"Tally cache: unreadable {path} ({exc}); rebuilt from the logs")
+      st = None
+    if st is not None:
+      hit = cls._load_memo.get(str(path))
+      if hit is not None and hit[0] == (st.st_size, st.st_mtime_ns):
+        return cls(hit[1])
+    try:
       doc = orjson.loads(path.read_bytes())
     except FileNotFoundError:
       doc = None
@@ -159,7 +179,10 @@ class TallyCache:
       doc = None
     if not isinstance(doc, dict) or doc.get("version") not in (1, 2, cls.SCHEMA_VERSION):
       return cls({})
-    return cls(doc.get("sources", {}))
+    sources = doc.get("sources", {})
+    if st is not None:
+      cls._load_memo[str(path)] = ((st.st_size, st.st_mtime_ns), sources)
+    return cls(sources)
 
   def save(self, path: Path) -> None:
     """Persist the next document atomically when it moved, creating the cache directory."""
@@ -979,13 +1002,15 @@ def capture_jsonl_sources(
     claude_homes: dict[str, Path],
     codex_homes: dict[str, Path],
     cache: TallyCache | None,
+    captured: dict[str, str],
 ) -> dict[str, int]:
   """Copy the Claude Code and Codex jsonl usage into the SQLite usage ledger, so the page's
   rows survive deletion of the source logs (see the ledger's module docstring).
 
   The serve rides the shared walk and cache-gated parse (``cache`` is the caller's
   TallyCache or None); a parsed file whose content signature the ledger already recorded for
-  this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
+  this host (``captured``, the caller's one captured-sigs read for the whole capture) is
+  skipped, and every other parsed file
   is written atomically with that signature. Each record dedupes on its record_id — Claude
   on the response's message id, Codex on the file session and event index — so a re-captured
   file re-upserts what it stored before and a message replayed into a second config dir
@@ -995,7 +1020,6 @@ def capture_jsonl_sources(
   Returns the records written per source label.
   """
   written: dict[str, int] = {USAGE_SOURCE_CLAUDE_CODE: 0, USAGE_SOURCE_CODEX: 0}
-  captured = ledger.captured_sigs(host)
   notes: list[str] = []
 
   rows = _walk_jsonl_logs("projects", claude_homes, USAGE_SOURCE_CLAUDE_CODE, notes)
@@ -1055,14 +1079,16 @@ def capture_jsonl_sources(
   return written
 
 
-def capture_charliebot(ledger: UsageLedger, host: str, sessions_dir: Path, cache: TallyCache | None) -> int:
+def capture_charliebot(
+    ledger: UsageLedger, host: str, sessions_dir: Path, cache: TallyCache | None, captured: dict[str, str]) -> int:
   """Copy the charlie-bot thread event logs and master-run captures into the SQLite usage
   ledger, so a thread's result totals survive deletion of its own event log (see the
   ledger's module docstring).
 
   The serve rides the shared walk and cache-gated parse (``cache`` is the caller's
   TallyCache or None); a parsed file whose stat signature the ledger already recorded for
-  this host (``captured_sigs``, read once per call) is skipped, and every other parsed file
+  this host (``captured``, the caller's one captured-sigs read for the whole capture) is
+  skipped, and every other parsed file
   is recorded with that signature — also one whose content yields no records, so an empty
   thread is never re-parsed. A thread with no metadata.json and one whose
   backend id cannot be classified contribute no records here; an unreadable file or a parse
@@ -1081,7 +1107,6 @@ def capture_charliebot(ledger: UsageLedger, host: str, sessions_dir: Path, cache
   Returns the records written.
   """
   registry = _backend_registry()
-  captured = ledger.captured_sigs(host)
   notes: list[str] = []
   written = 0
   for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, notes):
@@ -1311,7 +1336,7 @@ def _run_record(objects: list[dict], meta: dict, registry: dict, backend: str, r
       sessions=sessions)
 
 
-def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
+def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path, captured: dict[str, str]) -> int:
   """Copy the Run directories' raw captures into the SQLite usage ledger, so a run's totals
   survive deletion of its own raw log (see the ledger's module docstring).
 
@@ -1319,9 +1344,9 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
   the Run workers write. One record per run at most,
   deduped on the run id; the backend verdict in the run's metadata picks the usage arm (see
   ``_run_record``). Each candidate is stat'ed before anything opens it: its
-  ``st_mtime_ns:st_size`` pair is the signature, and one ``captured_sigs`` (read once per
-  call) already holds for this host skips the file outright — no log read, no
-  metadata.json — so an unchanged corpus pays one stat per run. Otherwise the file parses
+  ``st_mtime_ns:st_size`` pair is the signature, and ``captured`` (the caller's one
+  captured-sigs read for the whole capture) already holding for this host skips the file
+  outright — no log read, no metadata.json — so an unchanged corpus pays one stat per run. Otherwise the file parses
   as before and records the parse-time signature (taken before the read, so an append
   mid-read is seen on the next capture) — also one whose content yields no record, so a
   result-less run is never re-parsed. A missing or unreadable metadata.json raises: the
@@ -1330,7 +1355,6 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path) -> int:
   Returns the records written.
   """
   registry = _backend_registry()
-  captured = ledger.captured_sigs(host)
   written = 0
   for path in _iter_run_logs(sessions_dir):
     st = os.stat(path)
@@ -1412,7 +1436,7 @@ def capture_opencode(ledger: UsageLedger, host: str, db: Path) -> int:
       # leaves the probe's signature absent from captured_files, so the next capture still
       # re-reads those rows from the captured floor — the gate never hides uncaptured rows.
       ledger.record_gate(host, db_key, main_pair, wal_pair, sig)
-    captured = ledger.captured_sigs(host).get(db_key)
+    captured = ledger.captured_sig(host, db_key)
     if captured == sig:
       return 0
     if con is None:
@@ -1468,12 +1492,14 @@ def capture_usage(
   """
   notes: list[str] = []
   cache = TallyCache.load(cache_path, notes) if cache_path is not None else None
-  written = capture_jsonl_sources(ledger, host, claude_homes, codex_homes, cache)
+  captured = ledger.captured_sigs(host)
+  written = capture_jsonl_sources(ledger, host, claude_homes, codex_homes, cache, captured)
   if opencode_db is not None:
     written[USAGE_SOURCE_OPENCODE] = capture_opencode(ledger, host, opencode_db)
   if sessions_dir is not None:
     written[USAGE_SOURCE_CHARLIE_BOT] = (
-        capture_charliebot(ledger, host, sessions_dir, cache) + capture_runs(ledger, host, sessions_dir))
+        capture_charliebot(ledger, host, sessions_dir, cache, captured) +
+        capture_runs(ledger, host, sessions_dir, captured))
   if cache is not None:
     cache.save(cache_path)
   return written

@@ -136,6 +136,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M129 sidebar root-list changed round | M129 collector below | seconds per `GET /api/sessions/` request with a busy interval closed and the next opened since the previous request (the turn start/stop churn — `thinking_state.mark_busy`/`clear_busy` alternating over two active sessions between timed rounds; round 1 only opens, every later round moves two rows' states, so every round is a whole-body memo miss; scratch M119 corpus, live home read-only); the steady-state memo-hit serve is M119's reading, not this one — the production log shows the served shape is this miss nearly always (908 logged requests over 4.9 h, zero under 3 ms, the state churn the cron fleet and active turns pay) | median < max(0.005 s, rows × 0.0000200 s) (the after band reads 5.03-6.07 ms at 414 rows — 12.2-14.7 µs/row over the projection walk, the two moved rows' re-dumps, the payload assembly and the fresh deflate; the line sits 1.36-1.64× over the band, the M119 line's convention, so a new per-row disk term trips it while host-load noise stays inside; the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 | M130 token-usage opencode capture, fresh process | M130 collector below | seconds per fresh-process `capture_opencode` against the live opencode db (read-only, scratch ledger seeded by one capture; the db files byte-still across the timed rounds — the shape every server restart's first page load pays; files moving between rounds re-probe legitimately and the reading prices the probe, not the serve) | median < 0.005 s (the gate-hit band reads 0.13-0.17 ms — the db connection the gate skips plus two indexed ledger reads; the per-process probe it replaced reads 73.7-81.1 ms warm and 5.13 s on its first disk-cold run against the live 5.7 GB db, the scan the 2026-09-29 11:04 server log's 12.8 s first `/token-usage` load after the 11:00 restart carried; any probe returning to the fresh-process path trips the line ~15x) | — (introduced with its first history row) |
 | M131 sidebar root-list marked-session rebuild churn | M131 collector below | seconds per nine-round sequence of fresh marks: each round marks the six heaviest active thread-bearing sessions the way the workers' writes do and rebuilds each one's view rows (the seen-write rebuild the sidebar poll runs synchronously per marked session), live-corpus scratch copy | median < max(0.004 s, marked-sessions × 0.00022 s) (the after band reads 0.84-0.90 ms at six marked sessions — the line sits ~1.5x over it, the M119 line's convention; a regression to the whole-memo-drop shape reads 2.7-2.8 ms and trips 2.1x; the corpus-drift bias the M119 history documents applies) | — (introduced with its first history row) |
+| M132 token-usage capture wall, warm full corpus | M132 collector below | seconds per in-process `capture_usage` over the live corpora (scratch ledger and cache document; the live cache document seeds the scratch one, read once, never written; the opencode db leg is excluded — the M130 line owns it) | median < 0.17 s (the after band reads 0.130-0.133 s — one captured-sigs read, the stat-gated cache-document memo, and the charlie-bot walk; the line sits 1.28x over the band top and the pre-fix shape it guards — four captured-sigs reads plus the unconditional 4.5 MB document re-parse — reads 0.180-0.184 s and trips; the corpus the band prices is the 2026-09-30 sessions tree, 1973 session dirs and ~7.8k candidate files — a grown corpus re-prices the line the M72 way, and the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -9315,7 +9316,79 @@ EOF
 ```
 
 
+M132 — token-usage capture wall, warm full corpus. The page's ledger work on a standing
+load — the charlie-bot walk, the captured-sigs reads, and the cache-document load — in the
+shape the live server's capture runs, priced in-process against the branch checkout (the
+CHECKOUT convention the M62/M130 blocks set) while the served instance may still run older
+code. The scratch ledger and cache document isolate every write; the live corpora are
+read-only sources, and the opencode db leg is excluded (the M130 line owns it — its cold
+seed alone prices 218k record writes). The scratch ledger opens by copying the live
+ledger's captured-file signatures for this host (one read-only SELECT; the live server
+writes its own ledger, never this collector) — without it the cold pass re-writes every
+captured file's records one transaction each, ~2 minutes of fsyncs that would price the
+seed, not the serve:
+
+```bash
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import os, shutil, socket, sqlite3, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.token_tally import capture_usage
+from src.core.usage_ledger import UsageLedger
+
+scratch = Path(tempfile.mkdtemp(prefix="m132-capture-"))
+LEDGER, CACHE = scratch / "ledger.sqlite3", scratch / "cache.json"
+LIVE_CACHE = Path.home() / ".charliebot/cache/usage_capture/tally.json"
+if LIVE_CACHE.exists():
+    shutil.copy(LIVE_CACHE, CACHE)  # live document read once for the copy, never written
+HOST = socket.gethostname()
+LIVE_LEDGER = Path.home() / ".charliebot/usage/ledger.sqlite3"
+if LIVE_LEDGER.exists():
+    seed = UsageLedger(LEDGER)  # the open builds the scratch schema the copy writes into
+    seed.close()
+    live = sqlite3.connect(f"file:{LIVE_LEDGER}?mode=ro", uri=True)
+    try:
+        rows = live.execute("SELECT path, sig FROM captured_files WHERE host = ?", (HOST,)).fetchall()
+    finally:
+        live.close()
+    seed = sqlite3.connect(LEDGER)
+    try:
+        with seed:
+            seed.executemany("INSERT OR REPLACE INTO captured_files (host, path, sig) VALUES (?, ?, ?)",
+                             [(HOST, path, sig) for path, sig in rows])
+    finally:
+        seed.close()
+
+def homes(stem: str, marker: str) -> dict[str, Path]:
+    # Every $HOME/<stem>* dir carrying the walked tree: the same set the config's account
+    # list resolves to on this host, enumerated from the filesystem so the collector never
+    # loads the config (scratch CHARLIEBOT_HOME rule).
+    return {p.name: p for p in sorted(Path.home().glob(stem + "*")) if p.is_dir() and (p / marker).is_dir()}
+
+def capture():
+    with UsageLedger(LEDGER) as ledger:
+        return capture_usage(ledger, host=HOST,
+                             claude_homes=homes(".claude", "projects"), codex_homes=homes(".codex", "sessions"),
+                             opencode_db=None,
+                             sessions_dir=Path.home() / ".charliebot" / "sessions", cache_path=CACHE)
+
+capture()  # cold pass re-parses only the files that moved since the copied sigs; not timed
+times, written = [], None
+for _ in range(5):
+    t0 = time.perf_counter()
+    written = capture()
+    times.append(time.perf_counter() - t0)
+times.sort()
+print(f"checkout {Path(os.environ['CHECKOUT']).name}: standing capture wall median {times[2]:.4f} s, "
+      f"max {times[-1]:.4f} s over 5, records written {written}")
+shutil.rmtree(scratch)
+EOF
+```
+
 ## Sampling history
+| 2026-09-30 | this PR | M132 token-usage capture wall, the per-load fixed costs priced off it: every capture re-read the whole-host captured-sigs map four times — capture_jsonl_sources, capture_charliebot, capture_runs and capture_opencode each ran its own ``SELECT path, sig FROM captured_files WHERE host = ?`` (11,482 rows, ~14 ms) — and re-parsed the 4.53 MB cache document unconditionally on every load. The page's capture_usage now reads the map once and hands it to every leg (capture_opencode reads its single db row through the new indexed ``captured_sig``), and TallyCache.load memoizes the parsed document behind the file's (size, mtime_ns) pair — the ledger rows memo's witness class; a stale hit is harmless because lookup_sig serves an entry only while the source file's own stat signature matches. Verbatim collector, three interleaved main-checkout-before vs branch-worktree-after sets back-to-back at load 3.55-4.27 one-minute (a sibling cron run's collectors live on the host; both arms alternate under the same load): before medians 0.1802/0.1838/0.1829 s, maxima 0.1813-0.1863 s; after medians 0.1323/0.1300/0.1332 s, maxima 0.1616-0.1652 s — −26 % to −28 %, every paired set faster, maxima fully separated. Records written 0 in every timed round (the byte-still contract held); the live opencode db leg stays on the M130 line. Suite 1320-passed plus the documented environmental set (the 25 git_stash_guard errors, reproduced on the clean main checkout), ruff and yapf clean, 1 new test (the load memo's stat gate: a rewritten document re-reads) | every page load paid four full-map reads plus a 4.5 MB orjson parse before any walk or parse could start; the capture's legs share one host and one ledger, so one read answers all of them, and the document parse is pure repeat work while the file sits byte-still |
+
 | 2026-09-30 | this PR | M113 voice transcription wall, the CPU decode's segment fan-out: the offline path decoded the VAD windows strictly sequentially on one recognizer (num_threads=4), so the 102.2 s worst on-disk recording read 23-26 s quiet and 33-36 s contended — the server log's slowest served path — while the box's other four logical CPUs idled. The bundle now carries a recognizer pool and transcribe_pcm_offline fans the windows round-robin over it, joining in window order: on this host's 8 logical CPUs the pool is four recognizers at two ONNX threads each (the M113-probe matrix read 4×2 fastest of {1×4, 2×4, 2×3, 3×2, 4×2}; the cap bounds the resident weight copies at ~1.1 GB each and the boot build at ~3.5 s each; the GPU engine keeps its one-instance pool — concurrent generate calls serialize on the device). Verbatim collector, branch worktree (CHECKOUT at the worktree root, the M18/M62 protocol shape), before = the main checkout's standing sweep reading earlier this round: quiet median 25.75 s (RTF 0.25) → 18.18 s (RTF 0.18), −29 %; contended 8-hogs median 32.89 s (1.28× quiet) → 20.93 s (1.15×), −36 %; determinism true both arms; load 0.4-1.2 one-minute across both arms. Decode texts byte-identical across instance geometries (1×4, 2×4, 3×2, 4×2) and window orders on the probe corpus. Suite 1319-passed plus the documented environmental set (the 25 git_stash_guard errors, and the suite's built `_vfkspawn` extension which a fresh worktree must copy or build — both reproduced as environmental on this host), ruff and yapf clean, 4 new tests (window-order join against a reversed completion order, the one-instance pool, cross-request instance exclusivity — the entry count stays at 1 while the first decode holds the instance, a mutant with neutered locks fails it, and a failing window fails the whole call) | one recording's segments are independent decodes, and the autoregressive decoder steps of one window interleave with another's across instances where a single session's intra-op barriers stall — the gain lands mostly on the contended shape the 2026-09-21 nice-10 fix had already cut once |
 | 2026-09-30 | this PR | M98 memory-CLI invocation wall, the served token resolution's import graph priced off the wall: `src.core.runs` and `src.core.ndjson` imported asyncio at module level for one `to_thread` call each, and `src.core.models` eagerly re-exported the backend-field stack its session/run models never reference — the CLI's run-token audience resolution (`src.cli.memory`) imports all three, so the bystanders rode every served query beside the pydantic model stack it genuinely needs (the documented structural remainder, untouched). The module-level imports moved to their call sites (the json_utils deferral shape), the models re-export became a PEP 562 lazy re-export served through `deferred_import_loader` (every established `from src.core.models import <backend name>` consumer binds on first read; `import server` still loads the stack through its first consumer), and the read-only RunStore takes `control_lock=None` (the sync reads never touch it, a write path fails loud). Verbatim collector, interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of 7 fresh-process walls, served token shape (the sweep environment's run token), load 2.61-3.00-2.79 one-minute: median-of-medians 0.2287 → 0.1912 s (−16.4 %), every paired round faster, after maxima 0.195-0.203 under the before minima; served query stdout byte-identical across arms (sha1 5132832e037b), no-token witness band parity 0.044 vs 0.044 s; ruff and yapf clean, 1305-passed suite plus the documented environmental set reproduced on the clean base, and one new test (the lockless read-only store's record read, identity refusal through the live-log parse, loud write) | the token-scoped query paid the interpreter's heaviest stdlib chain plus the backend-field stack for one sync identity read; the asyncio import alone is ~30 ms of the wall and the backend stack ~20 ms more, both paid before any store byte is read |
 | 2026-09-30 | this PR | M7 token-usage page's warm ledger read, the grouped pass memoized on the ledger file's byte-still state: every page load re-ran the 499,840-row grouped pass (`_MODEL_ROWS_SQL`, 225-227 ms measured against a read-only open of the live ledger) even when the capture had written nothing — the live page's dominant shape (2 of 3 live GET probes read `0 records written` on every source). `model_rows_with_native_starts` serves repeat reads from a class-level single-entry memo keyed (path, (size, mtime_ns), this process's write generation, non-WAL journal): the stat pair moves on every committing writer's main-db rewrite (the ledger runs the default rollback journal), the generation catches this process's own `record_file`/`record_gate` writes outright, the pre-read stat must survive to the post-read check, and a WAL ledger stores nothing (its commits hide in the -wal sidecar) — the same (size, mtime_ns) witness class the capture gates already store. Evidence, interleaved A/B over per-arm fresh copies of the live ledger (239 MB) + tally cache doc, fresh process per arm per round, one untimed warm collect then 5 timed collect rounds (capture_usage over the live claude/codex/opencode/session sources read-only + the grouped read), arm order alternating, load 1.4-2.3 one-minute: before (main checkout) 0.3990/0.4143/0.3978 s medians → after (branch worktree) 0.1745/0.1761/0.1901 s, median-of-medians 0.399 → 0.176 s (−56 %), every paired round faster, each arm's timed rounds read 0 records written on every source, rows digest 802f118ab9f0 identical across arms; the standing M7 curl against the live server reads the pre-fix build until deploy (0.676 s median at this round's sweep, band); tests pin the four boundaries (memo identity on a still file, cross-instance write invalidation, own-write invalidation, WAL never stores); ruff and yapf clean | the page's remaining fixed per-load cost re-aggregated half a million unchanged rows on most loads |

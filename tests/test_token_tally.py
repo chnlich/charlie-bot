@@ -405,7 +405,8 @@ def _capture(claude: Claude | None,
   notes: list[str] = []
   tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
   written = tt.capture_jsonl_sources(
-      ledger, "host-a", claude.dirs if claude else {}, codex.homes if codex else {}, tally_cache)
+      ledger, "host-a", claude.dirs if claude else {}, codex.homes if codex else {}, tally_cache,
+      ledger.captured_sigs("host-a"))
   if tally_cache is not None:
     tally_cache.save(cache)
   return written
@@ -479,7 +480,7 @@ def _capture_charliebot(ledger: UsageLedger, sessions_dir: Path, cache: Path | N
   document, so every round shares the same cache-gated serve."""
   notes: list[str] = []
   tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
-  written = tt.capture_charliebot(ledger, "host-a", sessions_dir, tally_cache)
+  written = tt.capture_charliebot(ledger, "host-a", sessions_dir, tally_cache, ledger.captured_sigs("host-a"))
   if tally_cache is not None:
     tally_cache.save(cache)
   return written
@@ -690,7 +691,7 @@ class Runs:
 
 def _capture_runs(ledger: UsageLedger, sessions_dir: Path) -> int:
   """One Run capture round against *ledger*."""
-  return tt.capture_runs(ledger, "host-a", sessions_dir)
+  return tt.capture_runs(ledger, "host-a", sessions_dir, ledger.captured_sigs("host-a"))
 
 
 def _cc_claude_init(sid: str) -> dict:
@@ -920,6 +921,26 @@ def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
     assert _capture_runs(ledger, runs.root) == 1  # the append moved the stat: re-parsed
     row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
     assert (row.calls, row.in_fresh, row.cache_read, row.output) == (1, 190, 10, 9)
+
+
+# ---------------------------------------------------------------------------
+# tally cache document (TallyCache.load)
+# ---------------------------------------------------------------------------
+
+
+def test_tally_cache_load_reserves_the_memo_for_the_byte_still_document(tmp_path: Path) -> None:
+  """The loaded-document memo's stat gate: a byte-still document re-serves its parse and a
+  rewritten one re-reads. A stale document would be harmless on its own -- lookup_sig serves
+  an entry only while the source file's own signature matches -- but only while the memo
+  tracks the file, so the gate is what the test pins."""
+  cache = tmp_path / "tally.json"
+  notes: list[str] = []
+  cache.write_bytes(json.dumps({"version": 3, "sources": {"claude": {"k": {"sig": [1, 2]}}}}).encode())
+  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [1, 2]}
+  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [1, 2]}
+  cache.write_bytes(json.dumps({"version": 3, "sources": {"claude": {"k": {"sig": [3, 4]}}}}).encode())
+  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [3, 4]}
+  assert notes == []
 
 
 # ---------------------------------------------------------------------------

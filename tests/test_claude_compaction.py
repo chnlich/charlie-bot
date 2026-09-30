@@ -105,11 +105,9 @@ class _FakeProc:
     self._stdout = stdout
     self._on_communicate = on_communicate
     self._delay = delay
-    self.stdin_payload: bytes | None = None
     self.waited = False
 
   async def communicate(self, payload: bytes | None = None) -> tuple[bytes, bytes]:
-    self.stdin_payload = payload
     if self._delay:
       await asyncio.sleep(self._delay)
     if self._on_communicate is not None:

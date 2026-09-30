@@ -1770,7 +1770,6 @@ class FakeSlackClient:
     self.remove_calls: list[dict] = []
     self.reactions: dict[str, set[str]] = {}
     self.thread: list[dict] = []
-    self.reply_calls = 0
     self.fail_posts = fail_posts
     self._fail_remove = fail_remove
 
@@ -1781,7 +1780,6 @@ class FakeSlackClient:
   async def get_thread_replies(self, channel: str, thread_ts: str) -> list[dict]:
     """The thread-read seam the reply gate consumes; the seeded ``thread`` as a copy."""
     self.calls.append(("get_thread_replies", {"channel": channel, "thread_ts": thread_ts}))
-    self.reply_calls += 1
     return list(self.thread)
 
   async def post_message(self, channel: str, text: str, thread_ts: str) -> dict:

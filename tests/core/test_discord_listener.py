@@ -218,8 +218,8 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_old_boundary(tmp_path: Path) -> None:
-  """The tail's scope slot holds the Discord scope doc verbatim; the old fixed citation boundary is gone."""
+async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_citation_boundary(tmp_path: Path) -> None:
+  """The tail's scope slot holds the Discord scope doc verbatim; the Slack scope's citation boundary is not appended."""
   cfg, session_mgr, trigger_mgr, client = _rig(
       tmp_path, channels={_PARENT: {
           "id": _PARENT,
@@ -238,7 +238,8 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_old_bound
   red_line = (ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
   reply_format = (ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()
   assert content.endswith(f"{scope}\n{red_line}\n{reply_format}")
-  # The old platform-neutral citation boundary no longer rides the Discord prompt.
+  # The citation boundary lives only in the Slack scope doc; the Discord prompt
+  # carries just its own three docs and must not inherit it.
   assert "已成文的私有内容不引用" not in content
 
 

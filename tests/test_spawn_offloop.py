@@ -29,15 +29,16 @@ _PY_PRINT = (
 
 
 async def _spawn(*args: str, **kwargs: object) -> SpawnedProcess:
-  defaults: dict = dict(
-      cwd="/tmp",
-      env=dict(os.environ),
-      stdin=asyncio.subprocess.DEVNULL,
-      stdout=asyncio.subprocess.PIPE,
-      stderr=asyncio.subprocess.PIPE,
-      limit=LIMIT,
-      start_new_session=True,
-      preexec_fn=None)
+  defaults: dict = {
+      "cwd": "/tmp",
+      "env": dict(os.environ),
+      "stdin": asyncio.subprocess.DEVNULL,
+      "stdout": asyncio.subprocess.PIPE,
+      "stderr": asyncio.subprocess.PIPE,
+      "limit": LIMIT,
+      "start_new_session": True,
+      "preexec_fn": None,
+  }
   defaults.update(kwargs)
   return await spawn_subprocess(*args, **defaults)
 

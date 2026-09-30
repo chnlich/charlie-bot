@@ -15,19 +15,15 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, identity_of, live_subprocess, make_home_config
+from conftest import OPERATOR, NotificationSpy, build_env, identity_of, live_subprocess
 
 from src.core import event_types as ET
 from src.core.models import RunRecord
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
 
 
 @pytest_asyncio.fixture
 async def env(tmp_path: Path):
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+  _, session_mgr, tree = build_env(tmp_path)
   root = await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   worker = await tree.create_task(
@@ -39,28 +35,6 @@ async def env(tmp_path: Path):
       backend=None,
       caller=OPERATOR)
   return tree, session_mgr, root.id, worker.id
-
-
-class NotificationSpy:
-  """Records the tree notifications the sink emits, capturing what an observer
-  can read from the tree projection at signal time."""
-
-  def __init__(self, tree: TaskTreeManager) -> None:
-    self.calls: list[tuple[str, str | None]] = []
-    self.rows_at_signal: list[dict] = []
-    self._tree = tree
-    self._orig = tree.events.notify_tree_changed
-
-  async def _spy(self, session_id: str, event_type: str | None) -> None:
-    self.calls.append((session_id, event_type))
-    index = await self._tree._get_index()
-    self.rows_at_signal.append({
-        "node": self._tree.session_row(index, session_id).model_dump(),
-    })
-    await self._orig(session_id, event_type)
-
-  def install(self) -> None:
-    self._tree.events.notify_tree_changed = self._spy  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio

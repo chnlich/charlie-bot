@@ -17,49 +17,19 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, make_home_config
+from conftest import OPERATOR, NotificationSpy, build_env
 
 from src.core import event_types as ET
 from src.core.models import TaskSpec
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskInvalidError, TaskNotFoundError, TaskTreeManager
+from src.core.task_sessions import TaskInvalidError, TaskNotFoundError
 
 
 @pytest_asyncio.fixture
 async def env(tmp_path: Path):
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+  _, session_mgr, tree = build_env(tmp_path)
   root = await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   return tree, session_mgr, root.id
-
-
-class NotificationSpy:
-  """Records the tree notifications create_task emits, capturing what an
-  observer can read at signal time."""
-
-  def __init__(self, tree: TaskTreeManager) -> None:
-    self.calls: list[tuple[str, str | None]] = []
-    self.readable_at_signal: list[dict] = []
-    self._tree = tree
-    self._orig = tree.events.notify_tree_changed
-
-  async def _spy(self, session_id: str, event_type: str | None) -> None:
-    self.calls.append((session_id, event_type))
-    meta = await self._tree.load_meta(session_id)
-    index = await self._tree._get_index()
-    row = self._tree.session_row(index, session_id) if meta is not None else None
-    parent_row = (self._tree.session_row(index, row.task_parent_id) if row is not None and row.task_parent_id else None)
-    self.readable_at_signal.append(
-        {
-            "node": row.model_dump() if row else None,
-            "parent": parent_row.model_dump() if parent_row else None,
-        })
-    await self._orig(session_id, event_type)
-
-  def install(self) -> None:
-    self._tree.events.notify_tree_changed = self._spy  # type: ignore[method-assign]
 
 
 @pytest.mark.asyncio
@@ -76,7 +46,7 @@ async def test_create_notifies_with_the_node_readable_at_signal(env) -> None:
       backend=None,
       caller=OPERATOR)
   assert spy.calls == [(child.id, ET.TASK_CREATED)]
-  signal = spy.readable_at_signal[0]
+  signal = spy.rows_at_signal[0]
   assert signal["node"] is not None and signal["node"]["id"] == child.id, (
       "the observer can read the new node as soon as the signal arrives")
   assert signal["parent"] is not None and signal["parent"]["id"] == root_id

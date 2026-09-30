@@ -1,12 +1,16 @@
 """Tests for src/cli/discord.py — argv to request body, readback printing, refusal exit codes."""
 
-import io
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-from conftest import CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, make_json_response, patched_cli_post
+from conftest import (
+    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
+    make_json_response,
+    patched_cli_post,
+    run_reply_stdin_case,
+)
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.discord import main
@@ -62,14 +66,7 @@ def test_reply_posts_the_file_text_for_the_cwd_session_and_prints_the_readback(
 
 def test_reply_reads_stdin_when_the_file_is_a_dash(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  monkeypatch.setattr("sys.stdin", io.StringIO("piped reply\n"))
-  resp = make_json_response(_REPLY_READBACK)
-  with patched_cli_post(cfg, ["discord", "reply", "--file", "-"], return_value=resp) as post_mock:
-    main()
-
-  assert post_mock.call_args.kwargs["json"]["text"] == "piped reply\n"
-  assert json.loads(capsys.readouterr().out) == _REPLY_READBACK
+  run_reply_stdin_case(monkeypatch, tmp_path, capsys, "discord", _REPLY_READBACK)
 
 
 def test_stale_thread_refusal_exits_non_zero_with_the_detail_on_stderr(

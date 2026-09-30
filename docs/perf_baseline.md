@@ -3403,7 +3403,7 @@ shutil.copytree(best / "threads", dst)
 spec = (SID, dst, home / "sessions" / SID / "triggers", home / "sessions" / SID / "plans.json")
 
 sidebar_state.reset_for_tests()
-probe_sidebar_state_sync([spec])  # cold pass, as at a server start; not timed
+probe_sidebar_state_sync([spec], walked=None)  # cold pass, as at a server start; not timed
 
 # Victim rotation, resolved once: each post-write sweep renames the next
 # metadata file. (Picking the newest victim per round with a Path.glob would
@@ -4458,12 +4458,12 @@ for d in root.glob("*/triggers"):
         best, best_n = d, n
 SID = best.parent.name
 
-pending_trigger_state_sync(best)  # cold pass, as at a server start with an empty memo; not timed
+pending_trigger_state_sync(best, walked=None, dir_sig=None)  # cold pass, as at a server start with an empty memo; not timed
 times = []
 result = None
 for _ in range(9):
     t0 = time.perf_counter()
-    result = pending_trigger_state_sync(best)
+    result = pending_trigger_state_sync(best, walked=None, dir_sig=None)
     times.append(time.perf_counter() - t0)
 times.sort()
 print(f"session {SID}, {best_n} trigger files (pending {result[0]}); steady-state probe trigger scan "

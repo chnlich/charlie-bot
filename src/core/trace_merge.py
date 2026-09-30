@@ -351,10 +351,10 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
   """Merge Chrome JSON traces into one gzip-compressed Chrome trace."""
   # A build allocates ~1M dicts per 500k input events and mutates every one;
   # the generational passes over that churn measured 0.3-0.6 s per 1.07M-event
-  # build. The build runs inside the merge process pool (spawn context, whose
-  # workers run nothing else), so the disable is scoped to this build; collect
-  # reclaims the build's cyclic leftovers so they never accumulate across
-  # builds in a long-lived worker.
+  # build. The build runs in its own fresh process (the route's lean child,
+  # trace_merge_child) or a pool worker that runs nothing else, so the disable
+  # is scoped to this build; collect reclaims the build's cyclic leftovers so
+  # they never accumulate across builds in a long-lived worker.
   with gc_off(collect=True):
     _merge_all(paths, out_path, slim)
 

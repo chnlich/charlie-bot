@@ -1,21 +1,17 @@
-"""Idempotency judgments for the two finalize effects.
-
-Each of the finalize chain's effects is re-runnable because each is keyed on
-its OWN effect's observable result, never on a prerequisite step:
+"""The two finalize-effect judgments as pure predicates over loaded chat events.
 
 - worker_summary persist: a terminal worker_summary event for this thread_id
   is already in the chat stream;
 - master wake: a master output event (assistant / master_done /
   assistant_error) appears AFTER the thread's terminal summary.
 
-Effect-keyed (not prerequisite-keyed) matters for the wake judgment in
-particular: the summary is persisted before the master is triggered, so keying
-on "summary present" would leave a kill in that gap neither waking nor
-retrying. Keying on the effect makes "did it happen?" and "should I do it?"
-the same state.
+Each is effect-keyed (never prerequisite-keyed): the summary persists before
+the master triggers, so a wake keyed on "summary present" would leave a kill
+in that gap neither waking nor retrying.
 
-All predicates are pure functions over already-loaded chat/thread data so both
-the live finalize path and the startup reconcile pass apply identical rules.
+No production or test code calls these: the module's only reader is the
+standing M76 collector (docs/perf_baseline.md), which drives both scans in
+its fold-absent fallback.
 """
 
 from src.core import event_types as ET

@@ -2,9 +2,9 @@
 
 The cancel of a transcription in progress exits `connect(...)`, whose close
 handshake waits close_timeout for the peer's close frame. The shared conftest
-probe drives that cancel against a stand-in that never answers one, so the
-wait pinned here used to be websockets' 10 s default on every stop that had a
-transcription open.
+probe drives that cancel against a stand-in that never answers one; the pin
+keeps that wait at `WS_CLIENT_CLOSE_TIMEOUT`, since an unpinned connect() rides
+websockets' 10 s stop default on every stop that has a transcription open.
 """
 
 from __future__ import annotations

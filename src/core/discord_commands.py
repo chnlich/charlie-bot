@@ -33,18 +33,21 @@ from src.core.sessions import SessionManager
 from src.core.thread_entry import ThreadReplyError
 
 
-def _message_view(message: dict, *, unread: bool) -> dict:
-  """One thread message as the readback states it: ids, author name, text, attachment urls, unread flag.
+def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str]) -> dict:
+  """One thread message as the readback states it: ids, author name, person, text, attachments, unread flag.
 
   The author name is the author's ``global_name`` when set, else its
-  ``username``; ``content`` and ``attachments`` arrive possibly empty, never
-  absent, from the REST readback.
+  ``username``; ``person`` is the name the ``discord.allowed_users`` map gives
+  the author's id, None when the author's id is not in the map. ``content``
+  and ``attachments`` arrive possibly empty, never absent, from the REST
+  readback.
   """
   author = message["author"]
   return {
       "id": message["id"],
       "author_id": author["id"],
       "author": author.get("global_name") or author["username"],
+      "person": allowed_users.get(author["id"]),
       "timestamp": message["timestamp"],
       "content": message.get("content") or "",
       "attachments": [a["url"] for a in message.get("attachments") or []],
@@ -101,7 +104,7 @@ async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, s
   unread_ids = {
       m["id"] for m in thread_entry.unread_after(
           thread_messages,
-          eligible=lambda m: eligible_message(m, cfg.discord.allowed_user_ids),
+          eligible=lambda m: eligible_message(m, cfg.discord.allowed_users),
           message_id=lambda m: m["id"],
           watermark=watermark,
           id_key=snowflake_key)
@@ -116,12 +119,13 @@ async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, s
   if window_unread_ids:
     ack = await thread_entry.ack_messages(adapter, session_id, window_unread_ids, cfg, session_mgr)
     watermark_id = ack["watermark_id"]
-  messages = [] if starter is None else [_message_view(starter, unread=False)]
-  messages.extend(_message_view(m, unread=m["id"] in unread_ids) for m in window)
+  allowed_users = cfg.discord.allowed_users
+  messages = [] if starter is None else [_message_view(starter, unread=False, allowed_users=allowed_users)]
+  messages.extend(_message_view(m, unread=m["id"] in unread_ids, allowed_users=allowed_users) for m in window)
   return {"messages": messages, "watermark_id": watermark_id, "more_unread": len(unread_ids) - len(window_unread_ids)}
 
 
-async def _read_linked_channel(url: str, limit: int) -> dict:
+async def _read_linked_channel(url: str, limit: int, cfg: CharlieBotConfig) -> dict:
   """Read the newest *limit* messages of the channel *url* names; nothing is marked read.
 
   A url that is not a discord.com channel link refuses with 422. Discord
@@ -139,7 +143,12 @@ async def _read_linked_channel(url: str, limit: int) -> dict:
     if e.status in (403, 404):
       raise ThreadReplyError(404, "the bot cannot see this channel") from e
     raise ThreadReplyError(502, str(e)) from e
-  return {"messages": [_message_view(m, unread=False) for m in newest], "watermark_id": None, "more_unread": 0}
+  allowed_users = cfg.discord.allowed_users
+  return {
+      "messages": [_message_view(m, unread=False, allowed_users=allowed_users) for m in newest],
+      "watermark_id": None,
+      "more_unread": 0,
+  }
 
 
 async def read_thread(
@@ -157,13 +166,14 @@ async def read_thread(
   unread one — or the newest *limit* when nothing is unread — and the unread
   messages in the window are marked read, so reading is the ack. The readback
   carries ``watermark_id`` (after the ack) and ``more_unread`` (unread
-  messages left outside the window). With *url*, a discord.com channel link:
+  messages left outside the window); every message view names its author's
+  configured ``person``. With *url*, a discord.com channel link:
   the newest *limit* messages of that channel, all with ``unread: false``,
   nothing marked. A Discord refusal beyond the mapped statuses above is 502;
   its text names the failing call, never the token.
   """
   if url is not None:
-    return await _read_linked_channel(url, limit)
+    return await _read_linked_channel(url, limit, cfg)
   return await _read_own_thread(session_id, limit, cfg, session_mgr)
 
 

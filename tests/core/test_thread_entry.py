@@ -53,6 +53,7 @@ FAKECHAT = ThreadPlatform(
     reply_event_type="fakechat_reply",
     reply_command="charliebot fakechat reply",
     max_post_chars=2000,
+    scope_doc="fakechat_reply_scope.md",
     follow_trigger_prefix="fakechat-thread-follow",
     id_key=int,
     origin_field="fakechat_origin",

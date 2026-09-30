@@ -169,7 +169,9 @@ def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager]:
   stub_credentials({"discord": {"bot_token": "test-bot-token"}})
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
-      discord={"allowed_user_ids": [_USER]},
+      discord={"allowed_users": {
+          _USER: "tester"
+      }},
       backends=fake_backends(),
   )
   return cfg, SessionManager(cfg)

@@ -8,7 +8,7 @@ The point of the entrypoint is to run a CharlieBot session from where the conver
 
 The flow:
 
-- An allowed user mentions the bot in a server channel, thread, or forum post. The gateway listener (`run_listener` in `src/core/discord_listener.py`) receives the `MESSAGE_CREATE` event and applies Discord's drop rules first: non-human senders (a `bot` author flag or a `webhook_id`), message types that are neither plain messages nor replies (type 0 or 19), and authors not on the allow-list never reach the summon path.
+- An allowed user mentions the bot in a server channel, thread, or forum post. The gateway listener (`run_listener` in `src/core/discord_listener.py`) receives the `MESSAGE_CREATE` event and applies Discord's drop rules first: non-human senders (a `bot` author flag or a `webhook_id`), message types that are neither plain messages nor replies (type 0 or 19), and authors whose id is not in the account map never reach the summon path.
 - In a text or announcement channel the bot opens a thread from the mention message, named from the mention's stripped content; in a thread or forum post it uses the thread the mention already sits in. One session is bound per thread — the session id is derived from the guild id and the thread id, so mentioning the bot in the same thread again always reaches the same session (created once, unarchived, or reused).
 - The bot lights the 👀 reaction on the mention message and starts a master round. The master reads the thread server-side with `charliebot discord read` (the readback returns the messages the bot can see and marks the unread ones read) and answers through `charliebot discord reply`, which posts the reply into the thread.
 - Later unmentioned messages from allowed users in that thread wake the same session: the wake fires about 45 seconds after the last message of a batch, and 300 seconds at most after the first message of the chain, so a steady trickle still flushes.
@@ -44,8 +44,17 @@ The checklist below is the whole Discord-side setup; run it once per application
    | `ADD_REACTIONS` | Light and clear the 👀 reaction on the mention message. |
    | `ATTACH_FILES` | Upload the reply's linked pages as attachments. |
 
-5. **Name the allowed users.** Put the Discord user ids allowed to summon the bot under `discord.allowed_user_ids` in `config.yaml`. With Developer Mode on (User Settings, Advanced), right-click a user and Copy User ID. A message from an id outside the list is dropped before it can summon anything, and an empty list starts nothing: the entrypoint only starts when the token and at least one allowed user are set.
-6. **Restart the server.** Startup logs `discord_entrypoint_started` and connects the gateway listener; with the token or the allow-list missing it logs `discord_entrypoint_off` instead and runs without Discord.
+5. **Map each allowed account to its person.** Under `discord.allowed_users` in `config.yaml`, list one entry per Discord user id allowed to summon the bot, mapped to the person that account belongs to:
+
+   ```yaml
+   discord:
+     allowed_users:
+       "<user id one>": person-one
+       "<user id two>": person-two
+   ```
+
+   With Developer Mode on (User Settings, Advanced), right-click a user and Copy User ID. The map is who the bot knows people by: every readback message names its author's entry as `person`, and the thread reply rules (`prompts/discord_reply_scope.md`) judge personal information by that name, so a changed display name cannot impersonate anyone. A message from an id outside the map is dropped before it can summon anything, and an empty map starts nothing: the entrypoint only starts when the token and at least one mapped account are set.
+6. **Restart the server.** Startup logs `discord_entrypoint_started` and connects the gateway listener; with the token or the account map missing it logs `discord_entrypoint_off` instead and runs without Discord.
 
 ## Verify
 
@@ -64,9 +73,9 @@ Verification has two layers: the setup check reads what the Discord application 
 
 The server log completes the picture:
 
-- `discord_entrypoint_started` — startup found the token and a non-empty allow-list and launched the listener.
+- `discord_entrypoint_started` — startup found the token and a non-empty account map and launched the listener.
 - `discord_listener_connected` — the gateway accepted the IDENTIFY and answered READY; the line appears once per (re)connection.
-- `discord_entrypoint_off` — startup found no token or an empty allow-list; the server runs without Discord.
+- `discord_entrypoint_off` — startup found no token or an empty account map; the server runs without Discord.
 - `discord_listener_stopped` with the close code and its reason — the gateway closed with a code retrying cannot fix (for example `4004` authentication failed, or `4014` disallowed intents, which points back to the Message Content intent). The listener exits; fix the named cause and restart.
 - `discord_listener_missing_permissions` per guild — the listener's preflight found a guild missing required permissions; the listener keeps running so the granted guilds still work.
 
@@ -87,7 +96,7 @@ Day-to-day operation runs through the two session-bound verbs the master itself 
 
 - Without `--url` it reads the session's own thread, oldest first (the thread's starter message rides first when one exists in the parent channel). The window is `--limit` messages (1 to 100, default 50) starting at the oldest unread one, or the newest `--limit` when nothing is unread. The unread messages the readback returns are marked read — Discord has no separate ack verb, so the read is the ack — and the readback carries `watermark_id` (after the ack) and `more_unread` (unread messages left outside the window; repeat the read until it reads 0).
 - With `--url <discord.com channel link>` it reads that channel's newest `--limit` messages instead, all reported with `unread: false`, and marks nothing. A url that is not a discord.com link refuses with a 422; a channel the bot cannot see with a 404; any other Discord refusal with a 502.
-- Each message in the `messages` readback carries `id`, `author_id`, `author`, `timestamp`, `content`, `attachments`, and `unread`.
+- Each message in the `messages` readback carries `id`, `author_id`, `author`, `person`, `timestamp`, `content`, `attachments`, and `unread`. `person` is the name `discord.allowed_users` gives the author's id, and is null when the author's id is not in the map; the thread reply rules judge who is asking by it.
 
 `charliebot discord reply --file <path>` (`-` reads the reply text from stdin) posts the reply into the session's thread. Two refusals matter in operation:
 

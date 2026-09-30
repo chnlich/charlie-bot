@@ -58,7 +58,7 @@ from src.core.models import RunRecord, SessionMetadata, TaskType
 from src.core.runs import run_not_found_in_task_text
 
 if TYPE_CHECKING:
-    from src.core.task_sessions import TaskTreeManager
+  from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -73,7 +73,7 @@ LANDING_REF_PREFIX = "landed:"
 
 @dataclass(frozen=True)
 class LandingEvidence:
-    """Target-branch landing proof one completion claim names.
+  """Target-branch landing proof one completion claim names.
 
     The execution-stage adapters supply the actual artifacts; this stage
     validates the claim against the task's frozen Run records (the landing
@@ -81,9 +81,9 @@ class LandingEvidence:
     commit's merge verification to the adapters' own checks.
     """
 
-    branch: str
-    commit: str
-    repo_path: str | None = None
+  branch: str
+  commit: str
+  repo_path: str | None = None
 
 
 @dataclass(frozen=True)

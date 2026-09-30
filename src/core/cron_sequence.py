@@ -605,6 +605,16 @@ async def reconcile_bound_firings(
   stable report id and close request id dedup). A leaf already closed does
   nothing.
   """
+
+  def _schedule_recovered_settle(run_id: str, prompt: str) -> None:
+    # The settle rides its own logged task, never inline: a live process's
+    # follow must not hold this pass. A withheld launch records and reports
+    # itself (once, by stable id), and a settled step Run's own finish chain
+    # re-drives the frontier, so nothing is owed here after scheduling.
+    from src.core.tasks import create_logged_task
+
+    create_logged_task(launch_and_settle(tree, leaf_id, run_id, prompt), name=f"cron-recovered-step-{run_id[:8]}")
+
   if tree.task_state(leaf_id) != "open":
     return
   steps = task_cfg.steps or []
@@ -644,14 +654,7 @@ async def reconcile_bound_firings(
       previous_pos = executed_positions[-1]
       previous = await run_result_text(tree, leaf_id, by_position[previous_pos].id)
       prompt = chain_step_prompt(prompt, steps[previous_pos].name, previous)
-    from src.core.tasks import create_logged_task
-
-    async def _settle_recovered_launch(run_id: str = run.id, launch_prompt: str = prompt) -> None:
-      # A withheld recovered launch is recorded and reported by the launch
-      # itself (once, by stable id); the controller owes nothing further.
-      await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
-
-    create_logged_task(_settle_recovered_launch(), name=f"cron-recovered-step-{run.id[:8]}")
+    _schedule_recovered_settle(run.id, prompt)
     return
   if not executed_positions:
     return
@@ -676,17 +679,7 @@ async def reconcile_bound_firings(
       if last_pos + 1 > 0:
         previous = await run_result_text(tree, leaf_id, by_position[last_pos].id)
         prompt = chain_step_prompt(prompt, steps[last_pos].name, previous)
-      # The recovered launch settles in its own task (never inline — a live
-      # process's follow must not hold this pass). A withheld launch records
-      # and reports itself; the controller owes nothing further.
-      from src.core.tasks import create_logged_task
-
-      async def _settle_recovered_launch(run_id: str = next_run.id, launch_prompt: str = prompt) -> None:
-        await launch_and_settle(tree, leaf_id, run_id, launch_prompt)
-        # A settled step Run's own finish chain re-drives the frontier from
-        # here; nothing further is owed inline.
-
-      create_logged_task(_settle_recovered_launch(), name=f"cron-recovered-step-{next_run.id[:8]}")
+      _schedule_recovered_settle(next_run.id, prompt)
     return
   # The chain reached its boundary: re-deliver the ONE report (dedup by id).
   if last_outcome == "success" and last_pos == len(steps) - 1:

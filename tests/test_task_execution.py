@@ -279,6 +279,22 @@ async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeo
     pytest.fail(f"{what} never reached a terminal fact within {timeout}s")
 
 
+async def wait_for_task_completed(tree: TaskTreeManager, session_id: str, timeout: float,
+                                  what: str) -> None:
+    """Poll one task until its delivery chain closes it as completed.
+
+    The close is a later step of the delivery chain than the work (or review)
+    Run's terminal fact, so a caller that just awaited that fact must still
+    poll here; the timeout covers the chain's remaining steps only.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        if tree.task_state(session_id) == "completed":
+            return
+        await asyncio.sleep(0.1)
+    pytest.fail(f"{what} never closed as completed within {timeout}s")
+
+
 def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> Path:
     """The one work-kind run's worktree path (asserts exactly one work run)."""
     work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
@@ -873,12 +889,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
     assert retry_outcome == "success"
     assert retry_review.review_of_run_id == "run-work"
 
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    assert tree.task_state(worker.id) == "completed"
+    await wait_for_task_completed(tree, worker.id, 10, "the retried implement task")
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
     assert reports[-1]["outcome"] == "completed"
     finished = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.RUN_FINISHED]
@@ -1103,13 +1114,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
 
     # The reviewer's verdict is the delivery: the task closes and reports
     # completed to the parent with no landing step.
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less implement task never closed after its review passed")
+    await wait_for_task_completed(tree, worker.id, 10, "the repo-less implement task")
     # The close and the report land in separate awaits of the delivery chain;
     # a loaded runner's poll can see the closed task before the report
     # append, so the report gets the same bounded wait the review did.
@@ -1189,13 +1194,7 @@ async def test_repo_less_quick_edit_closes_without_review(
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     await wait_for_terminal_run(tree, worker.id, "run-work")
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less quick-edit task never closed on its successful work Run")
+    await wait_for_task_completed(tree, worker.id, 10, "the repo-less quick-edit task")
     # No review Run exists for a quick-edit delivery.
     review_runs = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
     assert review_runs == []

@@ -328,7 +328,8 @@ async def test_listener_cancel_skips_the_close_wait(tmp_path: Path, monkeypatch:
 async def test_listener_reconnects_within_three_seconds_after_disconnect(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Socket Mode refresh (the server-sent disconnect) has the listener's next
-  connection on the wire within 3 s: close wait plus reconnect backoff."""
+  connection on the wire within 3 s: the session exit aborts the transport, so
+  the bound is the reconnect backoff alone."""
   stand_in = WsServerNeverAnswersClose([*_WS_HELLO, {"type": "disconnect"}])
   try:
     task = await _run_listener_against(stand_in, tmp_path, monkeypatch)

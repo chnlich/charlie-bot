@@ -376,7 +376,7 @@ def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
 def _resolve_resume_id(
     option: BackendOption,
     session_meta: SessionMetadata,
-    cfg: CharlieBotConfig | None = None,
+    cfg: CharlieBotConfig | None,
 ) -> str | None:
   """Return the cc_session_id to resume, or None when it is not reachable.
 

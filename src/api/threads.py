@@ -141,7 +141,7 @@ def _tmux_attach_id(thread: ThreadMetadata, dispatch: _BackendDispatch) -> str |
   return None
 
 
-def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None = None) -> str | None:
+def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> str | None:
   dispatch = _backend_dispatch(thread, cfg)
   if dispatch is None:
     return None
@@ -315,7 +315,7 @@ _sig_gate = RevisionSweepGate(_LIST_PROOF_SWEEP_EVERY)
 
 def _row_source_stats(
     threads_dir: str,
-    runs_dir: str | None = None,
+    runs_dir: str | None,
 ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
   """One scandir+stat walk of the row-source directories, split by directory.
 
@@ -352,7 +352,7 @@ def _row_source_stats(
 
 def _signature_from_stats(
     thread_pairs: list[tuple[str, os.stat_result]],
-    run_pairs: list[tuple[str, os.stat_result]] = (),
+    run_pairs: list[tuple[str, os.stat_result]],
 ) -> tuple[tuple[str, int, int], ...]:
   """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
   sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]

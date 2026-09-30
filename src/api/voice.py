@@ -146,7 +146,7 @@ def _log_voice_transcribed(
     text: str,
     produced_by: str,
     selected_backend: str | None,
-    devices: dict | None = None,
+    devices: dict | None,
 ) -> None:
   """The voice_transcribed line both archive paths write; its fields are the log's contract.
 

@@ -608,7 +608,7 @@ async def _respawn_claude(
     resume: bool,
     plugin_dir: Path,
     cwd: Path,
-    config_dir: Path | None = None,
+    config_dir: Path | None,
 ) -> None:
   from src.agents.backends.pty_common import tmux_session_name
 

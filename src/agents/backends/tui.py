@@ -200,7 +200,7 @@ async def run_tui_attachment(
     websocket: WebSocket,
     session_id: str,
     cfg: CharlieBotConfig,
-    task_tree: object = None,
+    task_tree: object,
 ) -> None:
   """Per-WS PTY loop: spawn `tmux attach`, pump bytes, handle pty_input/pty_resize.
 

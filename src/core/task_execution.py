@@ -2175,7 +2175,7 @@ async def fail_unlaunched_tui_run(
 async def prepare_tui_task_launch(
     cfg: CharlieBotConfig,
     session_id: str,
-    tree: TaskTreeManager | None = None,
+    tree: TaskTreeManager | None,
 ) -> TuiTaskLaunch | None:
   """The v2 TUI task's launch seam: one Run per actual terminal launch, or None.
 

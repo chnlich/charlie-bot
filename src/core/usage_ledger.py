@@ -292,6 +292,11 @@ class UsageLedger:
     rows = self._conn.execute("SELECT path, sig FROM captured_files WHERE host = ?", (host,)).fetchall()
     return {row["path"]: row["sig"] for row in rows}
 
+  def captured_sig(self, host: str, path: str) -> str | None:
+    """One captured file path's last-recorded signature for *host*, or None when uncaptured."""
+    row = self._conn.execute("SELECT sig FROM captured_files WHERE host = ? AND path = ?", (host, path)).fetchone()
+    return None if row is None else row["sig"]
+
   def captured_gate(self, host: str, path: str) -> tuple[tuple[tuple[int, int], tuple[int, int] | None], str] | None:
     """One stored probe gate: the file-state pairs the probe ran under and the signature it
     computed, or None when nothing is stored for the (host, path)."""

@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from conftest import OPERATOR, build_env, create_task, stub_credentials
+from conftest import OPERATOR, OPUS_BACKEND_ID, build_env, create_scheduled_node, create_task, stub_credentials
 
 from src.api.message_utils import events_to_view
 from src.core import event_types as ET
-from src.core.models import RunRecord, utc_now_iso
+from src.core.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
 from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
 from src.core.task_sessions import (
@@ -624,3 +625,95 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   finished = [e for e in tree.events.load_events(task.id) if e["type"] == ET.RUN_FINISHED]
   assert finished and finished[-1]["run_id"] == "run-b"
   assert list(finished[-1]["input_event_ids"]) == ["in-1"]
+
+
+# ---------------------------------------------------------------------------
+# Sidebar order: the user's own actions lift updated_at
+# ---------------------------------------------------------------------------
+
+
+async def updated_at_of(session_mgr: SessionManager, session_id: str):
+  """One node's current sidebar sort key."""
+  meta = await session_mgr.get_session(session_id)
+  assert meta is not None
+  return meta.updated_at
+
+
+@pytest.mark.asyncio
+async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor(tmp_path: Path) -> None:
+  """A real user message lifts the target and its unarchived ancestors to the
+  event's time; an archived ancestor and everything above it keep their
+  updated_at; a replayed input_id lifts nothing; agent messages, child
+  reports, and scheduled triggers never lift."""
+  _, session_mgr, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root", name="Root")
+  mid = await create_task(tree, parent=root.id, request_id="mid", name="Mid")
+  child = await create_task(tree, parent=mid.id, request_id="child", name="Child")
+  first = (await updated_at_of(session_mgr, child.id) + timedelta(hours=1)).isoformat()
+  second = (await updated_at_of(session_mgr, child.id) + timedelta(hours=2)).isoformat()
+
+  await admit(tree, child.id, "my turn", input_id="m1", timestamp=first)
+  assert await updated_at_of(session_mgr, child.id) == ensure_utc(first)
+  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(first)
+  assert await updated_at_of(session_mgr, root.id) == ensure_utc(first)
+
+  # A replayed input_id returns the original event and lifts nothing; a new
+  # message moves the whole branch forward again.
+  await admit(tree, child.id, "my turn", input_id="m1", timestamp=second)
+  assert await updated_at_of(session_mgr, child.id) == ensure_utc(first)
+  await admit(tree, child.id, "again", input_id="m2", timestamp=second)
+  assert await updated_at_of(session_mgr, child.id) == ensure_utc(second)
+  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(second)
+  assert await updated_at_of(session_mgr, root.id) == ensure_utc(second)
+
+  # Agent relays, scheduled triggers, and child reports are server/agent
+  # traffic: none of them lifts, however fresh.
+  agent_at = (await updated_at_of(session_mgr, child.id) + timedelta(hours=3)).isoformat()
+  await admit(tree, child.id, "relayed", event_type=ET.AGENT_MESSAGE, actor="agent", timestamp=agent_at)
+  await admit(
+      tree, child.id, "cron woke this node", event_type=ET.SCHEDULED_TRIGGER, actor="system", timestamp=agent_at)
+  await admit(tree, child.id, "child finished", event_type=ET.CHILD_REPORT, actor="system", timestamp=agent_at)
+  assert await updated_at_of(session_mgr, child.id) == ensure_utc(second)
+  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(second)
+  assert await updated_at_of(session_mgr, root.id) == ensure_utc(second)
+
+  # An archived ancestor stops the climb: the archived row and everything
+  # above it keep their updated_at even though the message is fresher.
+  aroot = await create_task(tree, parent=None, request_id="aroot", name="ARoot")
+  amid = await create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
+  achild = await create_task(tree, parent=amid.id, request_id="achild", name="AChild")
+  await session_mgr.archive_session(amid.id)
+  archived_at = await updated_at_of(session_mgr, amid.id)
+  root_at = await updated_at_of(session_mgr, aroot.id)
+  later = (await updated_at_of(session_mgr, achild.id) + timedelta(hours=3)).isoformat()
+  await admit(tree, achild.id, "to the archived branch", timestamp=later)
+  assert await updated_at_of(session_mgr, achild.id) == ensure_utc(later)
+  assert await updated_at_of(session_mgr, amid.id) == archived_at
+  assert await updated_at_of(session_mgr, aroot.id) == root_at
+
+
+@pytest.mark.asyncio
+async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: Path) -> None:
+  """Listing order follows the user's actions: a fire leaves the scheduled
+  node's updated_at alone, so a node the user just messaged lists ahead of it
+  even when it started out older."""
+  _, session_mgr, tree = build_env(tmp_path)
+  x = await create_task(tree, parent=None, request_id="x", name="X")
+  s = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
+  # Pin both rows into the past, X two hours older than the scheduled node.
+  s_meta = await session_mgr.get_session(s.id)
+  assert s_meta is not None
+  base = s_meta.updated_at
+  await session_mgr.update_thinking_state(x.id, base - timedelta(hours=2))
+  await session_mgr.update_thinking_state(s.id, base - timedelta(hours=1))
+
+  await tree.record_scheduled_fire(s.id, last_scheduled_run=base.isoformat(), last_run_status=LastRunStatus.SKIPPED)
+  listing = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  assert [r.id for r in listing] == [s.id, x.id]
+  assert next(r for r in listing if r.id == s.id).last_run_status == LastRunStatus.SKIPPED
+
+  # The user messages the older node; the fired node keeps its place.
+  messaged_at = (base - timedelta(minutes=30)).isoformat()
+  await admit(tree, x.id, "my turn", timestamp=messaged_at)
+  listing = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  assert [r.id for r in listing] == [x.id, s.id]

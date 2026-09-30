@@ -394,6 +394,7 @@ class SessionMetadata(BaseModel):
   # only: never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
   worker_thread: WorkerThreadRef | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
+  # The sidebar sort key: records the user's last action on the row; server bookkeeping writes keep it.
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: str | None = None
   cc_session_started_at: UtcDatetime | None = None

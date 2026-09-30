@@ -38,7 +38,7 @@ from src.core.control_events import (
     stable_child_report_id,
 )
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import RunRecord
+from src.core.models import RunRecord, SessionStatus, ensure_utc
 
 if TYPE_CHECKING:
     from src.core.task_sessions import TaskTreeManager
@@ -154,6 +154,29 @@ class TaskInputDispatcher:
             if from_session_name is not None:
                 event["from_session_name"] = from_session_name
             await tree.events.append(session_id, event)
+            if event_type == ET.USER:
+                # A real user message is the one input that reorders the
+                # sidebar: it lifts the node and its unarchived ancestors to
+                # the event's time (the replay return above lifts nothing, and
+                # the other input types are agent/server traffic). The climb
+                # stops before the first archived ancestor — the archived row
+                # and everything above it keep their places, since above an
+                # archived parent the node is already Workspace's own root.
+                # Each write rides update_thinking_state's one-field fresh
+                # mutate, so a concurrent edit survives and the listing
+                # revision advances; the lift only ever moves forward.
+                index = await tree._get_index()
+                when = ensure_utc(event["timestamp"])
+                chain = [tree._index_meta(index, session_id)]
+                for ancestor in tree._ancestors(index, session_id):
+                    if ancestor.status == SessionStatus.ARCHIVED or tree.archived_of(index, ancestor):
+                        break
+                    chain.append(ancestor)
+                for node in chain:
+                    current = await tree.sessions.get_session(node.id)
+                    if when > current.updated_at:
+                        await tree.sessions.update_thinking_state(node.id, when)
+                tree.invalidate_tree_index()
         await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
         return event
 

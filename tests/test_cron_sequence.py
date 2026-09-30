@@ -26,6 +26,7 @@ from conftest import (
     POOLED_FABLE_ID,
     SCHEDULER_GET_CONFIG_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    backend_option,
     bind_deps_managers,
     init_repo_with_origin,
     patch_instructions_content,
@@ -37,13 +38,13 @@ from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
 from src.core.control_events import stable_run_id
 from src.core.models import RunRecord, TaskSpec
 from src.core.scheduler import Scheduler
-from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
     build_pooled_env,
+    build_spawning_env,
     install_backends,
     result_event,
     wait_for_terminal_run,
@@ -52,31 +53,14 @@ from tests.test_task_execution import (
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic home, the fake + codex backends, and one task tree."""
-  import src.core.config as core_config
-  home = tmp_path / "charliebot-home"
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      backends={
-          "options":
-              [
-                  OPUS_BACKEND_OPTION,
-                  CODEX_BACKEND_OPTION,
-                  {
-                      "id": "fake",
-                      "label": "Fake",
-                      "type": "codex",
-                      "model": "fake-model"
-                  },
-              ]
-      },
-      paths={"worktree_dir": str(home / "worktrees")})
-  core_config._credentials_cache.seed(
-      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
-          "access_key": "cron-seq-key"
-      }}))
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  return build_spawning_env(
+      tmp_path,
+      monkeypatch,
+      options=[
+          OPUS_BACKEND_OPTION,
+          CODEX_BACKEND_OPTION,
+          backend_option(id="fake", label="Fake", type="codex", model="fake-model"),
+      ])
 
 
 @pytest.fixture()

@@ -59,34 +59,50 @@ from src.core.task_sessions import TaskTreeManager
 OPERATOR = {"Authorization": "Bearer op-secret"}
 
 
-def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None,
+def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make the synthetic home the one spawned children sign against: seed its
+    access key and pin CHARLIEBOT_HOME at it, so every child environment signs
+    its run token against the synthetic home (never operator credentials)."""
+    import src.core.config as core_config
+    core_config._credentials_cache.seed(
+        core_config.Credentials(
+            path=home / "credentials.yaml",
+            sections={"charliebot": {"access_key": "task-exec-test-key"}}))
+    monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+
+
+def build_spawning_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list,
+                       preference: list[str] | None = None):
+    """(cfg, SessionManager, TaskTreeManager) over one synthetic home under tmp_path:
+    the given backend options, worktree_dir inside the home, and the seeded access
+    key every child environment signs against (seed_signing_home)."""
+    from src.core.config import CharlieBotConfig
+    home = tmp_path / "charliebot-home"
+    backends: dict = {"options": options}
+    if preference is not None:
+        backends["preference"] = preference
+    cfg = CharlieBotConfig(
+        charliebot_home=home,
+        backends=backends,
+        paths={"worktree_dir": str(home / "worktrees")})
+    seed_signing_home(home, monkeypatch)
+    session_mgr = SessionManager(cfg)
+    return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+
+
+def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
               backend_ids: list[str] | None = None):
     """One fake backend registered, so task creation's default resolution works.
 
     ``backend_ids`` names every configured option (default: the single "fake");
     tests that switch a session's backend pin build a config with more than one.
-    The synthetic home carries a synthetic access key: every child environment
-    signs its run token against it (never operator credentials from the host).
     """
-    import src.core.config as core_config
-    from src.core.config import CharlieBotConfig
-    home = tmp_path / "charliebot-home"
     ids = backend_ids if backend_ids is not None else ["fake"]
-    cfg = CharlieBotConfig(
-        charliebot_home=home,
-        backends={
-            "options": [backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
-            "preference": ids[:1],
-        },
-        paths={"worktree_dir": str(home / "worktrees")})
-    key = "task-exec-test-key"
-    core_config._credentials_cache.seed(core_config.Credentials(
-        path=home / "credentials.yaml",
-        sections={"charliebot": {"access_key": key}}))
-    if monkeypatch is not None:
-        monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-    session_mgr = SessionManager(cfg)
-    return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+    return build_spawning_env(
+        tmp_path,
+        monkeypatch,
+        options=[backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
+        preference=ids[:1])
 
 
 class SpawningScriptedBackend:
@@ -1923,19 +1939,13 @@ def build_pooled_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                      labels: tuple[str, ...] = ("main", "ext-1", "ext-2")):
     """The task-tree env over a pooled config: one cc-claude option drawing from the
     Claude account pool *labels* (pool_cfg plants healthy credentials in every account
-    dir). ``labels=()`` keeps the same cc-claude option over an empty pool. The
-    synthetic access key and CHARLIEBOT_HOME match build_env, so child environments
-    sign against the synthetic home.
+    dir). ``labels=()`` keeps the same cc-claude option over an empty pool. Children
+    sign against the synthetic home (seed_signing_home).
     """
-    import src.core.config as core_config
     home = tmp_path / "charliebot-home"
     option = backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)
     cfg = pool_cfg(tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels)
-    key = "task-exec-test-key"
-    core_config._credentials_cache.seed(core_config.Credentials(
-        path=home / "credentials.yaml",
-        sections={"charliebot": {"access_key": key}}))
-    monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+    seed_signing_home(home, monkeypatch)
     session_mgr = SessionManager(cfg)
     return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
@@ -2553,10 +2563,11 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
 
 
 @pytest.mark.asyncio
-async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path) -> None:
+async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path,
+                                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """finish_run's repeat path fills empty ended_at/exit_code from the passed
     values and never moves values already written."""
-    _cfg, _session_mgr, tree = build_env(tmp_path)
+    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
     worker = await create_task(
         tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
     run_id = "run-half"

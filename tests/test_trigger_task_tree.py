@@ -20,40 +20,26 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    backend_option,
     bind_deps_managers,
     patch_instructions_content,
 )
 
 from src.core import event_types as ET
 from src.core.models import PendingTrigger, TaskSpec, TriggerStatus
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
 from src.core.triggers import TriggerManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
+    build_spawning_env,
     install_backends,
     result_event,
 )
 
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-  from conftest import backend_option
-
-  import src.core.config as core_config
-  from src.core.config import CharlieBotConfig
-  home = tmp_path / "charliebot-home"
-  cfg = CharlieBotConfig(
-      charliebot_home=home,
-      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
-      paths={"worktree_dir": str(home / "worktrees")})
-  core_config._credentials_cache.seed(
-      core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
-          "access_key": "trigger-key"
-      }}))
-  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+  cfg, session_mgr, tree = build_spawning_env(
+      tmp_path, monkeypatch, options=[backend_option(id="fake", label="Fake", type="codex", model="fake-model")])
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   return cfg, session_mgr, tree
 

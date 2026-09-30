@@ -384,8 +384,7 @@ class FakeSessions:
     self.broadcasts.append((session_id, event_type))
     self.order.append("broadcast")
 
-  async def list_sessions_readonly(
-      self, status: SessionStatus | None = None, **_: object) -> list:
+  async def list_sessions_readonly(self, status: SessionStatus | None = None, **_: object) -> list:
     if self.meta is None or (status is not None and self.meta.status != status):
       return []
     return [self.meta]

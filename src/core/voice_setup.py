@@ -154,9 +154,9 @@ def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
 
   wav_path = pick_preflight_recording(cfg.sessions_dir)
   samples = _load_wav_samples(wav_path)
-  transcriber._decode_samples(bundle, samples)  # cold pass: CUDA kernel + allocator warmup
+  transcriber._decode_samples(bundle, samples, 0)  # cold pass: CUDA kernel + allocator warmup
   started = time.perf_counter()
-  text = transcriber._decode_samples(bundle, samples)
+  text = transcriber._decode_samples(bundle, samples, 0)
   decode_seconds = time.perf_counter() - started
   audio_seconds = len(samples) / SAMPLE_RATE
   if not text:

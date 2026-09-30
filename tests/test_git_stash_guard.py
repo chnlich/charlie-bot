@@ -250,6 +250,8 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       install_backends,
       make_pm_build,
       result_event,
+      wait_for_review_terminal,
+      wait_for_worktree,
   )
 
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
@@ -286,29 +288,13 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
   tree.dispatch.executor.launch(worker.id, "run-work")
 
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    run = await tree.runs.get_run(worker.id, "run-work")
-    if run is not None and run.worktree_path:
-      break
-    await asyncio.sleep(0.05)
-  else:
-    pytest.fail("the work run never recorded its worktree")
-  wt = Path(run.worktree_path)
+  wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
   (wt / "marker.txt").write_text("implemented\n")
   run_git(wt, "add", "-A")
   run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
   committed.set()
 
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
-    review = [r for r in runs.values() if r.kind == "review"]
-    if review and tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), review[0].id) is not None:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the review chain never produced a terminal fact")
+  await wait_for_review_terminal(tree, worker.id, timeout=15.0, what="the review chain")
 
   first_path_entry = work_backend.env["PATH"].split(os.pathsep)[0]
   assert first_path_entry == str(GIT_STASH_GUARD_DIR)

@@ -246,6 +246,39 @@ async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: 
     pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
 
 
+async def wait_for_worktree(tree: TaskTreeManager, session_id: str, run_id: str, timeout: float) -> Path:
+    """Poll one Run until the spawner records its worktree and return the path.
+
+    ``executor.launch`` returns before the spawn chain fills the record in, so
+    the caller must poll; the timeout covers the worktree_dir mkdir only.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        run = await tree.runs.get_run(session_id, run_id)
+        if run is not None and run.worktree_path:
+            return Path(run.worktree_path)
+        await asyncio.sleep(0.05)
+    pytest.fail(f"run {run_id} never recorded its worktree within {timeout}s")
+
+
+async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeout: float,
+                                   what: str) -> RunRecord:
+    """Poll a session's runs until its first review Run carries a terminal fact; return it.
+
+    The review Run's id is not known before the work Run's gate releases, so the
+    poll matches on ``kind == "review"`` rather than on a run id.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        runs = {r.id: r for r in tree.runs.list_run_records_sync(session_id)}
+        review = [r for r in runs.values() if r.kind == "review"]
+        if review and tree.runs.terminal_outcome(
+                tree.runs.load_events_sync(session_id), review[0].id) is not None:
+            return review[0]
+        await asyncio.sleep(0.1)
+    pytest.fail(f"{what} never reached a terminal fact within {timeout}s")
+
+
 def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> Path:
     """The one work-kind run's worktree path (asserts exactly one work run)."""
     work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
@@ -791,31 +824,14 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
     # The worker's implementation is its commit in the isolated worktree: wait
     # for the worktree, then land the work commit on the work branch.
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        run = await tree.runs.get_run(worker.id, "run-work")
-        if run is not None and run.worktree_path:
-            break
-        await asyncio.sleep(0.05)
-    else:
-        pytest.fail("the work run never recorded its worktree")
-    wt = Path(run.worktree_path)
-    assert Path(run.worktree_path).is_dir()
+    wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
+    assert wt.is_dir()
     (wt / "marker.txt").write_text("implemented\n")
     run_git(wt, "add", "-A")
     run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
     work_committed.set()
 
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
-        review = [r for r in runs.values() if r.kind == "review"]
-        if review and tree.runs.terminal_outcome(
-                tree.runs.load_events_sync(worker.id), review[0].id) is not None:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the review chain never produced a terminal fact")
+    await wait_for_review_terminal(tree, worker.id, timeout=10.0, what="the review chain")
 
     runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
     review_runs = [r for r in runs.values() if r.kind == "review"]
@@ -1075,17 +1091,8 @@ async def test_repo_less_implement_delivers_after_review_passes(
 
     # The implement work Run's review spawns without a repo and reads the
     # spec-plus-paths context, not a diff.
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
-        review = [r for r in runs.values() if r.kind == "review"]
-        if review and tree.runs.terminal_outcome(
-                tree.runs.load_events_sync(worker.id), review[0].id) is not None:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less review never reached a terminal fact")
-    review_run = review[0]
+    review_run = await wait_for_review_terminal(tree, worker.id, timeout=10.0,
+                                                what="the repo-less review")
     assert review_run.review_of_run_id == "run-work"
     assert review_run.repo_path is None and review_run.worktree_path is None
     prompt = review_backend.prompt

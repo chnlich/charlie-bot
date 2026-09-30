@@ -597,6 +597,23 @@ async def seed_scenario(home: Path) -> dict:
         await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
         await session_mgr.star_session(feature.id)
 
+        # --- the Threads view's chat-thread subtree (S25b) ------------------
+        # One discord-origin session in the group named for its channel, with
+        # one delegated child: Workspace lists neither, the Threads pill lists
+        # the pair nested, and no group-header plus button renders there.
+        from src.core.models import DiscordOrigin
+        discord_thread = await session_mgr.create_session(
+            CreateSessionRequest(
+                name="Discord #general 2026",
+                discord_origin=DiscordOrigin(
+                    guild_id="900000000000000010", parent_channel_id="900000000000000011",
+                    thread_id="900000000000000012"),
+                group="Discord #general"))
+        discord_thread_child = await tree.create_task(
+            request_id="seed-discord-child", task_parent_id=discord_thread.id, profile="manager",
+            task=TaskSpec(goal="the thread session's delegated child"), name="Discord thread child",
+            backend=None, caller=OP)
+
         # --- the row-menu scenarios' missing row kinds (S30-S32) --------------
         # An archived ROOT manager (the archived root's Move-to-group menu) and
         # a named group's root (the group header's + and gear): the two row
@@ -666,6 +683,7 @@ async def seed_scenario(home: Path) -> dict:
                 "bound_node": bound_node.id, "paused_node": paused_node.id,
                 "archived_child": archived_child.id, "archived_root": archived_root.id,
                 "grouped_root": grouped_root.id, "group_name": "Alpha team",
+                "discord_thread": discord_thread.id, "discord_thread_child": discord_thread_child.id,
                 "alpha_second": alpha_second.id, "alpha_third": alpha_third.id,
                 "live_run": "run-live",
                 "_live_handles": {"process": live_proc, "stop": live_stop,
@@ -689,7 +707,7 @@ async def seed_scenario(home: Path) -> dict:
 # mouse presents; bare headless reports (hover: none), which would run the
 # styles.css touch fallback and shadow the desktop hover reveal.
 DESKTOP_CAPTURE_FLAGS = [
-    "--no-first-run", "--no-default-browser-check",
+    "--no-first-run", "--no-default-browser-check", "--mute-audio",
     "--disable-background-networking", "--window-size=1440,900",
     "--remote-allow-origins=*",
     "--disable-background-timer-throttling",
@@ -1731,8 +1749,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 labels = await evaluate(cdp, session_id, """
                     [...document.querySelectorAll('#sidebar-filter-pills .filter-pill')].map(b => b.textContent.trim())
                 """)
-                assert_true(labels == ["Workspace", "Later", "Archive"],
-                            f"the pill strip reads Workspace, Later, Archive in order ({labels})")
+                assert_true(labels == ["Workspace", "Threads", "Later", "Archive"],
+                            f"the pill strip reads Workspace, Threads, Later, Archive in order ({labels})")
                 assert_true(await evaluate(cdp, session_id,
                                            "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"),
                             "Workspace is the active pill on load")
@@ -1770,7 +1788,71 @@ async def run_harness(args: argparse.Namespace) -> None:
                 shot = await screenshot(cdp, session_id, results, "s25_FAILED")
                 results.record("the three view pills", ok=False, detail=repr(exc), screenshot=shot)
 
+            # ---- S25b: the Threads pill — the chat-thread subtree's own view --
+            # Workspace (the first paint's own list) lists neither the
+            # discord-origin session nor its delegated child; clicking Threads
+            # lists the pair nested under "Discord #general" with no
+            # group-header plus button (the Settings gear stays); reloading
+            # with filter=threads in the URL stays on Threads.
+            try:
+                log("  s25b: the Threads pill")
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+                await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
+                workspace_names = await evaluate(cdp, session_id, """
+                    [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
+                """)
+                assert_true(not any("Discord #general 2026" in n or "Discord thread child" in n
+                                    for n in workspace_names),
+                            f"Workspace lists neither the thread session nor its child ({workspace_names})")
+
+                await evaluate(cdp, session_id, "document.getElementById('filter-threads').click()")
+                await wait_for(cdp, session_id,
+                               "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
+                               f" && !!document.getElementById('session-{ids['discord_thread']}')",
+                               timeout=12, label="Threads renders the thread session")
+                nesting = json.loads(await evaluate(cdp, session_id, f"""
+                    (() => {{
+                      const child = document.getElementById('session-{ids['discord_thread_child']}');
+                      const group = child && child.closest('.session-group');
+                      return JSON.stringify({{
+                        group: group ? group.dataset.sgroupKey : null,
+                        nested: !!child && child.closest('[data-tree-children="{ids['discord_thread']}"]') !== null,
+                      }});
+                    }})()
+                """))
+                assert_true(nesting["group"] == "Discord #general" and nesting["nested"],
+                            f"the child nests under its parent in the channel group ({nesting})")
+                header_buttons = json.loads(await evaluate(cdp, session_id, """
+                    JSON.stringify([...document.querySelectorAll('#session-list [data-sgroup-toggle-key]')]
+                      .map(h => [...h.querySelectorAll('button[title]')].map(b => b.title)))
+                """))
+                assert_true(all(not any("New session in group" in t for t in titles) for titles in header_buttons),
+                            f"no group-header plus button renders on Threads ({header_buttons})")
+                assert_true(all(any(t == "Settings" for t in titles) for titles in header_buttons),
+                            f"the group header's Settings gear stays ({header_buttons})")
+                shot = await screenshot(cdp, session_id, results, "s25b_threads_pill")
+                results.record("the Threads pill serves the chat-thread subtree", ok=True,
+                               detail="Workspace omits the subtree; Threads nests the pair under its channel group "
+                                      "with no group-header plus button",
+                               screenshot=shot)
+
+                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}&filter=threads"},
+                               session_id=session_id)
+                await wait_for(cdp, session_id,
+                               "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
+                               f" && !!document.getElementById('session-{ids['discord_thread']}')",
+                               timeout=12, label="the reload stays on Threads")
+                shot = await screenshot(cdp, session_id, results, "s25b_threads_reload")
+                results.record("filter=threads survives a reload", ok=True,
+                               detail="the restore path re-enters Threads and refetches the chat-threads list",
+                               screenshot=shot)
+            except Exception as exc:
+                shot = await screenshot(cdp, session_id, results, "s25b_FAILED")
+                results.record("the Threads pill serves the chat-thread subtree", ok=False, detail=repr(exc),
+                               screenshot=shot)
+
             # ---- S26: a bound node's schedule rides its Workspace row ---------
+
             # The enabled bound node shows the blue clock, the "Next:" line and
             # the truncated cron · timezone line, with the Settings gear (its
             # menu carries Edit schedule); the disabled one goes grey with

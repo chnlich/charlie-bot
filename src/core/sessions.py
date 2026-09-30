@@ -349,8 +349,8 @@ def _iter_trigger_stats(triggers_dir: str) -> list[tuple[str, os.stat_result]]:
 
 def pending_trigger_state_sync(
     triggers_dir: Path,
-    walked: list[tuple[str, os.stat_result]] | None = None,
-    dir_sig: tuple[int, int] | None = None,
+    walked: list[tuple[str, os.stat_result]] | None,
+    dir_sig: tuple[int, int] | None,
 ) -> tuple[int, datetime | None]:
   """(pending trigger count, earliest fire time) from the *.json files under *triggers_dir*.
 
@@ -652,7 +652,7 @@ def _task_tree_probe_signature(session_dir_str: str) -> tuple:
 
 def probe_sidebar_state_sync(
     specs: list[SidebarProbeSpec],
-    walked: dict[str, _WalkedProbeInputs] | None = None,
+    walked: dict[str, _WalkedProbeInputs] | None,
 ) -> dict[str, dict]:
   """Probe every spec serially.
 

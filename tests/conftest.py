@@ -1373,6 +1373,14 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
 
+# Import-path patch targets for the usage-ledger capture seam. Every consumer
+# (src/api/pages.py's token-usage page, src/core/scheduler.py's usage_ledger
+# handler, src/core/storage_cool.py's ledger backfill, src/cli/usage_ledger.py's
+# verbs) imports both names at call scope, so setattr lands each stand-in on the
+# defining module's attribute and the consumer's call reads it there.
+USAGE_LEDGER_DEFAULT_LEDGER_PATH_PATCH_TARGET = "src.core.usage_ledger.default_ledger_path"
+TOKEN_TALLY_CAPTURE_LOCAL_PATCH_TARGET = "src.core.token_tally.capture_local"
+
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
 # src/api/chat.py defines run_and_finalize itself and binds create_logged_task
 # (`from src.core.tasks import create_logged_task`) at import scope; cancel_master

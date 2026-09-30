@@ -1,4 +1,4 @@
-"""Unit tests for src/core/runs.py (run truth from disk) and finalize_effects judgments."""
+"""Unit tests for src/core/runs.py (run truth from disk)."""
 
 from __future__ import annotations
 
@@ -132,7 +132,3 @@ def test_resolve_kept_alive_when_death_unverifiable_and_no_result(tmp_path: Path
   resolution = _resolve(tmp_path, pid=999999)
   assert resolution.outcome is runs.RunOutcome.RUNNING
   assert "pid_start" in resolution.reason
-
-
-# ---------------------------------------------------------------------------
-# finalize_effects judgments

@@ -42,6 +42,7 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
+from typing import NoReturn  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     EVIDENCE_ROOT_DEFAULT,
@@ -59,7 +60,7 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
 
 

@@ -69,6 +69,7 @@ import time  # noqa: E402
 import traceback  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
+from typing import NoReturn  # noqa: E402
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
@@ -386,7 +387,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(message)
 
 
@@ -433,7 +434,7 @@ def trial_home_root(prefix: str, *, keep: bool) -> Path:
 
 async def open_authenticated_page(
     chrome: str, profile: Path, *, port: int, access_key: str, domains: tuple[str, ...],
-    fail: Callable[[str], None],
+    fail: Callable[[str], NoReturn],
 ) -> tuple[CDP, str, subprocess.Popen]:
     """Launch Chrome and open one page pre-seeded for the trial at *port*.
 
@@ -470,7 +471,7 @@ async def open_authenticated_page(
 
 
 async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console: Path,
-                             fail: Callable[[str], None], timeout_s: float) -> dict:
+                             fail: Callable[[str], NoReturn], timeout_s: float) -> dict:
     """Poll the preview instance's ready record; return it once ready.
 
     The record is ``<home>/state/preview_instance.json`` and ``ready: true``

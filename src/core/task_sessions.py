@@ -1262,6 +1262,14 @@ class TaskTreeManager:
     bound task's stable binding, or an unbound task's cron session — a legacy
     session (profile None) keeps parenting its firings in place, so its
     bookkeeping lands here too.
+
+    ``updated_at`` is left as it was: it records the user's last action on the
+    row (the sidebar sorts each group on it), and a frequent cron's fire must
+    not pin its node to the top of its group. The save therefore goes through
+    ``save_metadata`` directly rather than through ``_save_meta`` (whose
+    ``updated_at`` refresh it exists for is skipped here), so the sidebar dirty
+    mark and the listing revision still land — the row's Last status
+    refreshes — and the tree index is still invalidated.
     """
     if last_scheduled_run is None and cron is None and last_run_status is None:
       raise TaskInvalidError("record_scheduled_fire requires at least one scheduling field")
@@ -1275,8 +1283,8 @@ class TaskTreeManager:
         meta.last_scheduled_cron = cron
       if last_run_status is not None:
         meta.last_run_status = last_run_status
-      meta.updated_at = utc_now()
-      await self._save_meta(meta)
+      await self._sessions.save_metadata(meta)
+      self._invalidate_index()
       return meta
 
   async def create_retry(self, session_id: str, request_id: str, original_run_id: str) -> dict:

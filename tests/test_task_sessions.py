@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import OPUS_BACKEND_ID, build_env, create_task
+from conftest import OPUS_BACKEND_ID, build_env, create_scheduled_node, create_task
 
-from src.core.models import CreateSessionRequest, EventRef, RunRecord
+from src.core.models import CreateSessionRequest, EventRef, LastRunStatus, RunRecord, SessionStatus
 from src.core.task_sessions import (
     TaskInvalidError,
     TaskTreeManager,
@@ -127,3 +128,44 @@ async def test_permanent_delete_blockers(tmp_path: Path) -> None:
 
 # ---------------------------------------------------------------------------
 # Prompt bodies
+
+# ---------------------------------------------------------------------------
+# Scheduler bookkeeping
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: Path) -> None:
+  """Every record_scheduled_fire call shape the scheduler uses writes its
+  scheduling fields and leaves updated_at as it was: a frequent cron's node
+  keeps its sidebar place, while a listing read shows the new Last status."""
+  _, session_mgr, tree = build_env(tmp_path)
+  node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
+  fired_at = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+  await session_mgr.update_thinking_state(node.id, fired_at)
+
+  # The five call shapes src/core/scheduler.py fires with, and the metadata
+  # fields each must land (the scheduler's cron argument writes
+  # last_scheduled_cron): cron change, overlap skip, normal fire, loop noop,
+  # handler outcome.
+  stamp = fired_at.isoformat()
+  cron_call = {"last_scheduled_run": stamp, "cron": "0 3 * * *"}
+  cron_land = {"last_scheduled_run": stamp, "last_scheduled_cron": "0 3 * * *"}
+  skip_call = {"last_scheduled_run": stamp, "last_run_status": LastRunStatus.SKIPPED}
+  noop = {"last_run_status": LastRunStatus.SUCCESS}
+  handler_failed = {"last_run_status": LastRunStatus.FAILED}
+  shapes = [
+      (cron_call, cron_land),
+      (skip_call, skip_call),
+      (cron_call, cron_land),
+      (noop, noop),
+      (handler_failed, handler_failed),
+  ]
+  for call, landed in shapes:
+    meta = await tree.record_scheduled_fire(node.id, **call)
+    assert meta.updated_at == fired_at
+    fresh = await session_mgr.get_session(node.id)
+    assert fresh is not None and fresh.updated_at == fired_at
+    row = next(r for r in await session_mgr.list_sessions(status=SessionStatus.ACTIVE) if r.id == node.id)
+    for name, value in landed.items():
+      assert getattr(row, name) == value

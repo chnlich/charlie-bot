@@ -17,6 +17,7 @@ from pathlib import Path
 import pytest
 from conftest import (
     FABLE_MODEL,
+    OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     create_task,
     patch_instructions_content,
@@ -31,7 +32,7 @@ from src.core.models import SessionMetadata, TaskSpec
 from src.core.runs import RUN_EVENTS_NAME
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
-    OPERATOR,
+    OP_HEADERS,
     SpawningScriptedBackend,
     WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
@@ -71,7 +72,7 @@ async def _start_loop(
   }
   payload.update(payload_overrides or {})
   with make_api_client(cfg, session_mgr, tree) as client:
-    resp = client.post("/api/internal/improve", json=payload, headers=OPERATOR)
+    resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["status"] == "started"
@@ -202,7 +203,7 @@ async def test_live_goal_change_affects_next_iteration(
             "base_branch": "main",
             "work_branch": "improve/live-goal",
         },
-        headers=OPERATOR)
+        headers=OP_HEADERS)
     assert resp.status_code == 200, resp.text
     child_id = resp.json()["child_session_id"]
 
@@ -240,7 +241,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
       "base_branch": "main",
   }
   with make_api_client(cfg, session_mgr, tree) as client:
-    resp = client.post("/api/internal/improve", json=payload, headers=OPERATOR)
+    resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
   assert resp.status_code == 403, resp.text
   assert "take off" in str(resp.json()["detail"]).lower() or "authorization" in str(resp.json()["detail"]).lower()
   assert not _active_loop_path(manager.id, cfg).exists()

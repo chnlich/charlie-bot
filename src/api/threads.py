@@ -574,8 +574,9 @@ async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: Thr
 
   def walk_and_parse(
   ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
-    thread_pairs, run_pairs = _row_source_stats(str(session_dir / THREADS_DIR_NAME), str(session_dir / "data" / "runs"))
-    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs)
+    threads_dir = str(session_dir / THREADS_DIR_NAME)
+    thread_pairs, run_pairs = _row_source_stats(threads_dir, str(session_dir / "data" / "runs"))
+    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs, threads_dir)
 
   thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
   rows = [row for row, _fragment in _thread_list_items(session_id, thread_pairs, metas)]
@@ -685,7 +686,7 @@ async def list_threads(
   # the memo's proof and the rows behind the body describe one instant. The
   # gate-hit path always serves above, so a rebuild implies the walk ran.
   assert thread_pairs is not None
-  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs)
+  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs, str(session_dir / THREADS_DIR_NAME))
   thread_items = _thread_list_items(session_id, thread_pairs, metas)
   thread_items.extend(await _v2_run_list_items(session_id, run_pairs))
 

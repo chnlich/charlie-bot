@@ -15,11 +15,8 @@ so the listener can reason about ids and permissions without an HTTP client.
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import urllib.parse
-from collections.abc import Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -46,7 +43,6 @@ REQUIRED_PERMISSIONS: dict[str, int] = {
     "CREATE_PUBLIC_THREADS": 1 << 35,
     "READ_MESSAGE_HISTORY": 1 << 16,
     "ADD_REACTIONS": 1 << 6,
-    "ATTACH_FILES": 1 << 15,
 }
 
 # The shape message_link emits and parse_message_link accepts; ids are
@@ -114,11 +110,6 @@ class DiscordAPIError(Exception):
   def __str__(self) -> str:
     return f"{self.method} {self.path} failed: HTTP {self.status} code={self.code} message={self.message!r}"
 
-  @property
-  def too_large(self) -> bool:
-    """True for payload-too-large rejections: HTTP 413, or Discord's code 40005."""
-    return self.status == 413 or self.code == 40005
-
 
 class DiscordClient:
   """Thin Discord v10 REST wrapper: one method per API call, all of them
@@ -151,8 +142,6 @@ class DiscordClient:
       path: str,
       *,
       json_body: Any = None,
-      data: dict[str, str] | None = None,
-      files: Sequence[tuple[str, tuple[str, bytes, str]]] | None = None,
       params: dict[str, Any] | None = None,
   ) -> Any:
     """One Discord REST call: send it with the bot headers, retry a 429 up to
@@ -166,8 +155,6 @@ class DiscordClient:
           url,
           headers=self._headers,
           json=json_body,
-          data=data,
-          files=files,
           params=params,
       )
       if resp.status_code == 429 and retries < _MAX_429_RETRIES:
@@ -227,28 +214,19 @@ class DiscordClient:
         },
     )
 
-  async def create_message(self, channel_id: str, content: str, *, files: Sequence[Path] = ()) -> dict:
-    """POST /channels/{channel_id}/messages.
+  async def create_message(self, channel_id: str, content: str) -> dict:
+    """POST /channels/{channel_id}/messages with a JSON body.
 
     ``allowed_mentions`` is always ``{"parse": []}`` so a reply never pings
-    anyone. Without files the body is JSON; with files it is multipart — one
-    ``payload_json`` part (content, allowed_mentions, and the attachment
-    metadata Discord requires) plus one ``files[i]`` part per file.
+    anyone.
     """
-    path = f"/channels/{channel_id}/messages"
-    if not files:
-      return await self._request("POST", path, json_body={"content": content, "allowed_mentions": {"parse": []}})
-    attachments = [{"id": index, "filename": file.name} for index, file in enumerate(files)]
-    payload_json = json.dumps({"content": content, "allowed_mentions": {"parse": []}, "attachments": attachments})
     return await self._request(
-        "POST",
-        path,
-        data={"payload_json": payload_json},
-        files=[
-            (f"files[{index}]", (file.name, file.read_bytes(), "application/octet-stream"))
-            for index, file in enumerate(files)
-        ],
-    )
+        "POST", f"/channels/{channel_id}/messages", json_body={
+            "content": content,
+            "allowed_mentions": {
+                "parse": []
+            }
+        })
 
   async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
     """PUT the bot's own reaction (URL-encoded emoji) onto one message."""

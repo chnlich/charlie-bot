@@ -9,7 +9,6 @@ string sort — is covered without any Slack fixture.
 import asyncio
 import dataclasses
 import uuid
-from collections.abc import Callable, Sequence
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -42,7 +41,6 @@ from src.core.thread_entry import (
     noticed,
     nudged,
     operator_only_note,
-    post_reply,
     replied,
     rewrite_file_links,
     unread_after,
@@ -63,7 +61,6 @@ FAKECHAT = ThreadPlatform(
     mention_key="mention_id",
     block_keys=("channel_id", "thread_ts", "mention_id"),
     thread_fallback="(channel {channel_id}, thread {thread_ts})",
-    attaches_files=True,
 )
 
 
@@ -278,14 +275,13 @@ class FakeAdapter(ThreadAdapter):
   platform = FAKECHAT
 
   def __init__(self) -> None:
-    self.posts: list[tuple[dict, str, list]] = []
+    self.posts: list[tuple[dict, str]] = []
     self.acks: list[dict] = []
     self.removed: list[dict] = []
     self.thread: list[ThreadMessage] = []
-    self.files: list = []
 
-  async def post(self, address: dict, text: str, files: Sequence) -> None:
-    self.posts.append((address, text, list(files)))
+  async def post(self, address: dict, text: str) -> None:
+    self.posts.append((address, text))
 
   async def add_ack(self, block: dict) -> None:
     self.acks.append(block)
@@ -304,15 +300,6 @@ class FakeAdapter(ThreadAdapter):
 
   def address_of(self, origin) -> dict:
     return dict(origin)
-
-  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable, list]:
-    # The attaching swap appends each linked file itself and returns the
-    # replacement text; the returned list is what rides the last chunk.
-    def swap(fs_path) -> str:
-      self.files.append(fs_path)
-      return f"published:{fs_path.name}"
-
-    return swap, self.files
 
   def log_fields(self, address: dict) -> dict:
     return {"channel": address["channel_id"]}
@@ -441,29 +428,6 @@ async def test_ack_messages_orders_ids_by_the_platform_id_key() -> None:
   assert ack_event["type"] == "fakechat_ack"
   assert ack_event["content"] == "Fakechat thread ack: 2 message(s) read through 100"
   assert ack_event["fakechat_ack"] == {"message_ids": ["99", "100"], "watermark_id": "100"}
-
-
-@pytest.mark.asyncio
-async def test_post_reply_carries_the_linked_file_on_the_last_chunk_only(tmp_path) -> None:
-  cfg = make_home_config(tmp_path)
-  page = tmp_path / "page.html"
-  page.write_text("<p>hi</p>", encoding="utf-8")
-  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
-  # One linked file, but over the 2000-char per-message limit once the URL is
-  # rewritten, so the reply splits into several chunks.
-  text = ("filler paragraph\n\n" * 150) + f"see {file_url} for details"
-  adapter = FakeAdapter()
-  sessions = FakeSessions(_fake_meta())
-
-  readback = await post_reply(adapter, "s1", text, cfg, sessions)
-
-  assert len(adapter.posts) > 1
-  assert all(files == [] for _, _, files in adapter.posts[:-1])
-  assert adapter.posts[-1][2] == [page]
-  assert readback["attachments"] == ["page.html"]
-  reply_event = sessions.persisted[0]
-  assert reply_event["type"] == "fakechat_reply"
-  assert reply_event["fakechat_reply"]["attachments"] == ["page.html"]
 
 
 @pytest.mark.asyncio

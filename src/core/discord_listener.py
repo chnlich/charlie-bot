@@ -23,10 +23,10 @@ hooks the same point the Slack one does.
 
 The master posts to its session's thread itself, through ``charliebot discord
 reply`` -> the ``post_reply`` wrapper, and reads the outcome back in the same
-call; before any chunk posts, the reply path uploads every file-server page
-the text links as an attachment on the last chunk and replaces its URL with
-the file name — thread readers may not reach this server, so the reply text
-stands on its own. The posted text is persisted as a ``discord_reply`` event
+call; before any chunk posts, the reply path publishes every file-server page
+the text links and swaps in its published URL — thread readers may not reach
+this server, but a published URL opens from any device, so every reader gets
+the page. The posted text is persisted as a ``discord_reply`` event
 whose ``answers`` names the summon the running round was answering (None for a
 round no summon started). ``deliver_done`` hangs off the round's terminal
 ``master_done`` event (called from ``SessionManager.persist_and_broadcast``),
@@ -65,8 +65,6 @@ import random
 import re
 import sys
 import uuid
-from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
@@ -83,7 +81,7 @@ from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import DiscordOrigin
 from src.core.sessions import SessionManager
-from src.core.thread_entry import ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
+from src.core.thread_entry import LINKED_PAGES_LINE, ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
 from src.core.triggers import TriggerManager
 
 if TYPE_CHECKING:
@@ -161,7 +159,6 @@ DISCORD = ThreadPlatform(
     mention_key="mention_id",
     block_keys=("guild_id", "channel_id", "thread_id", "mention_id"),
     thread_fallback="(guild {guild_id}, thread {thread_id})",
-    attaches_files=True,
 )
 
 
@@ -177,13 +174,11 @@ def summon_session_id(guild_id: str, thread_id: str) -> str:
 # The summon prompt's platform line. The shared reply-format contract
 # (prompts/thread_reply_format.md) defers the platform-specific facts to
 # this line: platform name, reply command, per-message limit, and how
-# linked pages reach readers. Another platform's entrypoint states its own
-# line and reuses the contract unchanged.
+# linked pages reach readers (the shared ``LINKED_PAGES_LINE``). Another
+# platform's entrypoint states its own line and reuses the contract unchanged.
 _PLATFORM_LINE = (
     f"Platform: Discord. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. "
-    "Linked pages: the reply path uploads each linked file-server page as an attachment and replaces its URL with "
-    "the file name; thread readers may not reach this server, so the reply text stands on its own.")
+    f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")
 
 
 def _build_summon_prompt(link: str, cfg: CharlieBotConfig) -> str:
@@ -258,12 +253,9 @@ def _bot_client() -> DiscordClient:
 class DiscordThreadAdapter(ThreadAdapter):
   """The round side's face onto the Discord REST client.
 
-  Discord receives files: its link swap hands the linked page's file name back
-  for the URL and collects the path, and ``post`` rides the last chunk's
-  attachments (``attaches_files``). The client is built lazily — a given one
-  is used as is; without one, ``_bot_client`` runs on the first platform call
-  and is reused, resolved as the module global at that moment so tests can
-  stub the factory.
+  The client is built lazily — a given one is used as is; without one,
+  ``_bot_client`` runs on the first platform call and is reused, resolved as
+  the module global at that moment so tests can stub the factory.
   """
 
   platform = DISCORD
@@ -277,8 +269,8 @@ class DiscordThreadAdapter(ThreadAdapter):
       self._client = _bot_client()
     return self._client
 
-  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
-    await self._ensure_client().create_message(address["thread_id"], text, files=files)
+  async def post(self, address: dict, text: str) -> None:
+    await self._ensure_client().create_message(address["thread_id"], text)
 
   async def add_ack(self, block: dict) -> None:
     await self._ensure_client().add_reaction(block["channel_id"], block[self.platform.mention_key], _ACCEPTANCE_EMOJI)
@@ -309,22 +301,6 @@ class DiscordThreadAdapter(ThreadAdapter):
 
   def address_of(self, origin: DiscordOrigin) -> dict:
     return {"guild_id": origin.guild_id, "thread_id": origin.thread_id}
-
-  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
-    """The attachment swap for the shared link rewrite: keep the file name, collect the path.
-
-    Each distinct linked path is appended once (a path linked twice attaches
-    once) and its URL becomes the bare file name — the attachment rides the
-    same reply, so thread readers see the page without reaching this server.
-    """
-    files: list[Path] = []
-
-    def swap(fs_path: Path) -> str:
-      if fs_path not in files:
-        files.append(fs_path)
-      return fs_path.name
-
-    return swap, files
 
   def log_fields(self, address: dict) -> dict:
     return {"guild": address["guild_id"], "thread": address["thread_id"]}
@@ -483,8 +459,8 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
-  on a lazily-built Discord adapter; the rewrite, chunking, attachments,
-  refusals, reply event, and readback live there.
+  on a lazily-built Discord adapter; the rewrite, chunking, refusals, reply
+  event, and readback live there.
   """
   return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, session_mgr)
 

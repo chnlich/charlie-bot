@@ -405,7 +405,7 @@ async def test_preflight_intent_off_returns_before_connecting(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_path: Path) -> None:
   cfg, session_mgr = _rig(tmp_path)
-  permissions = sum(bit for name, bit in REQUIRED_PERMISSIONS.items() if name != "ATTACH_FILES")
+  permissions = sum(bit for name, bit in REQUIRED_PERMISSIONS.items() if name != "ADD_REACTIONS")
   guilds = [{"id": _GUILD, "name": "town", "permissions": str(permissions)}]
   ws = FakeGatewaySocket([_hello(), _ready()])
   with _listener([ws], guilds=guilds) as rig, capture_logs() as logs:
@@ -416,7 +416,7 @@ async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_pat
       missing = [e for e in logs if e["event"] == "discord_listener_missing_permissions"]
       assert len(missing) == 1
       assert missing[0]["guild"] == _GUILD
-      assert missing[0]["missing"] == ["ATTACH_FILES"]
+      assert missing[0]["missing"] == ["ADD_REACTIONS"]
     finally:
       await _stop(task)
 

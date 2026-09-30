@@ -9,14 +9,14 @@ through the internal discord/reply endpoint, and prints the server's readback as
 one JSON line: ``posted``, ``text`` (what actually went out), ``operator_only_note``
 (one line naming the application-route links that stay as written and reach the
 operator alone, null when there are none), ``chars``, ``chunks``, ``over_budget``
-(past the 500-character reply budget), ``answers`` (the summon event id the reply
-answers, or null for a round no summon started) and ``attachments`` (the file
-names uploaded with the reply — Discord receives linked pages as files, not
-published-and-swapped URLs). A refusal (unread eligible thread messages → the
-412 ``stale_thread`` payload — run ``charliebot discord read`` first; no Discord
-thread → 409; blank text or a linked file gone → 422; Discord rejected the post
-→ 502) exits non-zero with a JSON error on stderr and persists nothing — no
-chunk of the reply posts.
+(past the 500-character reply budget) and ``answers`` (the summon event id the
+reply answers, or null for a round no summon started). Every file-server page the
+text links is published first and its URL swapped for the published one, as on
+Slack. A refusal (unread eligible thread messages → the 412 ``stale_thread``
+payload — run ``charliebot discord read`` first; no Discord thread → 409; blank
+text, a linked file gone, or a publish preflight failure → 422; Discord rejected
+the post → 502) exits non-zero with a JSON error on stderr and persists nothing —
+no chunk of the reply posts.
 
 ``read`` posts the session, an optional Discord link and the page size to the
 internal discord/read endpoint and prints the readback JSON: ``messages`` (each

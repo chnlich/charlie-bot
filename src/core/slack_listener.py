@@ -43,8 +43,6 @@ block, outside the audit.
 import asyncio
 import json
 import uuid
-from collections.abc import Callable, Sequence
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.core import event_types as ET
@@ -53,12 +51,12 @@ from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import PendingTrigger, SlackOrigin
-from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 
 # _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
 from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
 from src.core.thread_entry import (
+    LINKED_PAGES_LINE,
     ThreadAdapter,
     ThreadMessage,
     ThreadPlatform,
@@ -95,12 +93,11 @@ _REPLY_COMMAND = "charliebot slack reply"
 # The summon prompt's platform line. The shared reply-format contract
 # (prompts/thread_reply_format.md) defers the platform-specific facts to
 # this line: platform name, reply command, per-message limit, and how
-# linked pages reach readers. Another platform's entrypoint states its own
-# line and reuses the contract unchanged.
+# linked pages reach readers (the shared ``LINKED_PAGES_LINE``). Another
+# platform's entrypoint states its own line and reuses the contract unchanged.
 _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
-    f"Per-message limit: {_MAX_POST_CHARS} characters. "
-    "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
+    f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")
 
 # Trigger-label prefix identifying a session's armed thread-follow record.
 _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
@@ -122,7 +119,6 @@ SLACK = ThreadPlatform(
     mention_key="mention_ts",
     block_keys=("channel_id", "thread_ts", "mention_ts"),
     thread_fallback="(channel {channel_id}, thread {thread_ts})",
-    attaches_files=False,
 )
 
 
@@ -460,12 +456,7 @@ def _bot_client() -> SlackClient:
 
 
 class SlackThreadAdapter(ThreadAdapter):
-  """The round side's face onto the Slack Web API client.
-
-  Slack never receives files: its link swap publishes the linked pages and
-  swaps the URLs to the published ones, so ``post`` takes no attachment and
-  ``link_swap`` appends to nothing.
-  """
+  """The round side's face onto the Slack Web API client."""
 
   platform = SLACK
 
@@ -485,7 +476,7 @@ class SlackThreadAdapter(ThreadAdapter):
       self._given = _bot_client()
     return self._given
 
-  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
+  async def post(self, address: dict, text: str) -> None:
     await self._client.post_message(address["channel_id"], text, thread_ts=address["thread_ts"])
 
   async def add_ack(self, block: dict) -> None:
@@ -503,9 +494,6 @@ class SlackThreadAdapter(ThreadAdapter):
 
   def address_of(self, origin: SlackOrigin) -> dict:
     return {"channel_id": origin.channel_id, "thread_ts": origin.thread_ts}
-
-  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
-    return _publish_swap(cfg), []
 
   def log_fields(self, address: dict) -> dict:
     return {"channel": address["channel_id"], "thread_ts": address["thread_ts"]}
@@ -544,22 +532,6 @@ async def ack_messages(
   live there.
   """
   return await thread_entry.ack_messages(SlackThreadAdapter(), session_id, message_ids, cfg, session_mgr)
-
-
-def _publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
-  """The Slack swap for the shared link rewrite: publish the file, return its published URL.
-
-  An unconfigured publish lane refuses the whole reply with 422 (the
-  ``PublishError`` text names the missing key).
-  """
-
-  def swap(fs_path: Path) -> str:
-    try:
-      return publish_artifact(fs_path, cfg).url
-    except PublishError as e:
-      raise SlackReplyError(422, str(e)) from e
-
-  return swap
 
 
 async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:

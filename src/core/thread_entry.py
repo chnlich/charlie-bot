@@ -28,7 +28,7 @@ entrypoint imports this module, never the reverse.
 import abc
 import asyncio
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -51,6 +51,7 @@ from src.core.models import (
     TriggerStatus,
     utc_now,
 )
+from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.triggers import ArchivedSessionError, TriggerManager
@@ -96,9 +97,6 @@ class ThreadPlatform:
   block_keys: tuple[str, ...]
   # Formatted with the summon block when a summon prompt carries no link.
   thread_fallback: str
-  # True when linked pages are uploaded as attachments instead of published
-  # (Slack publishes and swaps the URLs, so its swap appends to nothing).
-  attaches_files: bool
 
   @property
   def notice_key(self) -> str:
@@ -136,21 +134,16 @@ class ThreadAdapter(abc.ABC):
   One subclass per entrypoint wraps the platform's client: posting into the
   thread, lighting and clearing the summon ack, reading the thread's eligible
   messages, naming the thread (the ``address`` dict ``post`` accepts),
-  rewriting the reply's file links, shaping the log fields that point at the
-  thread, and naming the follow wake. The platform description rides on the
-  class, so every core helper reads it off the adapter it was handed.
+  shaping the log fields that point at the thread, and naming the follow
+  wake. The platform description rides on the class, so every core helper
+  reads it off the adapter it was handed.
   """
 
   platform: ThreadPlatform
 
   @abc.abstractmethod
-  async def post(self, address: dict, text: str, files: Sequence[Path]) -> None:
-    """Post one message into the thread *address* names.
-
-    *files* carries the attachments for platforms that receive them
-    (``attaches_files``); a platform whose swap publishes the linked pages
-    instead takes none. Raises on failure -- ``post_with_retry`` catches it.
-    """
+  async def post(self, address: dict, text: str) -> None:
+    """Post one text message into the thread *address* names; raises on failure -- ``post_with_retry`` catches it."""
 
   @abc.abstractmethod
   async def add_ack(self, block: dict) -> None:
@@ -167,14 +160,6 @@ class ThreadAdapter(abc.ABC):
   @abc.abstractmethod
   def address_of(self, origin: Any) -> dict:
     """The address dict ``post`` accepts for the thread *origin* names."""
-
-  @abc.abstractmethod
-  def link_swap(self, cfg: CharlieBotConfig) -> tuple[Callable[[Path], str], list[Path]]:
-    """The rewrite swap for the reply's file links, plus the list it appends the files to attach to.
-
-    A platform whose swap publishes (Slack) appends to nothing; a platform
-    that uploads attachments appends every published-instead-linked file.
-    """
 
   @abc.abstractmethod
   def log_fields(self, address: dict) -> dict:
@@ -397,8 +382,7 @@ def follow_floor(label: str) -> str | None:
 _RETRY_DELAYS = (1.0, 4.0)
 
 
-async def post_with_retry(
-    adapter: ThreadAdapter, address: dict, text: str, *, session_id: str, files: Sequence[Path] = ()) -> bool:
+async def post_with_retry(adapter: ThreadAdapter, address: dict, text: str, *, session_id: str) -> bool:
   """Post one thread reply, retrying on failure; True when the platform accepted it.
 
   Exhausting the retries logs an error and returns False instead of raising:
@@ -409,7 +393,7 @@ async def post_with_retry(
   attempts = len(_RETRY_DELAYS) + 1
   for attempt in range(attempts):
     try:
-      await adapter.post(address, text, files)
+      await adapter.post(address, text)
       return True
     except Exception as e:
       if attempt == attempts - 1:
@@ -512,17 +496,15 @@ async def post_reply(
     adapter: ThreadAdapter, session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Post *text* to the session's thread and return the readback the CLI prints.
 
-  Before any chunk posts, the file links in the text are rewritten through the
-  platform's swap (``rewrite_file_links`` with ``adapter.link_swap``), so the
-  thread receives links its readers can open (or, on an ``attaches_files``
-  platform, the linked files ride the last chunk as attachments);
-  the refusal paths there — a linked file gone, the publish lane unconfigured —
-  raise ``ThreadReplyError`` and leave the thread untouched. Refusals raise
-  ``ThreadReplyError``: 404 unknown session, 409 no platform thread, 422 blank
-  text, 422 a rewrite refusal, 502 when a chunk exhausted its retries (nothing
-  is persisted then, so the caller can retry). The endpoint runs
-  ``assert_thread_fresh`` first, so a stale thread (412) never reaches this
-  function. On success the platform's reply event records
+  Before any chunk posts, the file links in the text are rewritten through
+  ``publish_swap`` (``rewrite_file_links``), so the thread receives published
+  links its readers can open; the refusal paths there — a linked file gone, a
+  publish preflight failure — raise ``ThreadReplyError`` and leave the thread
+  untouched. Refusals raise ``ThreadReplyError``: 404 unknown session, 409 no
+  platform thread, 422 blank text, 422 a rewrite refusal, 502 when a chunk
+  exhausted its retries (nothing is persisted then, so the caller can retry).
+  The endpoint runs ``assert_thread_fresh`` first, so a stale thread (412)
+  never reaches this function. On success the platform's reply event records
   the text that went out, the summon it answers, and the chunk count; a reply that
   answers a summon clears that summon's ack. The readback carries that outbound
   text plus one line naming any application-route links, which stay as written and
@@ -533,8 +515,7 @@ async def post_reply(
   if not text.strip():
     raise ThreadReplyError(422, "Reply text is empty")
 
-  swap, files = adapter.link_swap(cfg)
-  text, operator_only_links = await asyncio.to_thread(rewrite_file_links, text, cfg, swap)
+  text, operator_only_links = await asyncio.to_thread(rewrite_file_links, text, cfg, publish_swap(cfg))
 
   # lazy: mirrors the backfill import's agents-package guard
   from src.agents import master_cc_state
@@ -555,16 +536,13 @@ async def post_reply(
   address = adapter.address_of(getattr(meta, platform.origin_field))
   bodies = chunk_text(text, platform.max_post_chars)
   for index, body in enumerate(bodies, start=1):
-    ok = await post_with_retry(
-        adapter, address, body, session_id=session_id, files=files if index == len(bodies) else ())
+    ok = await post_with_retry(adapter, address, body, session_id=session_id)
     if not ok:
       raise ThreadReplyError(
           502, f"{platform.display_name} did not accept chunk {index} of {len(bodies)} after {len(_RETRY_DELAYS) + 1} "
           "attempts; nothing was persisted")
 
   payload = {"answers": answers, "chars": len(text), "chunks": len(bodies)}
-  if platform.attaches_files:
-    payload["attachments"] = [f.name for f in files]
   await session_mgr.persist_and_broadcast(
       session_id, {
           "type": platform.reply_event_type,
@@ -583,7 +561,7 @@ async def post_reply(
       over_budget=over_budget,
       budget=_REPLY_BUDGET_CHARS,
       answers=answers)
-  readback = {
+  return {
       "posted": True,
       "text": text,
       "operator_only_note": operator_only_note(operator_only_links),
@@ -592,9 +570,6 @@ async def post_reply(
       "over_budget": over_budget,
       "answers": answers,
   }
-  if platform.attaches_files:
-    readback["attachments"] = [f.name for f in files]
-  return readback
 
 
 async def ack_messages(
@@ -1210,6 +1185,28 @@ def rewrite_file_links(text: str, cfg: CharlieBotConfig, swap: Callable[[Path], 
     cursor = m.end()
   out.append(text[cursor:])
   return "".join(out), list(dict.fromkeys(routes))
+
+
+# The page-delivery sentence every platform's summon-prompt line carries: every
+# platform's reply goes through post_reply, whose rewrite runs publish_swap.
+LINKED_PAGES_LINE = (
+    "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
+
+
+def publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
+  """The swap ``post_reply`` hands ``rewrite_file_links``: publish the file, return its published URL.
+
+  A ``PublishError`` (publish lane unconfigured or not deployed) refuses the
+  whole reply with 422; its text names the missing key or file.
+  """
+
+  def swap(fs_path: Path) -> str:
+    try:
+      return publish_artifact(fs_path, cfg).url
+    except PublishError as e:
+      raise ThreadReplyError(422, str(e)) from e
+
+  return swap
 
 
 def operator_only_note(links: list[str]) -> str | None:

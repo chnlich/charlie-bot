@@ -12,7 +12,7 @@ The flow:
 - In a text or announcement channel the bot opens a thread from the mention message, named from the mention's stripped content; in a thread or forum post it uses the thread the mention already sits in. One session is bound per thread — the session id is derived from the guild id and the thread id, so mentioning the bot in the same thread again always reaches the same session (created once, unarchived, or reused).
 - The bot lights the 👀 reaction on the mention message and starts a master round. The master reads the thread server-side with `charliebot discord read` (the readback returns the messages the bot can see and marks the unread ones read) and answers through `charliebot discord reply`, which posts the reply into the thread.
 - Later unmentioned messages from allowed users in that thread wake the same session: the wake fires about 45 seconds after the last message of a batch, and 300 seconds at most after the first message of the chain, so a steady trickle still flushes.
-- Linked pages travel with the reply as attachments: before posting, the reply path uploads every linked file-server page as an attachment and replaces its URL with the file name, because thread readers may not reach this server.
+- Linked pages reach readers as published links: before posting, the reply path publishes every linked file-server page through the publish lane (`charliebot publish`, the path Slack replies use) and swaps in its published URL, because thread readers may not reach this server. Each published copy sits under a fresh unguessable directory, so anyone holding the link opens the rendered page in the browser, and nobody can guess a link from the page name.
 - A round that ends without a reply gets one nudge; if the nudge round also posts nothing, the thread gets a one-line notice pointing to the session log.
 - A summon still queued when the server restarts gets a notice in its thread after the restart: the boot backfill reports it as lost and tells the thread to mention the bot again.
 - A mention in a DM cannot bind a guild thread. An allowed user's DM mention gets a one-line redirect to a server channel and nothing else — no session is touched.
@@ -29,10 +29,10 @@ The checklist below is the whole Discord-side setup; run it once per application
 4. **Invite the bot to the server.** Open the invite URL with the application's id filled in:
 
    ```
-   https://discord.com/oauth2/authorize?client_id=<application id>&scope=bot&permissions=309237746752
+   https://discord.com/oauth2/authorize?client_id=<application id>&scope=bot&permissions=309237713984
    ```
 
-   The `permissions` integer is the sum of `REQUIRED_PERMISSIONS` in `src/core/discord_client.py` — the seven permission bits the entrypoint exercises:
+   The `permissions` integer is the sum of `REQUIRED_PERMISSIONS` in `src/core/discord_client.py` — the six permission bits the entrypoint exercises:
 
    | Permission | Why the entrypoint needs it |
    |---|---|
@@ -42,7 +42,6 @@ The checklist below is the whole Discord-side setup; run it once per application
    | `CREATE_PUBLIC_THREADS` | Start a thread from the mention message when the mention lands in a text or announcement channel. |
    | `READ_MESSAGE_HISTORY` | Read a thread's past messages: the server-side read, the round's readback, and the reply's freshness gate all page through history. |
    | `ADD_REACTIONS` | Light and clear the 👀 reaction on the mention message. |
-   | `ATTACH_FILES` | Upload the reply's linked pages as attachments. |
 
 5. **Map each allowed account to its person.** Under `discord.allowed_users` in `config.yaml`, list one entry per Discord user id allowed to summon the bot, mapped to the person that account belongs to:
 
@@ -101,4 +100,4 @@ Day-to-day operation runs through the two session-bound verbs the master itself 
 `charliebot discord reply --file <path>` (`-` reads the reply text from stdin) posts the reply into the session's thread. Two refusals matter in operation:
 
 - **Stale thread (412).** The reply refuses with a `stale_thread` payload while eligible thread messages sit above the session's watermark — each unread message is named with its id, author, and a text preview. Run `charliebot discord read` to mark the new messages read, then reply again. Nothing posts while the refusal stands.
-- **Oversized attachment (502).** The reply path uploads every linked file-server page as an attachment riding the reply's last chunk. Discord rejects an upload past its size limit; the reply then reports a 502 naming the chunk Discord did not accept, and nothing is persisted — trim or drop the linked page and reply again.
+- **Publish failure (422).** The reply path publishes every linked file-server page before any chunk posts. When the publish lane refuses — `publish.dir` or `publish.public_base_url` unset in `config.yaml`, the publish directory missing, or its `index.html` missing — the whole reply refuses with a 422 whose detail names the missing key or file, and nothing posts. Fix the named item on the host and reply again.

@@ -60,6 +60,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from typing import NoReturn
 
 SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
@@ -83,7 +84,7 @@ ACTIVE_ID = "00000000-0000-4000-8000-0000000000a0"
 BUILD_LABEL = re.compile(r"\b[0-9a-f]{7,40} \u00b7 \d{2}-\d{2}\b")
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     print(f"UI PARITY CHECK COULD NOT RUN: {message}", file=sys.stderr, flush=True)
     raise SystemExit(2)
 

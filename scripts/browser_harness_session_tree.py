@@ -55,6 +55,7 @@ import time  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
+from typing import NoReturn  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -74,7 +75,7 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
-def fail(message: str) -> None:
+def fail(message: str) -> NoReturn:
     raise SystemExit(f"BROWSER HARNESS FAILED: {message}")
 
 
@@ -732,7 +733,7 @@ def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str])
         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
-def resolve_chrome(explicit: str | None, fail: Callable[[str], None]) -> str:
+def resolve_chrome(explicit: str | None, fail: Callable[[str], NoReturn]) -> str:
     """Resolve the chrome binary a harness drives: --chrome wins, then the two
     google-chrome installs. *fail* is the caller's own failure exit (the
     devtools_ws_url convention), so the refusal keeps the harness's prefix.
@@ -744,7 +745,7 @@ def resolve_chrome(explicit: str | None, fail: Callable[[str], None]) -> str:
 
 
 async def devtools_ws_url(chrome_proc: subprocess.Popen, timeout_s: float,
-                          fail: Callable[[str], None]) -> str:
+                          fail: Callable[[str], NoReturn]) -> str:
     """Read chrome's stderr until the DevTools websocket endpoint appears.
 
     *fail* is the caller's own failure exit, so each harness keeps its

@@ -26,6 +26,7 @@ from conftest import (
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     bind_deps_managers,
+    init_repo_with_origin,
     patch_instructions_content,
 )
 
@@ -42,7 +43,6 @@ from tests.test_task_execution import (
     WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
     build_pooled_env,
-    init_repo_with_origin,
     install_backends,
     result_event,
     wait_for_terminal_run,

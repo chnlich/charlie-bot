@@ -24,6 +24,7 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
     fresh_master_state,
+    init_repo_with_origin,
     patch_instructions_content,
     patch_resume_seams,
 )
@@ -39,7 +40,6 @@ from tests.test_task_execution import (
     build_env,
     child_reports,
     implement_marker_commit,
-    init_repo_with_origin,
     inject_chat_append_fault,
     inject_run_record_write_fault,
     install_backends,
@@ -183,9 +183,10 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     restart recovery any number of times registers none (the chain ends at
     the first successful review), while the review's own follow-up replay
     (landing recheck) stays idempotent."""
+    from conftest import init_repo_with_origin
+
     from src.core.models import PatchSessionTaskRequest
     from src.core.task_recovery import reconcile_task_tree
-    from tests.test_task_execution import init_repo_with_origin
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path / "repo")
     await tree.patch_task(
@@ -357,11 +358,10 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed review is a used attempt: recovery registers the next review
     on the next preference backend (the existing policy, unchanged)."""
-    from conftest import backend_option
+    from conftest import backend_option, init_repo_with_origin
 
     from src.core.models import PatchSessionTaskRequest
     from src.core.task_recovery import reconcile_task_tree
-    from tests.test_task_execution import init_repo_with_origin
     cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
     # Two reviewer entries beyond the worker's own backend: a failed first
     # attempt must move to the second one.

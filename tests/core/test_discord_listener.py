@@ -11,6 +11,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 from conftest import (
+    DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
     PUBLISH_BASE_URL,
     ROOT,
     deploy_publish_lane,
@@ -530,7 +531,7 @@ async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tm
   # The real REST client over an in-memory transport: the wire request shows
   # whether the post went out as JSON or as a multipart upload.
   client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
-  with patch("src.core.discord_listener._bot_client", return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     readback = await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)
 
   assert len(requests) == 1
@@ -555,7 +556,7 @@ async def test_post_reply_refuses_422_and_posts_nothing_without_the_publish_lane
   file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
 
   with (
-      patch("src.core.discord_listener._bot_client", return_value=client),
+      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(ThreadReplyError) as excinfo,
   ):
     await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)

@@ -14,6 +14,7 @@ from conftest import (
     FakeSlackClient,
     build_slack_cfg,
     make_internal_router_client,
+    shut_down_trigger_tasks,
 )
 
 from src.core import event_types as ET
@@ -74,12 +75,6 @@ def _rig(tmp_path: Path) -> tuple:
   cfg = build_slack_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   return cfg, session_mgr, TriggerManager(cfg, session_mgr), FakeSlackClient()
-
-
-def _shut_down(trigger_mgr: TriggerManager) -> None:
-  """Cancel every sleeping trigger task; persisted records are untouched."""
-  for task in list(trigger_mgr._tasks.values()):
-    task.cancel()
 
 
 async def _make_session(
@@ -157,7 +152,7 @@ async def test_thread_message_guard_chain_drops(tmp_path: Path, case: str) -> No
 
   assert sid is None
   assert await _armed(trigger_mgr, meta.id) == []
-  _shut_down(trigger_mgr)
+  shut_down_trigger_tasks(trigger_mgr)
 
 
 @pytest.mark.asyncio
@@ -177,7 +172,7 @@ async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: P
   armed = await _armed(trigger_mgr, meta.id)
   assert len(armed) == 1
   assert f"floor={_ts(150)}" in armed[0].message
-  _shut_down(trigger_mgr)
+  shut_down_trigger_tasks(trigger_mgr)
 
 
 @pytest.mark.asyncio
@@ -192,7 +187,7 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: Path, w
   armed = await _armed(trigger_mgr, meta.id)
   assert len(armed) == 1
   assert f"floor={_ts(150)}" in armed[0].message
-  _shut_down(trigger_mgr)
+  shut_down_trigger_tasks(trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +280,7 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   armed = (await _armed(trigger_mgr, meta.id))[0]
 
   # The process dies: in-memory sleep tasks vanish; the record stays PENDING.
-  _shut_down(trigger_mgr)
+  shut_down_trigger_tasks(trigger_mgr)
 
   # After restart the boot scan picks the record up; its deadline passed during
   # the outage, so the rehydrated task fires without sleeping.
@@ -306,7 +301,7 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   assert stored.status == TriggerStatus.FIRED
   wakes = [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SCHEDULED_TRIGGER]
   assert len(wakes) == 1
-  _shut_down(boot_mgr)
+  shut_down_trigger_tasks(boot_mgr)
 
 
 # ---------------------------------------------------------------------------

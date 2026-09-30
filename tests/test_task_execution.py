@@ -31,6 +31,7 @@ from conftest import (
     assistant_text_event,
     backend_option,
     create_task,
+    init_repo_with_origin,
     install_scripted_backends,
     make_transcript,
     patch_instructions_content,
@@ -223,21 +224,6 @@ async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: 
             return run, str(outcome)
         await asyncio.sleep(0.05)
     pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
-
-
-def init_repo_with_origin(tmp_path: Path) -> tuple[Path, Path]:
-    """A synthetic repo with a bare origin carrying main (the landing target)."""
-    origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", "-b", "main", str(origin)], check=True)
-    repo = tmp_path / "repo"
-    subprocess.run(["git", "clone", "-q", str(origin), str(repo)], check=True)
-    run_git(repo, "config", "user.email", "t@example.com")
-    run_git(repo, "config", "user.name", "t")
-    (repo / "seed.txt").write_text("seed\n")
-    run_git(repo, "add", ".")
-    run_git(repo, "commit", "-q", "-m", "seed")
-    run_git(repo, "push", "-q", "origin", "main")
-    return repo, origin
 
 
 def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> Path:

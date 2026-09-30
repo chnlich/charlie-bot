@@ -19,7 +19,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import create_task, patch_instructions_content, run_git, stub_credentials
+from conftest import create_task, init_repo_with_origin, patch_instructions_content, run_git, stub_credentials
 
 from src.agents.worker import GIT_STASH_GUARD_DIR
 from src.core import event_types as ET
@@ -239,7 +239,6 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       SpawningScriptedBackend,
       _adapter_with_silent_broadcast,
       build_env,
-      init_repo_with_origin,
       install_backends,
       make_pm_build,
       result_event,

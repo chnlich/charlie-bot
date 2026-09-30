@@ -1,6 +1,5 @@
 """NDJSON (newline-delimited JSON) file utilities."""
 
-import asyncio
 import json
 import mmap
 import os
@@ -505,6 +504,8 @@ def _append_ndjson_sync(path: Path, line: str) -> None:
 
 async def append_ndjson(path: Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
+  import asyncio  # deferred: the CLI's run-token resolution reads this module sync-only
+
   path.parent.mkdir(parents=True, exist_ok=True)
   # ensure_ascii=False keeps non-ASCII text verbatim, so grep/rg can match the
   # chat log as written; _append_ndjson_sync encodes the line as UTF-8.

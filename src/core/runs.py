@@ -21,7 +21,6 @@ This module owns the pure/queryable parts of that contract:
 
 from __future__ import annotations
 
-import asyncio
 import os
 import re
 import signal
@@ -51,6 +50,8 @@ from src.core.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 log = LazyStructlogLogger()
 
 if TYPE_CHECKING:
+  import asyncio
+
   from src.core.config import CharlieBotConfig
 
 RAW_LOG_NAME = "agent.raw.ndjson"
@@ -680,13 +681,15 @@ class RunStore:
   def __init__(
       self,
       sessions_dir: Path,
-      control_lock: asyncio.Lock,
+      control_lock: asyncio.Lock | None,
       events: ControlEventSink | None,
       aliases: SessionAliasStore,
   ) -> None:
     """*sessions_dir* is the store's path root; *events* None wires a read-only
     store (the CLI's run-token identity resolution): the reads fall back to the
-    live chat log's parse and the write paths fail loud on the missing sink."""
+    live chat log's parse and the write paths fail loud on the missing sink.
+    *control_lock* None rides the same read-only shape — the sync reads never
+    touch it, and a write path's ``async with`` fails loud on it."""
     self._sessions_dir = sessions_dir
     self._lock = control_lock  # the one short control write lock, shared with the tree owner
     self._events = events
@@ -752,6 +755,8 @@ class RunStore:
     a stale record. The bump lands after the awaited write, on the same loop
     pass a later reader's synchronous derivation runs in.
     """
+    import asyncio  # deferred: the CLI's run-token resolution imports this module read-only
+
     await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run.id), run.model_dump_json(indent=2))
     self.records_generation += 1
 
@@ -767,6 +772,8 @@ class RunStore:
       raise RuntimeError(f"run metadata unreadable at {path}: {e}") from e
 
   async def get_run(self, session_id: str, run_id: str) -> RunRecord | None:
+    import asyncio  # deferred
+
     return await asyncio.to_thread(self.read_run_sync, session_id, run_id)
 
   def _require_run(self, session_id: str, run_id: str) -> RunRecord:
@@ -1290,6 +1297,8 @@ class RunStore:
   @staticmethod
   async def _wait_for_exit(pid: int) -> bool:
     """Bounded poll for the process's actual exit after the signal."""
+    import asyncio  # deferred
+
     deadline = time.monotonic() + STOP_EXIT_WAIT_SECONDS
     while time.monotonic() < deadline:
       stat_pair = read_pid_stat(pid)

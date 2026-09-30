@@ -5,27 +5,50 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
 
-# The cross-layer constants single-home in src/core.constants (stdlib-only, the
+from src.core.deferred import deferred_import_loader
+
+# The cross-layer constants single-home in src.core.constants (stdlib-only, the
 # CLI import floor's contract).
-# The config-field models live in backend_models so the config chain (every CLI
-# invocation's get_config) skips constructing the session/API models; these
-# re-exports keep the established src.core.models import path working.
-from src.core.backend_models import (  # noqa: F401  (re-export)
-    BACKEND_OPTION_ADAPTER,
-    BackendBase,
-    BackendOption,
-    CcClaudeBackend,
-    ClaudeAccount,
-    ClaudeCompactionConfig,
-    TuiCliBackend,
-    backend_type_allows_missing_model,
-    option_default_model,
-)
+if TYPE_CHECKING:
+  from src.core.backend_models import (  # noqa: F401  (re-export)
+      BACKEND_OPTION_ADAPTER,
+      BackendBase,
+      BackendOption,
+      CcClaudeBackend,
+      ClaudeAccount,
+      ClaudeCompactionConfig,
+      TuiCliBackend,
+      backend_type_allows_missing_model,
+      option_default_model,
+  )
 from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
+
+# The backend-field models live in backend_models so the config chain (every
+# CLI invocation's get_config) constructs no session/API models; the re-export
+# keeps the established src.core.models import path working, bound on first
+# read so this module's session/run-model consumers pay no backend stack.
+_BACKEND_REEXPORTS = frozenset(
+    {
+        "BACKEND_OPTION_ADAPTER",
+        "BackendBase",
+        "BackendOption",
+        "CcClaudeBackend",
+        "ClaudeAccount",
+        "ClaudeCompactionConfig",
+        "TuiCliBackend",
+        "backend_type_allows_missing_model",
+        "option_default_model",
+    })
+
+
+def __getattr__(name: str) -> Any:
+  if name in _BACKEND_REEXPORTS:
+    return deferred_import_loader(name, "src.core.backend_models")(globals())
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def ensure_utc(v: datetime | str) -> datetime:

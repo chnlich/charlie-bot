@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from datetime import UTC, datetime
@@ -17,11 +18,15 @@ from conftest import build_env as build_task_tree_env
 
 from src.core import event_types as ET
 from src.core import runs
+from src.core.chat_events import chat_events_path
 from src.core.models import RunRecord, utc_now_iso
 from src.core.runs import (
+    RUN_IDENTITY_UNKNOWN_DETAIL,
     RunIdentityConflictError,
     RunStore,
+    run_identity_refusal,
 )
+from src.core.session_aliases import SessionAliasStore
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 
@@ -226,3 +231,38 @@ async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
   events = store.load_events_sync(session_id)
   assert store.stop_requested(events, "run-forged")
   assert not [e for e in events if e["type"] == ET.RUN_FINISHED]
+
+
+# ---------------------------------------------------------------------------
+# Read-only lockless store (the CLI's run-token resolution)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_readonly_store_reads_without_a_control_lock(tmp_path: Path) -> None:
+  sessions_dir = tmp_path / "sessions"
+  sessions_dir.mkdir()
+  store = RunStore(sessions_dir, None, None, SessionAliasStore(sessions_dir))
+  session_id, run_id = "sess-ro", "run-ro"
+  record = RunRecord(id=run_id, session_id=session_id)
+  path = store.metadata_path(session_id, run_id)
+  path.parent.mkdir(parents=True)
+  path.write_text(record.model_dump_json(), encoding="utf-8")
+
+  assert store.read_run_sync(session_id, run_id).id == run_id
+
+  # The identity predicate scans the live chat log the read-only store parses.
+  events_path = chat_events_path(sessions_dir / session_id)
+  events_path.parent.mkdir(parents=True, exist_ok=True)
+  events_path.write_text(
+      json.dumps({
+          "type": ET.RUN_FINISHED,
+          "run_id": run_id,
+          "outcome": "success",
+      }) + "\n", encoding="utf-8")
+  refusal = run_identity_refusal(store.read_run_sync(session_id, run_id), store.load_events_sync(session_id))
+  assert refusal == RUN_IDENTITY_UNKNOWN_DETAIL
+
+  # The lockless store is read-only by contract: a write path fails loud.
+  with pytest.raises(TypeError):
+    await store.register_run(RunRecord(id="r2", session_id=session_id))

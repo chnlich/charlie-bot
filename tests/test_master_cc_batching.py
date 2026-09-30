@@ -12,6 +12,7 @@ receives its exception.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -24,7 +25,7 @@ from conftest import (
     drain_session_consumer,
     fresh_master_state,
     make_sound_round,
-    mocked_callback_fields,
+    mock_session_callbacks,
     run_session_consumer,
 )
 
@@ -39,13 +40,8 @@ def _meta(session_id: str) -> SessionMetadata:
 
 
 def _callbacks(**overrides) -> SessionCallbacks:
-  fields = {"persist_and_broadcast": AsyncMock(), **mocked_callback_fields(), **overrides}
-  return SessionCallbacks(
-      **fields,
-      persist_master_run=AsyncMock(),
-      persist_claude_account=AsyncMock(side_effect=lambda sid, label: label),
-      claude_context_state=AsyncMock(return_value=(None, None)),
-  )
+  """mock_session_callbacks() with per-field overrides; the frozen dataclass derives via replace."""
+  return replace(mock_session_callbacks(), **overrides)
 
 
 def _item(

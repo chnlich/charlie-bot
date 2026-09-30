@@ -1852,7 +1852,6 @@ async def run_harness(args: argparse.Namespace) -> None:
                                screenshot=shot)
 
             # ---- S26: a bound node's schedule rides its Workspace row ---------
-
             # The enabled bound node shows the blue clock, the "Next:" line and
             # the truncated cron · timezone line, with the Settings gear (its
             # menu carries Edit schedule); the disabled one goes grey with

@@ -20,8 +20,12 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     TRIGGER_MASTER_PATCH_TARGET,
     TRIGGERS_GET_CONFIG_PATCH_TARGET,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
     bind_deps_managers,
+    install_backends,
     patch_instructions_content,
+    result_event,
 )
 
 from src.core import event_types as ET
@@ -29,12 +33,6 @@ from src.core.models import PendingTrigger, TaskSpec, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.triggers import TriggerManager
-from tests.test_task_execution import (
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    install_backends,
-    result_event,
-)
 
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

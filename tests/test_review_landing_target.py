@@ -18,8 +18,12 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
     create_task,
+    install_backends,
     patch_instructions_content,
+    result_event,
     run_git,
 )
 
@@ -27,13 +31,9 @@ from src.core import event_types as ET
 from src.core.models import TaskSpec, TaskType
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
     build_env,
     implement_marker_commit,
     init_repo_with_origin,
-    install_backends,
-    result_event,
     wait_for_terminal_run,
     work_run_worktree,
 )

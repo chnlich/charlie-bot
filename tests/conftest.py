@@ -819,6 +819,17 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
 
 
+def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
+
+  async def _async_noop(*args, **kwargs) -> None:
+    return None
+
+  from src.agents.master_cc_queue import streaming_manager
+  from src.core.task_execution import TaskExecutionAdapter
+  monkeypatch.setattr(streaming_manager, "broadcast", _async_noop)
+  return TaskExecutionAdapter(cfg, session_mgr, tree)
+
+
 def identity_of(pid: int) -> tuple[int, str]:
   """(pid, start_time) for a live pid; asserts the /proc stat read succeeded, so callers can pin
   a RunRecord to the pair without a None check."""
@@ -2392,6 +2403,93 @@ def install_scripted_backends(
     return backend
 
   monkeypatch.setattr(patch_target, fake_build_backend)
+  return builds
+
+
+class SpawningScriptedBackend:
+  """Backend double that fires the on_spawn callback, records its launch env,
+  and yields a scripted event list ending in a result event. A *post_events*
+  hook is awaited after that stream, before run() returns: it is how a test
+  acts on the world between one build's events and the next build's prompt."""
+
+  def __init__(
+      self,
+      events: list[dict],
+      exit_code: int = 0,
+      stderr_text: str = "",
+      pre_run: Callable[[], None] | None = None,
+      gate: Callable[[], object] | None = None,
+      post_events: Callable[[], Awaitable[None]] | None = None) -> None:
+    self._events = events
+    self.exit_code = exit_code
+    self.stderr_text = stderr_text
+    self._pre_run = pre_run
+    self.gate = gate
+    self.post_events = post_events
+    self.pid_start = "1-424000"
+    self.terminated = False
+    self.hang_diagnostics = None
+    self.prompt: str | None = None
+    self.env: dict | None = None
+    self.cwd: str | None = None
+    self._on_spawn = None
+    self._pid = 424000
+    self.cgroup_exit_report = lambda: None
+
+  def set_on_spawn(self, on_spawn) -> None:
+    self._on_spawn = on_spawn
+
+  async def terminate(self) -> None:
+    self.terminated = True
+
+  def detach(self) -> None:
+    pass
+
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    self.prompt = prompt
+    self.cwd = cwd
+    self.env = dict(env)
+    self._pid += 1
+    if self._pre_run is not None:
+      self._pre_run()
+    if self.gate is not None:
+      await asyncio.wait_for(self.gate(), timeout=15)
+    if self._on_spawn is not None:
+      await self._on_spawn(self._pid)
+    for event in self._events:
+      if self.terminated:
+        return
+      yield event
+    if self.post_events is not None:
+      await self.post_events()
+
+
+def result_event(text: str = "done") -> dict:
+  """A result event carrying real usage and text (the zero-output guard reads both)."""
+  from src.agents.backends import base as backend_base
+  event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
+  event["result"] = text
+  return event
+
+
+def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list, target: str) -> list[dict]:
+  """Serve *backends* one build at a time, wiring each build's on_spawn into the double."""
+  builds: list[dict] = []
+  queue = list(backends)
+
+  def fake_build(option: models.BackendOption, cfg, **kwargs):
+    backend = queue.pop(0)
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      backend.set_on_spawn(on_spawn)
+    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
+    return backend
+
+  monkeypatch.setattr(target, fake_build)
   return builds
 
 

@@ -25,8 +25,12 @@ from conftest import (
     OPUS_BACKEND_OPTION,
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
     bind_deps_managers,
+    install_backends,
     patch_instructions_content,
+    result_event,
 )
 
 from src.core import claude_accounts
@@ -38,13 +42,9 @@ from src.core.scheduler import Scheduler
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
-    SpawningScriptedBackend,
     WorkerAccountRecorder,
-    _adapter_with_silent_broadcast,
     build_pooled_env,
     init_repo_with_origin,
-    install_backends,
-    result_event,
     wait_for_terminal_run,
 )
 

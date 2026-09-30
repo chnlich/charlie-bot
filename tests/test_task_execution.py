@@ -16,7 +16,7 @@ import os
 import subprocess
 import time
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -27,15 +27,19 @@ from conftest import (
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     ScriptedRelayBackend,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
     _settle_parent,
     assistant_text_event,
     backend_option,
     create_task,
+    install_backends,
     install_scripted_backends,
     make_transcript,
     patch_instructions_content,
     pool_cfg,
     rate_limit_event,
+    result_event,
     run_git,
     stub_credentials,
 )
@@ -46,7 +50,7 @@ from fastapi.testclient import TestClient
 import src.core.task_execution as task_execution_module
 from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
-from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.runs import RAW_LOG_NAME
 from src.core.sessions import (
     CONTEXT_RESET_INSTRUCTION,
@@ -86,86 +90,6 @@ def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch | None = None,
         monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
     session_mgr = SessionManager(cfg)
     return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
-
-
-class SpawningScriptedBackend:
-    """Backend double that fires the on_spawn callback, records its launch env,
-    and yields a scripted event list ending in a result event. A *post_events*
-    hook is awaited after that stream, before run() returns: it is how a test
-    acts on the world between one build's events and the next build's prompt."""
-
-    def __init__(self, events: list[dict], exit_code: int = 0, stderr_text: str = "",
-                 pre_run: Callable[[], None] | None = None,
-                 gate: Callable[[], object] | None = None,
-                 post_events: Callable[[], Awaitable[None]] | None = None) -> None:
-        self._events = events
-        self.exit_code = exit_code
-        self.stderr_text = stderr_text
-        self._pre_run = pre_run
-        self.gate = gate
-        self.post_events = post_events
-        self.pid_start = "1-424000"
-        self.terminated = False
-        self.hang_diagnostics = None
-        self.prompt: str | None = None
-        self.env: dict | None = None
-        self.cwd: str | None = None
-        self._on_spawn = None
-        self._pid = 424000
-        self.cgroup_exit_report = lambda: None
-
-    def set_on_spawn(self, on_spawn) -> None:
-        self._on_spawn = on_spawn
-
-    async def terminate(self) -> None:
-        self.terminated = True
-
-    def detach(self) -> None:
-        pass
-
-    async def run(self, prompt: str, cwd: str, env: dict,
-                  uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-        self.prompt = prompt
-        self.cwd = cwd
-        self.env = dict(env)
-        self._pid += 1
-        if self._pre_run is not None:
-            self._pre_run()
-        if self.gate is not None:
-            await asyncio.wait_for(self.gate(), timeout=15)
-        if self._on_spawn is not None:
-            await self._on_spawn(self._pid)
-        for event in self._events:
-            if self.terminated:
-                return
-            yield event
-        if self.post_events is not None:
-            await self.post_events()
-
-
-def result_event(text: str = "done") -> dict:
-    """A result event carrying real usage and text (the zero-output guard reads both)."""
-    from src.agents.backends import base as backend_base
-    event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
-    event["result"] = text
-    return event
-
-
-def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list, target: str) -> list[dict]:
-    """Serve *backends* one build at a time, wiring each build's on_spawn into the double."""
-    builds: list[dict] = []
-    queue = list(backends)
-
-    def fake_build(option: BackendOption, cfg, **kwargs):
-        backend = queue.pop(0)
-        on_spawn = kwargs.get("on_spawn")
-        if on_spawn is not None:
-            backend.set_on_spawn(on_spawn)
-        builds.append({"option": option, "kwargs": kwargs, "backend": backend})
-        return backend
-
-    monkeypatch.setattr(target, fake_build)
-    return builds
 
 
 def make_pm_build(text: str, pm_builds: list | None = None):
@@ -337,17 +261,6 @@ def _bearer(claims):
     # dict double must match the exact key require_caller reads.
     request = type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
     return request
-
-
-def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
-    from src.agents.master_cc_queue import streaming_manager
-    from src.core.task_execution import TaskExecutionAdapter
-    monkeypatch.setattr(streaming_manager, "broadcast", _async_noop)
-    return TaskExecutionAdapter(cfg, session_mgr, tree)
-
-
-async def _async_noop(*args, **kwargs) -> None:
-    return None
 
 
 async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, content) -> list:

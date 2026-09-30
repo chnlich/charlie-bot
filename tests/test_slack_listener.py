@@ -5,19 +5,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import time
-from collections.abc import Iterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
     ROOT,
-    THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
-    THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
     WsServerNeverAnswersClose,
     build_slack_cfg,
-    make_task_spawner,
+    mention_seam,
 )
 
 from src.core import event_types as ET
@@ -82,30 +79,13 @@ def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackCli
   return cfg, SessionManager(cfg), FakeSlackClient()
 
 
-@contextlib.contextmanager
-def _mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]:
-  """Patch the seams an accepted mention fires through; yields the trigger mock.
-
-  The yielded mock replaces ``trigger_master`` (an accepted mention wakes the
-  master exactly once), and *tasks*, when given, collects the round the
-  mention spawns through ``create_logged_task`` for the test to drain. Any
-  further patch a test needs stays visible at the call site as a sibling
-  context.
-  """
-  with contextlib.ExitStack() as stack:
-    trigger = stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
-    if tasks is not None:
-      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
-    yield trigger
-
-
 @pytest.mark.asyncio
 async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
-  with _mention_seam(tasks) as trigger:
+  with mention_seam(tasks) as trigger:
     sid = await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
 
@@ -160,7 +140,7 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
   event = _make_event()
   tasks = _spawn_round_tasks()
 
-  with _mention_seam(tasks):
+  with mention_seam(tasks):
     await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
 
@@ -185,7 +165,7 @@ async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(tmp_path: 
   event = _make_event()
   tasks = _spawn_round_tasks()
 
-  with _mention_seam(tasks):
+  with mention_seam(tasks):
     await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
 
@@ -210,7 +190,7 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
   cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event()
 
-  with _mention_seam():
+  with mention_seam():
     first = await handle_app_mention(event, cfg, session_mgr, client)
     second = await handle_app_mention(event, cfg, session_mgr, client)
 
@@ -232,7 +212,7 @@ async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_
   cfg, session_mgr, client = _rig(tmp_path)
   event = _make_event(**event_overrides)
 
-  with _mention_seam():
+  with mention_seam():
     result = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert result is None

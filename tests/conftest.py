@@ -2069,6 +2069,24 @@ def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
   return _spawn
 
 
+@contextlib.contextmanager
+def mention_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]:
+  """Patch the seams an accepted mention fires through; yields the trigger mock.
+
+  The one home both listener suites (Slack and Discord) drive an accepted
+  mention through: the yielded mock replaces ``trigger_master`` (an accepted
+  mention wakes the master exactly once), and *tasks*, when given, collects
+  the tasks the mention spawns through ``create_logged_task`` for the test to
+  drain. Any further patch a test needs stays visible at the call site as a
+  sibling context.
+  """
+  with contextlib.ExitStack() as stack:
+    trigger = stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
+    if tasks is not None:
+      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
+    yield trigger
+
+
 def dump_yaml(body: Any) -> str:
   """Block-style ``yaml.safe_dump`` with the dict's insertion key order kept; callers write the result
   into cron host files whose key order should read like a hand-written file."""

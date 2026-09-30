@@ -3,18 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
-from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from conftest import (
     ROOT,
-    THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
-    THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     fake_backends,
-    make_task_spawner,
+    mention_seam,
     stub_credentials,
 )
 
@@ -158,23 +154,6 @@ async def _drain(tasks: list[asyncio.Task]) -> None:
   tasks.clear()
 
 
-@contextlib.contextmanager
-def _round_seam(tasks: list[asyncio.Task] | None = None) -> Iterator[AsyncMock]:
-  """Patch the seams an accepted mention fires through; yields the trigger mock.
-
-  The yielded mock replaces ``trigger_master`` (an accepted mention wakes the
-  master exactly once), and *tasks*, when given, collects the round and ack
-  tasks the mention spawns through ``create_logged_task`` for the test to
-  drain. Any further patch a test needs stays visible at the call site as a
-  sibling context.
-  """
-  with contextlib.ExitStack() as stack:
-    trigger = stack.enter_context(patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()))
-    if tasks is not None:
-      stack.enter_context(patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)))
-    yield trigger
-
-
 # ---------------------------------------------------------------------------
 # Summon
 # ---------------------------------------------------------------------------
@@ -190,7 +169,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> 
       }})
   tasks: list[asyncio.Task] = []
 
-  with _round_seam(tasks) as trigger:
+  with mention_seam(tasks) as trigger:
     sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
@@ -248,7 +227,7 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_old_bound
       }})
   tasks: list[asyncio.Task] = []
 
-  with _round_seam(tasks):
+  with mention_seam(tasks):
     sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
@@ -290,7 +269,7 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(tmp_pat
   )
   tasks: list[asyncio.Task] = []
 
-  with _round_seam(tasks):
+  with mention_seam(tasks):
     sid = await handle_message_create(
         _message(channel_id=_THREAD), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
@@ -324,7 +303,7 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path) -> None:
       }})
   tasks: list[asyncio.Task] = []
 
-  with _round_seam(tasks):
+  with mention_seam(tasks):
     first = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
     second = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
@@ -349,7 +328,7 @@ async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> 
           "name": "general"
       }})
 
-  with _round_seam():
+  with mention_seam():
     disallowed = await handle_message_create(
         _message(author={"id": _OTHER}), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     # A bot-flagged author drops even when its id is on the allow-list.
@@ -380,7 +359,7 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
       }],
   }
 
-  with _round_seam():
+  with mention_seam():
     sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
 
   assert sid is None

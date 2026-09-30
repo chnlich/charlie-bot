@@ -120,6 +120,12 @@ class TaskConflictError(Exception):
     super().__init__("; ".join(blockers))
 
 
+def require_operator(caller: object, message: str) -> None:
+  """Refuse *caller* with TaskForbiddenError(*message*) unless it carries operator credentials."""
+  if not isinstance(caller, CallerIdentity) or not caller.is_operator:
+    raise TaskForbiddenError(message)
+
+
 def closed_ancestors_blocker(closed_ids: list[str]) -> str:
   """The 409 blocker sentence naming a node's closed ancestor tasks."""
   return f"closed ancestor task(s): {', '.join(closed_ids)}"
@@ -1323,8 +1329,7 @@ class TaskTreeManager:
 
   async def patch_task(self, session_id: str, req: PatchSessionTaskRequest, *, caller: object) -> SessionMetadata:
     """Apply one v2 metadata mutation with its structural guards (operator-only)."""
-    if not isinstance(caller, CallerIdentity) or not caller.is_operator:
-      raise TaskForbiddenError("task metadata mutations require operator credentials")
+    require_operator(caller, "task metadata mutations require operator credentials")
     async with self.control_lock:
       await self._get_index()
       meta = await self.load_task_meta(session_id)
@@ -1608,8 +1613,7 @@ class TaskTreeManager:
     Operator scope only for v2 nodes; the empty/unreferenced rule is
     re-evaluated inside the lock immediately before the delete.
     """
-    if not isinstance(caller, CallerIdentity) or not caller.is_operator:
-      raise TaskForbiddenError("permanent delete requires operator credentials")
+    require_operator(caller, "permanent delete requires operator credentials")
     async with self.control_lock:
       index = await self._get_index(force=True)
       self._index_meta(index, session_id)

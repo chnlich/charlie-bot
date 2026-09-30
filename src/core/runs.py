@@ -947,7 +947,7 @@ class RunStore:
     async with self._lock:
       return await self.register_run_locked(record, task_spec_text=task_spec_text)
 
-  async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None = None) -> RunRecord:
+  async def register_run_locked(self, record: RunRecord, *, task_spec_text: str | None) -> RunRecord:
     """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:
@@ -979,7 +979,7 @@ class RunStore:
       request_id: str,
       original_run_id: str,
       *,
-      task_spec_text: str | None = None,
+      task_spec_text: str | None,
       **fields: object,
   ) -> RunRecord:
     """Bind (session, request_id) to one retry run; replays return the original product.

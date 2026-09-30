@@ -926,7 +926,7 @@ def _scoped_windows(raw: dict[str, Any], *, account: str) -> list[dict[str, Any]
   return windows
 
 
-def _transform_response(raw: dict[str, Any], *, account: str = "") -> dict[str, Any]:
+def _transform_response(raw: dict[str, Any], *, account: str) -> dict[str, Any]:
   """Transform the raw Anthropic usage API response into our cached format.
 
   Claude reports its two windows under fixed field names, so their lengths are

@@ -188,7 +188,7 @@ async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str |
   return branch, _ls_remote_ref_sha(out, _heads_ref(branch))
 
 
-async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: str | None = None) -> BaseResolution:
+async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: str | None) -> BaseResolution:
   """Resolve a --base-branch value to a worktree start point, failing loudly on ambiguity.
 
   Resolution matrix (the only accepted forms; everything else raises

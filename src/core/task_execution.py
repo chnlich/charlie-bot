@@ -599,7 +599,7 @@ class TaskExecutionAdapter:
       session_id: str,
       run_id: str,
       *,
-      launch_prompt: str | None = None,
+      launch_prompt: str | None,
   ) -> str:
     """Pre-launch rechecks, then execute one Run on its kind's adapter.
 
@@ -1136,7 +1136,7 @@ class TaskExecutionAdapter:
       option: BackendOption,
       snapshot: PromptSnapshot,
       *,
-      launch_prompt: str | None = None,
+      launch_prompt: str | None,
   ) -> None:
     """One work, review, or sequence Run on the existing Worker/backend adapter.
 
@@ -1670,7 +1670,7 @@ class TaskExecutionAdapter:
       option: BackendOption,
       is_alive: Callable[[], bool],
       *,
-      ended_at: datetime | None = None,
+      ended_at: datetime | None,
   ) -> asyncio.Future:
     """Re-attach a v2 manager turn through the per-session queue's follow path.
 
@@ -1731,7 +1731,7 @@ class TaskExecutionAdapter:
       option: BackendOption,
       is_alive: Callable[[], bool],
       *,
-      ended_at: datetime | None = None,
+      ended_at: datetime | None,
   ) -> None:
     """Re-attach a worker Run through Worker.resume's tail-follow.
 

@@ -208,9 +208,9 @@ def _v2_run_list_item(
     *,
     created_at: datetime,
     description: str,
-    branch_name: str | None = None,
-    worktree_path: str | None = None,
-    pid: int | None = None,
+    branch_name: str | None,
+    worktree_path: str | None,
+    pid: int | None,
 ) -> dict:
   """One ephemeral compatibility row for a v2 Run (no ThreadMetadata is written).
 

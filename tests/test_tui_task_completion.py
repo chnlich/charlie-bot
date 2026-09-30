@@ -140,11 +140,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   pane_proc = subprocess.Popen(["/bin/sleep", "300"])
 
   async def fake_start_tmux_session(
-      session_name: str,
-      working_dir: str,
-      env_args: list[str],
-      command_args: list[str],
-      window_name: str | None = None) -> None:
+      session_name: str, working_dir: str, env_args: list[str], command_args: list[str]) -> None:
     # The lowest scripted seam: the real ensure_tmux_session builds the argv and
     # env pairs above this, so the test observes actual delivery, not call
     # counts on ensure_tmux_session.

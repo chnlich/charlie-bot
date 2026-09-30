@@ -640,7 +640,9 @@ class TaskCompletionManager:
                 # with the current, visible blockers.
                 raise TaskConflictError(all_blockers)
             close_event, report, report_created = await self._append_closed(
-                session_id, fresh_meta, request_id=request_id, evidence=evidence, actor=actor)
+                session_id, fresh_meta, request_id=request_id, outcome="completed",
+                summary=evidence.summary, result_refs=evidence.result_refs,
+                run_ids=evidence.run_ids, actor=actor)
         await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
         if report_created and parent_epoch is not None:
             await tree.sessions.announce_appended_event(
@@ -673,15 +675,22 @@ class TaskCompletionManager:
         meta: SessionMetadata,
         *,
         request_id: str,
-        evidence: CompletionEvidence,
+        outcome: str,
+        summary: str,
+        result_refs: list[str],
+        run_ids: list[str],
         actor: str,
-    ) -> dict:
-        """Append task_closed with its fixed parent recipient, then deliver the report.
+    ) -> tuple[dict, dict, bool]:
+        """Append one task_closed fact, then deliver its parent report.
 
-        Lock held by the caller. report_to fixes this closure's delivery
-        ownership at close time; retries, recovery, and reparenting can never
-        retarget it. The report lands before the lock releases (a control
-        fact); the live announcements follow outside it (the caller's).
+        Lock held by the caller. The report's outcome, summary, and
+        result_refs are the close fact's own fields: recovery re-derives a
+        replayed report from the close fact, so a live delivery carrying
+        different values would make the parent's view depend on which pass
+        landed first. report_to fixes this closure's delivery ownership at
+        close time; retries, recovery, and reparenting can never retarget it.
+        The report lands before the lock releases (a control fact); the live
+        announcements follow outside it (the caller's).
         """
         tree = self._tree
         close_event = build_control_event(
@@ -690,23 +699,23 @@ class TaskCompletionManager:
             source_session_id=session_id,
             event_id=stable_close_event_id(session_id, request_id),
             request_id=request_id,
-            outcome="completed",
-            summary=evidence.summary,
-            result_refs=list(evidence.result_refs),
-            run_ids=list(evidence.run_ids),
+            outcome=outcome,
+            summary=summary,
+            result_refs=list(result_refs),
+            run_ids=list(run_ids),
             report_to=meta.task_parent_id,
         )
         await tree.events.append(session_id, close_event)
         report, report_created = await tree.dispatch.deliver_child_report_locked(
             session_id,
             source_event=close_event,
-            outcome="completed",
-            summary=evidence.summary,
-            result_refs=list(evidence.result_refs),
+            outcome=outcome,
+            summary=summary,
+            result_refs=list(result_refs),
             recipient=meta.task_parent_id,
             actor=ACTOR_SYSTEM,
         )
-        self._tree._invalidate_index()
+        tree._invalidate_index()
         return close_event, report, report_created
 
     # ------------------------------------------------------------------
@@ -1047,29 +1056,9 @@ class TaskCompletionManager:
             blockers = self.cancellation_blockers(session_id)
             if blockers:
                 raise TaskConflictError(sorted(set(blockers)))
-            close_event = build_control_event(
-                ET.TASK_CLOSED,
-                actor=actor,
-                source_session_id=session_id,
-                event_id=stable_close_event_id(session_id, request_id),
-                request_id=request_id,
-                outcome="cancelled",
-                summary=reason,
-                result_refs=[],
-                run_ids=[],
-                report_to=meta.task_parent_id,
-            )
-            await tree.events.append(session_id, close_event)
-            report, report_created = await tree.dispatch.deliver_child_report_locked(
-                session_id,
-                source_event=close_event,
-                outcome="cancelled",
-                summary=reason,
-                result_refs=[],
-                recipient=meta.task_parent_id,
-                actor=ACTOR_SYSTEM,
-            )
-            tree._invalidate_index()
+            close_event, report, report_created = await self._append_closed(
+                session_id, meta, request_id=request_id, outcome="cancelled", summary=reason,
+                result_refs=[], run_ids=[], actor=actor)
         await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
         if report_created and parent_epoch is not None:
             await tree.sessions.announce_appended_event(

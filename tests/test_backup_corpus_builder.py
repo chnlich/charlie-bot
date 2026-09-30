@@ -8,6 +8,7 @@ budget. The corpus under test is a tmp_path with the per-file targets shrunk.
 import json
 
 import backup_corpus_builder as builder
+import pytest
 
 
 def _shrink(monkeypatch, tmp_path):
@@ -38,12 +39,21 @@ def test_verified_corpus_survives_a_rerun_untouched(tmp_path, monkeypatch, capsy
   assert manifest == {"files": files, "bytes": total}
 
 
-def test_shapeless_manifest_rebuilds(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize(
+    "damaged_manifest",
+    [
+        pytest.param("{}", id="shapeless"),  # valid JSON, missing both fields
+        pytest.param("{not json", id="unreadable"),
+    ])
+def test_damaged_manifest_rebuilds(tmp_path, monkeypatch, capsys, damaged_manifest: str) -> None:
+  """A manifest _read_manifest cannot serve — unparseable, or parsed without
+  both integer fields — must ride the rebuild path (_read_manifest's contract):
+  the rebuild replaces every session id."""
   home = _shrink(monkeypatch, tmp_path)
   builder.main()
   sids = _sids(home)
   capsys.readouterr()
-  builder.MANIFEST.write_text("{}", encoding="utf-8")  # valid JSON, no fields
+  builder.MANIFEST.write_text(damaged_manifest, encoding="utf-8")
   builder.main()
   assert "corpus built" in capsys.readouterr().out
   assert _sids(home) != sids
@@ -56,17 +66,6 @@ def test_drifted_shape_rebuilds(tmp_path, monkeypatch, capsys):
   capsys.readouterr()
   chat = next((home / "sessions").glob("*/data/chat_events.jsonl"))
   chat.write_text(chat.read_text(encoding="utf-8") + "drift\n", encoding="utf-8")
-  builder.main()
-  assert "corpus built" in capsys.readouterr().out
-  assert _sids(home) != sids
-
-
-def test_unreadable_manifest_rebuilds(tmp_path, monkeypatch, capsys):
-  home = _shrink(monkeypatch, tmp_path)
-  builder.main()
-  sids = _sids(home)
-  capsys.readouterr()
-  builder.MANIFEST.write_text("{not json", encoding="utf-8")
   builder.main()
   assert "corpus built" in capsys.readouterr().out
   assert _sids(home) != sids

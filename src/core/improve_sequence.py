@@ -402,7 +402,7 @@ async def _settle_withheld_iteration(
     previous_summaries: list[str],
     iterations: int,
 ) -> None:
-    """Settle a loop whose iteration launch was withheld (no terminal fact will arrive).
+  """Settle a loop whose iteration launch was withheld (no terminal fact will arrive).
 
     The loop state cannot keep saying "running": the controller marks it
     blocked with the actual reason and releases the active lock. The launch
@@ -412,35 +412,40 @@ async def _settle_withheld_iteration(
     and none is retried automatically; the queued iteration Run stays as the
     retained pending request for the existing explicit resume/retry policy.
     """
-    state = await improve_command.require_loop_state(session_id, loop_id, cfg)
-    state.status = "blocked"
-    await improve_command.save_loop_state(session_id, state, cfg)
-    await improve_command.clear_active_loop_lock(session_id, cfg)
-    log.warning("improve_sequence_launch_withheld", session=session_id, loop_id=loop_id,
-                iteration=iteration, run_id=run_id, reason=reason)
-    payload = improve_command._build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
-    payload["blocked_iteration"] = iteration
-    payload["reason"] = reason
-    payload["withheld_run_id"] = run_id
-    payload["iterations_requested"] = iterations
-    await tree.sessions.deliver_to_successor(session_id, payload)
+  state = await improve_command.require_loop_state(session_id, loop_id, cfg)
+  state.status = "blocked"
+  await improve_command.save_loop_state(session_id, state, cfg)
+  await improve_command.clear_active_loop_lock(session_id, cfg)
+  log.warning(
+      "improve_sequence_launch_withheld",
+      session=session_id,
+      loop_id=loop_id,
+      iteration=iteration,
+      run_id=run_id,
+      reason=reason)
+  payload = improve_command._build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
+  payload["blocked_iteration"] = iteration
+  payload["reason"] = reason
+  payload["withheld_run_id"] = run_id
+  payload["iterations_requested"] = iterations
+  await tree.sessions.deliver_to_successor(session_id, payload)
 
 
 @dataclass(frozen=True)
 class IterationJudgment:
-    """One iteration's mechanical judgment and the evidence its report carries.
+  """One iteration's mechanical judgment and the evidence its report carries.
 
     ``tip`` is the work branch head after the iteration and ``commits_added``
     the commits over the tip the iteration started from; ``invalid_reason`` is
     None exactly when ``report_valid`` is true.
     """
 
-    summary: str
-    report_valid: bool
-    invalid_reason: str | None
-    tip: str
-    commits_added: int
-    report_path: Path
+  summary: str
+  report_valid: bool
+  invalid_reason: str | None
+  tip: str
+  commits_added: int
+  report_path: Path
 
 
 async def _judge_iteration(

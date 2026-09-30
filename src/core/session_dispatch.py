@@ -41,7 +41,7 @@ from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, SessionStatus, ensure_utc
 
 if TYPE_CHECKING:
-    from src.core.task_sessions import TaskTreeManager
+  from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -50,14 +50,14 @@ log = LazyStructlogLogger()
 # reports keep their own types even when their text contains a takeoff
 # phrase, so machine input can never mint or revoke a user authorization
 # window (the takeoff gate judges ET.USER events only).
-INPUT_EVENT_TYPES: frozenset[str] = frozenset(
-    {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
+INPUT_EVENT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
 def child_report_text(report: dict) -> str:
-    """A child_report event as the parent's turn input: the typed header, then its summary."""
-    return (f"[Report from task {report.get('child_session_id')} | "
-            f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+  """A child_report event as the parent's turn input: the typed header, then its summary."""
+  return (
+      f"[Report from task {report.get('child_session_id')} | "
+      f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
 
 
 # The admitted input types a message route may produce. A run-token caller on
@@ -67,15 +67,15 @@ ROUTE_INPUT_TYPES: frozenset[str] = frozenset({ET.USER, ET.AGENT_MESSAGE})
 
 
 def unprocessed_input_blocker(pending: list[dict]) -> str:
-    """The blocker sentence for a pending-input list: first 8 ids, then (+N more)."""
-    ids = ", ".join(str(e.get("id")) for e in pending[:8])
-    more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
-    return f"has unprocessed input: {ids}{more}"
+  """The blocker sentence for a pending-input list: first 8 ids, then (+N more)."""
+  ids = ", ".join(str(e.get("id")) for e in pending[:8])
+  more = "" if len(pending) <= 8 else f" (+{len(pending) - 8} more)"
+  return f"has unprocessed input: {ids}{more}"
 
 
 def inputs_not_pending_conflict(session_id: str, unknown: list[str]) -> str:
-    """The 409 conflict sentence for ack/claim ids outside the pending set."""
-    return f"input(s) not pending for {session_id}: {', '.join(unknown)}"
+  """The 409 conflict sentence for ack/claim ids outside the pending set."""
+  return f"input(s) not pending for {session_id}: {', '.join(unknown)}"
 
 
 class TaskInputDispatcher:

@@ -19,20 +19,16 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
-    apply_config_overrides,
     build_env,
     create_task,
     make_legacy_cron_session,
+    make_sessions_listing_client,
+    make_sessions_listing_page_client,
     page_initial_sessions,
     seed_thread,
     walk_archived_pages,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager, get_thread_manager
-from src.api.pages import router as pages_router
-from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
@@ -130,30 +126,10 @@ def _subtree_ids(fx: Fixture) -> set[str]:
   return {getattr(fx, name).id for name in _CRON_SUBTREE_ROWS}
 
 
-def _api_client(fx: Fixture) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config_on_loop] = lambda: fx.cfg
-  app.dependency_overrides[get_session_manager] = lambda: fx.session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: fx.tree
-  app.dependency_overrides[get_thread_manager] = lambda: fx.thread_mgr
-  return TestClient(app)
-
-
-def _page_client(fx: Fixture) -> TestClient:
-  app = FastAPI()
-  app.include_router(pages_router)
-  apply_config_overrides(app, fx.cfg)
-  app.dependency_overrides[get_session_manager] = lambda: fx.session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: fx.tree
-  app.dependency_overrides[get_thread_manager] = lambda: fx.thread_mgr
-  return TestClient(app)
-
-
 @pytest.mark.asyncio
 async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
+  client = make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   resp = client.get("/api/sessions/")
   assert resp.status_code == 200
   all_ids = {row["id"] for row in resp.json()}
@@ -165,7 +141,7 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) ->
 
   # The homepage's first-paint list carries the same membership, and the
   # auto-redirect never lands on a cron-subtree row.
-  page_client = _page_client(fx)
+  page_client = make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _subtree_ids(fx)
@@ -177,7 +153,7 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: Path) ->
 @pytest.mark.asyncio
 async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
+  client = make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
   page = resp.json()
@@ -211,7 +187,7 @@ async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: 
 @pytest.mark.asyncio
 async def test_search_and_starred_keep_their_rows(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
+  client = make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   resp = client.get("/api/sessions/search", params={"q": "firing-42"})
   assert resp.status_code == 200
   assert fx.worker.id in {row["id"] for row in resp.json()}

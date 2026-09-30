@@ -902,10 +902,12 @@ async def index(
         include_pending_trigger_status=True,
     )
     # The first-paint list shares the All endpoint's membership: cron-subtree
-    # rows ride no listing, so a firing leaf neither flattens into a top-level
-    # sidebar row nor becomes the auto-redirect target.
+    # rows and the chat-thread subtree ride no listing, so a firing leaf neither
+    # flattens into a top-level sidebar row, a Slack/Discord thread session
+    # never paints into Workspace, and neither becomes the auto-redirect target.
     cron_subtree = await session_mgr.cron_subtree_roots()
-    sessions = [s for s in sessions if s.id not in cron_subtree]
+    chat_threads = await session_mgr.chat_thread_subtree_roots()
+    sessions = [s for s in sessions if s.id not in cron_subtree and s.id not in chat_threads]
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

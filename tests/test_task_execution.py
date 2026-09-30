@@ -143,7 +143,7 @@ class SpawningScriptedBackend:
             await self.post_events()
 
 
-def result_event(text: str = "done") -> dict:
+def result_event(text: str) -> dict:
     """A result event carrying real usage and text (the zero-output guard reads both)."""
     from src.agents.backends import base as backend_base
     event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
@@ -2133,8 +2133,8 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
 def inject_chat_append_fault(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    event_type: str | None = None,
-    session_ids: set[str] | None = None,
+    event_type: str,
+    session_ids: set[str],
     times: int = 1,
     err: int = errno.ENOSPC,
     on_raise: Callable[[], None] | None = None,
@@ -2154,10 +2154,7 @@ def inject_chat_append_fault(
 
     async def flaky(path, data):
         target = str(path)
-        if (
-            (event_type is None or data.get("type") == event_type)
-            and (session_ids is None or any(f"/sessions/{s}/data/" in target for s in session_ids))
-        ):
+        if data.get("type") == event_type and any(f"/sessions/{s}/data/" in target for s in session_ids):
             if state["raised"] < times:
                 state["raised"] += 1
                 hits.append(True)
@@ -2207,7 +2204,7 @@ def inject_run_record_write_fault(
     return hits
 
 
-def write_raw_result(run_dir: Path, text: str = "done", *, age_seconds: float = 0.0) -> tuple[Path, datetime]:
+def write_raw_result(run_dir: Path, text: str, *, age_seconds: float = 0.0) -> tuple[Path, datetime]:
     """The run's raw transport log with one successful result event, optionally
     mtime-stamped into the past — the drain's truth source. Returns (path, mtime)."""
     raw = run_dir / RAW_LOG_NAME

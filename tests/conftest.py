@@ -1943,18 +1943,18 @@ def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
 
 
 def plan_doc(
-    plan_id: int = 1,
-    versions: list[dict] | None = None,
+    plan_id: int,
+    versions: list[dict],
     *,
     title: str = "Plan",
     takeoff: dict | None = None,
     closed: dict | None = None,
 ) -> dict:
-  """One plan-registry document wrapping versions (default: one plan_version_v1) in the registry schema."""
+  """One plan-registry document wrapping *versions* in the registry schema."""
   return {
       "id": plan_id,
       "title": title,
-      "versions": versions if versions is not None else [plan_version_v1()],
+      "versions": versions,
       "takeoff": takeoff,
       "closed": closed,
   }

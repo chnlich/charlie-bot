@@ -90,9 +90,9 @@ class FakeDiscordClient:
     matches = [m for m in self.channels.get(channel_id, []) if snowflake_key(m["id"]) > floor]
     return matches[-limit:] if after is None else matches[:limit]
 
-  async def create_message(self, channel_id: str, content: str, *, files=()) -> dict:
+  async def create_message(self, channel_id: str, content: str) -> dict:
     self.calls.append(("create_message", {"channel_id": channel_id}))
-    self.posts.append({"channel_id": channel_id, "content": content, "files": list(files)})
+    self.posts.append({"channel_id": channel_id, "content": content})
     return {"id": _mid(99)}
 
   async def get_current_user(self) -> dict:
@@ -465,8 +465,8 @@ async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) -> None:
-  """A guild missing ATTACH_FILES names it, the intent off reads false, and ok is false."""
-  every_permission_but_attach = sum(REQUIRED_PERMISSIONS.values()) - (1 << 15)
+  """A guild missing ADD_REACTIONS names it, the intent off reads false, and ok is false."""
+  every_permission_but_reactions = sum(REQUIRED_PERMISSIONS.values()) - REQUIRED_PERMISSIONS["ADD_REACTIONS"]
   cfg, session_mgr, client = _rig(
       tmp_path,
       user={
@@ -481,7 +481,7 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
           {
               "id": _GUILD,
               "name": "Research",
-              "permissions": str(every_permission_but_attach)
+              "permissions": str(every_permission_but_reactions)
           },
           {
               "id": _OTHER_GUILD,
@@ -514,7 +514,7 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
               {
                   "id": _GUILD,
                   "name": "Research",
-                  "missing_permissions": ["ATTACH_FILES"]
+                  "missing_permissions": ["ADD_REACTIONS"]
               },
               {
                   "id": _OTHER_GUILD,

@@ -41,8 +41,8 @@ serves the publish directory publicly, so anyone holding a link opens it, and a 
 guessed from the page name. Publishing refuses unless `<publish.dir>/index.html` exists: without
 it the host's static server would list the directory, and that listing would expose every link.
 
-The Slack reply path publishes every file-server URL of an outbound reply through this lane on
-its own and swaps in the published URLs; a publish refusal refuses the whole reply. The
+The Slack and Discord reply paths publish every file-server URL of an outbound reply through this
+lane on their own and swap in the published URLs; a publish refusal refuses the whole reply. The
 server-port links above serve the operator's own review in the browser and the chat embeds.
 
 ## Behavior

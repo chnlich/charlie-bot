@@ -8,8 +8,6 @@ are synthetic throughout.
 from __future__ import annotations
 
 import json
-import re
-from pathlib import Path
 from unittest.mock import AsyncMock, call, patch
 
 import httpx
@@ -33,20 +31,6 @@ _TOKEN = "synthetic-token-not-a-secret"
 def _client(handler) -> DiscordClient:
   """A client wired to an in-memory transport instead of the network."""
   return DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token=_TOKEN)
-
-
-def _multipart_parts(request: httpx.Request) -> dict[str, tuple[str, bytes]]:
-  """Decode a captured multipart body into field name -> (disposition, bytes)."""
-  boundary = request.headers["content-type"].split("boundary=")[1].encode()
-  parts: dict[str, tuple[str, bytes]] = {}
-  for chunk in request.content.split(b"--" + boundary):
-    head, _, body = chunk.partition(b"\r\n\r\n")
-    disposition = head.decode(errors="replace")
-    match = re.search(r'name="([^"]+)"', disposition)
-    if match is None:
-      continue
-    parts[match.group(1)] = (disposition, body.strip(b"\r\n"))
-  return parts
 
 
 @pytest.mark.asyncio
@@ -77,47 +61,6 @@ async def test_create_message_json_carries_allowed_mentions():
   result = await _client(handler).create_message("333333333333333333", "hello")
   assert result == {"id": "222222222222222222"}
   assert seen["body"] == {"content": "hello", "allowed_mentions": {"parse": []}}
-
-
-@pytest.mark.asyncio
-async def test_create_message_multipart_with_two_files(tmp_path: Path):
-  """With files the body is multipart: payload_json plus one files[i] part each."""
-
-  def handler(request: httpx.Request) -> httpx.Response:
-    seen["request"] = request
-    return httpx.Response(200, json={"id": "444444444444444444"})
-
-  seen: dict = {}
-  one = tmp_path / "one.bin"
-  two = tmp_path / "two.bin"
-  one.write_bytes(b"\x00ONE")
-  two.write_bytes(b"\x01TWO")
-  result = await _client(handler).create_message("333333333333333333", "see attached", files=[one, two])
-  assert result == {"id": "444444444444444444"}
-
-  parts = _multipart_parts(seen["request"])
-  assert set(parts) == {"payload_json", "files[0]", "files[1]"}
-  payload = json.loads(parts["payload_json"][1])
-  assert payload == {
-      "content": "see attached",
-      "allowed_mentions": {
-          "parse": []
-      },
-      "attachments": [
-          {
-              "id": 0,
-              "filename": "one.bin"
-          },
-          {
-              "id": 1,
-              "filename": "two.bin"
-          },
-      ],
-  }
-  assert parts["files[0]"][1] == b"\x00ONE"
-  assert parts["files[1]"][1] == b"\x01TWO"
-  assert 'filename="one.bin"' in parts["files[0]"][0]
-  assert 'filename="two.bin"' in parts["files[1]"][0]
 
 
 @pytest.mark.asyncio
@@ -176,30 +119,6 @@ async def test_http_error_carries_code_and_message_without_token():
   for fragment in ("GET", "/channels/555555555555555555", "403", "50013", "Missing Permissions"):
     assert fragment in text
   assert _TOKEN not in text
-
-
-@pytest.mark.asyncio
-async def test_too_large_flags_413_and_code_40005():
-  """too_large is true for HTTP 413 and for Discord's 40005, false otherwise."""
-
-  def handler(request: httpx.Request) -> httpx.Response:
-    status, body = seen.pop("reply")
-    return httpx.Response(status, json=body)
-
-  seen: dict = {"reply": (413, {"code": 40005, "message": "Request entity too large"})}
-  with pytest.raises(DiscordAPIError) as exc_info:
-    await _client(handler).create_message("333333333333333333", "big")
-  assert exc_info.value.too_large
-
-  seen["reply"] = (400, {"code": 40005, "message": "Request entity too large"})
-  with pytest.raises(DiscordAPIError) as exc_info:
-    await _client(handler).create_message("333333333333333333", "big")
-  assert exc_info.value.too_large
-
-  seen["reply"] = (400, {"code": 50035, "message": "Invalid Form Body"})
-  with pytest.raises(DiscordAPIError) as exc_info:
-    await _client(handler).create_message("333333333333333333", "big")
-  assert not exc_info.value.too_large
 
 
 @pytest.mark.asyncio
@@ -320,7 +239,6 @@ def test_missing_permissions_table_and_administrator():
       "CREATE_PUBLIC_THREADS",
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
-      "ATTACH_FILES",
   ]
   assert missing_permissions(0) == [
       "VIEW_CHANNEL",
@@ -329,7 +247,6 @@ def test_missing_permissions_table_and_administrator():
       "CREATE_PUBLIC_THREADS",
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
-      "ATTACH_FILES",
   ]
   assert missing_permissions(sum(REQUIRED_PERMISSIONS.values())) == []
   assert missing_permissions(1 << 3) == []
@@ -339,5 +256,4 @@ def test_missing_permissions_table_and_administrator():
       "CREATE_PUBLIC_THREADS",
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
-      "ATTACH_FILES",
   ]

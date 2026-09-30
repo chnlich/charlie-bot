@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from pathlib import Path
 from unittest.mock import patch
 
+import httpx
 import pytest
 from conftest import (
+    PUBLISH_BASE_URL,
     ROOT,
+    deploy_publish_lane,
     fake_backends,
     mention_seam,
     stub_credentials,
 )
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import snowflake_key
+from src.core.config import CharlieBotConfig, PublishConfig
+from src.core.discord_client import BASE_URL, DiscordClient, snowflake_key
 from src.core.discord_listener import (
     _DM_NOTICE,
     _REPLY_COMMAND,
@@ -29,6 +34,7 @@ from src.core.discord_listener import (
 )
 from src.core.models import CreateSessionRequest, DiscordOrigin, SessionStatus, TriggerStatus
 from src.core.sessions import SessionManager
+from src.core.thread_entry import ThreadReplyError
 from src.core.triggers import TriggerManager
 
 _GUILD = "900000000000000001"
@@ -78,9 +84,9 @@ class FakeDiscordClient:
     self.started_threads.append({"channel_id": channel_id, "message_id": message_id, "name": name})
     return {"id": self.thread_id, "name": name, "type": 11}
 
-  async def create_message(self, channel_id: str, content: str, *, files=()) -> dict:
-    self.calls.append(("create_message", {"channel_id": channel_id, "content": content, "files": list(files)}))
-    self.posts.append({"channel_id": channel_id, "content": content, "files": list(files)})
+  async def create_message(self, channel_id: str, content: str) -> dict:
+    self.calls.append(("create_message", {"channel_id": channel_id, "content": content}))
+    self.posts.append({"channel_id": channel_id, "content": content})
     return {"id": "0", "channel_id": channel_id, "content": content}
 
   async def add_reaction(self, channel_id: str, message_id: str, emoji: str) -> None:
@@ -363,7 +369,7 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
     sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
 
   assert sid is None
-  assert client.posts == [{"channel_id": _DM_CHANNEL, "content": _DM_NOTICE, "files": []}]
+  assert client.posts == [{"channel_id": _DM_CHANNEL, "content": _DM_NOTICE}]
   assert not [name for name, _ in client.calls if name == "add_reaction"]
   assert await session_mgr.list_sessions() == []
 
@@ -500,34 +506,68 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
   ]
 
 
-@pytest.mark.asyncio
-async def test_post_reply_uploads_linked_file_on_the_last_chunk(tmp_path: Path) -> None:
-  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
+async def _discord_session(session_mgr: SessionManager) -> str:
+  """Create the session bound to the test thread and return its id."""
   meta = await session_mgr.create_session(
       CreateSessionRequest(
           session_id=summon_session_id(_GUILD, _THREAD),
           name="discord session",
           discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+  return meta.id
+
+
+@pytest.mark.asyncio
+async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tmp_path: Path) -> None:
+  cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
+  cfg = cfg.model_copy(
+      update={"publish": PublishConfig(dir=deploy_publish_lane(tmp_path), public_base_url=PUBLISH_BASE_URL)})
+  sid = await _discord_session(session_mgr)
   page = tmp_path / "page.html"
   page.write_text("<p>hi</p>", encoding="utf-8")
   file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
-  # One linked file, but over the 2000-char per-message limit once the URL is
-  # rewritten, so the reply splits into several chunks.
-  text = ("filler paragraph\n\n" * 150) + f"see {file_url} for details"
+  requests: list[httpx.Request] = []
 
+  def handler(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json={"id": "0"})
+
+  # The real REST client over an in-memory transport: the wire request shows
+  # whether the post went out as JSON or as a multipart upload.
+  client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with patch("src.core.discord_listener._bot_client", return_value=client):
-    readback = await post_reply(meta.id, text, cfg, session_mgr)
+    readback = await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)
 
-  assert len(client.posts) > 1
-  assert all(p["files"] == [] for p in client.posts[:-1])
-  assert client.posts[-1]["files"] == [page]
-  # The URL became the bare file name, so the chunk stands on its own.
-  assert client.posts[-1]["content"].endswith("see page.html for details")
-  assert "http" not in client.posts[-1]["content"]
-  assert readback["attachments"] == ["page.html"]
-  reply_events = [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.DISCORD_REPLY]
-  assert len(reply_events) == 1
-  assert reply_events[0]["discord_reply"]["attachments"] == ["page.html"]
+  assert len(requests) == 1
+  request = requests[0]
+  assert (request.method, str(request.url)) == ("POST", f"{BASE_URL}/channels/{_THREAD}/messages")
+  assert request.headers["content-type"] == "application/json"
+  body = json.loads(request.content)
+  match = re.fullmatch(
+      re.escape(f"see {PUBLISH_BASE_URL}/") + r"([A-Za-z0-9_-]{22})" + re.escape("/page.html for details"),
+      body["content"])
+  assert match is not None, body["content"]
+  assert (cfg.publish.dir / match.group(1) / "page.html").read_text(encoding="utf-8") == "<p>hi</p>"
+  assert readback["text"] == body["content"]
+
+
+@pytest.mark.asyncio
+async def test_post_reply_refuses_422_and_posts_nothing_without_the_publish_lane(tmp_path: Path) -> None:
+  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
+  sid = await _discord_session(session_mgr)
+  page = tmp_path / "page.html"
+  page.write_text("<p>hi</p>", encoding="utf-8")
+  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
+
+  with (
+      patch("src.core.discord_listener._bot_client", return_value=client),
+      pytest.raises(ThreadReplyError) as excinfo,
+  ):
+    await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)
+
+  assert excinfo.value.status == 422
+  assert "publish.dir" in excinfo.value.detail
+  assert client.posts == []
+  assert not [ev for ev in session_mgr.load_chat_events_sync(sid) if ev.get("type") == ET.DISCORD_REPLY]
 
 
 @pytest.mark.asyncio

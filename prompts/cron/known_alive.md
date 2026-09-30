@@ -431,3 +431,36 @@ Known-alive symbols:
   installs neither attribute raises AttributeError on the first help render. Vulture flags
   each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
   delete them on that evidence.
+- `_reject_legacy_allow_list` (`src/core/config.py`, on `DiscordConfig`) — pydantic
+  `@model_validator(mode='before')` method, registered with pydantic at class-definition time
+  and invoked during model validation: it rejects the retired `discord.allowed_user_ids` list
+  with an error whose text names the `allowed_users` id-to-person map that replaced it. The
+  method name has exactly zero whole-repo matches outside its definition, so vulture flags it
+  as an unused method. Deleting it keeps the rejection (`DiscordConfig` pins `extra='forbid'`,
+  and the error's location path still names `discord.allowed_user_ids`, which is also what the
+  plumbing test asserts on) — what goes is the instruction to move each id into `allowed_users`.
+  Same framework-registered class as the `check_sources_and_mode` entry above.
+- `chunk_size` (`src/api/files.py`, on `_ServedFileResponse`) — class attribute on the
+  `FileResponse` subclass the file server's bare-file arm streams with. Starlette 1.0.0 reads
+  `self.chunk_size` in every body-streaming path and exposes the knob only as a class
+  attribute (no `__init__` parameter), so the 1 MiB assignment is the only way to widen it from
+  Starlette's 64 KiB default. Vulture flags it as an unused attribute and a whole-repo grep
+  finds only the assignment line; deleting it reverts the serve to 16x more chunk reads per MB
+  (wire bytes unchanged, so the suite stays green).
+- `row_factory` (`src/core/usage_ledger.py`, the write on `UsageLedger`'s sqlite3 connection) —
+  the sqlite3 layer reads `connection.row_factory` when it builds result rows: with the default
+  factory every row is a tuple and the ledger readers' `row["path"]`-style name access raises
+  TypeError on the first query. Vulture flags the write as an unused attribute and a whole-repo
+  grep finds only the assignment line. Never delete it on that evidence.
+- `lifespan_context` (`src/core/session_tree_preview.py`, the write on the preview app's
+  router) — Starlette's `Router` installs `self.lifespan_context` at construction and runs it
+  when the ASGI lifespan scope arrives, so the assignment is the swap that boots the real
+  shipped application under the preview home instead of the production lifespan. Vulture flags
+  it as an unused attribute and a whole-repo grep finds only the assignment line; deleting it
+  makes the preview harness boot the production lifespan against a synthetic home.
+- `_reader` (`scripts/browser_harness_session_tree.py`, on the `CDP` websocket client) — the
+  only strong reference to the reader task: asyncio's event loop holds tasks only weakly, and
+  its own `create_task` doc requires saving a reference to avoid a task disappearing
+  mid-execution. Vulture flags it as an unused attribute and a whole-repo grep finds only the
+  assignment line; dropping the assignment leaves the reader task collectible mid-loop, so the
+  harness would sporadically stop reading frames.

@@ -1360,11 +1360,12 @@ THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.thread_entry.create_log
 # setattrs the stand-in on the src.core.thread_entry module attribute.
 THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.core.thread_entry.trigger_master"
 
-# Import-path patch target for the Slack client factory every listener outbound path posts
-# through. src/core/slack_listener.py defines _bot_client at module scope, and its handlers
-# and reply/backfill helpers resolve the name at call time, so mock setattrs the stand-in
-# on the src.core.slack_listener module attribute.
+# Import-path patch targets for the platform client factories every listener outbound path
+# posts through. src/core/slack_listener.py and src/core/discord_listener.py each define
+# _bot_client at module scope, and their handlers and reply/backfill helpers resolve the
+# name at call time, so mock setattrs each stand-in on that listener module's own attribute.
 SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
+DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.discord_listener._bot_client"
 
 # Import-path patch targets for the scheduler's config reads. src/core/scheduler.py binds
 # both names at import scope (`from src.core.config import get_config, get_scheduled_tasks`),
@@ -1396,6 +1397,12 @@ CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
 # attribute and every helper defined there picks it up at call time.
 CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"
 CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.cli.common._request_get"
+
+# Import-path patch target for the memory CLI's home read. src/cli/memory.py binds the
+# name at import scope (`from src.core.home import charliebot_home_dir`), so mock and
+# monkeypatch.setattr land the stand-in on the src.cli.memory module attribute and the
+# CLI's entry points read it at call time.
+CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/agents/master_cc_run.py binds the factory with call-time `from

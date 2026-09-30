@@ -10,16 +10,11 @@ checkout, the branch, and the worktree exactly as they were.
 from pathlib import Path
 
 import pytest
-from conftest import legacy_memory_entry_text, run_git
+from conftest import CLI_MEMORY_HOME_PATCH_TARGET, legacy_memory_entry_text, run_git
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
 from src.core import memory_proposal
-
-# The patch target for the CLI's home read: src.cli.memory binds the name with
-# `from src.core.home import charliebot_home_dir`, so the tests setattr the
-# stand-in on the module attribute (the same route the store CLI tests use).
-_CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
 
 
 def _build_store(home: Path) -> Path:
@@ -43,7 +38,7 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   home = tmp_path / "home"
   home.mkdir()
   mem = _build_store(home)
-  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
   return mem
 
 
@@ -167,7 +162,7 @@ def test_open_refuses_uncommitted_live_change_and_touches_nothing(tmp_path: Path
   home = tmp_path / "home"
   home.mkdir()
   store = _build_store(home)
-  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
   (store / "topics").write_text("profile resident\nworkflow resident\nhost resident\n", encoding="utf-8")
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 1
@@ -181,7 +176,7 @@ def test_open_refuses_detached_live_checkout(tmp_path: Path, monkeypatch, capsys
   home = tmp_path / "home"
   home.mkdir()
   store = _build_store(home)
-  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
   head = run_git(store, "rev-parse", "HEAD").strip()
   run_git(store, "checkout", "-q", "--detach", head)
   code, _out, err = _run_cli(monkeypatch, capsys, "proposal", "open")

@@ -12,7 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import memory_entry_text
+from conftest import CLI_MEMORY_HOME_PATCH_TARGET, memory_entry_text
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
@@ -130,11 +130,6 @@ def test_assemble_worker_repo_topic_match(tmp_path: Path) -> None:
 
 # --- CLI add creates exactly one staging file, never touches entries/ -------
 
-# Import-path patch target for the memory CLI's home read: src/cli/memory.py binds the name
-# with `from src.core.home import charliebot_home_dir`, so mock setattrs the
-# stand-in on the src.cli.memory module attribute and the CLI's entry points read it at call time.
-_CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
-
 
 def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
   home = tmp_path / "home"
@@ -147,7 +142,7 @@ def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
 def _patch_cli_cfg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
   """Point the memory CLI's home resolution at a fresh fake store and return that config."""
   cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(_CLI_MEMORY_HOME_PATCH_TARGET, lambda: cfg.home)
+  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: cfg.home)
   return cfg
 
 

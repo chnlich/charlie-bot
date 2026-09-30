@@ -790,6 +790,18 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
   return [meta for meta in loaded if meta is not None]
 
 
+# The /status poll's whole-body memo: (resolved ids, sidebar generation) -> the
+# rendered body bytes. Every payload input sits behind the sidebar generation
+# (mark_sidebar_dirty bumps it for busy flips and every metadata write,
+# store_snapshot_entry for probe stores), so an unchanged generation is the
+# staleness contract — the same one the derived-map memo holds. Keyed at the
+# generation the request started at: a bump that lands mid-handler keys the
+# next poll's rebuild, never this body. force=1 keeps its synchronous probe
+# off this memo.
+_STATUS_BODY_MEMO_LIMIT = 4
+_status_body_memo: BoundedMemo[tuple, bytes] = BoundedMemo(_STATUS_BODY_MEMO_LIMIT)
+
+
 @router.get('/status', response_model=None)
 async def all_sessions_status(
     request: Request,
@@ -799,7 +811,8 @@ async def all_sessions_status(
 ) -> Response:
   """Return derived sidebar state for the requested sessions.
 
-  Clean sessions are served from the in-process snapshot with zero disk
+  A poll at an unchanged sidebar generation serves the last rendered body
+  whole. Clean sessions are served from the in-process snapshot with zero disk
   access; only sessions whose probed state changed since the last poll are
   re-probed from disk. Pass ``force=1`` to skip the dirty check and re-probe
   every requested session; every 10th poll also schedules the detached
@@ -809,7 +822,10 @@ async def all_sessions_status(
   # The 3 s poll reads the cached metadata references as they are (the
   # manager's per-row get_session path — model_copy, stamp, and the gather —
   # measured ~0.3 ms of this route); the payload's derived fields come from
-  # resolve_sidebar_state so the cache stays untouched.
+  # resolve_sidebar_state so the cache stays untouched. resolve_sidebar_state
+  # stays on every poll: its register_poll count is the every-10th self-heal
+  # sweep's cadence, which a body-memo hit must not starve.
+  generation = sidebar_state.derived_generation()
   sessions = await session_mgr.get_sessions_readonly(_parse_session_ids(ids))
   if not sessions:
     return await _switch_payload_response(request, {})
@@ -820,6 +836,11 @@ async def all_sessions_status(
       include_pending_plan_approval=True,
       force=force,
   )
+  body_key = (tuple(meta.id for meta in sessions), generation)
+  if not force:
+    cached_body = _status_body_memo.get(body_key)
+    if cached_body is not None:
+      return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
   result: dict[str, dict] = {}
   for meta in sessions:
     busy = thinking_state.busy_since(meta.id)
@@ -839,9 +860,11 @@ async def all_sessions_status(
       # key set stays byte-identical to today.
       payload[sidebar_state.WORK_STATE] = entry[sidebar_state.WORK_STATE]
     result[meta.id] = payload
+  body = fast_json_bytes(result)
+  _status_body_memo.store(body_key, body)
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
-  # rides the body-keyed memo (_switch_payload_response).
-  return await _switch_payload_response(request, result)
+  # rides the body-keyed memo (_switch_payload_response's memo).
+  return await gzip_body_response(request, body, {}, _switch_gzip_memo)
 
 
 @router.get('/tui/status')

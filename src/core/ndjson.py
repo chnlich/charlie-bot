@@ -384,7 +384,7 @@ def iter_ndjson_events_from_end(
       if start == pos:
         # The empty segment a trailing (or doubled) newline leaves: invisible
         # under the skip contract, so no filter verdict can change it.
-        pos = 0 if nl < 0 else nl
+        pos = max(nl, 0)
         continue
       if parse_filter is None:
         event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
@@ -402,7 +402,7 @@ def iter_ndjson_events_from_end(
           event = parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)
           if event is not None:
             yield event
-      pos = 0 if nl < 0 else nl
+      pos = max(nl, 0)
 
 
 class HeadProvableFilter:

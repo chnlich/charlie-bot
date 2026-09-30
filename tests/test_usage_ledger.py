@@ -441,3 +441,25 @@ def test_foreign_row_delete_falls_back_to_the_full_pass(monkeypatch, tmp_path):
     rows, _ = ledger.model_rows_with_native_starts()
   assert paths == ["full"]
   assert [row.model for row in rows] == ["model-b"]
+
+
+def test_fold_stands_down_on_a_foreign_value_rewrite(monkeypatch, tmp_path):
+  """A foreign writer's in-place value rewrite (no row-count change) must poison the
+  memo this process built: the epoch lives in the database, so the fold's next read
+  sees it and the full pass re-prices the page."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  rewritten = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=107)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7, ts=TS_B)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    rows_before, _ = ledger.model_rows_with_native_starts()
+  with UsageLedger(path) as foreign:  # another process's shape: its own connection
+    foreign.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
+  with UsageLedger(path) as reader:
+    reader.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+    paths = _read_path(monkeypatch, reader)
+    rows, _ = reader.model_rows_with_native_starts()
+  assert [row.output for row in rows_before if row.model == "model-a"] == [5]
+  assert paths == ["full"]
+  assert [row.output for row in rows if row.model == "model-a"] == [107]

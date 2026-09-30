@@ -78,6 +78,10 @@ CREATE TABLE IF NOT EXISTS fallback_sessions (
   session TEXT NOT NULL,
   PRIMARY KEY (record_id, session)
 );
+CREATE TABLE IF NOT EXISTS ledger_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
@@ -133,11 +137,11 @@ FROM usage u
 GROUP BY source, model, account, kind
 """
 
-# The currently-excluded fallback rows: the fold diff of this set against the memo's
-# names the fallback groups a new native session retired, and each retired group
-# re-aggregates from the table instead of being subtracted row by row.
+# The currently-excluded fallback rows. The fold diffs this set against the memo's
+# and stands down to the full pass on any difference: retirement cannot be patched
+# incrementally, so any set change re-prices the page from the table.
 _EXCLUDED_FALLBACK_IDS_SQL = """
-SELECT u.record_id, u.source, u.model FROM usage u WHERE u.kind = 'fallback' AND EXISTS (
+SELECT u.record_id FROM usage u WHERE u.kind = 'fallback' AND EXISTS (
   SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
   WHERE fs.record_id = u.record_id)
 """
@@ -331,6 +335,7 @@ class _RowsMemo:
   accs: dict[tuple[str, str], _ModelSum]
   rowcount: int
   excluded_fallback: frozenset[str]
+  rewrite_epoch: int
 
 
 def default_ledger_path() -> Path:
@@ -365,14 +370,13 @@ class UsageLedger:
   # A miss whose only change is this process's own inserts extends the memo by the
   # row delta (``_try_fold_rows``) instead of re-running the full grouped pass --
   # the page's own capture makes that the common shape under active turns. Any
-  # other change falls back to the full pass: a value rewrite poisons the fold
-  # through ``_value_rewrite_generation`` (a re-captured record upserts the same
-  # values and poisons nothing), a foreign writer's writes are invisible to both
-  # witnesses and so is every deletion, and the fold's own row-count witness
-  # aborts on a shrunk table.
+  # other change falls back to the full pass: an in-place value rewrite bumps the
+  # ledger's rewrite epoch (``_rewrite_epoch``), which the memo stores and the
+  # fold compares -- a re-captured record upserts the same values and bumps
+  # nothing; a foreign writer's inserts and every deletion fail the row-count
+  # witness; WAL silences the stat pair and stores no memo.
   _rows_memo: _RowsMemo | None = None
   _write_generation: int = 0
-  _value_rewrite_generation: int = 0
 
   def __init__(self, path: Path) -> None:
     self._inserted_ids: set[str] = set()
@@ -477,12 +481,16 @@ class UsageLedger:
           for session in rec.sessions:
             self._conn.execute(
                 "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
+      if rewrote:
+        # A value rewrite invalidates every aggregate built before it in any process,
+        # so the witness lives in the database, not in this process.
+        self._conn.execute(
+            "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
+            " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
     UsageLedger._write_generation += 1
-    if rewrote:
-      UsageLedger._value_rewrite_generation = UsageLedger._write_generation
     return len(records)
 
   def model_rows(self) -> list[LedgerRow]:
@@ -493,6 +501,16 @@ class UsageLedger:
     """The ledger file's (size, mtime_ns) pair."""
     st = self._path.stat()
     return (st.st_size, st.st_mtime_ns)
+
+  def _rewrite_epoch(self) -> int:
+    """The ledger's in-place value-rewrite counter, one row in ledger_meta.
+
+    The counter lives in the database, not in the process: a foreign writer's
+    value rewrite must poison a memo this process built, and no process-local
+    witness can see it.
+    """
+    row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'rewrite_epoch'").fetchone()
+    return 0 if row is None else int(row["value"])
 
   def _journal_mode(self) -> str:
     return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
@@ -552,7 +570,8 @@ class UsageLedger:
           native_starts=native_starts,
           accs=accs,
           rowcount=rowcount,
-          excluded_fallback=excluded)
+          excluded_fallback=excluded,
+          rewrite_epoch=self._rewrite_epoch())
     return rows, native_starts
 
   def _try_fold_rows(self, memo: _RowsMemo, identity: tuple[int, int],
@@ -566,7 +585,7 @@ class UsageLedger:
     to this process's tracking, so the row-count witness refuses the fold and
     the full pass prices them.
     """
-    if generation == memo.generation or UsageLedger._value_rewrite_generation > memo.generation:
+    if generation == memo.generation or self._rewrite_epoch() != memo.rewrite_epoch:
       return None
     rowcount = self._conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
     if rowcount != memo.rowcount + len(self._inserted_ids):
@@ -609,6 +628,7 @@ class UsageLedger:
         native_starts=native_starts,
         accs=accs,
         rowcount=rowcount,
-        excluded_fallback=excluded_now)
+        excluded_fallback=excluded_now,
+        rewrite_epoch=memo.rewrite_epoch)
     self._inserted_ids.clear()
     return rows, native_starts

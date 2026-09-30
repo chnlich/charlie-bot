@@ -365,8 +365,8 @@ _SCHEDULE_MODEL_NULLS = (
 )
 
 # The join's one-entry memo. The fields map is a pure function of the id set
-# and the cron snapshot's fingerprint (scheduled_tasks_fingerprint answers on
-# the same key get_scheduled_tasks reloads on), except schedule_next_run whose
+# and the cron snapshot's fingerprint (scheduled_tasks_snapshot returns it —
+# the freshness key get_scheduled_tasks reloads on), except schedule_next_run whose
 # answer stays valid until the fire time it names — the _NEXT_RUN_MEMO rule —
 # so the entry carries the earliest served fire and re-derives once now
 # crosses it. Callers read the map and never mutate it (apply_row_schedule

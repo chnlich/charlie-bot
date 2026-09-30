@@ -326,3 +326,118 @@ def test_wal_ledger_never_serves_the_memo(tmp_path):
   with UsageLedger(path) as ledger:
     rows_after, _ = ledger.model_rows_with_native_starts()
   assert [row.model for row in rows_after] == ["model-b", "model-a"]
+
+
+def _read_path(monkeypatch, ledger) -> list[str]:
+  """Record which read path each model_rows call takes while wrapped."""
+  paths: list[str] = []
+  original = UsageLedger._try_fold_rows
+
+  def spy(self, memo, identity, generation):
+    folded = original(self, memo, identity, generation)
+    paths.append("fold" if folded is not None else "full")
+    return folded
+
+  monkeypatch.setattr(UsageLedger, "_try_fold_rows", spy)
+  assert ledger  # the spy installs per ledger; callers pass the one under test
+  return paths
+
+
+def test_fold_serves_rows_a_fresh_ledger_matches(tmp_path):
+  """A read after this process's own inserts folds the delta into rows a fresh ledger matches."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7, ts=TS_B)
+  third = _record("rec-3", RecordKind.FALLBACK, sessions=("sess-c",), model="model-c", output=9, ts=TS_B)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows_with_native_starts()
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second, third])
+    rows, starts = ledger.model_rows_with_native_starts()
+  with UsageLedger(path) as fresh:
+    assert rows == fresh.model_rows_with_native_starts()[0]
+    assert starts == fresh.model_rows_with_native_starts()[1]
+
+
+def test_fold_stands_down_when_a_new_native_session_retires_a_fallback(monkeypatch, tmp_path):
+  """A new native session retires a counted fallback row; the fold cannot patch the
+  touched group incrementally, so it stands down and the full pass prices the retirement."""
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a",), model="model-fb", ts=TS_B)
+  native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",), model="model-native")
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb", [fb])
+    rows_before, _ = ledger.model_rows_with_native_starts()
+    paths = _read_path(monkeypatch, ledger)
+    ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", [native])
+    rows_after, _ = ledger.model_rows_with_native_starts()
+  assert [row.model for row in rows_before] == ["model-fb"]
+  assert paths == ["full"]
+  assert [row.model for row in rows_after] == ["model-native"]
+
+
+def test_fold_stands_down_on_another_instances_inserts(monkeypatch, tmp_path):
+  """Inserts this instance did not track (another ledger object, as another worker)
+  are invisible to its delta; the row-count witness refuses the fold."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7, ts=TS_B)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows_with_native_starts()
+  with UsageLedger(path) as writer:
+    writer.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+  with UsageLedger(path) as reader:
+    paths = _read_path(monkeypatch, reader)
+    rows, _ = reader.model_rows_with_native_starts()
+  assert paths == ["full"]
+  assert [row.model for row in rows] == ["model-b", "model-a"]
+
+
+def test_identical_reupsert_keeps_the_fold(monkeypatch, tmp_path):
+  """A moved file re-upserts its records with unchanged values; the fold still serves the read."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7, ts=TS_B)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows_with_native_starts()
+    paths = _read_path(monkeypatch, ledger)
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [first])
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+    rows, _ = ledger.model_rows_with_native_starts()
+  assert paths == ["fold"]
+  with UsageLedger(path) as fresh:
+    assert rows == fresh.model_rows_with_native_starts()[0]
+
+
+def test_value_rewrite_falls_back_to_the_full_pass(monkeypatch, tmp_path):
+  """An upsert that changes an existing row's values poisons the fold; the read re-aggregates."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  rewritten = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=9)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows_with_native_starts()
+    paths = _read_path(monkeypatch, ledger)
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
+    rows, _ = ledger.model_rows_with_native_starts()
+  assert paths == ["full"]
+  assert rows[0].output == 9
+
+
+def test_foreign_row_delete_falls_back_to_the_full_pass(monkeypatch, tmp_path):
+  """Rows that vanish under the memo (no statement here deletes) abort the fold."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7, ts=TS_B)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows_with_native_starts()
+    paths = _read_path(monkeypatch, ledger)
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+    ledger._conn.execute("DELETE FROM usage WHERE record_id = 'rec-1'")
+    ledger._conn.commit()
+    rows, _ = ledger.model_rows_with_native_starts()
+  assert paths == ["full"]
+  assert [row.model for row in rows] == ["model-b"]

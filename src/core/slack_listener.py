@@ -58,7 +58,6 @@ from src.core.sessions import SessionManager
 
 # _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
 from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
-
 from src.core.thread_entry import (
     ThreadAdapter,
     ThreadMessage,

@@ -431,3 +431,11 @@ Known-alive symbols:
   installs neither attribute raises AttributeError on the first help render. Vulture flags
   each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
   delete them on that evidence.
+- `terminal_summary_present`, `master_woke_after_summary` (and their private predicates
+  `_is_terminal_worker_summary`, `_MASTER_OUTPUT_TYPES`) in `src/core/finalize_effects.py` —
+  the finalize chain that ran these judgments per worker/reviewer completion is gone (the
+  task-execution refactor deleted its call sites with the spawner finalize path), but the
+  standing M76 collector (`docs/perf_baseline.md`) drives both scans as its fold-absent
+  fallback (`if hasattr(mgr, "finalize_summary_present")` ... else the scans verbatim), so
+  the module has no import-site caller and vulture flags both functions as unused. Never
+  delete the module on static evidence alone.

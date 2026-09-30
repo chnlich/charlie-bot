@@ -8,7 +8,6 @@ from pathlib import Path
 
 import orjson
 
-from src.core.finalize_effects import _MASTER_OUTPUT_TYPES, _is_terminal_worker_summary
 from src.core.json_utils import atomic_write_text
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
@@ -165,53 +164,6 @@ def _live_range_event(segment: str, session_id: str) -> dict | None:
   return parse_ndjson_line(segment, log_event="live_range_parse_skip", log_fields={"session_id": session_id})
 
 
-class _FinalizeFold:
-  """Per-session derived finalize-judgment state over the cached live events.
-
-  The two finalize idempotency judgments (``src/core/finalize_effects``) are
-  pure scans over the whole event list; the fold answers both in O(1):
-
-  - ``summary_marks`` maps each thread_id to the master-output count at the
-    moment its last terminal worker_summary appended;
-  - ``master_outputs`` counts every master-output event appended since.
-
-  A thread's summary is present iff it holds a mark; the master woke after
-  that summary iff the count has moved past the mark. The rules come from
-  finalize_effects' own predicates, so the fold and the pure scans cannot
-  drift; the parity test pins equivalence over randomized appends.
-  """
-
-  __slots__ = ("master_outputs", "summary_marks")
-
-  def __init__(self) -> None:
-    self.summary_marks: dict[str, int] = {}
-    self.master_outputs = 0
-
-  @classmethod
-  def build(cls, events: list[dict]) -> _FinalizeFold:
-    """Derive the fold from a freshly parsed event list (one pass, in the loading thread)."""
-    fold = cls()
-    for event in events:
-      fold.absorb(event)
-    return fold
-
-  def absorb(self, event: dict) -> None:
-    """Advance the fold by one appended event, the same mutation the list took."""
-    if event.get("type") in _MASTER_OUTPUT_TYPES:
-      self.master_outputs += 1
-      return
-    thread_id = event.get("thread_id")
-    if isinstance(thread_id, str) and _is_terminal_worker_summary(event, thread_id):
-      self.summary_marks[thread_id] = self.master_outputs
-
-  def summary_present(self, thread_id: str) -> bool:
-    return thread_id in self.summary_marks
-
-  def master_woke(self, thread_id: str) -> bool:
-    mark = self.summary_marks.get(thread_id)
-    return mark is not None and self.master_outputs > mark
-
-
 class ChatEventStore:
   """Persistence and cache operations for per-session chat_events.jsonl."""
 
@@ -227,9 +179,6 @@ class ChatEventStore:
     # In-memory cache: session_id -> list[dict] of parsed NDJSON events.
     # Populated on first read, kept in sync by save_chat_event().
     self._events_cache: dict[str, list[dict]] = {}
-    # Finalize-judgment fold per cached session (glossary on _FinalizeFold):
-    # built at load, advanced O(1) per append, dropped with the cache entry.
-    self._finalize_folds: dict[str, _FinalizeFold] = {}
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
@@ -263,7 +212,6 @@ class ChatEventStore:
 
   def clear_cache(self, session_id: str) -> None:
     self._events_cache.pop(session_id, None)
-    self._finalize_folds.pop(session_id, None)
 
   def get_chat_events_path(self, session_id: str) -> Path:
     """Return the absolute path to a session's chat_events.jsonl."""
@@ -274,8 +222,8 @@ class ChatEventStore:
 
     An event missing ``id`` or ``timestamp`` gets them injected before the
     append — the queued-turn reader takes the saved event's ``id`` as its
-    replay-exclusion key. A warm cache entry takes the append in memory and
-    advances its finalize fold; a cold cache stays cold.
+    replay-exclusion key. A warm cache entry takes the append in memory; a
+    cold cache stays cold.
     """
     if 'id' not in event:
       event['id'] = str(uuid.uuid4())
@@ -285,7 +233,6 @@ class ChatEventStore:
     # Keep in-memory cache in sync
     if session_id in self._events_cache:
       self._events_cache[session_id].append(event)
-      self._finalize_folds[session_id].absorb(event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""
@@ -293,7 +240,6 @@ class ChatEventStore:
       return self._events_cache[session_id]
     events = parse_ndjson_file(self._chat_events_path(session_id))
     self._events_cache[session_id] = events
-    self._finalize_folds[session_id] = _FinalizeFold.build(events)
     return events
 
   def peek_cached_events(self, session_id: str) -> list[dict] | None:
@@ -304,19 +250,6 @@ class ChatEventStore:
     path rather than parsing the whole file on the event loop.
     """
     return self._events_cache.get(session_id)
-
-  def finalize_summary_present(self, session_id: str, thread_id: str) -> bool:
-    """O(1) fold read of the summary-present judgment (glossary on _FinalizeFold).
-
-    The fold exists exactly while the events cache entry does (load builds it,
-    append advances it, clear drops it), so the caller peeks the cache warm
-    first; a cold read here raises loudly instead of parsing on the loop.
-    """
-    return self._finalize_folds[session_id].summary_present(thread_id)
-
-  def finalize_master_woke(self, session_id: str, thread_id: str) -> bool:
-    """O(1) fold read of the master-woke judgment (glossary on _FinalizeFold)."""
-    return self._finalize_folds[session_id].master_woke(thread_id)
 
   def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk. Does NOT populate _events_cache.
@@ -369,8 +302,8 @@ class ChatEventStore:
         # save_chat_event is the single append funnel and every whole-file
         # rewrite (archive rotation, fork, delete) drops the cache in the same
         # flow, so a warm cache is the file's parsed truth — the same trust
-        # load_chat_events_sync's consumers (projection, usage, finalize
-        # folds) already place in it. parse_ndjson_range's islice counts
+        # load_chat_events_sync's consumers (projection, usage) already
+        # place in it. parse_ndjson_range's islice counts
         # physical lines instead, so the disk read both re-parses the whole
         # prefix per call (the recap's per-divider cost) and skews its window
         # by any malformed lines the cached count never charged.

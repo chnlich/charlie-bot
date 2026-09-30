@@ -21,6 +21,7 @@ function registerSidebarFilter(filter) {
 }
 
 registerSidebarFilter({name: 'all', label: 'Workspace', url: '/api/sessions/', restoreFromUrl: false});
+registerSidebarFilter({name: 'threads', label: 'Threads', url: '/api/sessions/chat-threads'});
 registerSidebarFilter({name: 'starred', label: 'Later', url: '/api/sessions/starred'});
 registerSidebarFilter({name: 'archived', label: 'Archive', url: '/api/sessions/archived'});
 

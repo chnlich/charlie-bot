@@ -257,6 +257,7 @@ function inlinePageTimers(context) {
 function buildSidebarFilterElements() {
   return new Map([
     ['filter-all', createElement({className: 'filter-pill'})],
+    ['filter-threads', createElement({className: 'filter-pill'})],
     ['filter-starred', createElement({className: 'filter-pill'})],
     ['filter-archived', createElement({className: 'filter-pill'})],
     ['filter-scheduled', createElement({className: 'filter-pill'})],

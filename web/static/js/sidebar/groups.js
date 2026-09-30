@@ -551,12 +551,18 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
     const taskRowOptions = (s, index) =>
       groupLimitItemOptions(key, s, index, isLimitExpanded);
 
-    const groupActions = key && options.groupActions !== false ? `
+    // The Threads view hides the New-session-in-group button: a session
+    // created there has no platform origin and would fall back to Workspace.
+    // The gate derives from the filter, not the call options, so the in-place
+    // repaints (removeSessionFromRenderedList, paintWorkspaceBadge) keep it
+    // hidden too; the Settings gear stays.
+    const createInGroupButton = filter !== 'threads' ? `
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); createSessionInGroup(this.dataset.groupName)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-green-400 transition-opacity" title="New session in group">
         <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">${PLUS_SVG_PATH}</svg>
-      </button>
+      </button>` : '';
+    const groupActions = key && options.groupActions !== false ? `${createInGroupButton}
       <button data-group-name="${safeKey}"
               onclick="event.stopPropagation(); openGroupHeaderMenu(this)"
               class="opacity-0 group-hover:opacity-100 p-0.5 text-slate-500 hover:text-slate-300 transition-opacity" title="Settings">
@@ -902,6 +908,7 @@ function renderSessionList(sessions, filter, options = {}) {
   if (!sessions.length) {
     const labels = {
       all: 'No sessions yet',
+      threads: 'No chat threads',
       starred: 'No starred sessions',
       archived: 'No archived sessions',
       search: 'No matching sessions',

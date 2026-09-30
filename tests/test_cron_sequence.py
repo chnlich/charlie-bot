@@ -24,6 +24,7 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     POOLED_FABLE_ID,
+    SCHEDULER_GET_CONFIG_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     bind_deps_managers,
     init_repo_with_origin,
@@ -745,7 +746,7 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   cfg, session_mgr, tree = bound_env
   # The unbound path binds through the scheduler's reloaded process config;
   # pin it to the synthetic home's cfg.
-  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   install_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("sweep done")]),
@@ -803,7 +804,7 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   leaf must actually launch through it (auto-bind first, then the fire).
   """
   cfg, session_mgr, tree = bound_env
-  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   repo, _origin = init_repo_with_origin(tmp_path)
   _persist_unbound_cron_d(cfg, "repo-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   backend = SpawningScriptedBackend([result_event("sweep done")])
@@ -857,7 +858,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   leaf under the new node: step 0, then step 1 fed the previous result, then
   ONE boundary report to the node."""
   cfg, session_mgr, tree = bound_env
-  monkeypatch.setattr("src.core.scheduler.get_config", lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   _persist_unbound_cron_d(
       cfg, "chained-legacy", {
           "cron":

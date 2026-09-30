@@ -156,8 +156,9 @@ from src.agents.backends.gemini_cli import GeminiCliBackend  # noqa: E402
 from src.agents.backends.opencode import OpenCodeBackend  # noqa: E402
 from src.agents.worker import Worker  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
-from src.api.deps import get_session_manager, get_task_manager  # noqa: E402
+from src.api.deps import get_session_manager, get_task_manager, get_thread_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
+from src.api.pages import router as pages_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
 from src.core import runs  # noqa: E402
@@ -990,6 +991,32 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
   apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree
+  return TestClient(app)
+
+
+def make_sessions_listing_client(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
+  """TestClient mounting the sessions router (the sidebar listing and chat-threads endpoints)
+  with cfg and the session/task/thread manager overrides those routes resolve."""
+  app = FastAPI()
+  app.include_router(sessions_router, prefix="/api/sessions")
+  apply_config_overrides(app, cfg)
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
+  return TestClient(app)
+
+
+def make_sessions_listing_page_client(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
+  """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
+  same overrides make_sessions_listing_client carries."""
+  app = FastAPI()
+  app.include_router(pages_router)
+  apply_config_overrides(app, cfg)
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   return TestClient(app)
 
 

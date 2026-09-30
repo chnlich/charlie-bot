@@ -18,19 +18,16 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
-    apply_config_overrides,
     build_env,
     create_task,
     make_legacy_cron_session,
+    make_sessions_listing_client,
+    make_sessions_listing_page_client,
     page_initial_sessions,
     seed_thread,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager, get_thread_manager
-from src.api.pages import router as pages_router
-from src.api.sessions import project_worker_threads, router as sessions_router
+from src.api.sessions import project_worker_threads
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     CreateSessionRequest,
@@ -116,26 +113,6 @@ def _thread_ids(fx: Fixture) -> set[str]:
   return {getattr(fx, name).id for name in _CHAT_THREAD_ROWS}
 
 
-def _api_client(fx: Fixture) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_config_on_loop] = lambda: fx.cfg
-  app.dependency_overrides[get_session_manager] = lambda: fx.session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: fx.tree
-  app.dependency_overrides[get_thread_manager] = lambda: fx.thread_mgr
-  return TestClient(app)
-
-
-def _page_client(fx: Fixture) -> TestClient:
-  app = FastAPI()
-  app.include_router(pages_router)
-  apply_config_overrides(app, fx.cfg)
-  app.dependency_overrides[get_session_manager] = lambda: fx.session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: fx.tree
-  app.dependency_overrides[get_thread_manager] = lambda: fx.thread_mgr
-  return TestClient(app)
-
-
 @pytest.mark.asyncio
 async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
@@ -159,7 +136,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 @pytest.mark.asyncio
 async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shape(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
+  client = make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   workspace_ids = {row["id"] for row in client.get("/api/sessions/").json()}
   threads_rows = client.get("/api/sessions/chat-threads").json()
   threads_ids = {row["id"] for row in threads_rows}
@@ -198,7 +175,7 @@ async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: Path
   import src.api.sessions as sessions_api
 
   fx = await _build_fixture(tmp_path)
-  client = _api_client(fx)
+  client = make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   workspace = client.get("/api/sessions/")
   threads = client.get("/api/sessions/chat-threads")
   # A repeat of each route (the other route's memo now warm) still serves its
@@ -218,7 +195,7 @@ async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: Path
 @pytest.mark.asyncio
 async def test_homepage_initial_list_and_redirect_skip_the_chat_thread_subtree(tmp_path: Path) -> None:
   fx = await _build_fixture(tmp_path)
-  page_client = _page_client(fx)
+  page_client = make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _thread_ids(fx)

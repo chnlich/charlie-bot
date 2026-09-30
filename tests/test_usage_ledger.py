@@ -266,3 +266,63 @@ def test_reopen_recreates_a_dropped_gate_table(tmp_path) -> None:
     assert ledger.captured_gate(HOST, "/data/db.sqlite") is None
     ledger.record_gate(HOST, "/data/db.sqlite", (10, 20), None, "sig-1")
     assert ledger.captured_gate(HOST, "/data/db.sqlite") == (((10, 20), None), "sig-1")
+
+
+def test_rows_read_serves_the_memo_while_the_file_sits_still(tmp_path):
+  """A repeat read with no writer in between returns the memoized row objects."""
+  rec = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
+    rows, starts = ledger.model_rows_with_native_starts()
+    rows_again, starts_again = ledger.model_rows_with_native_starts()
+  assert rows_again is rows
+  assert starts_again is starts
+
+
+def test_rows_read_reflects_a_write_from_another_instance(tmp_path):
+  """A writer this process never saw (another instance, as another process) invalidates the memo."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    rows_before, _ = ledger.model_rows_with_native_starts()
+  with UsageLedger(path) as writer:
+    writer.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+  with UsageLedger(path) as ledger:
+    rows_after, _ = ledger.model_rows_with_native_starts()
+  assert [row.model for row in rows_before] == ["model-a"]
+  assert [row.model for row in rows_after] == ["model-b", "model-a"]
+
+
+def test_rows_read_reflects_this_instances_own_write(tmp_path):
+  """The capture writes through the same connection it reads from; the memo must not hide it."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    rows_before, _ = ledger.model_rows_with_native_starts()
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+    rows_after, _ = ledger.model_rows_with_native_starts()
+  assert [row.model for row in rows_before] == ["model-a"]
+  assert [row.model for row in rows_after] == ["model-b", "model-a"]
+
+
+def test_wal_ledger_never_serves_the_memo(tmp_path):
+  """Under WAL a commit hides in the -wal sidecar, so the stat pair cannot witness it:
+  the memo stores nothing and every read re-runs the grouped pass."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger._conn.execute("PRAGMA journal_mode=wal")
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    rows_before, _ = ledger.model_rows_with_native_starts()
+    rows_again, _ = ledger.model_rows_with_native_starts()
+    assert rows_again is not rows_before
+  with UsageLedger(path) as writer:
+    writer._conn.execute("PRAGMA journal_mode=wal")
+    writer.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+  with UsageLedger(path) as ledger:
+    rows_after, _ = ledger.model_rows_with_native_starts()
+  assert [row.model for row in rows_after] == ["model-b", "model-a"]

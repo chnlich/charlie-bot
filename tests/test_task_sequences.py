@@ -52,7 +52,7 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
 
 
 async def _start_loop(
-    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
+    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, *, wait_effect):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -78,17 +78,7 @@ async def _start_loop(
     child_id = body["child_session_id"]
     # The controller task is born inside the client's request loop; every
     # wait below happens while that loop is still alive.
-    if wait_effect is not None:
-      await wait_effect(client, body)
-    else:
-      deadline = asyncio.get_event_loop().time() + 10
-      while asyncio.get_event_loop().time() < deadline:
-        meta = await tree.load_meta(child_id)
-        if meta is not None and tree.runs.list_run_records_sync(child_id):
-          break
-        await asyncio.sleep(0.05)
-      else:
-        pytest.fail("the sequence controller never registered its first iteration run")
+    await wait_effect(client, body)
   return body, child_id
 
 

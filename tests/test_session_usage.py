@@ -103,7 +103,8 @@ def _assistant_event(
 def _result_event(
     total_cost_usd: float,
     model_usage: dict | None = None,
-    input_tokens: int = 0,
+    *,
+    input_tokens: int,
     context_snapshot: dict | None = None) -> dict:
   return {
       "type": "result",

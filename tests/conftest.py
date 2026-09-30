@@ -2701,6 +2701,18 @@ async def assert_trigger_fired(
   return msg
 
 
+def shut_down_trigger_tasks(trigger_mgr: TriggerManager) -> None:
+  """Cancel every sleeping trigger task; persisted records are untouched.
+
+  Reads ``TriggerManager._tasks`` because cancel-all has no public route: the
+  manager cancels a task only through the per-trigger paths a test is not
+  driving. Tests also call it mid-test to stand in for a process death, where
+  the in-memory tasks vanish and the records stay PENDING.
+  """
+  for task in list(trigger_mgr._tasks.values()):
+    task.cancel()
+
+
 def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[tuple[int, str]]]:
   """A `_run_tmux` stand-in that answers "has-session" as missing and records every call.
 

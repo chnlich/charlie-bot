@@ -11,6 +11,7 @@ from conftest import (
     ROOT,
     fake_backends,
     mention_seam,
+    shut_down_trigger_tasks,
     stub_credentials,
 )
 
@@ -140,12 +141,6 @@ def _message(**overrides: object) -> dict:
   }
   base.update(overrides)
   return base
-
-
-def _shut_down(trigger_mgr: TriggerManager) -> None:
-  """Cancel every sleeping trigger task; persisted records are untouched."""
-  for task in list(trigger_mgr._tasks.values()):
-    task.cancel()
 
 
 async def _drain(tasks: list[asyncio.Task]) -> None:
@@ -413,7 +408,7 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
     # The arm reads no thread content: the wake does that when it fires.
     assert not client.calls
   finally:
-    _shut_down(trigger_mgr)
+    shut_down_trigger_tasks(trigger_mgr)
 
 
 @pytest.mark.asyncio
@@ -453,7 +448,7 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
     assert revived is not None and revived.status == SessionStatus.ACTIVE
     assert len(armed) == 1
   finally:
-    _shut_down(trigger_mgr)
+    shut_down_trigger_tasks(trigger_mgr)
 
 
 # ---------------------------------------------------------------------------

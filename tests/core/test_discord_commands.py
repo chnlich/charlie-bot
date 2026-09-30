@@ -13,7 +13,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
-from conftest import fake_backends, make_internal_router_client, stub_credentials
+from conftest import (
+    DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
+    fake_backends,
+    make_internal_router_client,
+    stub_credentials,
+)
 
 from src.core.config import CharlieBotConfig
 from src.core.discord_client import REQUIRED_PERMISSIONS, DiscordAPIError, snowflake_key
@@ -33,10 +38,6 @@ _BOT = "600000000000000001"
 _PERSON = "tester"
 _OTHER_USER = "700000000000000002"
 _UNLISTED = "700000000000000003"
-
-# The factory the commands resolve at call time, so patching it hands every
-# path the same fake client.
-_BOT_CLIENT_TARGET = "src.core.discord_listener._bot_client"
 
 
 def _mid(i: int) -> str:
@@ -201,7 +202,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   # Unread runs m4..m10 minus the ineligible bot messages (m3, m6); the window
   # is the four messages from the oldest unread (m4) on, bot message included,
   # read. The bot message is not unread and rides outside the ack.
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, None, 4, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (4, 5, 6, 7)]
@@ -217,7 +218,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   assert acks[0]["discord_ack"] == {"message_ids": [_mid(4), _mid(5), _mid(7)], "watermark_id": _mid(7)}
 
   # A second read picks up the run the first window cut: the rest of the unread.
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     again = await read_thread(session_id, None, 4, cfg, session_mgr)
   assert [m["id"] for m in again["messages"]] == [_mid(i) for i in (8, 9, 10)]
   assert [m["unread"] for m in again["messages"]] == [True, True, True]
@@ -231,7 +232,7 @@ async def test_read_without_unread_returns_the_newest_limit(tmp_path: Path) -> N
   cfg, session_mgr, client = _rig(tmp_path, channels={_THREAD: [_message(i, f"m{i}") for i in range(1, 9)]})
   session_id = await _make_session(session_mgr, watermark=_mid(8))
 
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, None, 3, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (6, 7, 8)]
@@ -264,7 +265,7 @@ async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: 
     return page
 
   client.get_messages = get_messages
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, None, 50, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
@@ -286,7 +287,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
       })
   session_id = await _make_session(session_mgr)
 
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, None, 2, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_THREAD, _mid(1), _mid(2)]
@@ -322,7 +323,7 @@ async def test_read_skips_a_404_starter(tmp_path: Path) -> None:
                                     _message(2, "second follow up")]})
   session_id = await _make_session(session_mgr)
 
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, None, 2, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
@@ -340,7 +341,7 @@ async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_
       })
   session_id = await _make_session(session_mgr)
 
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     own = await read_thread(session_id, None, 5, cfg, session_mgr)
     linked = await read_thread(
         session_id, f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}", 5, cfg, session_mgr)
@@ -364,7 +365,7 @@ async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path
   session_id = await _make_session(session_mgr)
   url = f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"
 
-  with patch(_BOT_CLIENT_TARGET, return_value=client):
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
     result = await read_thread(session_id, url, 3, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (3, 4, 5)]
@@ -386,7 +387,7 @@ async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: Path)
   session_id = await _make_session(session_mgr)
 
   with (
-      patch(_BOT_CLIENT_TARGET, return_value=client),
+      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       make_internal_router_client(cfg, session_mgr) as http,
   ):
     hidden = http.post(
@@ -410,7 +411,7 @@ async def test_read_on_a_non_discord_session_answers_409(tmp_path: Path) -> None
   meta = await session_mgr.create_session(CreateSessionRequest(name="plain"))
 
   with (
-      patch(_BOT_CLIENT_TARGET, return_value=client),
+      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       make_internal_router_client(cfg, session_mgr) as http,
   ):
     resp = http.post("/api/internal/discord/read", json={"session_id": meta.id})
@@ -436,7 +437,7 @@ async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: 
   session_id = await _make_session(session_mgr)
 
   with (
-      patch(_BOT_CLIENT_TARGET, return_value=client),
+      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       make_internal_router_client(cfg, session_mgr) as http,
   ):
     refused = http.post("/api/internal/discord/reply", json={"session_id": session_id, "text": "the answer"})
@@ -492,7 +493,7 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
   )
 
   with (
-      patch(_BOT_CLIENT_TARGET, return_value=client),
+      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       make_internal_router_client(cfg, session_mgr) as http,
   ):
     resp = http.post("/api/internal/discord/check", json={})

@@ -19,7 +19,15 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import create_task, init_repo_with_origin, patch_instructions_content, run_git, stub_credentials
+from conftest import (
+    BUILD_BACKEND_PATCH_TARGET,
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    create_task,
+    init_repo_with_origin,
+    patch_instructions_content,
+    run_git,
+    stub_credentials,
+)
 
 from src.agents.worker import GIT_STASH_GUARD_DIR
 from src.core import event_types as ET
@@ -256,7 +264,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   }
   worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  monkeypatch.setattr("src.agents.backends.registry.build_backend", make_pm_build("manager turn", []))
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", []))
   patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(
@@ -265,7 +273,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   committed: asyncio.Event = asyncio.Event()
   work_backend = SpawningScriptedBackend([result_event("implemented")], gate=committed.wait)
   review_backend = SpawningScriptedBackend([result_event("review ok")])
-  install_backends(monkeypatch, [work_backend, review_backend], "src.agents.worker.build_backend")
+  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   record = RunRecord(
       id="run-work",

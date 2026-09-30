@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
+    DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
     build_slack_cfg,
     fake_backends,
     make_task_spawner,
@@ -44,7 +45,6 @@ from src.core.sessions import SessionManager
 from src.core.triggers import TriggerManager
 
 _CONNECT_PATCH_TARGET = "src.core.discord_listener._connect"
-_BOT_CLIENT_PATCH_TARGET = "src.core.discord_listener._bot_client"
 _HANDLER_PATCH_TARGET = "src.core.discord_listener.handle_message_create"
 _BACKFILL_PATCH_TARGET = "src.core.discord_listener._backfill_followed_threads"
 
@@ -157,7 +157,7 @@ def _listener(
 
   with contextlib.ExitStack() as stack:
     stack.enter_context(patch(_CONNECT_PATCH_TARGET, new=_fake_connect))
-    stack.enter_context(patch(_BOT_CLIENT_PATCH_TARGET, return_value=rest))
+    stack.enter_context(patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=rest))
     stack.enter_context(patch(_HANDLER_PATCH_TARGET, new=handler))
     stack.enter_context(patch(_BACKFILL_PATCH_TARGET, new=backfill))
     stack.enter_context(patch("src.core.discord_listener.asyncio.sleep", new=_compressed_sleep))

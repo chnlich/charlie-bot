@@ -47,6 +47,7 @@ from fastapi.testclient import TestClient
 import src.core.task_execution as task_execution_module
 from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.core.runs import RAW_LOG_NAME
 from src.core.sessions import (
@@ -326,7 +327,7 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     assert len(builds) == 1
     assert builds[0]["kwargs"].get("on_spawn") is not None
     captured_env = builds[0]["backend"].env or {}
-    assert captured_env.get("CHARLIEBOT_SESSION_ID") == manager.id
+    assert captured_env.get(SESSION_ID_ENV_VAR) == manager.id
     assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
 
 
@@ -640,8 +641,8 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     # second process for their operation.
     assert len(builds) == 3
     captured_env = builds[0]["backend"].env or {}
-    assert captured_env.get("CHARLIEBOT_SESSION_ID") == child_id
-    assert captured_env.get("CHARLIEBOT_RUN_TOKEN")
+    assert captured_env.get(SESSION_ID_ENV_VAR) == child_id
+    assert captured_env.get(RUN_TOKEN_ENV)
     assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
     worker_run = await tree.runs.get_run(child_id, run_id)
     assert worker_run is not None and worker_run.kind == "work"

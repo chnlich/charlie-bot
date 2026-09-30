@@ -25,6 +25,7 @@ from src.agents import master_cc
 from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.core import config as core_config
 from src.core import models
+from src.core.constants import SESSION_ID_ENV_VAR
 
 _SHIM_TEMPLATE = """#!/bin/sh
 env > '{dump}'
@@ -86,13 +87,13 @@ async def test_master_child_environment_carries_its_own_session_id(
   )
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, models.SessionMetadata(id="live-session", name="Live"), cfg.backends.options[0])
   await master_cc._run_cc(item)
 
-  assert _read_env_dump(dump)["CHARLIEBOT_SESSION_ID"] == "live-session"
+  assert _read_env_dump(dump)[SESSION_ID_ENV_VAR] == "live-session"
 
 
 @pytest.mark.asyncio
@@ -103,7 +104,7 @@ async def test_worker_child_environment_carries_no_session_id(
   shim, dump = _install_env_dump_shim(tmp_path)
   cwd = tmp_path / "worktree"
   cwd.mkdir()
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
 
   # The mapping src/agents/worker.py hands to the shared constructor.
   env = claude_supervisor_env({**os.environ, "CHARLIEBOT_TEST_EXTRA": "1"})
@@ -112,5 +113,5 @@ async def test_worker_child_environment_carries_no_session_id(
     pass
 
   child_env = _read_env_dump(dump)
-  assert "CHARLIEBOT_SESSION_ID" not in child_env
+  assert SESSION_ID_ENV_VAR not in child_env
   assert child_env["CHARLIEBOT_TEST_EXTRA"] == "1"

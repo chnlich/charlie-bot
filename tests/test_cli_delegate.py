@@ -17,6 +17,7 @@ from conftest import (
 from conftest import setup_session_cwd as _setup_session_cwd
 
 from src.cli.delegate import main
+from src.core.constants import SESSION_ID_ENV_VAR
 
 
 def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None = None) -> list[str]:
@@ -96,7 +97,7 @@ def test_main_routes_by_session_env_from_another_session_dir(
   task lands in the session the server started it for. The warning names both
   ids, so the misplaced cwd stays visible."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "archived-session")
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "live-session")
   task_spec_file = _write_task_spec(tmp_path)
 
   with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
@@ -106,7 +107,7 @@ def test_main_routes_by_session_env_from_another_session_dir(
   assert post_mock.call_args.kwargs["json"]["session_id"] == "live-session"
   err = capsys.readouterr().err
   assert "archived-session" in err
-  assert "CHARLIEBOT_SESSION_ID=live-session" in err
+  assert f"{SESSION_ID_ENV_VAR}=live-session" in err
 
 
 def test_main_rejects_explicit_session_against_session_env(
@@ -116,7 +117,7 @@ def test_main_rejects_explicit_session_against_session_env(
 ) -> None:
   """A copied --session literal stays a rejection that names both ids."""
   cfg = _setup_session_cwd(tmp_path, monkeypatch, "live-session")
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "live-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "live-session")
   task_spec_file = _write_task_spec(tmp_path)
 
   with (
@@ -129,7 +130,7 @@ def test_main_rejects_explicit_session_against_session_env(
   post_mock.assert_not_called()
   error = json.loads(capsys.readouterr().err)["error"]
   assert "--session=archived-session" in error
-  assert "CHARLIEBOT_SESSION_ID=live-session" in error
+  assert f"{SESSION_ID_ENV_VAR}=live-session" in error
 
 
 def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

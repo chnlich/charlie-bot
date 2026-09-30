@@ -2,6 +2,7 @@ import pytest
 from fastapi import WebSocket
 
 from src.agents.backends import pty_common
+from src.core.constants import SESSION_ID_ENV_VAR
 
 # Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
 # and its websocket handlers read it as a module global at call time, and the terminal handler
@@ -24,7 +25,7 @@ class _AcceptingWebSocket:
 @pytest.mark.asyncio
 async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict[str, dict[str, str]] = {}
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
   monkeypatch.setattr(pty_common, "_tmux_binary", lambda: "/usr/bin/tmux")
 
   class FakeProcess:
@@ -43,7 +44,7 @@ async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> N
 
   assert rc == 0
   assert stderr == ""
-  assert "CHARLIEBOT_SESSION_ID" not in captured["env"]
+  assert SESSION_ID_ENV_VAR not in captured["env"]
 
 
 @pytest.mark.asyncio

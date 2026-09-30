@@ -17,6 +17,7 @@ from src.agents import master_cc
 from src.agents.backends import base as backend_base
 from src.core import config as core_config
 from src.core import models
+from src.core.constants import SESSION_ID_ENV_VAR
 
 
 def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
@@ -42,11 +43,11 @@ def test_build_master_env_writes_own_session_and_keeps_inherited_path(
 
   monkeypatch.setenv("PATH", "/usr/bin")
   monkeypatch.setenv("CLAUDECODE", "1")
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "stale-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
 
   env = master_cc._build_master_env(cfg, "own-session")
 
-  assert env["CHARLIEBOT_SESSION_ID"] == "own-session"
+  assert env[SESSION_ID_ENV_VAR] == "own-session"
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
   assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
   assert env["PATH"] == "/usr/bin"

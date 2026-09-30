@@ -15,6 +15,7 @@ from conftest import (
 )
 
 from src.cli import common
+from src.core.constants import SESSION_ID_ENV_VAR
 
 
 def _set_cwd(
@@ -52,7 +53,7 @@ def test_resolve_session_id_sources_without_env(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
 
   with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == expected
@@ -75,7 +76,7 @@ def test_resolve_session_id_rejects_mismatches_without_env(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+  monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
 
   with (
       patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir),
@@ -113,7 +114,7 @@ def test_resolve_session_id_env_outranks_cwd(
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
   _set_cwd(tmp_path, monkeypatch, sessions_dir, cwd_session)
-  monkeypatch.setenv("CHARLIEBOT_SESSION_ID", "env-session")
+  monkeypatch.setenv(SESSION_ID_ENV_VAR, "env-session")
 
   with patch(CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, return_value=sessions_dir):
     assert common.resolve_session_id(arg_session) == "env-session"
@@ -124,7 +125,7 @@ def test_resolve_session_id_env_outranks_cwd(
     return
   note = json.loads(err)["note"]
   assert "other-session" in note
-  assert "CHARLIEBOT_SESSION_ID=env-session" in note
+  assert f"{SESSION_ID_ENV_VAR}=env-session" in note
 
 
 def test_validate_repo_path_accepts_existing_absolute_dir(tmp_path: Path) -> None:

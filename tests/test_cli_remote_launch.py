@@ -16,6 +16,7 @@ import pytest
 from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, CONFIG_GET_CONFIG_PATCH_TARGET, _wait_for
 
 from src.cli.remote_launch import main
+from src.core.constants import SESSION_ID_ENV_VAR
 
 # Import-path patch target for remote_launch's subprocess seam. subprocess.run is reached
 # through main's module-scope `import subprocess`, so its stand-in lands on the
@@ -166,10 +167,10 @@ def test_remote_launch_resolves_session_id(
   cfg = _mock_config(_make_session_dir(tmp_path, session))
   if session_source == "cwd":
     monkeypatch.chdir(cfg.sessions_dir / session)
-    monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)
+    monkeypatch.delenv(SESSION_ID_ENV_VAR, raising=False)
   else:
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("CHARLIEBOT_SESSION_ID", session)
+    monkeypatch.setenv(SESSION_ID_ENV_VAR, session)
 
   fake_proc = subprocess.CompletedProcess(args=[], returncode=0, stdout="24680\n", stderr="")
 

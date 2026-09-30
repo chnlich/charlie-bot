@@ -72,6 +72,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     open_cdp_page,
     pick_free_port,
 )
+from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))
@@ -182,7 +183,7 @@ class Side:
 
     def start(self) -> None:
         env = {k: v for k, v in os.environ.items()
-               if k not in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")}
+               if k not in (SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")}
         env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo)})
         log = self.log_path.open("w", encoding="utf-8")
         self.proc = subprocess.Popen(

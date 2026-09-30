@@ -725,12 +725,12 @@ if GENRES != tuple(_ASSERTION_SETS):
       f"{tuple(_ASSERTION_SETS)}; name every registered genre in both")
 
 
-def run_assertions(genre: str, artifact: Path, cfg: CharlieBotConfig | None = None) -> list[AssertionOutcome]:
+def run_assertions(genre: str, artifact: Path, cfg: CharlieBotConfig) -> list[AssertionOutcome]:
   """Run every assertion of *genre*'s set against *artifact*; return one outcome per printed line.
 
   Never stops at the first failure — a fix round clears every defect in one pass. A genre with
-  no registered assertion set raises ValueError. ``cfg`` is required only for genres whose set
-  includes page-height (plan, understanding).
+  no registered assertion set raises ValueError. The page-height genres (plan, understanding)
+  read *cfg*; the others ignore it.
   """
   names = _ASSERTION_SETS.get(genre)
   if names is None:

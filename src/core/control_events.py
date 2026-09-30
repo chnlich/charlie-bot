@@ -119,7 +119,7 @@ def build_control_event(
     event_type: str,
     *,
     actor: str,
-    source_session_id: str | None = None,
+    source_session_id: str,
     event_id: str | None = None,
     **payload: object,
 ) -> dict:

@@ -51,7 +51,8 @@ def _worker_backends(monkeypatch, outcomes: list[str]) -> list:
       WORKER_BUILD_BACKEND_PATCH_TARGET)
 
 
-async def _start_loop(cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
+async def _start_loop(
+    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})

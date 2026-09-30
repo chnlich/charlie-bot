@@ -141,7 +141,9 @@ _merge_tasks: dict[str, asyncio.Task] = {}
 # Bounded process pool for the CPU-bound merge body, created lazily on first use and shut down
 # from the server lifespan's shutdown half. Sized to the CPUs: a multi-trace merge runs one
 # member per trace on this pool and the wall is parse-bound, so more workers than the CPUs
-# only add contention; a single-trace merge uses one worker regardless.
+# only add contention. The single-trace build does not ride this pool: it runs in its own
+# lean child (_build_single_trace_merge), a fresh address space without the spawn worker's
+# per-build re-import of this module's __main__.
 # PEP 649 defers this annotation's evaluation to first introspection, so the bare name does
 # not import concurrent.futures at module load. Its module __getattr__ imports .process on
 # first read (multiprocessing rides it), and the M99 server import floor carries no spawn-pool

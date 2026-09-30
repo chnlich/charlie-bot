@@ -73,7 +73,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M61 session-metadata read after TTL expiry, idle-cold | M61 collector below | ms per listing/get_session over the live corpus with every cache entry aged past `_METADATA_CACHE_TTL` (archived entries never expire; the idle cost is the non-archived set's revalidation) | bare listing median < 2 ms; single get_session median < 0.1 ms; archived-page median < 0.003 s; all-sessions median < max(0.008 s, cached-metas × 0.000008 s) (the collector's `status=None` probe copies and sorts the whole cached set — the archived share never leaves the cache, so it only grows — the way the M72 walk scales with listed entries and the M78/M84/M101/M107 lines track bytes; the production routes copy only their filtered subsets, so this line prices the full-set probe the collector runs, not a route's cost; calibrated 2026-09-17 on 4.8-5.5 µs per cached meta across the 1075→1241 growth, the margin also carrying the cold sidebar-probe term the fresh-manager shape adds) | — (introduced with its first history row) |
 | M62 spawn base-resolution chain, base-less launch | M62 collector below | seconds per base-less base resolution (default branch + start point) against the real origin, quiet-remote steady state | median < 0.5 s | — (introduced with its first history row) |
 | M65 big-page gzip event-loop stall, whole-body JSON response | M65 collector below | seconds of loop lag + wall per 200-message events-page fetch through the real app stack (gzip + auth middleware), worst on-disk live chat corpus (loop lag reads the 5 ms ticker floor like M14; a drive faster than the ticker cadence records no tick and reports its own wall — the M14 never-yields rule) | loop-lag median < 0.010 s; wall median < 0.012 s | — (introduced with its first history row) |
-| M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts); the route-shape sub-reading (the same build as the production route runs it — one lean child process per timed build, the spawn+import overhead the in-process reading cannot see; the pre-fix shape submitted the build to the merge pool, whose spawn-context worker re-imports the server's `__main__` per build) | median < max(8 s, bytes ÷ 70 MB/s) (recalibrated from < 8 s: the flat line priced the 307.3 MB / 1.07M-event corpus the 2026-09-17 landing measured 3.97-4.40 s on; the worst on-disk corpus is now the 1422.3 MB / 3.52M-event stage3 trace and the build's demonstrated rate is 70-83 MB/s across both corpora — see the 2026-09-29 history row); route-shape paired overhead median < +0.30 s (the lean child's interpreter+import overhead rides build variance at the worst corpus's size — the after band reads +0.06 s on a 107.7 MB corpus and +0.22 s median on the 1422.3 MB one; the pre-fix pool shape reads +0.5-1.0 s and trips) | — (introduced with its first history row) |
+| M66 perfetto merged-trace build wall, worst on-disk trace corpus | M66 collector below | seconds per `merge_traces` build, largest Chrome-JSON trace under the documented trace roots (~/data, ~/scripts); the route-shape sub-reading (the same build as the production route runs it — one lean child process per timed build, the spawn+import overhead the in-process reading cannot see; the pre-fix shape submitted the build to the merge pool, whose spawn-context worker re-imports the server's `__main__` per build) | median < max(8 s, bytes ÷ 70 MB/s) (recalibrated from < 8 s: the flat line priced the 307.3 MB / 1.07M-event corpus the 2026-09-17 landing measured 3.97-4.40 s on; the worst on-disk corpus is now the 1422.3 MB / 3.52M-event stage3 trace and the build's demonstrated rate is 70-83 MB/s across both corpora — see the 2026-09-29 history row); route-shape paired overhead median < max(+0.30 s, in-process wall × 2.5 %) (the lean child's interpreter+import overhead is ~0.1 s, but a paired round's delta rides the build variance a 16 s build carries — the after band reads +0.05-0.06 s medians on a 107.7 MB corpus and +0.06-0.29 s medians on the 1422.3 MB one; the pre-fix pool shape reads +0.5-1.0 s and trips) | — (introduced with its first history row) |
 | M67 sidebar deep-probe trigger scan, steady state | M67 collector below | seconds per `pending_trigger_state_sync` call, worst on-disk trigger corpus | median < 0.00005 s | — (introduced with its first history row) |
 | M68 worker-list marked changed-poll rebuild | M68 collector below | seconds per body rebuild after one writer mark, worst on-disk thread-metadata corpus; the unchanged poll and its conditional are M36's shapes | median < 0.002 s (recalibrated from < 0.003 s: the row-fragment splice removed the rebuild's whole-body re-dump — the served path reads 1.23-1.27 ms; see the 2026-09-17 history row) | — (introduced with its first history row) |
 | M69 opencode SSE unhandled-event debug stream, steady state | M69 collector below | debug lines per 60 steady-state `_translate_sse_event` calls of one unhandled event type | 0 lines after the first sighting per event type per process | — (introduced with its first history row) |
@@ -4364,10 +4364,13 @@ The cost is background build work invisible to HTTP probes, so the collector tim
 the largest Chrome-JSON trace on disk (read-only; scratch output under /tmp), from the checkout
 under test: one cold pass, as at the first view of a corpus, then three timed builds. The second
 block times the route shape — the same build as the production route runs it, `_build_single_trace_merge`
-(the corpus and the in-process median arrive on the unit's exported env from the first block):
-one cold child, then three timed child builds, each a fresh lean subprocess, the spawn+import
-overhead the in-process reading cannot see (the pre-fix shape submitted the build to the merge
-pool, whose spawn-context worker re-imported the server's `__main__` per build). The trace roots
+in a fresh lean subprocess — against its own interleaved in-process arm over the same discovered
+corpus: one cold pass of each arm, as at the first view, then five paired rounds whose deltas
+price the child's spawn+import overhead the in-process reading cannot see (the pre-fix shape
+submitted the build to the merge pool, whose spawn-context worker re-imported the server's
+`__main__` per build). Each block discovers its own corpus: the sweep's export channel removes
+exported absolute paths as scratch at run end, and the corpus is a live read-only file, not
+scratch. The trace roots
 are the host's documented trace homes (~/data, ~/scripts); no qualifying file prints nothing and
 the round treats the metric as unmeasured. Evidence while the live server runs older code points
 the same collector at the branch checkout (`CHECKOUT` at the worktree root), the same shape as
@@ -4414,7 +4417,6 @@ for n, p in candidates:
 if best is None:
     raise SystemExit(0)
 print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
-print(f"export M66_CORPUS={best}")
 
 work = Path(tempfile.mkdtemp(prefix="m66-merge-"))
 out = work / "merged.json.gz"
@@ -4429,21 +4431,51 @@ try:
     print(f"merged build median {times[1]:.2f} s, max {times[-1]:.2f} s over 3; artifact {out.stat().st_size / 1e6:.1f} MB.gz")
 finally:
     shutil.rmtree(work)  # every exit path removes the scratch copy: the hourly cadence leaks one copy per skipped removal
+EOF
 ```
 
-The route shape shares the first block's corpus (the exported `M66_CORPUS`) and times its own
-in-process arm interleaved, so the paired deltas price the spawn overhead without the two
-blocks' load drift; its scratch copy is swept on the exit path:
+The route shape is its own block, self-contained like every standing collector: it discovers the
+worst corpus the same way block 1 does, then times the production build, `_build_single_trace_merge`
+in a fresh lean subprocess, against its own interleaved in-process arm — the paired deltas price
+the child's spawn+import overhead without either arm's load drift:
 
 ```bash
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'PYINNER'
 import os, shutil, sys, tempfile, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
+import orjson
 import src.core.trace_merge as tm
 from src.api.pages import _build_single_trace_merge
+from src.core.trace_merge import _trace_events_or_raise
 
-corpus = Path(os.environ["M66_CORPUS"])
+candidates = []
+for root in (Path.home() / "data", Path.home() / "scripts"):
+    if not root.is_dir():
+        continue
+    for p in root.rglob("*.json"):
+        try:
+            n = p.stat().st_size
+        except OSError:
+            continue
+        with p.open("rb") as f:
+            prefix = f.read(64).lstrip(b" \t\n\r")
+        if prefix[:1] in (b"{", b"["):
+            candidates.append((n, p))
+candidates.sort(reverse=True)
+best, best_n = None, -1
+for n, p in candidates:
+    try:
+        with p.open("rb") as f:
+            _trace_events_or_raise(orjson.loads(f.read()), p)
+    except ValueError:  # orjson.JSONDecodeError subclasses ValueError; so does the shape rejection
+        continue
+    best, best_n = p, n
+    break
+if best is None:
+    raise SystemExit(0)
+print(f"worst build corpus: {best}, {best_n / 1e6:.1f} MB")
+corpus = best
 
 work = Path(tempfile.mkdtemp(prefix="m66-route-"))
 out = work / "merged.json.gz"
@@ -9686,4 +9718,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-09-30 | this PR | M107 worst-dir build restored from a crash to a measurement: the corpus moved to `20260929_stage3_node_balance_2node/traces/recommended_budget` (2 × 1.42 GB / 3.5M-event members) and the verbatim collector died every round — the unbounded member wave submitted both 1.42 GB parses to the 4-worker merge pool, the session's 12 GiB memory cgroup (swap 0) killed a worker mid-parse (kernel oom records 20:00:20, 20:06:44), and `_cached_merge` raised `BrokenProcessPool` 19.8 s in; reproduced standalone (pool probe → BrokenProcessPool, inline sequential build 36.2 s ok), so the merged view of that dir 500s on main and the shared pool stays broken for the server's lifetime. Fix, three pieces: `_merge_memory_budget()` + `_member_counts` cap the concurrently building members by the cgroup's free bytes priced at 8× the largest member (one build measured 5.75-6.6 GB anon on 1.32-1.42 GB in) — oversized members build one at a time; the merge pool takes `max_tasks_per_child=1` because a second build in a retained worker only sometimes reuses the first's freed arenas (kills at 11.0-11.6 GB anon; plateau probes showed both reuse and stack); `_parse_trace_document` parses through a mapped view so the raw bytes stop riding the anon heap (parse(bytes) 5.18 GB vs mapped ~3.8 GB anon per equal file). After: median 35.97 s, max 36.04 s over 3 timed builds (78 MB/s effective), artifact 227.5 MB, byte-identity digest d7edbc932fc8 across rounds and equal to main's inline sequential build's decompressed stream (2,242,220,721 B both arms). The round's second finding was the collector itself: the field-level digest stdlib-parsed the whole 2.24 GB decompressed artifact and built a 7M-event ident list — the parent peaked 10.3-11.6 GB anon and the OOM kill took the collector down (kernel records 20:15:42, 20:17:44, 20:33:20) even with the build fixed; the witness now hashes the decompressed byte stream in 1 MB chunks at a few-MB peak, a stronger cross-round check since the build's serialization is deterministic | a product defect (unbounded concurrency against a memory-capped host) plus the collector repair that makes the metric measurable at all; without the digest fix the round reports M107 unmeasured |
 
 | 2026-09-29 | this PR | M66 healthy range recalibrated from a flat median < 8 s to median < max(8 s, bytes ÷ 70 MB/s), a docs-only calibration round (no product-code change): the hourly sweep read the merged build at 17.16 s median, max 18.76 s over 3 timed builds on the worst on-disk corpus `/home/chaoli/scripts/20260929_stage3_node_balance_2node/traces/recommended_budget/trace_rank008_step000515.json`, 1422.3 MB / 3,516,470 events, artifact 113.6 MB.gz — 2.1× over the flat line. The rate witness says corpus growth, not code regression: the 2026-09-17 landing (#1757) measured 3.97-4.40 s on the then-worst 307.3 MB / 1,068,461-event trace (70-77 MB/s), and today's build runs 82.9 MB/s on the 4.6× larger corpus — the per-byte rate holding through the later commits on this build path (#1801 swapped the merge's compressor to the isal igzip CLI, #1877 followed). A same-round phase probe on the corpus (sequential `merge_traces`, gc off, scratch output under /tmp, corpus read-only) attributed the wall: `read_bytes` 8.79 s disk-cold (the collector's own cold pass warms it; ~1 s warm), `orjson.loads` 11.71 s, parse+walk+serialize 16.6-16.8 s, igzip 951 MB/s (1.5 s, fully overlapped) — parse ~10.5 s plus walk ~6 s at 3.5M events, the shape's floor as built. The follow-up fix is designed and prototype-proven: a chunk-parallel single-trace build that tiles the pretty-printed traceEvents array at the direct-pass splitter's element-line anchors, scans each chunk's id first-sights in a child, replays them in chunk order into the sequential build's exact id allocation, and walks each chunk with lookup-only sequencers — the prototype's artifact is byte-identical to the sequential build's (sha1 996410439bbddca54e2b339c9ba418aed3a6ae48, 113,557,882 B, both arms) at a 7.7-9.2 s wall against the sequential 15.5-25.5 s; it prices ~460 diff lines with its byte-identity pins, over this loop's 300-line budget, so it travels as later runs' two stacked PRs (the `_synthetic_pids`/`_process_metadata_events` extractions plus the `inherited_pid_map` walk gate first, the chunk machinery second) | a corpus-growth recalibration, not a code change: the flat 8 s line false-trips every round on the bigger corpus while the per-byte rate holds, drowning the real regression signal the line exists for |
-| 2026-09-30 | this PR | M66 route-shape sub-reading, introduced with this PR's fix: the single-trace merged-trace build left the merge pool for its own lean child process (`src/core/trace_merge_child.py`, the direct-pass child's shape) — the pool's spawn-context worker re-imported the parent's `__main__` (the full server module, the M99 floor) on every build because `max_tasks_per_child=1` gives each build a fresh worker, and a forkserver child re-imports it too (the forked child runs spawn's preparation data, `_serve_one` → `spawn._main`; measured fresh-worker round trips 0.600-0.667 s either way against the lean child's 0.06 s). Verbatim collector, branch worktree: M66 block 1 in-process median 15.35 s (standing-sweep band, 15.31 s today), block 2 route-shape paired overhead median +0.18 s, max +0.38 s over 5 interleaved rounds on the worst corpus — inside the new < +0.30 s line, where the pre-fix pool shape reads +0.5-1.0 s and trips; on a 107.7 MB corpus the paired overhead reads +0.05-0.06 s. Interleaved A/B, main checkout pool shape vs branch child shape, arm order alternating, 3 timed builds per arm per round at load 2.87-3.27 one-minute, 107.7 MB corpus: pool 1.98/2.17/1.97 s median vs child 1.32/1.32/1.32 s (−33 %, every paired round faster, maxima fully separated 2.00-2.19 vs 1.33-1.41); artifacts byte-identical across pool/child/in-process arms on both corpora (sha1 cab5d1be22c9cb55 mid, 996410439bbddca5 worst — the digest the 2026-09-29 row recorded). On the worst corpus the two route shapes sit within build variance of each other (the ~0.6 s spawn is ~3 % of a 16 s build); the sub-reading's paired form exists so the line watches the overhead and not that variance. Suite 1314-passed plus the documented environmental set (the tailwind node build and 25 git_stash_guard errors, reproduced on the clean main checkout), ruff and yapf clean, 4 new tests (child byte parity with the in-process build, the spawn-argv execution shape, the exit classes, the route's exit-class mapping) | every first view of a merged trace paid a fresh server re-import before its build could start — the fresh-worker rule the arena-retention finding forced kept the address space but shipped the server's import weight with it; the child keeps the fresh address space and drops the import, and the merge gate keeps the concurrency bound the pool's max_workers was |
+| 2026-09-30 | this PR | M66 route-shape sub-reading, introduced with this PR's fix: the single-trace merged-trace build left the merge pool for its own lean child process (`src/core/trace_merge_child.py`, the direct-pass child's shape) — the pool's spawn-context worker re-imported the parent's `__main__` (the full server module, the M99 floor) on every build because `max_tasks_per_child=1` gives each build a fresh worker, and a forkserver child re-imports it too (the forked child runs spawn's preparation data, `_serve_one` → `spawn._main`; measured fresh-worker round trips 0.600-0.667 s either way against the lean child's 0.06 s). Verbatim collector, branch worktree (the route-shape block is self-contained — the sweep's export channel removes exported absolute paths as scratch at run end, and the corpus is a live read-only file, so the block discovers its own corpus and times both arms interleaved): M66 block 1 in-process median 15.35-15.60 s across runs (standing-sweep band, 15.31 s today), block 2 route-shape paired overhead medians +0.06 s to +0.23 s, max +0.30 s over 5 interleaved rounds on the worst corpus — inside the new max(+0.30 s, in-process × 2.5 %) line, where the pre-fix pool shape reads +0.5-1.0 s and trips; on a 107.7 MB corpus the paired overhead reads +0.05-0.06 s. Interleaved A/B, main checkout pool shape vs branch child shape, arm order alternating, 3 timed builds per arm per round at load 2.87-3.27 one-minute, 107.7 MB corpus: pool 1.98/2.17/1.97 s median vs child 1.32/1.32/1.32 s (−33 %, every paired round faster, maxima fully separated 2.00-2.19 vs 1.33-1.41); artifacts byte-identical across pool/child/in-process arms on both corpora (sha1 cab5d1be22c9cb55 mid, 996410439bbddca5 worst — the digest the 2026-09-29 row recorded). On the worst corpus the two route shapes sit within build variance of each other (the ~0.6 s spawn is ~3 % of a 16 s build); the sub-reading's paired form exists so the line watches the overhead and not that variance. Suite 1314-passed plus the documented environmental set (the tailwind node build and 25 git_stash_guard errors, reproduced on the clean main checkout), ruff and yapf clean, 4 new tests (child byte parity with the in-process build, the spawn-argv execution shape, the exit classes, the route's exit-class mapping) | every first view of a merged trace paid a fresh server re-import before its build could start — the fresh-worker rule the arena-retention finding forced kept the address space but shipped the server's import weight with it; the child keeps the fresh address space and drops the import, and the merge gate keeps the concurrency bound the pool's max_workers was |

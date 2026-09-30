@@ -216,68 +216,67 @@ async def _replay_followups(
     counters: dict,
     cfg: CharlieBotConfig,
 ) -> None:
-    """Re-drive every completed Run's follow-up that its crash window lost.
+  """Re-drive every completed Run's follow-up that its crash window lost.
 
     Every follow-up here is idempotent by construction: reviews are
     provenance-deduped, sequence advance is facts-driven over stable Run ids,
     reports and closes ride stable ids, so a repeated pass lands nothing
     twice.
     """
-    meta = await tree.load_meta(session_id)
-    if meta is None:
-        return
-    events = tree.runs.load_events_sync(session_id)
-    run_records = tree.runs.list_run_records_sync(session_id)
-    for run in run_records:
-        outcome = tree.runs.terminal_outcome(events, run.id)
-        # A terminal run whose metadata write failed (ended_at empty) gets its
-        # end metadata re-derived from the raw log: the run_finished fact is on
-        # disk, ended_at/exit_code are not. Idempotent — an already-written
-        # metadata file is never touched.
-        if outcome is not None and run.ended_at is None:
-            if adapter is None:
-                raise RuntimeError(
-                    "task execution adapter is not installed; cannot repair a half-written end record")
-            await adapter.repair_end_metadata(session_id, run, outcome)
-        if run.kind == "iteration":
-            continue  # the improve loop is never resumed (the restart boundary)
-        if run.kind == "scheduled_step":
-            # The cron firing's chain advances from durable facts only — for a
-            # terminal step the next position launches or the ONE boundary
-            # report re-delivers; for a registered-but-unlaunched frontier step
-            # (a controller that settled withheld or died before its launch)
-            # the same redrive replays that admitted step. Both idempotent by
-            # stable ids; a live process is followed, never relaunched.
-            if outcome is not None or run.pid is None:
-                counters["followups"] += 1
-                await _replay_cron_firing(session_id, tree, run, cfg)
-            continue
-        if outcome is None:
-            continue
-        if meta.profile != "worker" and run.kind != "manager_turn":
-            continue
-        if meta.profile == "manager" and run.kind == "manager_turn":
-            # The durable write happened, the crash landed before
-            # after_run_finished: the owner-close recheck replays once (its
-            # request-id replay dedups, and so does its blocked-request
-            # notice); phase 4's dispatch covers the rest.
-            counters["followups"] += 1
-            await tree.completion.recheck_close_requests(session_id, run.id)
-            continue
-        if run.kind == "work":
-            counters["followups"] += 1
-            if outcome == "success":
-                # The completion owner's post-success follow-up replays exactly
-                # as the dispatcher's finish path ran it: the own close-request
-                # recheck and the non-implement automatic completion (close +
-                # parent report). Everything inside is idempotent by stable
-                # request/close/report ids, so a crash in the finish→follow-up
-                # window is repaired and a repeated pass lands nothing twice.
-                await tree.completion.after_run_finished(session_id, run.id)
-                if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
-                    await adapter._maybe_spawn_review(session_id, run)
-            elif outcome in ("failed", "interrupted", "blocked"):
-                await adapter._report_failure_to_parent(session_id, run, outcome)
-        elif run.kind == "review":
-            counters["followups"] += 1
-            await adapter._after_review_run(meta, run, outcome)
+  meta = await tree.load_meta(session_id)
+  if meta is None:
+    return
+  events = tree.runs.load_events_sync(session_id)
+  run_records = tree.runs.list_run_records_sync(session_id)
+  for run in run_records:
+    outcome = tree.runs.terminal_outcome(events, run.id)
+    # A terminal run whose metadata write failed (ended_at empty) gets its
+    # end metadata re-derived from the raw log: the run_finished fact is on
+    # disk, ended_at/exit_code are not. Idempotent — an already-written
+    # metadata file is never touched.
+    if outcome is not None and run.ended_at is None:
+      if adapter is None:
+        raise RuntimeError("task execution adapter is not installed; cannot repair a half-written end record")
+      await adapter.repair_end_metadata(session_id, run, outcome)
+    if run.kind == "iteration":
+      continue  # the improve loop is never resumed (the restart boundary)
+    if run.kind == "scheduled_step":
+      # The cron firing's chain advances from durable facts only — for a
+      # terminal step the next position launches or the ONE boundary
+      # report re-delivers; for a registered-but-unlaunched frontier step
+      # (a controller that settled withheld or died before its launch)
+      # the same redrive replays that admitted step. Both idempotent by
+      # stable ids; a live process is followed, never relaunched.
+      if outcome is not None or run.pid is None:
+        counters["followups"] += 1
+        await _replay_cron_firing(session_id, tree, run, cfg)
+      continue
+    if outcome is None:
+      continue
+    if meta.profile != "worker" and run.kind != "manager_turn":
+      continue
+    if meta.profile == "manager" and run.kind == "manager_turn":
+      # The durable write happened, the crash landed before
+      # after_run_finished: the owner-close recheck replays once (its
+      # request-id replay dedups, and so does its blocked-request
+      # notice); phase 4's dispatch covers the rest.
+      counters["followups"] += 1
+      await tree.completion.recheck_close_requests(session_id, run.id)
+      continue
+    if run.kind == "work":
+      counters["followups"] += 1
+      if outcome == "success":
+        # The completion owner's post-success follow-up replays exactly
+        # as the dispatcher's finish path ran it: the own close-request
+        # recheck and the non-implement automatic completion (close +
+        # parent report). Everything inside is idempotent by stable
+        # request/close/report ids, so a crash in the finish→follow-up
+        # window is repaired and a repeated pass lands nothing twice.
+        await tree.completion.after_run_finished(session_id, run.id)
+        if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
+          await adapter._maybe_spawn_review(session_id, run)
+      elif outcome in ("failed", "interrupted", "blocked"):
+        await adapter._report_failure_to_parent(session_id, run, outcome)
+    elif run.kind == "review":
+      counters["followups"] += 1
+      await adapter._after_review_run(meta, run, outcome)

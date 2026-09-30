@@ -23,7 +23,7 @@ from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import RunTokenClaims, sign_run_token
 from tests.test_task_execution import (
-    OPERATOR,
+    OP_HEADERS,
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
     build_env,
@@ -72,7 +72,7 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
     from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         payload = delegate_payload(child.id, repo)
-        first = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
+        first = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
         assert first.status_code == 200, first.text
         body = first.json()
         child_leaf, run_id = body["session_id"], body["run_id"]
@@ -84,7 +84,7 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
         assert [r.id for r in runs] == [run_id]
 
         # The replayed request returns the original product, never a sibling.
-        replay = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
+        replay = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
         assert replay.status_code == 200, replay.text
         assert replay.json()["session_id"] == child_leaf
         assert replay.json()["run_id"] == run_id
@@ -117,7 +117,7 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
     from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
-            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
+            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OP_HEADERS)
     assert resp.status_code == 403
     assert "no active authorization" in resp.json()["detail"]
     assert builds == []
@@ -143,7 +143,7 @@ async def test_expired_pre_takeoff_on_the_ancestor_blocks(
     from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
-            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
+            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OP_HEADERS)
     assert resp.status_code == 403
     assert "no active authorization" in resp.json()["detail"]
     assert builds == []
@@ -165,7 +165,7 @@ async def test_worker_caller_cannot_delegate(
     from tests.test_task_execution import make_api_client
     with make_api_client(cfg, session_mgr, tree) as client:
         resp = client.post(
-            "/api/internal/delegate", json=delegate_payload(worker.id, repo), headers=OPERATOR)
+            "/api/internal/delegate", json=delegate_payload(worker.id, repo), headers=OP_HEADERS)
     assert resp.status_code == 403
     assert "not a manager" in resp.json()["detail"]
     assert builds == []
@@ -220,13 +220,13 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
     with make_api_client(cfg, session_mgr, tree) as client:
         verify = client.post(
             "/api/internal/delegate", json=delegate_payload(child.id, repo, task_type="verify"),
-            headers=OPERATOR)
+            headers=OP_HEADERS)
         assert verify.status_code == 200, verify.text
         verify_leaf = verify.json()["session_id"]
         verify_run = verify.json()["run_id"]
 
         blocked = client.post(
-            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OPERATOR)
+            "/api/internal/delegate", json=delegate_payload(child.id, repo), headers=OP_HEADERS)
         assert blocked.status_code == 403
 
         # The verify run launched and settled on the API loop that scheduled it.

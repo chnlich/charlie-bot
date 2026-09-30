@@ -24,6 +24,7 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     FABLE_MODEL,
+    OPERATOR,
     POOLED_FABLE_ID,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     ScriptedRelayBackend,
@@ -40,7 +41,6 @@ from conftest import (
     run_git,
     stub_credentials,
 )
-from conftest import OPERATOR as OP_CALLER
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -56,7 +56,10 @@ from src.core.sessions import (
 )
 from src.core.task_sessions import TaskTreeManager
 
-OPERATOR = {"Authorization": "Bearer op-secret"}
+# The internal-API auth headers carrying the access key stub_credentials seeds: tests
+# pass it as headers=. It is not a caller identity; conftest's OPERATOR (CallerIdentity)
+# is what caller= takes.
+OP_HEADERS = {"Authorization": "Bearer op-secret"}
 
 
 def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -551,7 +554,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
             "repo_path": str(repo),
             "base_branch": "main",
         }
-        first = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
+        first = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
         assert first.status_code == 200, first.text
         body = first.json()
         child_id, run_id = body["session_id"], body["run_id"]
@@ -563,7 +566,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
         # The replayed request (same spec, derived stable id) returns the
         # original child and Run instead of a second process.
-        replay = client.post("/api/internal/delegate", json=payload, headers=OPERATOR)
+        replay = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
         assert replay.status_code == 200, replay.text
         assert replay.json()["session_id"] == child_id
         assert replay.json()["run_id"] == run_id
@@ -571,13 +574,13 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         # The same explicit request_id replays identically; a distinct explicit
         # id names a genuinely different operation (an intentional sibling).
         first_named = client.post("/api/internal/delegate",
-                                  json=dict(payload, request_id="op-1"), headers=OPERATOR)
+                                  json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
         assert first_named.json()["session_id"] != child_id
         replay_named = client.post("/api/internal/delegate",
-                                   json=dict(payload, request_id="op-1"), headers=OPERATOR)
+                                   json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
         assert replay_named.json()["session_id"] == first_named.json()["session_id"]
         sibling = client.post("/api/internal/delegate", json=dict(payload, request_id="op-2"),
-                              headers=OPERATOR)
+                              headers=OP_HEADERS)
         assert sibling.json()["session_id"] != first_named.json()["session_id"]
 
         # The runs execute through the worker adapter while the API loop that
@@ -616,14 +619,14 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
         assert resolved == {"session_id": child_id, "run_id": run_id}
         from src.api import deps
         monkeypatch.setattr(deps, "_task_manager", tree)
-        row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OPERATOR)
+        row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OP_HEADERS)
         assert row.status_code == 200, row.text
         assert row.json()["id"] == run_id
         assert row.json()["session_id"] == child_id
 
         # The legacy list route exposes the same Run as a compatibility row:
         # its real id, backend and finished status — no ThreadMetadata exists.
-        listed = client.get(f"/api/threads/{child_id}/list", headers=OPERATOR)
+        listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
         assert listed.status_code == 200, listed.text
         rows = listed.json()
         assert isinstance(rows, list)
@@ -1320,7 +1323,7 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr,
         events=[result_event("manager turn done")])
@@ -1465,7 +1468,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
 
     # Turn 3 (a rule changed): fresh native context, history retained elsewhere.
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="changed rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn three", actor="user")
     decision = await tree.dispatch.dispatch_pending(manager.id)
     assert decision.get("launch") is True
@@ -1582,7 +1585,7 @@ async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     meta = await tree.load_meta(manager.id)
     body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
     body.unlink()  # the rule vanished before the launch
@@ -1623,7 +1626,7 @@ async def test_corrupt_rule_fails_before_launch_with_the_reason(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     meta = await tree.load_meta(manager.id)
     body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
     body.write_text("tampered bytes", encoding="utf-8")
@@ -1646,7 +1649,7 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     _backends, _builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("turn")])
     run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
@@ -1678,7 +1681,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     manager = await create_task(tree, parent=None, request_id="root")
     await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"),
-                          caller=OP_CALLER)
+                          caller=OPERATOR)
     _backends, builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
     from src.core import json_utils
@@ -1721,7 +1724,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     child = await create_task(tree, parent=manager.id, request_id="child")
     await tree.patch_task(
         manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"),
-        caller=OP_CALLER)
+        caller=OPERATOR)
     _backends, _builds = _manager_backend(
         monkeypatch, tree, cfg, session_mgr,
         events=[result_event("manager turn done")])
@@ -1751,7 +1754,7 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     # itself and for its descendant, while the current Run's snapshot stays fixed.
     await tree.patch_task(
         manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"),
-        caller=OP_CALLER)
+        caller=OPERATOR)
     meta = await tree.load_meta(manager.id)
     index = await tree._get_index()
     chain, node_ref = capture_prompt_chain(tree, index, meta)
@@ -1858,7 +1861,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
             "keep_worktree": False,
             "repo_path": str(repo),
             "base_branch": "main",
-        }, headers=OPERATOR)
+        }, headers=OP_HEADERS)
         assert resp.status_code == 200, resp.text
         body = resp.json()
         child_id, run_id = body["session_id"], body["run_id"]

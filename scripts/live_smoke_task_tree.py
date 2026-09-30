@@ -63,6 +63,7 @@ import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
 from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
 RUN_TIMEOUT_SECONDS = 420.0
@@ -292,7 +293,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
     os.environ["CHARLIEBOT_HOME"] = str(home)
     # Clear inherited production identity: the smoke's children route through
     # the synthetic home only.
-    for var in ("CHARLIEBOT_SESSION_ID", "CHARLIEBOT_RUN_TOKEN"):
+    for var in (SESSION_ID_ENV_VAR, RUN_TOKEN_ENV):
         os.environ.pop(var, None)
 
     base = f"http://127.0.0.1:{port}"

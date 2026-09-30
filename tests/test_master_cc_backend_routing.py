@@ -29,11 +29,12 @@ def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
   )
 
 
-def test_build_master_env_writes_own_session_and_prepends_repo_venv(
+def test_build_master_env_writes_own_session_and_keeps_inherited_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  """The master's own session id lands in the child environment, over any inherited value."""
+  """The master's own session id lands in the child environment, over any inherited value, and the
+  inherited PATH passes through without the repo venv's bin directory."""
   repo = tmp_path / "repo"
   venv_bin = repo / ".venv" / "bin"
   venv_bin.mkdir(parents=True)
@@ -48,7 +49,8 @@ def test_build_master_env_writes_own_session_and_prepends_repo_venv(
   assert env["CHARLIEBOT_SESSION_ID"] == "own-session"
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
   assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
-  assert env["PATH"].split(os.pathsep)[:2] == [str(venv_bin), "/usr/bin"]
+  assert env["PATH"] == "/usr/bin"
+  assert str(venv_bin) not in env["PATH"].split(os.pathsep)
   assert "CLAUDECODE" not in env
 
 

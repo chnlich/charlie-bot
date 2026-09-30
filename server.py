@@ -51,6 +51,7 @@ with gc_off(collect=False):
   from src.api.auth import AuthMiddleware, _credential_matches
   from src.api.deps import session_manager, set_trigger_manager, task_manager
   from src.core import timeouts
+  from src.core.agent_environment import apply_agent_environment
   from src.core.buildinfo import init_build_info
   from src.core.config import (
       CharlieBotConfig,
@@ -843,6 +844,8 @@ def main() -> None:
   """Run the server. The uvicorn arguments have their one definition here."""
   import uvicorn
 
+  # Every agent process copies this environment.
+  apply_agent_environment()
   cfg = get_config()
   require_backends(cfg, get_scheduled_tasks())
   uvicorn.run(

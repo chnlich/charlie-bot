@@ -178,6 +178,22 @@ async def _drain_manager_turns(tree: TaskTreeManager, manager_id: str) -> None:
   pytest.fail(f"the manager turn never settled: {tree.runs.list_run_records_sync(manager_id)}")
 
 
+def _child_reports(tree: TaskTreeManager, node_id: str) -> list[dict]:
+  """The child_report facts delivered to *node_id*'s event log."""
+  return [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
+
+
+async def _wait_for_child_reports(tree: TaskTreeManager, node_id: str, *, timeout: float, fail_msg: str) -> list[dict]:
+  """Poll the node's event log until a child_report lands; pytest.fail(*fail_msg*) on timeout."""
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    reports = _child_reports(tree, node_id)
+    if reports:
+      return reports
+    await asyncio.sleep(0.1)
+  pytest.fail(fail_msg)
+
+
 # ---------------------------------------------------------------------------
 # mode: master: the typed scheduled input lands on the bound manager
 # ---------------------------------------------------------------------------
@@ -233,14 +249,7 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   leaf_id = result["leaf_session_id"]
-  deadline = asyncio.get_event_loop().time() + 20
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the failure report never arrived")
+  reports = await _wait_for_child_reports(tree, manager.id, timeout=20, fail_msg="the failure report never arrived")
   # The chain stopped at the failed step: no later step run exists.
   records = tree.runs.list_run_records_sync(leaf_id)
   assert [r.sequence_ref.position for r in records] == [0]
@@ -362,7 +371,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   leaf_events = tree.runs.load_events_sync(leaf_id)
   assert tree.runs.terminal_outcome(leaf_events, run0.id) == "success"
   assert tree.task_state(leaf_id) == "open"
-  assert [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT] == []
+  assert _child_reports(tree, manager.id) == []
   assert [e for e in tree.events.load_events(leaf_id) if e.get("type") == ET.TASK_CLOSED] == []
   old_callbacks = [
       t.get_name() for t in asyncio.all_tasks() if t is not asyncio.current_task() and "chained" in t.get_name()
@@ -376,7 +385,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = _child_reports(tree, manager.id)
     if (len(records) == 2 and
         all(tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf_id), r.id) is not None for r in records) and
         len(reports) == 1):
@@ -391,7 +400,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0, 1]
   assert tree.task_state(leaf_id) == "completed"
   assert len([e for e in tree.events.load_events(leaf_id) if e.get("type") == ET.TASK_CLOSED]) == 1
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = _child_reports(tree, manager.id)
   assert len(reports) == 1, f"expected exactly one boundary report: {reports}"
   assert reports[0]["outcome"] == "completed"
   assert "completed all 2 step(s)" in str(reports[0]["summary"])
@@ -403,7 +412,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   await reconcile_task_tree(cfg, tree)
   await reconcile_task_tree(cfg, tree)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 2
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(_child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert tree.task_state(leaf.id) == "completed"
 
@@ -565,7 +574,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
 
   from src.core import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = _child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[0]["outcome"] == "blocked"
   assert "blocked" in str(reports[0]["summary"])
@@ -575,7 +584,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   # Repeated recovery at the blocked-close window adds nothing.
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(_child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 0
 
   # The repaired close: consume the pending input with a successful run; the
@@ -613,7 +622,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
   from src.core import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   assert tree.task_state(leaf.id) == "completed"
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = _child_reports(tree, manager.id)
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   await _drain_manager_turns(tree, manager.id)
@@ -632,7 +641,7 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
       cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id),
   )
   # Both scans converge on the same boundary product (stable close/report ids).
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(_child_reports(tree, manager.id)) == 1
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
   await _drain_manager_turns(tree, manager.id)
@@ -670,7 +679,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   assert calls["n"] == 1
   # The close landed and the boundary product is exactly ONE completed report.
   assert tree.task_state(leaf.id) == "completed"
-  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = _child_reports(tree, manager.id)
   assert len(reports) == 1
   assert reports[0]["outcome"] == "completed"
   assert len([e for e in tree.events.load_events(leaf.id) if e.get("type") == ET.TASK_CLOSED]) == 1
@@ -681,7 +690,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   await _drain_manager_turns(tree, manager.id)
-  assert len([e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]) == 1
+  assert len(_child_reports(tree, manager.id)) == 1
   assert len(tree.runs.list_run_records_sync(leaf.id)) == 2
 
 
@@ -775,14 +784,7 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   assert leaf_id != node_id
   leaf = await tree.load_meta(leaf_id)
   assert leaf is not None and leaf.task_parent_id == node_id
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the leaf's report never reached the bound node")
+  await _wait_for_child_reports(tree, node_id, timeout=15, fail_msg="the leaf's report never reached the bound node")
   assert tree.task_state(leaf_id) == "completed"
   # The node is a task-tree manager: no legacy wake ever fires for it.
   assert wakes == []
@@ -820,14 +822,8 @@ async def test_repo_prompt_task_launches_its_type_less_leaf_in_a_worktree(
   leaf_id = result["leaf_session_id"]
   leaf = await tree.load_meta(leaf_id)
   assert leaf is not None and leaf.task is not None and leaf.task.task_type is None
-  deadline = asyncio.get_event_loop().time() + 15
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(task_cfg.session_id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the repo-bound leaf's report never reached the bound node")
+  reports = await _wait_for_child_reports(
+      tree, task_cfg.session_id, timeout=15, fail_msg="the repo-bound leaf's report never reached the bound node")
   assert [r["outcome"] for r in reports] == ["completed"]
   assert tree.task_state(leaf_id) == "completed"
   # One work Run, spawned, whose launch text carries the implement bindings
@@ -899,7 +895,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   deadline = asyncio.get_event_loop().time() + 20
   while asyncio.get_event_loop().time() < deadline:
     records = tree.runs.list_run_records_sync(leaf_id)
-    reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
+    reports = _child_reports(tree, node_id)
     if len(records) == 2 and reports:
       break
     await asyncio.sleep(0.1)
@@ -911,7 +907,7 @@ async def test_unbound_steps_task_binds_then_advances_step_by_step(bound_env, mo
   assert "Result of the previous step (selector)" in builds[1]["backend"].prompt
   assert "selector says pick three" in builds[1]["backend"].prompt
   # ONE report at the boundary, delivered to the node the task now binds.
-  reports = [e for e in tree.events.load_events(node_id) if e.get("type") == ET.CHILD_REPORT]
+  reports = _child_reports(tree, node_id)
   assert len(reports) == 1
   assert "completed all 2 step(s)" in str(reports[0].get("summary"))
   assert tree.task_state(leaf_id) == "completed"
@@ -946,14 +942,8 @@ async def test_firing_with_same_resolved_backend_stops_before_any_step_launches(
   firing = "2026-01-01T03:00:00+00:00"
   result = await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   leaf_id = result["leaf_session_id"]
-  deadline = asyncio.get_event_loop().time() + 20
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the distinct-backend failure report never arrived")
+  reports = await _wait_for_child_reports(
+      tree, manager.id, timeout=20, fail_msg="the distinct-backend failure report never arrived")
   # Nothing launched: the scripted backend was never built, and the admitted
   # position-0 Run stays registered but pid-less and terminal-less.
   assert builds == []
@@ -1026,14 +1016,8 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
   await tree.runs.record_finish(leaf_id, run0.id, outcome="success", exit_code=0)
 
   await reconcile_task_tree(cfg, tree)
-  deadline = asyncio.get_event_loop().time() + 20
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the recovery's distinct-backend failure report never arrived")
+  reports = await _wait_for_child_reports(
+      tree, manager.id, timeout=20, fail_msg="the recovery's distinct-backend failure report never arrived")
   # The next position never launched: no step-1 Run exists, no process started.
   records = tree.runs.list_run_records_sync(leaf_id)
   assert sorted(r.sequence_ref.position for r in records if r.sequence_ref) == [0]
@@ -1068,14 +1052,7 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
   scheduler = Scheduler(cfg, session_mgr)
   firing = "2026-01-01T03:00:00+00:00"
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
-  deadline = asyncio.get_event_loop().time() + 20
-  while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    if reports:
-      break
-    await asyncio.sleep(0.1)
-  else:
-    pytest.fail("the completion report never arrived")
+  reports = await _wait_for_child_reports(tree, manager.id, timeout=20, fail_msg="the completion report never arrived")
   summary = str(reports[0].get("summary"))
   assert "**selector result (fake):**" in summary
   assert "**reviewer result (codex-o3):**" in summary

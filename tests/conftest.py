@@ -156,7 +156,7 @@ from src.agents.backends.gemini_cli import GeminiCliBackend  # noqa: E402
 from src.agents.backends.opencode import OpenCodeBackend  # noqa: E402
 from src.agents.worker import Worker  # noqa: E402
 from src.api.cron import router as cron_router  # noqa: E402
-from src.api.deps import get_session_manager  # noqa: E402
+from src.api.deps import get_session_manager, get_task_manager  # noqa: E402
 from src.api.internal import router as internal_router  # noqa: E402
 from src.api.sessions import router as sessions_router  # noqa: E402
 from src.core import event_types as ET  # noqa: E402
@@ -979,6 +979,18 @@ def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
 def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   """make_router_client over the cron router, mounted at /api/cron."""
   return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
+
+
+def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
+  """TestClient mounting the cron router plus the sessions router (the scheduled listing and
+  unarchive endpoints) with cfg/session_mgr/tree as dependency overrides."""
+  app = FastAPI()
+  app.include_router(cron_router, prefix="/api/cron")
+  app.include_router(sessions_router, prefix="/api/sessions")
+  apply_config_overrides(app, cfg)
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  return TestClient(app)
 
 
 def page_initial_sessions(page_client: TestClient, session_id: str) -> list[dict]:
@@ -2186,6 +2198,26 @@ def write_nightly_prompt(home: Path, body: str) -> Path:
   p.parent.mkdir(parents=True, exist_ok=True)
   p.write_text(body, encoding="utf-8")
   return p
+
+
+def write_nightly_task(
+    home: Path, *, project: str | None = None, backend: str | None = None, repo: str | None = None) -> Path:
+  """Seed one healthy 'nightly' cron job (pointer-backed host file, as production files look)
+  and return its yaml path; the optional keys are the task fields the scheduler tests vary."""
+  prompt_path = write_nightly_prompt(home, "run nightly\n")
+  body: dict[str, Any] = {
+      "cron": "0 3 * * *",
+      "prompt_file": str(prompt_path),
+      "timezone": "America/Los_Angeles",
+      "enabled": True,
+  }
+  if project is not None:
+    body["project"] = project
+  if backend is not None:
+    body["backend"] = backend
+  if repo is not None:
+    body["repo"] = repo
+  return write_cron_task(home, "nightly", dump_yaml(body))
 
 
 def memory_entry_text(

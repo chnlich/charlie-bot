@@ -419,3 +419,7 @@ Known-alive symbols:
   registry's ids at startup. The name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
+- `voice_setup` (the module `src/core/voice_setup.py`) — reached by string:
+  `scripts/setup.sh` runs `python -m src.core.voice_setup enable` on GPU hosts, so the module
+  has no import-site reference anywhere in Python; a reference scan restricted to `.py`/`.js`
+  sources reads it as an unreferenced module.

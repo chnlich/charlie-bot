@@ -158,9 +158,6 @@ def _resolve_run_scoped_audience(token: str) -> str:
   A wrong-instance token names a session this home's sessions directory has
   never heard of, which is the same visible unknown-run refusal.
   """
-  # Deferred off the module wall (M98): this resolution is the only asyncio consumer.
-  import asyncio
-
   from src.core.credentials import configured_access_key
   from src.core.json_utils import load_model_meta
   from src.core.models import SessionMetadata
@@ -181,7 +178,8 @@ def _resolve_run_scoped_audience(token: str) -> str:
   # one shared active-Run predicate), no server process needed. events=None:
   # the store reads the live chat log directly (the sink's SessionManager read
   # serves the same file); nothing here writes.
-  store = RunStore(root, asyncio.Lock(), None, SessionAliasStore(root))
+  # control_lock None: this resolution never writes, so it pays no asyncio import.
+  store = RunStore(root, None, None, SessionAliasStore(root))
   run = store.read_run_sync(claims.session_id, claims.run_id)
   refusal = run_identity_refusal(run, store.load_events_sync(claims.session_id))
   if refusal is not None:

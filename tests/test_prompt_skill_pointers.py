@@ -38,7 +38,8 @@ def test_prompt_skill_references_resolve() -> None:
         rest = match.group("rest").rstrip(_TRAILING_PUNCTUATION)
         target = SKILLS_DIR / name / rest
         if not target.exists():
-          broken.append(f"{path.relative_to(ROOT)}:{lineno}: {match.group(0)} -> {target.relative_to(ROOT)} does not exist")
+          broken.append(
+              f"{path.relative_to(ROOT)}:{lineno}: {match.group(0)} -> {target.relative_to(ROOT)} does not exist")
 
   assert checked > 0, "no skills/<name>/<rest> reference found under prompts/ - the scan matched nothing"
   assert not broken, "prompts/ reference(s) under skills/ do not resolve in the repo:\n  " + "\n  ".join(broken)

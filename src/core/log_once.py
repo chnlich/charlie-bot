@@ -238,7 +238,7 @@ _ACCESS_EVENT_COLUMN = _pad_log_field("http_request", _EVENT_WIDTH)
 
 
 def log_http_request_line(
-    method: str, path: str, status: object, duration_ms: object, client: object, error: str | None = None) -> None:
+    method: str, path: str, status: object, duration_ms: object, client: object, error: str | None) -> None:
   """Print the access log line the configured chain renders for this event.
 
   The chain's other processors do nothing for this shape — the middleware

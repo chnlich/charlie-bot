@@ -649,7 +649,7 @@ def _run_sort_key(run: RunRecord) -> tuple[datetime, str]:
   return (started, run.id)
 
 
-def _encode_run_cursor(key: tuple[datetime, str], descending: bool = False) -> str:
+def _encode_run_cursor(key: tuple[datetime, str], descending: bool) -> str:
   """Opaque keyset cursor: base64url JSON of the (started_at, id) boundary.
 
   The page order rides inside the cursor so a cursor minted under one order

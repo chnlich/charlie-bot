@@ -454,7 +454,7 @@ def _new_access_key() -> str:
 
 
 def prepare_preview(
-    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None = None) -> PreviewSetup:
+    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None) -> PreviewSetup:
   """Validate every launch precondition and resolve the instance's identity; no writes.
 
   The environment still selects the source profile here: the backend entries and
@@ -1007,8 +1007,7 @@ def install_log_capture(log_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_preview_command(
-    home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None = None) -> None:
+def run_preview_command(home_raw: str, port: int, backend_id: str | None, add_backend_ids: list[str] | None) -> None:
   """Prepare, validate and run one foreground preview instance; returns after clean shutdown.
 
   Every refusal exits through :class:`PreviewRefusedError` before any write; the

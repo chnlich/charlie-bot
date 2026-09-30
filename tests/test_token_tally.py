@@ -1092,14 +1092,14 @@ def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
       session_ids=[],
       results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 6))])
   cache = tmp_path / "cache.json"
-  round_args = dict(
-      host="host-a",
-      claude_homes=claude.dirs,
-      codex_homes=codex.homes,
-      opencode_db=oc.db,
-      sessions_dir=cb.root,
-      cache_path=cache,
-  )
+  round_args = {
+      "host": "host-a",
+      "claude_homes": claude.dirs,
+      "codex_homes": codex.homes,
+      "opencode_db": oc.db,
+      "sessions_dir": cb.root,
+      "cache_path": cache,
+  }
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     assert tt.capture_usage(ledger, **round_args) == \
         {"Claude Code": 1, "Codex": 1, "opencode": 1, "charlie-bot": 1}

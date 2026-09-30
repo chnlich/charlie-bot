@@ -78,9 +78,8 @@ def segment_texts(snapshot: PromptSnapshot) -> list[str]:
 
 
 async def patched_refs(mgr: TaskTreeManager, session_id: str, subtree: str | None, node: str | None):
-  meta = await mgr.patch_task(
+  return await mgr.patch_task(
       session_id, PatchSessionTaskRequest(subtree_prompt=subtree, node_prompt=node), caller=OPERATOR)
-  return meta
 
 
 # ---------------------------------------------------------------------------
@@ -202,8 +201,7 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
     from src.core.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
     segments, _err = build_segments(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
-    snapshot = assemble_snapshot(segments)
-    return snapshot
+    return assemble_snapshot(segments)
 
   # The worker sees exactly root+mid subtree rules then its own node rule.
   worker_snapshot = await snapshot_for("worker1")

@@ -339,8 +339,7 @@ def _bearer(claims):
     token = sign_run_token(claims, key)
     # Lowercase key: the real Header object is case-insensitive; the plain
     # dict double must match the exact key require_caller reads.
-    request = type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
-    return request
+    return type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
 
 
 def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):

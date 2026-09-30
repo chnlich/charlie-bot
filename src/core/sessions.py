@@ -335,16 +335,37 @@ _TRIGGER_STATE_VERDICT_LIMIT = 1024
 _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
                                                 datetime | None]] = BoundedMemo(_TRIGGER_STATE_VERDICT_LIMIT)
 
+# The probe's trigger-dir walk memo: (trigger dir path, its st_mode) -> the
+# walk's (path, stat) pairs, signed on the directory's (mtime_ns, size). Every
+# trigger writer publishes by rename into the directory, so any pair-changing
+# write moves the directory's own stat pair (the rename-publish ground
+# TriggerManager.list_triggers states once) and the fresh per-file stat list
+# below is the only content witness; the scandir+stat phase rides the memo, the
+# phase the sidebar's 10th-poll sweep repeats for every active session. The
+# mode rides the key so a permission change misses into the scandir's own
+# error. Served lists are shared across calls — consumers treat them read-only.
+_TRIGGER_WALK_MEMO_LIMIT = 1024
+_trigger_walk_pairs: StatSignatureMemo[tuple[str, int],
+                                       list[tuple[str, os.stat_result]]] = StatSignatureMemo(_TRIGGER_WALK_MEMO_LIMIT)
 
-def _iter_trigger_stats(triggers_dir: str) -> list[tuple[str, os.stat_result]]:
+
+def _iter_trigger_stats(triggers_dir: str, dir_st: os.stat_result) -> list[tuple[str, os.stat_result]]:
   """The shared trigger-dir stat walk (src.core.triggers.iter_trigger_file_stats).
 
-  Reached lazily because src.core.triggers imports SessionManager from this
-  module, the same lazy seam the recap import below uses.
+  *dir_st* is the directory stat the caller holds from before its walk — the
+  memo's stat-before-read half. Reached lazily because src.core.triggers
+  imports SessionManager from this module, the same lazy seam the recap import
+  below uses.
   """
+  memo_key = (triggers_dir, dir_st.st_mode)
+  pairs = _trigger_walk_pairs.fresh(memo_key, dir_st)
+  if pairs is not None:
+    return pairs
   from src.core.triggers import iter_trigger_file_stats
 
-  return iter_trigger_file_stats(triggers_dir)
+  pairs = iter_trigger_file_stats(triggers_dir)
+  _trigger_walk_pairs.record(memo_key, dir_st, pairs)
+  return pairs
 
 
 def pending_trigger_state_sync(
@@ -387,7 +408,7 @@ def pending_trigger_state_sync(
     if verdict is not None and verdict[0] == dir_sig:
       return verdict[1], verdict[2]
   if walked is None:
-    walked = _iter_trigger_stats(triggers_str)
+    walked = _iter_trigger_stats(triggers_str, dst)
 
   pending_count = 0
   next_trigger_at: datetime | None = None
@@ -732,7 +753,7 @@ def _sidebar_probe_walk(
     dir_st = None
   if dir_st is not None and stat.S_ISDIR(dir_st.st_mode):
     trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
-    trigger_pairs = _iter_trigger_stats(triggers_str)
+    trigger_pairs = _iter_trigger_stats(triggers_str, dir_st)
     trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
   try:
     plans_st = os.stat(os.fspath(plans_path))

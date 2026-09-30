@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import stat
 from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -89,13 +90,50 @@ def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple
       yield entry.path, meta_path, st
 
 
+# The signature walk's dir-listing memo: (threads dir path, its st_mode) ->
+# the thread-dir and metadata.json path strings, signed on the directory's
+# (mtime_ns, size). Creating or removing a thread dir always moves the listing
+# directory's own mtime, so the fresh per-metadata stat below stays the only
+# content witness; only the scandir+is_dir+join phase rides the memo, the phase
+# the sidebar's 10th-poll sweep repeats for every active session. The mode
+# rides the key so a permission change misses into the scandir's own error.
+_THREAD_WALK_DIR_MEMO_LIMIT = 1024
+_thread_walk_dirs: StatSignatureMemo[tuple[str, int],
+                                     list[tuple[str, str]]] = StatSignatureMemo(_THREAD_WALK_DIR_MEMO_LIMIT)
+
+
 def walk_thread_meta_stats(threads_dir: Path, log_event: str) -> list[tuple[str, str, os.stat_result]]:
   """``(thread_dir, metadata.json path, stat)`` for every thread dir under *threads_dir*.
 
   The scandir+stat phase the sidebar probe's signature walk takes once and
-  hands to ``iter_recent_thread_metas``' walked branch.
+  hands to ``iter_recent_thread_metas``' walked branch. The name pairs serve
+  from the directory-state memo while the directory's stat pair holds; every
+  metadata.json stat is taken fresh per call.
   """
-  return list(_iter_thread_meta_stats(threads_dir, log_event))
+  dir_key = os.fspath(threads_dir)
+  try:
+    dir_st = os.stat(dir_key)
+  except OSError:
+    return []
+  if not stat.S_ISDIR(dir_st.st_mode):
+    return []
+  memo_key = (dir_key, dir_st.st_mode)
+  names = _thread_walk_dirs.fresh(memo_key, dir_st)
+  if names is None:
+    with os.scandir(dir_key) as entries:
+      names = [(entry.path, f"{entry.path}/{METADATA_NAME}") for entry in entries if entry.is_dir()]
+    _thread_walk_dirs.record(memo_key, dir_st, names)
+  rows: list[tuple[str, str, os.stat_result]] = []
+  for thread_dir, meta_path in names:
+    try:
+      st = os.stat(meta_path)
+    except FileNotFoundError:
+      continue  # thread dir without metadata.json (mid-creation) — nothing to read
+    except OSError as error:
+      log.debug(log_event, path=meta_path, error=str(error))
+      continue
+    rows.append((thread_dir, meta_path, st))
+  return rows
 
 
 def iter_recent_thread_metas(

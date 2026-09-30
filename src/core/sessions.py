@@ -692,8 +692,8 @@ def _sidebar_probe_walk(
     threads_dir: Path,
     triggers_dir: Path,
     plans_path: Path,
-    session_dir: Path | None = None,
-    is_task_node: bool = False,
+    session_dir: Path | None,
+    is_task_node: bool,
 ) -> tuple[tuple, _WalkedProbeInputs]:
   """Stat-only identity of every byte the sidebar probe reads, plus the walk's stat pairs.
 

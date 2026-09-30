@@ -52,7 +52,7 @@ from src.core.models import (
 )
 from src.core.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.core.process import cleanup_session_cgroup
-from src.core.scheduled_sessions import cron_subtree_roots
+from src.core.scheduled_sessions import chat_thread_subtree_roots, cron_subtree_roots
 from src.core.session_usage import SessionUsageResolver
 from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.core.tasks import create_logged_task
@@ -1032,6 +1032,7 @@ class SessionManager:
     # signature, or the sweep re-walks, so the map re-derives exactly when its
     # inputs can have moved and never wider.
     self._cron_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
+    self._chat_thread_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
@@ -1370,6 +1371,23 @@ class SessionManager:
       return cached[1]
     roots = cron_subtree_roots(metas)
     self._cron_subtree_memo = (metas, roots)
+    return roots
+
+  async def chat_thread_subtree_roots(self) -> dict[str, str]:
+    """The chat-thread subtree membership map over every session's stored metadata.
+
+    See :func:`src.core.scheduled_sessions.chat_thread_subtree_roots` for the
+    rule. The map reads the shared cached metas — chain and platform-origin
+    marks only, statuses never matter — so the sidebar lists classify their
+    rows with no second read and no copy, memoized on unchanged metas exactly
+    like :meth:`cron_subtree_roots` beside which it lives.
+    """
+    metas = await self._load_session_metas()
+    cached = self._chat_thread_subtree_memo
+    if cached is not None and cached[0] is metas:
+      return cached[1]
+    roots = chat_thread_subtree_roots(metas)
+    self._chat_thread_subtree_memo = (metas, roots)
     return roots
 
   async def list_archived_page(

@@ -253,6 +253,23 @@ class UsageLedger:
   ledger and an existing one keeps every row. No statement here deletes.
   """
 
+  # The page-rows memo, one entry for the one production ledger path: the rows
+  # serve repeat reads unchanged while the file sits byte-still. Validity rides
+  # three witnesses together -- the file's (size, mtime_ns) pair, this process's
+  # write generation, and the journal mode -- because each alone has a hole the
+  # next one covers:
+  #   * the stat pair moves on every committing writer's main-db rewrite (the
+  #     ledger runs the default rollback journal, never WAL, whose commits hide
+  #     in the -wal sidecar), but a forged pair equal to the stored one defeats it;
+  #   * the generation catches this process's own writes outright;
+  #   * a later journal-mode flip to WAL would silence future stat movement, so a
+  #     memo is stored and served only under a non-WAL mode.
+  # The (size, mtime_ns) gate is the same witness class the capture gates store
+  # (``capture_gates``), and an mtime_ns collision across two real writes is the
+  # accepted risk those gates already carry.
+  _rows_memo: tuple[str, tuple[int, int], int, list[LedgerRow], dict[str, str]] | None = None
+  _write_generation: int = 0
+
   def __init__(self, path: Path) -> None:
     self._path = Path(path)
     self._path.parent.mkdir(parents=True, exist_ok=True)
@@ -297,6 +314,7 @@ class UsageLedger:
                wal_size = excluded.wal_size, wal_mtime_ns = excluded.wal_mtime_ns,
                sig = excluded.sig""",
           (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
+    UsageLedger._write_generation += 1
 
   def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord]) -> int:
     """Store one file capture atomically and return the record count.
@@ -325,14 +343,27 @@ class UsageLedger:
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
+    UsageLedger._write_generation += 1
     return len(records)
 
   def model_rows(self) -> list[LedgerRow]:
     """The /token-usage page rows, aggregated from counted records only."""
     return self.model_rows_with_native_starts()[0]
 
+  def _file_stat_identity(self) -> tuple[int, int]:
+    """The ledger file's (size, mtime_ns) pair."""
+    st = self._path.stat()
+    return (st.st_size, st.st_mtime_ns)
+
+  def _journal_mode(self) -> str:
+    return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+
   def model_rows_with_native_starts(self) -> tuple[list[LedgerRow], dict[str, str]]:
     """The page rows plus each source's first native day, from one grouped pass.
+
+    Repeat reads while the ledger file sits byte-still since the last read are
+    served from the class-level memo (see its comment for the validity
+    witnesses); the grouped pass below runs only on a memo miss.
 
     Rows and accounts are both sorted by total descending, with the group keys as
     tiebreakers so the same ledger content always yields the same ordering.
@@ -343,6 +374,12 @@ class UsageLedger:
     NULLIF'd ``first``: an empty-ts native row must not MIN the source to the
     empty string the way a raw ``MIN(SUBSTR(ts, 1, 10))`` over the table did.
     """
+    identity = self._file_stat_identity()
+    generation = UsageLedger._write_generation
+    memo = UsageLedger._rows_memo
+    if (memo is not None and memo[0] == str(self._path) and memo[1] == identity and memo[2] == generation and
+        self._journal_mode() != "wal"):
+      return memo[3], memo[4]
     accs: dict[tuple[str, str], _ModelSum] = {}
     native_starts: dict[str, str] = {}
     for row in self._conn.execute(_MODEL_ROWS_SQL):
@@ -387,4 +424,11 @@ class UsageLedger:
         for (source, model), acc in accs.items()
     ]
     rows.sort(key=lambda r: (-r.total, r.source, r.model))
+    # Store only a read the file provably covered: the pre-read stat must survive
+    # to the post-read check (a writer in between would leave the read consistent
+    # with the pre-write state), and never under WAL, whose commits the stat pair
+    # cannot see.
+    if (generation == UsageLedger._write_generation and self._file_stat_identity() == identity and
+        self._journal_mode() != "wal"):
+      UsageLedger._rows_memo = (str(self._path), identity, generation, rows, native_starts)
     return rows, native_starts

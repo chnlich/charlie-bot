@@ -19,24 +19,18 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
-    apply_config_overrides,
     build_env,
     create_task,
     cron_d_dir,
     dump_yaml,
     make_legacy_cron_session,
+    make_sessions_listing_client,
+    make_sessions_listing_page_client,
     page_initial_sessions,
     walk_archived_pages,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api.deps import get_session_manager, get_task_manager, get_thread_manager
-from src.api.pages import router as pages_router
-from src.api.sessions import router as sessions_router
 from src.core.models import CreateSessionRequest, RunRecord, SessionStatus
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
 
 
@@ -61,26 +55,6 @@ def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool =
               "session_id": session_id,
           }),
       encoding="utf-8")
-
-
-def _api_client(cfg, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
-  return TestClient(app)
-
-
-def _page_client(cfg, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(pages_router)
-  apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
-  return TestClient(app)
 
 
 def _assert_bound_row(row: dict, task_name: str, *, enabled: bool) -> None:
@@ -116,7 +90,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   unbound = await manager("Plain root", "plain-1", "Synthetic")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   _write_bound_task(temp_home, "synthetic-paused", disabled_node.id, enabled=False)
-  client = _api_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
 
   for url in ("/api/sessions/", "/api/sessions/starred"):
     if url.endswith("starred"):
@@ -131,7 +105,10 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
     _assert_unbound_row(by_id[unbound.id])
 
   # The homepage's server-rendered sidebar carries the same answer.
-  rows = {row["id"]: row for row in page_initial_sessions(_page_client(cfg, session_mgr, tree, thread_mgr), unbound.id)}
+  rows = {
+      row["id"]: row for row in page_initial_sessions(
+          make_sessions_listing_page_client(cfg, session_mgr, tree, thread_mgr), unbound.id)
+  }
   _assert_bound_row(rows[bound.id], "synthetic-daily", enabled=True)
   _assert_bound_row(rows[disabled_node.id], "synthetic-paused", enabled=False)
   _assert_unbound_row(rows[unbound.id])
@@ -197,7 +174,7 @@ async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_g
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="synthetic-daily")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   await session_mgr.archive_session(bound.id)
-  client = _api_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
 
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
@@ -242,7 +219,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
     await session_mgr.archive_session(filler.id)
     fillers.append(filler)
 
-  client = _api_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
   archived: list[str] = []
   context: list[str] = []
   pages = walk_archived_pages(client)
@@ -288,7 +265,7 @@ async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, 
   await tree.runs.register_run(RunRecord(id="run-2", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-2", outcome="success")
 
-  client = _api_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
   seen: dict[str, dict] = {}
   for page in walk_archived_pages(client):
     for row in page["sessions"]:

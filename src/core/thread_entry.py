@@ -73,6 +73,11 @@ class ThreadPlatform:
   name: str
   display_name: str
   reply_event_type: str
+  # The command the reply-format contract (prompts/thread_reply_format.md)
+  # names for posting a reply. A summon prompt embeds that contract, so a
+  # summon whose content names the command was issued under it; the
+  # round-end audit enforces only that contract and leaves rounds issued
+  # under the earlier one alone.
   reply_command: str
   max_post_chars: int
   # The platform's scope doc under prompts/ (what personal information may
@@ -209,9 +214,13 @@ def summon_prompt_tail(platform: ThreadPlatform, platform_line: str, cfg: Charli
   prompts/thread_reply_format.md) are read fresh from prompts/ on every call —
   no caching, so an edit takes effect on the next summon. A missing or
   unreadable doc raises a ValueError naming the path; a prompt without all
-  three docs is never built. The platform-specific facts ride in through
-  *platform_line* and the scope doc name through *platform*; the red line and
-  the reply-format contract are shared unchanged across platforms.
+  three docs is never built. The reply-format contract defers the
+  platform-specific facts to *platform_line* — platform name, reply command,
+  per-message limit, and how linked pages reach readers (the shared
+  ``LINKED_PAGES_LINE``) — and each platform's entrypoint states its own line
+  and reuses the contract unchanged. The scope doc name rides in through
+  *platform*; the red line and the reply-format contract are shared unchanged
+  across platforms.
   """
   scope_doc = load_prompt_doc(
       cfg.charlie_bot_repo,

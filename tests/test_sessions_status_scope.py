@@ -227,10 +227,12 @@ class TestProbeWalkDirStateMemo:
     threads_dir, victim = _threads_tree(tmp_path)
     _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
     first = sigs["sid"]
-    os.utime(threads_dir, (1_000_000, 1_000_000))
     replacement = victim.with_name("metadata.json.new")
     replacement.write_text('{"status": "running"}', encoding="utf-8")
-    os.replace(replacement, victim)  # the rename lands in the thread dir, not in threads/
+    # the rename lands in the thread dir, not in threads/ — the listing dir's
+    # stat pair holds and the second walk rides the memo; only the fresh
+    # per-file stat may see the rewrite
+    os.replace(replacement, victim)
     _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
     second = sigs["sid"]
     assert _thread_entry(second, "t1") != _thread_entry(first, "t1")

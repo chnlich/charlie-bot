@@ -100,8 +100,7 @@ def chat_thread_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str
   itself is a member of its subtree (the sidebar's Threads view lists it).
   """
   return subtree_roots(
-      metas, lambda meta: meta.slack_origin is not None or meta.discord_origin is not None,
-      include_root=True)
+      metas, lambda meta: meta.slack_origin is not None or meta.discord_origin is not None, include_root=True)
 
 
 class ScheduledSessionBusyError(RuntimeError):

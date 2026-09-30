@@ -25,19 +25,14 @@ from conftest import (
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
-    apply_config_overrides,
     bind_deps_managers,
+    make_cron_sessions_client,
     make_legacy_cron_session,
     patch_instructions_content,
-    write_cron_task,
     write_nightly_prompt,
+    write_nightly_task,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from src.api.cron import router as cron_router
-from src.api.deps import get_session_manager, get_task_manager
-from src.api.sessions import router as sessions_router
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
 from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
 from src.core.scheduler import TASK_HANDLERS, Scheduler
@@ -57,25 +52,6 @@ from tests.test_task_execution import (
 )
 
 _NIGHTLY_PROMPT_MD = "run nightly\n"
-
-
-def _write_nightly_task(
-    home: Path, *, project: str | None = None, backend: str | None = None, repo: str | None = None) -> Path:
-  """Seed one healthy 'nightly' job (pointer-backed host file) and return its yaml path."""
-  prompt_path = write_nightly_prompt(home, _NIGHTLY_PROMPT_MD)
-  body: dict[str, Any] = {
-      "cron": "0 3 * * *",
-      "prompt_file": str(prompt_path),
-      "timezone": "America/Los_Angeles",
-      "enabled": True,
-  }
-  if project is not None:
-    body["project"] = project
-  if backend is not None:
-    body["backend"] = backend
-  if repo is not None:
-    body["repo"] = repo
-  return write_cron_task(home, "nightly", yaml.safe_dump(body, sort_keys=False))
 
 
 def _read_task_yaml(home: Path, name: str = "nightly") -> dict:
@@ -106,16 +82,6 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
   return cfg, session_mgr, tree, scheduler, temp_home
 
 
-def _cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
-  app = FastAPI()
-  app.include_router(cron_router, prefix="/api/cron")
-  app.include_router(sessions_router, prefix="/api/sessions")
-  apply_config_overrides(app, cfg)
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  return TestClient(app)
-
-
 # ---------------------------------------------------------------------------
 # The migration tick: bind, copy bookkeeping, write back, archive
 # ---------------------------------------------------------------------------
@@ -128,7 +94,7 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   after the task in the task's project group carrying the copied last run, the
   cron session is archived, and nothing fires at the migration moment."""
   _cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home, project="charlie", backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, project="charlie", backend=OPUS_BACKEND_ID)
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
   # A copied anchor whose next occurrence is always ahead of this tick, so the
   # migration itself fires nothing.
@@ -166,7 +132,7 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
 @pytest.mark.asyncio
 async def test_task_without_project_lands_ungrouped(tick_env) -> None:
   _cfg, _session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home)
+  write_nightly_task(home)
 
   await scheduler._tick()
 
@@ -253,7 +219,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   type-less repo-bound leaf that no test ever launched."""
   cfg, session_mgr, tree, scheduler, home = tick_env
   repo, _origin = init_repo_with_origin(tmp_path / "sweep-work")
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID, repo=str(repo))
+  write_nightly_task(home, backend=OPUS_BACKEND_ID, repo=str(repo))
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
   # Last ran at yesterday's 03:00 occurrence: today's 03:00 is due.
   cron_session.last_scheduled_run = "2026-06-07T03:00:00-07:00"
@@ -313,7 +279,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   tick again ends with exactly one node, one binding, and no active cron
   session for the task."""
   _cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home)
+  write_nightly_task(home)
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
   # A just-ran anchor: the next occurrence is always ahead, so no replayed tick
   # fires and the copied bookkeeping is observable verbatim.
@@ -373,7 +339,7 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
   month-long scan window must not hold the archive off."""
   from conftest import write_thread_meta
   cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home)
+  write_nightly_task(home)
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
   cron_session = await make_legacy_cron_session(session_mgr, "nightly")
@@ -403,14 +369,14 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
 @pytest.mark.asyncio
 async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
   _cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home)
+  write_nightly_task(home)
   await scheduler._tick()
   original_id = _read_task_yaml(home)["session_id"]
   # The user archived the node, then deleted the task and re-created it under
   # the same name without a binding.
   await tree.set_presentation(original_id, "hidden")
   (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").unlink()
-  _write_nightly_task(home)
+  write_nightly_task(home)
 
   await scheduler._tick()
 
@@ -438,13 +404,13 @@ async def test_cron_editor_backend_change_switches_bound_node_in_place(
   switches the node's backend in place."""
   cfg, session_mgr, tree, scheduler, home = tick_env
   _patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == OPUS_BACKEND_ID
 
-  with _cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 200
@@ -463,12 +429,12 @@ async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
   from src.core.thinking_state import mark_busy
   cfg, session_mgr, tree, scheduler, home = tick_env
   _patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
   mark_busy(node_id)
 
-  with _cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 409
@@ -481,7 +447,7 @@ async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
 @pytest.mark.asyncio
 async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -> None:
   _cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
@@ -507,11 +473,11 @@ async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
   """The user's archive action on a bound node stops its task: the single-key
   write flips only ``enabled`` in the task's yaml; the binding itself stays."""
   cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home, project="charlie")
+  write_nightly_task(home, project="charlie")
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
-  with _cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.delete(f"/api/sessions/{node_id}")
 
   assert response.status_code == 200
@@ -525,11 +491,11 @@ async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
 async def test_task_delete_leaves_its_node_active(tick_env) -> None:
   """Deleting the task unlinks the yaml only: the node stays active."""
   cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home)
+  write_nightly_task(home)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
-  with _cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.delete("/api/cron/tasks/nightly")
 
   assert response.status_code == 200
@@ -585,7 +551,7 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
   and the fresh native conversation's turn carries the fixed report prefix."""
   from src.core.master_trigger import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
 
@@ -626,7 +592,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   continues that conversation \u2014 no prefix, no reset notice, no recycle."""
   from src.core.master_trigger import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
-  _write_nightly_task(home, backend=OPUS_BACKEND_ID)
+  write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 

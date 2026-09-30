@@ -28,7 +28,7 @@ import json
 import os
 from typing import Literal
 
-RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
+from src.core.constants import RUN_TOKEN_ENV
 
 
 class RunTokenError(Exception):

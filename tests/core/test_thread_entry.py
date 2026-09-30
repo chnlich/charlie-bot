@@ -531,36 +531,50 @@ async def test_follow_message_revives_an_archived_session_and_arms_after_the_una
   assert order == ["unarchive", "broadcast", "create"]
 
 
-@pytest.mark.asyncio
-async def test_accept_summon_unarchive_broadcasts_the_task_tree_change() -> None:
-  adapter = FakeAdapter()
-  sessions = FakeSessions(_fake_meta())
-  sessions.meta.status = SessionStatus.ARCHIVED
-  triggers = FakeTriggers()
-  block = {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}
-  tasks: list[asyncio.Task] = []
+# The summon payload every summon-side test sends and reads back in the acks.
+_SUMMON_BLOCK = {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}
 
+
+async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
+                             tasks: list[asyncio.Task]) -> tuple[str, AsyncMock]:
+  """One fakechat summon under the file's standard double set: the trigger-master
+  mock, the logged-task spawner, and the field-recording CreateSessionRequest
+  stand-in. Drains the spawned round tasks and returns (session id, the awaited
+  trigger mock) for the summon-side asserts."""
   with (
-      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
+      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
+      # The model drops unknown fields again (extra="allow" is gone), so the
+      # stand-in records the keyword arguments the shared core passes and the
+      # assert reads the platform's origin field off them by name.
       patch("src.core.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
   ):
     sid = await accept_summon(
         adapter,
         None,
         sessions,
-        triggers,
+        FakeTriggers(),
         session_id="s1",
         label="Fakechat #c1",
         origin={
             "channel_id": "c1",
             "thread_ts": "t1"
         },
-        block=block,
+        block=_SUMMON_BLOCK,
         content="fakechat summon",
         user="u1",
     )
     await asyncio.gather(*tasks)
+  return sid, mock_trigger
+
+
+@pytest.mark.asyncio
+async def test_accept_summon_unarchive_broadcasts_the_task_tree_change() -> None:
+  sessions = FakeSessions(_fake_meta())
+  sessions.meta.status = SessionStatus.ARCHIVED
+  tasks: list[asyncio.Task] = []
+
+  sid, _ = await _run_accept_summon(sessions, FakeAdapter(), tasks)
 
   assert sid == "s1"
   assert sessions.meta.status == SessionStatus.ACTIVE
@@ -630,34 +644,9 @@ async def test_backfill_leaves_an_archived_session_without_unread_archived() -> 
 async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() -> None:
   adapter = FakeAdapter()
   sessions = FakeSessions(None)  # no session yet: the summon create resolves it
-  triggers = FakeTriggers()
-  block = {"channel_id": "c1", "thread_ts": "t1", "mention_id": "m1"}
   tasks: list[asyncio.Task] = []
 
-  with (
-      patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
-      patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
-      # The model drops unknown fields again (extra="allow" is gone), so the
-      # stand-in records the keyword arguments the shared core passes and the
-      # assert reads the platform's origin field off them by name.
-      patch("src.core.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
-  ):
-    sid = await accept_summon(
-        adapter,
-        None,
-        sessions,
-        triggers,
-        session_id="s1",
-        label="Fakechat #c1",
-        origin={
-            "channel_id": "c1",
-            "thread_ts": "t1"
-        },
-        block=block,
-        content="fakechat summon",
-        user="u1",
-    )
-    await asyncio.gather(*tasks)
+  sid, mock_trigger = await _run_accept_summon(sessions, adapter, tasks)
 
   assert sid == "s1"
   request = sessions.created[0]
@@ -668,9 +657,9 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
   summon_event = sessions.persisted[0]
   assert summon_event["type"] == ET.AGENT_MESSAGE
   assert summon_event["from_session_name"] == "Fakechat"
-  assert summon_event["fakechat"] == block
+  assert summon_event["fakechat"] == _SUMMON_BLOCK
   mock_trigger.assert_awaited_once()
   assert mock_trigger.await_args.args[0] == "s1"
   assert mock_trigger.await_args.kwargs["user_event_id"] == summon_event["id"]
-  assert adapter.acks == [block]
+  assert adapter.acks == [_SUMMON_BLOCK]
   assert sorted(task.get_name() for task in tasks) == ["fakechat-ack-s1", "fakechat-round-s1"]

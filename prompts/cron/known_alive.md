@@ -423,3 +423,11 @@ Known-alive symbols:
   `scripts/setup.sh` runs `python -m src.core.voice_setup enable` on GPU hosts, so the module
   has no import-site reference anywhere in Python; a reference scan restricted to `.py`/`.js`
   sources reads it as an unreferenced module.
+- `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
+  `src/cli/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
+  (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /
+  `self._decolor`), so the two assignments are what the stock `_set_color` would have
+  installed and the piped arm's help render depends on them: a formatter whose `_set_color`
+  installs neither attribute raises AttributeError on the first help render. Vulture flags
+  each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
+  delete them on that evidence.

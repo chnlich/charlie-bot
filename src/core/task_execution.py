@@ -43,7 +43,7 @@ import json
 import shutil
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -997,6 +997,40 @@ class TaskExecutionAdapter:
       await self._alert_overlay_inactive(meta.id, option, overlay_error)
     return snapshot
 
+  def _manager_finish_recorder(
+      self, session_id: str, run_id: str, option: BackendOption, transport_dir: Path, *,
+      ended_at: datetime | None) -> Callable[[str | None, int, dict], Awaitable[None]]:
+    """The finish recorder both manager-turn launch paths hand the master queue.
+
+    Records the run observation (native session id, served model, raw-log refs),
+    lands the terminal fact through ``dispatch.finish_run``, and re-drives the
+    node's pending inputs. ``ended_at=None`` keeps record_finish's
+    observed-write-time default; the resume follow passes the drain rule's end
+    time.
+    """
+
+    async def on_task_finish(cc_session_id: str | None, exit_code: int, finish_extras: dict) -> None:
+      await self._tree.runs.record_observation(
+          session_id,
+          run_id,
+          native_session_id=cc_session_id,
+          model=finish_extras.get("model") or option.model,
+          raw_log_ref=str(transport_dir / runs.RAW_LOG_NAME),
+          result_ref=str(transport_dir / runs.RAW_LOG_NAME),
+      )
+      await self._tree.dispatch.finish_run(
+          session_id,
+          run_id,
+          outcome="success" if exit_code == 0 else "failed",
+          exit_code=exit_code,
+          ended_at=ended_at,
+      )
+      # Inputs admitted during this turn waited for the serialized
+      # consumer; the turn's finish is what dispatches their next run.
+      await self._tree.dispatch.dispatch_pending(session_id)
+
+    return on_task_finish
+
   async def _execute_manager_turn(
       self,
       meta: SessionMetadata,
@@ -1076,24 +1110,7 @@ class TaskExecutionAdapter:
           model=option.model,
           reset_anchor=fresh_native)
 
-    async def on_task_finish(cc_session_id: str | None, exit_code: int, finish_extras: dict) -> None:
-      await self._tree.runs.record_observation(
-          session_id,
-          run_id,
-          native_session_id=cc_session_id,
-          model=finish_extras.get("model") or option.model,
-          raw_log_ref=str(transport_dir / runs.RAW_LOG_NAME),
-          result_ref=str(transport_dir / runs.RAW_LOG_NAME),
-      )
-      await self._tree.dispatch.finish_run(
-          session_id,
-          run_id,
-          outcome="success" if exit_code == 0 else "failed",
-          exit_code=exit_code,
-      )
-      # Inputs admitted during this turn waited for the serialized
-      # consumer; the turn's finish is what dispatches their next run.
-      await self._tree.dispatch.dispatch_pending(session_id)
+    on_task_finish = self._manager_finish_recorder(session_id, run_id, option, transport_dir, ended_at=None)
 
     await self._persist_launch_text(session_id, run_id, prompt)
     log.info(
@@ -1693,24 +1710,7 @@ class TaskExecutionAdapter:
     async def on_task_spawn(pid: int, pid_start: str | None) -> None:
       raise RuntimeError(f"resume follow of run {run.id} must not spawn a process")
 
-    async def on_task_finish(cc_session_id: str | None, exit_code: int, finish_extras: dict) -> None:
-      await self._tree.runs.record_observation(
-          meta.id,
-          run.id,
-          native_session_id=cc_session_id,
-          model=finish_extras.get("model") or option.model,
-          raw_log_ref=str(transport_dir / runs.RAW_LOG_NAME),
-          result_ref=str(transport_dir / runs.RAW_LOG_NAME),
-      )
-      await self._tree.dispatch.finish_run(
-          meta.id,
-          run.id,
-          outcome="success" if exit_code == 0 else "failed",
-          exit_code=exit_code,
-          ended_at=ended_at,
-      )
-      # Same serialized-input follow-up as a fresh manager turn.
-      await self._tree.dispatch.dispatch_pending(meta.id)
+    on_task_finish = self._manager_finish_recorder(meta.id, run.id, option, transport_dir, ended_at=ended_at)
 
     return await enqueue_master_resume(
         self._cfg,

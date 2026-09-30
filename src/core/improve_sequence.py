@@ -54,26 +54,26 @@ from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
 from src.core.runs import RUN_EVENTS_NAME
 
 if TYPE_CHECKING:
-    from src.core.task_sessions import TaskTreeManager
+  from src.core.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
 
 def loop_owner_ref(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> str:
-    """The sequence owner_ref of one improve loop: the loop directory, exactly
+  """The sequence owner_ref of one improve loop: the loop directory, exactly
     as the plan's sequence_ref contract names it ("owner_ref 指向该循环目录")."""
-    return str(improve_command._loops_dir(session_id, cfg) / str(loop_id))
+  return str(improve_command._loops_dir(session_id, cfg) / str(loop_id))
 
 
 def improve_child_request_id(loop_id: int) -> str:
-    """The stable create request_id of one improve loop's worker child."""
-    return f"improve:{loop_id}"
+  """The stable create request_id of one improve loop's worker child."""
+  return f"improve:{loop_id}"
 
 
 def iteration_run_request_id(loop_id: int, iteration: int) -> str:
-    """The stable run request_id of one iteration: a replayed finalization
+  """The stable run request_id of one iteration: a replayed finalization
     binds to the same Run, never a duplicate."""
-    return f"improve:{loop_id}:iter:{iteration}"
+  return f"improve:{loop_id}:iter:{iteration}"
 
 
 async def create_improve_child(
@@ -85,37 +85,37 @@ async def create_improve_child(
     repo_path: str | None,
     base_branch: str | None,
 ) -> SessionMetadata:
-    """Create (or re-admit) the loop's one worker child under the manager.
+  """Create (or re-admit) the loop's one worker child under the manager.
 
     Stable by request id: a replayed admission returns the original child. The
     child carries the loop goal as its task text and no task_type: the improve
     loop is its own deliverable kind, and the implement delivery policy
     (review + landing) is the delegate path's contract, not this one.
     """
-    return await tree.create_task(
-        request_id=improve_child_request_id(loop_id),
-        task_parent_id=session_id,
-        profile="worker",
-        task=TaskSpec(
-            goal=goal,
-            repo_path=repo_path,
-            base_branch=base_branch,
-            task_type=None,
-        ),
-        name=f"Improve loop {loop_id}",
-        backend=None,
-        caller="operator",
-    )
+  return await tree.create_task(
+      request_id=improve_child_request_id(loop_id),
+      task_parent_id=session_id,
+      profile="worker",
+      task=TaskSpec(
+          goal=goal,
+          repo_path=repo_path,
+          base_branch=base_branch,
+          task_type=None,
+      ),
+      name=f"Improve loop {loop_id}",
+      backend=None,
+      caller="operator",
+  )
 
 
 def _compose_iteration_description(goal: str, plan: str | None, previous_summaries: list[str]) -> str:
-    """The iteration description, composed exactly as the legacy controller's."""
-    parts = [goal]
-    if plan is not None:
-        parts.append(f"Plan:\n{plan}")
-    if previous_summaries:
-        parts.append(improve_command.ITERATION_SUMMARIES_HEADING + "\n\n".join(previous_summaries))
-    return "\n".join(parts)
+  """The iteration description, composed exactly as the legacy controller's."""
+  parts = [goal]
+  if plan is not None:
+    parts.append(f"Plan:\n{plan}")
+  if previous_summaries:
+    parts.append(improve_command.ITERATION_SUMMARIES_HEADING + "\n\n".join(previous_summaries))
+  return "\n".join(parts)
 
 
 async def register_iteration_run(
@@ -133,55 +133,59 @@ async def register_iteration_run(
     work_branch: str,
     worktree_path: str,
 ) -> RunRecord:
-    """Register one iteration Run with its full shared-worktree provenance.
+  """Register one iteration Run with its full shared-worktree provenance.
 
     The loop's single worktree, branch and base are pinned on the Run before
     launch, so the adapter never creates a worktree of its own and every
     iteration commits to the same branch the controller merges back. Stable by
     (child, request id): a replayed registration returns the original Run.
     """
-    run_id = stable_run_id(child_id, iteration_run_request_id(loop_id, iteration))
-    existing = await tree.runs.get_run(child_id, run_id)
-    if existing is not None:
-        return existing
-    record = RunRecord(
-        id=run_id,
-        session_id=child_id,
-        kind="iteration",
-        backend=resolved_backend,
-        model=resolved_model,
-        repo_path=repo_path,
-        base_branch=base_branch,
-        branch_name=work_branch,
-        worktree_path=worktree_path,
-        sequence_ref=SequenceRef(
-            kind="improve",
-            owner_ref=loop_owner_ref(session_id, loop_id, cfg),
-            position=iteration,
-        ),
-    )
-    async with tree.control_lock:
-        await tree.runs.register_run_locked(record, task_spec_text=None)
-    fresh = await tree.runs.get_run(child_id, run_id)
-    assert fresh is not None
-    return fresh
+  run_id = stable_run_id(child_id, iteration_run_request_id(loop_id, iteration))
+  existing = await tree.runs.get_run(child_id, run_id)
+  if existing is not None:
+    return existing
+  record = RunRecord(
+      id=run_id,
+      session_id=child_id,
+      kind="iteration",
+      backend=resolved_backend,
+      model=resolved_model,
+      repo_path=repo_path,
+      base_branch=base_branch,
+      branch_name=work_branch,
+      worktree_path=worktree_path,
+      sequence_ref=SequenceRef(
+          kind="improve",
+          owner_ref=loop_owner_ref(session_id, loop_id, cfg),
+          position=iteration,
+      ),
+  )
+  async with tree.control_lock:
+    await tree.runs.register_run_locked(record, task_spec_text=None)
+  fresh = await tree.runs.get_run(child_id, run_id)
+  assert fresh is not None
+  return fresh
 
 
 async def _iteration_blocker(
-    tree: TaskTreeManager, child_id: str, run_id: str, iteration: int, outcome: str,
+    tree: TaskTreeManager,
+    child_id: str,
+    run_id: str,
+    iteration: int,
+    outcome: str,
 ) -> tuple[str | None, str]:
-    """The failed iteration's quota blocker and summary, from its own event log.
+  """The failed iteration's quota blocker and summary, from its own event log.
 
     Reuses the legacy mechanical judgments over the Run's translated events —
     the same quota-shaped-event definition, no new matcher.
     """
-    events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
-    if not events_path.is_file():
-        return None, f"Iteration {iteration} {outcome} (no events log)."
-    blocker_reason, summary = await asyncio.to_thread(
-        improve_command._failed_iteration_judgments,
-        improve_command._newest_first_events(events_path), iteration, outcome)
-    return blocker_reason, summary
+  events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
+  if not events_path.is_file():
+    return None, f"Iteration {iteration} {outcome} (no events log)."
+  blocker_reason, summary = await asyncio.to_thread(
+      improve_command._failed_iteration_judgments, improve_command._newest_first_events(events_path), iteration,
+      outcome)
+  return blocker_reason, summary
 
 
 async def run_improve_sequence(

@@ -84,17 +84,8 @@ _ACCEPTANCE_REACTION = "eyes"
 # fallback only.
 _MAX_POST_CHARS = 40000
 
-# The command the reply-format contract (prompts/thread_reply_format.md) names
-# for posting a reply. A summon prompt embeds that contract, so a summon whose
-# content names the command was issued under it; the round-end audit enforces
-# only that contract and leaves rounds issued under the earlier one alone.
 _REPLY_COMMAND = "charliebot slack reply"
 
-# The summon prompt's platform line. The shared reply-format contract
-# (prompts/thread_reply_format.md) defers the platform-specific facts to
-# this line: platform name, reply command, per-message limit, and how
-# linked pages reach readers (the shared ``LINKED_PAGES_LINE``). Another
-# platform's entrypoint states its own line and reuses the contract unchanged.
 _PLATFORM_LINE = (
     f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
     f"Per-message limit: {_MAX_POST_CHARS} characters. {LINKED_PAGES_LINE}")

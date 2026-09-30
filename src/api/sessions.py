@@ -436,39 +436,67 @@ def apply_row_schedule(dump: dict, fields: dict) -> dict:
   return dump
 
 
-@router.get("/")
-async def list_sessions(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-) -> Response:
-  """List active sessions newest first, each legacy row followed by its worker-leaf rows.
+# The sidebar's root list renders pre-dumped rows and ships the gzip form from
+# a body-keyed memo; the limit covers one steady-state body per open tab.
+_SESSIONS_LIST_GZIP_MEMO_LIMIT = 4
 
-  Cron-subtree rows ride no listing: a firing leaf whose parent chain reaches a
-  cron session stays out, so a parentless leaf never flattens into a top-level
-  row. Every row's schedule fields come from the one join (row_schedule_fields).
+
+class _SessionsListMemos:
+  """One sidebar route's three render memos, held as attributes so the shared
+  render helper reads and stores through one object per route.
+
+  The Workspace route and the Threads route render the same row shape through
+  the same helper, and each owns a private holder — the whole-body slot, the
+  per-row render map, and the body-keyed gzip memo — so the two lists never
+  evict each other and one route's memo can never serve the other's body.
   """
-  global _sessions_list_whole_body
-  rows, derived = await session_mgr.list_sessions_readonly(
-      status=SessionStatus.ACTIVE,
-      scheduled=False,
-      include_running_status=True,
-      include_pending_trigger_status=True,
-      include_pending_plan_approval=True,
-  )
-  cron_subtree = await session_mgr.cron_subtree_roots()
-  rows = [row for row in rows if row.id not in cron_subtree]
+
+  def __init__(self) -> None:
+    self.gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
+    # One steady-state whole-body slot beside the gzip memo: the search
+    # route's _search_whole_body mechanism. The slot is only ever replaced whole.
+    self.whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
+    # The changed round's per-row render: row id -> (overlay state, schedule
+    # state, row, final payload dict). The slot holds the row, and a live
+    # reference pins its id(), so an id hit is that row and only that row; the
+    # manager's fresh check moves a row's identity exactly when its content
+    # moves, so a slot can never serve a stale row's fields, and the two state
+    # tuples in the slot re-state the render's remaining inputs. Payload dicts
+    # are handed to the JSON renderer uncopied and never mutated after the
+    # schedule join, which is what keeps a shared slot read-only. Pruned to
+    # the current projection after each changed round.
+    self.row_render: dict[int, tuple[tuple, tuple, SessionMetadata, dict]] = {}
+
+
+_workspace_list_memos = _SessionsListMemos()
+_chat_threads_list_memos = _SessionsListMemos()
+
+
+async def _sessions_list_response(
+    request: Request,
+    rows: list[SessionMetadata],
+    derived: dict[str, dict],
+    cfg: CharlieBotConfig,
+    thread_mgr: ThreadManager,
+    memos: _SessionsListMemos,
+) -> Response:
+  """Render one sidebar list body and serve it from the route's own memos.
+
+  The one render/memo body both sidebar routes share: each route selects its
+  rows (the membership rule is the route's own) and hands them over with the
+  listing's derived sidebar state; the helper projects the legacy worker-thread
+  leaves, joins the schedule fields, renders the changed round, and stores
+  every memo on *memos*. The readonly rows and the memoized leaves are
+  identity-stable across requests, so the rendered body keys on the row
+  identities plus the overlay states: a repeat of an unchanged corpus re-runs
+  zero dumps (the search route's whole-body memo mechanism) and a reloaded
+  meta or moved overlay state re-renders. The schedule join rides the same
+  key, so a cron config change or a passing next-run re-renders the bound
+  rows. A worker_thread row's fields are construction-fixed, so only the
+  parent rows carry overlay state.
+  """
   projected = await project_worker_threads(rows, cfg, thread_mgr)
   schedule_fields = row_schedule_fields((row.id for row in projected), datetime.now(UTC))
-  # The readonly rows and the memoized leaves are identity-stable across
-  # requests, so the rendered body keys on the row identities plus the overlay
-  # states: a repeat of an unchanged corpus re-runs zero dumps (the search
-  # route's whole-body memo mechanism) and a reloaded meta or moved overlay
-  # state re-renders. The schedule join rides the same key, so a cron config
-  # change or a passing next-run re-renders the bound rows. A worker_thread
-  # row's fields are construction-fixed, so only the parent rows carry overlay
-  # state.
   rendered: list[tuple[SessionMetadata, tuple, tuple]] = []
   for row in projected:
     schedule_state = tuple(schedule_fields[row.id].items())
@@ -496,13 +524,13 @@ async def list_sessions(
             schedule_state))
   list_rows = tuple(row for row, _s, _sched in rendered)
   list_states = tuple((state, schedule_state) for _row, state, schedule_state in rendered)
-  cached = _sessions_list_whole_body
+  cached = memos.whole_body
   if (cached is not None and len(cached[0]) == len(list_rows) and
       all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and cached[1] == list_states):
-    return await gzip_body_response(request, cached[2], {}, _sessions_list_gzip_memo)
+    return await gzip_body_response(request, cached[2], {}, memos.gzip_memo)
   payload = []
   for row, (state, schedule_state) in zip(list_rows, list_states, strict=True):
-    rendered = _sessions_list_row_render.get(id(row))
+    rendered = memos.row_render.get(id(row))
     if rendered is not None and rendered[0] == state and rendered[1] == schedule_state:
       payload.append(rendered[3])
       continue
@@ -518,19 +546,77 @@ async def list_sessions(
         # set stays byte-identical (the dump already carries the field's null).
         dump[sidebar_state.WORK_STATE] = work_state
     payload.append(apply_row_schedule(dump, dict(schedule_state)))
-    _sessions_list_row_render[id(row)] = (state, schedule_state, row, payload[-1])
-  if len(_sessions_list_row_render) > len(list_rows):
+    memos.row_render[id(row)] = (state, schedule_state, row, payload[-1])
+  if len(memos.row_render) > len(list_rows):
     # A row that left the projection (archived, completed, filtered) holds a
     # slot nothing will ever consult again; drop it so the map stays at the
     # corpus the route serves.
     live = {id(row) for row in list_rows}
-    for stale in [row_id for row_id in _sessions_list_row_render if row_id not in live]:
-      del _sessions_list_row_render[stale]
+    for stale in [row_id for row_id in memos.row_render if row_id not in live]:
+      del memos.row_render[stale]
   body = fast_json_bytes(payload)
-  _sessions_list_whole_body = (list_rows, list_states, body)
+  memos.whole_body = (list_rows, list_states, body)
   # The Response return skips response_model's jsonable_encoder pass over every
   # projected row; the body-keyed memo serves the middleware's deflate.
-  return await gzip_body_response(request, body, {}, _sessions_list_gzip_memo)
+  return await gzip_body_response(request, body, {}, memos.gzip_memo)
+
+
+@router.get("/")
+async def list_sessions(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> Response:
+  """List active sessions newest first, each legacy row followed by its worker-leaf rows.
+
+  Cron-subtree rows and the chat-thread subtree ride no listing: a firing leaf
+  whose parent chain reaches a cron session stays out, and so does every
+  Slack/Discord thread session with the descendants its ``task_parent_id``
+  chains reach (the sidebar's Threads view lists that subtree through
+  /chat-threads), so a parentless leaf never flattens into a top-level row.
+  Every row's schedule fields come from the one join (row_schedule_fields).
+  """
+  rows, derived = await session_mgr.list_sessions_readonly(
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
+  )
+  cron_subtree = await session_mgr.cron_subtree_roots()
+  chat_threads = await session_mgr.chat_thread_subtree_roots()
+  rows = [row for row in rows if row.id not in cron_subtree and row.id not in chat_threads]
+  return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _workspace_list_memos)
+
+
+@router.get("/chat-threads")
+async def list_chat_threads(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    thread_mgr: ThreadManager = Depends(get_thread_manager),
+) -> Response:
+  """List the active chat-thread subtree newest first: the sidebar Threads view's rows.
+
+  The complement of the Workspace root list over the same active corpus: the
+  only rows kept are the Slack/Discord thread sessions — a session carrying a
+  ``slack_origin`` or ``discord_origin`` — and every descendant their
+  ``task_parent_id`` chains reach, the projected legacy worker-thread leaves
+  included. Row shape, projection, schedule join, and render are the shared
+  helper's; the render memos are this route's own, so the two lists never
+  evict each other.
+  """
+  rows, derived = await session_mgr.list_sessions_readonly(
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
+  )
+  chat_threads = await session_mgr.chat_thread_subtree_roots()
+  rows = [row for row in rows if row.id in chat_threads]
+  return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _chat_threads_list_memos)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -1152,27 +1238,6 @@ _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIM
 async def _switch_payload_response(request: Request, payload: dict | list) -> Response:
   """Render a request-path payload once and serve its gzip form from the body-keyed memo."""
   return await gzip_body_response(request, fast_json_bytes(payload), {}, _switch_gzip_memo)
-
-
-# The sidebar's root list renders pre-dumped rows and ships the gzip form from
-# a body-keyed memo; the limit covers one steady-state body per open tab.
-_SESSIONS_LIST_GZIP_MEMO_LIMIT = 4
-_sessions_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SESSIONS_LIST_GZIP_MEMO_LIMIT)
-
-# One steady-state whole-body slot beside the gzip memo: the search route's
-# _search_whole_body mechanism. The slot is only ever replaced whole.
-_sessions_list_whole_body: tuple[tuple[SessionMetadata, ...], tuple, bytes] | None = None
-
-# The changed round's per-row render: row id -> (overlay state, schedule
-# state, row, final payload dict). The slot holds the row, and a live
-# reference pins its id(), so an id hit is that row and only that row; the
-# manager's fresh check moves a row's identity exactly when its content
-# moves, so a slot can never serve a stale row's fields, and the two state
-# tuples in the slot re-state the render's remaining inputs. Payload dicts
-# are handed to the JSON renderer uncopied and never mutated after the
-# schedule join, which is what keeps a shared slot read-only. Pruned to the
-# current projection after each changed round.
-_sessions_list_row_render: dict[int, tuple[tuple, tuple, SessionMetadata, dict]] = {}
 
 
 @router.get('/{session_id}/pending-triggers')

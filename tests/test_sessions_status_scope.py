@@ -142,8 +142,8 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sidebar_state.reset_for_tests()
   import src.api.sessions as sessions_api
 
-  sessions_api._sessions_list_whole_body = None
-  sessions_api._sessions_list_row_render.clear()
+  sessions_api._workspace_list_memos.whole_body = None
+  sessions_api._workspace_list_memos.row_render.clear()
   cfg = build_tui_sessions_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   await session_mgr.create_session(CreateSessionRequest(name="Steady"))
@@ -172,8 +172,8 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
     assert 0 < changed_dumps < full_dumps
 
     # byte parity: a forced full re-render of the same corpus and states
-    sessions_api._sessions_list_whole_body = None
-    sessions_api._sessions_list_row_render.clear()
+    sessions_api._workspace_list_memos.whole_body = None
+    sessions_api._workspace_list_memos.row_render.clear()
     counts["dump"] = 0
     forced = client.get("/api/sessions/")
     assert forced.status_code == 200
@@ -185,5 +185,5 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
     thinking_state.clear_busy(mover.id)
     after = client.get("/api/sessions/")
     assert after.status_code == 200
-    assert len(sessions_api._sessions_list_row_render) == len(after.json())
+    assert len(sessions_api._workspace_list_memos.row_render) == len(after.json())
     assert all(row["id"] != leaving.id for row in after.json())

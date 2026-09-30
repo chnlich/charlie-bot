@@ -71,7 +71,7 @@ STREAMING_BACKEND_TYPES = [t for t in BackendType if t is not BackendType.TUI_CL
 @pytest.mark.parametrize("backend_type", STREAMING_BACKEND_TYPES, ids=lambda t: t.value)
 async def test_run_records_stream_identity_and_result_truth(
     tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
-  from tests.test_task_execution import (
+  from conftest import (
       SpawningScriptedBackend,
       install_backends,
       result_event,
@@ -119,7 +119,7 @@ async def test_run_records_stream_identity_and_result_truth(
 @pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
 async def test_zero_output_and_error_results_fail_across_types(
     tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
-  from tests.test_task_execution import SpawningScriptedBackend, install_backends
+  from conftest import SpawningScriptedBackend, install_backends
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
   root = await tree.create_task(

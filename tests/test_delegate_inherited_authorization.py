@@ -17,19 +17,24 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from conftest import WORKER_BUILD_BACKEND_PATCH_TARGET, agent_headers, delegate_payload, stub_credentials
+from conftest import (
+    WORKER_BUILD_BACKEND_PATCH_TARGET,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
+    agent_headers,
+    delegate_payload,
+    install_backends,
+    result_event,
+    stub_credentials,
+)
 
 from src.core import event_types as ET
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import RunTokenClaims, sign_run_token
 from tests.test_task_execution import (
     OPERATOR,
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
     build_env,
     init_repo_with_origin,
-    install_backends,
-    result_event,
     wait_for_terminal_run,
 )
 

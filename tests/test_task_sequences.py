@@ -18,9 +18,13 @@ import pytest
 from conftest import (
     FABLE_MODEL,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
     create_task,
+    install_backends,
     patch_instructions_content,
     rate_limit_event,
+    result_event,
     stub_credentials,
 )
 
@@ -32,16 +36,12 @@ from src.core.runs import RUN_EVENTS_NAME
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     OPERATOR,
-    SpawningScriptedBackend,
     WorkerAccountRecorder,
-    _adapter_with_silent_broadcast,
     build_env,
     build_pooled_env,
     init_repo_with_origin,
-    install_backends,
     make_api_client,
     make_pm_build,
-    result_event,
 )
 
 

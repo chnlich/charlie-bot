@@ -19,7 +19,16 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from conftest import create_task, patch_instructions_content, run_git, stub_credentials
+from conftest import (
+    SpawningScriptedBackend,
+    _adapter_with_silent_broadcast,
+    create_task,
+    install_backends,
+    patch_instructions_content,
+    result_event,
+    run_git,
+    stub_credentials,
+)
 
 from src.agents.worker import GIT_STASH_GUARD_DIR
 from src.core import event_types as ET
@@ -236,13 +245,9 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Both launch paths hand the backend spawn a PATH led by the guard."""
   from tests.test_task_execution import (
-      SpawningScriptedBackend,
-      _adapter_with_silent_broadcast,
       build_env,
       init_repo_with_origin,
-      install_backends,
       make_pm_build,
-      result_event,
   )
 
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)

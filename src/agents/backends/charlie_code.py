@@ -26,6 +26,7 @@ from src.agents.backends.base import (
     resolve_binary,
 )
 from src.core import event_types as ET
+from src.core.constants import CHARLIE_CODE_API_KEY_ENV
 from src.core.log_once import LazyStructlogLogger
 
 log = LazyStructlogLogger()
@@ -137,7 +138,7 @@ class CharlieCodeBackend(AgentBackend):
     charlie_code_env = {**env}
     prepend_path_dir(charlie_code_env, USER_LOCAL_BIN)
     if self._api_key is not None:
-      charlie_code_env["CHARLIE_CODE_API_KEY"] = self._api_key
+      charlie_code_env[CHARLIE_CODE_API_KEY_ENV] = self._api_key
     if self._proxy_url is not None:
       apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env

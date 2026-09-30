@@ -21,15 +21,25 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # (src.cli.common.resolve_session_id). One spelling everywhere.
 SESSION_ID_ENV_VAR = "CHARLIEBOT_SESSION_ID"
 
+# Run-bearer env wire name: run_token reads the presented bearer from it and the
+# task executor writes the signed token into every spawned worker env. One
+# spelling everywhere, so the isolation boundary below names the constant.
+RUN_TOKEN_ENV = "CHARLIEBOT_RUN_TOKEN"
+
+# charlie-code child API-key injection name: the backend writes the configured
+# key into the child env under it. One spelling everywhere, so the isolation
+# boundary below names the constant the child is keyed with.
+CHARLIE_CODE_API_KEY_ENV = "CHARLIE_CODE_API_KEY"
+
 # Inherited CharlieBot identity/credential variables that must never reach an
 # isolated trial or its children: the server-side preview pops them when it
 # activates the preview profile (session_tree_preview.activate_preview_environment),
 # and the live-trial harnesses pop them from the harness environment before they
 # spawn the trial instance (scripts/browser_harness_session_tree_preview.py).
 INHERITED_IDENTITY_ENV_VARS = (
-    "CHARLIEBOT_SESSION_ID",
-    "CHARLIEBOT_RUN_TOKEN",
-    "CHARLIE_CODE_API_KEY",
+    SESSION_ID_ENV_VAR,
+    RUN_TOKEN_ENV,
+    CHARLIE_CODE_API_KEY_ENV,
     "CLAUDE_CODE_OAUTH_TOKEN",
     "ANTHROPIC_API_KEY",
 )

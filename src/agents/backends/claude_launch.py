@@ -45,7 +45,7 @@ def build_claude_argv(
     plugin_dir: str | None = None,
     model: str | None = None,
     effort: str | None = None,
-    disallowed_tools: list[str] | None = None,
+    disallowed_tools: list[str] | None,
     prompt: str | None = None,
 ) -> list[str]:
   """Assemble the `claude` CLI launch argv shared by the interactive launchers.

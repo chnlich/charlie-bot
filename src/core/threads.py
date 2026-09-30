@@ -91,13 +91,14 @@ class ThreadManager:
       # workers-panel poll scale linearly with thread count.
       if not threads_dir.is_dir():
         return []
-      return self._metas_from_stats(iter_thread_meta_stats(threads_dir))
+      return self._metas_from_stats(iter_thread_meta_stats(threads_dir), str(threads_dir))
 
     threads = [t for t in await asyncio.to_thread(load_all) if t is not None]
     threads.sort(key=lambda t: t.created_at, reverse=True)
     return threads
 
-  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
+  def list_threads_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]],
+                              threads_dir: str) -> list[ThreadMetadata | None]:
     """Parse-merge the pre-walked ``(metadata.json path, stat)`` pairs of one session.
 
     *pairs* must be a fresh walk of exactly the files the caller's freshness
@@ -107,12 +108,15 @@ class ThreadManager:
     that vanished before its read yields ``None`` at its position (the same
     no-thread-row verdict the walk's stat failure gives), so callers pairing
     metas back with pairs stay aligned. The parse memo is ``list_threads``'s:
-    a hit costs no read, a miss reads the file, and files absent from *pairs*
-    drop out of the memo.
+    a hit costs no read, a miss reads the file, and this session's files
+    absent from *pairs* drop out of the memo. *threads_dir* is the walked
+    directory's path — the drop's scope, and the only witness for an empty
+    walk (a vanished threads dir drops the session's every memoized file).
     """
-    return self._metas_from_stats(pairs)
+    return self._metas_from_stats(pairs, threads_dir)
 
-  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]]) -> list[ThreadMetadata | None]:
+  def _metas_from_stats(self, pairs: Iterator[tuple[str, os.stat_result]],
+                        threads_dir: str) -> list[ThreadMetadata | None]:
     walked: set[str] = set()
     metas: list[ThreadMetadata | None] = []
     for meta_path, st in pairs:
@@ -133,7 +137,14 @@ class ThreadManager:
       else:
         self._list_memo.record(meta_path, st, meta)
       metas.append(meta)
-    self._list_memo.drop_where(lambda key: key not in walked)
+    # The vanished-file drop covers this walk's own directory only: a metadata
+    # path under another session's threads dir belongs to that session's walk,
+    # whose next walk drops its own vanished files. A whole-memo drop here
+    # evicts them, so every interleaved session's walk re-reads and re-parses
+    # its full thread set (measured 3.2x on the six-session churn one sidebar
+    # poll pays, the memo holding one session's files after any rebuild).
+    prefix = threads_dir.rstrip("/") + "/"
+    self._list_memo.drop_where(lambda key: key.startswith(prefix) and key not in walked)
     return metas
 
   def thread_dir(self, session_id: str, thread_id: str) -> Path:

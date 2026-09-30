@@ -135,6 +135,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M128 tree-page activity derivation, warm-index repeat over the runs-bearing corpus | M128 collector below | seconds per repeat `GET /api/sessions/tree` request (warm index, warm caches) over the live corpus's task nodes with their run records (the record's metadata.json only — the derivation reads the record, never a run's raw log or events file); the first timed round is reported, not the metric — the cold pass just derived every node, so it reads the post-bump rebuild, not the repeat | repeat median < max(0.005 s, task nodes × 0.000025 s) (the after band reads 2.52-6.07 ms at 355-366 task nodes — 7-9.5 µs/node quiet, 16.6 µs/node in the load-3.46 round — over the memo-key checks; the line sits ~1.5× over the band top, the M119 line's convention, so a new per-node disk term trips it while host-load noise stays inside) | — (introduced with its first history row) |
 | M129 sidebar root-list changed round | M129 collector below | seconds per `GET /api/sessions/` request with a busy interval closed and the next opened since the previous request (the turn start/stop churn — `thinking_state.mark_busy`/`clear_busy` alternating over two active sessions between timed rounds; round 1 only opens, every later round moves two rows' states, so every round is a whole-body memo miss; scratch M119 corpus, live home read-only); the steady-state memo-hit serve is M119's reading, not this one — the production log shows the served shape is this miss nearly always (908 logged requests over 4.9 h, zero under 3 ms, the state churn the cron fleet and active turns pay) | median < max(0.005 s, rows × 0.0000200 s) (the after band reads 5.03-6.07 ms at 414 rows — 12.2-14.7 µs/row over the projection walk, the two moved rows' re-dumps, the payload assembly and the fresh deflate; the line sits 1.36-1.64× over the band, the M119 line's convention, so a new per-row disk term trips it while host-load noise stays inside; the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 | M130 token-usage opencode capture, fresh process | M130 collector below | seconds per fresh-process `capture_opencode` against the live opencode db (read-only, scratch ledger seeded by one capture; the db files byte-still across the timed rounds — the shape every server restart's first page load pays; files moving between rounds re-probe legitimately and the reading prices the probe, not the serve) | median < 0.005 s (the gate-hit band reads 0.13-0.17 ms — the db connection the gate skips plus two indexed ledger reads; the per-process probe it replaced reads 73.7-81.1 ms warm and 5.13 s on its first disk-cold run against the live 5.7 GB db, the scan the 2026-09-29 11:04 server log's 12.8 s first `/token-usage` load after the 11:00 restart carried; any probe returning to the fresh-process path trips the line ~15x) | — (introduced with its first history row) |
+| M131 sidebar root-list marked-session rebuild churn | M131 collector below | seconds per nine-round sequence of fresh marks: each round marks the six heaviest active thread-bearing sessions the way the workers' writes do and rebuilds each one's view rows (the seen-write rebuild the sidebar poll runs synchronously per marked session), live-corpus scratch copy | median < max(0.004 s, marked-sessions × 0.00022 s) (the after band reads 0.84-0.90 ms at six marked sessions — the line sits ~1.5x over it, the M119 line's convention; a regression to the whole-memo-drop shape reads 2.7-2.8 ms and trips 2.1x; the corpus-drift bias the M119 history documents applies) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -9154,7 +9155,95 @@ EOF
 ```
 
 
+M131 — sidebar root-list marked-session rebuild churn. The changed round the sidebar
+poll pays between the steady memo-hit rounds: every session whose worker wrote since the
+last poll rebuilds its projected leaf rows synchronously inside the poll (the seen-write
+contract `view_thread_rows` holds), and the rebuilds' parse-memo maintenance is the wall
+the sequence prices. The collector snapshots the live corpus's read set (every session's
+metadata.json plus the active thread-bearing sessions' thread metadata files, live home
+read once and never written), warms every thread session's rows, then times nine rounds of
+the six heaviest active thread sessions' mark-then-rebuild sequence — the exact calls
+`project_worker_threads` makes per marked session. The memo-survival witness rides the
+reading: the parse memo must hold the whole warmed corpus after the rounds, not the last
+session's files (the whole-memo drop the fix removed held one session's files after any
+rebuild):
+
+```bash
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import asyncio, json, os, shutil, sys, tempfile, time
+sys.path.insert(0, os.environ["CHECKOUT"])
+from pathlib import Path
+from src.core.config import CharlieBotConfig
+from src.core.sessions import SessionManager
+from src.core.sidebar_state import mark_sidebar_dirty
+from src.core.threads import ThreadManager
+import src.api.threads as threads_view
+
+# Live-corpus scratch copy: metadata.json for every session, thread metadata files for
+# the active thread-bearing sessions. Live home read once for the copy, never written;
+# nothing here spawns a worker or reads a cc_session_id.
+root = Path.home() / ".charliebot" / "sessions"
+home = Path(tempfile.mkdtemp(prefix="m131-churn-home-", dir="/tmp"))
+thread_sessions = []
+for d in root.iterdir():
+    meta_p = d / "metadata.json"
+    if not meta_p.is_file():
+        continue
+    try:
+        raw = json.loads(meta_p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        continue
+    dst = home / "sessions" / d.name
+    dst.mkdir(parents=True)
+    shutil.copy2(meta_p, dst / "metadata.json")
+    tdir = d / "threads"
+    if not tdir.is_dir() or raw.get("status") != "active":
+        continue
+    nt = 0
+    for td in tdir.iterdir():
+        tm = td / "metadata.json"
+        if tm.is_file():
+            (dst / "threads" / td.name).mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tm, dst / "threads" / td.name / "metadata.json")
+            nt += 1
+    if nt:
+        thread_sessions.append((d.name, nt))
+thread_sessions.sort(key=lambda pair: -pair[1])
+if len(thread_sessions) < 6:
+    raise SystemExit(0)  # no qualifying corpus prints nothing; the round treats the metric as unmeasured
+marked = [sid for sid, _nt in thread_sessions[:6]]
+
+cfg = CharlieBotConfig(charliebot_home=home)
+thread_mgr = ThreadManager(cfg)
+
+async def main():
+    # Warm every thread session's rows: the poll's steady state serves memos, and the
+    # timed rounds' rebuilds race nothing but the memo maintenance they price.
+    for sid, _nt in thread_sessions:
+        await threads_view.view_thread_rows(sid, cfg, thread_mgr)
+    walls = []
+    for _ in range(9):
+        t0 = time.perf_counter()
+        for sid in marked:
+            mark_sidebar_dirty(sid, path="/threads/x/metadata.json")
+            await threads_view.view_thread_rows(sid, cfg, thread_mgr)
+        walls.append((time.perf_counter() - t0) * 1e3)
+    walls.sort()
+    kept = len(thread_mgr._list_memo._entries)
+    warmed = sum(nt for _sid, nt in thread_sessions)
+    print(f"checkout {Path(os.environ['CHECKOUT']).name}: {len(marked)} marked sessions, "
+          f"{warmed} warmed thread files; marked-rebuild sequence median {walls[4]:.3f} ms, "
+          f"max {walls[-1]:.3f} ms over 9; parse memo holds {kept} of {warmed} entries")
+
+asyncio.run(main())
+shutil.rmtree(home, ignore_errors=True)
+EOF
+```
+
+
 ## Sampling history
+| 2026-09-30 | this PR | M131 sidebar root-list marked-session rebuild churn, introduced with its landing fix: the thread-parse memo's vanished-file drop (`ThreadManager._metas_from_stats`'s `drop_where`) scanned and evicted the WHOLE memo on every session rebuild — a metadata path outside the walked session's threads dir belongs to another session's walk, so every interleaved session's next walk re-read and re-parsed its full thread set, and the memo stabilized at the last rebuilding session's files. The drop now scopes to the walked session's own threads-dir prefix; a deleted thread of the walked session still drops (the existing deleted-thread contract test holds), and every other session's parsed files survive. Interleaved A/B, main checkout before vs branch worktree after back-to-back, three rounds each of the verbatim M131 collector over the live-corpus scratch copy (six heaviest active thread sessions marked per round, 10/7/5/4/3/2 threads): before 2.710-2.810 ms median, max 2.778-3.429 ms, memo 2 of 68 entries after every round; after 0.842-0.898 ms median (−68 % to −70 %), max 0.858-1.601 ms, memo 35 of 35 — every paired round faster, 9/9 timed rounds. Standing witnesses on the same pass, main before vs worktree after: M119 list serve 1.94 → 1.80 ms median with the byte-identical body digest 26291e4b11f0; M129 changed-round 5.99 → 5.71 ms median (the M129 digest differs run to run on the same checkout — the live-corpus snapshot drifts, decoded size stable at 858582 B); M5 threads/list 1 ms both arms. Production context: the server log's 2170 `GET /api/sessions/` requests read 45.31 ms average, 19 ms median, 1211 ms max over the 10.71 h window at load 0.46-0.84 one-minute, while the M119 steady corpus round reads 2.1 ms — the marked-session rebuilds the live churn marks between polls are the median's bulk, and this fix prices the term the M131 collector now watches | the whole-memo drop made every interleaved session's rebuild a full re-read and re-parse of its thread set: the sidebar poll's marked-session cost scaled with the whole active corpus's thread files instead of the marked session's changed files |
+
 | 2026-09-30 | this PR | M127 server stop latency, the Socket Mode session exit aborts the transport: stop median 1.37/1.42/1.37 → 0.36/0.36/0.36 s, max 1.42 → 0.36 s, slack_listener_ms 1005/1001/1006 → 0/0/0, the verbatim collector — main checkout before (d95fe412, the branch's base) vs branch worktree after, one 3-round collector run per arm, sequential not interleaved, quiet load | Slack's Socket Mode endpoint never answers a client close frame, so the ``websockets.connect`` context manager's graceful close waited out close_timeout (1.0 s) on every session exit — each server stop and each refresh reconnect; the session exit now aborts the transport, firing the connection-lost waiter the close wait polls, and the stop pays only the remaining shutdown steps |
 | 2026-09-29 | this PR | M88 direct-pass build, the validating parse fanned out: the child splits a pretty-printed trace at element-line anchors into byte ranges that each wrap into a standalone JSON document — the child parses the head chunk (with the traceEvents shape check) while short-lived helper processes parse the rest in parallel, and any chunk failure falls back to the whole-file parse, non-tail chunks require the element separator so a missing comma at a split point reaches the whole-file rejection, and a file the anchor rules cannot split (compact JSON, no usable element-line anchor) builds exactly as before; the artifact stays the original bytes compressed. Interleaved A/B, five rounds (arm order alternating before→after / after→before), main checkout before vs branch worktree after back-to-back, the same 334.3 MB / 865,974-event corpus, load 2.39-2.94 one-minute: build median 2.88/2.90/2.95/2.97/2.99 → 1.57/1.53/1.63/1.55/1.54 s (median-of-medians 2.95 → 1.55, −47 %, every paired round faster, bands disjoint), artifact 28.7 MB.gz both arms; the build-window stall sub-reading moves 5.25-5.75 → 5.76-6.77 ms max-gap median, both arms under the 0.020 s line. Healthy range recalibrated from median < 3.5 s to median < max(0.5 s, bytes ÷ 150 MB/s) (the definition row carries the band math); the stall sub-line unchanged. Witnesses: the direct-pass suite 8-passed (three pre-existing plus five new: split tiling with per-chunk parse and the head's shape check, chunked artifact identity, trailing sibling keys after traceEvents, a corrupt file failing loud through the fallback with the boundary-separator case driven at the split's own anchor, unsplittable shapes returning no split), ruff and yapf clean | the served first view of any large trace paid a serial full-file parse — 2.7 s of the 2.95 s build wall — although the parse only gates acceptance and the artifact is the original bytes compressed; a file whose trailing sibling keys are corrupt now reaches the same EXIT_PARSE_FAILED through the fallback, priced ~1 s of wasted fan-out before the authoritative whole-file parse — the rejection path's cost for the fast path's safety |
 | 2026-09-29 | this PR | M88 direct-pass build window's event-loop stall, introduced with this PR: the validating parse moved into a child process (`src/core/direct_pass_child.py`) — the parse holds the GIL for its whole run and the build ran on a server thread, so the in-process parse stalled the event loop, every concurrent request and WebSocket with it, for its whole duration; the compress had already left the process for that exact reason, and the child now runs both passes with the same overlap (the wall stays max(parse, compress)) while the parent maps the child's exit classes back onto the same error types the route's handler answered; verbatim collector, now reading the stall beside the wall (a 5 ms ticker rides the loop across each timed build, the M114 protocol), main checkout before vs branch worktree after back-to-back at load ~2 one-minute over the 334.3 MB worst corpus: max-gap median 2010.35 ms (worst 2014.41) → 5.50 ms (worst 6.31), −99.7 %, the loop running 568-582 ticks per build window where the stall shape ran ~57; wall band parity 2.96 → 2.98 s median (max 2.96 → 2.99), artifact 28.7 MB.gz both arms; no-regression witnesses interleaved: M99 import server 0.544/0.543/0.563 → 0.553/0.548/0.546 s medians over three paired rounds (band), M66 merged build 4.01 → 4.06 s median (band), M107 multi-trace build 5.58 → 5.00 s median with event-identity digest 479b669d84e7 identical across arms; child-contract tests added (artifact identity, NotATraceError on a manifest, loud ValueError on a truncated body); ruff and yapf clean | the fix's metric is the stall sub-reading the collector now carries: the build wall never showed the ~2 s full-server stall every first-view trace build paid |

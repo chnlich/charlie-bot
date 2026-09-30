@@ -29,6 +29,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from src.core import event_types as ET
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.core.models import TaskSpec
 from src.core.run_token import RunTokenClaims, sign_run_token
 from tests.test_task_execution import wait_for_terminal_run
@@ -334,9 +335,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   argv = call["command_args"]
   native_id = runs_first.native_session_id
   assert native_id.startswith(session_id + "-")
-  assert env["CHARLIEBOT_SESSION_ID"] == session_id
-  assert env["CHARLIEBOT_RUN_TOKEN"].count(".") == 1  # a signed run token
-  assert env["CHARLIEBOT_RUN_TOKEN"] != "tui-op-key"  # never the operator key
+  assert env[SESSION_ID_ENV_VAR] == session_id
+  assert env[RUN_TOKEN_ENV].count(".") == 1  # a signed run token
+  assert env[RUN_TOKEN_ENV] != "tui-op-key"  # never the operator key
   assert env["CHARLIEBOT_HOME"] == str(cfg.charliebot_home)
   assert argv[argv.index("--session-id") + 1] == native_id
   working_dir = Path(call["working_dir"])
@@ -353,7 +354,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   assert run_after_attach.native_session_id == native_id
   # The run credential is a scoped agent caller: its own task, never the
   # second instance's.
-  agent_headers = {"Authorization": f"Bearer {env['CHARLIEBOT_RUN_TOKEN']}"}
+  agent_headers = {"Authorization": f"Bearer {env[RUN_TOKEN_ENV]}"}
   scoped = client.get(f"/api/sessions/{session_id}", headers=agent_headers)
   assert scoped.status_code == 200, scoped.text
   other = client.get(f"/api/sessions/{other_task.id}", headers=agent_headers)
@@ -419,9 +420,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   relaunch_native = relaunch_argv[relaunch_argv.index("--session-id") + 1]
   assert relaunch_native.startswith(session_id + "-")
   assert relaunch_native != native_id  # the changed hash chose a fresh native context
-  assert relaunch_env["CHARLIEBOT_SESSION_ID"] == session_id
-  assert relaunch_env["CHARLIEBOT_RUN_TOKEN"].count(".") == 1
-  assert relaunch_env["CHARLIEBOT_RUN_TOKEN"] != "tui-op-key"
+  assert relaunch_env[SESSION_ID_ENV_VAR] == session_id
+  assert relaunch_env[RUN_TOKEN_ENV].count(".") == 1
+  assert relaunch_env[RUN_TOKEN_ENV] != "tui-op-key"
   stored2 = json.loads(Path(run2.prompt_snapshot_ref).read_text(encoding="utf-8"))
   assert stored2["prompt_hash"] != stored["prompt_hash"]
   joined2 = "\n\n".join(b["text"] for b in stored2["blocks"])

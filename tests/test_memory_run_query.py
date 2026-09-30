@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 from conftest import OPERATOR, make_home_config
 
+from src.core.constants import RUN_TOKEN_ENV
 from src.core.models import RunRecord, TaskSpec
 from src.core.run_token import RunTokenClaims, sign_run_token
 from src.core.sessions import SessionManager
@@ -73,9 +74,9 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str], token: str | None
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot", *argv])
   if token is None:
-    monkeypatch.delenv("CHARLIEBOT_RUN_TOKEN", raising=False)
+    monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
   else:
-    monkeypatch.setenv("CHARLIEBOT_RUN_TOKEN", token)
+    monkeypatch.setenv(RUN_TOKEN_ENV, token)
   out, err = io.StringIO(), io.StringIO()
   code = 0
   try:

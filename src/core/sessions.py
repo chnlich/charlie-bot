@@ -2560,35 +2560,6 @@ class SessionManager:
     """
     return self._chat_events.load_chat_events_sync(session_id)
 
-  async def _ensure_chat_events_cached(self, session_id: str) -> None:
-    """Cold-cache load for the finalize fold readers.
-
-    The fold reads raise on a cold cache (a fold exists exactly while the
-    events cache entry does), and the whole-file parse must stay off the event
-    loop, so a peek miss pays one threaded whole-file load here.
-    """
-    if self._chat_events.peek_cached_events(session_id) is None:
-      await asyncio.to_thread(self._chat_events.load_chat_events_sync, session_id)
-
-  async def finalize_summary_present(self, session_id: str, thread_id: str) -> bool:
-    """Whether the session's chat stream holds this thread's terminal worker_summary.
-
-    Serves the O(1) finalize fold on a warm cache; a cold cache pays one
-    threaded whole-file load (never an on-loop parse) before the fold read.
-    The live finalize chain's duplicate-summary check calls this per completion.
-    """
-    await self._ensure_chat_events_cached(session_id)
-    return self._chat_events.finalize_summary_present(session_id, thread_id)
-
-  async def finalize_master_woke(self, session_id: str, thread_id: str) -> bool:
-    """Whether any master output followed this thread's last terminal worker_summary.
-
-    Same fold-serve contract as :meth:`finalize_summary_present`; the wake
-    judgment calls this per completion before triggering the master.
-    """
-    await self._ensure_chat_events_cached(session_id)
-    return self._chat_events.finalize_master_woke(session_id, thread_id)
-
   def load_chat_events_tail(self, session_id: str, limit: int) -> tuple[list[dict], int, bool]:
     """Load only the last *limit* events from disk, bypassing the read-through cache.
 

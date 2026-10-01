@@ -1,10 +1,12 @@
 import asyncio
+import atexit
 import contextlib
 import importlib
 import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -39,8 +41,11 @@ if str(ROOT) not in sys.path:
 # ---------------------------------------------------------------------------
 # HOME points at a fresh throwaway home, so the suite can never read or write
 # the live ~/.charliebot (real sessions, credentials, cron config) and the
-# collection count is the same on the host and in CI.
-os.environ["HOME"] = tempfile.mkdtemp(prefix="charliebot-test-home-")
+# collection count is the same on the host and in CI. The process deletes it on
+# exit: every run creates one, and /tmp otherwise keeps them until reboot.
+_TEST_HOME = tempfile.mkdtemp(prefix="charliebot-test-home-")
+atexit.register(shutil.rmtree, _TEST_HOME, ignore_errors=True)
+os.environ["HOME"] = _TEST_HOME
 # A CharlieBot session's own identity leaks into CLI/API tests and flips them to
 # 'ambiguous session' refusals; the suite always starts unauthenticated.
 for _leaked in ("CHARLIEBOT_RUN_TOKEN", "CHARLIEBOT_HOME", "CHARLIEBOT_SESSION_ID"):

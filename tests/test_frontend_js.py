@@ -29,7 +29,7 @@ def run_node_js_test(node_test: Path, skip_reason: str) -> None:
     pytest.fail(f'Node tests failed.\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}')
 
 
-# Node suites that exceed the 1s unit budget on this measurement (a node
+# Node suites that exceed the 2s unit budget on this measurement (a node
 # subprocess plus its own suite runtime): each carries the integration marker
 # via pytest.param below instead of dragging every suite's case over the cap.
 _INTEGRATION_SUITES = {
@@ -40,6 +40,11 @@ _INTEGRATION_SUITES = {
     # re-renders up to ~2100 rows per load — the walk the 2000-row render cap
     # bounds, far past a unit test's shape.
     "test_archived_view.test.js",
+    # Node process startup plus the suite runtime measured 1.06-2.08s across
+    # runs on these two: over the 2s budget on a loaded host despite
+    # unit-shaped suites.
+    "chat_delegate_rendering.test.js",
+    "artifact_comment_drafts.test.js",
 }
 
 # One case per node suite on disk: the glob is the single source, so a suite file that

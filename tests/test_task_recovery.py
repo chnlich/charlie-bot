@@ -411,8 +411,8 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
 
 @pytest.mark.asyncio
 async def test_reconcile_replays_an_already_delivered_blocked_report_without_waking(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The startup pass never wakes a parent for an already delivered report.
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The startup pass never wakes a parent for an already delivered report.
 
     The production wake-replay: an implement child whose landing check keeps
     failing (a rebase rewrote the base) re-derives the same stable blocked
@@ -421,63 +421,73 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
     same state — two successful review runs, the report already in the
     parent's log — must append nothing and wake nobody.
     """
-    from src.core.task_recovery import reconcile_task_tree
+  from src.core.task_recovery import reconcile_task_tree
 
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path)
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend="fake")
-    worker = await tree.create_task(
-        request_id="w", task_parent_id=legacy.id, profile="worker",
-        task=TaskSpec(goal="add a marker", repo_path=str(repo), base_branch="main",
-                      task_type=TaskType.IMPLEMENT),
-        name="W", backend=None, caller="operator")
-    trigger, calls, fired = wake_probe()
-    monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-    patch_instructions_content(monkeypatch)
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend="fake")
+  worker = await tree.create_task(
+      request_id="w",
+      task_parent_id=legacy.id,
+      profile="worker",
+      task=TaskSpec(goal="add a marker", repo_path=str(repo), base_branch="main", task_type=TaskType.IMPLEMENT),
+      name="W",
+      backend=None,
+      caller="operator")
+  trigger, calls, fired = wake_probe()
+  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  patch_instructions_content(monkeypatch)
 
-    # The reviewer never pushes, so the landing check fails on every pass.
-    install_backends(
-        monkeypatch,
-        [SpawningScriptedBackend([result_event("implemented")],
-                                 pre_run=partial(implement_marker_commit, tree, worker.id)),
-         SpawningScriptedBackend([result_event("review ok")])],
-        WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The reviewer never pushes, so the landing check fails on every pass.
+  install_backends(
+      monkeypatch, [
+          SpawningScriptedBackend(
+              [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),
+          SpawningScriptedBackend([result_event("review ok")])
+      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    _work, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
-    assert outcome == "success"
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  _work, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
+  assert outcome == "success"
 
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
-        if reports:
-            break
-        await asyncio.sleep(0.05)
-    else:
-        pytest.fail("the review chain never reported to the legacy parent")
-    await asyncio.wait_for(fired.wait(), timeout=5)
-    assert len(calls) == 1
-    assert [r["outcome"] for r in reports] == ["blocked"]
-    assert tree.task_state(worker.id) == "open"
-
-    # The shape that woke the production parent twice per restart: a second
-    # successful review run of the same work run replays alongside the first.
-    work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
-    await tree.runs.register_run(RunRecord(
-        id="review-replay-2", session_id=worker.id, kind="review", review_of_run_id=work_run.id,
-        backend="fake", model="fake-model", repo_path=work_run.repo_path,
-        base_branch=work_run.base_branch, branch_name=work_run.branch_name))
-    await tree.runs.record_finish(worker.id, "review-replay-2", "success")
-
-    counters = await reconcile_task_tree(cfg, tree)
-    await drain_legacy_wakes()
-
-    assert counters["followups"] == 3  # the work run plus both review runs replayed
-    assert len(calls) == 1
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
-    assert len(reports) == 1
+    if reports:
+      break
+    await asyncio.sleep(0.05)
+  else:
+    pytest.fail("the review chain never reported to the legacy parent")
+  await asyncio.wait_for(fired.wait(), timeout=5)
+  assert len(calls) == 1
+  assert [r["outcome"] for r in reports] == ["blocked"]
+  assert tree.task_state(worker.id) == "open"
+
+  # The shape that woke the production parent twice per restart: a second
+  # successful review run of the same work run replays alongside the first.
+  work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
+  await tree.runs.register_run(
+      RunRecord(
+          id="review-replay-2",
+          session_id=worker.id,
+          kind="review",
+          review_of_run_id=work_run.id,
+          backend="fake",
+          model="fake-model",
+          repo_path=work_run.repo_path,
+          base_branch=work_run.base_branch,
+          branch_name=work_run.branch_name))
+  await tree.runs.record_finish(worker.id, "review-replay-2", "success")
+
+  counters = await reconcile_task_tree(cfg, tree)
+  await drain_legacy_wakes()
+
+  assert counters["followups"] == 3  # the work run plus both review runs replayed
+  assert len(calls) == 1
+  reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
+  assert len(reports) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -487,70 +497,66 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
 
 @pytest.mark.asyncio
 async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(f) A run_finished fact whose metadata write failed out of space: the
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(f) A run_finished fact whose metadata write failed out of space: the
     retry fills ended_at/exit_code from the raw log once space returns, and a
     boot reconcile fills them too — from the drain rule's values, once."""
-    import src.core.task_execution as task_execution_module
-    from src.core.task_recovery import reconcile_task_tree
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  import src.core.task_execution as task_execution_module
+  from src.core.task_recovery import reconcile_task_tree
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run_id = decision["run_id"]
-    run_dir = tree.runs.run_dir(worker.id, run_id)
-    staged: list = []
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run_id = decision["run_id"]
+  run_dir = tree.runs.run_dir(worker.id, run_id)
+  staged: list = []
 
-    def _stage_raw_log() -> None:
-        staged.append(write_raw_result(run_dir, "drained work result"))
+  def _stage_raw_log() -> None:
+    staged.append(write_raw_result(run_dir, "drained work result"))
 
-    # The finish's metadata write (the one carrying ended_at) fails out of
-    # space after the fact landed; the fault stages the drain's raw log.
-    inject_run_record_write_fault(monkeypatch, only_finished=True, times=1, on_raise=_stage_raw_log)
-    run, _outcome = await wait_for_terminal_run(tree, worker.id, run_id)
-    assert len(staged) == 1
-    raw_mtime = staged[0][1]
-    # (The half-written state itself is transient — the retry repairs it within
-    # the first round — and is staged explicitly for the boot half below.)
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    run = await tree.runs.get_run(worker.id, run_id)
-    assert run is not None
-    assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
-    assert run.exit_code == 0  # the raw log's successful result event
-    finished = [e for e in tree.fact_history(worker.id)
-                if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_id]
-    assert len(finished) == 1  # the retry never wrote a second end record
+  # The finish's metadata write (the one carrying ended_at) fails out of
+  # space after the fact landed; the fault stages the drain's raw log.
+  inject_run_record_write_fault(monkeypatch, only_finished=True, times=1, on_raise=_stage_raw_log)
+  run, _outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  assert len(staged) == 1
+  raw_mtime = staged[0][1]
+  # (The half-written state itself is transient — the retry repairs it within
+  # the first round — and is staged explicitly for the boot half below.)
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  run = await tree.runs.get_run(worker.id, run_id)
+  assert run is not None
+  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
+  assert run.exit_code == 0  # the raw log's successful result event
+  finished = [e for e in tree.fact_history(worker.id) if e.get("type") == ET.RUN_FINISHED and e.get("run_id") == run_id]
+  assert len(finished) == 1  # the retry never wrote a second end record
 
-    # A boot reconcile repairs the same shape too: a staged fact with empty
-    # metadata and a past-stamped raw log.
-    cfg2, session_mgr2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
-    tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_mgr2, tree2, monkeypatch)
-    patch_instructions_content(monkeypatch)
-    install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
-    boot_run_id = "run-half-written"
-    await tree2.runs.register_run(
-        RunRecord(id=boot_run_id, session_id=worker2.id, kind="work", backend="fake", model="fake-model"))
-    await tree2.dispatch.finish_run(worker2.id, boot_run_id, outcome="success", exit_code=0)
-    meta_path = tree2.runs.metadata_path(worker2.id, boot_run_id)
-    record = json.loads(meta_path.read_text(encoding="utf-8"))
-    record["ended_at"] = None
-    record["exit_code"] = None
-    meta_path.write_text(json.dumps(record), encoding="utf-8")
-    _raw, boot_mtime = write_raw_result(
-        tree2.runs.run_dir(worker2.id, boot_run_id), "boot result", age_seconds=1800)
-    await reconcile_task_tree(cfg2, tree2, tree2.dispatch.executor)
-    boot_run = await tree2.runs.get_run(worker2.id, boot_run_id)
-    assert boot_run is not None
-    assert boot_run.ended_at is not None and abs(boot_run.ended_at - boot_mtime) < timedelta(seconds=1)
-    assert boot_run.exit_code == 0
+  # A boot reconcile repairs the same shape too: a staged fact with empty
+  # metadata and a past-stamped raw log.
+  cfg2, session_mgr2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
+  tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_mgr2, tree2, monkeypatch)
+  patch_instructions_content(monkeypatch)
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
+  boot_run_id = "run-half-written"
+  await tree2.runs.register_run(
+      RunRecord(id=boot_run_id, session_id=worker2.id, kind="work", backend="fake", model="fake-model"))
+  await tree2.dispatch.finish_run(worker2.id, boot_run_id, outcome="success", exit_code=0)
+  meta_path = tree2.runs.metadata_path(worker2.id, boot_run_id)
+  record = json.loads(meta_path.read_text(encoding="utf-8"))
+  record["ended_at"] = None
+  record["exit_code"] = None
+  meta_path.write_text(json.dumps(record), encoding="utf-8")
+  _raw, boot_mtime = write_raw_result(tree2.runs.run_dir(worker2.id, boot_run_id), "boot result", age_seconds=1800)
+  await reconcile_task_tree(cfg2, tree2, tree2.dispatch.executor)
+  boot_run = await tree2.runs.get_run(worker2.id, boot_run_id)
+  assert boot_run is not None
+  assert boot_run.ended_at is not None and abs(boot_run.ended_at - boot_mtime) < timedelta(seconds=1)
+  assert boot_run.exit_code == 0
 
 
 @pytest.mark.asyncio

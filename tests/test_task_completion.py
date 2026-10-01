@@ -113,7 +113,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   meta_2 = index.metas[worker_2.id]
   assert tree.archived_of(index, meta_1) and tree.archived_of(index, meta_2)
   page = await tree.tree_page(parent_id=None, include_archived=True, limit=100, cursor=None)
-  project_row = [r for r in page["items"] if r["id"] == project.id][0]
+  project_row = next(r for r in page["items"] if r["id"] == project.id)
   assert project_row["task_state"] == "open"  # no parent closes because its children completed
 
   # The feature's manager consumes its two child reports before closing: they

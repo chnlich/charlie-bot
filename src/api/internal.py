@@ -290,15 +290,14 @@ async def delegate_task(
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit repo_path")
     if req.base_branch is not None:
       raise HTTPException(status_code=400, detail="verify delegations are repo-less; omit base_branch")
-  else:
-    # implement/quick-edit/script-run carry a repo, or neither field: a
-    # repo-less Run works from its Run directory, and a base without its repo
-    # (or the reverse) names a worktree that cannot exist.
-    if (req.repo_path is None) != (req.base_branch is None):
-      raise HTTPException(
-          status_code=400,
-          detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
-          "give both for a repo task, neither for a repo-less one")
+  # implement/quick-edit/script-run carry a repo, or neither field: a
+  # repo-less Run works from its Run directory, and a base without its repo
+  # (or the reverse) names a worktree that cannot exist.
+  elif (req.repo_path is None) != (req.base_branch is None):
+    raise HTTPException(
+        status_code=400,
+        detail=f"{req.task_type.value} delegations take repo_path and base_branch together; "
+        "give both for a repo task, neither for a repo-less one")
   require_found(await session_mgr.get_session(req.session_id))
   resolved_backend, resolved_model = await _authorize_spawn_request(req, session_mgr, task_mgr)
   return await _delegate_task_tree(req, task_mgr, session_mgr, caller, resolved_backend, resolved_model)

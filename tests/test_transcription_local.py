@@ -54,7 +54,7 @@ class _StubRecognizer:
 
   def decode_stream(self, stream: _StubStream) -> None:
     assert stream.samples is not None and stream.samples.size > 0
-    marker = int(round(float(stream.samples[0]) * 32768))
+    marker = round(float(stream.samples[0]) * 32768)
     self.enter_count += 1
     if self._on_enter is not None:
       self._on_enter(marker)

@@ -170,7 +170,7 @@ async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(tmp_path: 
     await asyncio.gather(*tasks)
 
   events = session_mgr.load_chat_events_sync(_sid(event))
-  content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
+  content = next(ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE)["content"]
   assert ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
           "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。") in content
   assert "Keep the summoner's PII out of everything this session posts to the thread." in content

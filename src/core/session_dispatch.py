@@ -57,7 +57,7 @@ def child_report_text(report: dict) -> str:
   """A child_report event as the parent's turn input: the typed header, then its summary."""
   return (
       f"[Report from task {report.get('child_session_id')} | "
-      f"outcome {report.get('outcome')}] {str(report.get('summary') or '')}")
+      f"outcome {report.get('outcome')}] {report.get('summary') or ''!s}")
 
 
 # The admitted input types a message route may produce. A run-token caller on

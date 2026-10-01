@@ -33,7 +33,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -80,142 +80,155 @@ WORKER_PHRASE = "SLOW-RUN-MARKER-Q7X2"
 
 
 class Shots:
-    """The screenshot sink ``evaluate``'s screenshot helper expects."""
+  """The screenshot sink ``evaluate``'s screenshot helper expects."""
 
-    def __init__(self, evidence_dir: Path) -> None:
-        self.evidence_dir = evidence_dir
+  def __init__(self, evidence_dir: Path) -> None:
+    self.evidence_dir = evidence_dir
 
 
 async def screenshot(cdp: CDP, session_id: str, shots: Shots, name: str) -> str:
-    res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
-    path = shots.evidence_dir / f"{name}.png"
-    path.write_bytes(base64.b64decode(res["data"]))
-    log(f"    screenshot: {path.name}")
-    return path.name
+  res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
+  path = shots.evidence_dir / f"{name}.png"
+  path.write_bytes(base64.b64decode(res["data"]))
+  log(f"    screenshot: {path.name}")
+  return path.name
 
 
 def git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
-    return proc.stdout.strip()
+  proc = subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True)
+  return proc.stdout.strip()
 
 
 def build_slow_repo(home: Path) -> Path:
-    """The ~60 s script-run repo: the worker runs slow_report.sh and reports it."""
-    repo = home / "workspaces" / "slow-repo"
-    build_synthetic_repo(repo)
-    (repo / "slow_report.sh").write_text(
-        "#!/usr/bin/env bash\n"
-        "set -euo pipefail\n"
-        f"sleep {SLOW_RUN_SECONDS}\n"
-        f"printf '%s\\n' '{WORKER_PHRASE}' > report.txt\n",
-        encoding="utf-8")
-    git(repo, "add", ".")
-    git(repo, "commit", "-q", "-m", "add slow_report.sh")
-    return repo
+  """The ~60 s script-run repo: the worker runs slow_report.sh and reports it."""
+  repo = home / "workspaces" / "slow-repo"
+  build_synthetic_repo(repo)
+  (repo / "slow_report.sh").write_text(
+      "#!/usr/bin/env bash\n"
+      "set -euo pipefail\n"
+      f"sleep {SLOW_RUN_SECONDS}\n"
+      f"printf '%s\\n' '{WORKER_PHRASE}' > report.txt\n",
+      encoding="utf-8")
+  git(repo, "add", ".")
+  git(repo, "commit", "-q", "-m", "add slow_report.sh")
+  return repo
 
 
-async def create_manager(base: str, key: str, name: str, goal: str,
-                         request_id: str) -> str:
-    status, created = request(base, key, "POST", "/api/sessions/", {
-        "request_id": request_id, "profile": "manager", "name": name,
-        "task": {"goal": goal}, "backend": None,
-    })
-    if status != 200:
-        fail(f"manager create failed: {status} {created}")
-    manager_id = created["id"]
-    log(f"  manager {name}: {manager_id}")
-    return manager_id
+async def create_manager(base: str, key: str, name: str, goal: str, request_id: str) -> str:
+  status, created = request(
+      base, key, "POST", "/api/sessions/", {
+          "request_id": request_id,
+          "profile": "manager",
+          "name": name,
+          "task": {
+              "goal": goal
+          },
+          "backend": None,
+      })
+  if status != 200:
+    fail(f"manager create failed: {status} {created}")
+  manager_id = created["id"]
+  log(f"  manager {name}: {manager_id}")
+  return manager_id
 
 
 async def takeoff(base: str, key: str, manager_id: str, request_id: str) -> str:
-    """A real takeoff turn: the user message the delegation gate reads."""
-    status, msg = request(base, key, "POST", f"/api/chat/{manager_id}/message",
-                          {"content": "Take off. Reply with exactly PREVIEW-READY and then stop.",
-                           "request_id": request_id})
-    if status not in (200, 202):
-        fail(f"manager message failed: {status} {msg}")
-    deadline = time.monotonic() + 120
-    while time.monotonic() < deadline:
-        status, page = request(base, key, "GET",
-                               f"/api/sessions/{manager_id}/runs?order=desc&limit=5")
-        for row in page.get("items", []):
-            if row.get("kind") == "manager_turn" and row.get("state") in ("success", "failed"):
-                if row["state"] != "success":
-                    fail(f"takeoff turn of {manager_id} ended {row['state']}")
-                return row["id"]
-        await asyncio.sleep(1.0)
-    fail(f"takeoff turn of {manager_id} never finished")
+  """A real takeoff turn: the user message the delegation gate reads."""
+  status, msg = request(
+      base, key, "POST", f"/api/chat/{manager_id}/message", {
+          "content": "Take off. Reply with exactly PREVIEW-READY and then stop.",
+          "request_id": request_id
+      })
+  if status not in (200, 202):
+    fail(f"manager message failed: {status} {msg}")
+  deadline = time.monotonic() + 120
+  while time.monotonic() < deadline:
+    status, page = request(base, key, "GET", f"/api/sessions/{manager_id}/runs?order=desc&limit=5")
+    for row in page.get("items", []):
+      if row.get("kind") == "manager_turn" and row.get("state") in ("success", "failed"):
+        if row["state"] != "success":
+          fail(f"takeoff turn of {manager_id} ended {row['state']}")
+        return row["id"]
+    await asyncio.sleep(1.0)
+  fail(f"takeoff turn of {manager_id} never finished")
 
 
-async def delegate(base: str, key: str, manager_id: str, description: str, repo: Path,
-                   task_type: str, request_id: str) -> tuple[str, str]:
-    status, body = request(base, key, "POST", "/api/internal/delegate", {
-        "session_id": manager_id,
-        "description": description,
-        "repo_path": str(repo),
-        "base_branch": "main",
-        "task_type": task_type,
-        "keep_worktree": False,
-        "request_id": request_id,
-    })
+async def delegate(base: str, key: str, manager_id: str, description: str, repo: Path, task_type: str,
+                   request_id: str) -> tuple[str, str]:
+  status, body = request(
+      base, key, "POST", "/api/internal/delegate", {
+          "session_id": manager_id,
+          "description": description,
+          "repo_path": str(repo),
+          "base_branch": "main",
+          "task_type": task_type,
+          "keep_worktree": False,
+          "request_id": request_id,
+      })
+  if status != 200:
+    fail(f"delegate failed: {status} {body}")
+  log(f"  worker {body['session_id']} run {body['run_id']}")
+  return body["session_id"], body["run_id"]
+
+
+async def wait_status(
+    base: str, key: str, ids: list[str], session_id: str, predicate, label: str, timeout: float = 60.0) -> dict:
+  """Poll /api/sessions/status until one node's payload satisfies *predicate*."""
+  deadline = time.monotonic() + timeout
+  last: dict = {}
+  while time.monotonic() < deadline:
+    status, payload = request(base, key, "GET", "/api/sessions/status?ids=" + ",".join(ids))
     if status != 200:
-        fail(f"delegate failed: {status} {body}")
-    log(f"  worker {body['session_id']} run {body['run_id']}")
-    return body["session_id"], body["run_id"]
-
-
-async def wait_status(base: str, key: str, ids: list[str], session_id: str, predicate,
-                      label: str, timeout: float = 60.0) -> dict:
-    """Poll /api/sessions/status until one node's payload satisfies *predicate*."""
-    deadline = time.monotonic() + timeout
-    last: dict = {}
-    while time.monotonic() < deadline:
-        status, payload = request(base, key, "GET",
-                                  "/api/sessions/status?ids=" + ",".join(ids))
-        if status != 200:
-            fail(f"status fetch failed: {status} {payload}")
-        last = payload.get(session_id, {})
-        if last and predicate(last):
-            return last
-        await asyncio.sleep(1.0)
-    fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
+      fail(f"status fetch failed: {status} {payload}")
+    last = payload.get(session_id, {})
+    if last and predicate(last):
+      return last
+    await asyncio.sleep(1.0)
+  fail(f"status of {session_id} never satisfied {label}; last={json.dumps(last, default=str)}")
 
 
 async def icon_hidden(cdp: CDP, page_id: str, sid: str, kind: str) -> bool:
-    """Whether one indicator element carries the hidden class (row may be collapsed)."""
-    value = await evaluate(cdp, page_id,
-                           f"document.getElementById('{kind}-{sid}')?.classList.contains('hidden')")
-    return bool(value)
+  """Whether one indicator element carries the hidden class (row may be collapsed)."""
+  value = await evaluate(cdp, page_id, f"document.getElementById('{kind}-{sid}')?.classList.contains('hidden')")
+  return bool(value)
 
 
-async def assert_icons(cdp: CDP, page_id: str, sid: str, visible: str | None,
-                       hidden: list[str], label: str, timeout: float = 30.0) -> None:
-    """Wait until one row's icon table reads exactly *visible* (+ nothing else).
+async def assert_icons(
+    cdp: CDP,
+    page_id: str,
+    sid: str,
+    visible: str | None,
+    hidden: list[str],
+    label: str,
+    timeout: float = 30.0) -> None:
+  """Wait until one row's icon table reads exactly *visible* (+ nothing else).
 
     The row's paint trails the API verdict by at most one status poll, so the
     assertion waits for the flip instead of sampling it; a timeout fails with
     the row's own words as evidence.
     """
-    deadline = time.monotonic() + timeout
-    last = ""
-    while time.monotonic() < deadline:
-        kinds = ("spinner", "worker-indicator", "waiting-indicator", "unread", "subtree-unread")
-        states = {kind: await icon_hidden(cdp, page_id, sid, kind) for kind in kinds}
-        ok = all(states[kind] for kind in hidden)
-        if ok and visible is not None:
-            ok = not states[visible]
-        if ok:
-            return
-        last = json.dumps(states)
-        await asyncio.sleep(0.5)
-    fail(f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
+  deadline = time.monotonic() + timeout
+  last = ""
+  while time.monotonic() < deadline:
+    kinds = ("spinner", "worker-indicator", "waiting-indicator", "unread", "subtree-unread")
+    states = {kind: await icon_hidden(cdp, page_id, sid, kind) for kind in kinds}
+    ok = all(states[kind] for kind in hidden)
+    if ok and visible is not None:
+      ok = not states[visible]
+    if ok:
+      return
+    last = json.dumps(states)
+    await asyncio.sleep(0.5)
+  fail(f"{label}: icons never reached the expected state ({last})\n{await icon_dump(cdp, page_id, sid)}")
 
 
 async def worker_facing_titles(cdp: CDP, page_id: str) -> list[str]:
-    """Every worker-facing title the live view paints: sidebar row names, the
+  """Every worker-facing title the live view paints: sidebar row names, the
     header session name, the transcript's per-Run header lines, and the
     Delegated cards' live-state lines. None may carry a raw Markdown heading."""
-    return list(await evaluate(cdp, page_id, """
+  return list(
+      await evaluate(
+          cdp, page_id, """
         (() => {
           const texts = [];
           document.querySelectorAll('.session-name').forEach(el => texts.push(el.textContent || ''));
@@ -229,9 +242,11 @@ async def worker_facing_titles(cdp: CDP, page_id: str) -> list[str]:
 
 
 async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
-    """The row's own words at icon-assertion time: the evidence a failure needs."""
-    try:
-        return str(await evaluate(cdp, page_id, f"""
+  """The row's own words at icon-assertion time: the evidence a failure needs."""
+  try:
+    return str(
+        await evaluate(
+            cdp, page_id, f"""
             JSON.stringify({{
               row: !!document.getElementById('session-{sid}'),
               rowHidden: document.getElementById('session-{sid}')?.closest('[data-tree-children]')?.classList.contains('hidden'),
@@ -242,8 +257,8 @@ async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
               errs: (window.__errs || []).slice(0, 3),
             }})
         """))
-    except Exception as exc:
-        return f"<dump failed: {exc!r}>"
+  except Exception as exc:
+    return f"<dump failed: {exc!r}>"
 
 
 async def run_harness(args: argparse.Namespace) -> None:

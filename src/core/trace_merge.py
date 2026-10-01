@@ -5,6 +5,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import mmap
+import os
 import re
 import shutil
 import subprocess
@@ -16,6 +17,7 @@ from typing import BinaryIO
 
 import orjson
 
+from src.core.direct_pass_child import _MIN_CHUNK_BYTES, _chunk_parse_input, _split_chunks
 from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 
@@ -38,6 +40,9 @@ _MERGE_BATCH_EVENTS = 512
 # one dict probe where `in` + indexing costs two. JSON can never produce this object.
 _NO_TID = object()
 
+# The flow phases whose id the walk remaps; the scan records the same events' ids.
+_FLOW_PHASES = frozenset({"s", "t", "f"})
+
 # Id space one member of a multi-trace merge may allocate: the member's
 # sequencers start at 1 + file_index * this stride, so parallel members never
 # collide, and the walk fails loudly at the bound (the largest observed trace
@@ -56,6 +61,9 @@ _MERGE_MEMBER_RSS_FACTOR = 8
 # — while 1 MB (this kernel's pipe-max-size) holds several batches, so a flush
 # completes without waiting and the compress overlaps the GIL-bound walk.
 _MERGE_PIPE_BYTES = 1 << 20
+
+# Chunk helpers parse one trace's chunks concurrently; the wave keeps one wave's parse peak beside the held trees.
+_MERGE_CHUNK_WAVE = 4
 
 
 class NotATraceError(ValueError):
@@ -196,24 +204,19 @@ def _parse_trace_document(path: Path) -> object:
       return orjson.loads(memoryview(mapped))
 
 
-def _merge_one_trace(
-    path: Path,
-    file_index: int,
-    batcher: _EventBatcher,
-    tid_seq: _IdSequencer,
-    flow_seq: _IdSequencer,
-    slim: bool,
-) -> None:
-  trace = _parse_trace_document(path)
-  events = _trace_events_or_raise(trace, path)
-  rank_label = _rank_label(path)
-  tid_seq.start_trace()
-  flow_seq.start_trace()
+def _thread_name_event(pid: object, tid: int, raw: object, rank_label: str) -> dict:
+  return {"ph": "M", "pid": pid, "tid": tid, "name": "thread_name", "args": {"name": f"{rank_label}/{raw}"}}
 
-  # pid_labels keys stay str(pid) — int 7 and "7" are one pid merged last-wins,
-  # the rule the readers always applied — while pid_map also carries one raw
-  # value per key, so the walk remaps with one dict probe per event; a
-  # str-keyed map paid a str() on every event of a ~500k-event corpus.
+
+def _admit(raw: object, table: dict[str, int], ordered: list[object]) -> None:
+  key = str(raw)
+  if key not in table:
+    table[key] = len(table) + 1
+    ordered.append(raw)
+
+
+def _collect_pid_labels(events: list[dict]) -> tuple[dict[str, str], dict[str, object]]:
+  """pid_labels keys stay str(pid) (int 7 and "7" are one pid, last-wins); raw_pids keeps one form per key."""
   pid_labels: dict[str, str] = {}
   raw_pids: dict[str, object] = {}
   for event in events:
@@ -222,6 +225,39 @@ def _merge_one_trace(
       key = str(pid)
       pid_labels[key] = event["args"].get("labels") or ""
       raw_pids.setdefault(key, pid)
+  return pid_labels, raw_pids
+
+
+def _walk_drops(event: dict, ph: object, slim: bool) -> bool:
+  """The walk's drop rule; the scan shares it — a scan-only sight shifts every synthetic id off the walk's."""
+  if ph == "M":
+    name = event.get("name")
+    if name and name.startswith("process_"):
+      return True
+  return slim and event.get("cat") == "cpu_instant_event"
+
+
+def _merge_one_trace(
+    trace: object,
+    path: Path,
+    file_index: int,
+    batcher: _EventBatcher,
+    tid_seq: _IdSequencer,
+    flow_seq: _IdSequencer,
+    slim: bool,
+    labels_in: tuple[dict[str, str], dict[str, object]] | None = None,
+    marked_tids: set[object] | None = None,
+    emit_tail: bool = True,
+) -> None:
+  """Walk one parsed trace's events into *batcher*, remapped to synthetic ids.
+
+  The caller parses and owns the per-trace sequencer resets; *labels_in* replaces the process_labels
+  collection, *marked_tids* names the raw tid forms whose ``thread_name`` this call emits, *emit_tail*
+  gates the trailing process_ metadata (only the last chunk emits it)."""
+  events = _trace_events_or_raise(trace, path)
+  rank_label = _rank_label(path)
+
+  pid_labels, raw_pids = labels_in if labels_in is not None else _collect_pid_labels(events)
 
   pid_map: dict[object, str] = {}
   synthetic_meta: dict[str, tuple[int, str]] = {}
@@ -255,11 +291,7 @@ def _merge_one_trace(
 
   for event in events:
     ph = event.get("ph")
-    if ph == "M":
-      event_name = event.get("name")
-      if event_name and event_name.startswith("process_"):
-        continue
-    if slim and event.get("cat") == "cpu_instant_event":
+    if _walk_drops(event, ph, slim):
       continue
     if slim and isinstance(event.get("args"), dict):
       if "stream" in event["args"]:
@@ -286,26 +318,26 @@ def _merge_one_trace(
           # First sight: the sequencer allocates and inserts; the thread_name
           # rides the same first sight instead of a second per-event set probe.
           synthetic_tid = tid_seq(original_tid)
-          pending_append(
-              {
-                  "ph": "M",
-                  "pid": event["pid"],
-                  "tid": synthetic_tid,
-                  "name": "thread_name",
-                  "args": {
-                      "name": f"{rank_label}/{original_tid}"
-                  },
-              })
+          pending_append(_thread_name_event(event["pid"], synthetic_tid, original_tid, rank_label))
           if len(pending) >= batch_bound:
             batcher_flush(pending)
         tid_raw_map[original_tid] = synthetic_tid
       event["tid"] = synthetic_tid
-    if ph in {"s", "t", "f"} and "id" in event:
+      if marked_tids is not None and original_tid in marked_tids:
+        # The pre-loaded map never misses: the chunked walk's only thread_name emitter, once per form.
+        marked_tids.discard(original_tid)
+        pending_append(_thread_name_event(event["pid"], synthetic_tid, original_tid, rank_label))
+        if len(pending) >= batch_bound:
+          batcher_flush(pending)
+    if ph in _FLOW_PHASES and "id" in event:
       event["id"] = flow_seq(event["id"])
     pending_append(event)
     if len(pending) >= batch_bound:
       batcher_flush(pending)
 
+  if not emit_tail:
+    batcher_flush(pending)
+    return
   meta_tid = tid_seq("meta")
   for synthetic_pid, (sort_index, label) in synthetic_meta.items():
     for name, args in (
@@ -360,15 +392,156 @@ def merge_traces(paths: list[Path], out_path: Path, slim: bool) -> None:
 
 
 def _merge_all(paths: list[Path], out_path: Path, slim: bool) -> None:
-  tid_seq = _IdSequencer(1)
-  flow_seq = _IdSequencer(1)
+  if len(paths) == 1 and _merge_single_trace_chunked(paths[0], out_path, slim):
+    return
+  tid_seq, flow_seq = _IdSequencer(1), _IdSequencer(1)
   with _gzip_output_stream(out_path) as output:
     output.write(b'{"traceEvents":[')
     batcher = _EventBatcher(output)
     for file_index, path in enumerate(paths):
       # Each walk flushes its own pending list before returning.
-      _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
+      tid_seq.start_trace()
+      flow_seq.start_trace()
+      _merge_one_trace(_parse_trace_document(path), path, file_index, batcher, tid_seq, flow_seq, slim)
     output.write(b"]}")
+
+
+class _ChunkHelperError(RuntimeError):
+  """A chunk helper failed; the chunked build answers it with the sequential walk."""
+
+
+def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
+  """Build one trace's merged artifact with chunk-parallel helpers; False falls back.
+
+  Each helper parses once, holds its tree, reports its chunk's labels and first-sight tid/flow forms,
+  and waits for the parent's id maps; the maps match the sequential walk's allocation order —
+  byte-identical artifact; any failure falls back."""
+  size = path.stat().st_size
+  split = _split_chunks(path, size, _MIN_CHUNK_BYTES)
+  if split is None:
+    return False
+  object_form, indent, starts = split
+  ends = [*starts, size]
+  count = len(ends)
+  member_dir = None
+  helpers: list[subprocess.Popen] = []
+  # PYTHONPATH pins the helper's src.* imports to this build's checkout, not the venv's editable install.
+  helper_env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
+  try:
+    member_dir = Path(tempfile.mkdtemp(prefix="merge-chunks-"))
+    fragments = [member_dir / f"{index}.jsonl" for index in range(count)]
+    reports = []
+    for wave_start in range(0, count, _MERGE_CHUNK_WAVE):
+      wave_at = len(helpers)
+      for index in range(wave_start, min(wave_start + _MERGE_CHUNK_WAVE, count)):
+        spec = [
+            str(path), 0 if index == 0 else ends[index - 1], ends[index], index, count, object_form,
+            indent.decode(), slim, index == count - 1,
+            str(fragments[index])
+        ]
+        argv = [sys.executable, str(Path(__file__).resolve()), "--merge-chunk", orjson.dumps(spec).decode()]
+        helpers.append(
+            subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=helper_env))
+      for proc in helpers[wave_at:]:
+        line = proc.stdout.readline()
+        if not line:
+          raise _ChunkHelperError(f"chunk helper rc={proc.wait()} died before its report")
+        reports.append(orjson.loads(line))
+
+    # The id maps the sequential walk would have built; allocation order is its first-sight order.
+    pid_labels, raw_pids, tid_map, tid_raw, flow_map, flow_raw = {}, {}, {}, [], {}, []
+    prefixes = []
+    for report in reports:
+      # Deduped: a re-reported form must not inflate the prefix the marked rule reads.
+      prefixes.append(len(tid_map))
+      for key, label, raw in report[0]:
+        pid_labels[key] = label
+        raw_pids.setdefault(key, raw)
+      for raw in report[2]:
+        _admit(raw, flow_map, flow_raw)
+      for raw in report[1]:
+        _admit(raw, tid_map, tid_raw)
+    labels = [[key, label, raw_pids[key]] for key, label in pid_labels.items()]
+    instruction = orjson.dumps(
+        [
+            labels, [[raw, tid_map[str(raw)]] for raw in tid_raw], [[raw, flow_map[str(raw)]] for raw in flow_raw],
+            prefixes
+        ]).decode()
+    for proc in helpers:
+      proc.stdin.write(instruction + "\n")
+      proc.stdin.close()
+    for proc in helpers:
+      if proc.wait() != 0:
+        raise _ChunkHelperError(f"chunk helper rc={proc.returncode}: {proc.stderr.read().strip()[:200]}")
+
+    with _gzip_output_stream(out_path) as output:
+      output.write(b'{"traceEvents":[')
+      emitted = False
+      for fragment in fragments:
+        if fragment.stat().st_size:
+          output.write(b"," if emitted else b"")
+          with fragment.open("rb") as fragment_file:
+            shutil.copyfileobj(fragment_file, output)
+          emitted = True
+      output.write(b"]}")
+    return True
+  except (_ChunkHelperError, OSError, ValueError) as exc:
+    # A dead helper leaves no verdict: kill the rest (a blocked report write hangs a graceful close).
+    for proc in helpers:
+      proc.kill(), proc.wait()
+    log.warning("perfetto_merge_chunk_fallback", path=str(path), reason=str(exc)[:300])
+    return False
+  finally:
+    if member_dir is not None:
+      shutil.rmtree(member_dir, ignore_errors=True)
+
+
+def _merge_chunk_main(argv: list[str]) -> int:
+  """One chunk helper: parse and hold its chunk, report, wait for the maps, build.
+
+  The report must cross exactly the stream the build walk crosses; an empty stdin read means the parent died."""
+  import gc
+
+  path, start, end, index, count, object_form, indent, slim, last, fragment = orjson.loads(argv[0])
+  path, fragment_path, indent = Path(path), Path(fragment), indent.encode()
+  try:
+    gc.disable()
+    doc = orjson.loads(_chunk_parse_input(path, start, end, index, count, object_form, indent))
+    events = _trace_events_or_raise(doc, path)
+  except ValueError as error:  # orjson decode errors and NotATraceError are ValueError subclasses
+    print(f"chunk {index} failed to parse: {error}", file=sys.stderr)
+    return 1
+  pid_labels, raw_pids = _collect_pid_labels(events)
+  tids, flows, tid_keys, flow_keys = [], [], {}, {}
+  for event in events:
+    ph = event.get("ph")
+    if _walk_drops(event, ph, slim):
+      continue
+    raw_tid = event.get("tid", _NO_TID)
+    if raw_tid is not _NO_TID:
+      _admit(raw_tid, tid_keys, tids)
+    if ph in _FLOW_PHASES and "id" in event:
+      _admit(event["id"], flow_keys, flows)
+  report = [[key, label, raw_pids[key]] for key, label in pid_labels.items()]
+  sys.stdout.write(orjson.dumps([report, tids, flows]).decode() + "\n")
+  sys.stdout.flush()
+  line = sys.stdin.readline()
+  if not line:
+    print("chunk helper: parent died before the id maps arrived", file=sys.stderr)
+    return 3
+  labels_in, tid_pairs, flow_pairs, prefixes = orjson.loads(line)
+  # Pre-loaded maps carry every id the walk would allocate; an id above the chunk's prefix marks its form.
+  pid_labels = {key: label for key, label, _ in labels_in}
+  raw_pids = {key: raw for key, _, raw in labels_in}
+  tid_seq, flow_seq = _IdSequencer(max((v for _, v in tid_pairs), default=0) + 1), _IdSequencer(1)
+  tid_seq._seen = {str(raw): v for raw, v in tid_pairs}
+  flow_seq._seen = {str(raw): v for raw, v in flow_pairs}
+  with fragment_path.open("wb") as fragment_file:
+    _merge_one_trace(
+        doc, path, 0, _EventBatcher(fragment_file), tid_seq, flow_seq, slim, (pid_labels, raw_pids),
+        {raw for raw in tids if tid_seq._seen[str(raw)] > prefixes[index]}, last)
+  return 0
 
 
 def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) -> int:
@@ -386,7 +559,8 @@ def build_trace_member(path: Path, out_path: Path, file_index: int, slim: bool) 
     tid_seq = _IdSequencer(id_start)
     flow_seq = _IdSequencer(id_start)
     batcher = _EventBatcher(output)
-    _merge_one_trace(path, file_index, batcher, tid_seq, flow_seq, slim)
+    trace = _parse_trace_document(path)
+    _merge_one_trace(trace, path, file_index, batcher, tid_seq, flow_seq, slim)
     if tid_seq._next_id >= id_bound or flow_seq._next_id >= id_bound:
       raise ValueError(
           f"trace {path} exhausted its member id stride "
@@ -515,3 +689,9 @@ def build_multi_trace_merge(
           f"{', '.join(str(path) for path in paths)}")
   finally:
     shutil.rmtree(member_dir, ignore_errors=True)
+
+
+if __name__ == "__main__":
+  sys.exit(
+      _merge_chunk_main(sys.argv[2:])
+      if len(sys.argv) > 1 and sys.argv[1] == "--merge-chunk" else "trace_merge: run the helper with --merge-chunk")

@@ -70,7 +70,9 @@ MASTER_RUNS_DIR_NAME = "master_runs"
 # The per-session metadata filename (threads.py's node records, the task tree's
 # files). It homes here so the lean importers (the memory CLI's run-token path)
 # read it without threads.py's config chain; threads re-exports it.
-METADATA_NAME = "metadata.json"
+# The session metadata filename: defined in src.core.run_identity (the run-scoped
+# CLI path reads session metadata without this module's model stack).
+from src.core.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
 # Backend types whose event transport does not go through the shared base read
 # loop (opencode serves events over its own HTTP SSE; antigravity and tui-cli
@@ -540,28 +542,14 @@ RUN_TASK_SPEC_NAME = "task_spec.md"
 STOP_EXIT_POLL_SECONDS = 0.05
 STOP_EXIT_WAIT_SECONDS = 10.0
 
-# The caller-identity refusal reasons shared by the API dependency and the CLI's
-# run-scoped query resolution — one active-Run predicate, never a second.
-RUN_IDENTITY_UNKNOWN_DETAIL = "run token does not reference an active run"
-RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not launched"
-
-
-def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | None:
-  """Why *run* is not an active, launched Run for caller identity, or None.
-
-    The one predicate both identity consumers share: the API caller-identity
-    dependency and the CLI's run-scoped query resolution. A run token stands
-    only for a registered Run without a terminal fact whose launch identity
-    (pid, pid_start) is pinned.
-    """
-  if run is None:
-    return RUN_IDENTITY_UNKNOWN_DETAIL
-  for event in events:
-    if event.get("type") == ET.RUN_FINISHED and event.get("run_id") == run.id:
-      return RUN_IDENTITY_UNKNOWN_DETAIL
-  if run.pid is None or run.pid_start is None:
-    return RUN_IDENTITY_NOT_LAUNCHED_DETAIL
-  return None
+# The caller-identity refusal pieces: defined in src.core.run_identity (the
+# run-scoped CLI path reads them without this module's model stack); re-exported
+# here so the API dependency's and the tests' established import path holds.
+from src.core.run_identity import (  # noqa: E402, F401  (re-export)
+    RUN_IDENTITY_NOT_LAUNCHED_DETAIL,
+    RUN_IDENTITY_UNKNOWN_DETAIL,
+    run_identity_refusal,
+)
 
 
 def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:

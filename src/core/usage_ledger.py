@@ -12,9 +12,10 @@ charlie-bot capture whose underlying CLI log may already be pruned. A fallback
 record is counted only while none of the session ids it carries has a NATIVE
 record of its own: the moment the CLI's log for any of those sessions is seen,
 the fallback's contribution is presumed restated there. The exclusion is a
-query-time rule over the registered sessions, not a deletion — the module
-contains no DELETE statement, so re-reading a pruned-away file's captured rows
-and their spans stays possible forever.
+query-time rule over the registered sessions, not a deletion — no statement here
+deletes a usage row, so re-reading a pruned-away file's captured rows and their
+spans stays possible forever. (The only DELETE in the schema reaps the aggregate's
+own zero-count day rows; usage rows are never touched.)
 
 ``captured_files`` remembers the last signature written per (host, path), so a
 collector can skip files it already ingested by content, not by existence.
@@ -22,6 +23,12 @@ collector can skip files it already ingested by content, not by existence.
 ``capture_gates`` remembers one source's *probe* per (host, path): the file-state
 pairs a probe ran under and the signature it computed, so a fresh process reuses
 that probe while the files sit byte-still instead of re-scanning the source.
+
+``usage_agg`` carries the page's aggregates at (group, day) granularity, maintained
+by the schema's triggers for every writer: the triggers ride the database, so any
+process's capture -- this module at any version, the CLI, the server -- keeps the
+aggregate exact without a per-read freshness witness. The page read serves it
+whenever the one-time backfill has run, and prices the table directly before that.
 """
 
 from __future__ import annotations
@@ -82,6 +89,141 @@ CREATE TABLE IF NOT EXISTS ledger_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS usage_agg (
+  source TEXT NOT NULL,
+  model TEXT NOT NULL,
+  account TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  day TEXT NOT NULL,
+  calls INTEGER NOT NULL,
+  in_fresh INTEGER NOT NULL,
+  cache_write INTEGER NOT NULL,
+  cache_read INTEGER NOT NULL,
+  output INTEGER NOT NULL,
+  PRIMARY KEY (source, model, account, kind, day)
+);
+"""
+
+# The aggregate's maintenance contract: every usage write rides the ledger's own
+# statements, and these triggers ride the database, so the aggregate stays exact for
+# every writer -- this module at any version, in any process -- with no per-read
+# freshness witness. A counted record contributes one (group, day) row per day its ts
+# carries; the day granularity is what makes a rewrite correctable, because subtracting
+# the old (group, day) row and adding the new one keeps the group's MIN/MAX day exact,
+# which group-level sums alone cannot do. A fallback record counts only while none of
+# its registered sessions has a native record -- the same rule the page read applies,
+# evaluated at write time from the session tables; a fallback registers its sessions
+# before its usage row lands so that check sees them. A day row whose calls reach zero
+# is deleted (the only DELETE in the schema), because a zero row would otherwise extend
+# its group's MIN/MAX day and resurrect a group the table no longer counts.
+_COUNTED_SESSIONS_SQL = (
+    "SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session"
+    " WHERE fs.record_id = {r}.record_id")
+
+_AGG_DAY_EXISTS_SQL = (
+    "SELECT 1 FROM usage_agg a WHERE a.source = {r}.source AND a.model = {r}.model"
+    " AND a.account = {r}.account AND a.kind = {r}.kind AND a.day = SUBSTR({r}.ts, 1, 10)")
+
+
+def _agg_contribute_sql(which: str, calls: str) -> str:
+  """One aggregate upsert: add (or, with a negative calls term, subtract) {which} row's
+  contribution, skipping a fallback row the session tables exclude. A subtract fires only
+  when the (group, day) row already exists: before the backfill the aggregate is empty and
+  every subtract is a no-op the backfill's own pass subsumes, while a subtract that could
+  create a row would plant a negative orphan no later pass removes."""
+  return f"""
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT {which}.source, {which}.model, {which}.account, {which}.kind, SUBSTR({which}.ts, 1, 10), {calls},
+         {'-' if calls.startswith('-') else ''}{which}.in_fresh,
+         {'-' if calls.startswith('-') else ''}{which}.cache_write,
+         {'-' if calls.startswith('-') else ''}{which}.cache_read,
+         {'-' if calls.startswith('-') else ''}{which}.output
+  WHERE NOT ({which}.kind = 'fallback' AND EXISTS ({_COUNTED_SESSIONS_SQL.format(r=which)}))
+    AND ({'EXISTS' if calls.startswith('-') else 'NOT EXISTS'} ({_AGG_DAY_EXISTS_SQL.format(r=which)}))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;"""
+
+
+_AGG_TRIGGERS = f"""
+CREATE TRIGGER IF NOT EXISTS usage_agg_after_insert AFTER INSERT ON usage
+BEGIN
+  {_agg_contribute_sql('new', '1')}
+END;
+
+CREATE TRIGGER IF NOT EXISTS usage_agg_after_update AFTER UPDATE ON usage
+WHEN old.kind <> new.kind OR old.source <> new.source OR old.model <> new.model
+  OR old.account <> new.account OR old.ts <> new.ts OR old.in_fresh <> new.in_fresh
+  OR old.cache_write <> new.cache_write OR old.cache_read <> new.cache_read
+  OR old.output <> new.output
+BEGIN
+  {_agg_contribute_sql('old', '-1')}
+  {_agg_contribute_sql('new', '1')}
+END;
+
+CREATE TRIGGER IF NOT EXISTS usage_agg_after_delete AFTER DELETE ON usage
+BEGIN
+  {_agg_contribute_sql('old', '-1')}
+END;
+
+CREATE TRIGGER IF NOT EXISTS usage_agg_after_native_session AFTER INSERT ON native_sessions
+BEGIN
+  -- A newly registered native session retires every counted fallback row carrying it:
+  -- one whose other sessions match no native record, so this insert is the flip. The
+  -- subtract fires only when the (group, day) row exists (see _agg_contribute_sql):
+  -- before the backfill it is a no-op the backfill subsumes.
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+  FROM usage u
+  WHERE u.kind = 'fallback'
+    AND EXISTS (SELECT 1 FROM usage_agg a WHERE a.source = u.source AND a.model = u.model
+                AND a.account = u.account AND a.kind = u.kind AND a.day = SUBSTR(u.ts, 1, 10))
+    AND EXISTS (SELECT 1 FROM fallback_sessions fs WHERE fs.record_id = u.record_id AND fs.session = new.session)
+    AND NOT EXISTS (
+      SELECT 1 FROM fallback_sessions fs2 JOIN native_sessions ns2 ON ns2.session = fs2.session
+      WHERE fs2.record_id = u.record_id AND fs2.session <> new.session)
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER IF NOT EXISTS usage_agg_after_fallback_session AFTER INSERT ON fallback_sessions
+BEGIN
+  -- A fallback's first registered session closes the gap the previous release's write
+  -- order leaves: it upserted the usage row before registering sessions, so the insert
+  -- trigger's exclusion check saw none and counted a born-excluded record. The row is
+  -- present here, so the subtract lands on an existing (group, day) row; this release's
+  -- own order (sessions first) reaches this trigger before the usage row exists, where
+  -- the SELECT finds nothing and a later registration fails the first-session guard.
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+  FROM usage u
+  WHERE u.record_id = new.record_id
+    AND u.kind = 'fallback'
+    AND EXISTS (SELECT 1 FROM usage_agg a WHERE a.source = u.source AND a.model = u.model
+                AND a.account = u.account AND a.kind = u.kind AND a.day = SUBSTR(u.ts, 1, 10))
+    AND EXISTS (
+      SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+      WHERE fs.record_id = u.record_id)
+    AND NOT EXISTS (
+      SELECT 1 FROM fallback_sessions fs2 WHERE fs2.record_id = u.record_id
+      AND fs2.session <> new.session)
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER IF NOT EXISTS usage_agg_purge_empty AFTER UPDATE OF calls ON usage_agg
+WHEN new.calls = 0
+BEGIN
+  DELETE FROM usage_agg WHERE source = new.source AND model = new.model AND account = new.account
+    AND kind = new.kind AND day = new.day;
+END;
 """
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
@@ -144,6 +286,39 @@ _EXCLUDED_FALLBACK_IDS_SQL = """
 SELECT u.record_id FROM usage u WHERE u.kind = 'fallback' AND EXISTS (
   SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
   WHERE fs.record_id = u.record_id)
+"""
+
+# The page read over the maintained aggregate: same grouped shape as the table pass
+# above, over one row per (group, day) instead of one per record. Zero-count day rows
+# are deleted by the schema's purge trigger, so no filter here.
+_AGG_ROWS_SQL = """
+SELECT source, model, account, kind,
+       SUM(calls) AS calls,
+       SUM(in_fresh) AS in_fresh,
+       SUM(cache_write) AS cache_write,
+       SUM(cache_read) AS cache_read,
+       SUM(output) AS output,
+       MIN(NULLIF(day, '')) AS first,
+       MAX(NULLIF(day, '')) AS last
+FROM usage_agg
+GROUP BY source, model, account, kind
+"""
+
+# The one-time backfill: the table pass's counted-row rule projected to (group, day)
+# granularity. The upsert arms overwrite rather than add: a ledger written between the
+# triggers' creation and the backfill carries trigger-maintained increments on an
+# otherwise empty aggregate, and the locked full pass below is the ground truth that
+# subsumes them.
+_AGG_BACKFILL_SQL = f"""
+INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+SELECT source, model, account, kind, SUBSTR(ts, 1, 10) AS day,
+       COUNT(*), SUM(in_fresh), SUM(cache_write), SUM(cache_read), SUM(output)
+FROM usage u
+{_COUNTED_WHERE_SQL}
+GROUP BY source, model, account, kind, day
+ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+  calls = excluded.calls, in_fresh = excluded.in_fresh, cache_write = excluded.cache_write,
+  cache_read = excluded.cache_read, output = excluded.output
 """
 
 
@@ -349,7 +524,7 @@ class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
-  ledger and an existing one keeps every row. No statement here deletes.
+  ledger and an existing one keeps every row. No statement here deletes a usage row.
   """
 
   # The page-rows memo, one entry for the one production ledger path: the rows
@@ -385,6 +560,7 @@ class UsageLedger:
     self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
     self._conn.row_factory = sqlite3.Row
     self._conn.executescript(_SCHEMA)
+    self._conn.executescript(_AGG_TRIGGERS)
     self._conn.commit()
 
   def __enter__(self) -> Self:
@@ -469,10 +645,9 @@ class UsageLedger:
           self._inserted_ids.add(rec.record_id)
         elif old_values != new_values:
           rewrote = True
-        self._conn.execute(
-            _UPSERT_USAGE_SQL, (
-                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
-                rec.cache_write, rec.cache_read, rec.output, path, captured_at))
+        # The sessions register before the usage row: the aggregate's insert trigger
+        # counts a fallback row only while none of its sessions is native, and that
+        # check reads this record's own registrations.
         if rec.kind == RecordKind.NATIVE:
           for session in rec.sessions:
             self._conn.execute(
@@ -481,6 +656,10 @@ class UsageLedger:
           for session in rec.sessions:
             self._conn.execute(
                 "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
+        self._conn.execute(
+            _UPSERT_USAGE_SQL, (
+                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
+                rec.cache_write, rec.cache_read, rec.output, path, captured_at))
       if rewrote:
         # A value rewrite invalidates every aggregate built before it in any process,
         # so the witness lives in the database, not in this process.
@@ -516,13 +695,15 @@ class UsageLedger:
     return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
 
   def model_rows_with_native_starts(self) -> tuple[list[LedgerRow], dict[str, str]]:
-    """The page rows plus each source's first native day, from one grouped pass.
+    """The page rows plus each source's first native day, served from the fastest
+    exact layer.
 
     Repeat reads while the ledger file sits byte-still since the last read are
     served from the class-level memo (see its comment for the validity
-    witnesses); the grouped pass below runs only on a memo miss. A miss caused
-    by this process's own inserts extends the memo by the row delta instead
-    (``_try_fold_rows``); the full pass is the fallback for every other miss.
+    witnesses). A memo miss caused by this process's own inserts extends the memo
+    by the row delta instead (``_try_fold_rows``). Any other miss serves the
+    trigger-maintained aggregate (``_agg_accs``) once its one-time backfill has
+    run; the grouped table pass prices the read only before that backfill.
 
     Rows and accounts are both sorted by total descending, with the group keys as
     tiebreakers so the same ledger content always yields the same ordering.
@@ -544,14 +725,21 @@ class UsageLedger:
       folded = self._try_fold_rows(memo, identity, generation)
       if folded is not None:
         return folded
-    # The full pass below covers every insert this instance tracked, tracked or not.
     self._inserted_ids.clear()
-    accs: dict[tuple[str, str], _ModelSum] = {}
-    for row in self._conn.execute(_MODEL_ROWS_SQL):
-      # The grouped rows enumerate every kind stored (retirement only ever drops
-      # kind='fallback' rows): an unknown stored value raises on this read's own
-      # pass instead of surfacing silently dropped from the page.
-      _fold_grouped_row(accs, row)
+    accs = self._agg_accs()
+    # Re-anchor after the aggregate call: the one-time backfill it may run is this
+    # read's own write, and the rows below reflect the state it leaves -- only a
+    # writer after this point may void the memo.
+    identity = self._file_stat_identity()
+    if accs is None:
+      # The aggregate has not been backfilled: the table pass below covers every
+      # insert this instance tracked, tracked or not.
+      accs = {}
+      for row in self._conn.execute(_MODEL_ROWS_SQL):
+        # The grouped rows enumerate every kind stored (retirement only ever drops
+        # kind='fallback' rows): an unknown stored value raises on this read's own
+        # pass instead of surfacing silently dropped from the page.
+        _fold_grouped_row(accs, row)
     rows = _rows_from_accs(accs)
     native_starts = _native_starts_from_accs(accs)
     # Store only a read the file provably covered: the pre-read stat must survive
@@ -573,6 +761,48 @@ class UsageLedger:
           excluded_fallback=excluded,
           rewrite_epoch=self._rewrite_epoch())
     return rows, native_starts
+
+  def _agg_accs(self) -> dict[tuple[str, str], _ModelSum] | None:
+    """The page rows' accumulators served from the trigger-maintained aggregate, or None
+    while the aggregate has not been backfilled (the caller prices the table instead, and
+    the next read serves from it).
+
+    The triggers fire for every writer -- the schema carries them, so any process's
+    capture maintains the aggregate whatever code version it runs -- so a backfilled
+    aggregate needs no per-read freshness witness. A dropped aggregate table (the schema's
+    own statements never drop) shows up as a ready flag over an empty aggregate while the
+    table holds rows, and the backfill below re-prices it.
+    """
+    ready = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone()
+    empty = self._conn.execute("SELECT 1 FROM usage_agg LIMIT 1").fetchone() is None
+    if ready is not None and not (empty and self._conn.execute("SELECT 1 FROM usage LIMIT 1").fetchone()):
+      accs: dict[tuple[str, str], _ModelSum] = {}
+      for row in self._conn.execute(_AGG_ROWS_SQL):
+        _fold_grouped_row(accs, row)
+      return accs
+    self._backfill_agg()
+    return None
+
+  def _backfill_agg(self) -> None:
+    """Build the aggregate from the table once, under the write lock.
+
+    BEGIN IMMEDIATE serializes the check-plus-backfill across processes: two first
+    readers cannot both backfill, and a concurrent record_file waits out the one pass
+    instead of interleaving with it. A failure rolls the flag back with the rows, so
+    the next read retries.
+    """
+    self._conn.execute("BEGIN IMMEDIATE")
+    try:
+      ready = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone()
+      if ready is None:
+        self._conn.execute(_AGG_BACKFILL_SQL)
+        self._conn.execute(
+            "INSERT INTO ledger_meta (key, value) VALUES ('agg_backfilled', '1')"
+            " ON CONFLICT(key) DO UPDATE SET value = '1'")
+      self._conn.commit()
+    except BaseException:
+      self._conn.rollback()
+      raise
 
   def _try_fold_rows(self, memo: _RowsMemo, identity: tuple[int, int],
                      generation: int) -> tuple[list[LedgerRow], dict[str, str]] | None:

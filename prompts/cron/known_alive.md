@@ -439,3 +439,12 @@ Known-alive symbols:
   fallback (`if hasattr(mgr, "finalize_summary_present")` ... else the scans verbatim), so
   the module has no import-site caller and vulture flags both functions as unused. Never
   delete the module on static evidence alone.
+- `_reject_legacy_allow_list` (`src/core/config.py`, on `DiscordConfig`) — pydantic
+  `@model_validator(mode="before")` classmethod: it rejects the retired
+  `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
+  successor. The name has exactly zero whole-repo matches outside its definition, so
+  vulture flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above; deleting it would still fail validation
+  (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
+  field), but the error would no longer name `allowed_users`, the successor the
+  operator must move each id into.

@@ -61,38 +61,11 @@ class FakeVoiceXhr {
   failNetwork() { if (this.onerror) this.onerror(); }
 }
 
-// The run shape startRecording builds; the lock tests enter the transcription
-// window directly through startUpload with the slot claimed below.
-function makeVoiceRun(sessionId) {
-  return {
-    sessionId,
-    stream: null,
-    audioContext: null,
-    sourceNode: null,
-    workletNode: null,
-    recording: false,
-    stopping: false,
-    phase: 'idle',
-    pcmChunks: [],
-    totalSamples: 0,
-    level: 0,
-    confirmFired: false,
-    confirmedText: '',
-    confirmedSpan: null,
-    xhr: null,
-    requestInFlight: false,
-    uploadTimedOut: false,
-    uploadTimer: null,
-    flushId: 0,
-    flushResolvers: new Map(),
-    ui: null,
-    backend: {id: 'local', label: 'Local (sherpa)', livePartials: false},
-    devicesPromise: null,
-    relaySocket: null,
-    relayFinalResolve: null,
-    relayWaitTimer: null,
-    transcript: null,
-  };
+// The run object startRecording builds, from the module's own builder: the lock
+// tests enter the transcription window directly through startUpload with the
+// slot claimed below.
+function makeVoiceRun(h, sessionId) {
+  return h.context.newVoiceRun(sessionId, h.context.VOICE_BACKENDS[0]);
 }
 
 const sendLocked = (h) => h.sendButton.hasAttribute('disabled');
@@ -214,7 +187,7 @@ test('attachment and voice windows each lock, and the combined count unlocks onl
   assert.equal(sendLocked(h), true, 'an in-flight attachment locks the button');
   assert.equal(sendGreyed(h), true);
 
-  const run = makeVoiceRun('session-a');
+  const run = makeVoiceRun(h, 'session-a');
   h.context.__claimVoiceRun(run);
   h.context.startUpload(run);
   await flush(); // startUpload awaits the recording's settled devices first
@@ -234,7 +207,7 @@ test('attachment and voice windows each lock, and the combined count unlocks onl
 
 test('a failed voice upload settles its window; a retry re-locks; cancel settles again', async () => {
   const h = buildLockHarness();
-  const run = makeVoiceRun('session-a');
+  const run = makeVoiceRun(h, 'session-a');
   h.context.__claimVoiceRun(run);
 
   h.context.startUpload(run);
@@ -257,7 +230,7 @@ test('a failed voice upload settles its window; a retry re-locks; cancel settles
 
 test('a session switch tears down an in-flight transcription window and settles its count', async () => {
   const h = buildLockHarness();
-  const run = makeVoiceRun('session-a');
+  const run = makeVoiceRun(h, 'session-a');
   h.context.__claimVoiceRun(run);
 
   h.context.startUpload(run);
@@ -340,7 +313,7 @@ test('the send gate names the in-flight category and /compact passes the same ga
   completeUpload({path: '/tmp/a.txt', filename: 'a.txt', size: 3});
   await uploadPromise;
 
-  const run = makeVoiceRun('session-a');
+  const run = makeVoiceRun(h, 'session-a');
   h.context.__claimVoiceRun(run);
   h.context.startUpload(run);
   await flush(); // startUpload awaits the recording's settled devices first

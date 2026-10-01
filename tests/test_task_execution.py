@@ -447,28 +447,23 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
 
 
 @pytest.mark.asyncio
-async def test_concurrent_dispatch_starts_one_process(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    backend = SpawningScriptedBackend([result_event("one")])
-    builds = install_backends(
-        monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    patch_instructions_content(monkeypatch)
+async def test_concurrent_dispatch_starts_one_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  backend = SpawningScriptedBackend([result_event("one")])
+  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
 
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. First message.", actor="user")
-    # Two dispatch calls race the same pending batch: the reservation serializes
-    # them, so exactly one Run and one process exist.
-    results = await asyncio.gather(
-        tree.dispatch.dispatch_pending(manager.id),
-        tree.dispatch.dispatch_pending(manager.id))
-    launched = [d for d in results if d.get("launch")]
-    assert len(launched) == 1
-    run_id = launched[0]["run_id"]
-    await wait_for_terminal_run(tree, manager.id, run_id)
-    assert len(tree.runs.list_run_records_sync(manager.id)) == 1
-    assert len(builds) == 1
-    assert tree.dispatch.pending_inputs(manager.id) == []
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First message.", actor="user")
+  # Two dispatch calls race the same pending batch: the reservation serializes
+  # them, so exactly one Run and one process exist.
+  results = await asyncio.gather(tree.dispatch.dispatch_pending(manager.id), tree.dispatch.dispatch_pending(manager.id))
+  launched = [d for d in results if d.get("launch")]
+  assert len(launched) == 1
+  run_id = launched[0]["run_id"]
+  await wait_for_terminal_run(tree, manager.id, run_id)
+  assert len(tree.runs.list_run_records_sync(manager.id)) == 1
+  assert len(builds) == 1
+  assert tree.dispatch.pending_inputs(manager.id) == []
 
 
 # ---------------------------------------------------------------------------
@@ -477,74 +472,72 @@ async def test_concurrent_dispatch_starts_one_process(
 
 
 class _SpawnFirstBackend(SpawningScriptedBackend):
-    """Records the spawn identity first, then holds the turn open until released."""
+  """Records the spawn identity first, then holds the turn open until released."""
 
-    async def run(self, prompt, cwd, env, uploaded_files=None):
-        self.prompt = prompt
-        self.cwd = cwd
-        self.env = dict(env)
-        self._pid += 1
-        if self._on_spawn is not None:
-            await self._on_spawn(self._pid)
-        if self.gate is not None:
-            await asyncio.wait_for(self.gate(), timeout=15)
-        for event in self._events:
-            if self.terminated:
-                return
-            yield event
+  async def run(self, prompt, cwd, env, uploaded_files=None):
+    self.prompt = prompt
+    self.cwd = cwd
+    self.env = dict(env)
+    self._pid += 1
+    if self._on_spawn is not None:
+      await self._on_spawn(self._pid)
+    if self.gate is not None:
+      await asyncio.wait_for(self.gate(), timeout=15)
+    for event in self._events:
+      if self.terminated:
+        return
+      yield event
 
 
 @pytest.mark.asyncio
 async def test_input_admitted_during_active_run_dispatches_after_its_finish(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The later input is consumed by the next serialized turn without a second dispatch call."""
-    _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    gate_release = asyncio.Event()
-    first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
-    second = _SpawnFirstBackend([result_event("second")])
-    install_backends(
-        monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
-    patch_instructions_content(monkeypatch)
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The later input is consumed by the next serialized turn without a second dispatch call."""
+  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  gate_release = asyncio.Event()
+  first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
+  second = _SpawnFirstBackend([result_event("second")])
+  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
 
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True
-    run1 = decision["run_id"]
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  run1 = decision["run_id"]
 
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        run = await tree.runs.get_run(manager.id, run1)
-        if run is not None and run.pid is not None:
-            break
-        await asyncio.sleep(0.05)
-    else:
-        pytest.fail("the first turn never launched")
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
+    run = await tree.runs.get_run(manager.id, run1)
+    if run is not None and run.pid is not None:
+      break
+    await asyncio.sleep(0.05)
+  else:
+    pytest.fail("the first turn never launched")
 
-    # The later input is durably admitted but never launched under the active run.
-    admitted_later = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Second message.", actor="user")
-    decision_later = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision_later["launch"] is False
+  # The later input is durably admitted but never launched under the active run.
+  admitted_later = await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Second message.", actor="user")
+  decision_later = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision_later["launch"] is False
 
-    gate_release.set()
-    await wait_for_terminal_run(tree, manager.id, run1)
+  gate_release.set()
+  await wait_for_terminal_run(tree, manager.id, run1)
 
-    # The turn's own finish dispatches the waiting input as the next serialized
-    # turn: no second explicit dispatch call is needed and nothing is dropped.
-    deadline = asyncio.get_event_loop().time() + 15
-    run2_id = None
-    while asyncio.get_event_loop().time() < deadline:
-        others = [r for r in tree.runs.list_run_records_sync(manager.id) if r.id != run1]
-        if others:
-            run2_id = others[0].id
-            break
-        await asyncio.sleep(0.1)
-    assert run2_id is not None, "the later input was never dispatched after the turn finished"
-    run2, outcome2 = await wait_for_terminal_run(tree, manager.id, run2_id)
-    assert outcome2 == "success"
-    assert run2.input_event_ids == [str(admitted_later["id"])]
-    assert tree.dispatch.pending_inputs(manager.id) == []
+  # The turn's own finish dispatches the waiting input as the next serialized
+  # turn: no second explicit dispatch call is needed and nothing is dropped.
+  deadline = asyncio.get_event_loop().time() + 15
+  run2_id = None
+  while asyncio.get_event_loop().time() < deadline:
+    others = [r for r in tree.runs.list_run_records_sync(manager.id) if r.id != run1]
+    if others:
+      run2_id = others[0].id
+      break
+    await asyncio.sleep(0.1)
+  assert run2_id is not None, "the later input was never dispatched after the turn finished"
+  run2, outcome2 = await wait_for_terminal_run(tree, manager.id, run2_id)
+  assert outcome2 == "success"
+  assert run2.input_event_ids == [str(admitted_later["id"])]
+  assert tree.dispatch.pending_inputs(manager.id) == []
 
 
 # ---------------------------------------------------------------------------

@@ -322,64 +322,79 @@ def outline_lines(rows: list[list]) -> list[str]:
   return lines
 
 
-async def capture(cdp: CDP, session_id: str, side: Side, width: int, height: int, mobile: bool,
-                  view_filter: str, parent_of: dict) -> dict:
-    await cdp.send("Emulation.setDeviceMetricsOverride", {
-        "width": width, "height": height, "deviceScaleFactor": 1, "mobile": mobile}, session_id=session_id)
-    await cdp.send("Network.setCookie", {
-        "name": "charliebot_access_key", "value": side.access_key, "url": side.base}, session_id=session_id)
-    await cdp.send("Page.navigate", {"url": f"{side.base}/?session={ACTIVE_ID}"}, session_id=session_id)
-    await wait_for(cdp, session_id, f"!!document.getElementById('session-{ACTIVE_ID}')",
-                   f"the {side.name} session list")
-    if mobile:
-        # The phone layout keeps the sidebar in a closed drawer; open it so the
-        # rows are compared as rendered, not as hidden nodes.
-        await evaluate(cdp, session_id, "toggleMobileSidebar()")
-        await asyncio.sleep(0.5)
-    if view_filter != "all":
-        await evaluate(cdp, session_id, f"switchSidebarFilter({json.dumps(view_filter)})")
-        await wait_for(cdp, session_id,
-                       "!!document.querySelector('#session-list [id^=\"session-\"]:not(#session-"
-                       + ACTIVE_ID + ")') && !document.getElementById('session-" + ACTIVE_ID + "')",
-                       f"the {side.name} {view_filter} list")
-    # Let the first status poll and any deferred paint settle before reading.
-    await asyncio.sleep(2.0)
-    return await evaluate(cdp, session_id, OUTLINE_JS + f"({json.dumps(parent_of)})")
+async def capture(
+    cdp: CDP, session_id: str, side: Side, width: int, height: int, mobile: bool, view_filter: str,
+    parent_of: dict) -> dict:
+  await cdp.send(
+      "Emulation.setDeviceMetricsOverride", {
+          "width": width,
+          "height": height,
+          "deviceScaleFactor": 1,
+          "mobile": mobile
+      },
+      session_id=session_id)
+  await cdp.send(
+      "Network.setCookie", {
+          "name": "charliebot_access_key",
+          "value": side.access_key,
+          "url": side.base
+      },
+      session_id=session_id)
+  await cdp.send("Page.navigate", {"url": f"{side.base}/?session={ACTIVE_ID}"}, session_id=session_id)
+  await wait_for(cdp, session_id, f"!!document.getElementById('session-{ACTIVE_ID}')", f"the {side.name} session list")
+  if mobile:
+    # The phone layout keeps the sidebar in a closed drawer; open it so the
+    # rows are compared as rendered, not as hidden nodes.
+    await evaluate(cdp, session_id, "toggleMobileSidebar()")
+    await asyncio.sleep(0.5)
+  if view_filter != "all":
+    await evaluate(cdp, session_id, f"switchSidebarFilter({json.dumps(view_filter)})")
+    await wait_for(
+        cdp, session_id, "!!document.querySelector('#session-list [id^=\"session-\"]:not(#session-" + ACTIVE_ID +
+        ")') && !document.getElementById('session-" + ACTIVE_ID + "')", f"the {side.name} {view_filter} list")
+  # Let the first status poll and any deferred paint settle before reading.
+  await asyncio.sleep(2.0)
+  return await evaluate(cdp, session_id, OUTLINE_JS + f"({json.dumps(parent_of)})")
 
 
 async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
-    import websockets
+  import websockets
 
-    profile = Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
-    debug_port = pick_free_port()
-    proc = launch_chrome(chrome, profile, debug_port,
-                         ["--no-first-run", "--no-default-browser-check",
-                          "--disable-background-networking", "--remote-allow-origins=*"])
-    try:
-        ws_url = await devtools_ws_url(proc, 20, fail)
-        async with websockets.connect(ws_url, max_size=50 * 1024 * 1024) as ws:
-            cdp = CDP(ws)
-            captures: dict = {}
-            for width, height, mobile in WIDTHS:
-                for view_filter in FILTERS:
-                    view = f"{width}px/{view_filter}"
-                    captures[view] = {}
-                    for side in sides:
-                        session_id, target_id = await open_cdp_page(cdp, ("Page", "Network"))
-                        await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": (
+  profile = Path(tempfile.mkdtemp(prefix="ui-parity-chrome-"))
+  debug_port = pick_free_port()
+  proc = launch_chrome(
+      chrome, profile, debug_port,
+      ["--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--remote-allow-origins=*"])
+  try:
+    ws_url = await devtools_ws_url(proc, 20, fail)
+    async with websockets.connect(ws_url, max_size=50 * 1024 * 1024) as ws:
+      cdp = CDP(ws)
+      captures: dict = {}
+      for width, height, mobile in WIDTHS:
+        for view_filter in FILTERS:
+          view = f"{width}px/{view_filter}"
+          captures[view] = {}
+          for side in sides:
+            session_id, target_id = await open_cdp_page(cdp, ("Page", "Network"))
+            await cdp.send(
+                "Page.addScriptToEvaluateOnNewDocument", {
+                    "source":
+                        (
                             f"try {{ localStorage.setItem('charliebot_access_key', "
-                            f"{json.dumps(side.access_key)}); }} catch (e) {{}}")}, session_id=session_id)
-                        captures[view][side.name] = await capture(
-                            cdp, session_id, side, width, height, mobile, view_filter, parent_of)
-                        await cdp.send("Target.closeTarget", {"targetId": target_id})
-            return captures
-    finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-        shutil.rmtree(profile, ignore_errors=True)
+                            f"{json.dumps(side.access_key)}); }} catch (e) {{}}")
+                },
+                session_id=session_id)
+            captures[view][side.name] = await capture(
+                cdp, session_id, side, width, height, mobile, view_filter, parent_of)
+            await cdp.send("Target.closeTarget", {"targetId": target_id})
+      return captures
+  finally:
+    proc.terminate()
+    try:
+      proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+      proc.kill()
+    shutil.rmtree(profile, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -388,88 +403,92 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
 
 
 def git(*args: str) -> str:
-    return subprocess.run(["git", *args], cwd=SCRIPT_REPO, capture_output=True, text=True,
-                          check=True).stdout.strip()
+  return subprocess.run(["git", *args], cwd=SCRIPT_REPO, capture_output=True, text=True, check=True).stdout.strip()
 
 
 def resolve_main_ref(ref: str | None) -> str:
-    try:
-        return git("rev-parse", "--verify", (ref or git("merge-base", "HEAD", "origin/main")) + "^{commit}")
-    except subprocess.CalledProcessError as exc:
-        fail(f"cannot resolve the main reference {ref or 'merge-base HEAD origin/main'}: {exc.stderr.strip()}")
+  try:
+    return git("rev-parse", "--verify", (ref or git("merge-base", "HEAD", "origin/main")) + "^{commit}")
+  except subprocess.CalledProcessError as exc:
+    fail(f"cannot resolve the main reference {ref or 'merge-base HEAD origin/main'}: {exc.stderr.strip()}")
 
 
 def check(args: argparse.Namespace) -> int:
-    chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
-    if not chrome:
-        fail("google-chrome is not installed; pass --chrome")
-    main_sha = resolve_main_ref(args.main_ref)
-    branch_sha = git("rev-parse", "HEAD")
-    evidence = Path(args.evidence_dir or tempfile.mkdtemp(prefix="ui-parity-evidence-"))
-    evidence.mkdir(parents=True, exist_ok=True)
-    sessions = synthetic_sessions()
-    parent_of = {m["id"]: m["task_parent_id"] for m in sessions if m.get("task_parent_id")}
-    print(f"main {main_sha[:10]} vs branch {branch_sha[:10]} (working tree of {SCRIPT_REPO})", flush=True)
+  chrome = args.chrome or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+  if not chrome:
+    fail("google-chrome is not installed; pass --chrome")
+  main_sha = resolve_main_ref(args.main_ref)
+  branch_sha = git("rev-parse", "HEAD")
+  evidence = Path(args.evidence_dir or tempfile.mkdtemp(prefix="ui-parity-evidence-"))
+  evidence.mkdir(parents=True, exist_ok=True)
+  sessions = synthetic_sessions()
+  parent_of = {m["id"]: m["task_parent_id"] for m in sessions if m.get("task_parent_id")}
+  print(f"main {main_sha[:10]} vs branch {branch_sha[:10]} (working tree of {SCRIPT_REPO})", flush=True)
 
-    with tempfile.TemporaryDirectory(prefix="ui-parity-") as tmp_name:
-        tmp = Path(tmp_name)
-        main_tree = tmp / "main-checkout"
-        git("worktree", "add", "--detach", "--quiet", str(main_tree), main_sha)
-        sides = [Side("main", main_tree, tmp, sessions), Side("branch", SCRIPT_REPO, tmp, sessions)]
-        try:
-            for side in sides:
-                side.start()
-            captures = asyncio.run(run_browser(chrome, sides, parent_of))
-        finally:
-            for side in sides:
-                side.stop()
-            for side in sides:
-                shutil.copy(side.log_path, evidence / side.log_path.name)
-            git("worktree", "remove", "--force", str(main_tree))
+  with tempfile.TemporaryDirectory(prefix="ui-parity-") as tmp_name:
+    tmp = Path(tmp_name)
+    main_tree = tmp / "main-checkout"
+    git("worktree", "add", "--detach", "--quiet", str(main_tree), main_sha)
+    sides = [Side("main", main_tree, tmp, sessions), Side("branch", SCRIPT_REPO, tmp, sessions)]
+    try:
+      for side in sides:
+        side.start()
+      captures = asyncio.run(run_browser(chrome, sides, parent_of))
+    finally:
+      for side in sides:
+        side.stop()
+      for side in sides:
+        shutil.copy(side.log_path, evidence / side.log_path.name)
+      git("worktree", "remove", "--force", str(main_tree))
 
-    failures = 0
-    report = {"main": main_sha, "branch": branch_sha, "views": {}}
-    for view, by_side in captures.items():
-        main_lines = outline_lines(by_side["main"]["rows"])
-        branch_lines = outline_lines(by_side["branch"]["rows"])
-        diff = list(difflib.unified_diff(main_lines, branch_lines, "main", "branch", lineterm="", n=2))
-        hits = {side: by_side[side]["hits"] for side in by_side}
-        stem = view.replace("/", "-")
-        (evidence / f"outline-{stem}-main.txt").write_text("\n".join(main_lines) + "\n", encoding="utf-8")
-        (evidence / f"outline-{stem}-branch.txt").write_text("\n".join(branch_lines) + "\n", encoding="utf-8")
-        report["views"][view] = {"hits": hits, "diff": diff, "main_nodes": len(main_lines),
-                                 "branch_nodes": len(branch_lines)}
-        state = "differs" if diff else "identical"
-        print(f"{view}: {state} ({len(main_lines)} nodes compared; whitelist hits "
-              f"main {hits['main']}, branch {hits['branch']})", flush=True)
-        if diff:
-            failures += 1
-            print("\n".join(diff), flush=True)
-    (evidence / "ui_parity_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(f"evidence: {evidence}", flush=True)
-    if failures:
-        print(f"UI PARITY CHECK FAILED: {failures} of {len(captures)} views differ outside the whitelist",
-              flush=True)
-        return 1
-    print("UI PARITY CHECK PASSED", flush=True)
-    return 0
+  failures = 0
+  report = {"main": main_sha, "branch": branch_sha, "views": {}}
+  for view, by_side in captures.items():
+    main_lines = outline_lines(by_side["main"]["rows"])
+    branch_lines = outline_lines(by_side["branch"]["rows"])
+    diff = list(difflib.unified_diff(main_lines, branch_lines, "main", "branch", lineterm="", n=2))
+    hits = {side: by_side[side]["hits"] for side in by_side}
+    stem = view.replace("/", "-")
+    (evidence / f"outline-{stem}-main.txt").write_text("\n".join(main_lines) + "\n", encoding="utf-8")
+    (evidence / f"outline-{stem}-branch.txt").write_text("\n".join(branch_lines) + "\n", encoding="utf-8")
+    report["views"][view] = {
+        "hits": hits,
+        "diff": diff,
+        "main_nodes": len(main_lines),
+        "branch_nodes": len(branch_lines)
+    }
+    state = "differs" if diff else "identical"
+    print(
+        f"{view}: {state} ({len(main_lines)} nodes compared; whitelist hits "
+        f"main {hits['main']}, branch {hits['branch']})",
+        flush=True)
+    if diff:
+      failures += 1
+      print("\n".join(diff), flush=True)
+  (evidence / "ui_parity_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+  print(f"evidence: {evidence}", flush=True)
+  if failures:
+    print(f"UI PARITY CHECK FAILED: {failures} of {len(captures)} views differ outside the whitelist", flush=True)
+    return 1
+  print("UI PARITY CHECK PASSED", flush=True)
+  return 0
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    sub = parser.add_subparsers(dest="mode")
-    serve_parser = sub.add_parser("serve", help="internal: serve one checkout (spawned by the check)")
-    serve_parser.add_argument("--repo", type=Path, required=True)
-    serve_parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--main-ref", default=None, help="main commit (default: merge-base HEAD origin/main)")
-    parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome on PATH)")
-    parser.add_argument("--evidence-dir", default=None, help="report and server logs (default: a new temp dir)")
-    args = parser.parse_args()
-    if args.mode == "serve":
-        serve(args.repo, args.port)
-        return
-    raise SystemExit(check(args))
+  parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+  sub = parser.add_subparsers(dest="mode")
+  serve_parser = sub.add_parser("serve", help="internal: serve one checkout (spawned by the check)")
+  serve_parser.add_argument("--repo", type=Path, required=True)
+  serve_parser.add_argument("--port", type=int, required=True)
+  parser.add_argument("--main-ref", default=None, help="main commit (default: merge-base HEAD origin/main)")
+  parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome on PATH)")
+  parser.add_argument("--evidence-dir", default=None, help="report and server logs (default: a new temp dir)")
+  args = parser.parse_args()
+  if args.mode == "serve":
+    serve(args.repo, args.port)
+    return
+  raise SystemExit(check(args))
 
 
 if __name__ == "__main__":
-    main()
+  main()

@@ -49,6 +49,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     open_evidence_dir,
     pick_free_port,
     resolve_chrome,
+    stop_child,
 )
 from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     build_source_home,
@@ -539,19 +540,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             log(f"results written to {evidence_dir / 'sidebar_status_results.json'}")
             log("SIDEBAR STATUS LIVE HARNESS PASSED")
         finally:
-            if chrome_proc is not None and chrome_proc.poll() is None:
-                chrome_proc.terminate()
-                try:
-                    chrome_proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    chrome_proc.kill()
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=30)
+            stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
+            stop_child(proc, grace_s=60, kill_reap_s=30)
             log("server console tail:\n" + server_console.read_text()[-800:])
 
 

@@ -86,6 +86,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     pick_free_port,
     resolve_chrome,
     screenshot,
+    stop_child,
     wait_for,
 )
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
@@ -549,22 +550,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("harness-error", ok=False, detail=f"{type(exc).__name__}: {exc}", screenshot=None)
                 raise
             finally:
-                chrome_proc.terminate()
-                try:
-                    chrome_proc.wait(timeout=15)
-                except subprocess.TimeoutExpired:
-                    chrome_proc.kill()
-                    chrome_proc.wait(timeout=10)
+                stop_child(chrome_proc, grace_s=15, kill_reap_s=10)
         finally:
             from src.core.home_writer_fence import probe_writer_fence
 
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=30)
+            stop_child(proc, grace_s=60, kill_reap_s=30)
             holder = probe_writer_fence(home)
             results.record("server-fence-released-on-stop", holder["exclusive_holder_alive"] is False,
                            f"writer fence holder alive: {holder['exclusive_holder_alive']}", None)

@@ -21,10 +21,14 @@ before, a message seen twice counts once, and an updated source row moves its re
   claude:<message id, falling back to requestId, then uuid>  per response. Claude Code
       replays history verbatim on resume and fork — about half of all usage lines on this
       host — so responses dedupe on the id, within a file and across config dirs alike
-  codex:<session id>:<event index>  per token_count event. The session id comes off the
-      rollout-*.jsonl file name (its last five dash-separated segments) or, for any other
-      name, the path relative to its home. Subagent threads inherit the parent's
-      cumulative total_token_usage, so per-request last_token_usage is summed instead
+  codex-total:<root session id>:<total input>:<total cached>:<total output>  per
+      token_count event. The root is the rollout's first session_meta session_id — the id
+      a whole fork tree shares — so a forked rollout's copy of its parent's events and a
+      re-written event (verbatim, or with the per-request usage zeroed) land on the
+      original event's id and count once, while the record's own values stay that event's
+      last_token_usage. The session registered comes off the rollout-*.jsonl file name
+      (its last five dash-separated segments) or, for any other name, the path relative
+      to its home
   opencode:<message id>  per contributing db row; zero-token rows contribute nothing
   thread:<session>/<thread>/<i>  per charlie-bot thread result event
   master:<session>/<run>  per master-run capture's trailing result
@@ -137,7 +141,7 @@ class TallyCache:
   therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   """
 
-  SCHEMA_VERSION = 3
+  SCHEMA_VERSION = 4
 
   # Loaded-document memo, one entry per cache path: a repeat load whose document file
   # sits byte-still since the load that parsed it reuses that parse. The (size, mtime_ns)
@@ -156,7 +160,9 @@ class TallyCache:
   def load(cls, path: Path, notes: list[str]) -> TallyCache:
     """Read the persisted document; an unreadable or stale-schema file starts a cold cache.
 
-    Version 1 and 2 documents still serve: their entries carry the same records under
+    Version 1-3 documents still serve, except their Codex entries: those records carry
+    neither the root session id nor the totals the current record ids are built from, so
+    their source re-parses; every other source's entries carry the same records under the
     older shapes, and the first store rewrites them in the current one.
     """
     try:
@@ -177,9 +183,13 @@ class TallyCache:
     except (OSError, ValueError) as exc:
       notes.append(f"Tally cache: unreadable {path} ({exc}); rebuilt from the logs")
       doc = None
-    if not isinstance(doc, dict) or doc.get("version") not in (1, 2, cls.SCHEMA_VERSION):
+    if not isinstance(doc, dict) or doc.get("version") not in (1, 2, 3, cls.SCHEMA_VERSION):
       return cls({})
     sources = doc.get("sources", {})
+    if doc.get("version") != cls.SCHEMA_VERSION:
+      # A pre-4 Codex entry carries neither the root session id nor the totals the
+      # current record ids need; dropping the source re-parses its files.
+      sources = {name: entries for name, entries in sources.items() if name != "codex"}
     if st is not None:
       cls._load_memo[str(path)] = ((st.st_size, st.st_mtime_ns), sources)
     return cls(sources)
@@ -676,27 +686,54 @@ def _walk_source(
 _CODEX_MARKERS = tuple(f'"{name}"'.encode() for name in (CODEX_SESSION_META, CODEX_TURN_CONTEXT, CODEX_TOKEN_COUNT))
 
 
-def _codex_records(recs: list[dict], model: str | None, records: list[list]) -> str | None:
+def _codex_records(
+    path: str,
+    recs: list[dict],
+    model: str | None,
+    root: str | None,
+    records: list[list],
+) -> tuple[str | None, str | None]:
   """Fold prefiltered Codex records into ledger records, appending to *records*; returns
-  the trailing model context. *model* is the context in force at the first record — None
-  on a full parse, the cached entry's trailing context on an append-tail round;
-  session_meta and turn_context records update it in file order, and every token_count row
-  resolves against the context at its own line. Subagent threads inherit the parent's
-  cumulative total_token_usage, so per-request last_token_usage is summed instead.
+  the trailing (model context, root session id). *model* is the context in force at the
+  first record — None on a full parse, the cached entry's trailing context on an
+  append-tail round — and *root* the first session_meta's session_id, carried forward the
+  same way; session_meta and turn_context records update the context in file order, and
+  every token_count row resolves against the context at its own line.
+
+  A token_count event yields no record while its info is null or its last_token_usage is
+  all zero — those events re-state the previous one, and writing one would overwrite the
+  real record it copies. Every other event yields one record whose values are the event's
+  own last_token_usage and whose id inputs are the cumulative total_token_usage, the three
+  numbers a forked rollout's copied events and every re-emit share with the original
+  event; the capture builds the record id from them. A token_count event above no root
+  session id, or a record-bearing one without the totals its id is built from, raises.
   """
   for rec in recs:
     if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT):
       model = (rec.get("payload") or {}).get("model") or model
+      if root is None and rec.get("type") == CODEX_SESSION_META:
+        root = (rec.get("payload") or {}).get("session_id")
       continue
     payload = codex_token_count_payload(rec)
     if payload is None:
       continue
-    last = (payload.get("info") or {}).get("last_token_usage") or {}
+    if root is None:
+      raise ValueError(f"{path}: token_count event with no session_meta session_id above it")
+    info = payload.get("info") or {}
+    last = info.get("last_token_usage") or {}
     cached = last.get("cached_input_tokens", 0) or 0
     fresh = (last.get("input_tokens", 0) or 0) - cached
     out = last.get("output_tokens", 0) or 0
-    records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out])
-  return model
+    if fresh == 0 and cached == 0 and out == 0:
+      continue
+    total = info.get("total_token_usage")
+    if not isinstance(total, dict):
+      raise ValueError(f"{path}: token_count event without total_token_usage")
+    total_in = total.get("input_tokens", 0) or 0
+    total_cached = total.get("cached_input_tokens", 0) or 0
+    total_out = total.get("output_tokens", 0) or 0
+    records.append([model or "unknown", rec.get("timestamp"), fresh, cached, out, total_in, total_cached, total_out])
+  return model, root
 
 
 def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict, int]:
@@ -711,13 +748,13 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
     if tail is not None:
       recs, sig, end = tail
       records: list[list] = []
-      model = _codex_records(recs, prev.get("model_ctx"), records)
-      entry = {"sig": sig, "records": prev["records"] + records, "model_ctx": model, "end": end}
+      model, root = _codex_records(path, recs, prev.get("model_ctx"), prev.get("root"), records)
+      entry = {"sig": sig, "records": prev["records"] + records, "model_ctx": model, "root": root, "end": end}
       entry["guard"] = _boundary_guard(path, end)
       return entry, end - prev["end"]
   sig, recs, end = _prefiltered_jsonl(path, _CODEX_MARKERS)
-  # The model context opens at the file's first declared model, so a token_count
-  # preceding the first turn_context still carries it.
+  # The model context opens at the file's first declared model and the root session id at
+  # its first session_meta, so a token_count preceding either still carries them.
   model = next(
       (
           (rec.get("payload") or {}).get("model")
@@ -725,9 +762,13 @@ def _codex_file_contribution(path: str, prev: dict | None = None) -> tuple[dict,
           if rec.get("type") in (CODEX_SESSION_META, CODEX_TURN_CONTEXT) and (rec.get("payload") or {}).get("model")),
       None,
   )
+  root = next(
+      ((rec.get("payload") or {}).get("session_id") for rec in recs if rec.get("type") == CODEX_SESSION_META),
+      None,
+  )
   records = []
-  model = _codex_records(recs, model, records)
-  entry = {"sig": sig, "records": records, "model_ctx": model, "end": end}
+  model, root = _codex_records(path, recs, model, root, records)
+  entry = {"sig": sig, "records": records, "model_ctx": model, "root": root, "end": end}
   entry["guard"] = _boundary_guard(path, end)
   return entry, end
 
@@ -1012,10 +1053,10 @@ def capture_jsonl_sources(
   this host (``captured``, the caller's one captured-sigs read for the whole capture) is
   skipped, and every other parsed file
   is written atomically with that signature. Each record dedupes on its record_id — Claude
-  on the response's message id, Codex on the file session and event index — so a re-captured
-  file re-upserts what it stored before and a message replayed into a second config dir
-  counts once. A parse failure raises: the capture runs in the collector, not the page
-  load, so nothing here notes-and-continues.
+  on the response's message id, Codex on the root session id and the event's cumulative
+  totals — so a re-captured file re-upserts what it stored before and a message replayed
+  into a second config dir counts once. A parse failure raises: the capture runs in the
+  collector, not the page load, so nothing here notes-and-continues.
 
   Returns the records written per source label.
   """
@@ -1052,7 +1093,10 @@ def capture_jsonl_sources(
   for path, account, entry, _hit in walked:
     if entry is None:
       continue
-    sig = f"{entry['sig'][0]}:{entry['sig'][1]}"
+    # The parse-version prefix makes this a signature no older parser wrote, so every
+    # Codex file not yet captured at p2 re-parses and rewrites its rows once, whatever
+    # order old and new code wrote the ledger in.
+    sig = f"p2:{entry['sig'][0]}:{entry['sig'][1]}"
     if captured.get(path) == sig:
       continue
     name = os.path.basename(path)
@@ -1061,21 +1105,32 @@ def capture_jsonl_sources(
       sid = "-".join(name[len("rollout-"):-len(".jsonl")].rsplit("-", 5)[-5:])
     else:
       sid = os.path.relpath(path, str(codex_homes[account]))
-    records = [
-        UsageRecord(
-            record_id=f"codex:{sid}:{i}",
-            kind=RecordKind.NATIVE,
-            source=USAGE_SOURCE_CODEX,
-            model=model,
-            account=account,
-            ts=ts or "",
-            in_fresh=in_fresh,
-            cache_write=0,
-            cache_read=cache_read,
-            output=output,
-            sessions=(sid,)) for i, (model, ts, in_fresh, cache_read, output) in enumerate(entry["records"])
-    ]
-    written[USAGE_SOURCE_CODEX] += ledger.record_file(host, path, sig, records)
+    records: list[UsageRecord] = []
+    file_ids: set[str] = set()
+    for model, ts, in_fresh, cache_read, output, total_in, total_cached, total_out in entry["records"]:
+      # The id keys on the event's cumulative totals, so a forked rollout's copied events
+      # and every re-emit ride the original event's row; within one file only the first
+      # record per id is kept.
+      record_id = f"codex-total:{entry['root']}:{total_in}:{total_cached}:{total_out}"
+      if record_id in file_ids:
+        continue
+      file_ids.add(record_id)
+      records.append(
+          UsageRecord(
+              record_id=record_id,
+              kind=RecordKind.NATIVE,
+              source=USAGE_SOURCE_CODEX,
+              model=model,
+              account=account,
+              ts=ts or "",
+              in_fresh=in_fresh,
+              cache_write=0,
+              cache_read=cache_read,
+              output=output,
+              sessions=(sid,)))
+    # The legacy event-ordinal ids this rollout's own earlier captures wrote retire here;
+    # no other rollout's rows can open with "codex:<sid>:".
+    written[USAGE_SOURCE_CODEX] += ledger.record_file(host, path, sig, records, supersede_prefix=f"codex:{sid}:")
   return written
 
 

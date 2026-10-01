@@ -22,7 +22,6 @@ import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
-    create_task,
     init_repo_with_origin,
     patch_instructions_content,
     run_git,
@@ -246,6 +245,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   from tests.test_task_execution import (
       SpawningScriptedBackend,
       _adapter_with_silent_broadcast,
+      _root_manager_and_worker,
       build_env,
       install_backends,
       make_pm_build,
@@ -256,15 +256,9 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
 
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root")
-  task_spec = {
-      "goal": "## Goal\n\nadd a marker file\n",
-      "repo_path": str(repo),
-      "base_branch": "origin/main",
-      "task_type": "implement",
-      "keep_worktree": False,
-  }
-  worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
+  goal = "## Goal\n\nadd a marker file\n"
+  manager, worker = await _root_manager_and_worker(
+      tree, goal=goal, task_type="implement", repo_path=str(repo), base_branch="origin/main")
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", []))
   patch_instructions_content(monkeypatch)
@@ -285,7 +279,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       model="fake-model",
       repo_path=str(repo),
       base_branch="origin/main")
-  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  await tree.runs.register_run(record, task_spec_text=goal)
   tree.dispatch.executor.launch(worker.id, "run-work")
 
   wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
@@ -301,6 +295,3 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   assert review_backend.env["PATH"].split(os.pathsep)[0] == str(GIT_STASH_GUARD_DIR)
 
 
-def _spec(tree, spec: dict):
-  from tests.test_task_execution import _task_spec
-  return _task_spec(tree, spec)

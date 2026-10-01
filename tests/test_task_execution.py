@@ -778,22 +778,34 @@ async def test_first_terminal_fact_wins_governs_followups(
 # ---------------------------------------------------------------------------
 
 
+async def _root_manager_and_worker(
+        tree: TaskTreeManager, goal: str, task_type: str, repo_path: str | None,
+        base_branch: str | None) -> tuple:
+    """The delivery rigs' shared prologue: the root manager node plus its
+    worker-profile child holding the task spec (repo_path and base_branch are
+    None for the repo-less rigs). Returns (manager, worker)."""
+    manager = await create_task(tree, parent=None, request_id="root")
+    worker = await create_task(
+        tree, parent=manager.id, request_id="w", profile="worker",
+        task=_task_spec(tree, {
+            "goal": goal,
+            "repo_path": repo_path,
+            "base_branch": base_branch,
+            "task_type": task_type,
+            "keep_worktree": False,
+        }))
+    return manager, worker
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "origin/main",
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "## Goal\n\nadd a marker file\n"
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="implement", repo_path=str(repo), base_branch="origin/main")
     pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
                                            "Take off and implement the marker file.")
 
@@ -825,7 +837,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model", repo_path=str(repo), base_branch="origin/main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     # The worker's implementation is its commit in the isolated worktree: wait
@@ -924,16 +936,10 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
     work branch starts at the origin tip, and the local main ref is untouched."""
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     repo, origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "main",  # the bare form: local main is judged against origin/main
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "## Goal\n\nadd a marker file\n"
+    # The bare form: local main is judged against origin/main.
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="implement", repo_path=str(repo), base_branch="main")
     await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
                                "Take off and implement the marker file.")
 
@@ -949,7 +955,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model", repo_path=str(repo), base_branch="main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
@@ -993,16 +999,9 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
     exactly once, a recorded task spec, and no launch prompt."""
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
     repo, _origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "main",
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "## Goal\n\nadd a marker file\n"
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="implement", repo_path=str(repo), base_branch="main")
     await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
                                "Take off and implement the marker file.")
 
@@ -1018,7 +1017,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model", repo_path=str(repo), base_branch="main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
@@ -1064,13 +1063,9 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 async def test_repo_less_implement_delivers_after_review_passes(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
-        "task_type": "implement",
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n"
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="implement", repo_path=None, base_branch=None)
     pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
                                            "Take off and refresh the host lint config.")
 
@@ -1084,7 +1079,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
@@ -1138,10 +1133,9 @@ async def test_repo_less_implement_delivers_after_review_passes(
 async def test_repo_less_implement_review_failure_takes_the_failure_report(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {"goal": "fix the host script", "task_type": "implement"}
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "fix the host script"
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="implement", repo_path=None, base_branch=None)
     tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
     monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
     patch_instructions_content(monkeypatch)
@@ -1159,7 +1153,7 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     await wait_for_terminal_run(tree, worker.id, "run-work")
@@ -1179,10 +1173,9 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
 async def test_repo_less_quick_edit_closes_without_review(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
+    goal = "bump the host cron schedule line"
+    manager, worker = await _root_manager_and_worker(
+        tree, goal=goal, task_type="quick-edit", repo_path=None, base_branch=None)
     pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
                                            "Take off and bump it.")
 
@@ -1191,7 +1184,7 @@ async def test_repo_less_quick_edit_closes_without_review(
 
     record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
                        model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+    await tree.runs.register_run(record, task_spec_text=goal)
     tree.dispatch.executor.launch(worker.id, "run-work")
 
     await wait_for_terminal_run(tree, worker.id, "run-work")

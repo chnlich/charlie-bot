@@ -58,11 +58,10 @@ import shutil  # noqa: E402
 import subprocess  # noqa: E402
 import tempfile  # noqa: E402
 import time  # noqa: E402
-import urllib.error  # noqa: E402
-import urllib.request  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
 from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from scripts.live_preview_task_tree import request  # noqa: E402
 from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
@@ -161,21 +160,6 @@ def preflight(backend_id: str) -> None:
     from src.core.config import load_config
     if load_config().get_backend_option(backend_id) is None:
         fail(f"backend option {backend_id!r} missing from the production config")
-
-
-def request(base: str, method: str, path: str, key: str, payload: dict | None = None,
-            timeout: float = 30.0) -> tuple[int, dict | list]:
-    body = None
-    headers = {"Authorization": f"Bearer {key}"}
-    if payload is not None:
-        body = json.dumps(payload).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(base + path, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read().decode("utf-8") or "{}")
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode("utf-8") or "{}")
 
 
 def deps_tree():
@@ -277,11 +261,11 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
     fail(f"{label}: the dispatcher never reserved a run for the admitted input")
 
 
-async def arequest(base: str, method: str, path: str, key: str, payload: dict | None = None,
-                   timeout: float = 30.0) -> tuple[int, dict | list]:
+async def arequest(base: str, key: str, method: str, path: str,
+                   payload: dict | None = None) -> tuple[int, dict | list]:
     """request() off the loop thread: the isolated uvicorn server lives on this same
     loop, so a blocking urlopen here would deadlock the server that must answer it."""
-    return await asyncio.to_thread(request, base, method, path, key, payload, timeout)
+    return await asyncio.to_thread(request, base, key, method, path, payload)
 
 
 async def smoke(backend_id: str, purge: bool) -> None:
@@ -306,7 +290,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
         fail(str(exc))
     try:
         # -- the manager task and its real manager turn ----------------------
-        status, manager = await arequest(base, "POST", "/api/sessions/", access_key, {
+        status, manager = await arequest(base, access_key, "POST", "/api/sessions/", {
             "request_id": "smoke-manager-create",
             "profile": "manager",
             "name": "smoke-manager",
@@ -322,12 +306,11 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "and do not delegate.")
         # The next-start preview is the current configuration; the launch must
         # commit exactly these bytes.
-        status, preview = await arequest(
-            base, "GET", f"/api/sessions/{manager_id}/effective-prompt", access_key)
+        status, preview = await arequest(base, access_key, "GET", f"/api/sessions/{manager_id}/effective-prompt")
         if status != 200 or preview.get("kind") != "manager_turn":
             fail(f"effective-prompt preview failed: {status} {preview}")
-        status, posted = await arequest(base, "POST", f"/api/chat/{manager_id}/message", access_key,
-                                 {"content": phrase_instruction})
+        status, posted = await arequest(
+            base, access_key, "POST", f"/api/chat/{manager_id}/message", {"content": phrase_instruction})
         if status != 202:
             fail(f"manager input admission failed: {status} {posted}")
         input_event_id = posted.get("input_event_id")
@@ -375,8 +358,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
         if _blocks_shape(preview) != _blocks_shape(stored):
             fail("preview blocks differ from the stored launch snapshot")
         # The historical endpoint serves the stored snapshot.
-        status, ctx = await arequest(
-            base, "GET", f"/api/sessions/{manager_id}/runs/{run_id}/context", access_key)
+        status, ctx = await arequest(base, access_key, "GET", f"/api/sessions/{manager_id}/runs/{run_id}/context")
         if status != 200 or ctx.get("snapshot") is None:
             fail(f"run context endpoint failed: {status} {ctx}")
         if ctx["snapshot"] != stored:
@@ -414,7 +396,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
             "## Acceptance Tests\n\nThe final report contains the exact phrase.\n"
             "## Out of Scope\n\nEverything else.\n",
             encoding="utf-8")
-        status, delegated = await arequest(base, "POST", "/api/internal/delegate", access_key, {
+        status, delegated = await arequest(base, access_key, "POST", "/api/internal/delegate", {
             "session_id": manager_id,
             "description": spec_path.read_text(encoding="utf-8"),
             "repo_path": str(repo),
@@ -457,7 +439,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
         if not w_launch.is_file() or SMOKE_PHRASE not in w_launch.read_text(encoding="utf-8"):
             fail(f"worker launch text evidence missing the pinned spec at {w_launch}")
         w_preview_status, w_preview = await arequest(
-            base, "GET", f"/api/sessions/{child_id}/effective-prompt", access_key)
+            base, access_key, "GET", f"/api/sessions/{child_id}/effective-prompt")
         if w_preview_status != 200 or w_preview.get("kind") != "work":
             fail(f"worker effective-prompt failed: {w_preview_status} {w_preview}")
         if w_preview.get("prompt_hash") != w_stored["prompt_hash"]:
@@ -538,7 +520,7 @@ async def smoke(backend_id: str, purge: bool) -> None:
 
         # -- the compatibility aliases resolve to the same Run ---------------
         for owner in (child_id, manager_id):
-            status, row = await arequest(base, "GET", f"/api/threads/{owner}/threads/{worker_run_id}", access_key)
+            status, row = await arequest(base, access_key, "GET", f"/api/threads/{owner}/threads/{worker_run_id}")
             if status != 200 or row.get("id") != worker_run_id:
                 fail(f"alias {owner}/{worker_run_id} did not resolve to the run: {status} {row}")
 

@@ -99,6 +99,7 @@ if str(_REPO_ROOT) not in sys.path:
 import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
+from scripts.browser_harness_session_tree import stop_child  # noqa: E402
 from src.core.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
@@ -549,12 +550,7 @@ async def drive_mode(args: argparse.Namespace) -> int:
           recv.cancel()
     finally:
       # Fully reap chrome before the TemporaryDirectory cleanup reads the profile dir.
-      proc.terminate()
-      try:
-        proc.wait(timeout=CHROME_REAP_TIMEOUT_S)
-      except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
+      stop_child(proc, grace_s=CHROME_REAP_TIMEOUT_S, kill_reap_s=CHROME_REAP_TIMEOUT_S)
 
   with trace_path.open("w") as f:
     json.dump(chunks, f)

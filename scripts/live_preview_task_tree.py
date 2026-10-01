@@ -47,6 +47,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     EVIDENCE_ROOT_DEFAULT,
     open_evidence_dir,
     pick_free_port,
+    stop_child,
 )
 
 DEFAULT_BACKEND = "charlie-code-glm-flash"
@@ -573,12 +574,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             log(f"restart phase: {len(reviews_before)} review run(s) on the implement node before "
                 f"the restart: {[(r['id'][:8], r.get('state')) for r in reviews_before]}")
 
-            proc.terminate()
-            try:
-                proc.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait(timeout=30)
+            stop_child(proc, grace_s=60, kill_reap_s=30)
             stopped_fence = probe_writer_fence(home)
             if stopped_fence["exclusive_holder_alive"]:
                 fail("the preview writer fence is still held after the restart-phase shutdown")
@@ -629,13 +625,7 @@ async def run_harness(args: argparse.Namespace) -> None:
             log(f"results written to {evidence_dir / 'preview_live_results.json'}")
             log("LIVE PREVIEW HARNESS PASSED")
         finally:
-            if proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=60)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                    proc.wait(timeout=30)
+            stop_child(proc, grace_s=60, kill_reap_s=30)
             holder = probe_writer_fence(home)
             if holder["exclusive_holder_alive"]:
                 fail("the preview writer fence is still held after shutdown")

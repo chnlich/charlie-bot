@@ -103,6 +103,8 @@ def main() -> None:
     _cmd_lint(args)
   elif args.command == "proposal":
     _cmd_proposal(args)
+  else:
+    parser.error(f"unknown memory command: {args.command}")
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
@@ -247,8 +249,11 @@ def _cmd_proposal(args: argparse.Namespace) -> None:
     elif args.proposal_command == "commit":
       sha = memory_proposal.commit(live, args.path, Path(args.message_file).expanduser())
       fields = {"committed": sha}
-    else:
+    elif args.proposal_command == "land":
       fields = memory_proposal.land(live, args.sha)
+    else:
+      raise AssertionError(
+          f"unreachable: the proposal subparsers reject any other verb before dispatch, got {args.proposal_command!r}")
   except memory_proposal.ProposalRefusalError as e:
     print(f"error: {e}", file=sys.stderr)
     sys.exit(1)

@@ -115,8 +115,10 @@ def main(argv: Sequence[str] | None = None) -> None:
   args = parser.parse_args(argv if argv is not None else None)
   if args.verb == "check":
     sys.exit(_run_check(args))
-  if args.verb == "wrap":
+  elif args.verb == "wrap":
     sys.exit(_run_wrap(args))
+  else:
+    parser.error(f"unknown artifact verb: {args.verb}")
 
 
 if __name__ == "__main__":

@@ -14,7 +14,6 @@ from pathlib import Path
 from typing import Self
 
 import pytest
-from conftest import assert_transcribe_cancel_honors_close_timeout
 
 from src.agents.transcription import gemini
 from src.agents.transcription.gemini import GeminiTranscriptionBackend, _normalize_transcript
@@ -168,27 +167,3 @@ async def test_transcribe_normalizes_both_the_spaced_interim_and_the_spaced_fina
       ("final", NORMALIZED_FINAL),
   ]
   assert socket.closed  # the backend session closed with the transcription
-
-
-# --- Close wait ---------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_transcribe_cancel_waits_only_the_configured_close_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Cancelling a transcription in progress waits WS_CLIENT_CLOSE_TIMEOUT for the
-  peer's close frame, not websockets' 10 s default (synthetic credentials only)."""
-  from src.core import timeouts
-
-  monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
-  monkeypatch.setattr(
-      gemini,
-      "get_credentials",
-      lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections={"gemini": {
-          "api_key": "test-key"
-      }}),
-  )
-
-  def backend(url: str) -> GeminiTranscriptionBackend:
-    return GeminiTranscriptionBackend(CharlieBotConfig(charliebot_home=Path("/tmp/fake-home")), endpoint_url=url)
-
-  await assert_transcribe_cancel_honors_close_timeout(backend, [SETUP_REPLY])

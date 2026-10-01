@@ -357,50 +357,15 @@ def make_context_compact_failed_event(error: str | None, model: str | None) -> d
   return event
 
 
-_NDJSON_READ_CHUNK = 1 << 20
-
-
 async def iter_ndjson_events(stdout: asyncio.StreamReader) -> AsyncIterator[dict]:
   """Yield the JSON objects of an NDJSON stream.
 
-  The line split runs on each read's own bytes: the partial line rides a
-  chunk list joined once at its newline. StreamReader.readline re-scans its
-  whole buffer on every transport feed, quadratic in the line a big tool
-  output carries, and an accumulating bytearray pays a whole-line realloc per
-  growth — the split carries neither. Raw byte lines ride
-  :func:`parse_ndjson_line` directly: orjson parses the wire's UTF-8 bytes
-  natively, so a valid line pays no decode pass, and the contract's replace
-  fallback inside the parse decides torn bytes. A single line past the stream
-  buffer limit raises the readline shape's ValueError — the runaway-line bound
-  the piped funnel keeps.
+  Raw byte lines ride :func:`parse_ndjson_line` directly: orjson parses the
+  wire's UTF-8 bytes natively, so a valid line pays no decode pass, and the
+  contract's replace fallback inside the parse decides torn bytes.
   """
-  parts: list[bytes] = []
-  partial_size = 0
-  while True:
-    chunk = await stdout.read(_NDJSON_READ_CHUNK)
-    if not chunk:
-      break
-    scan_from = 0
-    while True:
-      newline = chunk.find(b"\n", scan_from)
-      if newline < 0:
-        break
-      parts.append(chunk[scan_from:newline])
-      line = parts[0] if len(parts) == 1 else b"".join(parts)
-      parts.clear()
-      partial_size = 0
-      scan_from = newline + 1
-      event = parse_ndjson_line(line, log_event="backend_line_not_json", log_fields={})
-      if event is not None:
-        yield event
-    if scan_from < len(chunk):
-      parts.append(chunk[scan_from:])
-      partial_size += len(chunk) - scan_from
-      if partial_size > DEFAULT_BUFFER_LIMIT:
-        raise ValueError(f"ndjson line exceeds the {DEFAULT_BUFFER_LIMIT} B stream buffer limit")
-  if parts:
-    line = parts[0] if len(parts) == 1 else b"".join(parts)
-    event = parse_ndjson_line(line, log_event="backend_line_not_json", log_fields={})
+  async for raw_line in stdout:
+    event = parse_ndjson_line(raw_line, log_event="backend_line_not_json", log_fields={})
     if event is not None:
       yield event
 

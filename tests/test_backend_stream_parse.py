@@ -32,44 +32,27 @@ _LINES = [
 _ASSISTANT_LINE_BYTES = len(_LINES[0]) + len(_LINES[1]) + len(_LINES[2])
 
 
-class _ChunkReader:
+class _LineReader:
 
-  """A read()-shaped stand-in for the piped stdout StreamReader.
+  def __init__(self, lines: list[bytes]) -> None:
+    self._lines = lines
+    self._i = 0
 
-  The feed cuts the stream at *chunk_size* bytes mid-line on purpose: the
-  funnel's line split must reassemble lines across read boundaries.
-  """
+  def __aiter__(self) -> _LineReader:
+    return self
 
-  def __init__(self, stream: bytes, chunk_size: int) -> None:
-    self._stream = stream
-    self._chunk_size = chunk_size
-    self._at = 0
-
-  async def read(self, size: int) -> bytes:
-    del size  # the transport's own pace decides; the funnel's ask never shrinks a feed
-    chunk = self._stream[self._at:self._at + self._chunk_size]
-    self._at += len(chunk)
-    return chunk
+  async def __anext__(self) -> bytes:
+    if self._i >= len(self._lines):
+      raise StopAsyncIteration
+    line = self._lines[self._i]
+    self._i += 1
+    return line
 
 
 @pytest.mark.asyncio
 async def test_iter_ndjson_events_parses_and_skips() -> None:
-  stream = b"".join(_LINES)
-  reader = _ChunkReader(stream, chunk_size=7)
-  events = [event async for event in iter_ndjson_events(reader)]
+  events = [event async for event in iter_ndjson_events(_LineReader(_LINES))]
   assert [event["seq"] for event in events] == [1, 3]
-
-
-@pytest.mark.asyncio
-async def test_iter_ndjson_events_raises_past_the_stream_buffer_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-  """One line past the stream buffer limit raises the readline shape's
-  ValueError instead of buffering without bound (the runaway-line bound)."""
-  from src.agents.backends import base
-
-  monkeypatch.setattr(base, "DEFAULT_BUFFER_LIMIT", 64)
-  reader = _ChunkReader(b'{"pad": "' + b"x" * 100, chunk_size=1 << 20)
-  with pytest.raises(ValueError, match="buffer limit"):
-    [event async for event in iter_ndjson_events(reader)]
 
 
 async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:

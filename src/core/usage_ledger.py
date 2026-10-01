@@ -269,7 +269,8 @@ def _stored_trigger_sql(statement: str) -> str:
 # statement leaves behind -- the comparison the open-time refresh runs.
 # The name list deliberately excludes usage_agg_purge_empty, so the lengths differ by design.
 _AGG_TRIGGER_SQLS = {
-    name: _stored_trigger_sql(statement) for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS, strict=False)
+    name: _stored_trigger_sql(statement)
+    for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS, strict=False)
 }
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
@@ -773,8 +774,8 @@ class UsageLedger:
           (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
     UsageLedger._write_generation += 1
 
-  def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord],
-                  supersede_prefix: str | None = None) -> int:
+  def record_file(
+      self, host: str, path: str, sig: str, records: Sequence[UsageRecord], supersede_prefix: str | None = None) -> int:
     """Store one file capture atomically and return the record count.
 
     Every record is upserted on ``record_id`` (the latest capture wins on every column

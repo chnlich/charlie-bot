@@ -1,4 +1,6 @@
 import io
+import shutil
+import types
 from pathlib import Path
 
 import pytest
@@ -134,3 +136,104 @@ async def test_old_style_live_pane_is_migration_blocked_without_killing_it(
     await claude_sub._prepare_tmux_session(SESSION_ID, tmp_path, requested_resume=True)
 
   assert marker_states == [claude_sub.SessionMarkerState.MIGRATION_BLOCKED]
+
+
+def _write_launch_plugin(tmp_path: Path, socket_name: str = "bridge.sock", token: str = "token-a") -> Path:
+  bridge = types.SimpleNamespace(socket_path=tmp_path / socket_name, token=token)
+  return claude_sub._write_hook_plugin(tmp_path, bridge)
+
+
+def test_plugin_validate_key_masks_per_launch_values_and_pins_the_binary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  fake_binary = tmp_path / "claude-bin"
+  fake_binary.write_bytes(b"binary")
+  monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
+
+  first = _write_launch_plugin(tmp_path / "one")
+  second = _write_launch_plugin(tmp_path / "two", socket_name="other.sock", token="token-b")
+  key_one = claude_sub._plugin_validate_key(first)
+  key_two = claude_sub._plugin_validate_key(second)
+  assert key_one is not None
+  assert key_one == key_two
+
+  plugin_json = first / ".claude-plugin" / "plugin.json"
+  plugin_json.write_text(plugin_json.read_text(encoding="utf-8").replace("0.1.0", "0.2.0"), encoding="utf-8")
+  assert claude_sub._plugin_validate_key(first) != key_one
+
+  moved_binary = tmp_path / "claude-bin-2"
+  moved_binary.write_bytes(b"binary-two")
+  monkeypatch.setattr(shutil, "which", lambda name: str(moved_binary))
+  assert claude_sub._plugin_validate_key(second) != key_two
+
+  monkeypatch.setattr(shutil, "which", lambda name: None)
+  assert claude_sub._plugin_validate_key(second) is None
+
+
+def test_plugin_validate_key_degrades_to_validate_on_unreadable_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  fake_binary = tmp_path / "claude-bin"
+  fake_binary.write_bytes(b"binary")
+  monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
+  plugin_dir = _write_launch_plugin(tmp_path / "one")
+  (plugin_dir / "hooks" / "hooks.json").write_text("{not json", encoding="utf-8")
+  assert claude_sub._plugin_validate_key(plugin_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_validate_hook_plugin_pair_cache_skips_the_second_pass(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path / "home"))
+  fake_binary = tmp_path / "claude-bin"
+  fake_binary.write_bytes(b"binary")
+  monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
+  calls: list[list[str]] = []
+
+  async def fake_capture(*args: str) -> tuple[int, str, str]:
+    calls.append(list(args))
+    return 0, "", ""
+
+  monkeypatch.setattr(claude_sub, "_run_cli_capture", fake_capture)
+  plugin_dir = _write_launch_plugin(tmp_path / "launch")
+
+  await claude_sub._validate_hook_plugin(plugin_dir)
+  await claude_sub._validate_hook_plugin(plugin_dir)
+  assert len(calls) == 1
+
+  (tmp_path / "home" / "claude-sub-sessions" / "plugin-validate-cache.json").unlink()
+  await claude_sub._validate_hook_plugin(plugin_dir)
+  assert len(calls) == 2
+
+  hooks_json = plugin_dir / "hooks" / "hooks.json"
+  hooks_json.write_text(hooks_json.read_text(encoding="utf-8").replace('"-S"', '"-S", "-I"'), encoding="utf-8")
+  await claude_sub._validate_hook_plugin(plugin_dir)
+  assert len(calls) == 3
+
+
+@pytest.mark.asyncio
+async def test_validate_hook_plugin_failure_writes_no_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path / "home"))
+  fake_binary = tmp_path / "claude-bin"
+  fake_binary.write_bytes(b"binary")
+  monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
+  calls: list[list[str]] = []
+
+  async def failing_capture(*args: str) -> tuple[int, str, str]:
+    calls.append(list(args))
+    return 1, "", "schema rejected"
+
+  monkeypatch.setattr(claude_sub, "_run_cli_capture", failing_capture)
+  plugin_dir = _write_launch_plugin(tmp_path / "launch")
+
+  with pytest.raises(claude_sub.ClaudeSubError, match="validation failed"):
+    await claude_sub._validate_hook_plugin(plugin_dir)
+  assert len(calls) == 1
+  assert not (tmp_path / "home" / "claude-sub-sessions" / "plugin-validate-cache.json").exists()

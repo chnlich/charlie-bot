@@ -31,6 +31,8 @@ def main() -> None:
   args = parser.parse_args()
   if args.command == "get":
     _cmd_get(args.key)
+  else:
+    parser.error(f"unknown config command: {args.command}")
 
 
 def _cmd_get(key: str) -> None:

@@ -97,6 +97,8 @@ def main() -> None:
   args = parser.parse_args()
   if args.session_tree_command == "preview":
     _cmd_preview(args)
+  else:
+    parser.error(f"unknown session-tree command: {args.session_tree_command}")
 
 
 if __name__ == "__main__":

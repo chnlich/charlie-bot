@@ -221,136 +221,140 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
 
 
 def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
-    """Count the landing-proof git calls at src.core.git's module attributes.
+  """Count the landing-proof git calls at src.core.git's module attributes.
 
     task_execution imports git_verify_commit_landed inside _landing_for_work,
     so the module-attribute patch reaches it; git_verify_commit_landed itself
     resolves git_fetch through the same module global, so both counters see
     every call a replayed follow-up makes.
     """
-    from src.core import git as git_mod
+  from src.core import git as git_mod
 
-    counts = {"git_fetch": 0, "git_verify_commit_landed": 0}
-    real_fetch = git_mod.git_fetch
-    real_verify = git_mod.git_verify_commit_landed
+  counts = {"git_fetch": 0, "git_verify_commit_landed": 0}
+  real_fetch = git_mod.git_fetch
+  real_verify = git_mod.git_verify_commit_landed
 
-    async def counted_fetch(repo_path, remote, branch):
-        counts["git_fetch"] += 1
-        return await real_fetch(repo_path, remote, branch)
+  async def counted_fetch(repo_path, remote, branch):
+    counts["git_fetch"] += 1
+    return await real_fetch(repo_path, remote, branch)
 
-    async def counted_verify(repo_path, branch, commit):
-        counts["git_verify_commit_landed"] += 1
-        return await real_verify(repo_path, branch, commit)
+  async def counted_verify(repo_path, branch, commit):
+    counts["git_verify_commit_landed"] += 1
+    return await real_verify(repo_path, branch, commit)
 
-    monkeypatch.setattr(git_mod, "git_fetch", counted_fetch)
-    monkeypatch.setattr(git_mod, "git_verify_commit_landed", counted_verify)
-    return counts
+  monkeypatch.setattr(git_mod, "git_fetch", counted_fetch)
+  monkeypatch.setattr(git_mod, "git_verify_commit_landed", counted_verify)
+  return counts
 
 
 async def _reviewed_implement_task(tmp_path, monkeypatch):
-    """One implement worker whose work and review Runs both finished success with
+  """One implement worker whose work and review Runs both finished success with
     its reviewed branch landed on origin's base — the durable state every server
     restart reconciles: every Run terminal, the review's follow-up owed to the
     replay. The worktree is already gone from disk, as a delivered task's is."""
-    from conftest import run_git
+  from conftest import run_git
 
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
-        tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
-    repo, _origin = init_repo_with_origin(tmp_path / "repo")
-    # The reviewer's landing: the reviewed branch fast-forwards origin's base.
-    run_git(repo, "checkout", "-q", "-b", "task/work")
-    (repo / "marker.txt").write_text("implemented\n")
-    run_git(repo, "add", "-A")
-    run_git(repo, "commit", "-q", "-m", "implement marker")
-    run_git(repo, "push", "-q", "origin", "task/work:main")
-    install_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("review ok")])],
-        WORKER_BUILD_BACKEND_PATCH_TARGET)
-    # The delivered report's parent turn: one fresh scripted double per build.
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
-    patch_instructions_content(monkeypatch)
-    work_run_id = "run-work"
-    await tree.runs.register_run(
-        RunRecord(id=work_run_id, session_id=worker.id, kind="work",
-                  backend="fake", model="fake-model",
-                  repo_path=str(repo), base_branch="main",
-                  branch_name="task/work",
-                  worktree_path=str(tmp_path / "charliebot-home" / "worktrees" / "task-work-gone")))
-    await tree.dispatch.finish_run(worker.id, work_run_id, outcome="success", exit_code=0)
-    review_run_id = "review-done"
-    await tree.runs.register_run(
-        RunRecord(id=review_run_id, session_id=worker.id, kind="review",
-                  review_of_run_id=work_run_id, backend="fake", model="fake-model"))
-    await tree.dispatch.finish_run(worker.id, review_run_id, outcome="success", exit_code=0)
-    return cfg, session_mgr, tree, manager, worker
+  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+      tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
+  repo, _origin = init_repo_with_origin(tmp_path / "repo")
+  # The reviewer's landing: the reviewed branch fast-forwards origin's base.
+  run_git(repo, "checkout", "-q", "-b", "task/work")
+  (repo / "marker.txt").write_text("implemented\n")
+  run_git(repo, "add", "-A")
+  run_git(repo, "commit", "-q", "-m", "implement marker")
+  run_git(repo, "push", "-q", "origin", "task/work:main")
+  install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The delivered report's parent turn: one fresh scripted double per build.
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  patch_instructions_content(monkeypatch)
+  work_run_id = "run-work"
+  await tree.runs.register_run(
+      RunRecord(
+          id=work_run_id,
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          repo_path=str(repo),
+          base_branch="main",
+          branch_name="task/work",
+          worktree_path=str(tmp_path / "charliebot-home" / "worktrees" / "task-work-gone")))
+  await tree.dispatch.finish_run(worker.id, work_run_id, outcome="success", exit_code=0)
+  review_run_id = "review-done"
+  await tree.runs.register_run(
+      RunRecord(
+          id=review_run_id,
+          session_id=worker.id,
+          kind="review",
+          review_of_run_id=work_run_id,
+          backend="fake",
+          model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, review_run_id, outcome="success", exit_code=0)
+  return cfg, session_mgr, tree, manager, worker
 
 
 @pytest.mark.asyncio
-async def test_recovery_closed_task_skips_landing(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A closed task's replayed review follow-up re-proves nothing: repeated
+async def test_recovery_closed_task_skips_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A closed task's replayed review follow-up re-proves nothing: repeated
     startup passes make zero landing git calls, append no fact on the worker or
     its parent, and leave the state completed."""
-    from src.core.task_recovery import reconcile_task_tree
+  from src.core.task_recovery import reconcile_task_tree
 
-    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
-    # The warm pass replays the follow-up on the still-open task: the landing
-    # proof runs once, the automatic close lands, and the parent report's own
-    # turn settles before the counted passes start.
+  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  # The warm pass replays the follow-up on the still-open task: the landing
+  # proof runs once, the automatic close lands, and the parent report's own
+  # turn settles before the counted passes start.
+  await reconcile_task_tree(cfg, tree)
+  assert tree.task_state(worker.id) == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+
+  counts = _count_landing_git(monkeypatch)
+  worker_facts = len(tree.fact_history(worker.id))
+  manager_facts = len(tree.fact_history(manager.id))
+  for _round in range(2):
     await reconcile_task_tree(cfg, tree)
-    assert tree.task_state(worker.id) == "completed"
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-
-    counts = _count_landing_git(monkeypatch)
-    worker_facts = len(tree.fact_history(worker.id))
-    manager_facts = len(tree.fact_history(manager.id))
-    for _round in range(2):
-        await reconcile_task_tree(cfg, tree)
-    assert counts["git_fetch"] == 0, counts
-    assert counts["git_verify_commit_landed"] == 0, counts
-    assert len(tree.fact_history(worker.id)) == worker_facts
-    assert len(tree.fact_history(manager.id)) == manager_facts
-    assert tree.task_state(worker.id) == "completed"
+  assert counts["git_fetch"] == 0, counts
+  assert counts["git_verify_commit_landed"] == 0, counts
+  assert len(tree.fact_history(worker.id)) == worker_facts
+  assert len(tree.fact_history(manager.id)) == manager_facts
+  assert tree.task_state(worker.id) == "completed"
 
 
 @pytest.mark.asyncio
-async def test_recovery_reopened_task_reproves_landing(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A reopened task derives "open" again, so its replayed review follow-up
+async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A reopened task derives "open" again, so its replayed review follow-up
     runs the full landing proof (the counter observes git_verify_commit_landed)."""
-    from src.core.task_recovery import reconcile_task_tree
+  from src.core.task_recovery import reconcile_task_tree
 
-    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
-    await reconcile_task_tree(cfg, tree)
-    assert tree.task_state(worker.id) == "completed"
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    await tree.completion.reopen_task(
-        worker.id, request_id="reopen-1", reason="recheck the delivery",
-        caller=OPERATOR)
-    assert tree.task_state(worker.id) == "open"
+  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  await reconcile_task_tree(cfg, tree)
+  assert tree.task_state(worker.id) == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  await tree.completion.reopen_task(worker.id, request_id="reopen-1", reason="recheck the delivery", caller=OPERATOR)
+  assert tree.task_state(worker.id) == "open"
 
-    counts = _count_landing_git(monkeypatch)
-    await reconcile_task_tree(cfg, tree)
-    assert counts["git_verify_commit_landed"] >= 1, counts
+  counts = _count_landing_git(monkeypatch)
+  await reconcile_task_tree(cfg, tree)
+  assert counts["git_verify_commit_landed"] >= 1, counts
 
 
 @pytest.mark.asyncio
-async def test_recovery_open_task_landing_unchanged(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """An open task's replayed review follow-up proves the landing and closes:
+async def test_recovery_open_task_landing_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An open task's replayed review follow-up proves the landing and closes:
     one pass closes the task and delivers the completed report to the parent,
     exactly as the closed-task skip left it."""
-    from src.core.task_recovery import reconcile_task_tree
+  from src.core.task_recovery import reconcile_task_tree
 
-    cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
-    counts = _count_landing_git(monkeypatch)
-    await reconcile_task_tree(cfg, tree)
-    assert counts["git_verify_commit_landed"] >= 1, counts
-    assert counts["git_fetch"] >= 1, counts
-    assert tree.task_state(worker.id) == "completed"
-    reports = [e for e in tree.fact_history(manager.id) if e.get("type") == ET.CHILD_REPORT]
-    assert reports and reports[-1]["outcome"] == "completed"
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  counts = _count_landing_git(monkeypatch)
+  await reconcile_task_tree(cfg, tree)
+  assert counts["git_verify_commit_landed"] >= 1, counts
+  assert counts["git_fetch"] >= 1, counts
+  assert tree.task_state(worker.id) == "completed"
+  reports = [e for e in tree.fact_history(manager.id) if e.get("type") == ET.CHILD_REPORT]
+  assert reports and reports[-1]["outcome"] == "completed"
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
 
 
 @pytest.mark.asyncio

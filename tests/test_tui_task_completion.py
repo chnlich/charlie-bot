@@ -24,7 +24,7 @@ from contextlib import suppress
 from pathlib import Path
 
 import pytest
-from conftest import OPERATOR
+from conftest import OPERATOR, _async_wait_for
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -275,14 +275,13 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   # scripted attachment.
   with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws:
     ws.send_json({"type": "cursor", "index": 0})
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
+
+    def _spawned() -> bool:
       attachment = ScriptedTtyAttachment.instances.get(session_id)
-      if attachment is not None and attachment.spawned:
-        break
-      await asyncio.sleep(0.05)
-    else:
-      pytest.fail("the attach path never spawned the task's own terminal")
+      return attachment is not None and attachment.spawned
+
+    await _async_wait_for(_spawned, 10.0, "the attach path never spawned the task's own terminal")
+    attachment = ScriptedTtyAttachment.instances.get(session_id)
     assert ensured and ensured[0][0] == session_id
     assert ensured[0][1] == cfg.sessions_dir / session_id
 
@@ -318,9 +317,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
         frame = msg
     assert base64.b64decode(frame["data"]) == b"terminal ready"
     ws.send_json({"type": "pty_input", "data": base64.b64encode(b"ls\n").decode()})
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline and not attachment.written:
-      await asyncio.sleep(0.05)
+    await _async_wait_for(lambda: attachment.written, 10.0, "the terminal never echoed the pty input")
     assert bytes(attachment.written) == b"ls\n"
 
   # One Run per actual terminal launch, observed at the delivery boundary: the
@@ -404,11 +401,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   # credential — then its own explicit stop lands its own interrupted fact.
   with client.websocket_connect(f"/ws/sessions/{session_id}?token=x") as ws3:
     ws3.send_json({"type": "cursor", "index": 0})
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline and len(start_calls) < 2:
-      await asyncio.sleep(0.05)
-  assert len(start_calls) == 2, ("the new attach never launched its terminal "
-                                 "(or produced no second Run)")
+    await _async_wait_for(
+        lambda: len(start_calls) >= 2, 10.0, "the new attach never launched its terminal (or produced no second Run)")
+  assert len(start_calls) == 2
   relaunch_call = start_calls[1]
   relaunch_env = dict(kv.split("=", 1) for kv in relaunch_call["env_args"] if kv != "-e")
   relaunch_argv = relaunch_call["command_args"]
@@ -561,13 +556,8 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
             "reason": "not needed"
         })
     assert cancelled.status_code == 200, cancelled.text
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-      if tree.task_state(agents_task.id) != "open":
-        break
-      await asyncio.sleep(0.05)
-    else:
-      pytest.fail("the agent child never settled after cancellation")
+    await _async_wait_for(
+        lambda: tree.task_state(agents_task.id) != "open", 10.0, "the agent child never settled after cancellation")
 
     # The cancelled child's report landed on this node as a durable input (the
     # ordinary delivery chain). The operator resolved it in the terminal too.

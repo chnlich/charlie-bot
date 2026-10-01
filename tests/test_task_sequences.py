@@ -19,6 +19,7 @@ from conftest import (
     FABLE_MODEL,
     OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
+    _async_wait_for,
     create_task,
     patch_instructions_content,
     rate_limit_event,
@@ -112,17 +113,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   await _admit_takeoff(tree, manager)
 
   async def _wait_done(client, body):
-    child_id = body["child_session_id"]
-    deadline = asyncio.get_event_loop().time() + 30
-    while asyncio.get_event_loop().time() < deadline:
-      records = tree.runs.list_run_records_sync(child_id)
-      if len(records) == 2 and _final_reports(tree, manager.id) and all(
-          tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) is not None for r in records):
-        return
-      await asyncio.sleep(0.1)
-    pytest.fail(
-        f"the sequence never finished: runs={[(r.id, r.kind) for r in tree.runs.list_run_records_sync(child_id)]} "
-        f"reports={_child_reports(tree, manager.id)}")
+    await _wait_for_iterations_settled(tree, body["child_session_id"], manager.id, timeout=30.0)
 
   body, child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
 
@@ -151,15 +142,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
     assert f"iter_{i:04d}.md" in b["backend"].prompt
   # One final result report on the manager, from the child, after BOTH runs,
   # plus one per-iteration report for each judged iteration.
-  deadline = asyncio.get_event_loop().time() + 10
-  report = None
-  while asyncio.get_event_loop().time() < deadline:
-    finals = _final_reports(tree, manager.id)
-    if finals:
-      report = finals[0]
-      break
-    await asyncio.sleep(0.1)
-  assert report is not None, "the final sequence result was never delivered"
+  report = await _wait_for_final_report(tree, manager.id, timeout=10.0)
   assert report.get("child_session_id") == child_id
   assert report.get("outcome") in ("completed", "blocked", "failed", "cancelled")
   assert "Improve loop" in str(report.get("summary"))
@@ -212,15 +195,7 @@ async def test_live_goal_change_affects_next_iteration(
     assert resp.status_code == 200, resp.text
     child_id = resp.json()["child_session_id"]
 
-    deadline = asyncio.get_event_loop().time() + 30
-    while asyncio.get_event_loop().time() < deadline:
-      records = tree.runs.list_run_records_sync(child_id)
-      if len(records) == 2 and _final_reports(tree, manager.id) and all(
-          tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) is not None for r in records):
-        break
-      await asyncio.sleep(0.1)
-    else:
-      pytest.fail("both iterations never finished")
+    await _wait_for_iterations_settled(tree, child_id, manager.id, timeout=30.0)
   # The second build's prompt carries the EDITED goal, not the original one.
   assert second.prompt is not None
   assert "now improve the OTHER thing" in second.prompt
@@ -285,6 +260,18 @@ def _final_reports(tree, manager_id: str) -> list[dict]:
   ]
 
 
+async def _wait_for_iterations_settled(tree, child_id: str, manager_id: str, timeout: float = 30.0) -> None:
+  """Both iteration Runs terminal and the loop's final report on the manager."""
+
+  def _settled() -> bool:
+    records = tree.runs.list_run_records_sync(child_id)
+    return bool(
+        len(records) == 2 and _final_reports(tree, manager_id) and
+        all(tree.runs.terminal_outcome(tree.runs.load_events_sync(child_id), r.id) is not None for r in records))
+
+  await _async_wait_for(_settled, timeout, "both iterations never finished")
+
+
 async def _wait_for_final_report(tree, manager_id: str, timeout: float = 30.0) -> dict:
   """The ONE final sequence result on the manager, from the child."""
   deadline = asyncio.get_event_loop().time() + timeout
@@ -347,15 +334,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
   async def wait_done(_client, body):
     # Both iterations terminal and the one final report delivered, while the
     # controller's portal loop is still alive.
-    deadline = asyncio.get_event_loop().time() + 30
-    while asyncio.get_event_loop().time() < deadline:
-      records = tree.runs.list_run_records_sync(body["child_session_id"])
-      if len(records) == 2 and _final_reports(tree, manager.id) and all(
-          tree.runs.terminal_outcome(tree.runs.load_events_sync(body["child_session_id"]), r.id) is not None
-          for r in records):
-        return
-      await asyncio.sleep(0.1)
-    pytest.fail("both iterations never finished")
+    await _wait_for_iterations_settled(tree, body["child_session_id"], manager.id, timeout=30.0)
 
   body, _child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=wait_done)
 
@@ -483,9 +462,7 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
 async def _await_wakes(wakes: list[str], manager_id: str, count: int, timeout: float = 10.0) -> None:
   """Wait until *count* parent wakes have fired (the final report's wake is
   awaited inline right after its append, so the poll only covers the tick)."""
-  deadline = asyncio.get_event_loop().time() + timeout
-  while asyncio.get_event_loop().time() < deadline and len(wakes) < count:
-    await asyncio.sleep(0.05)
+  await _async_wait_for(lambda: len(wakes) >= count, timeout, "the parent wakes never reached the expected count")
   assert wakes == [manager_id] * count
 
 

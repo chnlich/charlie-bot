@@ -595,11 +595,89 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
   return plugin_dir
 
 
+_PLUGIN_VALIDATE_CACHE_FILENAME = "plugin-validate-cache.json"
+
+
+def _plugin_validate_cache_path() -> Path:
+  return _session_marker_dir() / _PLUGIN_VALIDATE_CACHE_FILENAME
+
+
+def _plugin_validate_key(plugin_dir: Path) -> str | None:
+  """The plugin-validation pass's identity: written plugin bytes plus the claude binary's own identity.
+
+  The bridge socket path and token are the only per-launch values the written
+  hooks.json carries (``_write_hook_plugin``); masked by value so one pass
+  answers every launch writing the same bytes around them. ``None`` — no
+  claude binary, or unreadable plugin or binary — always validates.
+  """
+  import hashlib
+  import shutil
+
+  binary = shutil.which("claude")
+  if binary is None:
+    return None
+  try:
+    resolved = Path(binary).resolve()
+    stat = resolved.stat()
+    plugin_bytes = (plugin_dir / ".claude-plugin" / "plugin.json").read_bytes()
+    hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+  except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    return None
+  try:
+    for groups in hooks["hooks"].values():
+      for group in groups:
+        for hook in group["hooks"]:
+          args = hook["args"]
+          for flag, placeholder in (("--socket", "<socket>"), ("--token", "<token>")):
+            if flag in args:
+              args[args.index(flag) + 1] = placeholder
+  except (KeyError, TypeError):
+    return None
+  normalized = json.dumps(hooks, sort_keys=True, separators=(",", ":")).encode("utf-8")
+  digest = hashlib.sha256()
+  for part in (plugin_bytes, normalized, str(resolved).encode("utf-8"), f"{stat.st_size}:{stat.st_mtime_ns}".encode()):
+    digest.update(part)
+  return digest.hexdigest()
+
+
+def _read_validate_cache() -> str | None:
+  try:
+    data = json.loads(_plugin_validate_cache_path().read_text(encoding="utf-8"))
+  except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    return None
+  return data["key"] if isinstance(data, dict) and isinstance(data.get("key"), str) else None
+
+
+def _write_validate_cache(key: str) -> None:
+  path = _plugin_validate_cache_path()
+  try:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    write_json_atomically(path, {"key": key}, newline=True)
+  except OSError:
+    # The cache is an accelerator only: a failed write costs the next launch its
+    # validate (the pre-cache behavior) and never weakens the guard.
+    pass
+
+
 async def _validate_hook_plugin(plugin_dir: Path) -> None:
+  """Strict-validate the written plugin through the claude CLI before the turn's launch.
+
+  The guard fails a launch whose plugin this claude rejects before Claude starts —
+  the hooks carry prompt delivery, and a rejected plugin surfaces as UNKNOWN
+  delivery after the confirmation timeout. Validate reads only the plugin tree and
+  its own binary (a scratch ``CLAUDE_CONFIG_DIR``/``HOME`` validates identically), so
+  the pass is a fact about the (plugin bytes, claude binary) pair and rides the pair
+  cache in the state home; deploys and claude updates change the key and revalidate.
+  """
+  key = _plugin_validate_key(plugin_dir)
+  if key is not None and _read_validate_cache() == key:
+    return
   rc, stdout, stderr = await _run_cli_capture("claude", "plugin", "validate", "--strict", str(plugin_dir))
   if rc != 0:
     detail = stderr.strip() or stdout.strip()
     raise ClaudeSubError(f"Claude Code hook capability/plugin validation failed (rc={rc}): {detail}")
+  if key is not None:
+    _write_validate_cache(key)
 
 
 async def _respawn_claude(

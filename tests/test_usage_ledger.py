@@ -16,6 +16,7 @@ import pytest
 
 from src.core.usage_ledger import (
     _MODEL_ROWS_SQL,
+    _SCHEMA,
     LedgerRow,
     RecordKind,
     UsageLedger,
@@ -212,33 +213,52 @@ def _table_pass_rows(ledger: UsageLedger) -> list[LedgerRow]:
   return _rows_from_accs(accs)
 
 
+def _agg_rows(ledger: UsageLedger) -> list[LedgerRow]:
+  """The page rows folded from the trigger-maintained aggregate -- what a served read
+  prices once the backfill has run, read here without the memo in the way."""
+  accs = ledger._agg_accs()
+  assert accs is not None  # the aggregate has been backfilled and serves
+  return _rows_from_accs(accs)
+
+
 def test_agg_read_tracks_the_table_through_every_write_shape(tmp_path):
   """The served rows equal the table pass after each shape the write path produces:
-  a cross-day rewrite, a counted fallback retired by a native session, a fallback born
-  excluded, an excluded row rewritten, an empty-ts row, and a foreign row delete (the
-  module never deletes, but a raw delete must not leave the aggregate behind)."""
+  a cross-day rewrite, a same-group-day insert, a counted fallback retired by a native
+  session, a fallback born excluded, an excluded row rewritten, an empty-ts row, and a
+  foreign row delete (the module never deletes, but a raw delete must not leave the
+  aggregate behind). Every step checks both served paths: model_rows -- memo, fold, or
+  aggregate -- and the trigger-maintained aggregate itself."""
   moved = _record("rec-moved", RecordKind.NATIVE, sessions=("sess-m",), ts=TS_A, output=5)
   fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-x",), model="model-fb", ts=TS_B, output=7)
   native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-x",), model="model-native")
   empty = _record("rec-empty", RecordKind.NATIVE, sessions=("sess-e",), ts="", model="model-empty")
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+
+    def assert_served_on_the_table() -> None:
+      assert ledger.model_rows() == _table_pass_rows(ledger)
+      assert _agg_rows(ledger) == _table_pass_rows(ledger)
+
     ledger.record_file(HOST, "/logs/m.jsonl", "sig-m", [moved, fb, empty])
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    ledger.model_rows()  # the backfill; the aggregate serves from here
+    assert_served_on_the_table()
     moved_grown = _record("rec-moved", RecordKind.NATIVE, sessions=("sess-m",), ts=TS_B, output=9)
     ledger.record_file(HOST, "/logs/m.jsonl", "sig-m2", [moved_grown])
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert_served_on_the_table()
+    same_day = _record("rec-same-day", RecordKind.NATIVE, sessions=("sess-sd",), ts=TS_B, output=6)
+    ledger.record_file(HOST, "/logs/sd.jsonl", "sig-sd", [same_day])  # joins moved_grown's group-day
+    assert_served_on_the_table()
     ledger.record_file(HOST, "/logs/n.jsonl", "sig-n", [native])  # retires rec-fb
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert_served_on_the_table()
     born_excluded = _record("rec-be", RecordKind.FALLBACK, sessions=("sess-x",), model="model-be", ts=TS_B)
     ledger.record_file(HOST, "/logs/be.jsonl", "sig-be", [born_excluded])
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert_served_on_the_table()
     rewritten_excluded = _record(
         "rec-fb", RecordKind.FALLBACK, sessions=("sess-x",), model="model-fb", ts=TS_B, output=50)
     ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb2", [rewritten_excluded])
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert_served_on_the_table()
     ledger._conn.execute("DELETE FROM usage WHERE record_id = 'rec-moved'")
     ledger._conn.commit()
-    assert ledger.model_rows() == _table_pass_rows(ledger)
+    assert_served_on_the_table()
 
 
 def test_previous_release_write_order_never_counts_a_born_excluded_fallback(tmp_path):
@@ -325,6 +345,40 @@ def test_dropped_aggregate_table_reprices_on_the_next_read(tmp_path):
   with UsageLedger(path) as ledger:  # the reopen's schema script rebuilds the table
     rows = ledger.model_rows()
   assert rows == expected
+
+
+def test_backfilled_aggregate_counts_later_same_group_day_writes(tmp_path):
+  """After the backfill, inserts onto an existing (source, model, account, kind, day) row
+  increment the aggregate: two more records sharing the first's group-day both count,
+  read through _agg_accs -- the path the page read serves -- not the memo."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), output=6)
+  third = _record("rec-3", RecordKind.NATIVE, sessions=("sess-c",), output=7)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows()  # the backfill; the aggregate serves from here
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [second, third])
+    served = _agg_rows(ledger)
+    assert served == _table_pass_rows(ledger)
+  assert [(row.calls, row.output) for row in served] == [(3, 18)]
+
+
+def test_rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table(tmp_path):
+  """Rewriting one of several records sharing a (group, day) row subtracts the old
+  contribution and re-adds the new one, so the served aggregate stays the table pass."""
+  records = [
+      _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5),
+      _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), output=5),
+      _record("rec-3", RecordKind.NATIVE, sessions=("sess-c",), output=5),
+  ]
+  rewritten = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), output=50)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", records)
+    ledger.model_rows()  # the backfill
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
+    served = _agg_rows(ledger)
+    assert served == _table_pass_rows(ledger)
+  assert [(row.calls, row.output) for row in served] == [(3, 60)]
 
 
 def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path):
@@ -845,8 +899,9 @@ def test_upgrade_moves_only_the_gone_source_clc_records(tmp_path):
 
 def test_upgrade_reprices_a_shared_group_day(tmp_path):
   """A moved record can share its (group, day) aggregate row with another counted record:
-  the trigger's re-add fires only for a fresh day row, so the upgrade re-prices the
-  backfilled aggregate from the table and the served rows still equal the table pass."""
+  the trigger's re-add lands on that shared row, and the upgrade's wholesale replacement
+  re-prices the backfilled aggregate from the table, so the served rows still equal the
+  table pass."""
   path = tmp_path / "ledger.sqlite3"
   here = tmp_path / "here-master.jsonl"
   here.write_text("{}\n")
@@ -893,3 +948,139 @@ def test_in_unsplit_only_rewrite_keeps_the_aggregate_on_the_table(tmp_path):
     rows = ledger.model_rows()
     assert rows == _table_pass_rows(ledger)
   assert [(row.in_unsplit, row.total) for row in rows] == [(7, 27)]
+
+
+# The pre-fix release's add-arm trigger bodies (d845d13a): the add skipped any (group, day)
+# row that already existed, so every later insert into a served group-day was dropped and a
+# rewrite's re-add never landed. Only these two bodies differ from this module's; the three
+# subtract-only bodies are unchanged.
+_PRE_FIX_INSERT_TRIGGER = """
+CREATE TRIGGER usage_agg_after_insert AFTER INSERT ON usage
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
+  SELECT new.source, new.model, new.account, new.kind, SUBSTR(new.ts, 1, 10), 1,
+         new.in_fresh, new.cache_write, new.cache_read, new.in_unsplit, new.output
+  WHERE NOT (new.kind = 'fallback' AND EXISTS (
+      SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+      WHERE fs.record_id = new.record_id))
+    AND NOT EXISTS (
+      SELECT 1 FROM usage_agg a WHERE a.source = new.source AND a.model = new.model
+      AND a.account = new.account AND a.kind = new.kind AND a.day = SUBSTR(new.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
+END;"""
+
+_PRE_FIX_UPDATE_TRIGGER = """
+CREATE TRIGGER usage_agg_after_update AFTER UPDATE ON usage
+WHEN old.kind <> new.kind OR old.source <> new.source OR old.model <> new.model
+  OR old.account <> new.account OR old.ts <> new.ts OR old.in_fresh <> new.in_fresh
+  OR old.cache_write <> new.cache_write OR old.cache_read <> new.cache_read
+  OR old.in_unsplit <> new.in_unsplit OR old.output <> new.output
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
+  SELECT old.source, old.model, old.account, old.kind, SUBSTR(old.ts, 1, 10), -1,
+         -old.in_fresh, -old.cache_write, -old.cache_read, -old.in_unsplit, -old.output
+  WHERE NOT (old.kind = 'fallback' AND EXISTS (
+      SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+      WHERE fs.record_id = old.record_id))
+    AND EXISTS (
+      SELECT 1 FROM usage_agg a WHERE a.source = old.source AND a.model = old.model
+      AND a.account = old.account AND a.kind = old.kind AND a.day = SUBSTR(old.ts, 1, 10));
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
+  SELECT new.source, new.model, new.account, new.kind, SUBSTR(new.ts, 1, 10), 1,
+         new.in_fresh, new.cache_write, new.cache_read, new.in_unsplit, new.output
+  WHERE NOT (new.kind = 'fallback' AND EXISTS (
+      SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+      WHERE fs.record_id = new.record_id))
+    AND NOT EXISTS (
+      SELECT 1 FROM usage_agg a WHERE a.source = new.source AND a.model = new.model
+      AND a.account = new.account AND a.kind = new.kind AND a.day = SUBSTR(new.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
+END;"""
+
+
+def _trigger_sqls(conn) -> dict[str, str]:
+  """The stored sql of every trigger in the ledger, for reopen-stability asserts."""
+  return {
+      row["name"]: row["sql"]
+      for row in conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger' ORDER BY name")
+  }
+
+
+def _write_raw_usage(raw: sqlite3.Connection, rec: UsageRecord) -> None:
+  """One record through raw SQL, the way a release's record_file lands it: sessions
+  first, then the usage row."""
+  for session in rec.sessions:
+    raw.execute("INSERT INTO native_sessions (session, source) VALUES (?, ?)", (session, rec.source))
+  raw.execute(
+      "INSERT INTO usage (record_id, kind, source, model, account, host, ts,"
+      " in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at)"
+      " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '/x', ?)", (
+          rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, HOST, rec.ts, rec.in_fresh,
+          rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, rec.ts))
+
+
+def _pre_fix_ledger(path: Path, served: list[UsageRecord], late: list[UsageRecord]) -> None:
+  """Build a ledger as the pre-fix release left it: this schema, the add-arm-guarded
+  trigger bodies, *served* records written and the aggregate backfilled over them, then
+  *late* records written under the same bodies -- whose adds a served group-day drops.
+  Both stamps are set, so the fixed module's open takes the trigger-refresh path."""
+  raw = sqlite3.connect(path)
+  try:
+    raw.executescript(_SCHEMA)
+    raw.executescript(_PRE_FIX_INSERT_TRIGGER + _PRE_FIX_UPDATE_TRIGGER)
+    for rec in served + late:
+      _write_raw_usage(raw, rec)
+    raw.execute(
+        "INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write,"
+        " cache_read, in_unsplit, output)"
+        " SELECT source, model, account, kind, SUBSTR(ts, 1, 10), COUNT(*),"
+        " SUM(in_fresh), SUM(cache_write), SUM(cache_read), SUM(in_unsplit), SUM(output)"
+        " FROM usage WHERE record_id IN"
+        f" ({','.join('?' * len(served))})"
+        " GROUP BY source, model, account, kind, SUBSTR(ts, 1, 10)"
+        " ON CONFLICT(source, model, account, kind, day) DO UPDATE SET"
+        " calls = excluded.calls, in_fresh = excluded.in_fresh, cache_write = excluded.cache_write,"
+        " cache_read = excluded.cache_read, in_unsplit = excluded.in_unsplit, output = excluded.output",
+        [rec.record_id for rec in served])
+    raw.executemany("INSERT INTO ledger_meta (key, value) VALUES (?, ?)", [("agg_backfilled", "1"), ("schema", "2")])
+    raw.commit()
+  finally:
+    raw.close()
+
+
+def test_open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate(tmp_path):
+  """A ledger the pre-fix release left -- its add arm dropped every write onto an existing
+  (group, day) row -- opens under the fixed module with fresh bodies and a wholesale
+  re-price: the aggregate equals the table pass, a same-group-day insert keeps it equal,
+  and a reopen whose bodies now match runs nothing."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), output=6)
+  path = tmp_path / "ledger.sqlite3"
+  _pre_fix_ledger(path, [first], [second])  # the backfill ran before second was written
+  raw = sqlite3.connect(path)
+  try:
+    assert raw.execute("SELECT calls FROM usage_agg").fetchall() == [(1,)]  # second's add was dropped
+  finally:
+    raw.close()
+  third = _record("rec-3", RecordKind.NATIVE, sessions=("sess-c",), output=7)
+  with UsageLedger(path) as ledger:
+    served = _agg_rows(ledger)
+    assert served == _table_pass_rows(ledger)
+    assert [(row.calls, row.output) for row in served] == [(2, 11)]
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [third])
+    served = _agg_rows(ledger)
+    assert served == _table_pass_rows(ledger)
+  assert [(row.calls, row.output) for row in served] == [(3, 18)]
+  with UsageLedger(path) as ledger:
+    ledger.model_rows()
+    before, triggers = _snapshot(ledger._conn), _trigger_sqls(ledger._conn)
+  with UsageLedger(path) as ledger:
+    after, triggers_again = _snapshot(ledger._conn), _trigger_sqls(ledger._conn)
+  assert before == after
+  assert triggers == triggers_again

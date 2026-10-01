@@ -136,21 +136,25 @@ _AGG_DAY_EXISTS_SQL = (
 
 def _agg_contribute_sql(which: str, calls: str) -> str:
   """One aggregate upsert: add (or, with a negative calls term, subtract) {which} row's
-  contribution, skipping a fallback row the session tables exclude. A subtract fires only
-  when the (group, day) row already exists: before the backfill the aggregate is empty and
-  every subtract is a no-op the backfill's own pass subsumes, while a subtract that could
-  create a row would plant a negative orphan no later pass removes."""
+  contribution, skipping a fallback row the session tables exclude. An add lands
+  unconditionally on its (group, day) row -- creating it or upserting onto the one already
+  there -- so every counted write increments the aggregate. A subtract fires only when the
+  (group, day) row already exists: before the backfill the aggregate is empty and every
+  subtract is a no-op the backfill's wholesale replacement subsumes, while a subtract that
+  could create a row would plant a negative orphan no later pass removes."""
+  subtract = calls.startswith("-")
+  sign = "-" if subtract else ""
+  day_guard = f"    AND EXISTS ({_AGG_DAY_EXISTS_SQL.format(r=which)})\n" if subtract else ""
   return f"""
   INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
   SELECT {which}.source, {which}.model, {which}.account, {which}.kind, SUBSTR({which}.ts, 1, 10), {calls},
-         {'-' if calls.startswith('-') else ''}{which}.in_fresh,
-         {'-' if calls.startswith('-') else ''}{which}.cache_write,
-         {'-' if calls.startswith('-') else ''}{which}.cache_read,
-         {'-' if calls.startswith('-') else ''}{which}.in_unsplit,
-         {'-' if calls.startswith('-') else ''}{which}.output
+         {sign}{which}.in_fresh,
+         {sign}{which}.cache_write,
+         {sign}{which}.cache_read,
+         {sign}{which}.in_unsplit,
+         {sign}{which}.output
   WHERE NOT ({which}.kind = 'fallback' AND EXISTS ({_COUNTED_SESSIONS_SQL.format(r=which)}))
-    AND ({'EXISTS' if calls.startswith('-') else 'NOT EXISTS'} ({_AGG_DAY_EXISTS_SQL.format(r=which)}))
-  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+{day_guard}  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
     calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
     cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
     in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;"""
@@ -239,7 +243,9 @@ END;""",
 
 # The five triggers that sum the token columns. The schema-2 upgrade drops these by name
 # before the move: CREATE TRIGGER IF NOT EXISTS never replaces an existing trigger, so a
-# ledger upgraded in place would otherwise keep four-sum trigger bodies forever.
+# ledger upgraded in place would otherwise keep four-sum trigger bodies forever. The
+# open-time refresh (``_refresh_agg_triggers``) compares stored bodies against this
+# module's for the same reason.
 _AGG_SUM_TRIGGER_NAMES = (
     "usage_agg_after_insert",
     "usage_agg_after_update",
@@ -247,6 +253,21 @@ _AGG_SUM_TRIGGER_NAMES = (
     "usage_agg_after_native_session",
     "usage_agg_after_fallback_session",
 )
+
+
+def _stored_trigger_sql(statement: str) -> str:
+  """The sqlite_master.sql text creating a trigger from *statement* leaves behind: SQLite
+  keeps the statement's text minus its IF NOT EXISTS clause, edge whitespace, and the
+  trailing semicolon."""
+  body = statement.strip()[len("CREATE TRIGGER IF NOT EXISTS "):]
+  return ("CREATE TRIGGER " + body).rstrip(";").rstrip()
+
+
+# Each token-summing trigger name paired with the sqlite_master.sql text this module's own
+# statement leaves behind -- the comparison the open-time refresh runs.
+_AGG_TRIGGER_SQLS = {
+    name: _stored_trigger_sql(statement) for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS)
+}
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
 # from another file or host): the latest capture wins on every non-key column.
@@ -329,11 +350,13 @@ FROM usage_agg
 GROUP BY source, model, account, kind
 """
 
-# The one-time backfill: the table pass's counted-row rule projected to (group, day)
-# granularity. The upsert arms overwrite rather than add: a ledger written between the
-# triggers' creation and the backfill carries trigger-maintained increments on an
-# otherwise empty aggregate, and the locked full pass below is the ground truth that
-# subsumes them.
+# The wholesale aggregate replacement, run inside the caller's locked transaction by the
+# one-time backfill, the schema-2 upgrade's re-price, and the trigger refresh: the caller
+# deletes every usage_agg row first (``_AGG_WIPE_SQL``), then this counted-row pass -- the
+# table pass's counted-row rule projected to (group, day) granularity -- rebuilds the
+# aggregate from the table. Increments the triggers wrote before the pass never survive
+# beside it, and neither does any row an older trigger body left behind.
+_AGG_WIPE_SQL = "DELETE FROM usage_agg"
 _AGG_BACKFILL_SQL = f"""
 INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
 SELECT source, model, account, kind, SUBSTR(ts, 1, 10) AS day,
@@ -341,9 +364,6 @@ SELECT source, model, account, kind, SUBSTR(ts, 1, 10) AS day,
 FROM usage u
 {_COUNTED_WHERE_SQL}
 GROUP BY source, model, account, kind, day
-ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
-  calls = excluded.calls, in_fresh = excluded.in_fresh, cache_write = excluded.cache_write,
-  cache_read = excluded.cache_read, in_unsplit = excluded.in_unsplit, output = excluded.output
 """
 
 # The records whose input the schema-2 upgrade may move into in_unsplit once their source
@@ -565,7 +585,9 @@ class UsageLedger:
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
   ledger and an existing one keeps every row. No statement here deletes a usage row.
   A ledger with no ``schema`` stamp in ``ledger_meta`` upgrades to '2' once on open
-  (``_upgrade_schema``).
+  (``_upgrade_schema``). A ledger whose stored aggregate-trigger bodies differ from this
+  module's gets the five swapped and a backfilled aggregate re-priced on open
+  (``_refresh_agg_triggers``).
   """
 
   # The page-rows memo, one entry for the one production ledger path: the rows
@@ -605,24 +627,22 @@ class UsageLedger:
     if stamp is None or stamp["value"] != "2":
       self._upgrade_schema()  # recreates the aggregate triggers inside its transaction
     else:
-      for statement in _AGG_TRIGGER_STATEMENTS:
-        self._conn.execute(statement)
+      self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
     self._conn.commit()
 
   def _upgrade_schema(self) -> None:
     """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
     tables, swap the five token-summing aggregate triggers for bodies that carry it, move
-    the gone-source records' input, re-price a backfilled aggregate from the table, bump
-    the rewrite epoch, and stamp.
+    the gone-source records' input, re-price a backfilled aggregate from the table
+    wholesale, bump the rewrite epoch, and stamp.
 
     The triggers are dropped and recreated before the move so the update trigger
-    subtracts and re-adds every moved row's aggregate contribution. The re-add only
-    fires for a fresh (group, day) row (``_agg_contribute_sql``), so a moved row sharing
-    its day with another counted record would lose its re-added contribution; the
-    backfill's overwriting upsert then re-prices a backfilled aggregate from the table,
-    and after the move the aggregate equals the table pass again. A never-backfilled
-    aggregate is not served yet -- its one-time backfill prices the same ground truth
-    when it runs. Only records whose source file is gone move: a record whose file
+    subtracts and re-adds every moved row's aggregate contribution; the re-add lands on
+    its (group, day) row (``_agg_contribute_sql``), and the wholesale replacement
+    (``_AGG_WIPE_SQL`` then ``_AGG_BACKFILL_SQL``) re-prices a backfilled aggregate from
+    the table, so after the move the aggregate equals the table pass again. A
+    never-backfilled aggregate is not served yet -- its one-time backfill prices the same
+    ground truth when it runs. Only records whose source file is gone move: a record whose file
     remains is re-parsed with the correct split, and an old-code process rewriting its
     row would put the input back into ``in_fresh`` beside a moved ``in_unsplit`` and
     count the same input twice. BEGIN IMMEDIATE re-checks the stamp under the write
@@ -654,13 +674,50 @@ class UsageLedger:
             f"""UPDATE usage SET in_unsplit = in_fresh, in_fresh = 0
             WHERE {_UPGRADE_MOVE_RECORDS_SQL} AND origin IN ({marks})""", chunk)
       if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
-        self._conn.execute(_AGG_BACKFILL_SQL)  # re-price the served aggregate (see the docstring)
+        self._conn.execute(_AGG_WIPE_SQL)  # replace the served aggregate wholesale (see the docstring)
+        self._conn.execute(_AGG_BACKFILL_SQL)
       self._conn.execute(
           "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
           " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
       self._conn.execute(
           "INSERT INTO ledger_meta (key, value) VALUES ('schema', '2')"
           " ON CONFLICT(key) DO UPDATE SET value = '2'")
+      self._conn.commit()
+    except BaseException:
+      self._conn.rollback()
+      raise
+
+  def _refresh_agg_triggers(self) -> None:
+    """Swap this module's aggregate trigger bodies in when a stored one differs, then
+    re-price a backfilled aggregate from the table -- one transaction.
+
+    CREATE TRIGGER IF NOT EXISTS never replaces an existing trigger, so every existing
+    ledger runs the trigger bodies its creating release wrote. A pre-fix ledger's add arm
+    skipped any (group, day) row that already existed, dropping every later write onto a
+    served group-day and every rewrite's re-added contribution, so the page the backfilled
+    aggregate serves undercounts and shrinks on rewrites. Comparing each stored trigger's
+    sqlite_master.sql against this module's (``_AGG_TRIGGER_SQLS``) catches that drift on
+    open: the five triggers are dropped and recreated, and the wholesale replacement
+    rebuilds the aggregate from the table under the fresh bodies. A never-backfilled
+    aggregate is not served yet -- its one-time backfill prices the same ground truth when
+    it runs. A ledger whose stored bodies match this module's runs nothing.
+    """
+    self._conn.execute("BEGIN IMMEDIATE")
+    try:
+      stored = {
+          row["name"]: row["sql"]
+          for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
+      }
+      if all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items()):
+        self._conn.rollback()  # the stored bodies already match this module's
+        return
+      for name in _AGG_SUM_TRIGGER_NAMES:
+        self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+      for statement in _AGG_TRIGGER_STATEMENTS:
+        self._conn.execute(statement)
+      if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
+        self._conn.execute(_AGG_WIPE_SQL)  # re-price the served aggregate under the fresh bodies
+        self._conn.execute(_AGG_BACKFILL_SQL)
       self._conn.commit()
     except BaseException:
       self._conn.rollback()
@@ -887,17 +944,20 @@ class UsageLedger:
     return None
 
   def _backfill_agg(self) -> None:
-    """Build the aggregate from the table once, under the write lock.
+    """Replace the aggregate from the table once, under the write lock.
 
     BEGIN IMMEDIATE serializes the check-plus-backfill across processes: two first
     readers cannot both backfill, and a concurrent record_file waits out the one pass
-    instead of interleaving with it. A failure rolls the flag back with the rows, so
+    instead of interleaving with it. The replacement is wholesale -- every row the
+    aggregate carries goes away with the delete, so increments the triggers wrote before
+    the pass never survive beside it. A failure rolls the flag back with the rows, so
     the next read retries.
     """
     self._conn.execute("BEGIN IMMEDIATE")
     try:
       ready = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone()
       if ready is None:
+        self._conn.execute(_AGG_WIPE_SQL)
         self._conn.execute(_AGG_BACKFILL_SQL)
         self._conn.execute(
             "INSERT INTO ledger_meta (key, value) VALUES ('agg_backfilled', '1')"

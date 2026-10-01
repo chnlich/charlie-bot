@@ -39,7 +39,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -62,40 +62,40 @@ EVIDENCE_ROOT_DEFAULT = Path(tempfile.gettempdir()) / "charliebot-session-tree-e
 
 
 def open_evidence_dir(evidence_dir: Path) -> str:
-    """Create the run's evidence directory and return the commit it documents (the
+  """Create the run's evidence directory and return the commit it documents (the
     checkout's HEAD), so every artifact names the code it was produced from.
     """
-    evidence_dir.mkdir(parents=True, exist_ok=True)
-    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT,
-                          capture_output=True, text=True, check=True).stdout.strip()
+  evidence_dir.mkdir(parents=True, exist_ok=True)
+  return subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True,
+                        check=True).stdout.strip()
 
 
 def log(message: str) -> None:
-    print(message, flush=True)
+  print(message, flush=True)
 
 
 def stop_child(proc: subprocess.Popen | None, grace_s: float, kill_reap_s: float) -> None:
-    """Stop a harness child process: SIGTERM, wait up to ``grace_s``, then SIGKILL and
+  """Stop a harness child process: SIGTERM, wait up to ``grace_s``, then SIGKILL and
     reap within ``kill_reap_s``. A None handle or an already-exited child needs no stop.
     """
-    if proc is None or proc.poll() is not None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=grace_s)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=kill_reap_s)
+  if proc is None or proc.poll() is not None:
+    return
+  proc.terminate()
+  try:
+    proc.wait(timeout=grace_s)
+  except subprocess.TimeoutExpired:
+    proc.kill()
+    proc.wait(timeout=kill_reap_s)
 
 
 def fail(message: str) -> None:
-    raise SystemExit(f"BROWSER HARNESS FAILED: {message}")
+  raise SystemExit(f"BROWSER HARNESS FAILED: {message}")
 
 
 def pick_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+    sock.bind(("127.0.0.1", 0))
+    return int(sock.getsockname()[1])
 
 
 # ---------------------------------------------------------------------------
@@ -104,79 +104,79 @@ def pick_free_port() -> int:
 
 
 class CDP:
-    """Minimal Chrome DevTools Protocol client over the browser endpoint."""
+  """Minimal Chrome DevTools Protocol client over the browser endpoint."""
 
-    def __init__(self, ws) -> None:
-        self._ws = ws
-        self._next_id = 1
-        self._pending: dict[int, asyncio.Future] = {}
-        self._events: list[dict] = []
-        self.console_errors: list[str] = []
-        self.list_fetch_counts: list[str] = []
-        self.mutations: list[dict] = []
-        self._reader = asyncio.create_task(self._read_loop())
+  def __init__(self, ws) -> None:
+    self._ws = ws
+    self._next_id = 1
+    self._pending: dict[int, asyncio.Future] = {}
+    self._events: list[dict] = []
+    self.console_errors: list[str] = []
+    self.list_fetch_counts: list[str] = []
+    self.mutations: list[dict] = []
+    self._reader = asyncio.create_task(self._read_loop())
 
-    async def close(self) -> None:
-        """Close the browser websocket; the reader loop ends with it."""
-        await self._ws.close()
+  async def close(self) -> None:
+    """Close the browser websocket; the reader loop ends with it."""
+    await self._ws.close()
 
-    async def _read_loop(self) -> None:
-        try:
-            async for raw in self._ws:
-                msg = json.loads(raw)
-                if "id" in msg:
-                    fut = self._pending.pop(msg["id"], None)
-                    if fut and not fut.done():
-                        if "error" in msg:
-                            fut.set_exception(RuntimeError(str(msg["error"])))
-                        else:
-                            fut.set_result(msg.get("result", {}))
-                else:
-                    self._events.append(msg)
-                    method = msg.get("method", "")
-                    if method == "Runtime.consoleAPICalled" and msg["params"].get("type") == "error":
-                        self.console_errors.append(json.dumps(msg["params"].get("args", []))[:500])
-                    if method == "Runtime.exceptionThrown":
-                        self.console_errors.append(str(msg["params"].get("exceptionDetails", {}))[:500])
-                    if method == "Network.requestWillBeSent":
-                        request = msg["params"]["request"]
-                        url = request["url"]
-                        if request.get("method") == "GET" and url.endswith("/api/sessions/"):
-                            self.list_fetch_counts.append(url)
-                        if request.get("method") in ("POST", "PATCH") and "/api/sessions" in url:
-                            # Every outgoing mutation with its exact target URL
-                            # and body — the ground truth for "which task did
-                            # this dialog actually submit against".
-                            self.mutations.append({
-                                "url": url,
-                                "method": request.get("method"),
-                                "body": (request.get("postData") or "")[:600],
-                            })
-        except Exception as exc:  # reader exit is fine at shutdown
-            log(f"cdp reader stopped: {exc!r}")
+  async def _read_loop(self) -> None:
+    try:
+      async for raw in self._ws:
+        msg = json.loads(raw)
+        if "id" in msg:
+          fut = self._pending.pop(msg["id"], None)
+          if fut and not fut.done():
+            if "error" in msg:
+              fut.set_exception(RuntimeError(str(msg["error"])))
+            else:
+              fut.set_result(msg.get("result", {}))
+        else:
+          self._events.append(msg)
+          method = msg.get("method", "")
+          if method == "Runtime.consoleAPICalled" and msg["params"].get("type") == "error":
+            self.console_errors.append(json.dumps(msg["params"].get("args", []))[:500])
+          if method == "Runtime.exceptionThrown":
+            self.console_errors.append(str(msg["params"].get("exceptionDetails", {}))[:500])
+          if method == "Network.requestWillBeSent":
+            request = msg["params"]["request"]
+            url = request["url"]
+            if request.get("method") == "GET" and url.endswith("/api/sessions/"):
+              self.list_fetch_counts.append(url)
+            if request.get("method") in ("POST", "PATCH") and "/api/sessions" in url:
+              # Every outgoing mutation with its exact target URL
+              # and body — the ground truth for "which task did
+              # this dialog actually submit against".
+              self.mutations.append(
+                  {
+                      "url": url,
+                      "method": request.get("method"),
+                      "body": (request.get("postData") or "")[:600],
+                  })
+    except Exception as exc:  # reader exit is fine at shutdown
+      log(f"cdp reader stopped: {exc!r}")
 
-    async def send(self, method: str, params: dict | None = None, session_id: str | None = None) -> dict:
-        msg_id = self._next_id
-        self._next_id += 1
-        payload = {"id": msg_id, "method": method, "params": params or {}}
-        if session_id:
-            payload["sessionId"] = session_id
-        fut = asyncio.get_running_loop().create_future()
-        self._pending[msg_id] = fut
-        await self._ws.send(json.dumps(payload))
-        return await asyncio.wait_for(fut, timeout=30)
+  async def send(self, method: str, params: dict | None = None, session_id: str | None = None) -> dict:
+    msg_id = self._next_id
+    self._next_id += 1
+    payload = {"id": msg_id, "method": method, "params": params or {}}
+    if session_id:
+      payload["sessionId"] = session_id
+    fut = asyncio.get_running_loop().create_future()
+    self._pending[msg_id] = fut
+    await self._ws.send(json.dumps(payload))
+    return await asyncio.wait_for(fut, timeout=30)
 
-    def drain_list_fetches(self) -> list[str]:
-        seen = self.list_fetch_counts
-        self.list_fetch_counts = []
-        return seen
+  def drain_list_fetches(self) -> list[str]:
+    seen = self.list_fetch_counts
+    self.list_fetch_counts = []
+    return seen
 
-    def mutations_since(self, mark: int) -> list[dict]:
-        return self.mutations[mark:]
+  def mutations_since(self, mark: int) -> list[dict]:
+    return self.mutations[mark:]
 
-    def mutation_mark(self) -> int:
-        return len(self.mutations)
-
+  def mutation_mark(self) -> int:
+    return len(self.mutations)
 
 
 # ---------------------------------------------------------------------------
@@ -185,44 +185,49 @@ class CDP:
 
 
 def append_events_line(path: Path, event: dict) -> None:
-    """One event line onto a run's events.jsonl (the append-only shape)."""
-    with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(event) + "\n")
+  """One event line onto a run's events.jsonl (the append-only shape)."""
+  with path.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(event) + "\n")
 
 
 def grow_run_events(path: Path, stop: threading.Event, counter: dict) -> None:
-    """Append one committed assistant turn to the live Run's events log every
+  """Append one committed assistant turn to the live Run's events log every
     ~1.2 s until *stop* — the growing file the streaming assertions read."""
-    n = 0
-    while not stop.is_set() and n < 120:
-        if stop.wait(1.2):
-            break
-        n += 1
-        append_events_line(path, {
+  n = 0
+  while not stop.is_set() and n < 120:
+    if stop.wait(1.2):
+      break
+    n += 1
+    append_events_line(
+        path, {
             "type": "assistant",
-            "message": {"content": [{"type": "text", "text": f"streamed progress line {n}"}]},
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": f"streamed progress line {n}"
+                }]
+            },
             "timestamp": datetime.now(timezone.utc).isoformat(),
         })
-        counter["lines"] = n
+    counter["lines"] = n
 
 
 def seed_memory_store(home: Path) -> None:
-    """A minimal memory store: one resident topic (full delivery) and one
+  """A minimal memory store: one resident topic (full delivery) and one
     non-resident topic (index delivery), both master-audience — so the Context
     panel shows full-versus-index provenance from the real assembly."""
-    memory_dir = home / "memory"
-    (memory_dir / "entries" / "program-notes").mkdir(parents=True)
-    (memory_dir / "entries" / "archive-notes").mkdir(parents=True)
-    (memory_dir / "topics").write_text(
-        "program-notes resident\narchive-notes\n", encoding="utf-8")
-    (memory_dir / "entries" / "program-notes" / "deploy-runbook.md").write_text(
-        "---\nscope: host\ntopic: program-notes\naudience: master\n"
-        "title: Deploy runbook\n---\nDeploy through the pinned recipe; verify the health endpoint first.\n",
-        encoding="utf-8")
-    (memory_dir / "entries" / "archive-notes" / "old-migration.md").write_text(
-        "---\nscope: host\ntopic: archive-notes\naudience: master\n"
-        "title: Old migration notes\n---\nThe 2024 migration is complete; query on demand only.\n",
-        encoding="utf-8")
+  memory_dir = home / "memory"
+  (memory_dir / "entries" / "program-notes").mkdir(parents=True)
+  (memory_dir / "entries" / "archive-notes").mkdir(parents=True)
+  (memory_dir / "topics").write_text("program-notes resident\narchive-notes\n", encoding="utf-8")
+  (memory_dir / "entries" / "program-notes" / "deploy-runbook.md").write_text(
+      "---\nscope: host\ntopic: program-notes\naudience: master\n"
+      "title: Deploy runbook\n---\nDeploy through the pinned recipe; verify the health endpoint first.\n",
+      encoding="utf-8")
+  (memory_dir / "entries" / "archive-notes" / "old-migration.md").write_text(
+      "---\nscope: host\ntopic: archive-notes\naudience: master\n"
+      "title: Old migration notes\n---\nThe 2024 migration is complete; query on demand only.\n",
+      encoding="utf-8")
 
 
 async def seed_scenario(home: Path) -> dict:

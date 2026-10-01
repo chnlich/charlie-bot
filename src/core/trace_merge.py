@@ -11,7 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import BinaryIO
 
@@ -411,7 +411,9 @@ class _ChunkHelperError(RuntimeError):
   """A chunk helper failed; the chunked build answers it with the sequential walk."""
 
 
-def _merge_chunked_build(path: Path, file_index: int, id_base: int, slim: bool, assemble) -> bool | int | None:
+def _merge_chunked_build(
+    path: Path, file_index: int, id_base: int, slim: bool, assemble: Callable[[list[Path], int, int, int],
+                                                                              bool | int]) -> bool | int | None:
   """Run the chunk helpers over *path* and hand their fragments to *assemble*.
 
   Each helper parses once, holds its tree, reports its chunk's labels and first-sight tid/flow forms,

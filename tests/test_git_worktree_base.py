@@ -174,10 +174,7 @@ async def test_worktree_add_retries_a_transient_config_lock(
     if args[:2] == ("worktree", "add"):
       calls["n"] += 1
       if calls["n"] == 1:
-        return (
-            SimpleNamespace(returncode=128),
-            b"",
-            b"fatal: could not lock config file .git/config: File exists")
+        return (SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
       return await real_proc_bytes(repo_path, *args, timeout=timeout)
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
@@ -212,10 +209,7 @@ async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
   async def _always_locked(repo_path, *args, timeout):
     if args[:2] == ("worktree", "add"):
       calls["n"] += 1
-      return (
-          SimpleNamespace(returncode=128),
-          b"",
-          b"fatal: could not lock config file .git/config: File exists")
+      return (SimpleNamespace(returncode=128), b"", b"fatal: could not lock config file .git/config: File exists")
     return await real_proc_bytes(repo_path, *args, timeout=timeout)
 
   delays: list[float] = []

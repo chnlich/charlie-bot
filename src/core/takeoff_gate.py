@@ -166,29 +166,45 @@ def _settled_user_answers(
   return has_takeoff, pre_takeoff_at, seen_any_user
 
 
+def _effective_utc_now(now: datetime | None) -> datetime:
+  """The gate's wall clock in UTC; a naive *now* is rejected, never guessed."""
+  effective = now if now is not None else datetime.now(UTC)
+  if effective.tzinfo is None:
+    raise ValueError("authorization check time must be timezone-aware")
+  return effective.astimezone(UTC)
+
+
+def _authorization_window_open(has_takeoff: bool, pre_takeoff_at: datetime | None, effective_now: datetime) -> bool:
+  """The one window verdict both gates apply: the latest real user message
+  carries "take off", or a "pre take off" stamp still sits inside the window."""
+  pre_takeoff_active = (
+      pre_takeoff_at is not None and pre_takeoff_at <= effective_now < pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
+  return has_takeoff or pre_takeoff_active
+
+
+def _delegation_blocked(*, task_id: str | None) -> DelegationBlockedError:
+  """The shared no-authorization verdict; the task gate names the session it judged."""
+  scope = "" if task_id is None else f" of task {task_id}"
+  return DelegationBlockedError(
+      'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
+      f'"take off" in the latest real user message{scope} is required before delegating.')
+
+
 def check_takeoff_gate(
     session_id: str,
     session_mgr: SessionManager,
     now: datetime | None = None,
 ) -> None:
   """Verify an active pre-takeoff or ordinary takeoff authorization window."""
-  effective_now = now if now is not None else datetime.now(UTC)
-  if effective_now.tzinfo is None:
-    raise ValueError("authorization check time must be timezone-aware")
-  effective_now = effective_now.astimezone(UTC)
+  effective_now = _effective_utc_now(now)
 
   events = session_mgr.load_chat_events_sync(session_id)
   latest_user_has_takeoff, latest_pre_takeoff_at, _ = _settled_user_answers(events, session_id)
 
-  pre_takeoff_active = (
-      latest_pre_takeoff_at is not None and
-      latest_pre_takeoff_at <= effective_now < latest_pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
-  if latest_user_has_takeoff or pre_takeoff_active:
+  if _authorization_window_open(latest_user_has_takeoff, latest_pre_takeoff_at, effective_now):
     return
 
-  raise DelegationBlockedError(
-      'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
-      '"take off" in the latest real user message is required before delegating.')
+  raise _delegation_blocked(task_id=None)
 
 
 _TASK_ANCESTOR_HOP_LIMIT = 1000
@@ -216,10 +232,7 @@ def check_takeoff_gate_for_task(
   :class:`DelegationBlockedError` otherwise. ``task_meta_of`` returns
   ``(task_parent_id, profile)`` for one node, or (None, None) when unknown.
   """
-  effective_now = now if now is not None else datetime.now(UTC)
-  if effective_now.tzinfo is None:
-    raise ValueError("authorization check time must be timezone-aware")
-  effective_now = effective_now.astimezone(UTC)
+  effective_now = _effective_utc_now(now)
 
   current = start_session_id
   for _ in range(_TASK_ANCESTOR_HOP_LIMIT):
@@ -237,13 +250,9 @@ def check_takeoff_gate_for_task(
     if seen_user:
       # The nearest node with a real user instruction: apply the existing gate
       # here and never borrow past it (a local instruction blocks higher ones).
-      pre_takeoff_active = (
-          pre_takeoff_at is not None and pre_takeoff_at <= effective_now < pre_takeoff_at + _PRE_TAKEOFF_WINDOW)
-      if has_takeoff or pre_takeoff_active:
+      if _authorization_window_open(has_takeoff, pre_takeoff_at, effective_now):
         return current
-      raise DelegationBlockedError(
-          'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
-          f'"take off" in the latest real user message of task {current} is required before delegating.')
+      raise _delegation_blocked(task_id=current)
     if task_parent_id is None:
       break
     current = task_parent_id

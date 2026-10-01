@@ -875,16 +875,14 @@ class TaskTreeManager:
     return self._effective_archived(index, meta.id, {} if memo is None else memo, {})
 
   def _archived_of_pass(
-      self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool],
-      pass_facts: dict[str, _TaskFacts]) -> bool:
+      self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
     """archived_of inside one caller-owned pass: the memo and the facts cache
     both span the caller's whole node walk, so chains already resolved and
     facts already consulted serve the rest of the pass."""
     return self._effective_archived(index, meta.id, memo, pass_facts)
 
   def _effective_archived(
-      self, index: _TreeIndex, session_id: str, memo: dict[str, bool],
-      pass_facts: dict[str, _TaskFacts]) -> bool:
+      self, index: _TreeIndex, session_id: str, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
     """One node's effective archive value with inheritance, memoized per pass.
 
     Walks up the task-parent chain to the first memoized node, an explicit

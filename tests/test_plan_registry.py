@@ -24,9 +24,6 @@ async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConf
 
 
 # ---------------------------------------------------------------------------
-# Derived-state truth table (pure function of closed, takeoff)
-
-# ---------------------------------------------------------------------------
 # State machine: present → approve → amend → close
 # ---------------------------------------------------------------------------
 
@@ -108,9 +105,6 @@ async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Rejections
-
-# ---------------------------------------------------------------------------
 # Persistence, schema, and migration
 # ---------------------------------------------------------------------------
 
@@ -138,12 +132,6 @@ async def test_plans_json_shape_matches_schema(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Broadcast
-
-# ---------------------------------------------------------------------------
-# Enum reservations
-
-# ---------------------------------------------------------------------------
 # Tolerant read path (A1) — single authority in plans.py
 # ---------------------------------------------------------------------------
 
@@ -161,12 +149,6 @@ def test_read_plans_tolerant_corrupt_json_returns_one_file_level_error(tmp_path:
 
 
 # ---------------------------------------------------------------------------
-# Path normalization at the verb boundary (A3)
-
-# ---------------------------------------------------------------------------
-# Amend trigger tightening (A4) — initial writable only by present
-
-# ---------------------------------------------------------------------------
 # Goal budget gate: present/amend reject an over-budget Problem / Goal section
 # ---------------------------------------------------------------------------
 
@@ -182,16 +164,3 @@ async def test_present_rejects_goal_over_budget_with_measured_value(tmp_path: Pa
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 241))
   with pytest.raises(ValueError, match=r"241 weighted chars \(budget 240\)"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")
-
-
-# ---------------------------------------------------------------------------
-# Page budget gate: present/amend reject artifacts over the 2000 px height budget
-
-# ---------------------------------------------------------------------------
-# DOM assertions: present/amend enforce the full plan assertion set, not just budgets
-
-# ---------------------------------------------------------------------------
-# Fork-explainer gate: present/amend enforce the open Trade-off explainer
-
-# ---------------------------------------------------------------------------
-# Event-loop responsiveness: the assertion run (a headless-Chrome subprocess) is off-loop

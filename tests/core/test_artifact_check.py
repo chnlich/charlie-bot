@@ -72,9 +72,6 @@ def _sitrep_ok_doc() -> str:
 
 
 # ---------------------------------------------------------------------------
-# Genre table ownership
-
-# ---------------------------------------------------------------------------
 # style-verbatim
 # ---------------------------------------------------------------------------
 
@@ -86,27 +83,6 @@ def test_style_verbatim_fails_on_tampered_style(tmp_path: Path) -> None:
   assert not outcome.passed
   assert "differs from the genre template prompts/sitrep_template.html" in outcome.detail
 
-
-# ---------------------------------------------------------------------------
-# sections-numbered
-
-# ---------------------------------------------------------------------------
-# foot-present / explain-triad / req-chips
-
-# ---------------------------------------------------------------------------
-# fork-open-shape / fork-explainer
-
-# ---------------------------------------------------------------------------
-# fact-anchored
-
-# ---------------------------------------------------------------------------
-# goal-budget (moved measurement, unchanged budgets)
-
-# ---------------------------------------------------------------------------
-# page-height (moved measurement, unchanged budgets)
-
-# ---------------------------------------------------------------------------
-# ordinal-named
 
 # ---------------------------------------------------------------------------
 # Shipped templates pass their own genre
@@ -231,9 +207,6 @@ async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one
 
 
 # ---------------------------------------------------------------------------
-# run_probe unit behavior
-
-# ---------------------------------------------------------------------------
 # byte-integrity
 # ---------------------------------------------------------------------------
 
@@ -250,7 +223,3 @@ def test_byte_integrity_fails_on_non_lf_control_byte(tmp_path: Path, damaged_byt
   assert not outcome.passed
   assert hex_name in outcome.detail
   assert "at offset" in outcome.detail
-
-
-# ---------------------------------------------------------------------------
-# render-path (explain only)

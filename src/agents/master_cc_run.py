@@ -33,6 +33,7 @@ from src.core.models import (
     SessionMetadata,
     backend_type_allows_missing_model,
 )
+from src.core.ndjson import type_line_filter
 from src.core.process import kill_group_escalating
 from src.core.sessions import backend_switch_reset_reason, context_reset_note
 from src.core.streaming import handle_compaction_events
@@ -244,6 +245,12 @@ async def _salvage_silent_turn(
 
 
 _CLAUDE_RESUME_FLAG_BACKEND_TYPES = {BackendType.CC_CLAUDE, BackendType.CC_KIMI, BackendType.CC_OPENAI_COMPATIBLE}
+
+# The turn-end attribution's parse bound: assistant lines only. ET.ASSISTANT
+# is the raw stream's own type name here — every _CLAUDE_RESUME_FLAG_BACKEND_TYPES
+# backend runs the claude CLI and inherits the identity translate — so a raw
+# line head-proving another type cannot reach the served-model detector.
+_ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
 _NATIVE_RESUME_SESSION_BACKEND_TYPES = {
     BackendType.CODEX, BackendType.GEMINI, BackendType.OPENCODE, BackendType.CHARLIE_CODE, BackendType.ANTIGRAVITY
 }
@@ -929,10 +936,17 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # Fail open with a warning — the notice is advisory.
         log.warning("master_cc_fallback_notice_raw_log_missing", session=session_meta.id, raw_log=raw_log)
       else:
-        # The projection is a full read+parse of the turn's raw log (tens of ms
-        # on a multi-MB turn) — off the loop it stops freezing every concurrent
-        # request and WebSocket at turn end, the same shape as the git-diff hop.
-        turn_events = await asyncio.to_thread(runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option))
+        # The projection is a full read of the turn's raw log (tens of ms on a
+        # multi-MB turn) — off the loop it stops freezing every concurrent
+        # request and WebSocket at turn end, the same shape as the git-diff
+        # hop. The parse bounds itself to the assistant lines the detector
+        # reads: the claude-family raw stream leads every line with its type
+        # and the family's translate is the identity, so the echoed user
+        # context (~98% of a multi-MB round's bytes) never parses; a head the
+        # filter cannot read parses anyway, keeping a foreign raw shape on
+        # the whole-file projection.
+        turn_events = await asyncio.to_thread(
+            runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option), _ASSISTANT_LINE_FILTER)
         await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
 
   except asyncio.CancelledError:

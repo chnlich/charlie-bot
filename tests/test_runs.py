@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from src.core import runs
+from src.core.ndjson import parse_ndjson_events, type_line_filter
 
 HOST_BOOT = runs.read_host_boot_time()
 NOW = datetime.now(UTC)
@@ -64,6 +65,63 @@ def test_parse_raw_lines_skips_blank_torn_and_non_json() -> None:
   blob = b'{"a": 1}\n\nnot-json\n{"b": 2}\n{"torn'
   events = runs.parse_raw_lines(blob)
   assert events == [{"a": 1}, {"b": 2}]
+
+
+def test_parse_ndjson_events_line_filter_keeps_only_provable_matches(tmp_path: Path) -> None:
+  """The filter drops lines whose head proves a foreign type and still parses
+  every shape it cannot read (foreign leading key, torn line, blank)."""
+  raw = tmp_path / "raw.ndjson"
+  raw.write_bytes(
+      b'{"type": "user", "content": "' + b"x" * 4096 + b'"}\n'  # provable reject, multi-KB
+      b'{"type":"assistant", "message": {"model": "m"}}\n'  # no space after the colon
+      b'{"type": "assistant", "message": {"model": "m2"}}\n'
+      b'{"other_key": 1}\n'  # foreign leading key: no proof, must parse
+      b'\n{"torn')
+  events = parse_ndjson_events(
+      raw, log_event="test_skip", log_fields={}, parse_filter=type_line_filter(frozenset({"assistant"})))
+  assert events == [
+      {
+          "type": "assistant",
+          "message": {
+              "model": "m"
+          }
+      }, {
+          "type": "assistant",
+          "message": {
+              "model": "m2"
+          }
+      }, {
+          "other_key": 1
+      }
+  ]
+
+
+def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: Path) -> None:
+  """The filtered projection keeps every assistant event in order and adds
+  nothing the detector reads — a claude-family result event leads with its
+  duration field, not "type", so its head proves nothing and it rides along;
+  the detector skips it, which is what makes the bounded scan safe."""
+  from src.agents.backends.claude_code import out_of_family_served_models
+
+  lines = [
+      '{"type": "user", "content": "echo"}',
+      ASSISTANT_LINE,
+      '{"type": "system", "content": "note"}',
+      RESULT_SUCCESS_LINE,
+      '{"duration_api_ms": 1, "stop_reason": "end_turn", "type": "result", "is_error": false}',
+  ]
+  raw = _write_raw(tmp_path, lines)
+  whole = runs.project_raw_file(raw, _identity)
+  filtered = runs.project_raw_file(raw, _identity, type_line_filter(frozenset({"assistant"})))
+  assert filtered == [e for e in whole if e.get("type") == "assistant"
+                     ] + [{
+                         "duration_api_ms": 1,
+                         "stop_reason": "end_turn",
+                         "type": "result",
+                         "is_error": False
+                     }]
+  assert (
+      out_of_family_served_models(whole, "claude-fable-5") == out_of_family_served_models(filtered, "claude-fable-5"))
 
 
 def test_result_success_matrix() -> None:

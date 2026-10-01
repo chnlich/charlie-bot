@@ -222,104 +222,102 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
 
 
 def read_chat_events(home: Path, session_id: str) -> list[dict]:
-    """The trial session's persisted chat events, oldest first."""
-    from src.core.chat_events import chat_events_path
-    path = chat_events_path(home / "sessions" / session_id)
-    if not path.is_file():
-        return []
-    events: list[dict] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            events.append(json.loads(line))
-        except ValueError:
-            continue
-    return events
+  """The trial session's persisted chat events, oldest first."""
+  from src.core.chat_events import chat_events_path
+  path = chat_events_path(home / "sessions" / session_id)
+  if not path.is_file():
+    return []
+  events: list[dict] = []
+  for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+      events.append(json.loads(line))
+    except ValueError:
+      continue
+  return events
 
 
 def assistant_text(events: list[dict], after_index: int = -1) -> str:
-    """The assistant reply text carried by the events after *after_index*.
+  """The assistant reply text carried by the events after *after_index*.
 
     Groups the way MessageAggregator renders: an assistant event's text blocks
     join with no separator, consecutive assistant events are one message, and
     any other event closes the message; messages join with one newline.
     """
-    messages: list[str] = []
-    buffer: list[str] = []
+  messages: list[str] = []
+  buffer: list[str] = []
 
-    def flush() -> None:
-        if buffer:
-            messages.append("".join(buffer))
-            buffer.clear()
+  def flush() -> None:
+    if buffer:
+      messages.append("".join(buffer))
+      buffer.clear()
 
-    for event in events[after_index + 1:]:
-        if event.get("type") != "assistant":
-            flush()
-            continue
-        buffer.extend(
-            str(block.get("text") or "")
-            for block in (event.get("message") or {}).get("content") or []
-            if isinstance(block, dict) and block.get("type") == "text")
-    flush()
-    return "\n".join(messages).strip()
+  for event in events[after_index + 1:]:
+    if event.get("type") != "assistant":
+      flush()
+      continue
+    buffer.extend(
+        str(block.get("text") or "")
+        for block in (event.get("message") or {}).get("content") or []
+        if isinstance(block, dict) and block.get("type") == "text")
+  flush()
+  return "\n".join(messages).strip()
 
 
 def reply_opening(text: str, limit: int = REPLY_OPENING_CHARS) -> str:
-    """The reply's opening sentences, verbatim (never asserted, only recorded)."""
-    if len(text) <= limit:
-        return text
-    head = text[:limit]
-    cut = max(head.rfind(". "), head.rfind(".\n"), head.rfind("! "), head.rfind("? "))
-    if cut > limit // 2:
-        head = head[:cut + 1]
-    return head
+  """The reply's opening sentences, verbatim (never asserted, only recorded)."""
+  if len(text) <= limit:
+    return text
+  head = text[:limit]
+  cut = max(head.rfind(". "), head.rfind(".\n"), head.rfind("! "), head.rfind("? "))
+  if cut > limit // 2:
+    head = head[:cut + 1]
+  return head
 
 
 async def wait_v2_run(session_id: str, known_run_ids: set[str], label: str) -> tuple[str, object, str]:
-    """Wait for the dispatcher to reserve a fresh Run, then for its terminal fact."""
-    tree = deps_tree()
-    store = tree.runs
-    deadline = time.monotonic() + 60
-    run_id = None
-    while time.monotonic() < deadline:
-        registered = await asyncio.to_thread(store.list_run_records_sync, session_id)
-        fresh = [r for r in registered if r.id not in known_run_ids]
-        if fresh:
-            run_id = fresh[0].id
-            break
-        await asyncio.sleep(0.2)
-    if run_id is None:
-        fail(f"{label}: the dispatcher never reserved a run for the admitted input")
-    deadline = time.monotonic() + TURN_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        run = await asyncio.to_thread(store.read_run_sync, session_id, run_id)
-        if run is None:
-            fail(f"{label}: run {run_id} vanished from {session_id}")
-        events = await asyncio.to_thread(store.load_events_sync, session_id)
-        if store.run_has_terminal_fact(run, events):
-            return run_id, run, str(store.terminal_outcome(events, run_id))
-        await asyncio.sleep(1.0)
-    fail(f"{label}: run {run_id} still running after {TURN_TIMEOUT_SECONDS:.0f}s")
+  """Wait for the dispatcher to reserve a fresh Run, then for its terminal fact."""
+  tree = deps_tree()
+  store = tree.runs
+  deadline = time.monotonic() + 60
+  run_id = None
+  while time.monotonic() < deadline:
+    registered = await asyncio.to_thread(store.list_run_records_sync, session_id)
+    fresh = [r for r in registered if r.id not in known_run_ids]
+    if fresh:
+      run_id = fresh[0].id
+      break
+    await asyncio.sleep(0.2)
+  if run_id is None:
+    fail(f"{label}: the dispatcher never reserved a run for the admitted input")
+  deadline = time.monotonic() + TURN_TIMEOUT_SECONDS
+  while time.monotonic() < deadline:
+    run = await asyncio.to_thread(store.read_run_sync, session_id, run_id)
+    if run is None:
+      fail(f"{label}: run {run_id} vanished from {session_id}")
+    events = await asyncio.to_thread(store.load_events_sync, session_id)
+    if store.run_has_terminal_fact(run, events):
+      return run_id, run, str(store.terminal_outcome(events, run_id))
+    await asyncio.sleep(1.0)
+  fail(f"{label}: run {run_id} still running after {TURN_TIMEOUT_SECONDS:.0f}s")
 
 
 async def wait_v1_round(home: Path, session_id: str, baseline_done: int, label: str) -> int:
-    """Wait for one more settled v1 round (a master_done that leaves nothing running).
+  """Wait for one more settled v1 round (a master_done that leaves nothing running).
 
     Returns the new settled-done count. The anchor persist precedes the
     master_done broadcast, so a returned round guarantees the native id read.
     """
-    deadline = time.monotonic() + TURN_TIMEOUT_SECONDS
-    while time.monotonic() < deadline:
-        events = await asyncio.to_thread(read_chat_events, home, session_id)
-        settled = [
-            e for e in events
-            if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)]
-        if len(settled) > baseline_done:
-            done = settled[-1]
-            if int(done.get("exit_code") or 0) != 0:
-                fail(f"{label}: the round ended with exit_code={done.get('exit_code')}")
-            return len(settled)
-        await asyncio.sleep(1.0)
-    fail(f"{label}: the round never settled within {TURN_TIMEOUT_SECONDS:.0f}s")
+  deadline = time.monotonic() + TURN_TIMEOUT_SECONDS
+  while time.monotonic() < deadline:
+    events = await asyncio.to_thread(read_chat_events, home, session_id)
+    settled = [e for e in events if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)]
+    if len(settled) > baseline_done:
+      done = settled[-1]
+      if int(done.get("exit_code") or 0) != 0:
+        fail(f"{label}: the round ended with exit_code={done.get('exit_code')}")
+      return len(settled)
+    await asyncio.sleep(1.0)
+  fail(f"{label}: the round never settled within {TURN_TIMEOUT_SECONDS:.0f}s")
 
 
 # ---------------------------------------------------------------------------
@@ -328,83 +326,83 @@ async def wait_v1_round(home: Path, session_id: str, baseline_done: int, label: 
 
 
 def codex_rollout_path(native_id: str) -> Path | None:
-    """The Codex rollout file for *native_id* under the Codex sessions directory."""
-    root = Path.home() / ".codex" / "sessions"
-    if not root.is_dir():
-        return None
-    matches = sorted(root.rglob(f"rollout-*{native_id}.jsonl"), key=lambda p: p.stat().st_mtime)
-    return matches[-1] if matches else None
+  """The Codex rollout file for *native_id* under the Codex sessions directory."""
+  root = Path.home() / ".codex" / "sessions"
+  if not root.is_dir():
+    return None
+  matches = sorted(root.rglob(f"rollout-*{native_id}.jsonl"), key=lambda p: p.stat().st_mtime)
+  return matches[-1] if matches else None
 
 
 def codex_user_prompts(native_id: str) -> list[str]:
-    """The user-prompt texts the Codex rollout recorded for *native_id*."""
-    path = codex_rollout_path(native_id)
-    if path is None:
-        return []
-    prompts: list[str] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if event.get("type") != "response_item":
-            continue
-        payload = event.get("payload") or {}
-        if payload.get("type") != "message" or payload.get("role") != "user":
-            continue
-        prompts.extend(
-            str(part["text"])
-            for part in payload.get("content") or []
-            if isinstance(part, dict) and part.get("type") == "input_text" and part.get("text"))
-    return prompts
+  """The user-prompt texts the Codex rollout recorded for *native_id*."""
+  path = codex_rollout_path(native_id)
+  if path is None:
+    return []
+  prompts: list[str] = []
+  for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+      event = json.loads(line)
+    except ValueError:
+      continue
+    if event.get("type") != "response_item":
+      continue
+    payload = event.get("payload") or {}
+    if payload.get("type") != "message" or payload.get("role") != "user":
+      continue
+    prompts.extend(
+        str(part["text"])
+        for part in payload.get("content") or []
+        if isinstance(part, dict) and part.get("type") == "input_text" and part.get("text"))
+  return prompts
 
 
 def claude_transcript_path(native_id: str) -> Path | None:
-    """The Claude transcript for *native_id* under the login directory's projects tree."""
-    from src.core.claude_accounts import transcript_matches
-    from src.core.config import claude_config_dir
-    matches = transcript_matches(claude_config_dir(), native_id)
-    return matches[0] if matches else None
+  """The Claude transcript for *native_id* under the login directory's projects tree."""
+  from src.core.claude_accounts import transcript_matches
+  from src.core.config import claude_config_dir
+  matches = transcript_matches(claude_config_dir(), native_id)
+  return matches[0] if matches else None
 
 
 def claude_user_prompts(native_id: str) -> list[str]:
-    """The user-prompt texts the Claude transcript recorded for *native_id*."""
-    path = claude_transcript_path(native_id)
-    if path is None:
-        return []
-    prompts: list[str] = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            event = json.loads(line)
-        except ValueError:
-            continue
-        if event.get("type") != "user":
-            continue
-        message = event.get("message")
-        if not isinstance(message, dict) or message.get("role") != "user":
-            continue
-        content = message.get("content")
-        if isinstance(content, str):
-            prompts.append(content)
-        elif isinstance(content, list):
-            prompts.extend(
-                str(part["text"])
-                for part in content
-                if isinstance(part, dict) and part.get("type") == "text" and part.get("text"))
-    return prompts
+  """The user-prompt texts the Claude transcript recorded for *native_id*."""
+  path = claude_transcript_path(native_id)
+  if path is None:
+    return []
+  prompts: list[str] = []
+  for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+      event = json.loads(line)
+    except ValueError:
+      continue
+    if event.get("type") != "user":
+      continue
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+      continue
+    content = message.get("content")
+    if isinstance(content, str):
+      prompts.append(content)
+    elif isinstance(content, list):
+      prompts.extend(
+          str(part["text"])
+          for part in content
+          if isinstance(part, dict) and part.get("type") == "text" and part.get("text"))
+  return prompts
 
 
 def received_prompt_record(family: str, native_id: str, needle: str) -> str | None:
-    """The receiving backend's own record of one turn's user prompt.
+  """The receiving backend's own record of one turn's user prompt.
 
     *needle* is the turn's raw message text; the record is the prompt the
     backend actually received (for a reset turn that includes the note).
     """
-    prompts = codex_user_prompts(native_id) if family == "codex" else claude_user_prompts(native_id)
-    for prompt in prompts:
-        if needle in prompt:
-            return prompt
-    return None
+  prompts = codex_user_prompts(native_id) if family == "codex" else claude_user_prompts(native_id)
+  for prompt in prompts:
+    if needle in prompt:
+      return prompt
+  return None
 
 
 # ---------------------------------------------------------------------------

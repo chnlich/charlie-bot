@@ -633,71 +633,74 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
 
 
 def cleanup_native_files(natives: list[NativeRecord], results: dict) -> None:
-    """Delete the recorded native files only, verifying every target first."""
-    from src.core.config import claude_config_dir
+  """Delete the recorded native files only, verifying every target first."""
+  from src.core.config import claude_config_dir
 
-    codex_root = Path.home() / ".codex" / "sessions"
-    projects_root = Path(claude_config_dir()).expanduser() / "projects"
-    cleanup_ok = True
+  codex_root = Path.home() / ".codex" / "sessions"
+  projects_root = Path(claude_config_dir()).expanduser() / "projects"
+  cleanup_ok = True
 
-    claude_dirs: dict[Path, set[str]] = {}
+  claude_dirs: dict[Path, set[str]] = {}
+  for entry in natives:
+    if entry.family == "codex":
+      if codex_root.is_dir():
+        matches = sorted(codex_root.rglob(f"rollout-*{entry.native_id}.jsonl"))
+        if not matches:
+          entry.cleanup = "rollout not found; nothing to delete"
+          continue
+        for path in matches:
+          path.unlink()
+          entry.deleted.append(str(path))
+        entry.cleanup = f"deleted {len(matches)} rollout file(s)"
+      else:
+        entry.cleanup = "codex sessions directory absent; nothing to delete"
+    elif entry.family == "claude":
+      from src.core.claude_accounts import transcript_matches
+      matches = transcript_matches(claude_config_dir(), entry.native_id)
+      if not matches:
+        entry.cleanup = "transcript not found; nothing to delete"
+        continue
+      claude_dirs.setdefault(matches[0].parent, set()).add(entry.native_id)
+    else:
+      entry.cleanup = "charlie-code native state lives under the trial home; no host cleanup"
+
+  deleted_dirs: list[str] = []
+  for slug_dir, ids in claude_dirs.items():
+    # Guard: the target must sit inside the login's projects tree and hold
+    # only this trial's transcripts (its recorded ids plus the subagent
+    # logs of its own turns). Anything else refuses the deletion.
+    if projects_root not in slug_dir.parents:
+      results["cleanup_failures"].append(f"refused to delete {slug_dir}: outside {projects_root}")
+      cleanup_ok = False
+      continue
+    strangers = [p.name for p in slug_dir.glob("*.jsonl") if p.stem not in ids and not p.stem.startswith("agent-")]
+    if strangers:
+      results["cleanup_failures"].append(f"refused to delete {slug_dir}: holds non-trial transcripts {strangers}")
+      cleanup_ok = False
+      continue
+    shutil.rmtree(slug_dir)
+    deleted_dirs.append(str(slug_dir))
     for entry in natives:
-        if entry.family == "codex":
-            if codex_root.is_dir():
-                matches = sorted(codex_root.rglob(f"rollout-*{entry.native_id}.jsonl"))
-                if not matches:
-                    entry.cleanup = "rollout not found; nothing to delete"
-                    continue
-                for path in matches:
-                    path.unlink()
-                    entry.deleted.append(str(path))
-                entry.cleanup = f"deleted {len(matches)} rollout file(s)"
-            else:
-                entry.cleanup = "codex sessions directory absent; nothing to delete"
-        elif entry.family == "claude":
-            from src.core.claude_accounts import transcript_matches
-            matches = transcript_matches(claude_config_dir(), entry.native_id)
-            if not matches:
-                entry.cleanup = "transcript not found; nothing to delete"
-                continue
-            claude_dirs.setdefault(matches[0].parent, set()).add(entry.native_id)
-        else:
-            entry.cleanup = "charlie-code native state lives under the trial home; no host cleanup"
-
-    deleted_dirs: list[str] = []
-    for slug_dir, ids in claude_dirs.items():
-        # Guard: the target must sit inside the login's projects tree and hold
-        # only this trial's transcripts (its recorded ids plus the subagent
-        # logs of its own turns). Anything else refuses the deletion.
-        if projects_root not in slug_dir.parents:
-            results["cleanup_failures"].append(
-                f"refused to delete {slug_dir}: outside {projects_root}")
-            cleanup_ok = False
-            continue
-        strangers = [
-            p.name for p in slug_dir.glob("*.jsonl")
-            if p.stem not in ids and not p.stem.startswith("agent-")]
-        if strangers:
-            results["cleanup_failures"].append(
-                f"refused to delete {slug_dir}: holds non-trial transcripts {strangers}")
-            cleanup_ok = False
-            continue
-        shutil.rmtree(slug_dir)
-        deleted_dirs.append(str(slug_dir))
-        for entry in natives:
-            if entry.family == "claude" and entry.native_id in ids:
-                entry.cleanup = "slug directory deleted"
-                entry.deleted.append(str(slug_dir))
-    results["native_cleanup"] = {
-        "codex_rollouts_deleted": sorted(
-            path for entry in natives for path in entry.deleted if entry.family == "codex"),
-        "claude_dirs_deleted": deleted_dirs,
-        "native_records": [
-            {"family": e.family, "session_id": e.session_id, "native_id": e.native_id,
-             "cleanup": e.cleanup} for e in natives],
-    }
-    if not cleanup_ok:
-        results["cleanup_failures"].append("native-file cleanup refused a target; manual review required")
+      if entry.family == "claude" and entry.native_id in ids:
+        entry.cleanup = "slug directory deleted"
+        entry.deleted.append(str(slug_dir))
+  results["native_cleanup"] = {
+      "codex_rollouts_deleted":
+          sorted(path for entry in natives for path in entry.deleted if entry.family == "codex"),
+      "claude_dirs_deleted":
+          deleted_dirs,
+      "native_records":
+          [
+              {
+                  "family": e.family,
+                  "session_id": e.session_id,
+                  "native_id": e.native_id,
+                  "cleanup": e.cleanup
+              } for e in natives
+          ],
+  }
+  if not cleanup_ok:
+    results["cleanup_failures"].append("native-file cleanup refused a target; manual review required")
 
 
 # ---------------------------------------------------------------------------
@@ -706,71 +709,71 @@ def cleanup_native_files(natives: list[NativeRecord], results: dict) -> None:
 
 
 async def accept(out_path: Path, keep: bool) -> int:
-    preflight()
-    entries = load_source_entries()
+  preflight()
+  entries = load_source_entries()
 
-    home = Path(tempfile.mkdtemp(prefix="charliebot-switch-accept-"))
-    port, access_key = build_synthetic_home(home, entries)
-    os.environ["CHARLIEBOT_HOME"] = str(home)
-    for var in INHERITED_IDENTITY_ENV_VARS:
-        os.environ.pop(var, None)
+  home = Path(tempfile.mkdtemp(prefix="charliebot-switch-accept-"))
+  port, access_key = build_synthetic_home(home, entries)
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  for var in INHERITED_IDENTITY_ENV_VARS:
+    os.environ.pop(var, None)
 
-    base = f"http://127.0.0.1:{port}"
-    log(f"trial home: {home}")
-    log(f"isolated server: {base}")
+  base = f"http://127.0.0.1:{port}"
+  log(f"trial home: {home}")
+  log(f"isolated server: {base}")
 
-    results: dict = {
-        "legs": [],
-        "cleanup_failures": [],
-        "harness_error": None,
-        "trial_home": str(home),
-        "passed": False,
-    }
-    natives: list[NativeRecord] = []
+  results: dict = {
+      "legs": [],
+      "cleanup_failures": [],
+      "harness_error": None,
+      "trial_home": str(home),
+      "passed": False,
+  }
+  natives: list[NativeRecord] = []
+  try:
     try:
-        try:
-            await start_server(port, "charliebot-live-switch-accept")
-        except RuntimeError as exc:
-            fail(str(exc))
-        for spec in LEGS:
-            results["legs"].append(await run_leg(spec, base, access_key, home, natives))
-    except SystemExit as exc:
-        results["harness_error"] = redact(str(exc))
-    except Exception as exc:
-        results["harness_error"] = f"{type(exc).__name__}: {redact(str(exc))}"
-    finally:
-        await shutdown_servers()
+      await start_server(port, "charliebot-live-switch-accept")
+    except RuntimeError as exc:
+      fail(str(exc))
+    for spec in LEGS:
+      results["legs"].append(await run_leg(spec, base, access_key, home, natives))
+  except SystemExit as exc:
+    results["harness_error"] = redact(str(exc))
+  except Exception as exc:
+    results["harness_error"] = f"{type(exc).__name__}: {redact(str(exc))}"
+  finally:
+    await shutdown_servers()
 
-    cleanup_native_files(natives, results)
-    results["passed"] = (
-        results["harness_error"] is None and not results["cleanup_failures"]
-        and all(leg["passed"] for leg in results["legs"]))
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    log(f"results written to {out_path}")
+  cleanup_native_files(natives, results)
+  results["passed"] = (
+      results["harness_error"] is None and not results["cleanup_failures"] and
+      all(leg["passed"] for leg in results["legs"]))
+  out_path.parent.mkdir(parents=True, exist_ok=True)
+  out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+  log(f"results written to {out_path}")
 
-    if keep:
-        log(f"trial home kept for inspection: {home}")
-    else:
-        shutil.rmtree(home, ignore_errors=True)
-        log("trial home purged")
-    if results["harness_error"]:
-        log(f"HARNESS ERROR: {results['harness_error']}")
-    for failure in results["cleanup_failures"]:
-        log(f"CLEANUP FAILURE: {failure}")
-    log("SWITCH-ACCEPT PASSED" if results["passed"] else "SWITCH-ACCEPT FAILED")
-    return 0 if results["passed"] else 1
+  if keep:
+    log(f"trial home kept for inspection: {home}")
+  else:
+    shutil.rmtree(home, ignore_errors=True)
+    log("trial home purged")
+  if results["harness_error"]:
+    log(f"HARNESS ERROR: {results['harness_error']}")
+  for failure in results["cleanup_failures"]:
+    log(f"CLEANUP FAILURE: {failure}")
+  log("SWITCH-ACCEPT PASSED" if results["passed"] else "SWITCH-ACCEPT FAILED")
+  return 0 if results["passed"] else 1
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Isolated live acceptance: the context-reset note a backend switch "
-                    "puts in front of a session's first message")
-    parser.add_argument("--out", required=True, help="Path the JSON results are written to")
-    parser.add_argument("--keep", action="store_true", help="Keep the trial home for inspection")
-    args = parser.parse_args()
-    raise SystemExit(asyncio.run(accept(Path(args.out).expanduser(), args.keep)))
+  parser = argparse.ArgumentParser(
+      description="Isolated live acceptance: the context-reset note a backend switch "
+      "puts in front of a session's first message")
+  parser.add_argument("--out", required=True, help="Path the JSON results are written to")
+  parser.add_argument("--keep", action="store_true", help="Keep the trial home for inspection")
+  args = parser.parse_args()
+  raise SystemExit(asyncio.run(accept(Path(args.out).expanduser(), args.keep)))
 
 
 if __name__ == "__main__":
-    main()
+  main()

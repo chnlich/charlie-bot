@@ -88,9 +88,6 @@ async def test_history_copying_never_becomes_a_task_parent(tmp_path: Path) -> No
 
 
 # ---------------------------------------------------------------------------
-# Stable create / retry
-
-# ---------------------------------------------------------------------------
 # Derived state, pagination, deletion
 # ---------------------------------------------------------------------------
 
@@ -122,12 +119,6 @@ async def test_permanent_delete_blockers(tmp_path: Path) -> None:
   mgr.aliases.path.unlink()
   assert await mgr.deletion_blockers(leaf.id) == []
 
-
-# ---------------------------------------------------------------------------
-# Mutation guards
-
-# ---------------------------------------------------------------------------
-# Prompt bodies
 
 # ---------------------------------------------------------------------------
 # Scheduler bookkeeping

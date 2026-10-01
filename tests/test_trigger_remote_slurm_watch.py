@@ -42,12 +42,6 @@ async def test_remote_slurm_completes(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# sacct row parsing: array-task rows are rejected by shape, not by int()
-
-# ---------------------------------------------------------------------------
-# verify-on-create: probe failure, observed state, accounting lag
-
-# ---------------------------------------------------------------------------
 # Unreachable host: silent for the grace window -> fire early via still_alive
 # ---------------------------------------------------------------------------
 

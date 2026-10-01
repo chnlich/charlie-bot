@@ -129,9 +129,6 @@ async def test_quarantine_rejects_unexpected_residue_name(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
-# _remove_local_worktree_artifacts
-
-# ---------------------------------------------------------------------------
 # _quarantine_stale_failed_worktrees sweep
 # ---------------------------------------------------------------------------
 

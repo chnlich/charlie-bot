@@ -179,8 +179,3 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 
   backend_kwargs = captures["kwargs"]
   assert backend_kwargs["extra_flags"] == ["--exclude-dynamic-system-prompt-sections"]
-
-
-# ---------------------------------------------------------------------------
-# resume_session log field: derived from the resolved resume id, honest on both
-# the Claude family (--resume flag route) and native-resume backends.

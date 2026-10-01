@@ -43,9 +43,6 @@ def _build_cfg(tmp_path: Path) -> tuple[CharlieBotConfig, Path]:
 
 
 # ---------------------------------------------------------------------------
-# Acceptance #1: guard ⟷ reachability through the real production functions
-
-# ---------------------------------------------------------------------------
 # Acceptance #3: §4.1 API contract
 # ---------------------------------------------------------------------------
 

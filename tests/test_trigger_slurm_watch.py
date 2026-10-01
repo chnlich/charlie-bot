@@ -98,9 +98,6 @@ async def test_slurm_single_job_terminal_state(
 
 
 # ---------------------------------------------------------------------------
-# Mixed-kind AND: local pid + slurm job
-
-# ---------------------------------------------------------------------------
 # No-sacct host: create-time fail-loud; pure pid / pure delay still work
 # ---------------------------------------------------------------------------
 
@@ -118,7 +115,3 @@ async def test_no_sacct_host_slurm_create_fails(tmp_path: Path) -> None:
         message="no slurm here",
         watch_targets=[SlurmJob(job_id=12345)],
     )
-
-
-# ---------------------------------------------------------------------------
-# Recovery: a persisted slurm trigger on a host without sacct skips (no spin)

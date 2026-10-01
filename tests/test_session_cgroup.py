@@ -25,9 +25,6 @@ def test_server_config_zero_disables_cgroup() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cgroup directory naming
-
-# ---------------------------------------------------------------------------
 # Ensure: creation, refresh, degradation
 # ---------------------------------------------------------------------------
 
@@ -55,9 +52,6 @@ def test_ensure_session_cgroup_degrades_when_base_missing(monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
-# preexec construction and composition
-
-# ---------------------------------------------------------------------------
 # memory.events reading and exit attribution
 # ---------------------------------------------------------------------------
 
@@ -68,7 +62,3 @@ def test_classify_cap_kill_on_max_growth() -> None:
   assert "session 内存上限触发" in msg
   assert "12288" in msg
   assert "gpuq" in msg
-
-
-# ---------------------------------------------------------------------------
-# Lifecycle: cleanup and startup sweep

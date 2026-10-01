@@ -404,9 +404,6 @@ async def test_round_end_without_a_slack_thread_answers_false_without_slack_cred
 
 
 # ---------------------------------------------------------------------------
-# _chunk_text
-
-# ---------------------------------------------------------------------------
 # Boot backfill: lost summons
 # ---------------------------------------------------------------------------
 
@@ -426,9 +423,6 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
   assert len(_of_type(events, ET.ASSISTANT_ERROR)) == 1
   assert not _of_type(events, ET.MASTER_DONE)
 
-
-# ---------------------------------------------------------------------------
-# Boot backfill: the round-end audit over finished rounds
 
 # ---------------------------------------------------------------------------
 # Ack reaction lifecycle

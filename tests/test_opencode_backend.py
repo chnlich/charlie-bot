@@ -585,7 +585,3 @@ async def test_run_lock_failure_retries_same_session_mid_stream(
   assert "opencode_lock_retry" in out
   assert sid in out
   assert not [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
-
-
-# ---------------------------------------------------------------------------
-# Prompt file parts: image attachments ride the prompt as OpenCode file parts

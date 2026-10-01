@@ -125,9 +125,6 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 
 
 # ---------------------------------------------------------------------------
-# Gap 2 — server_error keeps today's exit code and hint
-
-# ---------------------------------------------------------------------------
 # Gap 3(a) — readback determinism for improve, schedule-trigger, and plan
 # ---------------------------------------------------------------------------
 
@@ -275,8 +272,3 @@ def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
     assert stub.received["body"] == {"a": 1}
   finally:
     stub.close()
-
-
-# ---------------------------------------------------------------------------
-# Gap 3(b) — readback determinism at the matcher level: concurrent identical
-# specs, and a verify thread never satisfying an implement call's readback.

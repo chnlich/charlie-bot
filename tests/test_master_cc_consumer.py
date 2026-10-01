@@ -408,7 +408,3 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   cold_meta = await cold_reader.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"
-
-
-# ---------------------------------------------------------------------------
-# after_round: the consumer-owned post-round naming hook

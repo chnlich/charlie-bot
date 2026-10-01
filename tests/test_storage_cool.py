@@ -154,9 +154,6 @@ def test_metadataless_session_dir_never_qualifies(cool_env: CharlieBotConfig) ->
 
 
 # ---------------------------------------------------------------------------
-# Transport files: scoped by relative path, allowlist of names
-
-# ---------------------------------------------------------------------------
 # Claude Code transcript directories
 # ---------------------------------------------------------------------------
 
@@ -377,15 +374,6 @@ def test_real_sweep_captures_once_before_first_deletion_dry_run_never(
   run_cool_sweep(cfg=cfg, now=NOW, dry_run=True)
   assert existed_at_capture == []
 
-
-# ---------------------------------------------------------------------------
-# Failure isolation
-
-# ---------------------------------------------------------------------------
-# Scoped run (--session)
-
-# ---------------------------------------------------------------------------
-# CLI and scheduler wiring
 
 # ---------------------------------------------------------------------------
 # Migrated run references: retention-protected evidence

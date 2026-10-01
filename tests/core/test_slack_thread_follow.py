@@ -191,12 +191,6 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: Path, w
 
 
 # ---------------------------------------------------------------------------
-# Arming: coalescing and the flush cap
-
-# ---------------------------------------------------------------------------
-# Mention pairing dedup, both delivery orders
-
-# ---------------------------------------------------------------------------
 # Reply gate and ack
 # ---------------------------------------------------------------------------
 
@@ -302,7 +296,3 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   wakes = [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SCHEDULED_TRIGGER]
   assert len(wakes) == 1
   shut_down_trigger_tasks(boot_mgr)
-
-
-# ---------------------------------------------------------------------------
-# CLI

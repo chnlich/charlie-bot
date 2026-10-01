@@ -323,14 +323,6 @@ def test_poll_stale_keep_on_fetch_failure(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ---------------------------------------------------------------------------
-# Round-robin scheduling (T4): per-account fetch order, per-fetch broadcast,
-# cache pruning at the round boundary, and the empty-round guard.
-
-# ---------------------------------------------------------------------------
-# Emit-time expiry annotation (broadcast + GET route): the shared claude
-# predicate judged on the server clock at every emit, on emit copies only.
-
-# ---------------------------------------------------------------------------
 # ClaudeUsageProvider: 401-triggered renewal. The provider owns no clock; the
 # server's 401 is the only signal that a stored token is unusable.
 # ---------------------------------------------------------------------------
@@ -433,9 +425,3 @@ async def test_claude_fetch_renews_once_and_retries_once_after_401(
   assert len(fake.gets) == 2
   assert fake.gets[0]["headers"]["Authorization"] == "Bearer tok-stored"
   assert fake.gets[1]["headers"]["Authorization"] == "Bearer tok-new"
-
-
-# ---------------------------------------------------------------------------
-# User-Agent resolution: both OAuth consumers (usage GET and refresh POST)
-# share one runtime-probed claude-code/<version>; any probe failure falls
-# back to the pinned constant with a loud warning, resolved once per process.

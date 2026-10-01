@@ -36,7 +36,8 @@ from src.cli import schedule_trigger as cli_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.core.sessions import SessionManager
-from src.core.slack_listener import _arm_follow_trigger
+from src.core.slack_listener import SLACK, SlackThreadAdapter
+from src.core.thread_entry import arm_follow_trigger
 from src.core.triggers import MAX_PENDING_TRIGGERS, PendingTriggerLimitError, TriggerManager
 
 
@@ -168,8 +169,15 @@ async def test_slack_follow_rearm_succeeds_on_a_full_session(tmp_path: Path) -> 
       patch(BROADCAST_PATCH_TARGET, new=MagicMock()),
       patch(TRIGGER_MASTER_PATCH_TARGET, new=MagicMock()),
   ):
-    trigger = await _arm_follow_trigger(
-        trigger_mgr, session_id, "C1", "1700000000.000100", "https://slack/p", "1700000000.000100")
+    adapter = SlackThreadAdapter()
+    trigger = await arm_follow_trigger(
+        SLACK,
+        trigger_mgr,
+        session_id,
+        floor="1700000000.000100",
+        wake_label=lambda floor: adapter.follow_wake_message(floor, "https://slack/p"),
+        log_fields={"channel": "C1", "thread_ts": "1700000000.000100"},
+    )
 
   assert trigger is not None
   assert await _pending_count(trigger_mgr, session_id) == MAX_PENDING_TRIGGERS + 1

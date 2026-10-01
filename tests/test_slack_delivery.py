@@ -36,13 +36,13 @@ from src.core.models import (
 )
 from src.core.sessions import SessionManager
 from src.core.slack_listener import (
-    _NO_REPLY_NOTICE,
+    SLACK,
     SlackReplyError,
-    _lost_summons,
     backfill_lost_summons,
     deliver_done,
     post_reply,
 )
+from src.core.thread_entry import _NO_REPLY_NOTICE, lost_summons
 
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
@@ -474,5 +474,5 @@ async def test_batch_holding_two_summons_binds_the_reply_to_the_newer_one(tmp_pa
   done = _done(None)
   done[ET.INPUT_EVENT_IDS] = [older["id"], newer["id"]]
   await _append(session_mgr, sid, done)
-  lost = _lost_summons(session_mgr.load_chat_events_sync(sid), owned=set(), running=set())
+  lost = lost_summons(SLACK, session_mgr.load_chat_events_sync(sid), owned=set(), running=set())
   assert lost == []

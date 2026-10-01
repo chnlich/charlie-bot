@@ -73,9 +73,6 @@ def test_every_cc_claude_entry_is_pooled_when_the_pool_is_declared(tmp_path: Pat
 
 
 # ---------------------------------------------------------------------------
-# Health
-
-# ---------------------------------------------------------------------------
 # Headroom
 # ---------------------------------------------------------------------------
 
@@ -101,9 +98,6 @@ def _event(status: str, five_hour: float, seven_day: float, resets_at: float | N
     info["resetsAt"] = resets_at
   return info
 
-
-# ---------------------------------------------------------------------------
-# Panel expiry: the shared predicate and the pool fold that drops expired windows
 
 # ---------------------------------------------------------------------------
 # Selection
@@ -143,15 +137,6 @@ def test_move_transcript_copies_conversation_and_sidecar_into_the_same_slug(tmp_
   assert transcript.exists(), "the source copy stays for fallback"
   assert claude_accounts.transcript_path(dst_dir, "uuid-1") == moved
 
-
-# ---------------------------------------------------------------------------
-# Resume resolution through the pool
-
-# ---------------------------------------------------------------------------
-# Backend-switch domain
-
-# ---------------------------------------------------------------------------
-# Directory derivations: usage panel, token tally, cold storage
 
 # ---------------------------------------------------------------------------
 # Metadata persistence
@@ -203,10 +188,3 @@ def test_move_transcript_refuses_to_overwrite_a_strictly_newer_destination(tmp_p
   # The refusal moves nothing: both copies stand exactly as they were.
   assert src.read_text(encoding="utf-8") == '{"stale": true}\n'
   assert dst.read_text(encoding="utf-8") == '{"stale": true}\n{"live": true}\n'
-
-
-# ---------------------------------------------------------------------------
-# Copy retirement after a sound round
-
-# ---------------------------------------------------------------------------
-# The placement probe's lineage helpers

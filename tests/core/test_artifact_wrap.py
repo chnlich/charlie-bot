@@ -64,9 +64,6 @@ def _wrap_cli(fragment_path: Path, output: Path, genre: str, *flags: str) -> Sys
 
 
 # ---------------------------------------------------------------------------
-# vendored KaTeX
-
-# ---------------------------------------------------------------------------
 # assembly + pre-render
 # ---------------------------------------------------------------------------
 
@@ -137,7 +134,3 @@ def test_wrap_byte_gate_runs_on_the_assembled_bytes(
   assert _wrap_cli(fragment, output, "explain").code == 1
   offset = int(re.search(r"0x09 at offset (\d+)", capsys.readouterr().err).group(1))
   assert offset > 5000  # the template head alone is longer than any fragment prefix
-
-
-# ---------------------------------------------------------------------------
-# render-path assertion over the wrap product

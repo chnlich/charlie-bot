@@ -143,13 +143,3 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
   assert any(
       entry.get("event") == "plan_artifact_outside_parent_on_fork" and entry.get("log_level") == "warning"
       for entry in logs), f"expected outside-parent warning, got: {logs}"
-
-
-# ---------------------------------------------------------------------------
-# D2: sidebar pending-approval flag (all_sessions_status)
-
-# ---------------------------------------------------------------------------
-# A1: corrupt registry — sidebar survives, plan_registry_read_failed warning
-
-# ---------------------------------------------------------------------------
-# A5: first-paint sidebar badge — GET /api/sessions/ carries has_pending_plan_approval

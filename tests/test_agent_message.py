@@ -39,12 +39,6 @@ from src.core.models import (
 from src.core.sessions import SessionManager
 
 # ---------------------------------------------------------------------------
-# Gate: agent_message can neither mint nor revoke a takeoff window
-
-# ---------------------------------------------------------------------------
-# A1 event shape
-
-# ---------------------------------------------------------------------------
 # A2 route boundaries
 # ---------------------------------------------------------------------------
 
@@ -177,7 +171,3 @@ def test_cli_session_send_relays_message(tmp_path: Path) -> None:
       "target_session_id": "target-id",
       "content": "relay this",
   }
-
-
-# ---------------------------------------------------------------------------
-# W1: aggregator + JS whitelist (agent_message surfaces as a visible message)

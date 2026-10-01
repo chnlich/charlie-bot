@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const { readStatic } = require('./read_static');
 const { createElement } = require('./dom_element_stub');
 const { escapeHtml } = require('./escape_html_stub');
-const { baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
+const { anchorOpenTag, baseSessionContext, buildSidebarFilterElements, buildUsageElements, createChatSidebarContext,
   makeSessionMeta, SWITCH_TELEMETRY_URL } = require('./session_context_stub');
 
 const WEBSOCKET_JS = readStatic('websocket.js');
@@ -112,12 +112,6 @@ function buildNavContext(overrides = {}) {
 function makeWorkSessions() {
   return Array.from({length: 7}, (_, idx) =>
     makeSession(`work-${idx + 1}`, `Work ${idx + 1}`, {group: 'Work'}));
-}
-
-function sessionAnchorOpenTag(html, id) {
-  const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
-  if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
-  return match[0];
 }
 
 test('pollActiveSessionView refreshes usage from the lazy usage endpoint', async () => {
@@ -473,9 +467,9 @@ test('renderSessionList limits each grouped session section to five visible sess
   assert.match(nav.innerHTML, /Personal/);
   assert.equal((nav.innerHTML.match(/session-group-limit-toggle/g) || []).length, 2);
   assert.match(nav.innerHTML, />Show all<\/button>/);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
   // The named header's direct buttons: the create and the Settings gear (the
   // scheduled-task, rename and delete actions moved into the gear's menu).
   assert.match(nav.innerHTML, /createSessionInGroup\(this\.dataset\.groupName\)/);
@@ -531,10 +525,10 @@ test('toggleSessionGroupLimit expansion is ephemeral and resets on the filter-pi
   context.enterSidebarFilter('starred');
   await new Promise(setImmediate);
 
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'personal-6').includes('session-group-limit-extra hidden'), true);
 });
 
 test('switchSidebarFilter owns no expansion reset and preserves expansion across filters', async () => {
@@ -549,8 +543,8 @@ test('switchSidebarFilter owns no expansion reset and preserves expansion across
   await new Promise(setImmediate);
 
   assert.equal(context.currentFilter, 'starred');
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
   assert.match(nav.innerHTML, />Show less<\/button>/);
 });
 
@@ -566,7 +560,7 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
     await new Promise(setImmediate);
 
     assert.equal(context.currentFilter, 'starred');
-    assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+    assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
     assert.match(nav.innerHTML, />Show all<\/button>/);
     assert.doesNotMatch(nav.innerHTML, />Show less<\/button>/);
   }
@@ -582,7 +576,7 @@ test('enterSidebarFilter collapses expansions on a tab change and keeps them on 
     await new Promise(setImmediate);
 
     assert.equal(context.currentFilter, 'all');
-    assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
+    assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), false);
     assert.match(nav.innerHTML, />Show less<\/button>/);
   }
 });
@@ -656,7 +650,7 @@ test('in-place refresh paths preserve group expansion', async () => {
     await new Promise(setImmediate);
 
     assert.equal(
-      sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'),
+      anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'),
       false,
       `${path.name}: the refreshed group must stay expanded`
     );
@@ -673,9 +667,9 @@ test('page load renders every group collapsed with the five-row preview and a Sh
   context.renderSessionList(sessions, 'all');
 
   assert.match(nav.innerHTML, />Show all<\/button>/);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
 });
 
 test('stale session-group-list-expanded localStorage seed stays inert', () => {
@@ -690,9 +684,9 @@ test('stale session-group-list-expanded localStorage seed stays inert', () => {
 
   assert.match(nav.innerHTML, /session-group-limit-toggle/);
   assert.match(nav.innerHTML, />Show all<\/button>/);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-5').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra hidden'), true);
 });
 
 test('group limit toggles and filter switches never write the expansion keys to localStorage', async () => {
@@ -722,9 +716,9 @@ test('renderSessionList keeps active grouped session visible outside the first f
 
   context.renderSessionList(sessions, 'all');
 
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra'), false);
-  assert.equal(sessionAnchorOpenTag(nav.innerHTML, 'work-7').includes('bg-blue-600/20 text-blue-300'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-6').includes('session-group-limit-extra hidden'), true);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-7').includes('session-group-limit-extra'), false);
+  assert.equal(anchorOpenTag(nav.innerHTML, 'work-7').includes('bg-blue-600/20 text-blue-300'), true);
 });
 
 test('renderSessionList leaves search results flat and untrimmed', () => {

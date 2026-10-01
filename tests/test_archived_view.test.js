@@ -13,8 +13,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
+const { anchorOpenTag, baseSessionContext, buildSidebarFilterElements, countRows, createChatSidebarContext,
+  inlinePageTimers, makeSessionMeta, rowHtml } = require('./session_context_stub');
 
 function makeArchivedSession(id, overrides = {}) {
   return makeSessionMeta(id, {status: 'archived', ...overrides});
@@ -81,16 +81,6 @@ function buildContext(overrides = {}) {
   return {context, elements, fetchCalls};
 }
 
-function countRows(html) {
-  return (html.match(/<a\b[^>]*id="session-/g) || []).length;
-}
-
-function rowHtml(html, id) {
-  const start = html.indexOf(`id="session-${id}"`);
-  if (start === -1) throw new Error(`Missing rendered session anchor for ${id}`);
-  return html.slice(start, html.indexOf('</a>', start));
-}
-
 // The Settings button's data attributes, read back off the rendered row: the
 // dataset openSessionRowMenu builds its item list from.
 function settingsDataset(html, id) {
@@ -101,12 +91,6 @@ function settingsDataset(html, id) {
     dataset[m[1].replace(/-(\w)/g, (_, c) => c.toUpperCase())] = m[2];
   }
   return dataset;
-}
-
-function anchorOpenTag(html, id) {
-  const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
-  if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
-  return match[0];
 }
 
 function archivedContext(pages) {

@@ -13,8 +13,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { baseSessionContext, buildSidebarFilterElements, createChatSidebarContext, inlinePageTimers,
-  makeSessionMeta } = require('./session_context_stub');
+const { anchorIdsInOrder, baseSessionContext, buildSidebarFilterElements, countRows, createChatSidebarContext,
+  inlinePageTimers, makeSessionMeta } = require('./session_context_stub');
 
 function makeSession(id, overrides = {}) {
   return makeSessionMeta(id, {group: 'Work', status: 'active', ...overrides});
@@ -87,10 +87,6 @@ async function paintGroupedWithBadge(context, sessions, options = {}) {
   await settle();
 }
 
-function countRows(html) {
-  return (html.match(/<a\b[^>]*id="session-/g) || []).length;
-}
-
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
 function legacyRow(id, hour, overrides = {}) {
@@ -114,10 +110,6 @@ function workerLeaf(id, parent, hour, overrides = {}) {
     worker_thread: {session_id: parent, thread_id: id},
     ...overrides,
   });
-}
-
-function anchorIdsInOrder(html) {
-  return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
 }
 
 // A legacy parent P with two projected worker-thread leaves, a task-node

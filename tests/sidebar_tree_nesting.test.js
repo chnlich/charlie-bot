@@ -11,7 +11,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const { createElement } = require('./dom_element_stub');
-const { buildSidebarIndicatorContext, makeSessionMeta } = require('./session_context_stub');
+const { anchorIdsInOrder, anchorOpenTag, buildSidebarIndicatorContext, makeSessionMeta, rowHtml } =
+  require('./session_context_stub');
 
 const at = (hour) => `2026-04-02T${String(hour).padStart(2, '0')}:00:00Z`;
 
@@ -67,22 +68,6 @@ function familyRows() {
     worker('w-new', 'r1', 11),
     manager('c-new', 'r1', 9),
   ];
-}
-
-function anchorIdsInOrder(html) {
-  return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
-}
-
-function anchorOpenTag(html, id) {
-  const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
-  if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
-  return match[0];
-}
-
-function rowHtml(html, id) {
-  const start = html.indexOf(`id="session-${id}"`);
-  if (start === -1) throw new Error(`Missing rendered session anchor for ${id}`);
-  return html.slice(start, html.indexOf('</a>', start));
 }
 
 test('child task rows nest under their parent, collapsed by default', () => {

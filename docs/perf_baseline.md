@@ -8803,7 +8803,7 @@ every host path points inside it, one synthetic backend option so the entry poin
 a synthetic Slack allowed user id, synthetic Slack tokens in the scratch credentials, and a server port
 found free by binding 0; it stubs the four host-shared doors (the cgroup sweep, the speech-model
 download, and the ext-usage and host-auth pollers — usage fetch can rotate shared OAuth tokens,
-host_auth probes remote hosts), stubs the Slack backfill, and points SlackClient.open_connection at an
+host_auth probes remote hosts), stubs the restart backfill, and points SlackClient.open_connection at an
 in-collector stand-in Socket Mode endpoint on an ephemeral port that never answers a close frame, so no
 request reaches Slack. It writes an entry script that imports `server` from CHECKOUT and runs server.py's
 own `__main__` block through `runpy.run_path(..., run_name="__main__")` so the uvicorn arguments have
@@ -8895,7 +8895,7 @@ publish:
     # The entry script: import server from CHECKOUT, stub the four host-shared
     # doors (the cgroup sweep, the speech-model download, and the two pollers -
     # usage fetch can rotate shared OAuth tokens, host_auth probes remote hosts)
-    # plus the Slack backfill, point open_connection at the stand-in, then run
+    # plus the restart backfill, point open_connection at the stand-in, then run
     # server.py's own __main__ block through runpy so the uvicorn arguments have
     # their one definition. The server's stdout and stderr go to a file below.
     ENTRY = SCRATCH / "entry.py"
@@ -8912,7 +8912,7 @@ server.sweep_stale_session_cgroups = lambda *a, **k: 0
 server._provision_speech_models = lambda cfg: None
 server.ext_usage.start_poller = _noop
 server.host_auth.start_poller = _noop
-server._run_slack_backfill = _noop
+server._run_backfill = _noop
 import src.core.slack_listener as slack_listener
 
 async def _open_stand_in(self):

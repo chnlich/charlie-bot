@@ -75,9 +75,28 @@ PARITY_ARGVS = [
 ]
 
 
+def _is_guard_shim_dir(entry: str) -> bool:
+  """The guard shim by Worker.run's definition of GIT_STASH_GUARD_DIR: a
+  ``git_stash_guard`` directory inside a ``src/agents`` tree. The launching
+  checkout and the imported tree can differ (a worktree-run session inherits
+  the launcher's PATH), so any checkout's shim directory matches."""
+  resolved = Path(entry).resolve()
+  return (resolved.name == "git_stash_guard" and resolved.parent.name == "agents"
+          and resolved.parent.parent.name == "src")
+
+
+def _path_without_guard_shim(raw_path: str) -> str:
+  """PATH minus every guard shim directory. Sessions launched by Worker.run
+  carry the shim first on PATH; the fixture seeding below must reach real git,
+  while the test bodies put the shim back via _guard_run."""
+  return os.pathsep.join(entry for entry in raw_path.split(os.pathsep) if not _is_guard_shim_dir(entry))
+
+
 def _git_env(tmp_path: Path) -> dict[str, str]:
-  """Isolated git config so host gitconfig cannot leak into the run."""
+  """Isolated git config so host gitconfig cannot leak into the run, and a PATH
+  without the guard shim so the fixture's git calls are real git."""
   env = dict(os.environ)
+  env["PATH"] = _path_without_guard_shim(env["PATH"])
   env["GIT_CONFIG_GLOBAL"] = str(tmp_path / "gitconfig")
   env["GIT_CONFIG_SYSTEM"] = os.devnull
   return env

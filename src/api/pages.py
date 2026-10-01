@@ -8,6 +8,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -748,28 +749,100 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
   return rows, native_starts, written, time.monotonic() - started
 
 
+_MODEL_LEAF_SUFFIX = re.compile(r"\s*\([^()]*\)$")
+
+
+def _model_leaf(model: str) -> str:
+  """The model name as a reader knows it: the last / segment minus a trailing ' (provider)'
+  suffix, case kept — `zai-org/GLM-5.3-Flash` and `Kimi-K3 (amd-kimi-k3)` read as
+  GLM-5.3-Flash and Kimi-K3."""
+  return _MODEL_LEAF_SUFFIX.sub("", model.rsplit("/", 1)[-1])
+
+
+def _merge_ledger_rows(rows: list[LedgerRow]) -> list[dict]:
+  """Fold the ledger's per-(source, model) rows into one page row per model.
+
+  Sources spell one model differently — opencode `zai-org/GLM-5.3-Flash`, charlie-bot
+  `GLM-5.3-Flash`, opencode path models `Kimi-K3 (amd-kimi-k3)` — so rows group on the
+  casefolded leaf name, and versions (`claude-fable-5` vs `claude-fable-5-1`) stay apart.
+  The merged row displays the largest part's (by total) spelling, carries one segment per
+  source for the stacked charts, and lists one (source · account) sub-row per account
+  across the parts; the segments and sub-rows sum to the row.
+  """
+  groups: dict[str, list[LedgerRow]] = {}
+  for row in rows:
+    groups.setdefault(_model_leaf(row.model).casefold(), []).append(row)
+  merged = []
+  for parts in groups.values():
+    accounts: dict[tuple[str, str], dict[str, int]] = {}
+    for part in parts:
+      for account in part.accounts:
+        acc = accounts.setdefault((part.source, account.name), {"calls": 0, "output": 0, "total": 0})
+        acc["calls"] += account.calls
+        acc["output"] += account.output
+        acc["total"] += account.total
+    first = min((p.first for p in parts if p.first), default="")
+    last = max((p.last for p in parts if p.last), default="")
+    merged.append(
+        {
+            "model": _model_leaf(max(parts, key=lambda p: p.total).model),
+            "calls": sum(p.calls for p in parts),
+            "in_fresh": sum(p.in_fresh for p in parts),
+            "cache_write": sum(p.cache_write for p in parts),
+            "cache_read": sum(p.cache_read for p in parts),
+            "in_unsplit": sum(p.in_unsplit for p in parts),
+            "output": sum(p.output for p in parts),
+            "total": sum(p.total for p in parts),
+            "fallback_output": sum(p.fallback_output for p in parts),
+            "accounts":
+                [
+                    {
+                        "name": f"{source} · {name}",
+                        "calls": acc["calls"],
+                        "output": acc["output"],
+                        "total": acc["total"]
+                    } for (source, name), acc in sorted(accounts.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+                ],
+            "segments":
+                [
+                    {
+                        "slot": _USAGE_SLOT[source],
+                        "total": sum(p.total for p in parts if p.source == source),
+                        "output": sum(p.output for p in parts if p.source == source),
+                    } for source in _USAGE_SOURCES if any(p.source == source for p in parts)
+                ],
+            "window": f"{first} → {last}",
+        })
+  merged.sort(key=lambda m: (-m["total"], m["model"]))
+  return merged
+
+
 def _token_usage_context(
     rows: list[LedgerRow], native_starts: dict[str, str], written: dict[str, int], elapsed_s: float) -> dict:
   """Prepare the display context for the token_usage template from one ledger read.
 
-  Computes the aggregate stats the page renders server-side (hero, tiles, conclusions),
-  the compact number strings, and the serialized JS payload for the charts and table.
+  Merges the ledger's rows into one page row per model for the charts, the table and the
+  top ranks, while the per-source tiles keep counting the unmerged rows (they answer how
+  much each CLI used). Computes the aggregate stats the page renders server-side (hero,
+  tiles, conclusions) and the serialized JS payload for the charts and table.
   """
   tot = {
       "in_fresh": sum(r.in_fresh for r in rows),
       "cache_write": sum(r.cache_write for r in rows),
       "cache_read": sum(r.cache_read for r in rows),
+      "in_unsplit": sum(r.in_unsplit for r in rows),
       "output": sum(r.output for r in rows),
       "total": sum(r.total for r in rows),
       "calls": sum(r.calls for r in rows),
   }
+  merged = _merge_ledger_rows(rows)
   window = (
       (min(r.first for r in rows if r.first),
        max(r.last for r in rows if r.last)) if rows and any(r.first for r in rows) else ("", ""))
   cache_share = tot["cache_read"] / tot["total"] * 100 if tot["total"] else 0.0
   out_share = tot["output"] / tot["total"] if tot["total"] else 0.0
-  top = max(rows, key=lambda r: r.total) if rows else None
-  top_out = max(rows, key=lambda r: r.output) if rows else None
+  top = max(merged, key=lambda m: m["total"]) if merged else None
+  top_out = max(merged, key=lambda m: m["output"]) if merged else None
   per_src: dict[str, dict] = {}
   for src in _USAGE_SOURCES:
     sub = [r for r in rows if r.source == src]
@@ -780,36 +853,11 @@ def _token_usage_context(
         "share": sum(r.total for r in sub) / tot["total"] * 100 if tot["total"] else 0.0,
         "native_start": native_starts.get(src, ""),
     }
-  payload = {
-      "rows":
-          [
-              {
-                  "model": r.model,
-                  "source": r.source,
-                  "total": r.total,
-                  "output": r.output,
-                  "in_fresh": r.in_fresh,
-                  "cache_write": r.cache_write,
-                  "cache_read": r.cache_read,
-                  "calls": r.calls,
-                  "fallback_output": r.fallback_output,
-                  "accounts":
-                      [{
-                          "name": a.name,
-                          "calls": a.calls,
-                          "output": a.output,
-                          "total": a.total
-                      } for a in r.accounts],
-                  "slot": _USAGE_SLOT[r.source],
-                  "window": f"{r.first} → {r.last}",
-              } for r in rows
-          ],
-  }
-  payload = json.dumps(payload, ensure_ascii=False)
+  payload = json.dumps({"rows": merged}, ensure_ascii=False)
   ctx = {
-      "rows": rows,
+      "rows": merged,
       "tot_compact": _compact(tot["total"]),
-      "in_compact": _compact(tot["in_fresh"] + tot["cache_write"] + tot["cache_read"]),
+      "in_compact": _compact(tot["in_fresh"] + tot["cache_write"] + tot["cache_read"] + tot["in_unsplit"]),
       "out_compact": _compact(tot["output"]),
       "cr_compact": _compact(tot["cache_read"]),
       "cw_compact": _compact(tot["cache_write"]),
@@ -819,10 +867,10 @@ def _token_usage_context(
       "per_src": per_src,
       "usage_sources": list(_USAGE_SOURCES),
       "tot_calls": f"{tot['calls']:,}",
-      "top_escaped": top.model if top else "",
-      "top_compact": _compact(top.total) if top else "0",
-      "top_out_escaped": top_out.model if top_out else "",
-      "top_out_compact": _compact(top_out.output) if top_out else "0",
+      "top_escaped": top["model"] if top else "",
+      "top_compact": _compact(top["total"]) if top else "0",
+      "top_out_escaped": top_out["model"] if top_out else "",
+      "top_out_compact": _compact(top_out["output"]) if top_out else "0",
       "elapsed_s": elapsed_s,
       "captured_now": f"{sum(written.values()):,}",
   }

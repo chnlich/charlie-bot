@@ -2,7 +2,8 @@
 
 The ledger lives under tmp_path and ``capture_local`` is stubbed, so no test reads the
 real charliebot home or scans any real log; every number on the page must come out of
-the seeded ledger alone.
+the seeded ledger alone. The row-merge tests go one step further back: they build synthetic
+``LedgerRow`` s and call the page's context builder directly, with no ledger behind them.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ import pytest
 from conftest import make_page_request
 
 from src.api import pages
-from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
+from src.core.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
 
 CC, CODEX, OC, CB = "Claude Code", "Codex", "opencode", "charlie-bot"
 CC_TS, CODEX_TS, OC_TS, CB_TS = (
@@ -100,6 +101,45 @@ async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
   return response.body.decode("utf-8")
 
 
+def _ledger_row(
+    source: str,
+    model: str,
+    *,
+    calls: int = 1,
+    in_fresh: int = 0,
+    cache_write: int = 0,
+    cache_read: int = 0,
+    in_unsplit: int = 0,
+    output: int = 0,
+    fallback_output: int = 0,
+    first: str = "2026-02-01",
+    last: str = "2026-02-02",
+    accounts: list[LedgerAccount] | None = None,
+) -> LedgerRow:
+  """A synthetic page row; ``total`` is the five token fields, as the ledger keeps it."""
+  return LedgerRow(
+      source=source,
+      model=model,
+      in_fresh=in_fresh,
+      cache_write=cache_write,
+      cache_read=cache_read,
+      in_unsplit=in_unsplit,
+      output=output,
+      calls=calls,
+      total=in_fresh + cache_write + cache_read + in_unsplit + output,
+      first=first,
+      last=last,
+      fallback_calls=1 if fallback_output else 0,
+      fallback_output=fallback_output,
+      accounts=accounts or [],
+  )
+
+
+def _payload_rows(rows: list[LedgerRow]) -> list[dict]:
+  """The serialized rows the page's JS would feed its charts and table from."""
+  return json.loads(pages._token_usage_context(rows, {}, {}, 0.0)["payload"])["rows"]
+
+
 @pytest.mark.asyncio
 async def test_page_lists_seeded_models_with_output_totals(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """Every seeded model appears exactly once, with its ledger output total."""
@@ -166,3 +206,86 @@ async def test_failed_capture_clears_itself_so_the_next_request_renders(
   assert {(r["model"], r["output"]) for r in _data_rows(body)} == {
       ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
   }
+
+
+def test_spellings_of_one_model_merge_into_one_row() -> None:
+  """opencode's prefixed spelling and charlie-bot's bare one land on a single row: the
+  display name is the largest part's spelling, the source · account sub-rows follow its
+  total order and sum to the row, and the per-source segments sum to it too."""
+  rows = [
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("b", 1, 10, 10)]),
+  ]
+  (row,) = _payload_rows(rows)
+  assert row["model"] == "GLM-5.3-Flash"
+  assert row["total"] == 40
+  assert [(a["name"], a["total"]) for a in row["accounts"]] == [("opencode · a", 30), ("charlie-bot · b", 10)]
+  assert [s["total"] for s in row["segments"]] == [30, 10]
+  assert [s["slot"] for s in row["segments"]] == [pages._USAGE_SLOT[OC], pages._USAGE_SLOT[CB]]
+  assert sum(s["total"] for s in row["segments"]) == row["total"]
+
+
+def test_canonical_name_merges_spellings_but_keeps_versions_apart() -> None:
+  """The canonical name is the casefolded leaf minus a trailing (provider) suffix: the
+  Kimi and GLM spellings each merge into one row named for their largest part, while
+  claude-fable-5 and claude-fable-5-1 stay two rows."""
+  rows = [
+      _ledger_row(OC, "moonshotai/Kimi-K3", output=5),
+      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7),
+      _ledger_row(CODEX, "GLM-5.3-flash", output=3),
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4),
+      _ledger_row(CC, "claude-fable-5", output=9),
+      _ledger_row(CC, "claude-fable-5-1", output=11),
+  ]
+  got = sorted((r["model"], r["output"]) for r in _payload_rows(rows))
+  assert got == [("GLM-5.3-Flash", 7), ("Kimi-K3", 12), ("claude-fable-5", 9), ("claude-fable-5-1", 11)]
+
+
+def test_per_source_tiles_still_count_the_unmerged_rows() -> None:
+  """The tiles answer how much each CLI used, so their totals and model counts come from
+  the ledger's own rows: opencode's three spellings show three tile models behind the
+  page's two merged rows."""
+  rows = [
+      _ledger_row(OC, "moonshotai/Kimi-K3", in_fresh=5),
+      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7),
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4),
+      _ledger_row(CB, "GLM-5.3-Flash", output=3),
+  ]
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0)["ctx"]
+  for src in (CC, CODEX, OC, CB):
+    sub = [r for r in rows if r.source == src]
+    assert ctx["per_src"][src]["models"] == len(sub)
+    assert ctx["per_src"][src]["t_comp"] == pages._compact(sum(r.total for r in sub))
+  assert ctx["per_src"][OC]["models"] == 3
+  assert len(_payload_rows(rows)) == 2
+
+
+def test_in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() -> None:
+  """The unsplit input rides the payload row that feeds the table column, and the hero's
+  total and input figures count it like the other input columns."""
+  rows = [_ledger_row(CC, "claude-sonnet-4", in_fresh=7, cache_write=3, cache_read=11, in_unsplit=5, output=4)]
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0)["ctx"]
+  (row,) = _payload_rows(rows)
+  assert row["in_unsplit"] == 5
+  assert row["total"] == 30
+  assert ctx["tot_compact"] == pages._compact(30)
+  assert ctx["in_compact"] == pages._compact(26)
+
+
+@pytest.mark.asyncio
+async def test_rendered_page_has_one_row_per_canonical_model(monkeypatch: pytest.MonkeyPatch) -> None:
+  """End to end over the real template: two sources' spellings of one model render one
+  page row, carrying the merged source · account sub-rows and both sources' segments."""
+  rows = [
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("b", 1, 10, 10)]),
+      _ledger_row(CC, "claude-sonnet-4", output=100),
+  ]
+  monkeypatch.setattr(pages, "_capture_ledger_rows", lambda: (rows, {}, {}, 0.0))
+  response = await pages.token_usage_viewer(make_page_request("/token-usage"))
+  assert response.status_code == 200
+  data = _data_rows(response.body.decode("utf-8"))
+  assert [(r["model"], r["total"]) for r in data] == [("claude-sonnet-4", 100), ("GLM-5.3-Flash", 40)]
+  glm = data[1]
+  assert [a["name"] for a in glm["accounts"]] == ["opencode · a", "charlie-bot · b"]
+  assert [s["total"] for s in glm["segments"]] == [30, 10]

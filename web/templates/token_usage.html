@@ -89,11 +89,12 @@
   The top model by total is <b>{{ ctx.top_escaped }}</b> (<code>{{ ctx.top_compact }}</code>); of that,
   <b>{{ "%.1f"%cache_share }}%</b> was cache reads (cached input tokens, cheapest per token), while output tokens
   billed for real were only {{ ctx.out_compact }} in total, with the top rank going to <b>{{ ctx.top_out_escaped }}</b>
-  (<code>{{ ctx.top_out_compact }}</code>). Usage for the same model across multiple subscription accounts is merged into one row.</p>
+  (<code>{{ ctx.top_out_compact }}</code>). Usage for the same model is merged into one row across subscription accounts and across the
+  different spellings the sources give it.</p>
   <div class="meta">
     <span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }}</span>
     <span class="mtag">sources &middot; Claude Code / Codex / opencode / charlie-bot local logs</span>
-    <span class="mtag">scope &middot; one model = one row (merged across subscriptions)</span>
+    <span class="mtag">scope &middot; one model = one row (merged across sources and subscriptions)</span>
     <span class="mtag">API calls &middot; {{ ctx.tot_calls }}</span>
     <span class="mtag">generated &middot; {{ generated }}</span>
   </div>
@@ -141,7 +142,7 @@
   <div class="card"><div class="legend" id="lg2"></div><div class="chart" id="c_out"></div></div>
 
   <h2><span class="n">4</span>Full breakdown</h2>
-  <p style="color:var(--mut);font-size:13px;margin:0 0 10px">One row per model; indented rows below are the per-account split for that model.</p>
+  <p style="color:var(--mut);font-size:13px;margin:0 0 10px">One row per model; the indented rows below are its per-source, per-account split and sum to it.</p>
   <table class="data" id="tbl"></table>
 
   <h2><span class="n">5</span>Methodology</h2>
@@ -186,8 +187,8 @@
 <script>
 const DATA = {{ payload|safe }};
 const SLOT = {1:'var(--series-1)', 2:'var(--series-2)', 3:'var(--series-3)', 4:'var(--series-4)'};
-// Legend order is the server's source display order (slot 1..n); each payload row
-// carries its own slot number, so no client-side source→slot map exists. The legend key
+// Legend order is the server's source display order (slot 1..n); each payload row's
+// segments carry their own slot numbers, so no client-side source→slot map exists. The legend key
 // only exists on the python this page ships with: the template reloads from disk while
 // the serving process runs the python it started with, so the key stays absent until
 // that process restarts — an absent key renders an empty legend instead of failing the
@@ -238,10 +239,21 @@ function bars(container, key) {
     row.tabIndex = 0;
     const nm = el('div','nm'); nm.append(el('span', null, r.model));
     const track = el('div','track');
-    const bar = el('div','bar');
-    bar.style.width = Math.max(scale(r[key]), 0.25) + '%';
-    bar.style.background = SLOT[r.slot];
-    track.append(bar);
+    // The bar stacks one segment per source, left to right in the server's source order, each
+    // in its legend colour; a bar too small to see keeps a sliver on its widest segment.
+    const widths = r.segments.map(s => scale(s[key]));
+    const shown = widths.reduce((a, b) => a + b, 0);
+    if (shown > 0 && shown < 0.25) widths[widths.indexOf(Math.max(...widths))] += 0.25 - shown;
+    let left = 0;
+    r.segments.forEach((s, i) => {
+      const bar = el('div','bar');
+      bar.style.left = left + '%';
+      bar.style.width = widths[i] + '%';
+      bar.style.background = SLOT[s.slot];
+      if (i < r.segments.length - 1) bar.style.borderRadius = '0';
+      left += widths[i];
+      track.append(bar);
+    });
     row.append(nm, track, el('div','vl', compact(r[key])));
     const show = ev => tip(ev, r);
     row.addEventListener('pointermove', show);
@@ -266,8 +278,11 @@ const TIP = document.getElementById('tip');
 function tip(ev, r) {
   TIP.textContent = '';
   const t = el('div','t');
-  const sw = el('span','sw'); sw.style.background = SLOT[r.slot];
-  t.append(sw, el('span', null, r.model));
+  for (const s of r.segments) {
+    const sw = el('span','sw'); sw.style.background = SLOT[s.slot];
+    t.append(sw);
+  }
+  t.append(el('span', null, r.model));
   const tb = el('table');
   const add = (k, v) => {
     const tr = el('tr');
@@ -279,6 +294,7 @@ function tip(ev, r) {
   add('cache read', fmt(r.cache_read));
   add('cache write', fmt(r.cache_write));
   add('fresh input', fmt(r.in_fresh));
+  add('unsplit input', fmt(r.in_unsplit));
   add('API calls', fmt(r.calls));
   if (r.fallback_output > 0) add('lower bound', 'output \u2265 ' + fmt(r.fallback_output));
   add('window', r.window);
@@ -299,16 +315,19 @@ bars('c_out','output');
 // Table view: the WCAG-clean twin of both charts.
 const T = document.getElementById('tbl');
 const thead = el('thead'), head = el('tr');
-for (const c of ['Model','Platform','API calls','Fresh input','Cache write','Cache read','Output','Total','Window'])
+for (const c of ['Model','Platform','API calls','Fresh input','Cache write','Cache read','Unsplit input','Output','Total','Window'])
   head.append(el('th', null, c));
 thead.append(head); T.append(thead);
 const tb = el('tbody');
-const sums = {calls:0, in_fresh:0, cache_write:0, cache_read:0, output:0, total:0};
+const sums = {calls:0, in_fresh:0, cache_write:0, cache_read:0, in_unsplit:0, output:0, total:0};
 for (const r of DATA.rows) {
   const tr = el('tr');
   const td0 = el('td','mdl');
-  const sw = el('span','sw'); sw.style.background = SLOT[r.slot];
-  td0.append(sw, el('span', null, r.model));
+  for (const s of r.segments) {
+    const sw = el('span','sw'); sw.style.background = SLOT[s.slot];
+    td0.append(sw);
+  }
+  td0.append(el('span', null, r.model));
   // Counted fallback records are the part of the row that could still grow if a pruned CLI
   // log resurfaces, so the output behind them is only a lower bound — say so on the row.
   if (r.fallback_output > 0) {
@@ -316,8 +335,8 @@ for (const r of DATA.rows) {
     mark.title = fmt(r.fallback_output) + ' output tokens come from captures whose CLI logs are pruned';
     td0.append(mark);
   }
-  tr.append(td0, el('td', null, r.source));
-  for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) {
+  tr.append(td0, el('td', null, r.segments.map(s => LEG[s.slot - 1][1]).join(', ')));
+  for (const k of ['calls','in_fresh','cache_write','cache_read','in_unsplit','output','total']) {
     tr.append(el('td', null, fmt(r[k])));
     sums[k] += r[k];
   }
@@ -326,14 +345,14 @@ for (const r of DATA.rows) {
   if (r.accounts.length > 1) for (const a of r.accounts) {
     const ar = el('tr','acct');
     ar.append(el('td', null, '↳ ' + a.name), el('td', null, ''), el('td', null, fmt(a.calls)),
-              el('td', null, ''), el('td', null, ''), el('td', null, ''),
+              el('td', null, ''), el('td', null, ''), el('td', null, ''), el('td', null, ''),
               el('td', null, fmt(a.output)), el('td', null, fmt(a.total)), el('td', null, ''));
     tb.append(ar);
   }
 }
 const sum = el('tr','sum');
 sum.append(el('td', null, 'Sum (' + DATA.rows.length + ' models)'), el('td', null, ''));
-for (const k of ['calls','in_fresh','cache_write','cache_read','output','total']) sum.append(el('td', null, fmt(sums[k])));
+for (const k of ['calls','in_fresh','cache_write','cache_read','in_unsplit','output','total']) sum.append(el('td', null, fmt(sums[k])));
 sum.append(el('td','win', {{ window_str|tojson }}));
 tb.append(sum); T.append(tb);
 </script>

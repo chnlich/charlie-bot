@@ -252,22 +252,11 @@ async function toggleVoice() {
   else if (run.phase === 'retry') startUpload(run);
 }
 
-async function startRecording() {
-  if (!SESSION_ID) {
-    showToast('Open a session before recording voice input', true);
-    return;
-  }
-  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-    showToast('Microphone access is not available. Use HTTPS or a supported browser.', true);
-    return;
-  }
-  if (!window.AudioContext && !window.webkitAudioContext) {
-    showToast('Audio capture is not available in this browser', true);
-    return;
-  }
-
-  const run = {
-    sessionId: SESSION_ID,
+// The one construction site of a recording's run object: every phase below
+// mutates the fields it initializes, so a field the pipeline needs starts here.
+function newVoiceRun(sessionId, backend) {
+  return {
+    sessionId,
     stream: null,
     audioContext: null,
     sourceNode: null,
@@ -288,12 +277,29 @@ async function startRecording() {
     flushId: 0,
     flushResolvers: new Map(),
     ui: null,
-    backend: selectedVoiceBackend(),
+    backend,
     devicesPromise: null,
     relaySocket: null,
     relayFinalResolve: null,
     relayWaitTimer: null,
   };
+}
+
+async function startRecording() {
+  if (!SESSION_ID) {
+    showToast('Open a session before recording voice input', true);
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    showToast('Microphone access is not available. Use HTTPS or a supported browser.', true);
+    return;
+  }
+  if (!window.AudioContext && !window.webkitAudioContext) {
+    showToast('Audio capture is not available in this browser', true);
+    return;
+  }
+
+  const run = newVoiceRun(SESSION_ID, selectedVoiceBackend());
   activeVoiceRun = run;
   setVoiceButtonRecording(true);
   updateVoiceCaret();

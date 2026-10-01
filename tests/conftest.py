@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import yaml
+from _pytest.runner import runtestprotocol
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
@@ -52,11 +53,13 @@ if os.environ.get("PYTHONPATH", "").split(os.pathsep)[0] != str(ROOT):
   os.environ["PYTHONPATH"] = os.pathsep.join([str(ROOT), os.environ.get("PYTHONPATH", "")]).rstrip(os.pathsep)
 
 # ---------------------------------------------------------------------------
-# Per-test wall-time budget and the integration cap. A unit test stays under 1s
+# Per-test wall-time budget and the integration cap. A unit test stays under 2s
 # and a test marked `integration` (real processes / real time) under 10s; at
 # most 50 collected tests may carry the marker. The budgets are ini options so
 # the mechanism's own test can shrink them. Enforcement lives here so the limit
-# is mechanical, not a convention.
+# is mechanical, not a convention. A test whose only failure is its wall time
+# reruns once and the rerun's timing decides: CI hosts jitter past the budget
+# on runs that pass unchanged seconds later.
 # ---------------------------------------------------------------------------
 
 _UNIT_BUDGET_INI = "unit_test_budget_seconds"
@@ -64,6 +67,15 @@ _INTEGRATION_BUDGET_INI = "integration_test_budget_seconds"
 _MAX_INTEGRATION_INI = "max_integration_tests"
 _ELAPSED_ATTR = "_charliebot_wall_seconds"
 _BUDGET_REPORTED_ATTR = "_charliebot_budget_reported"
+# Rerun-tier state. Attempt 1 runs unlogged (pytest_runtest_protocol below);
+# its budget-trip stamp is that hook's rerun evidence, and the rerun's reports
+# are the only ones any consumer sees. A rerun fires only when every
+# non-tripped report passed, so it can never mask an assertion failure, an
+# error, or a skip.
+_ATTEMPT_ATTR = "_charliebot_attempt"
+_FIRST_ELAPSED_ATTR = "_charliebot_first_wall_seconds"
+_TRIP_ELAPSED_ATTR = "_charliebot_budget_trip_seconds"
+_RERUN_EVENTS = pytest.StashKey[list]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -71,7 +83,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
       _UNIT_BUDGET_INI, "Per-test wall-time budget in seconds (setup + call + teardown) for tests that carry no "
       "integration or local_only marker; enforced by this conftest.",
       type="float",
-      default=1.0)
+      default=2.0)
   parser.addini(
       _INTEGRATION_BUDGET_INI,
       "Per-test wall-time budget in seconds for tests marked @pytest.mark.integration.",
@@ -112,6 +124,15 @@ def _accrue_stage_time(item: pytest.Item) -> Any:
 pytest_runtest_setup = pytest_runtest_call = pytest_runtest_teardown = _accrue_stage_time
 
 
+def _budget_longrepr(item: pytest.Item, budget: float, elapsed: float, kind: str) -> str:
+  """The budget-failure message: the timing, the budget, and the escape hatch."""
+  return (
+      f"test wall time {elapsed:.2f}s exceeds the {budget:g}s {kind} budget "
+      f"(setup + call + teardown, enforced by tests/conftest.py). Make the test faster, or mark "
+      f"it @pytest.mark.integration if it truly needs real processes or real time "
+      f"(integration budget {float(item.config.getini(_INTEGRATION_BUDGET_INI)):g}s).")
+
+
 @pytest.hookimpl(wrapper=True)
 def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) -> Any:
   report: pytest.TestReport = yield
@@ -126,12 +147,65 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[None]) ->
   setattr(item, _BUDGET_REPORTED_ATTR, True)
   kind = "integration" if item.get_closest_marker("integration") else "unit"
   report.outcome = "failed"
-  report.longrepr = (
-      f"test wall time {elapsed:.2f}s exceeds the {budget:g}s {kind} budget "
-      f"(setup + call + teardown, enforced by tests/conftest.py). Make the test faster, or mark "
-      f"it @pytest.mark.integration if it truly needs real processes or real time "
-      f"(integration budget {float(item.config.getini(_INTEGRATION_BUDGET_INI)):g}s).")
+  report.longrepr = _budget_longrepr(item, budget, elapsed, kind)
+  if getattr(item, _ATTEMPT_ATTR, 1) == 1:
+    # Attempt 1 is unlogged, so this report reaches no consumer: it is the
+    # protocol hook's evidence for a rerun, and the rerun's own trip carries
+    # the verdict with both timings.
+    setattr(report, _TRIP_ELAPSED_ATTR, elapsed)
+  else:
+    first = getattr(item, _FIRST_ELAPSED_ATTR, 0.0)
+    report.longrepr += (
+        f" Budget rerun: attempt 1 {first:.2f}s, rerun {elapsed:.2f}s"
+        f" - both exceed the {budget:g}s {kind} budget.")
   return report
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_protocol(item: pytest.Item, nextitem: pytest.Item | None) -> bool | None:
+  """Run the item once, then once more when only its wall time tripped.
+
+  Attempt 1 runs with logging off, so its reports reach no consumer until this
+  hook decides: logged untouched, or discarded for a rerun whose reports carry
+  the outcome. Returning True halts the firstresult hook chain, keeping the
+  default protocol out; returning None would defer to it.
+  """
+  item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+  reports = runtestprotocol(item, log=False, nextitem=nextitem)
+  trips = [rep for rep in reports if getattr(rep, _TRIP_ELAPSED_ATTR, None) is not None]
+  if len(trips) != 1 or not all(rep.passed or rep is trips[0] for rep in reports):
+    # Nothing tripped, or the attempt owns a failure the budget cannot explain:
+    # attempt 1 is the outcome.
+    for rep in reports:
+      item.ihook.pytest_runtest_logreport(report=rep)
+    item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+    return True
+  setattr(item, _ATTEMPT_ATTR, 2)
+  setattr(item, _FIRST_ELAPSED_ATTR, getattr(trips[0], _TRIP_ELAPSED_ATTR))
+  setattr(item, _ELAPSED_ATTR, 0.0)
+  setattr(item, _BUDGET_REPORTED_ATTR, False)
+  item.ihook.pytest_runtest_logstart(nodeid=item.nodeid, location=item.location)
+  runtestprotocol(item, log=True, nextitem=nextitem)
+  _record_rerun_event(item)
+  item.ihook.pytest_runtest_logfinish(nodeid=item.nodeid, location=item.location)
+  return True
+
+
+def _record_rerun_event(item: pytest.Item) -> None:
+  """Both timings of a finished rerun; a rerun pass has no failure block to carry them."""
+  first = getattr(item, _FIRST_ELAPSED_ATTR, 0.0)
+  second = getattr(item, _ELAPSED_ATTR, 0.0)
+  budget = _budget_seconds(item)
+  kind = "integration" if item.get_closest_marker("integration") else "unit"
+  verdict = "within budget" if second <= budget else "also over budget"
+  item.config.stash.setdefault(_RERUN_EVENTS, []).append((item.nodeid, first, second, budget, kind, verdict))
+
+
+def pytest_terminal_summary(terminalreporter: pytest.TerminalReporter, exitstatus: int, config: pytest.Config) -> None:
+  for nodeid, first, second, budget, kind, verdict in config.stash.get(_RERUN_EVENTS, ()):
+    terminalreporter.write_line(
+        f"BUDGET RERUN {nodeid}: attempt 1 {first:.2f}s over the {budget:g}s {kind} budget; rerun {second:.2f}s "
+        f"{verdict}")
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:

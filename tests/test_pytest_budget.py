@@ -1,5 +1,6 @@
 """The per-test wall-time budget mechanism itself: budgets fail slow tests, the
-integration marker buys the larger budget, and the collection cap trips.
+integration marker buys the larger budget, the collection cap trips, and a
+budget-only trip reruns once with the rerun's timing deciding the outcome.
 
 The inner runs load the REAL tests/conftest.py (registered as a plugin), so the
 mechanism under test is the enforcement the suite actually runs under; each
@@ -30,6 +31,35 @@ def test_marked_gets_the_larger_budget():
 
 def test_unmarked_over_budget_fails():
     time.sleep(0.12)
+"""
+
+_INNER_RERUN_PASS_TESTS = """
+import time
+
+calls = {"n": 0}
+
+
+def test_over_budget_then_fast():
+    calls["n"] += 1
+    if calls["n"] == 1:
+        time.sleep(0.12)
+"""
+
+_INNER_RERUN_FAIL_TESTS = """
+import time
+
+
+def test_always_over_budget():
+    time.sleep(0.12)
+"""
+
+_INNER_NO_RERUN_TESTS = """
+calls = {"n": 0}
+
+
+def test_assertion_failure_never_reruns():
+    calls["n"] += 1
+    assert calls["n"] == 2
 """
 
 _INNER_CAP_TESTS = """
@@ -92,6 +122,40 @@ def test_budget_mechanism(pytester: pytest.Pytester) -> None:
   out = result.stdout.str()
   assert "exceeds the 0.03s unit budget" in out, out
   assert "Make the test faster, or mark it @pytest.mark.integration" in out, out
+
+
+def test_budget_only_failure_reruns_once_and_passes(pytester: pytest.Pytester) -> None:
+  """A wall-time-only trip reruns once: the rerun is within budget, so the
+  combined outcome is a pass, and the summary records both timings."""
+  result = _run_inner(pytester, _INNER_INI, _INNER_RERUN_PASS_TESTS)
+  result.assert_outcomes(passed=1)
+  assert result.ret == 0
+  result.stdout.fnmatch_lines(
+      [
+          "*BUDGET RERUN*: attempt 1 0.1*s over the 0.03s unit budget; rerun 0.0*s within budget*",
+      ])
+
+
+def test_budget_rerun_that_also_exceeds_fails_with_both_timings(pytester: pytest.Pytester) -> None:
+  """When the rerun exceeds the budget too, the combined outcome is a failure
+  carrying both attempts' timings."""
+  result = _run_inner(pytester, _INNER_INI, _INNER_RERUN_FAIL_TESTS)
+  result.assert_outcomes(failed=1)
+  out = result.stdout.str()
+  assert "exceeds the 0.03s unit budget" in out, out
+  assert "attempt 1 0.1" in out, out
+  assert "rerun 0.1" in out, out
+
+
+def test_assertion_failure_never_reruns(pytester: pytest.Pytester) -> None:
+  """An assertion failure is the outcome on its first attempt: no rerun runs
+  that could turn it into a pass, and no budget text rides along."""
+  result = _run_inner(pytester, _INNER_INI, _INNER_NO_RERUN_TESTS)
+  result.assert_outcomes(failed=1)
+  out = result.stdout.str()
+  assert "AssertionError" in out, out
+  assert "exceeds the 0.03s unit budget" not in out, out
+  assert "BUDGET RERUN" not in out, out
 
 
 def test_integration_cap_trips_at_collection(pytester: pytest.Pytester) -> None:

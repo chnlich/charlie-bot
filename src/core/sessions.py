@@ -2367,13 +2367,30 @@ class SessionManager:
     """
     await self._chat_events.save_chat_event(session_id, event)
 
-  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
-    """Persist event, run it through the session's aggregator, broadcast deltas + raw event.
+  async def _feed_and_broadcast(
+      self, session_id: str, event: dict, aggregator: MessageAggregator, archive_offset: int) -> None:
+    """Stamp the event index, feed the aggregator, and broadcast what comes out.
 
-    Raw events whose type is in ``_RAW_EVENTS_REPLACED_BY_DELTAS`` are not
-    broadcast on the wire; the aggregator emits ``message``/``stream`` deltas
-    in their place. Every other event type flows raw because clients use it
-    for state side-effects (e.g. ``master_done`` → stopThinking).
+    The index is ``archive_offset + cached count - 1`` over the post-append
+    events cache. Deltas go out first; a raw event whose type is in
+    ``_RAW_EVENTS_REPLACED_BY_DELTAS`` never follows them because the deltas
+    replace it on the wire, while every other event type flows raw for the
+    state side-effects clients hang off it (for example ``master_done`` → stopThinking).
+    """
+    event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
+
+    channel = session_channel(session_id)
+    deltas = list(aggregator.feed(event))
+    for delta in deltas:
+      await streaming_manager.broadcast(channel, delta)
+    if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
+      await streaming_manager.broadcast(channel, event)
+
+  async def persist_and_broadcast(self, session_id: str, event: dict) -> None:
+    """Persist event, then broadcast it through the session's aggregator.
+
+    Callers rely on the event being durable and on the wire output matching
+    the announce path's; both ride the shared ``_feed_and_broadcast``.
     """
     # Prime the events cache + aggregator before persisting so event_index
     # injection works on the very first call after server start (and so the
@@ -2383,14 +2400,7 @@ class SessionManager:
     meta = await self.get_session(session_id)
     archive_offset = meta.archive_offset if meta else 0
     await self.save_chat_event(session_id, event)
-    event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
-
-    channel = session_channel(session_id)
-    deltas = list(aggregator.feed(event))
-    for delta in deltas:
-      await streaming_manager.broadcast(channel, delta)
-    if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
-      await streaming_manager.broadcast(channel, event)
+    await self._feed_and_broadcast(session_id, event, aggregator, archive_offset)
 
     # Slack delivery hangs off the round's terminal event, after the broadcast
     # and in its own task: the funnel neither waits on Slack nor breaks when a
@@ -2434,14 +2444,7 @@ class SessionManager:
       return
     try:
       meta = await self.get_session(session_id)
-      archive_offset = meta.archive_offset if meta else 0
-      event["event_index"] = archive_offset + self._chat_events.cached_event_count(session_id) - 1
-      channel = session_channel(session_id)
-      deltas = list(aggregator.feed(event))
-      for delta in deltas:
-        await streaming_manager.broadcast(channel, delta)
-      if event.get("type") not in _RAW_EVENTS_REPLACED_BY_DELTAS:
-        await streaming_manager.broadcast(channel, event)
+      await self._feed_and_broadcast(session_id, event, aggregator, meta.archive_offset if meta else 0)
     except Exception:
       # The event is already durable; a notification failure is repaired by
       # catch-up/reconciliation, never by persisting a second copy.

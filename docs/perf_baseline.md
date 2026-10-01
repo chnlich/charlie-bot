@@ -7301,7 +7301,7 @@ CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.
 import asyncio, os, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
-from src.agents.backends.base import tail_follow_events
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events
 from src.core.runs import CURSOR_NAME, read_raw_cursor
 
 LINES = 2000
@@ -7326,6 +7326,7 @@ async def drain():
     async for _ in tail_follow_events(
         raw, translate=translate, is_alive=lambda: False,
         cursor=cursor, start_offset=0, post_result_timeout=60.0,
+        buffer_limit=DEFAULT_BUFFER_LIMIT,
     ):
         pass
     return count
@@ -8082,7 +8083,7 @@ CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.
 import asyncio, os, shutil, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
-from src.agents.backends.base import tail_follow_events
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events
 
 CHUNK = 128 * 1024 * 1024
 ROUNDS = 8
@@ -8130,7 +8131,7 @@ async def main():
     wt.start()
     async for _ in tail_follow_events(
         raw, translate=translate, is_alive=lambda: not writer_done.is_set(),
-        post_result_timeout=60.0,
+        post_result_timeout=60.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
     ):
         pass
     wall = time.perf_counter() - t0
@@ -8456,7 +8457,7 @@ import asyncio, os, sys, time
 from pathlib import Path
 
 sys.path.insert(0, os.environ["CHECKOUT"])
-from src.agents.backends.base import tail_follow_events, _TAIL_POLL_INTERVAL
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events, _TAIL_POLL_INTERVAL
 
 SCRATCH = Path("/tmp/lp_m122/probe.jsonl")
 IDLE = Path("/tmp/lp_m122/idle.jsonl")
@@ -8483,7 +8484,7 @@ async def discovery_round() -> list[float]:
             translate=lambda e: [e],
             is_alive=lambda: alive["v"],
             start_offset=0,
-            post_result_timeout=1.0,
+            post_result_timeout=1.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
         ):
             latencies.append(time.perf_counter() - appended[ev["seq"]])
 
@@ -8511,7 +8512,7 @@ async def idle_cpu() -> float:
             translate=lambda e: [e],
             is_alive=lambda: alive["v"],
             start_offset=0,
-            post_result_timeout=1.0,
+            post_result_timeout=1.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
         ):
             pass
     task = asyncio.create_task(idle_follow())

@@ -34,24 +34,34 @@ from tests.test_task_execution import (
 
 
 async def make_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """One synthetic instance: root manager + child manager under it, plus the
+  """One synthetic instance: root manager + child manager under it, plus the
     API client and the scripted executor, with no user input anywhere yet."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    from conftest import patch_instructions_content
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    # The spawn-style routes resolve backends through the config owner directly.
-    from src.api import internal as internal_api
-    monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
-    root = await tree.create_task(
-        request_id="root", task_parent_id=None, profile="manager",
-        task=TaskSpec(goal="project"), name="Project", backend=None, caller="operator")
-    child = await tree.create_task(
-        request_id="child", task_parent_id=root.id, profile="manager",
-        task=TaskSpec(goal="feature"), name="Feature", backend=None, caller="operator")
-    return cfg, session_mgr, tree, root, child
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  from conftest import patch_instructions_content
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  # The spawn-style routes resolve backends through the config owner directly.
+  from src.api import internal as internal_api
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  root = await tree.create_task(
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=TaskSpec(goal="project"),
+      name="Project",
+      backend=None,
+      caller="operator")
+  child = await tree.create_task(
+      request_id="child",
+      task_parent_id=root.id,
+      profile="manager",
+      task=TaskSpec(goal="feature"),
+      name="Feature",
+      backend=None,
+      caller="operator")
+  return cfg, session_mgr, tree, root, child
 
 
 @pytest.mark.asyncio
@@ -229,38 +239,38 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
 
 
 async def register_active_run(tree, session_id: str, run_id: str, kind: str = "manager_turn") -> None:
-    """Pin one active, launched Run on *session_id*: the identity its run
+  """Pin one active, launched Run on *session_id*: the identity its run
     token stands for (registered, no terminal fact, launch identity pinned)."""
-    await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind=kind))
-    await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
+  await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind=kind))
+  await tree.runs.record_launch(session_id, run_id, pid=424242, pid_start=f"ps-{run_id}")
 
 
 @pytest.mark.asyncio
 async def test_agent_run_token_delegates_verify_without_a_takeoff(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-    """The CLI's real credential — a run token — delegating a read-only verify
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The CLI's real credential — a run token — delegating a read-only verify
     needs no takeoff window: with no user instruction anywhere, the delegation
     returns 200, creates a repo-less verify child, and its run launches and
     settles (the agent-creation check reads the same verify exemption the
     route and the launch read)."""
-    cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
-    builds = install_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])],
-        WORKER_BUILD_BACKEND_PATCH_TARGET)
-    await register_active_run(tree, child.id, "child-run")
+  cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
+  builds = install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("verdict: yes")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  await register_active_run(tree, child.id, "child-run")
 
-    from tests.test_task_execution import make_api_client
-    with make_api_client(cfg, session_mgr, tree) as client:
-        verify = client.post(
-            "/api/internal/delegate", json=delegate_payload(child.id, repo, task_type="verify"),
-            headers=agent_headers(child.id, "child-run"))
-        assert verify.status_code == 200, verify.text
-        leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
-        leaf = await tree.load_meta(leaf_id)
-        assert leaf is not None and leaf.profile == "worker"
-        assert leaf.task_parent_id == child.id
-        assert leaf.task is not None
-        assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
-        _run, outcome = await wait_for_terminal_run(tree, leaf_id, run_id)
-    assert outcome == "success"
-    assert len(builds) == 1
+  from tests.test_task_execution import make_api_client
+  with make_api_client(cfg, session_mgr, tree) as client:
+    verify = client.post(
+        "/api/internal/delegate",
+        json=delegate_payload(child.id, repo, task_type="verify"),
+        headers=agent_headers(child.id, "child-run"))
+    assert verify.status_code == 200, verify.text
+    leaf_id, run_id = verify.json()["session_id"], verify.json()["run_id"]
+    leaf = await tree.load_meta(leaf_id)
+    assert leaf is not None and leaf.profile == "worker"
+    assert leaf.task_parent_id == child.id
+    assert leaf.task is not None
+    assert leaf.task.task_type == "verify" and leaf.task.repo_path is None
+    _run, outcome = await wait_for_terminal_run(tree, leaf_id, run_id)
+  assert outcome == "success"
+  assert len(builds) == 1

@@ -444,5 +444,7 @@ Known-alive symbols:
   `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
   successor. The name has exactly zero whole-repo matches outside its definition, so
   vulture flags it as an unused method. Same framework-registered class as the
-  `check_sources_and_mode` entry above; deleting it would not fail validation, it
-  would silently admit the retired key again.
+  `check_sources_and_mode` entry above; deleting it would still fail validation
+  (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
+  field), but the error would no longer name `allowed_users`, the successor the
+  operator must move each id into.

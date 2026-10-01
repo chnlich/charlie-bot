@@ -63,7 +63,7 @@ from pathlib import Path
 
 SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_REPO))
+  sys.path.insert(0, str(SCRIPT_REPO))
 
 from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
@@ -84,8 +84,8 @@ BUILD_LABEL = re.compile(r"\b[0-9a-f]{7,40} \u00b7 \d{2}-\d{2}\b")
 
 
 def fail(message: str) -> None:
-    print(f"UI PARITY CHECK COULD NOT RUN: {message}", file=sys.stderr, flush=True)
-    raise SystemExit(2)
+  print(f"UI PARITY CHECK COULD NOT RUN: {message}", file=sys.stderr, flush=True)
+  raise SystemExit(2)
 
 
 # ---------------------------------------------------------------------------
@@ -94,56 +94,76 @@ def fail(message: str) -> None:
 
 
 def _sid(n: int) -> str:
-    return f"00000000-0000-4000-8000-{n:012x}"
+  return f"00000000-0000-4000-8000-{n:012x}"
 
 
 def synthetic_sessions() -> list[dict]:
-    """(id, name, group, status, parent, profile, starred) rows, newest first."""
-    root, child, worker = _sid(1), _sid(2), _sid(3)
-    rows = [
-        (ACTIVE_ID, "Release notes", "alpha", "active", None, None, False),
-        (root, "Rework auth", "alpha", "active", None, "manager", False),
-        (child, "Token store", "alpha", "active", root, "manager", False),
-        (worker, "Implement the parser", "alpha", "active", root, "worker", False),
-        (_sid(4), "Benchmark sweep", "beta", "active", None, None, True),
-        (_sid(5), "Loader cleanup", "beta", "active", None, None, False),
-        (_sid(6), "Onboarding doc", "gamma", "active", None, None, False),
-        (_sid(7), "Scratchpad", None, "active", None, None, False),
-        (_sid(8), "Weekly review", None, "active", None, None, False),
-        (_sid(9), "Implement the cache", "alpha", "archived", root, "worker", False),
-        (_sid(10), "Implement the retry", "alpha", "archived", root, "worker", False),
-    ]
-    out = []
-    for index, (sid, name, group, status, parent, profile, starred) in enumerate(rows):
-        # Fixed times months back, one hour apart: the list order and every
-        # rendered time label come out the same on both sides.
-        stamp = f"2026-01-15T{20 - index:02d}:00:00Z"
-        meta = {
-            "id": sid, "name": name, "status": status, "backend": "fake-scripted",
-            "group": group, "starred": starred, "created_at": stamp, "updated_at": stamp,
-        }
-        if profile:
-            meta.update({"schema_version": 2, "profile": profile, "task_parent_id": parent})
-        out.append(meta)
-    return out
+  """(id, name, group, status, parent, profile, starred) rows, newest first."""
+  root, child, worker = _sid(1), _sid(2), _sid(3)
+  rows = [
+      (ACTIVE_ID, "Release notes", "alpha", "active", None, None, False),
+      (root, "Rework auth", "alpha", "active", None, "manager", False),
+      (child, "Token store", "alpha", "active", root, "manager", False),
+      (worker, "Implement the parser", "alpha", "active", root, "worker", False),
+      (_sid(4), "Benchmark sweep", "beta", "active", None, None, True),
+      (_sid(5), "Loader cleanup", "beta", "active", None, None, False),
+      (_sid(6), "Onboarding doc", "gamma", "active", None, None, False),
+      (_sid(7), "Scratchpad", None, "active", None, None, False),
+      (_sid(8), "Weekly review", None, "active", None, None, False),
+      (_sid(9), "Implement the cache", "alpha", "archived", root, "worker", False),
+      (_sid(10), "Implement the retry", "alpha", "archived", root, "worker", False),
+  ]
+  out = []
+  for index, (sid, name, group, status, parent, profile, starred) in enumerate(rows):
+    # Fixed times months back, one hour apart: the list order and every
+    # rendered time label come out the same on both sides.
+    stamp = f"2026-01-15T{20 - index:02d}:00:00Z"
+    meta = {
+        "id": sid,
+        "name": name,
+        "status": status,
+        "backend": "fake-scripted",
+        "group": group,
+        "starred": starred,
+        "created_at": stamp,
+        "updated_at": stamp,
+    }
+    if profile:
+      meta.update({"schema_version": 2, "profile": profile, "task_parent_id": parent})
+    out.append(meta)
+  return out
 
 
 def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> None:
-    home.mkdir(parents=True)
-    config = {
-        "server": {"port": port, "host": "127.0.0.1"},
-        "backends": {"options": [{
-            "id": "fake-scripted", "label": "Scripted (never launches)",
-            "type": "cc-claude", "model": "scripted-model",
-        }], "preference": ["fake-scripted"]},
-        "paths": {"worktree_dir": str(home / "worktrees")},
-    }
-    (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    for meta in sessions:
-        session_dir = home / "sessions" / meta["id"]
-        session_dir.mkdir(parents=True)
-        (session_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
+  home.mkdir(parents=True)
+  config = {
+      "server": {
+          "port": port,
+          "host": "127.0.0.1"
+      },
+      "backends":
+          {
+              "options":
+                  [
+                      {
+                          "id": "fake-scripted",
+                          "label": "Scripted (never launches)",
+                          "type": "cc-claude",
+                          "model": "scripted-model",
+                      }
+                  ],
+              "preference": ["fake-scripted"]
+          },
+      "paths": {
+          "worktree_dir": str(home / "worktrees")
+      },
+  }
+  (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  for meta in sessions:
+    session_dir = home / "sessions" / meta["id"]
+    session_dir.mkdir(parents=True)
+    (session_dir / "metadata.json").write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -152,74 +172,78 @@ def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> 
 
 
 def serve(repo: Path, port: int) -> None:
-    sys.path.insert(0, str(repo))
-    import uvicorn
+  sys.path.insert(0, str(repo))
+  import uvicorn
 
-    import server
-    import src
+  import server
+  import src
 
-    # The ready line names the imported modules, so the parent can assert that
-    # this side really serves its own checkout.
-    print(READY_PREFIX + json.dumps({"server": server.__file__, "src": list(src.__path__)}), flush=True)
-    uvicorn.run(server.app, host="127.0.0.1", port=port, log_level="error", lifespan="off")
+  # The ready line names the imported modules, so the parent can assert that
+  # this side really serves its own checkout.
+  print(READY_PREFIX + json.dumps({"server": server.__file__, "src": list(src.__path__)}), flush=True)
+  uvicorn.run(server.app, host="127.0.0.1", port=port, log_level="error", lifespan="off")
 
 
 class Side:
-    """One checkout served from a temporary home by a child process."""
+  """One checkout served from a temporary home by a child process."""
 
-    def __init__(self, name: str, repo: Path, tmp: Path, sessions: list[dict]) -> None:
-        self.name = name
-        self.repo = repo
-        self.port = pick_free_port()
-        self.access_key = f"parity-{name}-" + os.urandom(8).hex()
-        self.home = tmp / f"home-{name}"
-        write_home(self.home, self.port, self.access_key, sessions)
-        self.log_path = tmp / f"serve-{name}.log"
-        self.proc: subprocess.Popen | None = None
+  def __init__(self, name: str, repo: Path, tmp: Path, sessions: list[dict]) -> None:
+    self.name = name
+    self.repo = repo
+    self.port = pick_free_port()
+    self.access_key = f"parity-{name}-" + os.urandom(8).hex()
+    self.home = tmp / f"home-{name}"
+    write_home(self.home, self.port, self.access_key, sessions)
+    self.log_path = tmp / f"serve-{name}.log"
+    self.proc: subprocess.Popen | None = None
 
-    @property
-    def base(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+  @property
+  def base(self) -> str:
+    return f"http://127.0.0.1:{self.port}"
 
-    def start(self) -> None:
-        env = {k: v for k, v in os.environ.items()
-               if k not in (SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")}
-        env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo)})
-        log = self.log_path.open("w", encoding="utf-8")
-        self.proc = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), "serve", "--repo", str(self.repo),
-             "--port", str(self.port)],
-            cwd=self.repo, env=env, stdout=subprocess.PIPE, stderr=log, text=True)
-        line = self.proc.stdout.readline()
-        if not line.startswith(READY_PREFIX):
-            fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}")
-        modules = json.loads(line[len(READY_PREFIX):])
-        paths = [modules["server"], *modules["src"]]
-        if not all(Path(p).resolve().is_relative_to(self.repo.resolve()) for p in paths):
-            fail(f"{self.name} server imported code outside {self.repo}: {paths}")
-        deadline = time.monotonic() + 30
-        while True:
-            try:
-                with socket.create_connection(("127.0.0.1", self.port), timeout=1):
-                    return
-            except OSError:
-                if self.proc.poll() is not None or time.monotonic() > deadline:
-                    fail(f"{self.name} server is not listening; log {self.log_path}")
-                time.sleep(0.1)
+  def start(self) -> None:
+    env = {k: v for k, v in os.environ.items() if k not in (SESSION_ID_ENV_VAR, "CHARLIEBOT_ACCESS_KEY", "VIRTUAL_ENV")}
+    env.update({"CHARLIEBOT_HOME": str(self.home), "PYTHONPATH": str(self.repo)})
+    log = self.log_path.open("w", encoding="utf-8")
+    self.proc = subprocess.Popen(
+        [sys.executable,
+         str(Path(__file__).resolve()), "serve", "--repo",
+         str(self.repo), "--port",
+         str(self.port)],
+        cwd=self.repo,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=log,
+        text=True)
+    line = self.proc.stdout.readline()
+    if not line.startswith(READY_PREFIX):
+      fail(f"{self.name} server did not start; log {self.log_path}: {line.strip()}")
+    modules = json.loads(line[len(READY_PREFIX):])
+    paths = [modules["server"], *modules["src"]]
+    if not all(Path(p).resolve().is_relative_to(self.repo.resolve()) for p in paths):
+      fail(f"{self.name} server imported code outside {self.repo}: {paths}")
+    deadline = time.monotonic() + 30
+    while True:
+      try:
+        with socket.create_connection(("127.0.0.1", self.port), timeout=1):
+          return
+      except OSError:
+        if self.proc.poll() is not None or time.monotonic() > deadline:
+          fail(f"{self.name} server is not listening; log {self.log_path}")
+        time.sleep(0.1)
 
-    def stop(self) -> None:
-        if self.proc and self.proc.poll() is None:
-            self.proc.terminate()
-            try:
-                self.proc.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                self.proc.kill()
+  def stop(self) -> None:
+    if self.proc and self.proc.poll() is None:
+      self.proc.terminate()
+      try:
+        self.proc.wait(timeout=10)
+      except subprocess.TimeoutExpired:
+        self.proc.kill()
 
 
 # ---------------------------------------------------------------------------
 # Browser: CDP helpers and the outline export.
 # ---------------------------------------------------------------------------
-
 
 # Walks one root and returns [depth, tag, id, classes, text, visible] rows,
 # skipping each whitelisted node with its subtree and counting the rule hits.
@@ -268,29 +292,34 @@ OUTLINE_JS = r"""
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str):
-    result = await cdp.send("Runtime.evaluate", {
-        "expression": expression, "returnByValue": True, "awaitPromise": True}, session_id=session_id)
-    if "exceptionDetails" in result:
-        raise RuntimeError(str(result["exceptionDetails"])[:500])
-    return result.get("result", {}).get("value")
+  result = await cdp.send(
+      "Runtime.evaluate", {
+          "expression": expression,
+          "returnByValue": True,
+          "awaitPromise": True
+      },
+      session_id=session_id)
+  if "exceptionDetails" in result:
+    raise RuntimeError(str(result["exceptionDetails"])[:500])
+  return result.get("result", {}).get("value")
 
 
 async def wait_for(cdp: CDP, session_id: str, expression: str, what: str, timeout: float = 20) -> None:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if await evaluate(cdp, session_id, expression):
-            return
-        await asyncio.sleep(0.2)
-    fail(f"timed out waiting for {what}")
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if await evaluate(cdp, session_id, expression):
+      return
+    await asyncio.sleep(0.2)
+  fail(f"timed out waiting for {what}")
 
 
 def outline_lines(rows: list[list]) -> list[str]:
-    lines = []
-    for depth, tag, el_id, classes, text, shown in rows:
-        head = tag + (f"#{el_id}" if el_id else "") + (f".{classes}" if classes else "")
-        text = BUILD_LABEL.sub("<build label>", text)
-        lines.append("  " * depth + head + (f" {json.dumps(text)}" if text else "") + ("" if shown else " [hidden]"))
-    return lines
+  lines = []
+  for depth, tag, el_id, classes, text, shown in rows:
+    head = tag + (f"#{el_id}" if el_id else "") + (f".{classes}" if classes else "")
+    text = BUILD_LABEL.sub("<build label>", text)
+    lines.append("  " * depth + head + (f" {json.dumps(text)}" if text else "") + ("" if shown else " [hidden]"))
+  return lines
 
 
 async def capture(cdp: CDP, session_id: str, side: Side, width: int, height: int, mobile: bool,

@@ -152,7 +152,7 @@ async def _tail_events_page(
   """Load the last *message_limit* events and view them with global ordinals.
 
   Returns (messages, pending_draft, total_event_count, oldest_message_ordinal,
-  has_more). Indices are global (archive_offset + line-in-live-file), matching
+  has_more). Indices are global (archive_offset + line_in_live_file), matching
   ``load_chat_events_range``; ``has_more`` is set when the tail window is full
   or archived events precede it.
   """

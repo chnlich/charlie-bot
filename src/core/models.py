@@ -471,7 +471,7 @@ class SessionMetadata(BaseModel):
   group: str | None = None
   # Number of chat events that have been moved out of the live chat_events.jsonl
   # into archive files. All event_index values seen by the UI/API are GLOBAL =
-  # archive_offset + line_number_in_live_file.
+  # archive_offset + line_in_live_file.
   archive_offset: int = 0
 
 

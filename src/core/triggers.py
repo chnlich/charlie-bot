@@ -859,12 +859,7 @@ class TriggerManager:
     # duplicating the task input or its process. No second append/wake path
     # exists on this route.
     if await self._fire_task_tree(fresh, trigger_message, deliver_to):
-      fresh.status = TriggerStatus.FIRED
-      fresh.fired_at = datetime.now(UTC)
-      fresh.fire_reason = reason
-      await self._save_trigger(fresh)
-      self._tasks.pop(trigger.id, None)
-      log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id, reason=reason)
+      await self._stamp_fired(fresh, reason)
       return
 
     # Deliver the scheduled-trigger event through the succession-aware primitive:
@@ -884,12 +879,7 @@ class TriggerManager:
     # the session is already about to answer. Crash between this stamp and the
     # enqueue below costs one replayed wake (the event is unanswered), which
     # merges into the next turn.
-    fresh.status = TriggerStatus.FIRED
-    fresh.fired_at = datetime.now(UTC)
-    fresh.fire_reason = reason
-    await self._save_trigger(fresh)
-    self._tasks.pop(trigger.id, None)
-    log.info("trigger_fired", trigger_id=trigger.id, session=fresh.session_id, reason=reason)
+    await self._stamp_fired(fresh, reason)
 
     # Wake the master CC, declared as SCHEDULED_TRIGGER input so it batches
     # with whatever else is queued. The trigger's task no longer waits for the
@@ -912,6 +902,20 @@ class TriggerManager:
         ),
         name=f"trigger-wake-{trigger.id[:8]}",
     )
+
+  async def _stamp_fired(self, fresh: PendingTrigger, reason: str) -> None:
+    """Stamp a delivered trigger FIRED, persist it, and retire its waiter.
+
+    Both delivery routes end here: the stamp, the persist, the waiter's
+    retirement, and the fired log move together, so a route that stamps
+    FIRED without the other four leaves a live waiter on a terminal record.
+    """
+    fresh.status = TriggerStatus.FIRED
+    fresh.fired_at = datetime.now(UTC)
+    fresh.fire_reason = reason
+    await self._save_trigger(fresh)
+    self._tasks.pop(fresh.id, None)
+    log.info("trigger_fired", trigger_id=fresh.id, session=fresh.session_id, reason=reason)
 
   def _tree_alias_target(self, session_id: str) -> str | None:
     """The canonical task id an established alias maps to, or None."""

@@ -133,6 +133,30 @@ function makeSidebarRow(sessionId, name) {
   });
 }
 
+// Readers for what renderSessionList actually produced: every sidebar render
+// path emits each session as an <a> anchor whose id is "session-<id>", and the
+// assertions below dig rows back out of a rendered innerHTML, so all four
+// assume that anchor shape.
+function countRows(html) {
+  return (html.match(/<a\b[^>]*id="session-/g) || []).length;
+}
+
+function anchorIdsInOrder(html) {
+  return [...html.matchAll(/<a\b[^>]*id="session-([^"]+)"/g)].map((m) => m[1]);
+}
+
+function anchorOpenTag(html, id) {
+  const match = html.match(new RegExp(`<a\\b[^>]*id="session-${id}"[^>]*>`));
+  if (!match) throw new Error(`Missing rendered session anchor for ${id}`);
+  return match[0];
+}
+
+function rowHtml(html, id) {
+  const start = html.indexOf(`id="session-${id}"`);
+  if (start === -1) throw new Error(`Missing rendered session anchor for ${id}`);
+  return html.slice(start, html.indexOf('</a>', start));
+}
+
 // One session-metadata fixture as the sidebar wire format carries it. Only the
 // fields every sidebar harness shares live here: a harness whose fixture must
 // leave a field undefined (usage_poll reads no status) or default it
@@ -328,6 +352,10 @@ module.exports = {
   SWITCH_TELEMETRY_URL,
   makeSidebarRow,
   makeSessionMeta,
+  countRows,
+  anchorIdsInOrder,
+  anchorOpenTag,
+  rowHtml,
   bootstrapPayload,
   installSessionDocumentLookups,
   stubPageTimers,

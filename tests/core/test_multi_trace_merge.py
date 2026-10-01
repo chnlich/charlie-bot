@@ -26,10 +26,10 @@ def _write_trace(path: Path, rank: int, events: int) -> None:
   path.write_text(json.dumps(trace))
 
 
-def _build(paths: list[Path], out_path: Path) -> list[dict]:
+def _build(paths: list[Path], out_path: Path, slim: bool = False) -> list[dict]:
   executor = concurrent.futures.ThreadPoolExecutor(max_workers=4)
   try:
-    trace_merge.build_multi_trace_merge(paths, out_path, slim=False, executor=executor)
+    trace_merge.build_multi_trace_merge(paths, out_path, slim=slim, executor=executor)
   finally:
     executor.shutdown(wait=True)
   return json.loads(gzip.decompress(out_path.read_bytes()))["traceEvents"]
@@ -91,3 +91,62 @@ def test_no_budget_builds_every_member_at_once(tmp_path: Path, monkeypatch: pyte
   monkeypatch.setattr(trace_merge, "_member_outcome", barrier_outcome)
   monkeypatch.setattr(trace_merge, "_merge_memory_budget", lambda: None)
   assert len(_build(paths, tmp_path / "out.json.gz")) >= 4 * 10
+
+
+def _write_pretty_trace(path: Path, rank: int, events_per_pid: int) -> None:
+  """A pretty trace whose identities span any chunk split: labels away from their pid's events."""
+  trace: dict = {"traceEvents": [], "deviceProperties": [{"gpu": rank}]}
+  events = trace["traceEvents"]
+  events.append({"ph": "M", "name": "process_labels", "pid": 7 + rank, "args": {"labels": f"GPU {3 + rank}"}})
+  for index in range(events_per_pid):
+    events.append(
+        {
+            "ph": "X",
+            "pid": 7 + rank,
+            "tid": index % 2,
+            "ts": index,
+            "name": "span",
+            "id": f"f{index % 3}",
+            "args": {
+                "stream": 1
+            }
+        })
+    events.append({"ph": "s", "pid": 7 + rank, "tid": "1", "ts": index, "name": "flow", "id": index % 3})
+  events.append({"ph": "X", "pid": 7 + rank, "tid": 9, "ts": 10_200, "name": "late span"})
+  events.append({"ph": "M", "name": "process_labels", "pid": 7 + rank, "args": {"labels": f"GPU {4 + rank}"}})
+  events.append({"ph": "X", "pid": str(7 + rank), "tid": 1, "ts": 10_000, "name": "str-pid span"})
+  path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
+
+
+@pytest.mark.integration
+def test_chunked_member_serves_the_sequential_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The chunked member build ships the sequential member walk's exact bytes, stride ids included."""
+  paths = []
+  for rank in range(2):
+    path = tmp_path / f"trace_rank{rank}.json"
+    _write_pretty_trace(path, rank, 120)
+    paths.append(path)
+  chunked, sequential = tmp_path / "chunked.json.gz", tmp_path / "sequential.json.gz"
+
+  monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
+  _build(paths, chunked)
+  monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
+  _build(paths, sequential)
+  assert chunked.read_bytes() == sequential.read_bytes()
+
+
+@pytest.mark.integration
+def test_chunked_member_serves_the_sequential_slim_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The slim chunked member keeps the sequential slim walk's exact bytes: one stream, one drop rule."""
+  paths = []
+  for rank in range(2):
+    path = tmp_path / f"trace_rank{rank}.json"
+    _write_pretty_trace(path, rank, 120)
+    paths.append(path)
+  chunked, sequential = tmp_path / "chunked-slim.json.gz", tmp_path / "sequential-slim.json.gz"
+
+  monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
+  _build(paths, chunked, slim=True)
+  monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
+  _build(paths, sequential, slim=True)
+  assert chunked.read_bytes() == sequential.read_bytes()

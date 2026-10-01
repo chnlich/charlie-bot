@@ -154,16 +154,14 @@ def _resolve_run_scoped_audience(token: str) -> str:
   """The audience the verified, active owning Run of *token* fixes — or a visible exit.
 
   Reuses the central run-identity pieces (the signature verifier and the one
-  shared active-Run predicate in src.core.runs); no local re-implementation.
-  A wrong-instance token names a session this home's sessions directory has
-  never heard of, which is the same visible unknown-run refusal.
+  shared active-Run predicate); no local re-implementation. A wrong-instance
+  token names a session this home's sessions directory has never heard of,
+  which is the same visible unknown-run refusal.
   """
   from src.core.credentials import configured_access_key
-  from src.core.json_utils import load_model_meta
-  from src.core.models import SessionMetadata
+  from src.core.json_utils import load_json_meta
+  from src.core.run_identity import SESSION_METADATA_NAME, run_scoped_refusal
   from src.core.run_token import RunTokenError, verify_run_token
-  from src.core.runs import METADATA_NAME, RunStore, run_identity_refusal
-  from src.core.session_aliases import SessionAliasStore
   root = _sessions_root()
   key = configured_access_key()
   if not key:
@@ -175,24 +173,23 @@ def _resolve_run_scoped_audience(token: str) -> str:
     print(f"error: invalid run token: {e}", file=sys.stderr)
     sys.exit(1)
   # A read-only local resolution through the same owners the server uses (the
-  # one shared active-Run predicate), no server process needed. events=None:
-  # the store reads the live chat log directly (the sink's SessionManager read
-  # serves the same file); nothing here writes.
-  # control_lock None: this resolution never writes, so it pays no asyncio import.
-  store = RunStore(root, None, None, SessionAliasStore(root))
-  run = store.read_run_sync(claims.session_id, claims.run_id)
-  refusal = run_identity_refusal(run, store.load_events_sync(claims.session_id))
+  # one shared active-Run predicate via run_scoped_refusal), no server process
+  # needed; nothing here writes. The read stays off the pydantic model stack:
+  # this runs per fresh CLI process, and the stack prices ~120 ms of the wall
+  # (src.core.models' 58 model classes) for three record fields and one fact type.
+  refusal = run_scoped_refusal(root, claims.session_id, claims.run_id)
   if refusal is not None:
     print(f"error: {refusal}", file=sys.stderr)
     sys.exit(1)
-  meta = load_model_meta(root / claims.session_id / METADATA_NAME, SessionMetadata)
-  if meta is None or meta.profile is None:
+  meta = load_json_meta(root / claims.session_id / SESSION_METADATA_NAME, "memory_session_meta_read")
+  profile = meta.get("profile") if meta else None
+  if profile not in ("manager", "worker"):
     print(
         f"error: run token references session {claims.session_id}, which is not a "
         "task-tree node in this instance",
         file=sys.stderr)
     sys.exit(1)
-  return "master" if meta.profile == "manager" else "worker"
+  return "master" if profile == "manager" else "worker"
 
 
 def _cmd_add(args: argparse.Namespace) -> None:

@@ -107,6 +107,22 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
     proc.terminate()
 
 
+async def test_unlaunched_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
+  try:
+    # A fresh Run whose launch identity is never pinned: registered but not
+    # launched, the refusal names the missing pin, not an unknown run.
+    run_id = run_id + "-unlaunched"
+    await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind="work"))
+    token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "query-op-key")
+    out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta"], token)
+    assert code == 1
+    assert "has not launched" in err
+    assert out == ""
+  finally:
+    proc.terminate()
+
+
 async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:

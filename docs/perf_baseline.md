@@ -138,6 +138,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M131 sidebar root-list marked-session rebuild churn | M131 collector below | seconds per nine-round sequence of fresh marks: each round marks the six heaviest active thread-bearing sessions the way the workers' writes do and rebuilds each one's view rows (the seen-write rebuild the sidebar poll runs synchronously per marked session), live-corpus scratch copy | median < max(0.004 s, marked-sessions × 0.00022 s) (the after band reads 0.84-0.90 ms at six marked sessions — the line sits ~1.5x over it, the M119 line's convention; a regression to the whole-memo-drop shape reads 2.7-2.8 ms and trips 2.1x; the corpus-drift bias the M119 history documents applies) | — (introduced with its first history row) |
 | M132 token-usage capture wall, warm full corpus | M132 collector below | seconds per in-process `capture_usage` over the live corpora (scratch ledger and cache document; the live cache document seeds the scratch one, read once, never written; the opencode db leg is excluded — the M130 line owns it) | median < 0.17 s (the after band reads 0.130-0.133 s — one captured-sigs read, the stat-gated cache-document memo, and the charlie-bot walk; the line sits 1.28x over the band top and the pre-fix shape it guards — four captured-sigs reads plus the unconditional 4.5 MB document re-parse — reads 0.180-0.184 s and trips; the corpus the band prices is the 2026-09-30 sessions tree, 1973 session dirs and ~7.8k candidate files — a grown corpus re-prices the line the M72 way, and the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 | M133 claude-sub launch plugin-validate pre-flight, pair-cached | M133 collector below | seconds per `_validate_hook_plugin` round (the subscription launch's pre-respawn guard), steady state with the pair cache warm — one warm pass writes it; the deploy-day round that validates and writes reads the pre-fix band | median < 0.005 s (the cache-hit band reads 0.2-0.3 ms — the state-home cache read plus the key's digest over the written plugin bytes; the pre-fix shape reads 475-500 ms of claude CLI boot per launch and trips ~100x; the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
+| M134 run-scoped memory-CLI query wall, worst chat corpus | M134 collector below | seconds per run-scoped `memory query --topic ... --index` — `CHARLIEBOT_RUN_TOKEN` present, the shape every delegated worker's invocation runs (the standing M98 line prices the same shape at the sweep env's own token session; this row pins the worst on-disk live chat corpus) | median < max(0.030 s, bytes ÷ 6500 MB/s) (the after band reads 0.155-0.156 s over the 1051.3 MB corpus — a 6.7 GB/s mapped line scan; the pre-fix shape re-parsed the whole corpus through the events-cache funnel, 3.5-3.7 s, and trips ~23x) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -9448,6 +9449,83 @@ with tempfile.TemporaryDirectory(prefix="m133-validate-") as tmp:
 PYEOF
 ```
 
+M134 — run-scoped memory-CLI query wall, worst chat corpus. Every memory read a delegated worker
+issues is a `charliebot memory` invocation in a fresh process whose environment carries the worker's
+`CHARLIEBOT_RUN_TOKEN`, so the read first resolves the run-scoped audience: the verified run's identity
+fields plus a terminal-fact scan over the calling session's chat log. The pre-fix resolution imported
+the pydantic model stack (~120 ms) and re-parsed the whole corpus through the events-cache funnel; the
+fix reads the same verdict through `src.core.run_identity` (the one shared refusal predicate over a
+head-filtered parse). The collector builds the run-scoped shape against a scratch `CHARLIEBOT_HOME`
+under /tmp — fresh random session/run ids (no `cc_session_id`), the worst on-disk live chat corpus
+copied in (live home read once for the copy, never written), a synthetic task-tree metadata with
+`profile: manager`, an active run record with pinned launch identity, a seeded one-entry store, and a
+scratch signing key — then times the real read command with a token minted for that run, asserting the
+index line prints:
+
+```bash
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'INNEREOF'
+import json, os, secrets, shutil, statistics, subprocess, sys, tempfile, time, uuid
+from pathlib import Path
+
+CHECKOUT = os.environ["CHECKOUT"]
+sys.path.insert(0, CHECKOUT)
+from src.core.run_token import RunTokenClaims, sign_run_token
+
+# Worst run-scoped corpus: the live chat file carrying the most bytes; live home
+# read once for the copy, never written.
+root = Path.home() / ".charliebot" / "sessions"
+best, best_n = None, -1
+for d in root.iterdir():
+    p = d / "data" / "chat_events.jsonl"
+    if p.is_file():
+        n = p.stat().st_size
+        if n > best_n:
+            best, best_n = p, n
+
+home = Path(tempfile.mkdtemp(prefix="m134-scope-home-", dir="/tmp"))
+sid, run_id = str(uuid.uuid4()), str(uuid.uuid4())
+sdst = home / "sessions" / sid
+(sdst / "data" / "runs" / run_id).mkdir(parents=True)
+shutil.copy2(best, sdst / "data" / "chat_events.jsonl")
+(sdst / "metadata.json").write_text(json.dumps({
+    "id": sid, "name": "m134-scope-probe", "status": "active",
+    "created_at": "2026-10-01T00:00:00+00:00", "updated_at": "2026-10-01T00:00:00+00:00",
+    "schema_version": 2, "profile": "manager",
+}), encoding="utf-8")
+(sdst / "data" / "runs" / run_id / "metadata.json").write_text(json.dumps({
+    "id": run_id, "session_id": sid, "kind": "work", "pid": 12345, "pid_start": "m134-probe-start",
+}), encoding="utf-8")
+entries = home / "memory" / "entries" / "charliebot"
+entries.mkdir(parents=True)
+(entries / "probe-entry.md").write_text(
+    "---\nscope: host\ntopic: charliebot\naudience: master, worker\ntitle: probe entry\n---\nbody\n",
+    encoding="utf-8")
+(home / "memory" / "topics").write_text("charliebot\n", encoding="utf-8")
+key = secrets.token_urlsafe(32)
+(home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {key}\n", encoding="utf-8")
+token = sign_run_token(RunTokenClaims(session_id=sid, run_id=run_id, agent="m134-probe"), key)
+
+CODE = "import sys; from src.cli.memory import main; sys.exit(main())"
+env = dict(os.environ, CHARLIEBOT_HOME=str(home), CHARLIEBOT_RUN_TOKEN=token)
+
+def wall():
+    t0 = time.perf_counter()
+    r = subprocess.run([sys.executable, "-c", CODE, "query", "--topic", "charliebot", "--index"],
+                       cwd=CHECKOUT, env=env, capture_output=True, text=True)
+    dt = time.perf_counter() - t0
+    assert r.returncode == 0, f"query failed rc={r.returncode}: {r.stderr.strip()[:300]}"
+    assert "charliebot/probe-entry" in r.stdout, f"unexpected output: {r.stdout[:200]}"
+    return dt
+
+wall()  # warm the interpreter's page cache; not timed
+times = sorted(wall() for _ in range(7))
+print(f"run-scoped memory query over {best_n / 1e6:.1f} MB chat corpus: median {times[3]:.4f} s, "
+      f"max {times[-1]:.4f} s over 7 (checkout {Path(CHECKOUT).name})")
+shutil.rmtree(home)
+INNEREOF
+```
+
+
 ## Sampling history
 | 2026-09-30 | this PR | M56 /status served median 1.57/1.55/1.76/1.65 → 0.95/0.96/1.00/1.02 ms (four interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, before arm first in every round, load 1.7-3.2 one-minute; median-of-medians 1.60 → 0.98, −39 %, every paired round faster), parsed-body digest 5896b872992d and wire 16076 B identical across all eight arms; witness riding the same file: M119 root-list serve 2.38 → 2.17 ms, digest 793457279896 identical (band parity, the route is untouched) | every /status poll rebuilt its ~681-row payload dict-by-dict and re-serialized the ~149 KB body although every payload input already sits behind the derived fold's generation (mark_sidebar_dirty bumps it for busy flips and every metadata write, store_snapshot_entry for probe stores) — the poll's steady state now serves the last rendered bytes from a (resolved ids, generation) whole-body memo and re-renders only on that key's first poll after a bump; resolve_sidebar_state stays on every poll so the every-10th self-heal sweep's cadence is untouched, the body key reads the generation at request start so a mid-handler bump keys the next poll's rebuild, and force=1 keeps its synchronous probe off the memo |
 | 2026-09-30 | this PR | M91 worst-single-event healthy range gains the write-state bias note, a docs-only calibration round (no product-code change): the line's write half prices the funnel's page-cache append floor, and that floor moves with the host's dirty-page state, not with the code — the five standing rounds around this one read 12.57/13.25 ms on a quiet host (Dirty < 5 MB, the 13-14 ms landing-day floor) against 30.56/94.67/138.29 ms with writeback in flight — 3 of 5 over the 20 ms line; a post-sweep re-run the same day read 12.84 ms at Dirty 436 kB, the same quiet floor. The controlled demonstration, the verbatim collector back-to-back on one host: idle (Dirty 472 kB, load 0.16) worst single event 12.81 ms, replay median 0.0140 s; one background 1.5 GB dirtying writer (Dirty 1.36 GB, load unchanged) 208.61 ms, replay median 0.0469 s — 16x on identical code and corpus, and the state cleared when the backlog drained (Dirty 760 kB). The isolated floor split under a 198 MB backlog reads orjson dumps 10.2 ms + os.write 14.9 ms = 25 ms for the same event whose quiet total is 13 ms, so the stretch is entirely the write half's throttling. No line value can carry the regression watch through this band: the pre-fix shape the line exists to catch reads 75.8-80.1 ms (the 2026-09-12 row), under the demonstrated 138-209 ms stalls | the 20 ms line false-trips on writeback state and drowns the real regression signal; the range now reads a tripped worst-single-event against the ~5 us per-event append floor and re-reads next round when the floor holds, the M56 collision convention, keeping the line's teeth for the quiet state where the floor it prices actually holds |
@@ -9868,3 +9946,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-10-01 | this PR | M84 backend stream-line parse's stdout sub-reading drops the stub that bypassed the funnel, a docs-only calibration round (no product-code change): the sweep's stdout-stream reading — 6448.3 ms median over the 2147.5 MB / 61-line worst raw log — was the failed orjson parse of the corpus's single 2.1 GB runaway line (the component split the 2026-09-20 row priced at 5.28-5.56 s per scan), delivered by a collector stub that fed the funnel pre-split lines over the async-iter protocol and so priced neither readline's split nor the stream buffer limit; the sub-reading therefore priced a cost that grows linearly with the runaway file at 75 % of its bytes ÷ 250 MB/s line — one growth step from a false trip a later round would hunt as a regression. The stub now drives the production path: a real asyncio.StreamReader fed at transport pace (64 KB feed_data rounds) over the corpus's stream-buffer-limit-plausible lines, so readline and the limit do their real work; the unfiltered feed raises at the 1 GB limit on this corpus (verified — the piped funnel's runaway-line bound, the readline contract), the runaway shape belonging to the raw-log funnel's window bound (the M118 corpus). Verbatim-collector after, same corpus: tail-follow replay median 5943.7 ms, max 6281.9 ms (the sweep's 5918.9/5998.6 unchanged), stdout-stream replay median 0.1 ms, max 0.1 ms, 60/60 events, parity divergences 0 over 7 — the sub-reading now prices the funnel's real work on the plausible corpus (60 tiny lines, 0.03 MB), the max(0.040 s, bytes ÷ 250 MB/s) line unchanged; review arc: an earlier iteration of this round rewrote the funnel's split on a claimed readline per-feed rescan (quadratic in the line) — falsified against the pinned CPython 3.14.7, whose readuntil persists its scan offset (64/128/256 MB single lines measure 404-407 MB/s flat, reviewer-verified and re-verified on this host) — and replaced the stream's configured buffer limit with the module default; reverted. Load 2.1-2.9 one-minute across the readings | the sub-reading priced a fiction the corpus's growth would have turned into a false trip; the repair makes the arm measure the funnel the served path runs |
 | 2026-10-01 | this PR | M88 direct-pass build median 5.19/5.24/5.46/5.18/5.30/5.48 → 4.39/4.53/5.45/4.33/4.63/4.73 s (six interleaved rounds of the verbatim collector, main checkout before vs branch worktree after back-to-back, before arm first in every round, load 1.9-7.0 one-minute with one sibling-cron burst mid-run; median-of-medians 5.27 → 4.53, −14 %, 5 of 6 paired rounds faster, the burst round inflating both arms to parity); split mechanism witness min-of-3 856.2 → 7.1 ms on the 1422.3 MB corpus with identical starts ([177788206, 355576443, 533364655], count 8); artifact sha1 ff1a8a30c9dd identical across arms; tick max-gap medians 8-13 ms both arms, inside the 0.020 s line; healthy line unchanged (after band 285-328 MB/s effective against the bytes ÷ 150 MB/s line) | the split's backward anchor probe read the whole span since the last boundary — cumulatively a full extra read of the trace per build, a serial 856 ms prologue ahead of the parse fan-out; the probe now reads only a window ending at the boundary (the `_ANCHOR_WINDOW_BYTES` 8 MB), the full-span scan staying as the fallback for element lines spaced wider than the window, so boundaries land byte-identical |
 | 2026-10-01 | this PR | M74 turn-end rescan, the projection bounded to the assistant lines the served-model detector reads: the scan now maps the raw log and parses only lines a head-provable type filter keeps (the raw claude-family stream leads every line with its type and the family's translate is the identity, so the echoed user context — 98.4% of the worst corpus's bytes, 45.4 of 46.1 MB — never parses; a line whose head proves nothing — the claude result event leads with its duration field, not "type" — rides along and the detector skips it, which is what keeps the bounded scan safe), falling back to nothing: the unfiltered callers keep the read-bytes shape. Interleaved A/B, four rounds of the verbatim collector (pre-PR collector on the main checkout before vs post-PR collector on the branch worktree after back-to-back, arm order alternating before→after / after→before, load 1.7-2.8 one-minute): wall median 55.3/56.4/56.7/57.0 → 10.5/11.5/10.2/11.6 ms (median-of-medians 56.7 → 11.1 ms, −80%, 5x, every paired round faster, bands disjoint), loop-lag median 10.4-10.6 → 8.3-8.8 ms, projected events 1181 → 207. Healthy range gains the wall line < max(0.020 s, bytes ÷ 2000 MB/s) (the definition row carries the band math); the loop-lag line unchanged. Witnesses: assistant-event parity on the live 46.1 MB corpus (the filtered projection's assistant subset equals the whole projection's, detector verdict identical — empty both arms), the mapping rides the same append-only-file ground the from-the-end walk documents; test_runs.py's filter tests (head-proof drop, foreign-key fall-through, detector parity with the foreign-head result line) + the model-fallback suite 12 passed; the full suite flapped on the 1 s unit budget under a sibling cron's load burst identically on a pristine origin/main snapshot (17-34 budget timeouts both trees, families: task_sequences, memory_proposal, git_worktree_base) — load, not this diff | every claude-family master turn ended with a full read+parse+project of the round's raw log to attribute the served model, and the parse read the round's echoed prompt history — 98% of the bytes — to reach the 1% of lines the detector reads; the bound cuts the turn-end GIL hold 5x on the worst corpus |
+| 2026-10-01 | this PR | M98 / M134 run-scoped memory-CLI resolution, the fresh-process read taken off the model stack and the whole-corpus re-parse: the audience resolution imported `src.core.runs` (the 58-class pydantic model stack, 122 ms of the wall) to validate three run-record fields and one session-metadata field, and scanned the caller session's whole chat log for `run_finished` facts — the standing M98 sweep env carries the cron's own run token, so the standing reading priced this shape at the cron session's corpus. The verdict now reads through `src.core.run_identity` (`run_scoped_refusal`: the shared refusal predicate over a head-provably-filtered parse, the M74 filter contract; foreign leading keys — the control events' id-first form — fall through and parse) and the session profile reads raw JSON with the TaskProfile literal enforced. Interleaved A/B, four rounds of the verbatim collectors, main checkout before vs branch worktree after back-to-back, arm order alternating, load 3.0-3.7 one-minute: M98 median 0.192/0.194/0.194/0.196 → 0.069/0.069/0.069/0.071 s (median-of-medians 0.194 → 0.069, −64%, every paired round faster), M134 median 3.52/3.53/3.54/3.61 → 0.155/0.156/0.156/0.156 s over the 1051.3 MB worst corpus (median-of-medians 3.54 → 0.156, −96%, 23x, every paired round faster, bands disjoint). Tokenless control arm 0.046 s both trees (the audience resolution never runs there — the fix cannot move it, and did not). Verdict parity: the ended-run and unlaunched-run refusals ride the light path unchanged (test_memory_run_query.py end-to-end), reader agreement with the model-validated store read pinned in test_run_store.py; M134 definition and history rows land with this PR. |

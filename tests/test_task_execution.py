@@ -64,201 +64,207 @@ OP_HEADERS = {"Authorization": "Bearer op-secret"}
 
 
 def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Make the synthetic home the one spawned children sign against: seed its
+  """Make the synthetic home the one spawned children sign against: seed its
     access key and pin CHARLIEBOT_HOME at it, so every child environment signs
     its run token against the synthetic home (never operator credentials)."""
-    import src.core.config as core_config
-    core_config._credentials_cache.seed(
-        core_config.Credentials(
-            path=home / "credentials.yaml",
-            sections={"charliebot": {"access_key": "task-exec-test-key"}}))
-    monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
+  import src.core.config as core_config
+  core_config._credentials_cache.seed(
+      core_config.Credentials(
+          path=home / "credentials.yaml", sections={"charliebot": {
+              "access_key": "task-exec-test-key"
+          }}))
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
 
 
-def build_spawning_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list,
-                       preference: list[str] | None = None):
-    """(cfg, SessionManager, TaskTreeManager) over one synthetic home under tmp_path:
+def build_spawning_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list, preference: list[str] | None = None):
+  """(cfg, SessionManager, TaskTreeManager) over one synthetic home under tmp_path:
     the given backend options, worktree_dir inside the home, and the seeded access
     key every child environment signs against (seed_signing_home)."""
-    from src.core.config import CharlieBotConfig
-    home = tmp_path / "charliebot-home"
-    backends: dict = {"options": options}
-    if preference is not None:
-        backends["preference"] = preference
-    cfg = CharlieBotConfig(
-        charliebot_home=home,
-        backends=backends,
-        paths={"worktree_dir": str(home / "worktrees")})
-    seed_signing_home(home, monkeypatch)
-    session_mgr = SessionManager(cfg)
-    return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  from src.core.config import CharlieBotConfig
+  home = tmp_path / "charliebot-home"
+  backends: dict = {"options": options}
+  if preference is not None:
+    backends["preference"] = preference
+  cfg = CharlieBotConfig(charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
+  seed_signing_home(home, monkeypatch)
+  session_mgr = SessionManager(cfg)
+  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
-def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-              backend_ids: list[str] | None = None):
-    """One fake backend registered, so task creation's default resolution works.
+def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_ids: list[str] | None = None):
+  """One fake backend registered, so task creation's default resolution works.
 
     ``backend_ids`` names every configured option (default: the single "fake");
     tests that switch a session's backend pin build a config with more than one.
     """
-    ids = backend_ids if backend_ids is not None else ["fake"]
-    return build_spawning_env(
-        tmp_path,
-        monkeypatch,
-        options=[backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
-        preference=ids[:1])
+  ids = backend_ids if backend_ids is not None else ["fake"]
+  return build_spawning_env(
+      tmp_path,
+      monkeypatch,
+      options=[backend_option(id=i, label=i, type="codex", model="fake-model") for i in ids],
+      preference=ids[:1])
 
 
 class SpawningScriptedBackend:
-    """Backend double that fires the on_spawn callback, records its launch env,
+  """Backend double that fires the on_spawn callback, records its launch env,
     and yields a scripted event list ending in a result event. A *post_events*
     hook is awaited after that stream, before run() returns: it is how a test
     acts on the world between one build's events and the next build's prompt."""
 
-    def __init__(self, events: list[dict], exit_code: int = 0, stderr_text: str = "",
-                 pre_run: Callable[[], None] | None = None,
-                 gate: Callable[[], object] | None = None,
-                 post_events: Callable[[], Awaitable[None]] | None = None) -> None:
-        self._events = events
-        self.exit_code = exit_code
-        self.stderr_text = stderr_text
-        self._pre_run = pre_run
-        self.gate = gate
-        self.post_events = post_events
-        self.pid_start = "1-424000"
-        self.terminated = False
-        self.hang_diagnostics = None
-        self.prompt: str | None = None
-        self.env: dict | None = None
-        self.cwd: str | None = None
-        self._on_spawn = None
-        self._pid = 424000
-        self.cgroup_exit_report = lambda: None
+  def __init__(
+      self,
+      events: list[dict],
+      exit_code: int = 0,
+      stderr_text: str = "",
+      pre_run: Callable[[], None] | None = None,
+      gate: Callable[[], object] | None = None,
+      post_events: Callable[[], Awaitable[None]] | None = None) -> None:
+    self._events = events
+    self.exit_code = exit_code
+    self.stderr_text = stderr_text
+    self._pre_run = pre_run
+    self.gate = gate
+    self.post_events = post_events
+    self.pid_start = "1-424000"
+    self.terminated = False
+    self.hang_diagnostics = None
+    self.prompt: str | None = None
+    self.env: dict | None = None
+    self.cwd: str | None = None
+    self._on_spawn = None
+    self._pid = 424000
+    self.cgroup_exit_report = lambda: None
 
-    def set_on_spawn(self, on_spawn) -> None:
-        self._on_spawn = on_spawn
+  def set_on_spawn(self, on_spawn) -> None:
+    self._on_spawn = on_spawn
 
-    async def terminate(self) -> None:
-        self.terminated = True
+  async def terminate(self) -> None:
+    self.terminated = True
 
-    def detach(self) -> None:
-        pass
+  def detach(self) -> None:
+    pass
 
-    async def run(self, prompt: str, cwd: str, env: dict,
-                  uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-        self.prompt = prompt
-        self.cwd = cwd
-        self.env = dict(env)
-        self._pid += 1
-        if self._pre_run is not None:
-            self._pre_run()
-        if self.gate is not None:
-            await asyncio.wait_for(self.gate(), timeout=15)
-        if self._on_spawn is not None:
-            await self._on_spawn(self._pid)
-        for event in self._events:
-            if self.terminated:
-                return
-            yield event
-        if self.post_events is not None:
-            await self.post_events()
+  async def run(self,
+                prompt: str,
+                cwd: str,
+                env: dict,
+                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
+    self.prompt = prompt
+    self.cwd = cwd
+    self.env = dict(env)
+    self._pid += 1
+    if self._pre_run is not None:
+      self._pre_run()
+    if self.gate is not None:
+      await asyncio.wait_for(self.gate(), timeout=15)
+    if self._on_spawn is not None:
+      await self._on_spawn(self._pid)
+    for event in self._events:
+      if self.terminated:
+        return
+      yield event
+    if self.post_events is not None:
+      await self.post_events()
 
 
 def result_event(text: str) -> dict:
-    """A result event carrying real usage and text (the zero-output guard reads both)."""
-    from src.agents.backends import base as backend_base
-    event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
-    event["result"] = text
-    return event
+  """A result event carrying real usage and text (the zero-output guard reads both)."""
+  from src.agents.backends import base as backend_base
+  event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
+  event["result"] = text
+  return event
 
 
 def install_backends(monkeypatch: pytest.MonkeyPatch, backends: list, target: str) -> list[dict]:
-    """Serve *backends* one build at a time, wiring each build's on_spawn into the double."""
-    builds: list[dict] = []
-    queue = list(backends)
+  """Serve *backends* one build at a time, wiring each build's on_spawn into the double."""
+  builds: list[dict] = []
+  queue = list(backends)
 
-    def fake_build(option: BackendOption, cfg, **kwargs):
-        backend = queue.pop(0)
-        on_spawn = kwargs.get("on_spawn")
-        if on_spawn is not None:
-            backend.set_on_spawn(on_spawn)
-        builds.append({"option": option, "kwargs": kwargs, "backend": backend})
-        return backend
+  def fake_build(option: BackendOption, cfg, **kwargs):
+    backend = queue.pop(0)
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      backend.set_on_spawn(on_spawn)
+    builds.append({"option": option, "kwargs": kwargs, "backend": backend})
+    return backend
 
-    monkeypatch.setattr(target, fake_build)
-    return builds
+  monkeypatch.setattr(target, fake_build)
+  return builds
 
 
 def make_pm_build(text: str, pm_builds: list | None = None):
-    """The parent-manager turn's build function for BUILD_BACKEND_PATCH_TARGET:
+  """The parent-manager turn's build function for BUILD_BACKEND_PATCH_TARGET:
     one scripted double per registry build, wired for on_spawn the way
     install_backends wires worker builds. ``pm_builds`` collects the built
     doubles for tests that assert the parent turn actually built one."""
 
-    def pm_build(option, cfg_, **kwargs):
-        b = SpawningScriptedBackend([result_event(text)])
-        on_spawn = kwargs.get("on_spawn")
-        if on_spawn is not None:
-            b.set_on_spawn(on_spawn)
-        if pm_builds is not None:
-            pm_builds.append(b)
-        return b
+  def pm_build(option, cfg_, **kwargs):
+    b = SpawningScriptedBackend([result_event(text)])
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      b.set_on_spawn(on_spawn)
+    if pm_builds is not None:
+      pm_builds.append(b)
+    return b
 
-    return pm_build
+  return pm_build
 
 
 def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
-    from src.api import internal as internal_api
-    from src.api import sessions as sessions_api
-    from src.api import threads as threads_api
-    from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+  from src.api import internal as internal_api
+  from src.api import sessions as sessions_api
+  from src.api import threads as threads_api
+  from src.api.deps import get_config, get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 
-    app = FastAPI()
-    app.include_router(sessions_api.router, prefix="/api/sessions")
-    app.include_router(threads_api.router, prefix="/api/threads")
-    app.include_router(internal_api.router, prefix="/api/internal")
-    app.dependency_overrides[get_config] = lambda: cfg
-    app.dependency_overrides[get_config_on_loop] = lambda: cfg
-    app.dependency_overrides[get_session_manager] = lambda: session_mgr
-    app.dependency_overrides[get_task_manager] = lambda: task_mgr
-    app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
-    return TestClient(app)
+  app = FastAPI()
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.include_router(threads_api.router, prefix="/api/threads")
+  app.include_router(internal_api.router, prefix="/api/internal")
+  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[get_config_on_loop] = lambda: cfg
+  app.dependency_overrides[get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[get_task_manager] = lambda: task_mgr
+  app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
+  return TestClient(app)
 
 
-async def wait_for_terminal_run(tree: TaskTreeManager, session_id: str, run_id: str,
+async def wait_for_terminal_run(tree: TaskTreeManager,
+                                session_id: str,
+                                run_id: str,
                                 timeout: float = 15.0) -> tuple[RunRecord, str]:
-    """Poll one Run until its end record lands (the launch is fire-and-forget).
+  """Poll one Run until its end record lands (the launch is fire-and-forget).
 
     The terminal fact and the metadata mirror land as two writes under one
     lock; a poll that reads the record between them returns a stale record
     whose ``ended_at`` is still empty, so the terminal outcome alone is not
     the landing's edge — wait for the mirror's ``ended_at`` too.
     """
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        run = await tree.runs.get_run(session_id, run_id)
-        assert run is not None, f"run {run_id} vanished"
-        events = tree.runs.load_events_sync(session_id)
-        outcome = tree.runs.terminal_outcome(events, run_id)
-        if outcome is not None and run.ended_at is not None:
-            return run, str(outcome)
-        await asyncio.sleep(0.05)
-    pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    run = await tree.runs.get_run(session_id, run_id)
+    assert run is not None, f"run {run_id} vanished"
+    events = tree.runs.load_events_sync(session_id)
+    outcome = tree.runs.terminal_outcome(events, run_id)
+    if outcome is not None and run.ended_at is not None:
+      return run, str(outcome)
+    await asyncio.sleep(0.05)
+  pytest.fail(f"run {run_id} never reached a terminal fact within {timeout}s")
 
 
 async def wait_for_worktree(tree: TaskTreeManager, session_id: str, run_id: str, timeout: float) -> Path:
-    """Poll one Run until the spawner records its worktree and return the path.
+  """Poll one Run until the spawner records its worktree and return the path.
 
     ``executor.launch`` returns before the spawn chain fills the record in, so
     the caller must poll; the timeout covers the worktree_dir mkdir only.
     """
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        run = await tree.runs.get_run(session_id, run_id)
-        if run is not None and run.worktree_path:
-            return Path(run.worktree_path)
-        await asyncio.sleep(0.05)
-    pytest.fail(f"run {run_id} never recorded its worktree within {timeout}s")
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    run = await tree.runs.get_run(session_id, run_id)
+    if run is not None and run.worktree_path:
+      return Path(run.worktree_path)
+    await asyncio.sleep(0.05)
+  pytest.fail(f"run {run_id} never recorded its worktree within {timeout}s")
 
 
 async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeout: float,

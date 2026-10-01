@@ -75,6 +75,7 @@ async def test_run_records_stream_identity_and_result_truth(
       SpawningScriptedBackend,
       install_backends,
       result_event,
+      wait_for_terminal_run,
   )
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
@@ -92,15 +93,7 @@ async def test_run_records_stream_identity_and_result_truth(
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
   run_id = decision["run_id"]
   assert run_id is not None
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    run = await tree.runs.get_run(root.id, run_id)
-    events = tree.runs.load_events_sync(root.id)
-    if tree.runs.run_has_terminal_fact(run, events):
-      break
-    await asyncio.sleep(0.05)
-  else:
-    pytest.fail(f"run for {backend_type.value} never finished")
+  run, outcome = await wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
 
   # The Run records the configured model, the stream's native session id,
   # and its own transport refs.
@@ -110,7 +103,7 @@ async def test_run_records_stream_identity_and_result_truth(
   run_dir = tree.runs.run_dir(root.id, run_id)
   assert run.raw_log_ref == str(run_dir / "agent.raw.ndjson")
   assert run.result_ref == str(run_dir / "agent.raw.ndjson")
-  assert tree.runs.terminal_outcome(events, run_id) == "success"
+  assert outcome == "success"
   # The launched identity backed the run credential's acceptance window.
   assert run.pid == 424001 and run.pid_start == "1-424000"
 
@@ -119,7 +112,7 @@ async def test_run_records_stream_identity_and_result_truth(
 @pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
 async def test_zero_output_and_error_results_fail_across_types(
     tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
-  from tests.test_task_execution import SpawningScriptedBackend, install_backends
+  from tests.test_task_execution import SpawningScriptedBackend, install_backends, wait_for_terminal_run
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
   root = await tree.create_task(
@@ -146,14 +139,8 @@ async def test_zero_output_and_error_results_fail_across_types(
     assert [e for e in tree.events.load_events(root.id) if e.get("type") == ET.RUN_FINISHED] == []
     return
   run_id = decision["run_id"]
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    run = await tree.runs.get_run(root.id, run_id)
-    events = tree.runs.load_events_sync(root.id)
-    if tree.runs.run_has_terminal_fact(run, events):
-      break
-    await asyncio.sleep(0.05)
-  assert tree.runs.terminal_outcome(events, run_id) == "failed"
+  _run, outcome = await wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
+  assert outcome == "failed"
 
   # A backend whose transport dies mid-turn (run() raises) fails the turn
   # through the master queue's error path. The failed zero-output run gates
@@ -168,14 +155,6 @@ async def test_zero_output_and_error_results_fail_across_types(
   errored = _TransportDeath([])
   install_backends(monkeypatch, [errored], BUILD_BACKEND_PATCH_TARGET)
   retry = await tree.create_retry(root.id, "retry-error", run_id)
-  retry_run_id = retry["run_id"]
-  decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-  run_id = decision["run_id"]
-  deadline = asyncio.get_event_loop().time() + 10
-  while asyncio.get_event_loop().time() < deadline:
-    run = await tree.runs.get_run(root.id, run_id)
-    events = tree.runs.load_events_sync(root.id)
-    if tree.runs.run_has_terminal_fact(run, events):
-      break
-    await asyncio.sleep(0.05)
-  assert tree.runs.terminal_outcome(events, retry_run_id) == "failed"
+  await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
+  _run, outcome = await wait_for_terminal_run(tree, root.id, retry["run_id"], timeout=10.0)
+  assert outcome == "failed"

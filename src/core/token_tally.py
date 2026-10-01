@@ -141,7 +141,7 @@ class TallyCache:
   therefore holds only files seen this run — deleted logs drop out without a separate sweep.
   """
 
-  SCHEMA_VERSION = 4
+  SCHEMA_VERSION = 5
 
   # Loaded-document memo, one entry per cache path: a repeat load whose document file
   # sits byte-still since the load that parsed it reuses that parse. The (size, mtime_ns)
@@ -160,10 +160,12 @@ class TallyCache:
   def load(cls, path: Path, notes: list[str]) -> TallyCache:
     """Read the persisted document; an unreadable or stale-schema file starts a cold cache.
 
-    Version 1-3 documents still serve, except their Codex entries: those records carry
-    neither the root session id nor the totals the current record ids are built from, so
-    their source re-parses; every other source's entries carry the same records under the
-    older shapes, and the first store rewrites them in the current one.
+    Pre-5 documents still serve, except two sources: a version 1-3 Codex entry carries
+    neither the root session id nor the totals the current record ids are built from, and
+    a pre-5 charlie-bot entry's records predate the cache-split corrections (a CLC thread's
+    unsplit input, a codex thread's subtracted cached reads, a master run's cached reads),
+    so those sources re-parse; every other source's entries carry the same records under
+    the older shapes, and the first store rewrites them in the current one.
     """
     try:
       st = path.stat()
@@ -183,13 +185,15 @@ class TallyCache:
     except (OSError, ValueError) as exc:
       notes.append(f"Tally cache: unreadable {path} ({exc}); rebuilt from the logs")
       doc = None
-    if not isinstance(doc, dict) or doc.get("version") not in (1, 2, 3, cls.SCHEMA_VERSION):
+    if not isinstance(doc, dict) or doc.get("version") not in (1, 2, 3, 4, cls.SCHEMA_VERSION):
       return cls({})
     sources = doc.get("sources", {})
     if doc.get("version") != cls.SCHEMA_VERSION:
-      # A pre-4 Codex entry carries neither the root session id nor the totals the
-      # current record ids need; dropping the source re-parses its files.
-      sources = {name: entries for name, entries in sources.items() if name != "codex"}
+      # A pre-4 Codex entry carries neither the root session id nor the totals the current
+      # record ids need, and a pre-5 charlie-bot entry's records predate the cache-split
+      # corrections; dropping the source re-parses its files.
+      stale = ("codex", USAGE_SOURCE_CHARLIE_BOT) if doc["version"] < 4 else (USAGE_SOURCE_CHARLIE_BOT,)
+      sources = {name: entries for name, entries in sources.items() if name not in stale}
     if st is not None:
       cls._load_memo[str(path)] = ((st.st_size, st.st_mtime_ns), sources)
     return cls(sources)
@@ -575,6 +579,34 @@ def _usage_counts(usage: dict) -> list[int]:
   ]
 
 
+def _verdict_counts(usage: dict, verdict: str | None) -> list[int]:
+  """A thread result row's five counts — ``_usage_counts``'s four plus ``in_unsplit`` —
+  split by the thread backend's verdict: a codex-type backend reports its cached reads
+  inside ``input_tokens`` and names them again in ``cache_read_input_tokens``, so in_fresh
+  subtracts them and the reads count once; a CLC backend's result usage logs no cache
+  fields at all, so the split is unknowable and the whole input lands in ``in_unsplit``;
+  every other verdict keeps the Claude envelope's own split.
+  """
+  if verdict == "codex":
+    cache_read = usage.get(ET.USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0
+    return [
+        (usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0) - cache_read,
+        0,
+        cache_read,
+        usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+        0,
+    ]
+  if verdict == "include":
+    return [
+        0,
+        0,
+        0,
+        usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0,
+        usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0,
+    ]
+  return [*_usage_counts(usage), 0]
+
+
 def _claude_records(recs: list[dict], seen: set) -> list[list]:
   """Fold prefiltered Claude records into ledger records, deduped against *seen*.
 
@@ -859,12 +891,13 @@ def _thread_records(objects: list[dict], meta: dict | None, registry: dict) -> t
     return [], []
   model = _thread_row_model(meta, registry)
   backend = meta.get("backend") or ""
+  verdict = _classify_backend(backend, registry) if backend else None
   records: list[list] = []
   ids: list[str] = []
   for obj in objects:
     if obj.get("type") == ET.RESULT:
       usage = obj.get("usage") or {}
-      records.append([model, backend, obj.get("timestamp"), *_usage_counts(usage)])
+      records.append([model, backend, obj.get("timestamp"), *_verdict_counts(usage, verdict)])
     elif obj.get("session_id"):
       sid = obj["session_id"]
       if isinstance(sid, str):
@@ -912,8 +945,9 @@ def _master_records(objects: list[dict],
   at most one.
 
   A CLC-shaped capture self-identifies with ``type: context`` lines that carry the model;
-  its trailing ``type: result`` line carries the run's usage (no cache fields — they stay
-  0). *model* is the prefix's trailing context on an append-tail round, where the tail
+  its trailing ``type: result`` line carries the run's usage with the cached reads inside
+  the one input field (``cached_tokens``), which split out like a Run record's do. *model*
+  is the prefix's trailing context on an append-tail round, where the tail
   carries no context line of its own. The timestamp is the master_runs directory name, the
   run's recorded start time: stable across re-parses, unlike the file mtime a growing log
   keeps moving. Captures without any context model (the claude CLI's own stream, already
@@ -929,10 +963,21 @@ def _master_records(objects: list[dict],
   if model is None or last is None:
     return [], model
   usage = last.get("usage") or {}
+  # The cached reads ride inside the one input field (``cached_tokens``), the same
+  # envelope a Run's raw stream keeps: subtract them back out so they land in cache_read
+  # instead of reading as fresh misses.
+  input_tokens = usage.get(ET.USAGE_INPUT_TOKENS, 0) or 0
+  cached = usage.get("cached_tokens", 0) or 0
   opt = next((o for o in registry.values() if o.type == BackendType.CHARLIE_CODE and o.model == model), None)
   account = opt.id if opt is not None else _CLC_MASTER_ACCOUNT
   ts = Path(path).parts[-2]  # the master_runs/<started_at> directory name
-  return ([[_bare_model(model), account, ts, *_usage_counts(usage)]], model)
+  return (
+      [
+          [
+              _bare_model(model), account, ts, input_tokens - cached, 0, cached,
+              usage.get(ET.USAGE_OUTPUT_TOKENS, 0) or 0, 0
+          ]
+      ], model)
 
 
 def _master_contribution(path: str, registry: dict, prev: dict | None = None) -> tuple[dict, int]:
@@ -1167,7 +1212,10 @@ def capture_charliebot(
   for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, notes):
     if mtime_ns is None:
       raise OSError(f"charlie-bot: unreadable {path}: {error}")
-    sig = f"{mtime_ns}:{size}"
+    # The parse-version prefix makes this a signature no older parser wrote, so every
+    # charlie-bot file not yet captured at p2 re-parses and rewrites its rows once — the
+    # rows an older parser wrote predate the cache-split corrections.
+    sig = f"p2:{mtime_ns}:{size}"
     if captured.get(path) == sig:
       continue
     entry = cache.lookup_sig(USAGE_SOURCE_CHARLIE_BOT, path, [mtime_ns, size]) if cache is not None else None
@@ -1191,7 +1239,9 @@ def capture_charliebot(
               in_fresh=in_fresh,
               cache_write=cache_write,
               cache_read=cache_read,
-              output=output) for model, account, ts, in_fresh, cache_write, cache_read, output in entry["records"]
+              output=output,
+              in_unsplit=in_unsplit)
+          for model, account, ts, in_fresh, cache_write, cache_read, output, in_unsplit in entry["records"]
       ]
     else:
       records = []
@@ -1216,8 +1266,9 @@ def capture_charliebot(
                 cache_write=cache_write,
                 cache_read=cache_read,
                 output=output,
-                sessions=sessions)
-            for i, (model, account, ts, in_fresh, cache_write, cache_read, output) in enumerate(entry["records"])
+                in_unsplit=in_unsplit,
+                sessions=sessions) for i, (model, account, ts, in_fresh, cache_write, cache_read, output,
+                                           in_unsplit) in enumerate(entry["records"])
         ]
     written += ledger.record_file(host, path, sig, records)
   return written

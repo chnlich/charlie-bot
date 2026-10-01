@@ -297,6 +297,7 @@ class Worker:
           cursor=cursor,
           start_offset=runs.read_raw_cursor(cursor),
           post_result_timeout=stream_backend._POST_RESULT_TIMEOUT,
+          buffer_limit=self._cfg.subprocess_buffer_limit,
           on_silence=on_silence,
       ):
         await self._process_event(event, fd)

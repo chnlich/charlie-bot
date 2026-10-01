@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from conftest import _async_wait_for, cancel_and_drain
 
-from src.agents.backends.base import iter_ndjson_events, tail_follow_events
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, iter_ndjson_events, tail_follow_events
 
 _LINES = [
     b'{"type": "assistant", "seq": 1}\n',
@@ -55,7 +55,7 @@ async def test_iter_ndjson_events_parses_and_skips() -> None:
   assert [event["seq"] for event in events] == [1, 3]
 
 
-async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
+async def _collect_tail_events(raw_bytes: bytes, buffer_limit: int, **kwargs: Any) -> list[dict]:
   """Write *raw_bytes* as the raw log and return every event tail_follow_events yields."""
   with tempfile.TemporaryDirectory() as work:
     raw = Path(work) / "agent.raw.ndjson"
@@ -65,6 +65,7 @@ async def _collect_tail_events(raw_bytes: bytes, **kwargs: Any) -> list[dict]:
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
+            buffer_limit=buffer_limit,
             **kwargs,
         )
     ]
@@ -91,6 +92,7 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
           raw,
           translate=lambda event: [event],
           is_alive=lambda: True,
+          buffer_limit=DEFAULT_BUFFER_LIMIT,
           post_result_timeout=9999.0,
       ):
         events.append(event)  # noqa: PERF401  (see comment above)
@@ -110,7 +112,8 @@ async def _collect_staged_tail(partial: bytes, completion: bytes) -> list[dict]:
 @pytest.mark.asyncio
 async def test_tail_follow_events_replays_from_offset() -> None:
   """The re-attach shape: a restart resumes at the recorded byte offset."""
-  events = await _collect_tail_events(b"".join(_LINES), start_offset=_ASSISTANT_LINE_BYTES, post_result_timeout=60.0)
+  events = await _collect_tail_events(
+      b"".join(_LINES), DEFAULT_BUFFER_LIMIT, start_offset=_ASSISTANT_LINE_BYTES, post_result_timeout=60.0)
 
   # The NaN-bearing line lands in this range and skips as malformed (the
   # parser boundary the funnels adopt), so only the result line survives.
@@ -134,6 +137,7 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
+            buffer_limit=DEFAULT_BUFFER_LIMIT,
             cursor=cursor,
             post_result_timeout=60.0,
         )
@@ -146,6 +150,7 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
             raw,
             translate=lambda event: [event],
             is_alive=lambda: False,
+            buffer_limit=DEFAULT_BUFFER_LIMIT,
             cursor=cursor,
             start_offset=runs.read_raw_cursor(cursor),
             post_result_timeout=60.0,
@@ -168,5 +173,20 @@ async def test_tail_follow_events_drops_torn_final_line() -> None:
   """A final line the producer never finished stays unprocessed (the torn
   final write replays as at most a duplicate — never a loss)."""
   torn = b'{"type": "assistant", "seq": 1}\n{"type": "assistant", "seq": 2'
-  events = await _collect_tail_events(torn, post_result_timeout=60.0)
+  events = await _collect_tail_events(torn, DEFAULT_BUFFER_LIMIT, post_result_timeout=60.0)
   assert [event["seq"] for event in events] == [1]
+
+
+@pytest.mark.asyncio
+async def test_tail_follow_events_skips_a_completed_line_over_the_buffer_limit() -> None:
+  """A completed line over the buffer limit consumes without a parse.
+
+  The piped funnel's StreamReader cannot deliver such a line, so it is not a
+  real backend event; the raw-log funnel's parse of one is a multi-second
+  event-loop stall that ends in the same skip. The over-limit line's
+  valid-JSON body proves the line took the limit skip, not the malformed
+  skip: a parse would yield its event.
+  """
+  over_limit = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 4096 + b'"}\n'
+  events = await _collect_tail_events(b"".join([_LINES[0], over_limit, _LINES[4]]), 1024, post_result_timeout=60.0)
+  assert [event["seq"] for event in events] == [1, 3]

@@ -1106,6 +1106,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
         cursor=cursor_path,
         start_offset=runs.read_raw_cursor(cursor_path),
         post_result_timeout=AgentBackend._POST_RESULT_TIMEOUT,
+        buffer_limit=cfg.subprocess_buffer_limit,
     ):
       tracker.on_event(event)
       cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)

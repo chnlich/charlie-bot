@@ -6061,6 +6061,7 @@ async def tail_replay():
     async for _ in tail_follow_events(
         raw, translate=translate, is_alive=lambda: False,
         cursor=None, start_offset=0, post_result_timeout=60.0,
+        buffer_limit=DEFAULT_BUFFER_LIMIT,
     ):
         pass
     return count
@@ -7300,7 +7301,7 @@ CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.
 import asyncio, os, sys, tempfile, time
 sys.path.insert(0, os.environ["CHECKOUT"])
 from pathlib import Path
-from src.agents.backends.base import tail_follow_events
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events
 from src.core.runs import CURSOR_NAME, read_raw_cursor
 
 LINES = 2000
@@ -7325,6 +7326,7 @@ async def drain():
     async for _ in tail_follow_events(
         raw, translate=translate, is_alive=lambda: False,
         cursor=cursor, start_offset=0, post_result_timeout=60.0,
+        buffer_limit=DEFAULT_BUFFER_LIMIT,
     ):
         pass
     return count
@@ -8081,7 +8083,7 @@ CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.
 import asyncio, os, shutil, sys, tempfile, threading, time
 from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
-from src.agents.backends.base import tail_follow_events
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events
 
 CHUNK = 128 * 1024 * 1024
 ROUNDS = 8
@@ -8129,7 +8131,7 @@ async def main():
     wt.start()
     async for _ in tail_follow_events(
         raw, translate=translate, is_alive=lambda: not writer_done.is_set(),
-        post_result_timeout=60.0,
+        post_result_timeout=60.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
     ):
         pass
     wall = time.perf_counter() - t0
@@ -8455,7 +8457,7 @@ import asyncio, os, sys, time
 from pathlib import Path
 
 sys.path.insert(0, os.environ["CHECKOUT"])
-from src.agents.backends.base import tail_follow_events, _TAIL_POLL_INTERVAL
+from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, tail_follow_events, _TAIL_POLL_INTERVAL
 
 SCRATCH = Path("/tmp/lp_m122/probe.jsonl")
 IDLE = Path("/tmp/lp_m122/idle.jsonl")
@@ -8482,7 +8484,7 @@ async def discovery_round() -> list[float]:
             translate=lambda e: [e],
             is_alive=lambda: alive["v"],
             start_offset=0,
-            post_result_timeout=1.0,
+            post_result_timeout=1.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
         ):
             latencies.append(time.perf_counter() - appended[ev["seq"]])
 
@@ -8510,7 +8512,7 @@ async def idle_cpu() -> float:
             translate=lambda e: [e],
             is_alive=lambda: alive["v"],
             start_offset=0,
-            post_result_timeout=1.0,
+            post_result_timeout=1.0, buffer_limit=DEFAULT_BUFFER_LIMIT,
         ):
             pass
     task = asyncio.create_task(idle_follow())
@@ -9950,3 +9952,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-10-01 | this PR | M7 token-usage page's ledger read on the active-hour shape, the rows memo's every-load miss served from a write-maintained (group, day) aggregate: the page's own capture rewrites the moved sources' records every load (one active run's record alone grows its totals between loads), the value rewrite poisons the delta fold, and the read fell through to the full grouped pass over the whole usage table — the in-server warm full pass measures 222-225 ms against the 502k-row live-ledger copy, and the live page read 0.59-0.79 s across this round's sweep and 0.699 s at the post-sweep re-read (the standing collector reads the served instance's pre-fix build until deploy). The schema now carries usage_agg at (source, model, account, kind, day) granularity maintained by triggers that ride the database — every writer's upsert and session registration keeps it exact, any process, any code version, no per-read freshness witness; the day granularity is what makes a rewrite correctable (subtract the old (group, day) row, add the new one — group-level sums cannot keep a group's MIN/MAX day exact); the read serves it once its one-time BEGIN IMMEDIATE backfill has run and prices the table directly before that; the memo and fold paths stand above it untouched, and record_file registers a record's sessions before its upsert so the insert trigger's exclusion check sees them. Evidence, the M7 doc's scratch-instance A/B (scratch CHARLIEBOT_HOME + scratch CLAUDE_CONFIG_DIR, seeded 502k-row ledger copies, synthetic sessions — fresh random ids, no cc_session_id — one run per session growing one result line before every timed load, the active-hour shape; live corpora read-only, live server untouched), four interleaved rounds × five timed loads, arm order alternating, load 2.3-2.5 one-minute: before 0.3321/0.3336/0.3374/0.3442 s → after 0.0686/0.0690/0.0701/0.0702 s medians (median-of-medians 0.337 → 0.070, −79 %, every paired round faster; the pre-review build read the same band, 0.0605-0.0720 s after medians). Parity: the aggregate read equals the table pass row for row on the 502k-row copy; 4,000 randomized record_file sequences (new records, cross-day rewrites, retirements, born-excluded fallbacks, empty-ts rows, raw deletes) served rows identical to the table pass on every step with zero non-positive aggregate rows; the two scratch arms' ledger rows byte-identical; the review round's two repros (a pre-backfill retirement and the previous release's sessions-after-upsert order) serve the table truth after the guards. No-regression witnesses, same round: M9 codex rescan 0.0001 s, M130 opencode capture 0.13 ms, M132 standing capture 0.1628 s (all bands), M7 changed-round main-checkout 0.0881 s vs branch worktree 0.0977 s (both under the 0.15 s line, overlapping load bands); the ledger suite's 32 passing tests include 5 new ones (write-shape parity, pre-aggregate backfill, served-from-aggregate, dropped-table re-price, the previous-release write order) | the page's every-load full table pass is the term; the aggregate moves it behind the writes the capture already pays |
 | 2026-10-01 | this PR | M66 merged build median 15.48 s, max 15.64 s over 3 → 7.74 s median, max 9.32 s over 3 (verbatim collector, CHECKOUT at the branch worktree, the same 1422.3 MB / 3.52M-event worst on-disk corpus, artifact 113.6 MB.gz both arms): the build's full-file orjson parse — the wall's ~two-thirds — now splits at the direct-pass split's element anchors into 8 chunks that helper subprocesses parse in waves of 4; the parent assembles the sequential walk's exact id maps from the helpers' first-sight reports (prefixes ride the dedup — a form two chunks re-report must not inflate the marked rule past the chunk's own new ids) and each helper walks its chunk with the pre-loaded maps, so the fragment stream concatenates to the sequential build's exact bytes, verified byte-identical on the 1422.3 MB corpus; no-regression witnesses: the multi-trace merge (the shared walk) reads paired interleaved medians 38.27 s main vs 38.38 s branch over 4 rounds with the same byte-identity digest d7edbc932fc8, and the route-shape paired overhead reads +0.02 s median (before +0.03 s), inside the max(+0.30 s, in-process × 2.5 %) line; any helper failure falls back to the whole-file sequential build | the parse held the GIL for one process's whole read+parse of the file while the walk and the gzip run waited; chunk helpers overlap the parse wall across processes and hold only their chunk's tree, so the first-view build wall halves on the corpus the healthy line prices |
 | 2026-10-01 | this PR | M8 absent-needle search's pooled scan, the thread-pool hand-off batched: the read-jobs gather paid one ``asyncio.to_thread`` task per chat file — 755 hand-offs (context copy, queue round-trip, completion wakeup) over the active corpus, ~0.1 s the pool's threads serialize on. Manager-level interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, four rounds of the verbatim collector shape over the live active corpus (445.6 MB / 755 files, read-only, the three search memos cleared per timed round) at load 2.56-3.55 one-minute: manager wall median 0.5419/0.5499/0.5468/0.5725 → 0.4816/0.5011/0.4968/0.4838 s, median-of-medians 0.548 → 0.490 (−10.6 %), every paired round faster; component witness (single-thread scan, same corpus) 0.4209/0.4314/0.4305/0.4213 → 0.4250/0.4284/0.4263/0.4207 s medians (band parity — the scan's own bytes are untouched); row verdicts identical across all eight arms. Batch sizes 8 and 16 measured equal (0.4836/0.4912/0.4828 s interleaved against the per-file 0.5210/0.5288 s); the batch keeps the pool's one-read-per-worker overlap, so the cold-cache shape (27.7 s single-thread cold full scan) keeps its 12 concurrent readers. Measured-and-dropped this round: a numpy candidate-pass scan (loose |0x20 probe filter, two rarest-byte anchors, exact ``_ASCII_LOWER`` gather verify) — verdict parity held on every corpus shape tested, but the per-window/per-file vectorized orchestration the pool serializes on ate the pass parallelism (single-thread 0.75 s vs the fold's 0.43 s on this corpus, pooled 0.57-0.63 s vs the fold's 0.53-0.55 s; 4 explicit threads over 3.5 GB of archived corpora read 2200 MB/s at 1 MB windows, but the production mix of 755 files × ~590 KB never reaches that amortization), so the GIL-held fold stays | 755 per-file thread-pool tasks per cold search is pure hand-off work: the same executor serves every poll read and probe, and the search box fires one full-corpus scan per new prefix on every typing burst |
+| 2026-10-01 | this PR | M84 tail-follow replay, the over-limit completed line skips its parse: the drain handed every completed line to orjson regardless of size, and the worst on-disk raw log is one 2147.5 MB runaway line plus 60 tiny lines — the parse scanned all 2.1 GB and ended in the same skip (JSONDecodeError), 5.9-6.1 s of event-loop stall per drain round over it (the sweep reading 6116.5 ms, the quiet interleaved before 5889.0/6000.0/6009.4 ms). The drain now skips the parse of a completed line over the transport's own buffer limit — the piped funnel's StreamReader cannot deliver such a line (the served `_StdoutReader` collector arm models exactly that), so it is not a real backend event, and a valid one would only wedge the pipeline downstream; the bytes still consume and the cursor advances past the line exactly as for a malformed one. Manager-level interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of each side's verbatim collector over the live worst corpus (2147.5 MB / 61 lines, read-only scratch copy) at load 2.50-2.68 one-minute: tail-follow replay medians 5889.0/6000.0/6009.4 → 174.1/174.8/172.0 ms (−97.0% to −97.1%), every paired round faster, parity divergences 0 both arms; the stdout-stream arm is byte-identical work and reads 0.2 ms both arms (60/60 events). No-regression witnesses: M118's grown-line round (the unclosed line is never parsed) reads 3.84/3.20 → 3.56/3.35 s drain wall, tick gaps 90-100 ms both arms, under its 4.0 s line; the backend stream-parse suite (6, including the new valid-JSON-over-limit skip test) and the master-consumer/batching/logging suites pass. The tail-follow healthy line stays: normal corpora keep their orjson+translate floor (the 250 MB/s line prices them), and this corpus's round now reads ~0.17 s against the same max(0.060 s, bytes ÷ 250 MB/s) line | a runaway backend write is a known host shape (the M118 corpus), and the one drain round over its completed line paid a multi-second event-loop stall for a line no transport could deliver — the re-attach path pays it again on every server restart |

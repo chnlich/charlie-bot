@@ -506,33 +506,36 @@ def test_forked_rollout_counts_the_copied_events_once(tmp_path: Path) -> None:
   root = "forktreeroot1"
   calls = [
       # (per-call last_token_usage, cumulative total_token_usage, ts) after each request.
-      ({
-          "input_tokens": 60,
-          "cached_input_tokens": 20,
-          "output_tokens": 7
-      }, {
-          "input_tokens": 60,
-          "cached_input_tokens": 20,
-          "output_tokens": 7
-      }, "2026-09-10T00:00:01Z"),
-      ({
-          "input_tokens": 30,
-          "cached_input_tokens": 0,
-          "output_tokens": 5
-      }, {
-          "input_tokens": 90,
-          "cached_input_tokens": 20,
-          "output_tokens": 12
-      }, "2026-09-10T00:00:02Z"),
-      ({
-          "input_tokens": 10,
-          "cached_input_tokens": 4,
-          "output_tokens": 1
-      }, {
-          "input_tokens": 100,
-          "cached_input_tokens": 24,
-          "output_tokens": 13
-      }, "2026-09-10T00:00:03Z"),
+      (
+          {
+              "input_tokens": 60,
+              "cached_input_tokens": 20,
+              "output_tokens": 7
+          }, {
+              "input_tokens": 60,
+              "cached_input_tokens": 20,
+              "output_tokens": 7
+          }, "2026-09-10T00:00:01Z"),
+      (
+          {
+              "input_tokens": 30,
+              "cached_input_tokens": 0,
+              "output_tokens": 5
+          }, {
+              "input_tokens": 90,
+              "cached_input_tokens": 20,
+              "output_tokens": 12
+          }, "2026-09-10T00:00:02Z"),
+      (
+          {
+              "input_tokens": 10,
+              "cached_input_tokens": 4,
+              "output_tokens": 1
+          }, {
+              "input_tokens": 100,
+              "cached_input_tokens": 24,
+              "output_tokens": 13
+          }, "2026-09-10T00:00:03Z"),
   ]
   parent = [_codex_meta(session_id=root), _codex_turn("codex-m1")]
   parent += [_codex_count(last, total, ts) for last, total, ts in calls]
@@ -543,10 +546,26 @@ def test_forked_rollout_counts_the_copied_events_once(tmp_path: Path) -> None:
   fork = [_codex_meta(session_id=root), _codex_turn("codex-m1")]
   fork += [_codex_count(last, total, f"2026-09-10T00:09:0{i}Z") for i, (last, total, _ts) in enumerate(calls[:2], 1)]
   fork += [
-      _codex_count({"input_tokens": 26, "cached_input_tokens": 6, "output_tokens": 3},
-                   {"input_tokens": 126, "cached_input_tokens": 30, "output_tokens": 16}, "2026-09-10T00:09:03Z"),
-      _codex_count({"input_tokens": 5, "cached_input_tokens": 0, "output_tokens": 2},
-                   {"input_tokens": 131, "cached_input_tokens": 30, "output_tokens": 18}, "2026-09-10T00:09:04Z"),
+      _codex_count(
+          {
+              "input_tokens": 26,
+              "cached_input_tokens": 6,
+              "output_tokens": 3
+          }, {
+              "input_tokens": 126,
+              "cached_input_tokens": 30,
+              "output_tokens": 16
+          }, "2026-09-10T00:09:03Z"),
+      _codex_count(
+          {
+              "input_tokens": 5,
+              "cached_input_tokens": 0,
+              "output_tokens": 2
+          }, {
+              "input_tokens": 131,
+              "cached_input_tokens": 30,
+              "output_tokens": 18
+          }, "2026-09-10T00:09:04Z"),
   ]
   _write_rollout(codex, "forkchild1", fork)
 
@@ -586,7 +605,11 @@ def test_reemitted_events_add_no_record_and_overwrite_nothing(tmp_path: Path, re
       _codex_meta(session_id=root),
       _codex_turn("codex-m1"),
       _codex_count(last, total, "2026-09-10T00:01:00Z"),
-      _codex_count({"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0}, total, "2026-09-10T00:02:00Z"),
+      _codex_count({
+          "input_tokens": 0,
+          "cached_input_tokens": 0,
+          "output_tokens": 0
+      }, total, "2026-09-10T00:02:00Z"),
       codex_token_count_event("2026-09-10T00:03:00Z", info=None),
   ]
   first_sid, first_lines, second_sid, second_lines = (
@@ -614,8 +637,16 @@ def test_capture_supersedes_the_legacy_id_rows_of_its_rollout(tmp_path: Path) ->
       codex, sid, [
           _codex_meta(session_id=sid),
           _codex_turn("codex-m1"),
-          _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                       {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}, "2026-09-10T00:00:00Z"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, "2026-09-10T00:00:00Z"),
       ])
 
   def legacy(legacy_sid: str, count: int) -> list[UsageRecord]:
@@ -652,8 +683,16 @@ def test_codex_signature_version_gates_the_skip(tmp_path: Path) -> None:
       codex, "sigthread1", [
           _codex_meta(session_id="sigthread1"),
           _codex_turn("codex-m1"),
-          _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                       {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}, "2026-09-10T00:00:00Z"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, "2026-09-10T00:00:00Z"),
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     st = path.stat()
@@ -671,19 +710,42 @@ def test_codex_append_tail_parse_matches_a_full_parse(tmp_path: Path) -> None:
       codex, "tailthread1", [
           _codex_meta(session_id="tailroot1"),
           _codex_turn("codex-m1"),
-          _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                       {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}, "2026-09-10T00:00:00Z"),
-          _codex_count({"input_tokens": 30, "cached_input_tokens": 0, "output_tokens": 5},
-                       {"input_tokens": 90, "cached_input_tokens": 20, "output_tokens": 12}, "2026-09-10T00:00:01Z"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, "2026-09-10T00:00:00Z"),
+          _codex_count(
+              {
+                  "input_tokens": 30,
+                  "cached_input_tokens": 0,
+                  "output_tokens": 5
+              }, {
+                  "input_tokens": 90,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 12
+              }, "2026-09-10T00:00:01Z"),
       ])
   prefix = tt._codex_file_contribution(str(path))[0]
   with path.open("a") as fh:
     fh.write(json.dumps(_codex_turn("codex-m2")) + "\n")
     fh.write(
         json.dumps(
-            _codex_count({"input_tokens": 10, "cached_input_tokens": 4, "output_tokens": 1},
-                         {"input_tokens": 100, "cached_input_tokens": 24, "output_tokens": 13},
-                         "2026-09-10T00:00:02Z")) + "\n")
+            _codex_count(
+                {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 4,
+                    "output_tokens": 1
+                }, {
+                    "input_tokens": 100,
+                    "cached_input_tokens": 24,
+                    "output_tokens": 13
+                }, "2026-09-10T00:00:02Z")) + "\n")
   tailed = tt._codex_file_contribution(str(path), prefix)[0]
   full = tt._codex_file_contribution(str(path))[0]
   assert tailed["records"] == full["records"]
@@ -696,25 +758,31 @@ def test_cache_load_drops_pre_p2_codex_entries_only(tmp_path: Path) -> None:
   assert tt.TallyCache.SCHEMA_VERSION == 4
   path = tmp_path / "cache.json"
   path.write_text(
-      json.dumps({
-          "version": 3,
-          "sources": {
-              "claude": {
-                  "claude-file": {
-                      "sig": [11, 22],
-                      "records": [["claude-m1", "2026-09-10T00:00:00Z", 10, 0, 0, 5]],
-                  }
-              },
-              "codex": {
-                  "codex-file": {
-                      "sig": [33, 44],
-                      "records": [["codex-m1", "2026-09-10T00:00:00Z", 40, 20, 7]],
-                      "model_ctx": "codex-m1",
-                      "end": 999,
-                  }
-              },
-          },
-      }))
+      json.dumps(
+          {
+              "version": 3,
+              "sources":
+                  {
+                      "claude":
+                          {
+                              "claude-file":
+                                  {
+                                      "sig": [11, 22],
+                                      "records": [["claude-m1", "2026-09-10T00:00:00Z", 10, 0, 0, 5]],
+                                  }
+                          },
+                      "codex":
+                          {
+                              "codex-file":
+                                  {
+                                      "sig": [33, 44],
+                                      "records": [["codex-m1", "2026-09-10T00:00:00Z", 40, 20, 7]],
+                                      "model_ctx": "codex-m1",
+                                      "end": 999,
+                                  }
+                          },
+                  },
+          }))
   cache = tt.TallyCache.load(path, [])
   assert cache.lookup_sig("claude", "claude-file", [11, 22]) is not None
   assert cache.lookup_sig("codex", "codex-file", [33, 44]) is None
@@ -722,19 +790,20 @@ def test_cache_load_drops_pre_p2_codex_entries_only(tmp_path: Path) -> None:
 
   # The drop is version-gated, not source-gated: a current document serves its Codex entries.
   path.write_text(
-      json.dumps({
-          "version": 4,
-          "sources": {
-              "codex": {
-                  "codex-file": {
-                      "sig": [33, 44],
-                      "records": [],
-                      "root": "tailroot1",
-                      "end": 1,
+      json.dumps(
+          {
+              "version": 4,
+              "sources": {
+                  "codex": {
+                      "codex-file": {
+                          "sig": [33, 44],
+                          "records": [],
+                          "root": "tailroot1",
+                          "end": 1,
+                      }
                   }
-              }
-          },
-      }))
+              },
+          }))
   cache = tt.TallyCache.load(path, [])
   assert cache.lookup_sig("codex", "codex-file", [33, 44]) is not None
 
@@ -747,8 +816,16 @@ def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
       codex, "norootthread1", [
           _codex_meta(),
           _codex_turn("codex-m1"),
-          _codex_count({"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7},
-                       {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}, "2026-09-10T00:00:00Z"),
+          _codex_count(
+              {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, {
+                  "input_tokens": 60,
+                  "cached_input_tokens": 20,
+                  "output_tokens": 7
+              }, "2026-09-10T00:00:00Z"),
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(ValueError, match="norootthread1"):
     _capture(None, codex, ledger)
@@ -844,7 +921,11 @@ def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
           "input_tokens": 60,
           "cached_input_tokens": 20,
           "output_tokens": 7
-      }, {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}, "2026-09-10T00:00:00Z")
+      }, {
+          "input_tokens": 60,
+          "cached_input_tokens": 20,
+          "output_tokens": 7
+      }, "2026-09-10T00:00:00Z")
   cb = Charliebot(tmp_path)
   cb.thread(
       "s1",
@@ -1116,7 +1197,11 @@ def test_capture_runs_codex_sums_turns_and_retires_on_the_captured_rollout(
             "input_tokens": 150,
             "cached_input_tokens": 30,
             "output_tokens": 8
-        }, {"input_tokens": 150, "cached_input_tokens": 30, "output_tokens": 8}, "2026-09-27T18:00:00Z")
+        }, {
+            "input_tokens": 150,
+            "cached_input_tokens": 30,
+            "output_tokens": 8
+        }, "2026-09-27T18:00:00Z")
     assert _capture(None, codex, ledger)["Codex"] == 1  # the rollout is captured native
     assert ("charlie-bot", "gpt-5") not in _ledger_rows(ledger)  # excluded: its session id has a native record
 
@@ -1367,7 +1452,11 @@ def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
           "input_tokens": 60,
           "cached_input_tokens": 20,
           "output_tokens": 8
-      }, {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 8}, "2024-01-03T00:00:00Z")
+      }, {
+          "input_tokens": 60,
+          "cached_input_tokens": 20,
+          "output_tokens": 8
+      }, "2024-01-03T00:00:00Z")
   oc.write("m1", 100, _usage(50, 5))
   cb.thread(
       "s1",

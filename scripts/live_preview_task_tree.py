@@ -30,7 +30,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -57,15 +57,15 @@ RUN_TIMEOUT_SECONDS = 420.0
 
 
 def log(message: str) -> None:
-    print(message, flush=True)
+  print(message, flush=True)
 
 
 def fail(message: str) -> None:
-    raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
+  raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
 
 
 def make_record(checks: list[dict]) -> Callable[[str, bool, str], None]:
-    """The PASS/FAIL sink the live-preview harnesses record their checks through.
+  """The PASS/FAIL sink the live-preview harnesses record their checks through.
 
     The returned closure appends the check to *checks* (the list the harness's
     evidence JSON serializes), logs the verdict, and exits through ``fail`` on
@@ -73,94 +73,89 @@ def make_record(checks: list[dict]) -> Callable[[str, bool, str], None]:
     after it never run.
     """
 
-    def record(name: str, ok: bool, detail: str) -> None:
-        checks.append({"name": name, "ok": ok, "detail": detail})
-        log(f"    [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
-        if not ok:
-            fail(f"assertion failed: {name}: {detail}")
+  def record(name: str, ok: bool, detail: str) -> None:
+    checks.append({"name": name, "ok": ok, "detail": detail})
+    log(f"    [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
+    if not ok:
+      fail(f"assertion failed: {name}: {detail}")
 
-    return record
+  return record
 
 
-def request(base: str, key: str, method: str, path: str,
-            payload: dict | None = None) -> tuple[int, dict]:
-    headers = {"Authorization": "Bearer " + key}
-    data = None
-    if payload is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(payload).encode()
-    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+def request(base: str, key: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict]:
+  headers = {"Authorization": "Bearer " + key}
+  data = None
+  if payload is not None:
+    headers["Content-Type"] = "application/json"
+    data = json.dumps(payload).encode()
+  req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+  try:
+    with urllib.request.urlopen(req, timeout=30) as resp:
+      return resp.status, json.loads(resp.read().decode() or "{}")
+  except urllib.error.HTTPError as e:
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            return resp.status, json.loads(resp.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
-        try:
-            return e.code, json.loads(e.read().decode() or "{}")
-        except ValueError:
-            return e.code, {}
+      return e.code, json.loads(e.read().decode() or "{}")
+    except ValueError:
+      return e.code, {}
 
 
 def snapshot_native_storage() -> dict[str, tuple[float, int]]:
-    """The host's production native CLC session directory, hashed for the isolation proof."""
-    native = Path.home() / ".charlie-code" / "sessions"
-    if not native.is_dir():
-        return {}
-    return {
-        str(p): (p.stat().st_mtime, p.stat().st_size)
-        for p in sorted(native.rglob("*")) if p.is_file()
-    }
+  """The host's production native CLC session directory, hashed for the isolation proof."""
+  native = Path.home() / ".charlie-code" / "sessions"
+  if not native.is_dir():
+    return {}
+  return {str(p): (p.stat().st_mtime, p.stat().st_size) for p in sorted(native.rglob("*")) if p.is_file()}
 
 
 def snapshot_tree(root: Path) -> dict[str, str]:
-    return {
-        str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in sorted(root.rglob("*")) if p.is_file()
-    }
+  return {
+      str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+      for p in sorted(root.rglob("*"))
+      if p.is_file()
+  }
 
 
 def build_synthetic_repo(repo: Path) -> None:
-    repo.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.email", "preview@example.com"], check=True)
-    subprocess.run(["git", "-C", str(repo), "config", "user.name", "preview"], check=True)
-    (repo / "README.md").write_text("live preview synthetic repo\n", encoding="utf-8")
-    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
-    subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
+  repo.mkdir(parents=True)
+  subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+  subprocess.run(["git", "-C", str(repo), "config", "user.email", "preview@example.com"], check=True)
+  subprocess.run(["git", "-C", str(repo), "config", "user.name", "preview"], check=True)
+  (repo / "README.md").write_text("live preview synthetic repo\n", encoding="utf-8")
+  subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+  subprocess.run(["git", "-C", str(repo), "commit", "-q", "-m", "seed"], check=True)
 
 
-async def wait_run_terminal(base: str, key: str, session_id: str, run_id: str,
-                            label: str) -> tuple[dict, str]:
-    """Poll one Run over the instance API until a terminal state; timeout fails explicitly."""
-    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
-    last = ""
-    while time.monotonic() < deadline:
-        status, page = request(base, key, "GET",
-                               f"/api/sessions/{session_id}/runs?order=desc&limit=50")
-        if status != 200:
-            fail(f"{label}: runs list failed: {status} {page}")
-        row = next((r for r in page.get("items", []) if r.get("id") == run_id), None)
-        if row is None:
-            fail(f"{label}: run {run_id} vanished from {session_id}")
-        state = row.get("state")
-        if state in ("success", "failed", "stopped", "interrupted"):
-            outcome = "success" if state == "success" else state
-            return row, outcome
-        last = f"state={state}"
-        await asyncio.sleep(2.0)
-    fail(f"{label}: run {run_id} still running after {RUN_TIMEOUT_SECONDS:.0f}s ({last})")
+async def wait_run_terminal(base: str, key: str, session_id: str, run_id: str, label: str) -> tuple[dict, str]:
+  """Poll one Run over the instance API until a terminal state; timeout fails explicitly."""
+  deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+  last = ""
+  while time.monotonic() < deadline:
+    status, page = request(base, key, "GET", f"/api/sessions/{session_id}/runs?order=desc&limit=50")
+    if status != 200:
+      fail(f"{label}: runs list failed: {status} {page}")
+    row = next((r for r in page.get("items", []) if r.get("id") == run_id), None)
+    if row is None:
+      fail(f"{label}: run {run_id} vanished from {session_id}")
+    state = row.get("state")
+    if state in ("success", "failed", "stopped", "interrupted"):
+      outcome = "success" if state == "success" else state
+      return row, outcome
+    last = f"state={state}"
+    await asyncio.sleep(2.0)
+  fail(f"{label}: run {run_id} still running after {RUN_TIMEOUT_SECONDS:.0f}s ({last})")
 
 
 def check_snapshot_integrity(snapshot: dict, label: str) -> None:
-    joined = "\n\n".join(b["text"] for b in snapshot["blocks"])
-    if snapshot["char_count"] != len(joined):
-        fail(f"{label}: snapshot char_count {snapshot['char_count']} != measured {len(joined)}")
-    for block in snapshot["blocks"]:
-        if block["body_ref"] != hashlib.sha256(block["text"].encode("utf-8")).hexdigest():
-            fail(f"{label}: snapshot block body_ref mismatch for sources={block['sources']}")
+  joined = "\n\n".join(b["text"] for b in snapshot["blocks"])
+  if snapshot["char_count"] != len(joined):
+    fail(f"{label}: snapshot char_count {snapshot['char_count']} != measured {len(joined)}")
+  for block in snapshot["blocks"]:
+    if block["body_ref"] != hashlib.sha256(block["text"].encode("utf-8")).hexdigest():
+      fail(f"{label}: snapshot block body_ref mismatch for sources={block['sources']}")
 
 
 def block_sources(snapshot: dict) -> list[tuple[str, str]]:
-    return [(s["scope"], s["source_ref"]) for b in snapshot["blocks"] for s in b["sources"]]
+  return [(s["scope"], s["source_ref"]) for b in snapshot["blocks"] for s in b["sources"]]
 
 
 async def run_harness(args: argparse.Namespace) -> None:

@@ -119,8 +119,11 @@ def _write_pretty_trace(path: Path, rank: int, events_per_pid: int) -> None:
 
 
 @pytest.mark.integration
-def test_chunked_member_serves_the_sequential_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The chunked member build ships the sequential member walk's exact bytes, stride ids included."""
+@pytest.mark.parametrize("slim", [False, True], ids=["plain", "slim"])
+def test_chunked_member_serves_the_sequential_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slim: bool) -> None:
+  """The chunked member build ships the sequential member walk's exact bytes, stride ids
+  included, for the plain and the slim walk alike."""
   paths = []
   for rank in range(2):
     path = tmp_path / f"trace_rank{rank}.json"
@@ -129,24 +132,7 @@ def test_chunked_member_serves_the_sequential_bytes(tmp_path: Path, monkeypatch:
   chunked, sequential = tmp_path / "chunked.json.gz", tmp_path / "sequential.json.gz"
 
   monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
-  _build(paths, chunked)
+  _build(paths, chunked, slim=slim)
   monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
-  _build(paths, sequential)
-  assert chunked.read_bytes() == sequential.read_bytes()
-
-
-@pytest.mark.integration
-def test_chunked_member_serves_the_sequential_slim_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The slim chunked member keeps the sequential slim walk's exact bytes: one stream, one drop rule."""
-  paths = []
-  for rank in range(2):
-    path = tmp_path / f"trace_rank{rank}.json"
-    _write_pretty_trace(path, rank, 120)
-    paths.append(path)
-  chunked, sequential = tmp_path / "chunked-slim.json.gz", tmp_path / "sequential-slim.json.gz"
-
-  monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
-  _build(paths, chunked, slim=True)
-  monkeypatch.setattr(trace_merge, "_split_chunks", lambda *args: None)
-  _build(paths, sequential, slim=True)
+  _build(paths, sequential, slim=slim)
   assert chunked.read_bytes() == sequential.read_bytes()

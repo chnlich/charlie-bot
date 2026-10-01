@@ -68,10 +68,8 @@ DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
 
 # The per-session metadata filename (threads.py's node records, the task tree's
-# files). It homes here so the lean importers (the memory CLI's run-token path)
-# read it without threads.py's config chain; threads re-exports it.
-# The session metadata filename: defined in src.core.run_identity (the run-scoped
-# CLI path reads session metadata without this module's model stack).
+# files; threads re-exports it): defined in src.core.run_identity, whose
+# run-scoped CLI path reads session metadata without this module's model stack.
 from src.core.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
 # Backend types whose event transport does not go through the shared base read

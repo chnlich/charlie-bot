@@ -344,7 +344,7 @@ def motion_timeline_verdict(samples: list[list[dict]],
 
 
 def build_source_home(source: Path, backend_ids: list[str]) -> None:
-    """The trial's private configuration source: the selected backend entries of the current profile.
+  """The trial's private configuration source: the selected backend entries of the current profile.
 
     The source read is scoped to the entries the trial consumes: the profile's raw
     YAML is parsed here and only the selected entries are validated against this
@@ -355,102 +355,118 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     strictly. The first entry is the trial's default; the rest are the
     explicitly selectable additions.
     """
-    import yaml
+  import yaml
 
-    from src.core.config import CharlieBotConfig, charliebot_home_dir, load_credentials
+  from src.core.config import CharlieBotConfig, charliebot_home_dir, load_credentials
 
-    config_path = charliebot_home_dir() / "config.yaml"
-    raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
-    entries = []
-    written_sections: set[str] = set()
-    credential_lines: list[str] = []
-    for backend_id in backend_ids:
-        raw_entry = next((e for e in raw_options if isinstance(e, dict) and e.get("id") == backend_id), None)
-        if raw_entry is None:
-            raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
-        try:
-            # Schema-strict validation of exactly the entry the trial copies.
-            option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
-        except Exception as e:
-            raise SystemExit(
-                f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
-                f"config schema: {e}") from e
-        assert option is not None
-        if option.type.value != "charlie-code":
-            raise SystemExit(
-                f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
-                "state only for charlie-code")
-        entries.append(json.loads(option.model_dump_json()))
-        if getattr(option, "credential", None):
-            section = str(option.credential)
-            api_key = load_credentials().get(section, "api_key")
-            if api_key is None:
-                raise SystemExit(f"backend {backend_id!r} needs credentials.{section}.api_key; it is unset")
-            if section not in written_sections:
-                written_sections.add(section)
-                credential_lines.append(f"{section}:\n  api_key: {api_key}\n")
-    source.mkdir(parents=True, exist_ok=True)
-    config = {
-        "server": {"host": "127.0.0.1", "port": 18498},
-        "paths": {"workspace_dirs": [str(source / "workspaces")],
-                  "worktree_dir": str(source / "worktrees")},
-        "backends": {"options": entries, "preference": [backend_ids[0]]},
-    }
-    (source / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
-    creds = "charliebot:\n  access_key: source-operator-key-not-used\n" + "".join(credential_lines)
-    (source / "credentials.yaml").write_text(creds, encoding="utf-8")
+  config_path = charliebot_home_dir() / "config.yaml"
+  raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
+  entries = []
+  written_sections: set[str] = set()
+  credential_lines: list[str] = []
+  for backend_id in backend_ids:
+    raw_entry = next((e for e in raw_options if isinstance(e, dict) and e.get("id") == backend_id), None)
+    if raw_entry is None:
+      raise SystemExit(f"backend {backend_id!r} is not configured in the current profile {config_path}")
+    try:
+      # Schema-strict validation of exactly the entry the trial copies.
+      option = CharlieBotConfig(backends={"options": [raw_entry]}).get_backend_option(backend_id)
+    except Exception as e:
+      raise SystemExit(
+          f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
+          f"config schema: {e}") from e
+    assert option is not None
+    if option.type.value != "charlie-code":
+      raise SystemExit(
+          f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
+          "state only for charlie-code")
+    entries.append(json.loads(option.model_dump_json()))
+    if getattr(option, "credential", None):
+      section = str(option.credential)
+      api_key = load_credentials().get(section, "api_key")
+      if api_key is None:
+        raise SystemExit(f"backend {backend_id!r} needs credentials.{section}.api_key; it is unset")
+      if section not in written_sections:
+        written_sections.add(section)
+        credential_lines.append(f"{section}:\n  api_key: {api_key}\n")
+  source.mkdir(parents=True, exist_ok=True)
+  config = {
+      "server": {
+          "host": "127.0.0.1",
+          "port": 18498
+      },
+      "paths": {
+          "workspace_dirs": [str(source / "workspaces")],
+          "worktree_dir": str(source / "worktrees")
+      },
+      "backends": {
+          "options": entries,
+          "preference": [backend_ids[0]]
+      },
+  }
+  (source / "config.yaml").write_text(yaml.safe_dump(config), encoding="utf-8")
+  creds = "charliebot:\n  access_key: source-operator-key-not-used\n" + "".join(credential_lines)
+  (source / "credentials.yaml").write_text(creds, encoding="utf-8")
 
 
 def fail(message: str) -> None:
-    raise SystemExit(message)
+  raise SystemExit(message)
 
 
 def preview_invocation(home: Path, port: int, backend: str, extra_backends: list[str]) -> list[str]:
-    """The preview instance's argv: the real CLI as its own foreground process.
+  """The preview instance's argv: the real CLI as its own foreground process.
 
     Every harness starts ``charliebot session-tree preview`` rather than an
     in-process server, so the trial rides the fresh-home boot path the operator
     runs. *backend* is the trial's default; every entry in *extra_backends*
     arrives as a further ``--add-backend``.
     """
-    invocation = [sys.executable, "-m", "src.cli.main", "session-tree", "preview",
-                  "--home", str(home), "--port", str(port), "--backend", backend]
-    for extra in extra_backends:
-        invocation += ["--add-backend", extra]
-    return invocation
+  invocation = [
+      sys.executable, "-m", "src.cli.main", "session-tree", "preview", "--home",
+      str(home), "--port",
+      str(port), "--backend", backend
+  ]
+  for extra in extra_backends:
+    invocation += ["--add-backend", extra]
+  return invocation
 
 
 def preview_instance_env(source_home: Path) -> dict[str, str]:
-    """The preview child's env: the trial's source home and an unbuffered console.
+  """The preview child's env: the trial's source home and an unbuffered console.
 
     The copy is taken at call time, so callers must scrub production identity
     variables from ``os.environ`` before calling.
     """
-    env = dict(os.environ)
-    env["CHARLIEBOT_HOME"] = str(source_home)
-    env["PYTHONUNBUFFERED"] = "1"
-    return env
+  env = dict(os.environ)
+  env["CHARLIEBOT_HOME"] = str(source_home)
+  env["PYTHONUNBUFFERED"] = "1"
+  return env
 
 
 def trial_home_root(prefix: str, *, keep: bool) -> Path:
-    """The trial's temp root, purged at process exit unless *keep*.
+  """The trial's temp root, purged at process exit unless *keep*.
 
     Every trial artifact (source home, trial home, chrome profile, console
     logs) lives inside the returned directory, so one purge clears the trial.
     """
-    tmp_path = Path(tempfile.mkdtemp(prefix=prefix))
-    if keep:
-        log(f"kept for inspection: {tmp_path}")
-    else:
-        atexit.register(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
-    return tmp_path
+  tmp_path = Path(tempfile.mkdtemp(prefix=prefix))
+  if keep:
+    log(f"kept for inspection: {tmp_path}")
+  else:
+    atexit.register(lambda: shutil.rmtree(tmp_path, ignore_errors=True))
+  return tmp_path
 
 
 async def open_authenticated_page(
-    chrome: str, profile: Path, *, port: int, access_key: str, domains: tuple[str, ...],
+    chrome: str,
+    profile: Path,
+    *,
+    port: int,
+    access_key: str,
+    domains: tuple[str, ...],
     fail: Callable[[str], None],
 ) -> tuple[CDP, str, subprocess.Popen]:
-    """Launch Chrome and open one page pre-seeded for the trial at *port*.
+  """Launch Chrome and open one page pre-seeded for the trial at *port*.
 
     The access key reaches the page twice before the first navigation - the
     bootstrap writes it to localStorage, the cookie jar gets the session
@@ -459,12 +475,14 @@ async def open_authenticated_page(
     capture shape. Returns (cdp, session_id, chrome_proc); the caller owns the
     process and drives the page itself.
     """
-    chrome_proc = launch_chrome(chrome, profile, pick_free_port(),
-                                ["--no-first-run", "--no-default-browser-check"])
-    ws_url = await devtools_ws_url(chrome_proc, 30, fail)
-    cdp = await connect_cdp(ws_url)
-    session_id, _target_id = await open_cdp_page(cdp, domains)
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": f"""
+  chrome_proc = launch_chrome(chrome, profile, pick_free_port(), ["--no-first-run", "--no-default-browser-check"])
+  ws_url = await devtools_ws_url(chrome_proc, 30, fail)
+  cdp = await connect_cdp(ws_url)
+  session_id, _target_id = await open_cdp_page(cdp, domains)
+  await cdp.send(
+      "Page.addScriptToEvaluateOnNewDocument", {
+          "source":
+              f"""
         (function () {{
           try {{ localStorage.setItem('charliebot_access_key', '{access_key}'); }} catch (e) {{}}
           window.__errs = [];
@@ -472,21 +490,31 @@ async def open_authenticated_page(
           window.addEventListener('unhandledrejection',
               (e) => window.__errs.push('rej: ' + String(e.reason).slice(0, 160)));
         }})();
-    """}, session_id=session_id)
-    await cdp.send("Network.setCookie", {
-        "name": "charliebot_access_key", "value": access_key,
-        "url": f"http://127.0.0.1:{port}/",
-    }, session_id=session_id)
-    await cdp.send("Emulation.setDeviceMetricsOverride", {
-        "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
-    }, session_id=session_id)
-    await cdp.send("Page.enable", {}, session_id=session_id)
-    return cdp, session_id, chrome_proc
+    """
+      },
+      session_id=session_id)
+  await cdp.send(
+      "Network.setCookie", {
+          "name": "charliebot_access_key",
+          "value": access_key,
+          "url": f"http://127.0.0.1:{port}/",
+      },
+      session_id=session_id)
+  await cdp.send(
+      "Emulation.setDeviceMetricsOverride", {
+          "width": 1440,
+          "height": 900,
+          "deviceScaleFactor": 1,
+          "mobile": False,
+      },
+      session_id=session_id)
+  await cdp.send("Page.enable", {}, session_id=session_id)
+  return cdp, session_id, chrome_proc
 
 
-async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console: Path,
-                             fail: Callable[[str], None], timeout_s: float) -> dict:
-    """Poll the preview instance's ready record; return it once ready.
+async def wait_preview_ready(
+    proc: subprocess.Popen, home: Path, server_console: Path, fail: Callable[[str], None], timeout_s: float) -> dict:
+  """Poll the preview instance's ready record; return it once ready.
 
     The record is ``<home>/state/preview_instance.json`` and ``ready: true``
     ends the wait. A process that exits before the record lands fails
@@ -495,18 +523,18 @@ async def wait_preview_ready(proc: subprocess.Popen, home: Path, server_console:
     record path, the only observable left. *fail* is the caller's own failure
     exit, so each harness keeps its message prefix and exit style.
     """
-    record_path = home / "state" / "preview_instance.json"
-    deadline = time.monotonic() + timeout_s
-    record: dict = {}
-    while time.monotonic() < deadline:
-        if record_path.is_file():
-            record = json.loads(record_path.read_text())
-            if record.get("ready"):
-                return record
-        if proc.poll() is not None:
-            fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
-        await asyncio.sleep(0.2)
-    fail(f"preview instance never became ready ({record_path})")
+  record_path = home / "state" / "preview_instance.json"
+  deadline = time.monotonic() + timeout_s
+  record: dict = {}
+  while time.monotonic() < deadline:
+    if record_path.is_file():
+      record = json.loads(record_path.read_text())
+      if record.get("ready"):
+        return record
+    if proc.poll() is not None:
+      fail(f"preview process exited early: {server_console.read_text()[-1500:]}")
+    await asyncio.sleep(0.2)
+  fail(f"preview instance never became ready ({record_path})")
 
 
 async def run_harness(args: argparse.Namespace) -> None:

@@ -248,15 +248,9 @@ async def cancel_master_agent(
     except RunIdentityConflictError as e:
       from src.api.sessions import _task_http_error
       raise _task_http_error(e) from e
-    if not requested:
-      await session_mgr.persist_and_broadcast(
-          session_id, {
-              "type": ET.ASSISTANT_ERROR,
-              "content": "No active master agent to cancel.",
-          })
-      raise HTTPException(status_code=404, detail="No active master agent")
-    return {"ok": True}
-  found = await _load_cancel_master(globals())(session_id, meta=meta, session_mgr=session_mgr)
+    found = requested > 0
+  else:
+    found = await _load_cancel_master(globals())(session_id, meta=meta, session_mgr=session_mgr)
   if not found:
     await session_mgr.persist_and_broadcast(
         session_id, {

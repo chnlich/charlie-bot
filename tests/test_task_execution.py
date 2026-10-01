@@ -2471,137 +2471,132 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
 
 @pytest.mark.asyncio
 async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(e) Below the threshold a worker-class run stays queued with one blocked
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(e) Below the threshold a worker-class run stays queued with one blocked
     report; a manager turn still launches; threshold 0 skips the check."""
-    cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-    cfg.server.min_free_disk_gib = 10 ** 9  # no filesystem holds this much
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    worker_builds = install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  worker_builds = install_worker_launch_and_resume_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run_id = decision["run_id"]
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run_id = decision["run_id"]
 
-    def _withheld_reason() -> str | None:
-        events = tree.events.load_events(worker.id)
-        for event in events:
-            if event.get("type") == ET.RUN_LAUNCH_WITHHELD:
-                return str(event.get("reason"))
-        return None
+  def _withheld_reason() -> str | None:
+    events = tree.events.load_events(worker.id)
+    for event in events:
+      if event.get("type") == ET.RUN_LAUNCH_WITHHELD:
+        return str(event.get("reason"))
+    return None
 
-    # The launch is fire-and-forget: poll for the withheld verdict's durable
-    # event, then re-read the queued run it left behind.
-    await poll_until(lambda: _withheld_reason() is not None, what="the disk-headroom withheld event")
-    reason = _withheld_reason() or ""
-    assert "disk free" in reason and "below 1000000000 GiB" in reason
-    assert str(cfg.charliebot_home) in reason or str(Path(cfg.paths.worktree_dir)) in reason
-    run = await tree.runs.get_run(worker.id, run_id)
-    assert run is not None and run.pid is None  # no process, stays queued
-    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_id) is None
-    assert worker_builds == []
-    await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the blocked report")
-    assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["blocked"]
+  # The launch is fire-and-forget: poll for the withheld verdict's durable
+  # event, then re-read the queued run it left behind.
+  await poll_until(lambda: _withheld_reason() is not None, what="the disk-headroom withheld event")
+  reason = _withheld_reason() or ""
+  assert "disk free" in reason and "below 1000000000 GiB" in reason
+  assert str(cfg.charliebot_home) in reason or str(Path(cfg.paths.worktree_dir)) in reason
+  run = await tree.runs.get_run(worker.id, run_id)
+  assert run is not None and run.pid is None  # no process, stays queued
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_id) is None
+  assert worker_builds == []
+  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the blocked report")
+  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["blocked"]
 
-    # A manager turn launches under the same threshold: the blocked report's
-    # own wake started one (worker-class runs only are checked).
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    manager_events = tree.runs.load_events_sync(manager.id)
-    turns = [r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn"]
-    assert len(turns) == 1
-    assert tree.runs.terminal_outcome(manager_events, turns[0].id) == "success"
-    # ...and threshold 0 skips the check, so the queued worker launches.
-    cfg.server.min_free_disk_gib = 0
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
-    assert outcome == "success"
+  # A manager turn launches under the same threshold: the blocked report's
+  # own wake started one (worker-class runs only are checked).
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  manager_events = tree.runs.load_events_sync(manager.id)
+  turns = [r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn"]
+  assert len(turns) == 1
+  assert tree.runs.terminal_outcome(manager_events, turns[0].id) == "success"
+  # ...and threshold 0 skips the check, so the queued worker launches.
+  cfg.server.min_free_disk_gib = 0
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
+  assert outcome == "success"
 
 
 @pytest.mark.asyncio
 async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(j) A non-out-of-space exception in the end path lands the run
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(j) A non-out-of-space exception in the end path lands the run
     immediately (as today) and starts no retry; a success fact that hits
     OSError(EIO) during delivery sends no failed report."""
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    install_worker_launch_and_resume_backends(
-        monkeypatch,
-        [SpawningScriptedBackend([result_event("work done")]),
-         SpawningScriptedBackend([result_event("more work done")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  install_worker_launch_and_resume_backends(
+      monkeypatch,
+      [SpawningScriptedBackend([result_event("work done")]),
+       SpawningScriptedBackend([result_event("more work done")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
-    # First half: the run_finished write raises PermissionError (not space).
-    inject_chat_append_fault(
-        monkeypatch, event_type=ET.RUN_FINISHED, session_ids={worker.id}, err=errno.EACCES)
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run_id = decision["run_id"]
-    _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
-    assert outcome == "failed"  # landed immediately by the existing path
-    assert adapter._landing_retries == {}  # no retry for a non-space error
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["failed"]
+  # First half: the run_finished write raises PermissionError (not space).
+  inject_chat_append_fault(monkeypatch, event_type=ET.RUN_FINISHED, session_ids={worker.id}, err=errno.EACCES)
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run_id = decision["run_id"]
+  _run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  assert outcome == "failed"  # landed immediately by the existing path
+  assert adapter._landing_retries == {}  # no retry for a non-space error
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  assert [r.get("outcome") for r in child_reports(tree, manager.id)] == ["failed"]
 
-    # Second half: a success fact that hits EIO during delivery — the durable
-    # outcome governs the delivery, so no contradicting failed report, and no
-    # retry (EIO does not clear with freed space).
-    fresh = await tree.runs.get_run(worker.id, decision["run_id"])
-    assert fresh is not None and fresh.id == run_id
-    inject_chat_append_fault(
-        monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id},
-        times=50, err=errno.EIO)
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="More work.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    second_id = decision["run_id"]
-    _second_run, second_outcome = await wait_for_terminal_run(tree, worker.id, second_id)
-    assert second_outcome == "success"
-    assert adapter._landing_retries == {}
-    await poll_until(lambda: len(child_reports(tree, manager.id)) >= 1, what="the retried delivery")
-    outcomes = [r.get("outcome") for r in child_reports(tree, manager.id)]
-    assert "failed" not in outcomes[1:], outcomes  # the second run sent no failed report
+  # Second half: a success fact that hits EIO during delivery — the durable
+  # outcome governs the delivery, so no contradicting failed report, and no
+  # retry (EIO does not clear with freed space).
+  fresh = await tree.runs.get_run(worker.id, decision["run_id"])
+  assert fresh is not None and fresh.id == run_id
+  inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id}, times=50, err=errno.EIO)
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="More work.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  second_id = decision["run_id"]
+  _second_run, second_outcome = await wait_for_terminal_run(tree, worker.id, second_id)
+  assert second_outcome == "success"
+  assert adapter._landing_retries == {}
+  await poll_until(lambda: len(child_reports(tree, manager.id)) >= 1, what="the retried delivery")
+  outcomes = [r.get("outcome") for r in child_reports(tree, manager.id)]
+  assert "failed" not in outcomes[1:], outcomes  # the second run sent no failed report
 
 
 @pytest.mark.asyncio
-async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path,
-                                                           monkeypatch: pytest.MonkeyPatch) -> None:
-    """finish_run's repeat path fills empty ended_at/exit_code from the passed
+async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """finish_run's repeat path fills empty ended_at/exit_code from the passed
     values and never moves values already written."""
-    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
-    worker = await create_task(
-        tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
-    run_id = "run-half"
-    await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work"))
-    # First finish with an empty-ended_at repeat (the half-written record's
-    # shape): the fact lands, the metadata write is lost.
-    await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
-    meta_path = tree.runs.metadata_path(worker.id, run_id)
-    record = json.loads(meta_path.read_text(encoding="utf-8"))
-    record["ended_at"] = None
-    record["exit_code"] = None
-    meta_path.write_text(json.dumps(record), encoding="utf-8")
-    tree.runs.records_generation += 1
+  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
+  run_id = "run-half"
+  await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work"))
+  # First finish with an empty-ended_at repeat (the half-written record's
+  # shape): the fact lands, the metadata write is lost.
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="success", exit_code=0)
+  meta_path = tree.runs.metadata_path(worker.id, run_id)
+  record = json.loads(meta_path.read_text(encoding="utf-8"))
+  record["ended_at"] = None
+  record["exit_code"] = None
+  meta_path.write_text(json.dumps(record), encoding="utf-8")
+  tree.runs.records_generation += 1
 
-    ended = datetime.now(UTC) - timedelta(minutes=5)
-    await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=-1, ended_at=ended)
-    run = await tree.runs.get_run(worker.id, run_id)
-    assert run is not None
-    # The first outcome never moves; the empty fields take the passed values.
-    assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_id) == "success"
-    assert run.ended_at is not None and abs(run.ended_at - ended) < timedelta(seconds=1)
-    assert run.exit_code == -1
-    # A repeat over complete metadata changes nothing, whatever it names.
-    other = ended + timedelta(minutes=1)
-    await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=-2, ended_at=other)
-    run = await tree.runs.get_run(worker.id, run_id)
-    assert run is not None
-    assert run.ended_at == run.ended_at and run.ended_at is not None
-    assert abs(run.ended_at - ended) < timedelta(seconds=1)
-    assert run.exit_code == -1
+  ended = datetime.now(UTC) - timedelta(minutes=5)
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=-1, ended_at=ended)
+  run = await tree.runs.get_run(worker.id, run_id)
+  assert run is not None
+  # The first outcome never moves; the empty fields take the passed values.
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_id) == "success"
+  assert run.ended_at is not None and abs(run.ended_at - ended) < timedelta(seconds=1)
+  assert run.exit_code == -1
+  # A repeat over complete metadata changes nothing, whatever it names.
+  other = ended + timedelta(minutes=1)
+  await tree.dispatch.finish_run(worker.id, run_id, outcome="failed", exit_code=-2, ended_at=other)
+  run = await tree.runs.get_run(worker.id, run_id)
+  assert run is not None
+  assert run.ended_at == run.ended_at and run.ended_at is not None
+  assert abs(run.ended_at - ended) < timedelta(seconds=1)
+  assert run.exit_code == -1

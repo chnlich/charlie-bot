@@ -143,24 +143,6 @@ def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path, mo
 
 
 # ---------------------------------------------------------------------------
-# Existing preview home validation
-
-# ---------------------------------------------------------------------------
-# Seeding and restart
-
-# ---------------------------------------------------------------------------
-# Multi-entry catalog: explicitly selected additions
-
-# ---------------------------------------------------------------------------
-# Preparation
-
-# ---------------------------------------------------------------------------
-# Environment selection
-
-# ---------------------------------------------------------------------------
-# Native-session isolation wrapper and real argv
-
-# ---------------------------------------------------------------------------
 # Launcher workspace boundary
 # ---------------------------------------------------------------------------
 
@@ -319,7 +301,3 @@ def test_cli_refuses_symlinked_home_resolving_into_production(tmp_path: Path, so
       tmp_path, source_home,
       ["--home", str(link), "--port", str(_free_port()), "--backend", "clc-test"], "overlaps the production home")
   assert not (source_home / "nested-deeper").exists()
-
-
-# ---------------------------------------------------------------------------
-# Full behavioral case through the real CLI (needs the installed launcher)

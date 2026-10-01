@@ -132,17 +132,6 @@ def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatc
 
 
 # ---------------------------------------------------------------------------
-# base.run() template-method ordering: _prepare_transport runs after the
-# transport dir is resolved/created/rotated and before _build_command.
-
-# ---------------------------------------------------------------------------
-# CharlieCodeBackend api_key -> CHARLIE_CODE_API_KEY injection
-
-# ---------------------------------------------------------------------------
-# CharlieCodeBackend option sampling knobs: defaults, explicit values, and
-# pydantic range validation on the config entry.
-
-# ---------------------------------------------------------------------------
 # registry wiring
 # ---------------------------------------------------------------------------
 

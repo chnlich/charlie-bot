@@ -245,10 +245,3 @@ async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) ->
   worker_selection = select_worker_memory(cfg.memory_dir, "")
   assert worker_selection is not None
   assert all(not sources for _d, _t, sources in worker_selection.segments)
-
-
-# ---------------------------------------------------------------------------
-# Snapshot / hash contract
-
-# ---------------------------------------------------------------------------
-# Own-subtree scope: THIS NODE AND ITS DESCENDANTS

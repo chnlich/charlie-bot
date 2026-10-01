@@ -57,7 +57,3 @@ def test_uncovered_verified_alive_resolves_running(tmp_path: Path) -> None:
   resolution = _resolve(tmp_path, backend_type="opencode", pid=pid, pid_start=pid_start, started_at=NOW)
   assert resolution.outcome is runs.RunOutcome.RUNNING
   assert resolution.reason == runs.UNCOVERED_ALIVE_REASON
-
-
-# ---------------------------------------------------------------------------
-# Raw-missing row: both effective-alive variants, no DIED backdoor

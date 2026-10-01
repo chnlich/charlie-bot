@@ -81,9 +81,6 @@ async def test_invalid_run_bearer_never_falls_back_to_operator_cookie() -> None:
 
 
 # ---------------------------------------------------------------------------
-# CLI: a run token in the environment is the only credential sent
-
-# ---------------------------------------------------------------------------
 # The v2 task gate: nearest real user instruction, unchanged time rules
 # ---------------------------------------------------------------------------
 

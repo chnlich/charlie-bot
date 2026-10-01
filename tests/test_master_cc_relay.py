@@ -68,9 +68,6 @@ def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line
 
 
 # ---------------------------------------------------------------------------
-# The in-run watch
-
-# ---------------------------------------------------------------------------
 # _run_cc across accounts
 # ---------------------------------------------------------------------------
 
@@ -151,13 +148,3 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   notices = _events_of(item.callbacks, ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED)
   assert sorted(n["account"] for n in notices) == ["ext-1", "ext-2"]
   assert {n["reason"] for n in notices} == {"empty_credentials"}
-
-
-# ---------------------------------------------------------------------------
-# Operator surfaces
-
-# ---------------------------------------------------------------------------
-# Label persistence at placement, the lineage probe, and refusal self-heal
-
-# ---------------------------------------------------------------------------
-# End-of-run error hint on the live exit path

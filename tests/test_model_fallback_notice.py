@@ -90,15 +90,6 @@ def test_pure_and_mixed_out_of_family_rounds_detect_served_models() -> None:
 
 
 # ---------------------------------------------------------------------------
-# (e2) Family decision table + single-suffix-strip regression guard
-
-# ---------------------------------------------------------------------------
-# (e) Render mapping
-
-# ---------------------------------------------------------------------------
-# Wiring — live path (re-reads this invocation's own raw log)
-
-# ---------------------------------------------------------------------------
 # Wiring — re-attach path (reuses the whole-round projection, zero new I/O)
 # ---------------------------------------------------------------------------
 

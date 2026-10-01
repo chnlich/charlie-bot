@@ -104,15 +104,6 @@ async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Wait loop with remote probe — ALL-die fire across hosts
-
-# ---------------------------------------------------------------------------
-# Backoff schedule
-
-# ---------------------------------------------------------------------------
-# Migration: legacy `watch_pids` JSON file -> rewritten in new schema
-
-# ---------------------------------------------------------------------------
 # CLI parsing — self-describing --watch specs (local / remote / slurm)
 # ---------------------------------------------------------------------------
 

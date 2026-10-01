@@ -351,7 +351,3 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   assert scheduler._handles["code-health"] is scheduled_handle
   scheduled_handle.cancel()
   await asyncio.sleep(0)
-
-
-# ---------------------------------------------------------------------------
-# 7. Projection: the skip event renders as one system message

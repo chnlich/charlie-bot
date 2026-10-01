@@ -233,7 +233,3 @@ async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeyp
   assert killed == [4242]
   assert proc.waited is True
   assert "timed out" in events[0]["error"]
-
-
-# ---------------------------------------------------------------------------
-# Chat rendering

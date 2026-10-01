@@ -231,10 +231,6 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
 
 
 # ---------------------------------------------------------------------------
-# Withheld launches settle: no hung waiter, released lock, honest report
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Pooled launches: iteration Runs start on a Claude pool account
 # ---------------------------------------------------------------------------
 

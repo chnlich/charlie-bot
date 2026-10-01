@@ -231,14 +231,6 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
 
 
 # ---------------------------------------------------------------------------
-# Later input, acknowledgement exactness
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Rotation, imported boundary, close/reopen across segments
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Closed nodes, authorization identities, stopped queued runs
 # ---------------------------------------------------------------------------
 
@@ -345,14 +337,6 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
     master_trigger_module.run_message = original
   assert called == [True]
 
-
-# ---------------------------------------------------------------------------
-# Input identity, dedup, and attachment preservation
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# Index races: phantom nodes and stale installs
-# ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
 # Permanent delete: every reference category, one locked operation

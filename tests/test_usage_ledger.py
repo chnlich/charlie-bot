@@ -650,6 +650,7 @@ def test_fold_stands_down_on_a_foreign_value_rewrite(monkeypatch, tmp_path):
 
 # --- supersede_prefix: the one bounded deletion path, and the ts-keeping conflict rule ------
 
+
 def test_supersede_prefix_deletes_only_its_range_while_writing_replacements(tmp_path):
   """supersede_prefix deletes the usage rows and their fallback_sessions rows under the
   prefix -- by key range, so ids sorting past the bound survive -- in the same call that

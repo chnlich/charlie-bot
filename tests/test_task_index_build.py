@@ -69,3 +69,26 @@ async def test_write_mid_build_never_installs_over_newer_generation(tree, monkey
   fresh = await tree._get_index()
   assert builds["n"] == 3  # the post-write read rebuilt
   assert fresh.revision != index.revision or fresh is not index
+
+
+@pytest.mark.asyncio
+async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypatch):
+  """One build pass pays one facts consult chain per task node.
+
+  The structural read and the inheritance fold need the same node's facts;
+  without the pass cache the fold re-walks the events-cache consults the
+  structural read settled, and a two-node build pays four chains for two
+  nodes (2 structural + 2 fold).
+  """
+  await tree.create_task(
+      request_id="child", task_parent_id=None, profile="worker", task=None, name="Child", backend=None, caller=OPERATOR)
+  calls = {"n": 0}
+  orig = type(tree)._facts_of
+
+  def counting(session_id):
+    calls["n"] += 1
+    return orig(tree, session_id)
+
+  monkeypatch.setattr(tree, "_facts_of", counting)
+  tree._build_index_sync(tree._sessions.fresh_cached_metas())
+  assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"

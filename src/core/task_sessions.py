@@ -552,12 +552,13 @@ class TaskTreeManager:
     # parent's archived status among them, which this loop skips entirely.
     index = _TreeIndex(metas=metas, children=children, revision="", root_sig=root_sig)
     memo: dict[str, bool] = {}
+    pass_facts: dict[str, _TaskFacts] = {}
     structural: list[str] = []
     for sid, meta in task_nodes:
-      facts = self._facts_of(sid)
+      facts = self._pass_facts(pass_facts, sid)
       structural.append(
           f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.presentation}|{meta.status.value}"
-          f"|{facts.task_state}|{self.archived_of(index, meta, memo)}")
+          f"|{facts.task_state}|{self._archived_of_pass(index, meta, memo, pass_facts)}")
     # The placeholder revision above is an input only to the shared-memo pass,
     # which never reads it; the real one lands before the index is published.
     index.revision = sha256_hex("\n".join(sorted(structural)))
@@ -711,6 +712,20 @@ class TaskTreeManager:
     self._outcomes_memo[session_id] = (live, archived_count, outcomes, covered)
     return outcomes
 
+  def _pass_facts(self, cache: dict[str, _TaskFacts], session_id: str) -> _TaskFacts:
+    """The pass's facts view: one _facts_of consult chain per session id per cache.
+
+    The build's structural read and the inheritance fold both need the same
+    node's facts; the shared fold memo validates the events-cache identity on
+    every call, so a pass that re-asks for an id it already holds re-pays the
+    consult chains the first call settled.
+    """
+    facts = cache.get(session_id)
+    if facts is None:
+      facts = self._facts_of(session_id)
+      cache[session_id] = facts
+    return facts
+
   def facts_of(self, session_id: str) -> _TaskFacts:
     """Public fold entry for the input/completion owners (same memo)."""
     return self._facts_of(session_id)
@@ -797,10 +812,11 @@ class TaskTreeManager:
     from src.core.runs import read_host_boot_time
     return read_host_boot_time()
 
-  def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts) -> bool:
+  def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
     """One node's OWN archive value from a pre-folded fact set (no inheritance).
 
-    The subtree-inheritance fold around it lives in archived_of.
+    The subtree-inheritance fold around it lives in archived_of; the parent
+    receipt lookup rides the caller's pass cache like every other facts read.
     """
     if meta.presentation == "hidden":
       return True
@@ -819,7 +835,7 @@ class TaskTreeManager:
     recipient = close.get("report_to")
     if not recipient:
       return True  # a root task archives immediately on its own success
-    parent_facts = self._facts_of(str(recipient))
+    parent_facts = self._pass_facts(cache, str(recipient))
     return (meta.id, str(close.get("id"))) in parent_facts.delivered_reports
 
   async def derived_archived_ids(self) -> set[str]:
@@ -833,9 +849,10 @@ class TaskTreeManager:
     """
     index = await self._get_index()
     memo: dict[str, bool] = {}
+    pass_facts: dict[str, _TaskFacts] = {}
     return {
         session_id for session_id, meta in index.metas.items()
-        if meta.status != SessionStatus.ARCHIVED and self.archived_of(index, meta, memo)
+        if meta.status != SessionStatus.ARCHIVED and self._archived_of_pass(index, meta, memo, pass_facts)
     }
 
   def archived_of(self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
@@ -855,15 +872,24 @@ class TaskTreeManager:
     ancestors); a relation cycle surfaces through the hop guard as
     TaskConflictError, never silently.
     """
-    return self._effective_archived(index, meta.id, {} if memo is None else memo)
+    return self._effective_archived(index, meta.id, {} if memo is None else memo, {})
 
-  def _effective_archived(self, index: _TreeIndex, session_id: str, memo: dict[str, bool]) -> bool:
+  def _archived_of_pass(
+      self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
+    """archived_of inside one caller-owned pass: the memo and the facts cache
+    both span the caller's whole node walk, so chains already resolved and
+    facts already consulted serve the rest of the pass."""
+    return self._effective_archived(index, meta.id, memo, pass_facts)
+
+  def _effective_archived(
+      self, index: _TreeIndex, session_id: str, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
     """One node's effective archive value with inheritance, memoized per pass.
 
     Walks up the task-parent chain to the first memoized node, an explicit
     shown, or a root, then folds the effective values back down; every node
     the walk touches lands in the memo, so a whole-listing pass never
-    recomputes one.
+    recomputes one. The fold reads facts through *pass_facts*, and an
+    inherited True settles the subtree without any node's own facts read.
     """
     chain: list[tuple[str, SessionMetadata]] = []
     seen: set[str] = set()
@@ -884,7 +910,8 @@ class TaskTreeManager:
         break
       current = meta.task_parent_id
     for sid, node in reversed(chain):
-      inherited = self._archived_facts_based(node, self._facts_of(sid)) or inherited
+      if not inherited:
+        inherited = self._archived_facts_based(node, self._pass_facts(pass_facts, sid), pass_facts)
       memo[sid] = inherited
     return memo[session_id]
 

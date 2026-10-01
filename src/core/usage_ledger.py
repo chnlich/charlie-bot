@@ -267,8 +267,9 @@ def _stored_trigger_sql(statement: str) -> str:
 
 # Each token-summing trigger name paired with the sqlite_master.sql text this module's own
 # statement leaves behind -- the comparison the open-time refresh runs.
+# The name list deliberately excludes usage_agg_purge_empty, so the lengths differ by design.
 _AGG_TRIGGER_SQLS = {
-    name: _stored_trigger_sql(statement) for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS)
+    name: _stored_trigger_sql(statement) for name, statement in zip(_AGG_SUM_TRIGGER_NAMES, _AGG_TRIGGER_STATEMENTS, strict=False)
 }
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again

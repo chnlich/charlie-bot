@@ -497,8 +497,3 @@ async def test_profile_changing_replay_never_bypasses_authorization(
   metas = (await tree._get_index()).metas
   children = [m for m in metas.values() if m.task_parent_id == root.id]
   assert sorted(m.id for m in children) == sorted([worker_id, manager_id])
-
-
-# ---------------------------------------------------------------------------
-# The single manager prompt states the corrected boundary
-# ---------------------------------------------------------------------------

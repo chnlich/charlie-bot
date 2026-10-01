@@ -41,8 +41,3 @@ async def test_resolve_successor_chain_walks_across_three_generations(tmp_path: 
   resolved = await mgr.resolve_successor_chain(gen0)
   assert resolved is not None
   assert resolved.id == gen3.id
-
-
-# ---------------------------------------------------------------------------
-# Scheduler-owned elone: inheriting succession
-# ---------------------------------------------------------------------------

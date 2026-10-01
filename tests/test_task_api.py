@@ -395,10 +395,6 @@ async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env)
 
 
 # ---------------------------------------------------------------------------
-# Tree search path projection, ancestor-context rows, pending inputs
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Caller-session rule through the HTTP API: the operator header picks whose
 # own turn closed the child, the run token ignores it
 # ---------------------------------------------------------------------------

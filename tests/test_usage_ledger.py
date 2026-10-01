@@ -648,6 +648,98 @@ def test_fold_stands_down_on_a_foreign_value_rewrite(monkeypatch, tmp_path):
   assert [row.output for row in rows if row.model == "model-a"] == [107]
 
 
+# --- supersede_prefix: the one bounded deletion path, and the ts-keeping conflict rule ------
+
+def test_supersede_prefix_deletes_only_its_range_while_writing_replacements(tmp_path):
+  """supersede_prefix deletes the usage rows and their fallback_sessions rows under the
+  prefix -- by key range, so ids sorting past the bound survive -- in the same call that
+  writes the replacement records, and the trigger-maintained aggregate tracks the
+  exchange."""
+  legacy = [
+      _record("codex:t1:0", RecordKind.NATIVE, sessions=("sess-a",), output=5),
+      _record("codex:t1:1", RecordKind.FALLBACK, sessions=("sess-b",), model="model-fb", ts=TS_B, output=7),
+      _record("codex:t10:0", RecordKind.NATIVE, sessions=("sess-a",), model="model-x", output=3),
+      _record("codex:t1x:0", RecordKind.NATIVE, sessions=("sess-a",), model="model-y", output=4),
+      _record("codex-total:t1:5:0:2", RecordKind.NATIVE, sessions=("sess-a",), model="model-t", output=9),
+  ]
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", legacy)
+    replacement = _record("codex-total:t1:7:0:0", RecordKind.NATIVE, sessions=("sess-a",), model="model-t", output=6)
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [replacement], supersede_prefix="codex:t1:")
+    stored = [row["record_id"] for row in ledger._conn.execute("SELECT record_id FROM usage ORDER BY record_id")]
+    links = [row["record_id"] for row in ledger._conn.execute("SELECT record_id FROM fallback_sessions")]
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+  assert stored == ["codex-total:t1:5:0:2", "codex-total:t1:7:0:0", "codex:t10:0", "codex:t1x:0"]
+  assert links == []
+
+
+def test_superseding_n_rows_for_n_new_rows_keeps_every_read_layer_agreed(monkeypatch, tmp_path):
+  """N deletes paired with N inserts is the shape the fold's row-count witness cannot
+  see, so the supersede bumps the epoch: the fold stands down, the full pass re-prices,
+  and the memo-served repeat read, the aggregate read and the table pass all agree."""
+  legacy = [
+      _record("codex:t1:0", RecordKind.NATIVE, sessions=("sess-a",), output=5),
+      _record("codex:t1:1", RecordKind.NATIVE, sessions=("sess-a",), output=7),
+  ]
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", legacy)
+    ledger.model_rows()  # the memo and the one-time backfill
+    replacements = [
+        _record("codex-total:t1:5:0:2", RecordKind.NATIVE, sessions=("sess-a",), output=9),
+        _record("codex-total:t1:5:0:3", RecordKind.NATIVE, sessions=("sess-a",), output=6),
+    ]
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", replacements, supersede_prefix="codex:t1:")
+    paths = _read_path(monkeypatch, ledger)
+    rows, starts = ledger.model_rows_with_native_starts()
+    served = ledger.model_rows()
+    agg_rows = _rows_from_accs(ledger._agg_accs())
+    table_rows = _table_pass_rows(ledger)
+  assert paths == ["full"]
+  assert served is rows
+  assert rows == agg_rows == table_rows
+  assert [(row.model, row.calls, row.output) for row in rows] == [("model-a", 2, 15)]
+  assert starts == {SOURCE: "2026-01-10"}
+
+
+def test_ts_conflict_keeps_the_earlier_non_empty_value(tmp_path):
+  """On a record_id conflict the stored ts keeps the earlier non-empty value: a later
+  stamp changes nothing (and is no rewrite), an earlier stamp wins, and an empty stamp
+  never displaces a stored one."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), ts=TS_A, output=5)
+  later = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), ts=TS_B, output=5)
+  earlier = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), ts="2026-01-09T07:00:00+00:00", output=5)
+  blank = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), ts="", output=5)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    epoch = ledger._rewrite_epoch()
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [later])
+    stored = ledger._conn.execute("SELECT ts FROM usage WHERE record_id = 'rec-1'").fetchone()[0]
+    assert stored == TS_A
+    assert ledger._rewrite_epoch() == epoch
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a3", [earlier])
+    stored = ledger._conn.execute("SELECT ts FROM usage WHERE record_id = 'rec-1'").fetchone()[0]
+    assert stored == "2026-01-09T07:00:00+00:00"
+    assert ledger._rewrite_epoch() == epoch + 1
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a4", [blank])
+    stored = ledger._conn.execute("SELECT ts FROM usage WHERE record_id = 'rec-1'").fetchone()[0]
+    assert stored == "2026-01-09T07:00:00+00:00"
+    assert ledger._rewrite_epoch() == epoch + 1
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+
+
+def test_supersede_prefix_matching_nothing_bumps_nothing(tmp_path):
+  """A prefix that matches no row deletes nothing and leaves the rewrite epoch alone."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", output=7)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    epoch = ledger._rewrite_epoch()
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second], supersede_prefix="nomatch:")
+    assert ledger._rewrite_epoch() == epoch
+    stored = [row["record_id"] for row in ledger._conn.execute("SELECT record_id FROM usage ORDER BY record_id")]
+  assert stored == ["rec-1", "rec-2"]
+
+
 # --- the one-time schema-2 upgrade ---------------------------------------------------------
 
 # The pre-change ledger: usage and usage_agg carry four token sums, the triggers sum four

@@ -481,7 +481,7 @@ async def create_session(base: str, key: str, spec: LegSpec) -> str:
         }
     else:
         payload = {"name": spec.name, "backend": spec.route[0]}
-    status, created = await arequest(base, "POST", "/api/sessions/", key, payload)
+    status, created = await arequest(base, key, "POST", "/api/sessions/", payload)
     if status != 200 or not created.get("id"):
         fail(f"leg {spec.name}: session create failed: {status} {created}")
     return str(created["id"])
@@ -516,7 +516,7 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
         if spec.kind == "v2":
             known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
             status, posted = await arequest(
-                base, "POST", f"/api/chat/{session_id}/message", key, {"content": TURN1_CONVENTIONS})
+                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
             if status != 202:
                 fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
             _run1_id, run1, outcome1 = await wait_v2_run(session_id, known, f"{spec.name} turn 1")
@@ -529,11 +529,11 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
                 e for e in events_before
                 if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
             status, posted = await arequest(
-                base, "POST", f"/api/chat/{session_id}/message", key, {"content": TURN1_CONVENTIONS})
+                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
             if status != 202:
                 fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
             await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 1")
-            status, detail = await arequest(base, "GET", f"/api/sessions/{session_id}", key)
+            status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
             if status != 200:
                 fail(f"leg {spec.name}: session read failed: {status} {detail}")
             native1 = detail.get("cc_session_id")
@@ -546,7 +546,7 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
         # -- the switch(es) ---------------------------------------------------
         for target in spec.route[1:]:
             status, switched = await arequest(
-                base, "POST", f"/api/sessions/{session_id}/backend", key, {"backend": target})
+                base, key, "POST", f"/api/sessions/{session_id}/backend", {"backend": target})
             if status != 200:
                 fail(f"leg {spec.name}: switch to {target} failed: {status} {switched}")
             log(f"[{spec.name}] switched to {target}")
@@ -555,7 +555,7 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
         if spec.kind == "v2":
             known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
             status, posted = await arequest(
-                base, "POST", f"/api/chat/{session_id}/message", key, {"content": TURN2_TASK})
+                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
             if status != 202:
                 fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
             run2_id, run2, outcome2 = await wait_v2_run(session_id, known, f"{spec.name} turn 2")
@@ -572,11 +572,11 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
                 e for e in events_before
                 if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
             status, posted = await arequest(
-                base, "POST", f"/api/chat/{session_id}/message", key, {"content": TURN2_TASK})
+                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
             if status != 202:
                 fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
             await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 2")
-            status, detail = await arequest(base, "GET", f"/api/sessions/{session_id}", key)
+            status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
             if status != 200:
                 fail(f"leg {spec.name}: session read failed: {status} {detail}")
             native2 = detail.get("cc_session_id")

@@ -115,7 +115,7 @@ async def click(cdp: CDP, session_id: str, selector: str) -> None:
                    f" if (!el) throw new Error('missing element ' + {json.dumps(selector)}); el.click(); }})()")
 
 
-async def click_button_by_text(cdp: CDP, session_id: str, text: str, scope: str = "body") -> None:
+async def click_button_by_text(cdp: CDP, session_id: str, text: str, scope: str) -> None:
     expr = (f"(() => {{ const root = document.querySelector({json.dumps(scope)});"
             f" const btn = [...root.querySelectorAll('button')].find(b => b.textContent.trim() ==="
             f" {json.dumps(text)}); if (!btn) throw new Error('missing button ' + {json.dumps(text)});"
@@ -229,7 +229,7 @@ MOTION_TIMELINE_SNIPPET = """
 
 
 async def wait_motion_live(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
-                           timeout: float = 15.0) -> None:
+                           timeout: float) -> None:
     """Bounded wait until both cues' first animation instance is actually running.
 
     A freshly rendered row reports its animationName before any animation

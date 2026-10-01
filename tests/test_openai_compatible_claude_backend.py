@@ -32,7 +32,7 @@ def _option(**overrides: Any) -> Any:
   return backend_option(**base)
 
 
-def _cfg(option: Any | None = None) -> CharlieBotConfig:
+def _cfg(option: Any | None) -> CharlieBotConfig:
   return CharlieBotConfig(server={"port": 8123}, backends={"options": [option or _option()]})
 
 

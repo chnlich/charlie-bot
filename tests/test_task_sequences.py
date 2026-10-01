@@ -59,8 +59,7 @@ async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> Non
       manager.id, event_type=ET.USER, content="Take off. Run the improve loop.", actor="user")
 
 
-async def _start_loop(
-    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
+async def _start_loop(cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, *, wait_effect):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})

@@ -2157,8 +2157,8 @@ def inject_chat_append_fault(
 def inject_run_record_write_fault(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    only_finished: bool = True,
-    times: int = 1,
+    only_finished: bool,
+    times: int,
     err: int = errno.ENOSPC,
     on_raise: Callable[[], None] | None = None,
 ) -> list[bool]:

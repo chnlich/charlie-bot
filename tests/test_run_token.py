@@ -23,7 +23,7 @@ from src.core.run_token import (
 from src.core.takeoff_gate import check_takeoff_gate_for_task
 
 
-def _scope(headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> dict:
+def _scope(headers: dict[str, str] | None, cookies: dict[str, str] | None) -> dict:
   raw_headers: list[tuple[bytes, bytes]] = []
   for name, value in (headers or {}).items():
     raw_headers.append((name.lower().encode(), value.encode()))

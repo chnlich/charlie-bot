@@ -78,7 +78,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   cfg, session_mgr, tree = build_env(tmp_path)
   thread_mgr = ThreadManager(cfg)
 
-  async def manager(name: str, request_id: str, group: str | None = None):
+  async def manager(name: str, request_id: str, group: str | None):
     node = await create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
     if group is not None:
       node.group = group

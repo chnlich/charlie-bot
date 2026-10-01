@@ -269,7 +269,7 @@ def test_preview_gate_refuses_disabled_mutations_and_passes_the_rest() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _cli_env(source: Path, *, strip_launcher: bool = False, launcher_dir: Path | None = None) -> dict:
+def _cli_env(source: Path, *, strip_launcher: bool, launcher_dir: Path | None) -> dict:
   env = dict(os.environ.items())
   env["CHARLIEBOT_HOME"] = str(source)
   env["PYTHONUNBUFFERED"] = "1"

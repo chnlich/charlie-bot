@@ -10,6 +10,7 @@ import pytest
 from src.api import pages
 from src.core import trace_merge, trace_merge_child
 from src.core.trace_merge import NotATraceError, merge_traces
+from tests.core.test_multi_trace_merge import _write_pretty_trace
 
 REPO_ROOT = str(Path(pages.__file__).resolve().parents[2])
 
@@ -91,38 +92,13 @@ def test_route_build_maps_the_child_exits_back(tmp_path: Path) -> None:
     pages._build_single_trace_merge([manifest], tmp_path / "no.json.gz", slim=False)
 
 
-def _write_pretty_trace(path: Path, events_per_pid: int) -> None:
-  """A pretty trace whose identities span any chunk split: labels away from their pid's events."""
-  trace: dict = {"traceEvents": [], "deviceProperties": [{"gpu": 0}]}
-  events = trace["traceEvents"]
-  events.append({"ph": "M", "name": "process_labels", "pid": 7, "args": {"labels": "GPU 3"}})
-  for index in range(events_per_pid):
-    events.append(
-        {
-            "ph": "X",
-            "pid": 7,
-            "tid": index % 2,
-            "ts": index,
-            "name": "span",
-            "id": f"f{index % 3}",
-            "args": {
-                "stream": 1
-            }
-        })
-    events.append({"ph": "s", "pid": 7, "tid": "1", "ts": index, "name": "flow", "id": index % 3})
-  events.append({"ph": "X", "pid": 7, "tid": 9, "ts": 10_200, "name": "late span"})
-  events.append({"ph": "M", "name": "process_labels", "pid": 7, "args": {"labels": "GPU 4"}})
-  events.append({"ph": "X", "pid": "7", "tid": 1, "ts": 10_000, "name": "str-pid span"})
-  path.write_text(json.dumps(trace, indent=2), encoding="utf-8")
-
-
 # The real sequential build runs the full merge path per output; measured
 # 1.01-1.13s across runs, past the 2s unit budget under host load.
 @pytest.mark.integration
 def test_chunked_build_serves_the_sequential_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The chunked path must ship the sequential build's exact bytes; a drifted synthetic id diverges."""
   trace = tmp_path / "trace_rank0.json"
-  _write_pretty_trace(trace, events_per_pid=120)
+  _write_pretty_trace(trace, 0, 120)
   plain, sequential, slim, slim_sequential = (
       tmp_path / n
       for n in ("chunked.json.gz", "sequential.json.gz", "chunked-slim.json.gz", "sequential-slim.json.gz"))

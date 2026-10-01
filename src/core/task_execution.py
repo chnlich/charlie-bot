@@ -230,6 +230,26 @@ def capture_prompt_chain(
   return tuple(chain), meta.node_prompt_ref
 
 
+async def _capture_chain_under_control_lock(
+    tree: TaskTreeManager,
+    meta: SessionMetadata,
+) -> tuple[tuple[tuple[str, str | None], ...], str | None, SessionMetadata]:
+  """Reload *meta* and capture its prompt chain inside one control-lock hold.
+
+  The index build, the meta reload, and the ancestor walk are one unit: the
+  chain is only coherent with the body the caller builds from the returned
+  meta when all three share the same lock hold. A task that vanished
+  mid-assembly fails loud instead of assembling from a half-deleted node.
+  """
+  async with tree.control_lock:
+    index = await tree._get_index()
+    fresh_meta = await tree.load_meta(meta.id)
+    if fresh_meta is None:
+      raise TaskNotFoundError(f"task {meta.id} vanished during prompt assembly")
+    chain, node_ref = capture_prompt_chain(tree, index, fresh_meta)
+    return chain, node_ref, fresh_meta
+
+
 async def assemble_coherent_snapshot(
     cfg: CharlieBotConfig,
     tree: TaskTreeManager,
@@ -251,12 +271,7 @@ async def assemble_coherent_snapshot(
   snapshot: PromptSnapshot | None = None
   overlay_error: OSError | None = None
   for _ in range(task_prompts._COHERENCE_PASSES):
-    async with tree.control_lock:
-      index = await tree._get_index()
-      fresh_meta = await tree.load_meta(meta.id)
-      if fresh_meta is None:
-        raise TaskNotFoundError(f"task {meta.id} vanished during prompt assembly")
-      chain, node_ref = capture_prompt_chain(tree, index, fresh_meta)
+    chain, node_ref, fresh_meta = await _capture_chain_under_control_lock(tree, meta)
     built, err = await asyncio.to_thread(
         task_prompts.build_segments, cfg, fresh_meta, kind, overlay=overlay, chain=chain, node_ref=node_ref)
     candidate = task_prompts.assemble_snapshot(built)
@@ -267,12 +282,7 @@ async def assemble_coherent_snapshot(
         task_prompts.build_segments, cfg, fresh_meta, kind, overlay=overlay, chain=chain, node_ref=node_ref)
     if candidate.to_json_dict() != task_prompts.assemble_snapshot(rebuilt).to_json_dict():
       continue
-    async with tree.control_lock:
-      index = await tree._get_index()
-      fresh_meta = await tree.load_meta(meta.id)
-      if fresh_meta is None:
-        raise TaskNotFoundError(f"task {meta.id} vanished during prompt assembly")
-      chain2, node_ref2 = capture_prompt_chain(tree, index, fresh_meta)
+    chain2, node_ref2, _ = await _capture_chain_under_control_lock(tree, meta)
     if (chain2, node_ref2) != (chain, node_ref):
       continue  # a rule/ancestor moved: rebuild from the new view
     snapshot, overlay_error = candidate, (err or err2)

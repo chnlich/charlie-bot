@@ -190,7 +190,12 @@ def parse_ndjson_file(path: Path) -> list[dict]:
   return parse_ndjson_events(path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
 
 
-def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any]) -> list[dict]:
+def parse_ndjson_events(
+    path: Path,
+    *,
+    log_event: str,
+    log_fields: dict[str, Any],
+    parse_filter: HeadProvableFilter | None = None) -> list[dict]:
   """Whole-file read+parse with the caller's skip label and fields.
 
   One zero-copy mmap pass: lines are memoryview slices of the mapping riding
@@ -200,7 +205,11 @@ def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any
   whole-file parse and the windowed readers disagree on nothing. The mapping
   is safe against the writers because they only ever append (an archive
   rewrite publishes through ``os.replace`` onto a new inode); a writer that
-  truncated a mapped file would SIGBUS the parse instead.
+  truncated a mapped file would SIGBUS the parse instead. *parse_filter*
+  drops lines before their parse: the same class the from-the-end walk
+  takes, because only a head-provable verdict answers from the line's first
+  ``HEAD_PROOF_BYTES`` bytes — a rejected multi-MB line costs the probe,
+  never its bytes.
   """
   if not path.exists():
     return []
@@ -212,7 +221,8 @@ def parse_ndjson_events(path: Path, *, log_event: str, log_fields: dict[str, Any
       return []
     return [
         event for line in _iter_mmap_lines(mm, size)
-        if (event := parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)) is not None
+        if (parse_filter is None or parse_filter(bytes(line[:HEAD_PROOF_BYTES]))) and
+        (event := parse_ndjson_line(line, log_event=log_event, log_fields=log_fields)) is not None
     ]
 
 
@@ -329,11 +339,13 @@ def parse_ndjson_tail(path: Path, limit: int) -> tuple[list[dict], int, bool]:
   return events, total, has_more
 
 
-# Bound, in bytes, on the head probe a head-provable filter reads in the
-# from-the-end walk. Every event type the repo writes proves within it; a
-# longer name defeats the proof and parses, the conservative direction the
-# filter's contract already takes for every shape it cannot read.
-_HEAD_PROOF_BYTES = 256
+# Bound, in bytes, on the head probe a head-provable filter reads. Every
+# event type the repo writes proves within it; a longer name defeats the
+# proof and parses, the conservative direction the filter's contract already
+# takes for every shape it cannot read. Both walkers hand the filter this
+# bound: the from-the-end walk per line, the forward whole-file parse in
+# parse_ndjson_events.
+HEAD_PROOF_BYTES = 256
 
 
 def _parse_mapped_line(
@@ -391,7 +403,7 @@ def iter_ndjson_events_from_end(
         if event is not None:
           yield event
       elif head_filter is not None:
-        head = bytes(memoryview(mm)[start:min(start + _HEAD_PROOF_BYTES, pos)])
+        head = bytes(memoryview(mm)[start:min(start + HEAD_PROOF_BYTES, pos)])
         if head_filter(head):
           event = _parse_mapped_line(mm, start, pos, log_event=log_event, log_fields=log_fields)
           if event is not None:
@@ -437,7 +449,7 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
   whitespace before the object, a value the head walk cannot read — returns
   True and parses: the filter skips only what it can prove. The from-the-end
   walk may pass a bounded head probe (the line's first
-  ``_HEAD_PROOF_BYTES`` bytes); the probe opens with the line's own first
+  ``HEAD_PROOF_BYTES`` bytes); the probe opens with the line's own first
   bytes, so the proof reads identically, and a probe without the closing
   quote parses.
   """

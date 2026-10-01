@@ -41,7 +41,7 @@ from src.core.control_events import ACTOR_SYSTEM, ControlEventSink, build_contro
 from src.core.json_utils import atomic_write_text
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import RunRecord, ensure_utc, utc_now
-from src.core.ndjson import parse_ndjson_file, parse_ndjson_line
+from src.core.ndjson import HeadProvableFilter, parse_ndjson_events, parse_ndjson_file, parse_ndjson_line
 from src.core.run_token import b64url_decode, b64url_encode
 from src.core.session_aliases import SessionAliasStore
 from src.core.sidebar_state import mark_sidebar_dirty
@@ -320,14 +320,25 @@ def select_error_hint(error_messages: list[str], stderr_text: str) -> str | None
   return cleaned[:_STDERR_HINT_MAX_CHARS] or None
 
 
-def project_raw_file(raw_path: Path, translate: Callable[[dict], list[dict]]) -> list[dict]:
+def project_raw_file(
+    raw_path: Path,
+    translate: Callable[[dict], list[dict]],
+    line_filter: HeadProvableFilter | None = None) -> list[dict]:
   """Whole-file projection: read, parse, and project one raw log.
 
   ``translate`` must be fresh (see project_raw_events). The scan is a full
-  read+parse of the log's bytes, so event-loop callers reach it through
-  asyncio.to_thread.
+  read of the log's bytes, so event-loop callers reach it through
+  asyncio.to_thread. A *line_filter* (a HeadProvableFilter, the only filter
+  whose verdict a bounded head probe can answer) bounds the parse to the
+  lines its keep-set names and rides the mapped walk, so a rejected line
+  costs its 256-byte probe instead of its bytes and no whole-file copy
+  precedes the walk; the unfiltered scan keeps the read-bytes shape its
+  existing callers measure.
   """
-  return project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+  if line_filter is None:
+    return project_raw_events(parse_raw_lines(raw_path.read_bytes()), translate)
+  return project_raw_events(
+      parse_ndjson_events(raw_path, log_event="raw_line_not_json", log_fields={}, parse_filter=line_filter), translate)
 
 
 def scan_result_exit(

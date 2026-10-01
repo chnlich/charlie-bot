@@ -162,6 +162,11 @@ _SEARCH_MATCH_MEMO_LIMIT = 8
 # stays bounded instead of scaling with the chat file's size, which would stall
 # the event loop for every other request.
 _SEARCH_CHUNK_SIZE = 1 << 18
+# Chat files whose classification demanded bytes ride one thread-pool task per
+# this many files: the hand-off (context copy, queue round-trip) is per-task
+# work the pool's threads serialize on, and a batch keeps the one-read-per-
+# worker overlap the per-file shape already had.
+_SEARCH_SCAN_BATCH_FILES = 8
 # The raw-byte scan's case fold: A-Z to a-z, every other byte identity. UTF-8
 # never encodes a non-ASCII codepoint below 0x80, so for an ASCII needle this
 # fold sees exactly the ASCII letters the decoded text's str.lower() sees,
@@ -1626,23 +1631,39 @@ class SessionManager:
 
     scan_failures = 0
 
-    async def _check_content(
-        meta: SessionMetadata, path: Path, sig: tuple[int, int, int], start: int) -> SessionMetadata | None:
-      """Read a chat file whose classification demanded bytes (thread-pool work)."""
+    async def _check_content_batch(
+        batch: list[tuple[SessionMetadata, Path, tuple[int, int, int], int]]) -> list[SessionMetadata | None]:
+      """Read a batch of chat files whose classification demanded bytes, one
+      thread-pool task for the batch.
+
+      One task per file paid the hand-off 755 times over the active corpus
+      (manager-level pooled scan 0.53 s against 0.43 s single-thread); one
+      task per batch keeps the pool's one-read-per-worker overlap while paying
+      the hand-off once per batch (measured 0.48-0.49 s at batches of 8-16,
+      interleaved against the per-file shape). Verdicts stay per-file, so the
+      memoization below is unchanged.
+      """
       nonlocal scan_failures
-      verdict = await asyncio.to_thread(_scan_content_for_hit, path, meta.id, query_lower, start)
-      if verdict is None:
-        scan_failures += 1
-        return None  # errored scan proves no absence, so nothing is memoized
-      if verdict:
-        self._memoize_search_hit(str(path), sig, query_lower)
-        return meta
-      self._memoize_search_miss(str(path), sig, query_lower)
-      return None
+      verdicts = await asyncio.to_thread(
+          lambda: [_scan_content_for_hit(path, meta.id, query_lower, start) for meta, path, _, start in batch])
+      out: list[SessionMetadata | None] = []
+      for (meta, path, sig, _), verdict in zip(batch, verdicts, strict=True):
+        if verdict is None:
+          scan_failures += 1
+          out.append(None)  # errored scan proves no absence, so nothing is memoized
+        elif verdict:
+          self._memoize_search_hit(str(path), sig, query_lower)
+          out.append(meta)
+        else:
+          self._memoize_search_miss(str(path), sig, query_lower)
+          out.append(None)
+      return out
 
     scanned_hits = await asyncio.gather(
-        *(_check_content(meta, path, sig, start) for meta, path, sig, start in read_jobs))
-    content_hits = proven_hits + [meta for meta in scanned_hits if meta is not None]
+        *(
+            _check_content_batch(read_jobs[at:at + _SEARCH_SCAN_BATCH_FILES])
+            for at in range(0, len(read_jobs), _SEARCH_SCAN_BATCH_FILES)))
+    content_hits = proven_hits + [meta for batch in scanned_hits for meta in batch if meta is not None]
     rows = matches[:_SEARCH_RESULT_LIMIT] + content_hits
     rows.sort(key=lambda meta: meta.updated_at, reverse=True)
     rows = rows[:_SEARCH_RESULT_LIMIT]

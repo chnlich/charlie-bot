@@ -6,7 +6,7 @@ import inspect
 import io
 import json
 import time
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -330,37 +330,22 @@ async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identi
     log.exception("crash_recovery_failed")
 
 
-async def _run_slack_backfill(cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
-  """Report Slack summons lost across the restart, once recovery has had its chance.
+async def _run_backfill(
+    cfg: CharlieBotConfig,
+    session_mgr: SessionManager,
+    recovery_task: asyncio.Task,
+    backfill_lost_summons: Callable[[CharlieBotConfig, SessionManager], Awaitable[int]],
+    platform: str,
+) -> None:
+  """Report one platform's summons lost across the restart, once recovery has had its chance.
 
   Waits on the crash-recovery task first so re-attach and the user-message
   replay have already answered everything they can; whatever is still
   unanswered after that is genuinely lost and gets a notice in its thread.
   """
-  from src.core.slack_listener import (
-      backfill_lost_summons,  # lazy: avoids import cycle at module scope
-  )
-
   await recovery_task
   reported = await backfill_lost_summons(cfg, session_mgr)
-  log.info("slack_backfill_done", count=reported)
-
-
-async def _run_discord_backfill(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, recovery_task: asyncio.Task) -> None:
-  """Report Discord summons lost across the restart, once recovery has had its chance.
-
-  Waits on the crash-recovery task first so re-attach and the user-message
-  replay have already answered everything they can; whatever is still
-  unanswered after that is genuinely lost and gets a notice in its thread.
-  """
-  from src.core.discord_listener import (
-      backfill_lost_summons,  # lazy: avoids import cycle at module scope
-  )
-
-  await recovery_task
-  reported = await backfill_lost_summons(cfg, session_mgr)
-  log.info("discord_backfill_done", count=reported)
+  log.info(f"{platform}_backfill_done", count=reported)
 
 
 @asynccontextmanager
@@ -465,28 +450,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     slack_listener_task = None
     creds = get_credentials()
     if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
-      from src.core.slack_listener import (
-          run_listener,  # lazy: avoids import cycle at module scope
+      from src.core.slack_listener import (  # lazy: avoids import cycle at module scope
+          backfill_lost_summons,
+          run_listener,
       )
 
       slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
       app.state.slack_listener_task = slack_listener_task
       app.state.slack_backfill_task = create_logged_task(
-          _run_slack_backfill(cfg, session_mgr, app.state.recovery_task), name="slack-backfill")
+          _run_backfill(cfg, session_mgr, app.state.recovery_task, backfill_lost_summons, "slack"),
+          name="slack-backfill")
       log.info("slack_entrypoint_started")
     else:
       log.info("slack_entrypoint_off")
 
     discord_listener_task = None
     if creds.get("discord", "bot_token") and cfg.discord.allowed_users:
-      from src.core.discord_listener import (
-          run_listener,  # lazy: avoids import cycle at module scope
+      from src.core.discord_listener import (  # lazy: avoids import cycle at module scope
+          backfill_lost_summons,
+          run_listener,
       )
 
       discord_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="discord-listener")
       app.state.discord_listener_task = discord_listener_task
       app.state.discord_backfill_task = create_logged_task(
-          _run_discord_backfill(cfg, session_mgr, app.state.recovery_task), name="discord-backfill")
+          _run_backfill(cfg, session_mgr, app.state.recovery_task, backfill_lost_summons, "discord"),
+          name="discord-backfill")
       log.info("discord_entrypoint_started")
     else:
       log.info("discord_entrypoint_off")

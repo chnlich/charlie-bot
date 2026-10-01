@@ -738,77 +738,78 @@ DESKTOP_CAPTURE_FLAGS = [
 
 
 def launch_chrome(chrome: str, profile: Path, debug_port: int, flags: list[str]) -> subprocess.Popen:
-    """Start headless chrome with a CDP endpoint and a private profile; return the process.
+  """Start headless chrome with a CDP endpoint and a private profile; return the process.
 
     The caller owns the returned process: terminate and reap it when the run
     ends. *flags* carries the harness's own switches (window size, throttling
     bans); the launch sandwich around them - headless mode, the debug port,
     the profile, the start URL - is the one shared shape.
     """
-    return subprocess.Popen(
-        [chrome, "--headless=new", f"--remote-debugging-port={debug_port}",
-         f"--user-data-dir={profile}", *flags, "about:blank"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+  return subprocess.Popen(
+      [
+          chrome, "--headless=new", f"--remote-debugging-port={debug_port}", f"--user-data-dir={profile}", *flags,
+          "about:blank"
+      ],
+      stdout=subprocess.DEVNULL,
+      stderr=subprocess.PIPE)
 
 
 def resolve_chrome(explicit: str | None, fail: Callable[[str], None]) -> str:
-    """Resolve the chrome binary a harness drives: --chrome wins, then the two
+  """Resolve the chrome binary a harness drives: --chrome wins, then the two
     google-chrome installs. *fail* is the caller's own failure exit (the
     devtools_ws_url convention), so the refusal keeps the harness's prefix.
     """
-    chrome = explicit or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
-    if not chrome:
-        fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
-    return chrome
+  chrome = explicit or shutil.which("google-chrome") or shutil.which("google-chrome-stable")
+  if not chrome:
+    fail("google-chrome is not installed; install it or pass --chrome (no fake output)")
+  return chrome
 
 
-async def devtools_ws_url(chrome_proc: subprocess.Popen, timeout_s: float,
-                          fail: Callable[[str], None]) -> str:
-    """Read chrome's stderr until the DevTools websocket endpoint appears.
+async def devtools_ws_url(chrome_proc: subprocess.Popen, timeout_s: float, fail: Callable[[str], None]) -> str:
+  """Read chrome's stderr until the DevTools websocket endpoint appears.
 
     *fail* is the caller's own failure exit, so each harness keeps its
     message prefix and exit code. The captured stderr tail rides the failure
     message: a chrome that exits before announcing its endpoint explains
     itself there.
     """
-    stderr_lines: list[str] = []
-    ws_url = None
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline and ws_url is None:
-        line = chrome_proc.stderr.readline().decode(errors="replace")
-        if not line:
-            break  # EOF: chrome exited, so no endpoint is coming
-        stderr_lines.append(line)
-        if "DevTools listening on ws://" in line:
-            ws_url = line.strip().split()[-1]
-    if ws_url is None:
-        fail("chrome devtools endpoint did not come up: " + "".join(stderr_lines[-5:]))
-    return ws_url
+  stderr_lines: list[str] = []
+  ws_url = None
+  deadline = time.monotonic() + timeout_s
+  while time.monotonic() < deadline and ws_url is None:
+    line = chrome_proc.stderr.readline().decode(errors="replace")
+    if not line:
+      break  # EOF: chrome exited, so no endpoint is coming
+    stderr_lines.append(line)
+    if "DevTools listening on ws://" in line:
+      ws_url = line.strip().split()[-1]
+  if ws_url is None:
+    fail("chrome devtools endpoint did not come up: " + "".join(stderr_lines[-5:]))
+  return ws_url
 
 
 async def connect_cdp(ws_url: str) -> CDP:
-    """Open the browser websocket, wrap it in CDP, and settle before the first send."""
-    import websockets
+  """Open the browser websocket, wrap it in CDP, and settle before the first send."""
+  import websockets
 
-    ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
-    cdp = CDP(ws)
-    await asyncio.sleep(0.3)
-    return cdp
+  ws = await websockets.connect(ws_url, max_size=50 * 1024 * 1024)
+  cdp = CDP(ws)
+  await asyncio.sleep(0.3)
+  return cdp
 
 
 async def open_cdp_page(cdp: CDP, domains: tuple[str, ...]) -> tuple[str, str]:
-    """Create one blank page target, attach flattened, enable *domains*.
+  """Create one blank page target, attach flattened, enable *domains*.
 
     Returns (session_id, target_id): the session id drives the page's CDP
     calls; the target id is what closes the page again (Target.closeTarget).
     """
-    target = await cdp.send("Target.createTarget", {"url": "about:blank"})
-    attached = await cdp.send("Target.attachToTarget",
-                              {"targetId": target["targetId"], "flatten": True})
-    session_id = attached["sessionId"]
-    for domain in domains:
-        await cdp.send(f"{domain}.enable", session_id=session_id)
-    return session_id, target["targetId"]
+  target = await cdp.send("Target.createTarget", {"url": "about:blank"})
+  attached = await cdp.send("Target.attachToTarget", {"targetId": target["targetId"], "flatten": True})
+  session_id = attached["sessionId"]
+  for domain in domains:
+    await cdp.send(f"{domain}.enable", session_id=session_id)
+  return session_id, target["targetId"]
 
 
 # ---------------------------------------------------------------------------
@@ -817,7 +818,7 @@ async def open_cdp_page(cdp: CDP, domains: tuple[str, ...]) -> tuple[str, str]:
 
 
 class Results:
-    """The browser evidence file: per-scenario rows, console errors, and the run's provenance.
+  """The browser evidence file: per-scenario rows, console errors, and the run's provenance.
 
     ``record`` accumulates the scenario rows in call order; ``save`` writes the
     run's one JSON evidence file. ``entry_point`` and ``invocation`` are
@@ -825,41 +826,55 @@ class Results:
     what ran omits both.
     """
 
-    def __init__(self, evidence_dir: Path, commit: str, *, browser: str, results_name: str,
-                 entry_point: str | None = None, invocation: list[str] | None = None) -> None:
-        self.evidence_dir = evidence_dir
-        self.commit = commit
-        self.browser = browser
-        self.results_name = results_name
-        self.entry_point = entry_point
-        self.invocation = invocation
-        self.scenarios: list[dict] = []
-        self.console_errors: list[str] = []
+  def __init__(
+      self,
+      evidence_dir: Path,
+      commit: str,
+      *,
+      browser: str,
+      results_name: str,
+      entry_point: str | None = None,
+      invocation: list[str] | None = None) -> None:
+    self.evidence_dir = evidence_dir
+    self.commit = commit
+    self.browser = browser
+    self.results_name = results_name
+    self.entry_point = entry_point
+    self.invocation = invocation
+    self.scenarios: list[dict] = []
+    self.console_errors: list[str] = []
 
-    def record(self, name: str, ok: bool, detail: str, screenshot: str | None) -> None:
-        self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
-        log(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
+  def record(self, name: str, ok: bool, detail: str, screenshot: str | None) -> None:
+    self.scenarios.append({"name": name, "ok": ok, "detail": detail, "screenshot": screenshot})
+    log(f"  [{'PASS' if ok else 'FAIL'}] {name}: {detail}")
 
-    def save(self) -> None:
-        payload: dict = {
-            "tested_commit": self.commit,
-            "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "browser": self.browser,
-        }
-        if self.entry_point is not None:
-            payload["entry_point"] = self.entry_point
-        if self.invocation is not None:
-            payload["invocation"] = self.invocation
-        payload["scenarios"] = self.scenarios
-        payload["console_errors"] = self.console_errors
-        out = self.evidence_dir / self.results_name
-        out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        log(f"results written to {out}")
+  def save(self) -> None:
+    payload: dict = {
+        "tested_commit": self.commit,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "browser": self.browser,
+    }
+    if self.entry_point is not None:
+      payload["entry_point"] = self.entry_point
+    if self.invocation is not None:
+      payload["invocation"] = self.invocation
+    payload["scenarios"] = self.scenarios
+    payload["console_errors"] = self.console_errors
+    out = self.evidence_dir / self.results_name
+    out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    log(f"results written to {out}")
 
 
-def api_request(base: str, key: str, method: str, path: str, body: dict | None = None,
-                *, timeout: float, token: str | None = None) -> tuple[int, dict]:
-    """One real HTTP API call from a SEPARATE authenticated client.
+def api_request(
+    base: str,
+    key: str,
+    method: str,
+    path: str,
+    body: dict | None = None,
+    *,
+    timeout: float,
+    token: str | None = None) -> tuple[int, dict]:
+  """One real HTTP API call from a SEPARATE authenticated client.
 
     This is the cross-client creator of the creation-visibility scenarios: the
     operator access key (or a scoped agent run token) rides the Authorization
@@ -867,17 +882,17 @@ def api_request(base: str, key: str, method: str, path: str, body: dict | None =
     bounds one call. A 2xx body must be JSON; an error response's empty body
     parses as {}.
     """
-    headers = {"Authorization": "Bearer " + (token or key)}
-    data = None
-    if body is not None:
-        headers["Content-Type"] = "application/json"
-        data = json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, json.loads(resp.read().decode())
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode() or "{}")
+  headers = {"Authorization": "Bearer " + (token or key)}
+  data = None
+  if body is not None:
+    headers["Content-Type"] = "application/json"
+    data = json.dumps(body).encode("utf-8")
+  req = urllib.request.Request(base + path, data=data, headers=headers, method=method)
+  try:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+      return resp.status, json.loads(resp.read().decode())
+  except urllib.error.HTTPError as e:
+    return e.code, json.loads(e.read().decode() or "{}")
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:

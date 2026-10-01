@@ -263,6 +263,17 @@ async def test_readonly_store_reads_without_a_control_lock(tmp_path: Path) -> No
   refusal = run_identity_refusal(store.read_run_sync(session_id, run_id), store.load_events_sync(session_id))
   assert refusal == RUN_IDENTITY_UNKNOWN_DETAIL
 
+  # The run-scoped CLI path reads the same record without the model stack; both
+  # readers agree on the fields the refusal predicate consumes, and on absence.
+  from src.core.run_identity import read_run_identity_sync, run_scoped_refusal
+  identity = read_run_identity_sync(store.metadata_path(session_id, run_id))
+  record = store.read_run_sync(session_id, run_id)
+  assert identity == (record.id, record.pid, record.pid_start)
+  assert read_run_identity_sync(store.metadata_path(session_id, "no-such-run")) is None
+  assert run_scoped_refusal(
+      store._sessions_dir, session_id, "no-such-run") == "run token does not reference an active run"
+  assert run_scoped_refusal(store._sessions_dir, session_id, run_id) == "run token does not reference an active run"
+
   # The lockless store is read-only by contract: a write path fails loud.
   with pytest.raises(TypeError):
     await store.register_run(RunRecord(id="r2", session_id=session_id))

@@ -38,12 +38,11 @@ def row_bands(img, x0, x1, y0, y1):
         current = [y, y]
       else:
         current[1] = y
-    else:
-      # A gap of >=3 dark rows ends a band (glyph gaps inside a line are 1-2px).
-      if current is not None and y - current[1] >= 3:
-        if current[1] - current[0] >= 6:  # a text line is ~10-14px tall
-          bands.append(tuple(current))
-        current = None
+    # A gap of >=3 dark rows ends a band (glyph gaps inside a line are 1-2px).
+    elif current is not None and y - current[1] >= 3:
+      if current[1] - current[0] >= 6:  # a text line is ~10-14px tall
+        bands.append(tuple(current))
+      current = None
   if current is not None and current[1] - current[0] >= 6:
     bands.append(tuple(current))
   return bands

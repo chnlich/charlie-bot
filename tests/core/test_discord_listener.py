@@ -234,7 +234,7 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_cit
     await _drain(tasks)
 
   events = session_mgr.load_chat_events_sync(sid)
-  content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
+  content = next(ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE)["content"]
   scope = (ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
   red_line = (ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
   reply_format = (ROOT / "prompts" / "thread_reply_format.md").read_text(encoding="utf-8").strip()

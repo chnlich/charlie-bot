@@ -649,17 +649,16 @@ class TaskExecutionAdapter:
           reason = f"run {run_id} has a durable stop request"
           log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
           withheld = (meta, run, reason)
-        else:
-          # Trade-off 1: worker-class runs are the write-heavy launches
-          # (environment installs, test runs) — below the configured free-space
-          # floor they stay queued with a blocked report instead of dying
-          # mid-run. Manager turns always launch: they write little and are the
-          # path that reports the shortage.
-          if meta.profile == "worker" and run.kind in WORKER_KINDS:
-            reason = self._disk_headroom_withhold_reason()
-            if reason is not None:
-              log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
-              withheld = (meta, run, reason)
+        # Trade-off 1: worker-class runs are the write-heavy launches
+        # (environment installs, test runs) — below the configured free-space
+        # floor they stay queued with a blocked report instead of dying
+        # mid-run. Manager turns always launch: they write little and are the
+        # path that reports the shortage.
+        elif meta.profile == "worker" and run.kind in WORKER_KINDS:
+          reason = self._disk_headroom_withhold_reason()
+          if reason is not None:
+            log.info("run_launch_withheld", session_id=session_id, run_id=run_id, reason=reason)
+            withheld = (meta, run, reason)
     if withheld is not None:
       meta, run, reason = withheld
       return await self._record_launch_withheld(meta, run, reason)

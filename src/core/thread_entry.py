@@ -1,7 +1,7 @@
 """Platform-neutral shared-thread core.
 
-The shared thread feature exists once per chat platform (Slack today, Discord
-next): a summon starts a session bound to one thread, the round answers into
+The shared thread feature exists once per chat platform (Slack and Discord
+today): a summon starts a session bound to one thread, the round answers into
 that thread, and the audit keeps summon and reply consistent across restarts.
 This module holds what every platform shares: the platform description
 (``ThreadPlatform``), the pure helpers, the adapter surface both the summon
@@ -18,9 +18,9 @@ ack (``ack_messages``), the round-end audit (``deliver_done`` over
 The follow side wakes its session whatever the session's stored status: an
 archived thread session is revived first (unarchived, logged, its task-tree
 change broadcast), so any eligible thread message brings the session back to
-the sidebar's Threads view. The per-platform entrypoint
-(``src.core.slack_listener`` today) describes its platform with one
-``ThreadPlatform`` instance built from its own constants and
+the sidebar's Threads view. Each per-platform entrypoint
+(``src.core.slack_listener``, ``src.core.discord_listener``) describes its
+platform with one ``ThreadPlatform`` instance built from its own constants and
 hands platform plus adapter to these functions. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
@@ -64,8 +64,8 @@ class ThreadPlatform:
   """The per-platform facts the shared helpers and the entrypoint agree on.
 
   ``name`` is the summon event-block key and the prefix of every persisted
-  marker (``slack`` for Slack, ``discord`` later), so the derived keys spell
-  the platform's marker payload keys and ack wire type from one string.
+  marker (``slack`` for Slack, ``discord`` for Discord), so the derived keys
+  spell the platform's marker payload keys and ack wire type from one string.
   ``id_key`` maps one message id to its ordering key: the platform's id sort
   (``str`` for Slack's dotted ts strings, ``int`` for Discord snowflakes).
   """
@@ -86,17 +86,18 @@ class ThreadPlatform:
   scope_doc: str
   follow_trigger_prefix: str
   id_key: Callable[[str], Any]
-  # ``SessionMetadata`` attribute holding the thread origin (``slack_origin``)
-  # and the newest consumed message id (``slack_watermark_ts``): the round
-  # side reads and writes both by these names.
+  # ``SessionMetadata`` attribute holding the thread origin (``slack_origin``,
+  # ``discord_origin``) and the newest consumed message id
+  # (``slack_watermark_ts``, ``discord_watermark_id``): the round side reads
+  # and writes both by these names.
   origin_field: str
   watermark_field: str
-  # The key naming a message id in readbacks and refusals (``ts`` for Slack):
-  # the 412 payload's per-message key, and the ack readback's
-  # ``watermark_<id_label>`` key.
+  # The key naming a message id in readbacks and refusals (``ts`` for Slack,
+  # ``id`` for Discord): the 412 payload's per-message key, and the ack
+  # readback's ``watermark_<id_label>`` key.
   id_label: str
-  # The summon-block key of the mention message (``mention_ts``); a block
-  # without it carries no ack to clear.
+  # The summon-block key of the mention message (``mention_ts`` for Slack,
+  # ``mention_id`` for Discord); a block without it carries no ack to clear.
   mention_key: str
   # The summon-block keys a nudge copies from the summon it re-asks.
   block_keys: tuple[str, ...]

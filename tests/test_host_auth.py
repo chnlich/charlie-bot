@@ -18,16 +18,9 @@ def _iso(moment: datetime) -> str:
 
 
 def _entry(alias: str, hostname: str, **overrides: Any) -> dict:
-  entry = {
-      "alias": alias,
-      "hostname": hostname,
-      "status": None,
-      "detail": "",
-      "last_probe_at": None,
-      "last_change_at": None,
-      "last_ok_at": None,
-      "enrolled_observed_at": None,
-  }
+  # Builds through the production constructor so the fixture's shape is the
+  # shape _merge_hosts writes into the state, not a second copy of it.
+  entry = core._new_entry(alias, hostname)
   entry.update(overrides)
   return entry
 

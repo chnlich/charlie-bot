@@ -612,15 +612,21 @@ class UsageLedger:
   def _upgrade_schema(self) -> None:
     """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
     tables, swap the five token-summing aggregate triggers for bodies that carry it, move
-    the gone-source records' input, bump the rewrite epoch, and stamp.
+    the gone-source records' input, re-price a backfilled aggregate from the table, bump
+    the rewrite epoch, and stamp.
 
     The triggers are dropped and recreated before the move so the update trigger
-    subtracts and re-adds every moved row's aggregate contribution -- after the move the
-    aggregate still equals the table pass. Only records whose source file is gone move: a
-    record whose file remains is re-parsed with the correct split, and an old-code
-    process rewriting its row would put the input back into ``in_fresh`` beside a moved
-    ``in_unsplit`` and count the same input twice. BEGIN IMMEDIATE re-checks the stamp
-    under the write lock, so two processes opening an un-stamped ledger upgrade once.
+    subtracts and re-adds every moved row's aggregate contribution. The re-add only
+    fires for a fresh (group, day) row (``_agg_contribute_sql``), so a moved row sharing
+    its day with another counted record would lose its re-added contribution; the
+    backfill's overwriting upsert then re-prices a backfilled aggregate from the table,
+    and after the move the aggregate equals the table pass again. A never-backfilled
+    aggregate is not served yet -- its one-time backfill prices the same ground truth
+    when it runs. Only records whose source file is gone move: a record whose file
+    remains is re-parsed with the correct split, and an old-code process rewriting its
+    row would put the input back into ``in_fresh`` beside a moved ``in_unsplit`` and
+    count the same input twice. BEGIN IMMEDIATE re-checks the stamp under the write
+    lock, so two processes opening an un-stamped ledger upgrade once.
     """
     self._conn.execute("BEGIN IMMEDIATE")
     try:
@@ -647,6 +653,8 @@ class UsageLedger:
         self._conn.execute(
             f"""UPDATE usage SET in_unsplit = in_fresh, in_fresh = 0
             WHERE {_UPGRADE_MOVE_RECORDS_SQL} AND origin IN ({marks})""", chunk)
+      if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
+        self._conn.execute(_AGG_BACKFILL_SQL)  # re-price the served aggregate (see the docstring)
       self._conn.execute(
           "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
           " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")

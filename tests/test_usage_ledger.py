@@ -843,6 +843,28 @@ def test_upgrade_moves_only_the_gone_source_clc_records(tmp_path):
     assert meta["rewrite_epoch"] == "1"
 
 
+def test_upgrade_reprices_a_shared_group_day(tmp_path):
+  """A moved record can share its (group, day) aggregate row with another counted record:
+  the trigger's re-add fires only for a fresh day row, so the upgrade re-prices the
+  backfilled aggregate from the table and the served rows still equal the table pass."""
+  path = tmp_path / "ledger.sqlite3"
+  here = tmp_path / "here-master.jsonl"
+  here.write_text("{}\n")
+  gone = tmp_path / "gone" / "master.jsonl"
+  rows = [
+      ("master:gone", "native", SOURCE, "model-m", "acct-a", HOST, TS_A, 100, 10, 20, 5, str(gone), TS_A),
+      ("master:here", "native", SOURCE, "model-m", "acct-a", HOST, TS_A, 200, 0, 0, 6, str(here), TS_A),
+  ]
+  _old_ledger(path, rows)
+  with UsageLedger(path) as ledger:
+    stored = {row["record_id"]: row for row in ledger._conn.execute("SELECT * FROM usage")}
+    assert stored["master:gone"]["in_fresh"] == 0 and stored["master:gone"]["in_unsplit"] == 100
+    assert stored["master:here"]["in_fresh"] == 200 and stored["master:here"]["in_unsplit"] == 0
+    served = ledger.model_rows()
+    assert served == _table_pass_rows(ledger)
+  assert [(row.calls, row.in_fresh, row.in_unsplit, row.total) for row in served] == [(2, 200, 100, 341)]
+
+
 def test_reopening_the_upgraded_ledger_changes_no_row(tmp_path):
   """The upgrade is one-time: a ledger already stamped schema '2' opens without touching
   a usage row, an aggregate row, or the meta stamps."""

@@ -4,7 +4,7 @@ Each test drives the real loop over a scripted fake websocket handed out through
 the patched ``_connect``, with the REST client, the MESSAGE_CREATE handler and
 the READY backfill as mocks. The listener's sleeps compress 1000x (a 1 s
 reconnect backoff waits 1 ms, a 30 000 ms heartbeat interval beats every
-30 ms), so every test stays inside the 1 s unit budget on the real wall clock.
+30 ms), so every test stays inside the 2 s unit budget on the real wall clock.
 """
 
 from __future__ import annotations

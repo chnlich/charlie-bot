@@ -1010,8 +1010,9 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
           SpawningScriptedBackend([result_event("reviewed the picks")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The completed close's report wake dispatches the manager's turn (the test
-  # drains it below); script it so no external CLI process starts — the real
-  # spawn sat right on the 1s unit budget and flaked.
+  # drains it below); script it so no external CLI process starts — a real
+  # spawn's process start spends the unit budget's headroom and flakes under
+  # CI jitter.
   _script_manager_turn(monkeypatch, ["report noted"])
   task_cfg = _bound_task(
       "chained",

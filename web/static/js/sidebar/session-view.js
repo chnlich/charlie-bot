@@ -913,21 +913,28 @@ async function createSessionInGroup(group) {
   await createTaskNode(null, group);
 }
 
+// The one create-session POST both entry points make: a scheduled task's born-
+// bound node and a plain task node carry the same body and headers, so the
+// request shape is stated once here. Returns the created session's payload.
+async function createSessionNode(taskParentId, group) {
+  const backendSel = document.getElementById('new-session-backend');
+  const backend = backendSel ? backendSel.value : undefined;
+  const res = await fetch('/api/sessions/', {
+    method: 'POST',
+    headers: JSON_HEADERS,
+    body: JSON.stringify(taskCreateBody(taskParentId, backend, group)),
+  });
+  if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
+  return res.json();
+}
+
 // The group header's clock button: a scheduled task is born bound. The
 // manager node is created in that group first, then the cron editor opens in
 // create mode with the node prefilled as the binding and the task's project
 // set to the group.
 async function createScheduledTaskInGroup(group) {
   try {
-    const backendSel = document.getElementById('new-session-backend');
-    const backend = backendSel ? backendSel.value : undefined;
-    const res = await fetch('/api/sessions/', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(taskCreateBody(null, backend, group)),
-    });
-    if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
-    const node = await res.json();
+    const node = await createSessionNode(null, group);
     if (typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
     openCronAdder({sessionId: node.id, project: group});
   } catch (err) {
@@ -937,15 +944,7 @@ async function createScheduledTaskInGroup(group) {
 
 async function createTaskNode(taskParentId, group) {
   try {
-    const backendSel = document.getElementById('new-session-backend');
-    const backend = backendSel ? backendSel.value : undefined;
-    const res = await fetch('/api/sessions/', {
-      method: 'POST',
-      headers: JSON_HEADERS,
-      body: JSON.stringify(taskCreateBody(taskParentId, backend, group)),
-    });
-    if (!res.ok) throw new Error(`Create session failed: ${res.status}`);
-    const data = await res.json();
+    const data = await createSessionNode(taskParentId, group);
     // The new session must be visible when the list repaints: open its group.
     if (group && typeof Sidebar.expandSessionGroup === 'function') Sidebar.expandSessionGroup(group);
     // The new child must be visible when the list repaints: open its parent.

@@ -81,8 +81,8 @@ def _is_guard_shim_dir(entry: str) -> bool:
   checkout and the imported tree can differ (a worktree-run session inherits
   the launcher's PATH), so any checkout's shim directory matches."""
   resolved = Path(entry).resolve()
-  return (resolved.name == "git_stash_guard" and resolved.parent.name == "agents"
-          and resolved.parent.parent.name == "src")
+  return (
+      resolved.name == "git_stash_guard" and resolved.parent.name == "agents" and resolved.parent.parent.name == "src")
 
 
 def _path_without_guard_shim(raw_path: str) -> str:

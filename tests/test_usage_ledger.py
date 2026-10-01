@@ -15,9 +15,12 @@ import pytest
 
 from src.core.usage_ledger import (
     _MODEL_ROWS_SQL,
+    LedgerRow,
     RecordKind,
     UsageLedger,
     UsageRecord,
+    _fold_grouped_row,
+    _rows_from_accs,
     default_ledger_path,
 )
 
@@ -196,6 +199,129 @@ def test_native_start_survives_an_empty_ts_native_row(tmp_path):
     ledger.record_file(HOST, "/logs/d.jsonl", "sig-d", [dated])
     _rows, starts = ledger.model_rows_with_native_starts()
   assert starts == {SOURCE: "2026-01-11"}
+
+
+def _table_pass_rows(ledger: UsageLedger) -> list[LedgerRow]:
+  """The page rows folded straight from the table pass -- the read's ground truth."""
+  accs = {}
+  for row in ledger._conn.execute(_MODEL_ROWS_SQL):
+    _fold_grouped_row(accs, row)
+  return _rows_from_accs(accs)
+
+
+def test_agg_read_tracks_the_table_through_every_write_shape(tmp_path):
+  """The served rows equal the table pass after each shape the write path produces:
+  a cross-day rewrite, a counted fallback retired by a native session, a fallback born
+  excluded, an excluded row rewritten, an empty-ts row, and a foreign row delete (the
+  module never deletes, but a raw delete must not leave the aggregate behind)."""
+  moved = _record("rec-moved", RecordKind.NATIVE, sessions=("sess-m",), ts=TS_A, output=5)
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-x",), model="model-fb", ts=TS_B, output=7)
+  native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-x",), model="model-native")
+  empty = _record("rec-empty", RecordKind.NATIVE, sessions=("sess-e",), ts="", model="model-empty")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/m.jsonl", "sig-m", [moved, fb, empty])
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+    moved_grown = _record("rec-moved", RecordKind.NATIVE, sessions=("sess-m",), ts=TS_B, output=9)
+    ledger.record_file(HOST, "/logs/m.jsonl", "sig-m2", [moved_grown])
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+    ledger.record_file(HOST, "/logs/n.jsonl", "sig-n", [native])  # retires rec-fb
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+    born_excluded = _record("rec-be", RecordKind.FALLBACK, sessions=("sess-x",), model="model-be", ts=TS_B)
+    ledger.record_file(HOST, "/logs/be.jsonl", "sig-be", [born_excluded])
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+    rewritten_excluded = _record(
+        "rec-fb", RecordKind.FALLBACK, sessions=("sess-x",), model="model-fb", ts=TS_B, output=50)
+    ledger.record_file(HOST, "/logs/fb.jsonl", "sig-fb2", [rewritten_excluded])
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+    ledger._conn.execute("DELETE FROM usage WHERE record_id = 'rec-moved'")
+    ledger._conn.commit()
+    assert ledger.model_rows() == _table_pass_rows(ledger)
+
+
+def test_previous_release_write_order_never_counts_a_born_excluded_fallback(tmp_path):
+  """The previous release upserted the usage row before registering sessions, so on a
+  triggered ledger the insert trigger saw none and counted a born-excluded fallback.
+  The first-session trigger subtracts it; this release's own order (sessions first)
+  reaches that trigger before the usage row exists, where it no-ops."""
+  native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",), model="model-native")
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/native.jsonl", "sig-native", [native])
+    expected = ledger.model_rows()  # the backfill runs, the aggregate serves from here
+    # The previous release's order, written through raw SQL exactly as its record_file did:
+    conn = sqlite3.connect(path)
+    try:
+      conn.execute(
+          "INSERT INTO usage (record_id, kind, source, model, account, host, ts,"
+          " in_fresh, cache_write, cache_read, output, origin, captured_at)"
+          " VALUES ('rec-fb', 'fallback', ?, 'model-fb', 'acct-a', ?, ?, 10, 2, 3, 7, '/x', ?)",
+          (SOURCE, HOST, TS_B, TS_B))
+      conn.execute("INSERT INTO fallback_sessions (record_id, session) VALUES ('rec-fb', 'sess-a')")
+      conn.commit()
+    finally:
+      conn.close()
+    rows = ledger.model_rows()
+  assert [row.model for row in expected] == ["model-native"]
+  assert [row.model for row in rows] == ["model-native"]
+
+
+def test_backfill_prices_a_ledger_written_before_the_aggregate(tmp_path):
+  """Rows written before the triggers existed (any pre-aggregate writer's shape) price
+  the first new-code read exactly: the backfill folds the whole table once."""
+  rec = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
+  # Strip the aggregate to the pre-trigger shape: no table, no flag, and rows a raw
+  # writer (no triggers) adds afterwards.
+  raw = sqlite3.connect(path)
+  try:
+    raw.executescript("DROP TABLE usage_agg; DELETE FROM ledger_meta; DROP TRIGGER usage_agg_after_insert;")
+    raw.execute(
+        "INSERT INTO usage (record_id, kind, source, model, account, host, ts,"
+        " in_fresh, cache_write, cache_read, output, origin, captured_at)"
+        " VALUES ('rec-2', 'native', ?, 'model-b', 'acct-a', ?, ?, 4, 1, 1, 3, '/x', ?)", (SOURCE, HOST, TS_B, TS_B))
+    raw.commit()
+  finally:
+    raw.close()
+  with UsageLedger(path) as ledger:
+    rows = ledger.model_rows()
+  assert [row.model for row in rows] == ["model-a", "model-b"]
+  assert rows[0].calls == 1 and rows[1].calls == 1
+
+
+def test_backfilled_read_serves_the_aggregate_not_the_table_pass(tmp_path):
+  """Once backfilled, a read the memo and fold miss prices the aggregate: the table
+  pass never runs, which is the term the page's wall sheds."""
+  rec = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
+    ledger.model_rows()  # first read runs the backfill
+    expected = _table_pass_rows(ledger)  # the ground truth, traced or not
+    ran: list[str] = []
+    ledger._conn.set_trace_callback(ran.append)
+    try:
+      rows = ledger.model_rows()
+    finally:
+      ledger._conn.set_trace_callback(None)
+    assert rows == expected
+    table_passes = [s for s in ran if "FROM usage u" in s and "usage_agg" not in s]
+    assert table_passes == []
+
+
+def test_dropped_aggregate_table_reprices_on_the_next_read(tmp_path):
+  """A ready flag over a dropped aggregate table (no statement here drops one) must not
+  serve an empty page: the read re-prices and the rows survive."""
+  rec = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",))
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [rec])
+    expected = ledger.model_rows()
+    ledger._conn.execute("DROP TABLE usage_agg")
+    ledger._conn.commit()
+  with UsageLedger(path) as ledger:  # the reopen's schema script rebuilds the table
+    rows = ledger.model_rows()
+  assert rows == expected
 
 
 def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path):

@@ -12,10 +12,12 @@ charlie-bot capture whose underlying CLI log may already be pruned. A fallback
 record is counted only while none of the session ids it carries has a NATIVE
 record of its own: the moment the CLI's log for any of those sessions is seen,
 the fallback's contribution is presumed restated there. The exclusion is a
-query-time rule over the registered sessions, not a deletion — no statement here
-deletes a usage row, so re-reading a pruned-away file's captured rows and their
-spans stays possible forever. (The only DELETE in the schema reaps the aggregate's
-own zero-count day rows; usage rows are never touched.)
+query-time rule over the registered sessions, not a deletion — re-reading a
+pruned-away file's captured rows and their spans stays possible forever. A usage
+row leaves the ledger only when a re-parse of its own source supersedes it by id
+prefix (``record_file``'s ``supersede_prefix``); nothing else deletes usage rows.
+(The only other DELETE in the schema reaps the aggregate's own zero-count day
+rows.)
 
 ``in_unsplit`` holds input tokens whose cache hit/miss split was never logged, and it
 counts toward every total like the other input columns. The one-time schema-2 upgrade
@@ -123,7 +125,7 @@ CREATE TABLE IF NOT EXISTS usage_agg (
 # its registered sessions has a native record -- the same rule the page read applies,
 # evaluated at write time from the session tables; a fallback registers its sessions
 # before its usage row lands so that check sees them. A day row whose calls reach zero
-# is deleted (the only DELETE in the schema), because a zero row would otherwise extend
+# is deleted (the only DELETE in the schema's triggers), because a zero row would otherwise extend
 # its group's MIN/MAX day and resurrect a group the table no longer counts.
 _COUNTED_SESSIONS_SQL = (
     "SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session"
@@ -270,7 +272,8 @@ _AGG_TRIGGER_SQLS = {
 }
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
-# from another file or host): the latest capture wins on every non-key column.
+# from another file or host): the latest capture wins on every non-key column but ts,
+# which record_file keeps at the earlier non-empty value.
 _UPSERT_USAGE_SQL = """
 INSERT INTO usage (record_id, kind, source, model, account, host, ts,
                    in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at)
@@ -583,9 +586,10 @@ class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
-  ledger and an existing one keeps every row. No statement here deletes a usage row.
-  A ledger with no ``schema`` stamp in ``ledger_meta`` upgrades to '2' once on open
-  (``_upgrade_schema``). A ledger whose stored aggregate-trigger bodies differ from this
+  ledger and an existing one keeps every row. The one deletion of a usage row is
+  ``record_file``'s ``supersede_prefix`` range: a re-parse superseding its own source's
+  legacy-id records. A ledger with no ``schema`` stamp in ``ledger_meta`` upgrades to
+  '2' once on open (``_upgrade_schema``). A ledger whose stored aggregate-trigger bodies differ from this
   module's gets the five swapped and a backfilled aggregate re-priced on open
   (``_refresh_agg_triggers``).
   """
@@ -608,10 +612,12 @@ class UsageLedger:
   # A miss whose only change is this process's own inserts extends the memo by the
   # row delta (``_try_fold_rows``) instead of re-running the full grouped pass --
   # the page's own capture makes that the common shape under active turns. Any
-  # other change falls back to the full pass: an in-place value rewrite bumps the
-  # ledger's rewrite epoch (``_rewrite_epoch``), which the memo stores and the
-  # fold compares -- a re-captured record upserts the same values and bumps
-  # nothing; a foreign writer's inserts and every deletion fail the row-count
+  # other change falls back to the full pass: an in-place value rewrite or a
+  # superseding prefix delete bumps the ledger's rewrite epoch
+  # (``_rewrite_epoch``), which the memo stores and the fold compares -- the
+  # delete must bump it because N deletes paired with N inserts slips past the
+  # row-count witness; a re-captured record upserts the same values and bumps
+  # nothing; a foreign writer's inserts and deletions fail the row-count
   # witness; WAL silences the stat pair and stores no memo.
   _rows_memo: _RowsMemo | None = None
   _write_generation: int = 0
@@ -766,14 +772,23 @@ class UsageLedger:
           (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
     UsageLedger._write_generation += 1
 
-  def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord]) -> int:
+  def record_file(self, host: str, path: str, sig: str, records: Sequence[UsageRecord],
+                  supersede_prefix: str | None = None) -> int:
     """Store one file capture atomically and return the record count.
 
-    Every record is upserted on ``record_id`` (latest capture wins, ``origin`` and
-    ``captured_at`` stamped from this write), each NATIVE record's sessions are
-    registered once (first registration wins, later re-captures keep them), each
-    FALLBACK record's sessions are linked, and the file's signature is remembered
-    for the collector's skip decision.
+    Every record is upserted on ``record_id`` (the latest capture wins on every column
+    but ``ts``, which keeps the earlier non-empty value -- a re-capture of the same call
+    may carry a later stamp, and the call's own time is the earlier one), each NATIVE
+    record's sessions are registered once (first registration wins, later re-captures
+    keep them), each FALLBACK record's sessions are linked, and the file's signature is
+    remembered for the collector's skip decision.
+
+    With ``supersede_prefix``, the same transaction first deletes every usage row whose
+    ``record_id`` starts with it -- a primary-key range, not LIKE -- together with those
+    rows' ``fallback_sessions`` rows, before the upserts land: the ledger's one bounded
+    deletion path, a re-parse superseding a source file's legacy-id records. A delete
+    that removed at least one row bumps the rewrite epoch, because N deletes paired with
+    N inserts slips past the fold's row-count witness.
     """
     captured_at = datetime.now(UTC).isoformat()
     # Two witnesses ride every write, and the row-delta fold consumes both. (1) The
@@ -794,17 +809,36 @@ class UsageLedger:
           f"SELECT record_id, kind, source, model, account, ts, in_fresh, cache_write, cache_read,"
           f" in_unsplit, output FROM usage WHERE record_id IN ({marks})", chunk):
         existing[row["record_id"]] = tuple(row)[1:]
-    rewrote = False
     with self._conn:
+      deleted = 0
+      if supersede_prefix is not None:
+        # A primary-key range: the upper bound is the prefix with its last character
+        # incremented, so 'codex:t1:' matches 'codex:t1:0' but not 'codex:t10:0' or
+        # 'codex:t1x:0'. The usage rows go first, while their fallback_sessions links
+        # still hold -- the delete trigger's counted-row check reads them, and an
+        # excluded row must not be subtracted.
+        upper = supersede_prefix[:-1] + chr(ord(supersede_prefix[-1]) + 1)
+        deleted = self._conn.execute(
+            "DELETE FROM usage WHERE record_id >= ? AND record_id < ?", (supersede_prefix, upper)).rowcount
+        self._conn.execute(
+            "DELETE FROM fallback_sessions WHERE record_id >= ? AND record_id < ?", (supersede_prefix, upper))
+      rewrote = deleted > 0
       for rec in records:
-        new_values = (
-            rec.kind.value, rec.source, rec.model, rec.account, rec.ts, rec.in_fresh, rec.cache_write, rec.cache_read,
-            rec.in_unsplit, rec.output)
+        ts = rec.ts
         old_values = existing.get(rec.record_id)
         if old_values is None:
           self._inserted_ids.add(rec.record_id)
-        elif old_values != new_values:
-          rewrote = True
+        else:
+          old_ts = old_values[4]
+          # The row keeps the earlier non-empty ts: an existing ts stays when the
+          # incoming one is empty or later; otherwise the incoming one wins.
+          if old_ts != "" and (ts == "" or ts > old_ts):
+            ts = old_ts
+          # The witness compares the values the row holds after the upsert, with the
+          # kept ts, so a re-capture differing only by a later stamp is not a rewrite.
+          if old_values != (rec.kind.value, rec.source, rec.model, rec.account, ts, rec.in_fresh, rec.cache_write,
+                            rec.cache_read, rec.in_unsplit, rec.output):
+            rewrote = True
         # The sessions register before the usage row: the aggregate's insert trigger
         # counts a fallback row only while none of its sessions is native, and that
         # check reads this record's own registrations.
@@ -818,11 +852,13 @@ class UsageLedger:
                 "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
         self._conn.execute(
             _UPSERT_USAGE_SQL, (
-                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
+                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
                 rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at))
       if rewrote:
         # A value rewrite invalidates every aggregate built before it in any process,
-        # so the witness lives in the database, not in this process.
+        # and a superseding delete can pair N deletes with N inserts the fold's
+        # row-count witness cannot see -- the witness lives in the database, not in
+        # this process.
         self._conn.execute(
             "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
             " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")

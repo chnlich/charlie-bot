@@ -5,6 +5,7 @@ import concurrent.futures
 import contextlib
 import fcntl
 import mmap
+import os
 import re
 import shutil
 import subprocess
@@ -61,8 +62,7 @@ _MERGE_MEMBER_RSS_FACTOR = 8
 # completes without waiting and the compress overlaps the GIL-bound walk.
 _MERGE_PIPE_BYTES = 1 << 20
 
-# Chunk helpers parsing one trace's member concurrently; each holds its chunk's
-# bytes beside a share of the tree, so the wave stays near half the whole-file peak.
+# Chunk helpers parse one trace's chunks concurrently; the wave keeps one wave's parse peak beside the held trees.
 _MERGE_CHUNK_WAVE = 4
 
 
@@ -229,8 +229,7 @@ def _collect_pid_labels(events: list[dict]) -> tuple[dict[str, str], dict[str, o
 
 
 def _walk_drops(event: dict, ph: object, slim: bool) -> bool:
-  """The walk's drop rule; the scan shares it — a sight the scan records but the
-  walk drops shifts every later synthetic id off the sequential values."""
+  """The walk's drop rule; the scan shares it — a scan-only sight shifts every synthetic id off the walk's."""
   if ph == "M":
     name = event.get("name")
     if name and name.startswith("process_"):
@@ -252,11 +251,9 @@ def _merge_one_trace(
 ) -> None:
   """Walk one parsed trace's events into *batcher*, remapped to synthetic ids.
 
-  The caller parses and owns the per-trace sequencer resets. The keywords carry
-  the chunked build's pre-computed state: *labels_in* replaces the process_labels
-  collection (a chunk rarely holds every label event), *marked_tids* names the raw
-  tid forms whose ``thread_name`` this call emits, *emit_tail* gates the trailing
-  process_ metadata (only the last chunk emits it)."""
+  The caller parses and owns the per-trace sequencer resets; *labels_in* replaces the process_labels
+  collection, *marked_tids* names the raw tid forms whose ``thread_name`` this call emits, *emit_tail*
+  gates the trailing process_ metadata (only the last chunk emits it)."""
   events = _trace_events_or_raise(trace, path)
   rank_label = _rank_label(path)
 
@@ -327,8 +324,7 @@ def _merge_one_trace(
         tid_raw_map[original_tid] = synthetic_tid
       event["tid"] = synthetic_tid
       if marked_tids is not None and original_tid in marked_tids:
-        # The pre-loaded map never misses: this is the chunked walk's only
-        # thread_name emitter, once per form, at the sequential first-sight spot.
+        # The pre-loaded map never misses: the chunked walk's only thread_name emitter, once per form.
         marked_tids.discard(original_tid)
         pending_append(_thread_name_event(event["pid"], synthetic_tid, original_tid, rank_label))
         if len(pending) >= batch_bound:
@@ -417,10 +413,9 @@ class _ChunkHelperError(RuntimeError):
 def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
   """Build one trace's merged artifact with chunk-parallel helpers; False falls back.
 
-  Each helper parses once, holds its tree, reports its chunk's labels and first-sight
-  tid/flow forms, and waits for the parent's id maps on stdin; the wave stagger keeps
-  one wave's parse peak beside the held trees. The maps are the sequential walk's exact
-  allocation order — byte-identical artifact; a failure falls back."""
+  Each helper parses once, holds its tree, reports its chunk's labels and first-sight tid/flow forms,
+  and waits for the parent's id maps; the maps match the sequential walk's allocation order —
+  byte-identical artifact; any failure falls back."""
   size = path.stat().st_size
   split = _split_chunks(path, size, _MIN_CHUNK_BYTES)
   if split is None:
@@ -428,13 +423,16 @@ def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
   object_form, indent, starts = split
   ends = [*starts, size]
   count = len(ends)
-  member_dir = Path(tempfile.mkdtemp(prefix="merge-chunks-"))
-  fragments = [member_dir / f"{index}.jsonl" for index in range(count)]
+  member_dir = None
   helpers: list[subprocess.Popen] = []
+  # PYTHONPATH pins the helper's src.* imports to this build's checkout, not the venv's editable install.
+  helper_env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[2])}
   try:
+    member_dir = Path(tempfile.mkdtemp(prefix="merge-chunks-"))
+    fragments = [member_dir / f"{index}.jsonl" for index in range(count)]
     reports = []
     for wave_start in range(0, count, _MERGE_CHUNK_WAVE):
-      wave = []
+      wave_at = len(helpers)
       for index in range(wave_start, min(wave_start + _MERGE_CHUNK_WAVE, count)):
         spec = [
             str(path), 0 if index == 0 else ends[index - 1], ends[index], index, count, object_form,
@@ -442,10 +440,10 @@ def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
             str(fragments[index])
         ]
         argv = [sys.executable, str(Path(__file__).resolve()), "--merge-chunk", orjson.dumps(spec).decode()]
-        wave.append(
-            subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True))
-      helpers.extend(wave)
-      for proc in wave:
+        helpers.append(
+            subprocess.Popen(
+                argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=helper_env))
+      for proc in helpers[wave_at:]:
         line = proc.stdout.readline()
         if not line:
           raise _ChunkHelperError(f"chunk helper rc={proc.wait()} died before its report")
@@ -489,21 +487,20 @@ def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
       output.write(b"]}")
     return True
   except (_ChunkHelperError, OSError, ValueError) as exc:
-    # A dead helper leaves no verdict; kill the rest (a helper blocked writing its
-    # report would hang a graceful stdin close) and fall back.
+    # A dead helper leaves no verdict: kill the rest (a blocked report write hangs a graceful close).
     for proc in helpers:
       proc.kill(), proc.wait()
     log.warning("perfetto_merge_chunk_fallback", path=str(path), reason=str(exc)[:300])
     return False
   finally:
-    shutil.rmtree(member_dir, ignore_errors=True)
+    if member_dir is not None:
+      shutil.rmtree(member_dir, ignore_errors=True)
 
 
 def _merge_chunk_main(argv: list[str]) -> int:
   """One chunk helper: parse and hold its chunk, report, wait for the maps, build.
 
-  The report must cross exactly the stream the build walk crosses; an empty stdin
-  read means the parent died and the helper answers nothing."""
+  The report must cross exactly the stream the build walk crosses; an empty stdin read means the parent died."""
   import gc
 
   path, start, end, index, count, object_form, indent, slim, last, fragment = orjson.loads(argv[0])

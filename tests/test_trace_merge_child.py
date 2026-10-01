@@ -117,13 +117,12 @@ def _write_pretty_trace(path: Path, events_per_pid: int) -> None:
 
 
 def test_chunked_build_serves_the_sequential_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The chunked path must ship the sequential build's exact bytes: synthetic ids are
-  walk-order values, and a drifted allocation diverges from a cached artifact."""
+  """The chunked path must ship the sequential build's exact bytes; a drifted synthetic id diverges."""
   trace = tmp_path / "trace_rank0.json"
   _write_pretty_trace(trace, events_per_pid=120)
   plain, sequential, slim, slim_sequential = (
-      tmp_path / name
-      for name in ("chunked.json.gz", "sequential.json.gz", "chunked-slim.json.gz", "sequential-slim.json.gz"))
+      tmp_path / n
+      for n in ("chunked.json.gz", "sequential.json.gz", "chunked-slim.json.gz", "sequential-slim.json.gz"))
 
   monkeypatch.setattr(trace_merge, "_MIN_CHUNK_BYTES", 256)
   merge_traces([trace], plain, slim=False)

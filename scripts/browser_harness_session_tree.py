@@ -881,50 +881,62 @@ def api_request(base: str, key: str, method: str, path: str, body: dict | None =
 
 
 async def evaluate(cdp: CDP, session_id: str, expression: str) -> object:
-    res = await cdp.send("Runtime.evaluate", {
-        "expression": expression, "returnByValue": True, "awaitPromise": True,
-    }, session_id=session_id)
-    if res.get("exceptionDetails"):
-        detail = res["exceptionDetails"]
-        # Full details plus the expression head: a bare description hides whether
-        # the failure is a parse error of the sent text or a throw inside it.
-        raise RuntimeError(
-            "page evaluate failed: " + json.dumps(detail)[:600]
-            + " | expression head: " + expression[:160].replace("\n", " "))
-    return res.get("result", {}).get("value")
+  res = await cdp.send(
+      "Runtime.evaluate", {
+          "expression": expression,
+          "returnByValue": True,
+          "awaitPromise": True,
+      },
+      session_id=session_id)
+  if res.get("exceptionDetails"):
+    detail = res["exceptionDetails"]
+    # Full details plus the expression head: a bare description hides whether
+    # the failure is a parse error of the sent text or a throw inside it.
+    raise RuntimeError(
+        "page evaluate failed: " + json.dumps(detail)[:600] + " | expression head: " +
+        expression[:160].replace("\n", " "))
+  return res.get("result", {}).get("value")
 
 
 async def screenshot(cdp: CDP, session_id: str, results: Results, name: str) -> str:
-    res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
-    path = results.evidence_dir / f"{name}.png"
-    path.write_bytes(base64.b64decode(res["data"]))
-    return path.name
+  res = await cdp.send("Page.captureScreenshot", {"format": "png"}, session_id=session_id)
+  path = results.evidence_dir / f"{name}.png"
+  path.write_bytes(base64.b64decode(res["data"]))
+  return path.name
 
 
 async def expand_to(cdp: CDP, session_id: str, node_ids: list[str]) -> None:
-    """Expand the managers above *node_ids* through the sidebar's own API.
+  """Expand the managers above *node_ids* through the sidebar's own API.
 
     expandTreeNode is idempotent — an already-open level stays open (toggle
     would collapse it)."""
-    for node_id in node_ids:
-        await wait_for(cdp, session_id, f"!!document.getElementById('session-{node_id}')",
-                       timeout=8, label=f"row visible for {node_id}")
-        await evaluate(cdp, session_id, f"Sidebar.expandTreeNode('{node_id}')")
-        await wait_for(cdp, session_id,
-                       '(() => { const el = document.querySelector('
-                       "\"[data-tree-children='" + node_id + "']\");"
-                       " return el && !el.classList.contains('hidden'); })()",
-                       timeout=8, label=f"children container for {node_id}")
+  for node_id in node_ids:
+    await wait_for(
+        cdp,
+        session_id,
+        f"!!document.getElementById('session-{node_id}')",
+        timeout=8,
+        label=f"row visible for {node_id}")
+    await evaluate(cdp, session_id, f"Sidebar.expandTreeNode('{node_id}')")
+    await wait_for(
+        cdp,
+        session_id,
+        '(() => { const el = document.querySelector('
+        "\"[data-tree-children='" + node_id + "']\");"
+        " return el && !el.classList.contains('hidden'); })()",
+        timeout=8,
+        label=f"children container for {node_id}")
 
 
 async def reveal_row(cdp: CDP, session_id: str, node_id: str) -> None:
-    """Bring one (possibly nested) row on screen for the screenshot evidence.
+  """Bring one (possibly nested) row on screen for the screenshot evidence.
 
     A nested row sits inside its root's subtree wrapper, which the group's
     5-row preview hides with the root when the root falls past the limit (only
     the active row itself is exempt): Show all that group, then scroll the row
     into view. Expansion is the caller's (expand_to)."""
-    await evaluate(cdp, session_id, f"""
+  await evaluate(
+      cdp, session_id, f"""
         (() => {{
           const row = document.getElementById('session-{node_id}');
           let el = row;
@@ -934,15 +946,20 @@ async def reveal_row(cdp: CDP, session_id: str, node_id: str) -> None:
           row.scrollIntoView({{block: 'center'}});
         }})()
     """)
-    await wait_for(cdp, session_id, f"document.getElementById('session-{node_id}').offsetParent !== null",
-                   timeout=8, label=f"row on screen for {node_id}")
+  await wait_for(
+      cdp,
+      session_id,
+      f"document.getElementById('session-{node_id}').offsetParent !== null",
+      timeout=8,
+      label=f"row on screen for {node_id}")
 
 
 async def click_selector_center(cdp: CDP, session_id: str, selector: str, label: str) -> dict:
-    """One real pointer click (move, press, release) on the element *selector*
+  """One real pointer click (move, press, release) on the element *selector*
     names; the move first, because a row's desktop buttons only take pointers
     while the row is hovered. The element's box is the click's ground truth."""
-    box = await evaluate(cdp, session_id, f"""
+  box = await evaluate(
+      cdp, session_id, f"""
         (() => {{
           const el = document.querySelector({json.dumps(selector)});
           if (!el) return null;
@@ -951,13 +968,18 @@ async def click_selector_center(cdp: CDP, session_id: str, selector: str, label:
           return {{x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height}};
         }})()
     """)
-    assert_true(box is not None, f"{label}: the click target renders: {selector}")
-    await cdp.send("Input.dispatchMouseEvent",
-                   {"type": "mouseMoved", "x": box["x"], "y": box["y"]}, session_id=session_id)
-    # The move first, then check the point really hits the target: a covered
-    # or pointer-transparent target fails here with the covering element's
-    # identity instead of as a silent miss downstream.
-    hit = await evaluate(cdp, session_id, f"""
+  assert_true(box is not None, f"{label}: the click target renders: {selector}")
+  await cdp.send(
+      "Input.dispatchMouseEvent", {
+          "type": "mouseMoved",
+          "x": box["x"],
+          "y": box["y"]
+      }, session_id=session_id)
+  # The move first, then check the point really hits the target: a covered
+  # or pointer-transparent target fails here with the covering element's
+  # identity instead of as a silent miss downstream.
+  hit = await evaluate(
+      cdp, session_id, f"""
         (() => {{
           const el = document.querySelector({json.dumps(selector)});
           const at = document.elementFromPoint({box['x']}, {box['y']});
@@ -968,71 +990,89 @@ async def click_selector_center(cdp: CDP, session_id: str, selector: str, label:
                              + ' title=' + (at.title || '')) : 'nothing'}};
         }})()
     """)
-    assert_true(hit and hit.get("ok"),
-                f"{label}: the click point misses the target "
-                f"({box['x']:.0f},{box['y']:.0f}), hits: {hit and hit.get('at')}")
-    for kind in ("mousePressed", "mouseReleased"):
-        await cdp.send("Input.dispatchMouseEvent",
-                       {"type": kind, "x": box["x"], "y": box["y"],
-                        "button": "left", "clickCount": 1}, session_id=session_id)
-    return box
+  assert_true(
+      hit and hit.get("ok"), f"{label}: the click point misses the target "
+      f"({box['x']:.0f},{box['y']:.0f}), hits: {hit and hit.get('at')}")
+  for kind in ("mousePressed", "mouseReleased"):
+    await cdp.send(
+        "Input.dispatchMouseEvent", {
+            "type": kind,
+            "x": box["x"],
+            "y": box["y"],
+            "button": "left",
+            "clickCount": 1
+        },
+        session_id=session_id)
+  return box
 
 
 async def press_escape(cdp: CDP, session_id: str) -> None:
-    """One real Escape keydown+keyup through the browser's input pipeline."""
-    for kind in ("keyDown", "keyUp"):
-        await cdp.send("Input.dispatchKeyEvent",
-                       {"type": kind, "key": "Escape", "code": "Escape",
-                        "windowsVirtualKeyCode": 27, "nativeVirtualKeyCode": 27},
-                       session_id=session_id)
+  """One real Escape keydown+keyup through the browser's input pipeline."""
+  for kind in ("keyDown", "keyUp"):
+    await cdp.send(
+        "Input.dispatchKeyEvent", {
+            "type": kind,
+            "key": "Escape",
+            "code": "Escape",
+            "windowsVirtualKeyCode": 27,
+            "nativeVirtualKeyCode": 27
+        },
+        session_id=session_id)
 
 
 def menu_items_as_text(items: list[dict]) -> list[str]:
-    """The open menu's items in the expected lists' notation: 'sep' for a
+  """The open menu's items in the expected lists' notation: 'sep' for a
     separator, ' (danger)' appended to a red item's label."""
-    return [("sep" if item["sep"] else
-             (item["label"] or "") + (" (danger)" if item["danger"] else ""))
-            for item in items]
+  return [("sep" if item["sep"] else (item["label"] or "") + (" (danger)" if item["danger"] else "")) for item in items]
 
 
 async def open_row_menu(cdp: CDP, session_id: str, selector: str, label: str) -> list[str]:
-    """Click the Settings gear *selector* names and read the open .row-menu's
+  """Click the Settings gear *selector* names and read the open .row-menu's
     items; exactly one menu may exist while it is open."""
-    before = await evaluate(cdp, session_id, "document.querySelectorAll('.row-menu').length")
-    assert_true(before == 0, f"{label}: no menu is open before the click ({before})")
-    await click_selector_center(cdp, session_id, selector, label)
-    await wait_for(cdp, session_id, "document.querySelectorAll('.row-menu').length === 1",
-                   timeout=6, label=f"{label}: the Settings menu opens")
-    items = await evaluate(cdp, session_id, """
+  before = await evaluate(cdp, session_id, "document.querySelectorAll('.row-menu').length")
+  assert_true(before == 0, f"{label}: no menu is open before the click ({before})")
+  await click_selector_center(cdp, session_id, selector, label)
+  await wait_for(
+      cdp,
+      session_id,
+      "document.querySelectorAll('.row-menu').length === 1",
+      timeout=6,
+      label=f"{label}: the Settings menu opens")
+  items = await evaluate(
+      cdp, session_id, """
         [...document.querySelectorAll('.row-menu > *')].map(el => ({
           sep: el.classList.contains('row-menu-sep'),
           label: el.classList.contains('row-menu-item') ? el.textContent : null,
           danger: el.classList.contains('row-menu-item-danger'),
         }))
     """)
-    return menu_items_as_text(items)
+  return menu_items_as_text(items)
 
 
 async def assert_menu_item_heights(cdp: CDP, session_id: str, label: str) -> float:
-    """Every item of the open menu is a 44px touch row; return the minimum."""
-    min_h = await evaluate(cdp, session_id, """
+  """Every item of the open menu is a 44px touch row; return the minimum."""
+  min_h = await evaluate(
+      cdp, session_id, """
         Math.min(...[...document.querySelectorAll('.row-menu .row-menu-item')]
           .map(b => b.getBoundingClientRect().height))
     """)
-    assert_true(min_h >= 44, f"{label}: every menu item is at least 44px tall (min {min_h})")
-    return min_h
+  assert_true(min_h >= 44, f"{label}: every menu item is at least 44px tall (min {min_h})")
+  return min_h
 
 
 async def close_row_menu(cdp: CDP, session_id: str, label: str) -> None:
-    """Escape closes the open menu and leaves no .row-menu behind."""
-    await press_escape(cdp, session_id)
-    await wait_for(cdp, session_id, "document.querySelectorAll('.row-menu').length === 0",
-                   timeout=6, label=f"{label}: Escape closes the menu")
+  """Escape closes the open menu and leaves no .row-menu behind."""
+  await press_escape(cdp, session_id)
+  await wait_for(
+      cdp,
+      session_id,
+      "document.querySelectorAll('.row-menu').length === 0",
+      timeout=6,
+      label=f"{label}: Escape closes the menu")
 
 
 def assert_menu_matches(actual: list[str], expected: list[str], label: str) -> None:
-    assert_true(actual == expected,
-                f"{label}: the menu reads {actual!r}, expected {expected!r}")
+  assert_true(actual == expected, f"{label}: the menu reads {actual!r}, expected {expected!r}")
 
 
 DIAGNOSTIC_SNAPSHOT = """
@@ -1057,40 +1097,39 @@ DIAGNOSTIC_SNAPSHOT = """
 
 
 def assert_true(cond: bool, message: str) -> None:
-    if not cond:
-        raise AssertionError(message)
+  if not cond:
+    raise AssertionError(message)
 
 
-async def wait_for(cdp: CDP, session_id: str, expression: str, timeout: float = 10.0,
-                   label: str | None = None) -> object:
-    """Poll a page expression until truthy; a timeout is an explicit failure."""
-    started = time.monotonic()
-    deadline = started + timeout
-    while time.monotonic() < deadline:
-        try:
-            value = await asyncio.wait_for(
-                evaluate(cdp, session_id, expression), timeout=min(10.0, max(1.0, deadline - time.monotonic())))
-        except (RuntimeError, asyncio.TimeoutError) as exc:
-            # A mid-navigation evaluate can race the page swap, and headless
-            # renderers occasionally stall a single CDP evaluate; retry until
-            # the deadline instead of failing the scenario on a transient.
-            msg = str(exc)
-            head = msg[msg.find("expression head:"):] if "expression head:" in msg else msg[-200:]
-            log(f"    transient during wait ({head[:260]}); retrying")
-            await asyncio.sleep(0.3)
-            continue
-        if value:
-            if time.monotonic() - started > 2.0:
-                log(f"    step slow ({time.monotonic() - started:.1f}s): {(label or expression)[:80]}")
-            return value
-        await asyncio.sleep(0.2)
-    diag = ""
+async def wait_for(
+    cdp: CDP, session_id: str, expression: str, timeout: float = 10.0, label: str | None = None) -> object:
+  """Poll a page expression until truthy; a timeout is an explicit failure."""
+  started = time.monotonic()
+  deadline = started + timeout
+  while time.monotonic() < deadline:
     try:
-        diag = str(await evaluate(cdp, session_id, DIAGNOSTIC_SNAPSHOT))
-    except Exception:
-        diag = "<diag failed>"
-    raise AssertionError(
-        f"timeout waiting for {label or expression[:120]}\npage state: {diag[:1200]}")
+      value = await asyncio.wait_for(
+          evaluate(cdp, session_id, expression), timeout=min(10.0, max(1.0, deadline - time.monotonic())))
+    except (RuntimeError, asyncio.TimeoutError) as exc:
+      # A mid-navigation evaluate can race the page swap, and headless
+      # renderers occasionally stall a single CDP evaluate; retry until
+      # the deadline instead of failing the scenario on a transient.
+      msg = str(exc)
+      head = msg[msg.find("expression head:"):] if "expression head:" in msg else msg[-200:]
+      log(f"    transient during wait ({head[:260]}); retrying")
+      await asyncio.sleep(0.3)
+      continue
+    if value:
+      if time.monotonic() - started > 2.0:
+        log(f"    step slow ({time.monotonic() - started:.1f}s): {(label or expression)[:80]}")
+      return value
+    await asyncio.sleep(0.2)
+  diag = ""
+  try:
+    diag = str(await evaluate(cdp, session_id, DIAGNOSTIC_SNAPSHOT))
+  except Exception:
+    diag = "<diag failed>"
+  raise AssertionError(f"timeout waiting for {label or expression[:120]}\npage state: {diag[:1200]}")
 
 
 async def run_harness(args: argparse.Namespace) -> None:

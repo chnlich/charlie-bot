@@ -9,6 +9,7 @@ than a hard-coded total.
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -39,6 +40,7 @@ def _record(
     account: str = "acct-a",
     ts: str = TS_A,
     output: int = 5,
+    in_unsplit: int = 0,
 ) -> UsageRecord:
   return UsageRecord(
       record_id=record_id,
@@ -51,6 +53,7 @@ def _record(
       cache_write=2,
       cache_read=3,
       output=output,
+      in_unsplit=in_unsplit,
       sessions=sessions,
   )
 
@@ -589,3 +592,282 @@ def test_fold_stands_down_on_a_foreign_value_rewrite(monkeypatch, tmp_path):
   assert [row.output for row in rows_before if row.model == "model-a"] == [5]
   assert paths == ["full"]
   assert [row.output for row in rows if row.model == "model-a"] == [107]
+
+
+# --- the one-time schema-2 upgrade ---------------------------------------------------------
+
+# The pre-change ledger: usage and usage_agg carry four token sums, the triggers sum four
+# token columns, and ledger_meta has no schema stamp -- the shape the upgrade meets on open.
+_OLD_DDL = """
+CREATE TABLE usage (
+  record_id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL,
+  source TEXT NOT NULL,
+  model TEXT NOT NULL,
+  account TEXT NOT NULL,
+  host TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  in_fresh INTEGER NOT NULL,
+  cache_write INTEGER NOT NULL,
+  cache_read INTEGER NOT NULL,
+  output INTEGER NOT NULL,
+  origin TEXT NOT NULL,
+  captured_at TEXT NOT NULL
+);
+CREATE INDEX usage_group_cover ON usage(kind, source, model, account, ts, in_fresh, cache_write, cache_read, output);
+CREATE TABLE usage_agg (
+  source TEXT NOT NULL,
+  model TEXT NOT NULL,
+  account TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  day TEXT NOT NULL,
+  calls INTEGER NOT NULL,
+  in_fresh INTEGER NOT NULL,
+  cache_write INTEGER NOT NULL,
+  cache_read INTEGER NOT NULL,
+  output INTEGER NOT NULL,
+  PRIMARY KEY (source, model, account, kind, day)
+);
+CREATE TABLE ledger_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE native_sessions (session TEXT PRIMARY KEY, source TEXT NOT NULL);
+CREATE TABLE fallback_sessions (record_id TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY (record_id, session));
+CREATE TRIGGER usage_agg_after_insert AFTER INSERT ON usage
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT new.source, new.model, new.account, new.kind, SUBSTR(new.ts, 1, 10), 1,
+         new.in_fresh, new.cache_write, new.cache_read, new.output
+  WHERE NOT (new.kind = 'fallback' AND EXISTS (
+    SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+    WHERE fs.record_id = new.record_id))
+    AND NOT EXISTS (
+    SELECT 1 FROM usage_agg a WHERE a.source = new.source AND a.model = new.model
+      AND a.account = new.account AND a.kind = new.kind AND a.day = SUBSTR(new.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER usage_agg_after_update AFTER UPDATE ON usage
+WHEN old.kind <> new.kind OR old.source <> new.source OR old.model <> new.model
+  OR old.account <> new.account OR old.ts <> new.ts OR old.in_fresh <> new.in_fresh
+  OR old.cache_write <> new.cache_write OR old.cache_read <> new.cache_read
+  OR old.output <> new.output
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT old.source, old.model, old.account, old.kind, SUBSTR(old.ts, 1, 10), -1,
+         -old.in_fresh, -old.cache_write, -old.cache_read, -old.output
+  WHERE NOT (old.kind = 'fallback' AND EXISTS (
+    SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+    WHERE fs.record_id = old.record_id))
+    AND EXISTS (
+    SELECT 1 FROM usage_agg a WHERE a.source = old.source AND a.model = old.model
+      AND a.account = old.account AND a.kind = old.kind AND a.day = SUBSTR(old.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT new.source, new.model, new.account, new.kind, SUBSTR(new.ts, 1, 10), 1,
+         new.in_fresh, new.cache_write, new.cache_read, new.output
+  WHERE NOT (new.kind = 'fallback' AND EXISTS (
+    SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+    WHERE fs.record_id = new.record_id))
+    AND NOT EXISTS (
+    SELECT 1 FROM usage_agg a WHERE a.source = new.source AND a.model = new.model
+      AND a.account = new.account AND a.kind = new.kind AND a.day = SUBSTR(new.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER usage_agg_after_delete AFTER DELETE ON usage
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT old.source, old.model, old.account, old.kind, SUBSTR(old.ts, 1, 10), -1,
+         -old.in_fresh, -old.cache_write, -old.cache_read, -old.output
+  WHERE NOT (old.kind = 'fallback' AND EXISTS (
+    SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+    WHERE fs.record_id = old.record_id))
+    AND EXISTS (
+    SELECT 1 FROM usage_agg a WHERE a.source = old.source AND a.model = old.model
+      AND a.account = old.account AND a.kind = old.kind AND a.day = SUBSTR(old.ts, 1, 10))
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER usage_agg_after_native_session AFTER INSERT ON native_sessions
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+  FROM usage u
+  WHERE u.kind = 'fallback'
+    AND EXISTS (SELECT 1 FROM usage_agg a WHERE a.source = u.source AND a.model = u.model
+                AND a.account = u.account AND a.kind = u.kind AND a.day = SUBSTR(u.ts, 1, 10))
+    AND EXISTS (SELECT 1 FROM fallback_sessions fs WHERE fs.record_id = u.record_id AND fs.session = new.session)
+    AND NOT EXISTS (
+      SELECT 1 FROM fallback_sessions fs2 JOIN native_sessions ns2 ON ns2.session = fs2.session
+      WHERE fs2.record_id = u.record_id AND fs2.session <> new.session)
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+
+CREATE TRIGGER usage_agg_after_fallback_session AFTER INSERT ON fallback_sessions
+BEGIN
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+  FROM usage u
+  WHERE u.record_id = new.record_id
+    AND u.kind = 'fallback'
+    AND EXISTS (SELECT 1 FROM usage_agg a WHERE a.source = u.source AND a.model = u.model
+                AND a.account = u.account AND a.kind = u.kind AND a.day = SUBSTR(u.ts, 1, 10))
+    AND EXISTS (
+      SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
+      WHERE fs.record_id = u.record_id)
+    AND NOT EXISTS (
+      SELECT 1 FROM fallback_sessions fs2 WHERE fs2.record_id = u.record_id
+      AND fs2.session <> new.session)
+  ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
+    calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
+    cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
+    output = output + excluded.output;
+END;
+"""
+
+
+def _old_ledger(path: Path, rows: list[tuple]) -> None:
+  """Build a pre-change ledger: old four-sum DDL and triggers, the aggregate backfilled,
+  and no schema stamp -- the shape the one-time upgrade meets on open."""
+  raw = sqlite3.connect(path)
+  try:
+    raw.executescript(_OLD_DDL)
+    raw.executemany(
+        "INSERT INTO usage (record_id, kind, source, model, account, host, ts,"
+        " in_fresh, cache_write, cache_read, output, origin, captured_at)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+    raw.execute(
+        "INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)"
+        " SELECT source, model, account, kind, SUBSTR(ts, 1, 10), COUNT(*),"
+        " SUM(in_fresh), SUM(cache_write), SUM(cache_read), SUM(output)"
+        " FROM usage GROUP BY source, model, account, kind, SUBSTR(ts, 1, 10)"
+        " ON CONFLICT(source, model, account, kind, day) DO UPDATE SET"
+        " calls = excluded.calls, in_fresh = excluded.in_fresh, cache_write = excluded.cache_write,"
+        " cache_read = excluded.cache_read, output = excluded.output")
+    raw.execute("INSERT INTO ledger_meta (key, value) VALUES ('agg_backfilled', '1')")
+    raw.commit()
+  finally:
+    raw.close()
+
+
+def _upgrade_fixture_rows(root: Path, here: Path) -> list[tuple]:
+  """Four pre-change records: gone- and present-source master: records, a gone-source
+  native thread: record, and a gone-source codex: record."""
+  gone = root / "gone"
+  return [
+      (
+          "master:gone", "native", SOURCE, "model-m", "acct-a", HOST, TS_A, 100, 10, 20, 5, str(gone / "master.jsonl"),
+          TS_A),
+      ("master:here", "native", SOURCE, "model-m", "acct-a", HOST, TS_B, 200, 0, 0, 6, str(here), TS_B),
+      (
+          "thread:gone", "native", SOURCE, "model-t", "acct-a", HOST, TS_A, 300, 0, 0, 7, str(gone / "thread.jsonl"),
+          TS_A),
+      ("codex:gone", "native", SOURCE, "model-c", "acct-a", HOST, TS_B, 400, 0, 0, 8, str(gone / "codex.jsonl"), TS_B),
+  ]
+
+
+def _snapshot(conn) -> tuple[list[tuple], list[tuple], list[tuple]]:
+  """Every usage, aggregate and meta row as plain tuples, in a stable order."""
+  return (
+      [tuple(row) for row in conn.execute("SELECT * FROM usage ORDER BY record_id")],
+      [tuple(row) for row in conn.execute("SELECT * FROM usage_agg ORDER BY source, model, account, kind, day")],
+      [tuple(row) for row in conn.execute("SELECT * FROM ledger_meta ORDER BY key")],
+  )
+
+
+def test_in_unsplit_shows_on_every_read_path(tmp_path, monkeypatch):
+  """A record carrying in_unsplit shows the column and its total through the table pass,
+  the memo fold, and the aggregate read -- the three layers the page read serves from."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), in_unsplit=7)
+  second = _record("rec-2", RecordKind.NATIVE, sessions=("sess-b",), model="model-b", ts=TS_B, in_unsplit=7)
+  third = _record("rec-3", RecordKind.NATIVE, sessions=("sess-c",), model="model-c", in_unsplit=7)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    assert [(row.in_unsplit, row.total) for row in _table_pass_rows(ledger)] == [(7, 27)]
+    ledger.model_rows()  # first read runs the backfill and stores the memo
+    paths = _read_path(monkeypatch, ledger)
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [second])
+    folded, _ = ledger.model_rows_with_native_starts()
+    assert paths == ["fold"]
+    assert [(row.in_unsplit, row.total) for row in folded if row.model == "model-b"] == [(7, 27)]
+    with UsageLedger(path) as foreign:  # another process's shape: its own tracked inserts
+      foreign.record_file(HOST, "/logs/c.jsonl", "sig-c", [third])
+    served, _ = ledger.model_rows_with_native_starts()
+    assert served == _table_pass_rows(ledger)
+  assert [(row.model, row.in_unsplit, row.total) for row in served] == [
+      ("model-a", 7, 27), ("model-b", 7, 27), ("model-c", 7, 27)
+  ]
+
+
+def test_upgrade_moves_only_the_gone_source_clc_records(tmp_path):
+  """The one-time upgrade moves a gone-source master:/native thread: record's input into
+  in_unsplit and leaves present-file and codex: rows alone; every total is unchanged, the
+  aggregate read still equals the table pass, and the ledger ends stamped schema '2'."""
+  path = tmp_path / "ledger.sqlite3"
+  here = tmp_path / "here-master.jsonl"
+  here.write_text("{}\n")
+  rows = _upgrade_fixture_rows(tmp_path, here)
+  _old_ledger(path, rows)
+  with UsageLedger(path) as ledger:
+    stored = {row["record_id"]: row for row in ledger._conn.execute("SELECT * FROM usage")}
+    assert stored["master:gone"]["in_fresh"] == 0 and stored["master:gone"]["in_unsplit"] == 100
+    assert stored["thread:gone"]["in_fresh"] == 0 and stored["thread:gone"]["in_unsplit"] == 300
+    assert stored["master:here"]["in_fresh"] == 200 and stored["master:here"]["in_unsplit"] == 0
+    assert stored["codex:gone"]["in_fresh"] == 400 and stored["codex:gone"]["in_unsplit"] == 0
+    for record_id, row in stored.items():
+      old = next(r for r in rows if r[0] == record_id)
+      total = row["in_fresh"] + row["cache_write"] + row["cache_read"] + row["in_unsplit"] + row["output"]
+      assert total == old[7] + old[8] + old[9] + old[10]  # the pre-upgrade in_fresh + cache sums + output
+    served = ledger.model_rows()
+    assert served == _table_pass_rows(ledger)
+    assert {row.model: row.in_unsplit for row in served} == {"model-m": 100, "model-t": 300, "model-c": 0}
+    meta = {row["key"]: row["value"] for row in ledger._conn.execute("SELECT * FROM ledger_meta")}
+    assert meta["schema"] == "2"
+    assert meta["rewrite_epoch"] == "1"
+
+
+def test_reopening_the_upgraded_ledger_changes_no_row(tmp_path):
+  """The upgrade is one-time: a ledger already stamped schema '2' opens without touching
+  a usage row, an aggregate row, or the meta stamps."""
+  path = tmp_path / "ledger.sqlite3"
+  here = tmp_path / "here-master.jsonl"
+  here.write_text("{}\n")
+  _old_ledger(path, _upgrade_fixture_rows(tmp_path, here))
+  with UsageLedger(path) as ledger:
+    ledger.model_rows()
+    before = _snapshot(ledger._conn)
+  with UsageLedger(path) as ledger:
+    after = _snapshot(ledger._conn)
+  assert before == after
+
+
+def test_in_unsplit_only_rewrite_keeps_the_aggregate_on_the_table(tmp_path):
+  """A rewrite that changes only in_unsplit reaches the trigger-maintained aggregate: the
+  served rows equal the table pass and carry the new split."""
+  first = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), in_unsplit=0)
+  rewritten = _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), in_unsplit=7)
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [first])
+    ledger.model_rows()  # the backfill; later reads serve the aggregate
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a2", [rewritten])
+    rows = ledger.model_rows()
+    assert rows == _table_pass_rows(ledger)
+  assert [(row.in_unsplit, row.total) for row in rows] == [(7, 27)]

@@ -19,7 +19,7 @@ import pytest
 from conftest import codex_token_count_event
 
 from src.core import token_tally as tt
-from src.core.constants import USAGE_SOURCE_CODEX
+from src.core.constants import USAGE_SOURCE_CHARLIE_BOT, USAGE_SOURCE_CODEX
 from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 
 NAME = "claude-model"
@@ -752,10 +752,11 @@ def test_codex_append_tail_parse_matches_a_full_parse(tmp_path: Path) -> None:
   assert (tailed["root"], tailed["model_ctx"]) == (full["root"], full["model_ctx"]) == ("tailroot1", "codex-m2")
 
 
-def test_cache_load_drops_pre_p2_codex_entries_only(tmp_path: Path) -> None:
-  """A version-3 document loads with its Claude entries served and its Codex entries gone —
-  those records carry neither the root nor the totals the current ids are built from."""
-  assert tt.TallyCache.SCHEMA_VERSION == 4
+def test_cache_load_drops_pre_p2_codex_and_charliebot_entries(tmp_path: Path) -> None:
+  """A version-3 document loads with its Claude entries served and its Codex and charlie-bot
+  entries gone — the Codex records carry neither the root nor the totals the current ids
+  are built from, and the charlie-bot records predate the cache-split corrections."""
+  assert tt.TallyCache.SCHEMA_VERSION == 5
   path = tmp_path / "cache.json"
   path.write_text(
       json.dumps(
@@ -781,31 +782,100 @@ def test_cache_load_drops_pre_p2_codex_entries_only(tmp_path: Path) -> None:
                                       "end": 999,
                                   }
                           },
+                      "charlie-bot":
+                          {
+                              "thread-file": {
+                                  "sig": [55, 66],
+                                  "records": [],
+                                  "ids": [],
+                                  "meta": None,
+                                  "end": 1,
+                              }
+                          },
                   },
           }))
   cache = tt.TallyCache.load(path, [])
   assert cache.lookup_sig("claude", "claude-file", [11, 22]) is not None
   assert cache.lookup_sig("codex", "codex-file", [33, 44]) is None
   assert cache.prev("codex", "codex-file") is None
+  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is None
+  assert cache.prev("charlie-bot", "thread-file") is None
 
-  # The drop is version-gated, not source-gated: a current document serves its Codex entries.
+  # The drop is version-gated, not source-gated: a current document serves both sources.
+  path.write_text(
+      json.dumps(
+          {
+              "version": tt.TallyCache.SCHEMA_VERSION,
+              "sources":
+                  {
+                      "codex": {
+                          "codex-file": {
+                              "sig": [33, 44],
+                              "records": [],
+                              "root": "tailroot1",
+                              "end": 1,
+                          }
+                      },
+                      "charlie-bot":
+                          {
+                              "thread-file": {
+                                  "sig": [55, 66],
+                                  "records": [],
+                                  "ids": [],
+                                  "meta": None,
+                                  "end": 1,
+                              }
+                          }
+                  },
+          }))
+  cache = tt.TallyCache.load(path, [])
+  assert cache.lookup_sig("codex", "codex-file", [33, 44]) is not None
+  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is not None
+
+
+def test_cache_load_drops_version4_charliebot_entries(tmp_path: Path) -> None:
+  """A version-4 document keeps its Claude and Codex entries but drops its charlie-bot
+  entries: those records predate the cache-split corrections, so their files re-parse."""
+  path = tmp_path / "cache.json"
   path.write_text(
       json.dumps(
           {
               "version": 4,
-              "sources": {
-                  "codex": {
-                      "codex-file": {
-                          "sig": [33, 44],
-                          "records": [],
-                          "root": "tailroot1",
-                          "end": 1,
-                      }
-                  }
-              },
+              "sources":
+                  {
+                      "claude":
+                          {
+                              "claude-file":
+                                  {
+                                      "sig": [11, 22],
+                                      "records": [["claude-m1", "2026-09-10T00:00:00Z", 10, 0, 0, 5]],
+                                  }
+                          },
+                      "codex": {
+                          "codex-file": {
+                              "sig": [33, 44],
+                              "records": [],
+                              "root": "tailroot1",
+                              "end": 1,
+                          }
+                      },
+                      "charlie-bot":
+                          {
+                              "thread-file": {
+                                  "sig": [55, 66],
+                                  "records": [],
+                                  "ids": [],
+                                  "meta": None,
+                                  "end": 1,
+                              }
+                          }
+                  },
           }))
   cache = tt.TallyCache.load(path, [])
+  assert cache.lookup_sig("claude", "claude-file", [11, 22]) is not None
   assert cache.lookup_sig("codex", "codex-file", [33, 44]) is not None
+  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is None
+  assert cache.prev("charlie-bot", "thread-file") is None
 
 
 def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
@@ -875,7 +945,7 @@ def test_charliebot_capture_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
       backend="charlie-code-glm-flash",
       model="openai/zai-org/GLM-5.3-Flash",
       session_ids=[],
-      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5, cache_read=10))])
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
   cb.thread(
       "s1",
       "t2",
@@ -902,10 +972,112 @@ def test_charliebot_capture_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
   assert set(rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
   recorded = rows["charlie-bot", "GLM-5.3-Flash"]
-  assert (recorded.calls, recorded.in_fresh, recorded.cache_write, recorded.cache_read, recorded.output) == \
-      (1, 100, 0, 10, 5)
+  # A CLC thread's usage logs no cache fields: the whole input lands in in_unsplit.
+  assert (
+      recorded.calls, recorded.in_fresh, recorded.cache_write, recorded.cache_read, recorded.in_unsplit,
+      recorded.output) == (1, 0, 0, 0, 100, 5)
   merged = rows["charlie-bot", "GLM-5.4-Flash"]
-  assert (merged.calls, merged.in_fresh, merged.output) == (2, 200 + 300, 6 + 7)
+  # t2's input is unsplit like t1's; the master's carries no cached reads.
+  assert (merged.calls, merged.in_fresh, merged.in_unsplit, merged.output) == (2, 300, 200, 6 + 7)
+
+
+def test_charliebot_codex_thread_counts_its_cached_reads_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A codex-type thread result's input_tokens already includes its cached reads, so
+  in_fresh keeps only the uncached part and the reads land in cache_read — counted once,
+  not once per column."""
+  _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="codex-gpt",
+      model=None,
+      session_ids=["sid-1"],
+      results=[("2026-09-11T20:00:00+00:00", _result_usage(906453, 4104, cache_read=846080))])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 1
+    row = _ledger_rows(ledger)["charlie-bot", "gpt-5"]
+    assert (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.output) == (1, 60373, 0, 846080, 4104)
+    assert row.total == 906453 + 4104  # the envelope's input counted once, cached part included
+
+
+def test_charliebot_clc_thread_lands_whole_in_unsplit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A CLC thread result's usage logs no cache fields, so the hit/miss split is unknowable:
+  the whole input counts in in_unsplit instead of reading as a fresh miss in in_fresh."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-glm-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", {
+          "input_tokens": 4677324,
+          "output_tokens": 39171
+      })])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 1
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
+    assert (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output) == \
+        (1, 0, 0, 0, 4677324, 39171)
+    assert row.total == 4677324 + 39171
+
+
+def test_charliebot_cc_claude_thread_keeps_the_claude_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A cc-claude thread result's usage is in the Claude envelope keys, which carry the
+  split themselves: the counts stay the envelope's own, whatever the codex and CLC
+  envelopes needed."""
+  _stub_registry(monkeypatch, _Option("claude-opus-5", "cc-claude", "anthropic/claude-opus-5-5"))
+  cb = Charliebot(tmp_path)
+  cb.thread(
+      "s1",
+      "t1",
+      backend="claude-opus-5",
+      model="claude-opus-5-5",
+      session_ids=["cl-sess"],
+      results=[
+          (
+              "2026-09-11T20:00:00+00:00", {
+                  "input_tokens": 100,
+                  "cache_creation_input_tokens": 20,
+                  "cache_read_input_tokens": 40,
+                  "output_tokens": 5,
+              })
+      ])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 1
+    row = _ledger_rows(ledger)["charlie-bot", "claude-opus-5-5"]
+    assert (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output) == \
+        (1, 100, 20, 40, 0, 5)
+
+
+def test_charliebot_master_counts_its_cached_reads_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A master capture's trailing result carries the run's usage with the cached reads
+  inside the one input field; they land in cache_read, not in in_fresh beside them."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  cb = Charliebot(tmp_path)
+  cb.master(
+      "s1", "20260913T000000Z", [
+          {
+              "type": "context",
+              "model": "openai/zai-org/GLM-5.4-Flash"
+          },
+          {
+              "type": "result",
+              "usage": {
+                  "input_tokens": 1293011,
+                  "cached_tokens": 1283200,
+                  "output_tokens": 8712
+              }
+          },
+      ])
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture_charliebot(ledger, cb.root) == 1
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.4-Flash"]
+    assert (row.calls, row.in_fresh, row.cache_write, row.cache_read, row.in_unsplit, row.output) == \
+        (1, 9811, 0, 1283200, 0, 8712)
+    assert row.total == 1293011 + 8712
 
 
 def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
@@ -1010,6 +1182,45 @@ def test_charliebot_capture_skips_unkeyable_threads(tmp_path: Path, monkeypatch:
     assert ledger.model_rows() == []
     assert len(ledger.captured_sigs("host-a")) == 2
     assert _capture_charliebot(ledger, cb.root) == 0
+
+
+def test_charliebot_capture_reparses_a_file_the_bare_signature_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread file the older parser recorded under the bare stat pair re-parses once and
+  rewrites its rows onto the same record ids; a file whose p2 signature the ledger holds
+  is skipped."""
+  _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
+  cb = Charliebot(tmp_path)
+  path = cb.thread(
+      "s1",
+      "t1",
+      backend="charlie-code-glm-flash",
+      model="openai/zai-org/GLM-5.3-Flash",
+      session_ids=[],
+      results=[("2026-09-11T20:00:00+00:00", {
+          "input_tokens": 100,
+          "output_tokens": 5
+      })])
+  st = path.stat()
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    # What the older parser wrote: the whole input in in_fresh, under the bare stat pair.
+    stale = UsageRecord(
+        record_id="thread:s1/t1/0",
+        kind=RecordKind.NATIVE,
+        source=USAGE_SOURCE_CHARLIE_BOT,
+        model="GLM-5.3-Flash",
+        account="charlie-code-glm-flash",
+        ts="2026-09-11T20:00:00+00:00",
+        in_fresh=100,
+        cache_write=0,
+        cache_read=0,
+        output=5)
+    assert ledger.record_file("host-a", str(path), f"{st.st_mtime_ns}:{st.st_size}", [stale]) == 1
+    assert _capture_charliebot(ledger, cb.root) == 1  # the bare stat pair is no current signature
+    row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
+    assert (row.calls, row.in_fresh, row.in_unsplit, row.output) == (1, 0, 100, 5)  # same id, corrected values
+    assert ledger.captured_sig("host-a", str(path)) == f"p2:{st.st_mtime_ns}:{st.st_size}"
+    assert _capture_charliebot(ledger, cb.root) == 0  # the matching p2 signature serves
 
 
 # ---------------------------------------------------------------------------

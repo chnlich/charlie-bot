@@ -20,7 +20,9 @@ Plus the resolution's probe-fed forms:
     from one ls-remote
 """
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import run_git
@@ -153,6 +155,114 @@ async def test_merge_base_unexpected_exit_code_raises(
   assert "merge-base --is-ancestor" in message
   assert "exit code 2" in message
   assert "fatal: bad object" in message
+
+
+@pytest.mark.asyncio
+async def test_worktree_add_retries_a_transient_config_lock(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """A lock-class failure from a concurrent worktree add is retried: the second
+  attempt's result is the one used, and the worktree exists."""
+  from src.core import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  expected = run_git(main_checkout, "rev-parse", "feature")
+  wt_path = repo_setup["tmp_path"] / "wt-retry"
+  real_proc_bytes = git_mod._git_proc_bytes
+  calls = {"n": 0}
+
+  async def _lock_once_then_real(repo_path, *args, timeout):
+    if args[:2] == ("worktree", "add"):
+      calls["n"] += 1
+      if calls["n"] == 1:
+        return (
+            SimpleNamespace(returncode=128),
+            b"",
+            b"fatal: could not lock config file .git/config: File exists")
+      return await real_proc_bytes(repo_path, *args, timeout=timeout)
+    return await real_proc_bytes(repo_path, *args, timeout=timeout)
+
+  delays: list[float] = []
+
+  async def _instant_sleep(seconds: float) -> None:
+    delays.append(seconds)
+
+  monkeypatch.setattr(git_mod, "_git_proc_bytes", _lock_once_then_real)
+  monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+  resolution = await git_create_worktree(main_checkout, "feature", "charliebot/task-retry", wt_path)
+
+  assert calls["n"] == 2
+  assert delays == [0.1]
+  assert _worktree_head(wt_path) == expected
+  assert resolution.canonical == "feature"
+
+
+@pytest.mark.asyncio
+async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """A lock that never clears fails loudly on the last attempt with git's own
+  error text, after the full 100ms/200ms/400ms backoff schedule."""
+  from src.core import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  wt_path = repo_setup["tmp_path"] / "wt-locked"
+  real_proc_bytes = git_mod._git_proc_bytes
+  calls = {"n": 0}
+
+  async def _always_locked(repo_path, *args, timeout):
+    if args[:2] == ("worktree", "add"):
+      calls["n"] += 1
+      return (
+          SimpleNamespace(returncode=128),
+          b"",
+          b"fatal: could not lock config file .git/config: File exists")
+    return await real_proc_bytes(repo_path, *args, timeout=timeout)
+
+  delays: list[float] = []
+
+  async def _instant_sleep(seconds: float) -> None:
+    delays.append(seconds)
+
+  monkeypatch.setattr(git_mod, "_git_proc_bytes", _always_locked)
+  monkeypatch.setattr(asyncio, "sleep", _instant_sleep)
+
+  with pytest.raises(RuntimeError) as excinfo:
+    await git_create_worktree(main_checkout, "feature", "charliebot/task-locked", wt_path)
+
+  assert calls["n"] == 4  # the first invocation plus 3 retries
+  assert delays == [0.1, 0.2, 0.4]
+  assert "could not lock config file .git/config: File exists" in str(excinfo.value)
+
+
+@pytest.mark.asyncio
+async def test_worktree_add_non_lock_failure_raises_immediately(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """A failure outside the lock class is not retried: it raises on the first
+  attempt carrying git's real error."""
+  from src.core import git as git_mod
+
+  main_checkout = repo_setup["main_checkout"]
+  wt_path = repo_setup["tmp_path"] / "wt-bad-object"
+  real_proc_bytes = git_mod._git_proc_bytes
+  calls = {"n": 0}
+
+  async def _bad_object(repo_path, *args, timeout):
+    if args[:2] == ("worktree", "add"):
+      calls["n"] += 1
+      return SimpleNamespace(returncode=128), b"", b"fatal: invalid reference: nope"
+    return await real_proc_bytes(repo_path, *args, timeout=timeout)
+
+  async def _no_sleep(seconds: float) -> None:
+    raise AssertionError("a non-lock failure must not back off")
+
+  monkeypatch.setattr(git_mod, "_git_proc_bytes", _bad_object)
+  monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+  with pytest.raises(RuntimeError) as excinfo:
+    await git_create_worktree(main_checkout, "feature", "charliebot/task-bad-object", wt_path)
+
+  assert calls["n"] == 1
+  assert "fatal: invalid reference: nope" in str(excinfo.value)
 
 
 # --- launch path: base-less fallback resolves to the remote's default branch ------

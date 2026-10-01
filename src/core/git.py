@@ -18,6 +18,14 @@ from src.core.timeouts import (
 log = LazyStructlogLogger()
 
 _WORKTREE_LOCAL_ARTIFACT_NAMES = frozenset({".pixi", ".pixi-cache", ".uv-cache", ".venv", ".local", "build"})
+# Concurrent `git worktree add` calls in one repository race on shared state -
+# the .git/config lock, the .git/worktrees gitdir - and git reports those as
+# lock-class errors ("could not lock config file ...: File exists", "Unable to
+# create '<path>': File exists"). A short retry rides them out; any other
+# failure still raises on its first attempt.
+_WORKTREE_LOCK_RETRY_MARKERS = ("could not lock", "unable to create", "file exists")
+_WORKTREE_ADD_ATTEMPTS = 4  # the first invocation plus 3 retries
+_WORKTREE_RETRY_BACKOFF_S = 0.1  # doubled per retry: 100ms, 200ms, 400ms
 
 
 def git_worktree_dir_name(branch_name: str) -> str:
@@ -368,34 +376,48 @@ async def git_create_worktree(
   """
   resolution = await resolve_base_branch(repo_path, base_branch, remote_tip=remote_tip)
   start_point = resolution.start_point
-  try:
-    proc, stdout, stderr = await _git_proc_bytes(
-        repo_path,
-        "worktree",
-        "add",
-        "-b",
-        branch_name,
-        str(wt_path),
-        start_point,
-        timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-    )
-  except TimeoutError as e:
-    raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
-  if proc.returncode != 0:
+  for attempt in range(1, _WORKTREE_ADD_ATTEMPTS + 1):
+    try:
+      proc, stdout, stderr = await _git_proc_bytes(
+          repo_path,
+          "worktree",
+          "add",
+          "-b",
+          branch_name,
+          str(wt_path),
+          start_point,
+          timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
+      )
+    except TimeoutError as e:
+      raise RuntimeError(f'git worktree add timed out after {SUBPROCESS_GIT_WRITE_TIMEOUT}s for {branch_name}') from e
+    if proc.returncode == 0:
+      break
     out = stdout.decode().strip()
     err = stderr.decode().strip()
-    log.error(
-        "worktree_create_failed",
+    transient = any(marker in f"{out}\n{err}".lower() for marker in _WORKTREE_LOCK_RETRY_MARKERS)
+    if not transient or attempt == _WORKTREE_ADD_ATTEMPTS:
+      log.error(
+          "worktree_create_failed",
+          repo=str(repo_path),
+          branch=branch_name,
+          worktree=str(wt_path),
+          base_branch=base_branch,
+          start_point=start_point,
+          stdout=out,
+          stderr=err,
+          returncode=proc.returncode,
+      )
+      raise RuntimeError(f"git worktree add failed for {branch_name}: {err or out or 'unknown error'}")
+    backoff = _WORKTREE_RETRY_BACKOFF_S * 2**(attempt - 1)
+    log.warning(
+        "worktree_add_retry",
         repo=str(repo_path),
         branch=branch_name,
-        worktree=str(wt_path),
-        base_branch=base_branch,
-        start_point=start_point,
-        stdout=out,
-        stderr=err,
-        returncode=proc.returncode,
+        attempt=attempt,
+        backoff_s=backoff,
+        stderr=err or out,
     )
-    raise RuntimeError(f"git worktree add failed for {branch_name}: {err or out or 'unknown error'}")
+    await asyncio.sleep(backoff)
   log.info(
       "git_worktree_created",
       repo=str(repo_path),

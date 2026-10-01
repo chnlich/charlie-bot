@@ -71,6 +71,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     launch_chrome,
     open_cdp_page,
     pick_free_port,
+    stop_child,
 )
 from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
 
@@ -233,12 +234,7 @@ class Side:
         time.sleep(0.1)
 
   def stop(self) -> None:
-    if self.proc and self.proc.poll() is None:
-      self.proc.terminate()
-      try:
-        self.proc.wait(timeout=10)
-      except subprocess.TimeoutExpired:
-        self.proc.kill()
+    stop_child(self.proc, grace_s=10, kill_reap_s=10)
 
 
 # ---------------------------------------------------------------------------
@@ -389,11 +385,7 @@ async def run_browser(chrome: str, sides: list[Side], parent_of: dict) -> dict:
             await cdp.send("Target.closeTarget", {"targetId": target_id})
       return captures
   finally:
-    proc.terminate()
-    try:
-      proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-      proc.kill()
+    stop_child(proc, grace_s=5, kill_reap_s=5)
     shutil.rmtree(profile, ignore_errors=True)
 
 

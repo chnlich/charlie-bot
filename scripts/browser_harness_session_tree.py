@@ -74,6 +74,20 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
+def stop_child(proc: subprocess.Popen | None, grace_s: float, kill_reap_s: float) -> None:
+    """Stop a harness child process: SIGTERM, wait up to ``grace_s``, then SIGKILL and
+    reap within ``kill_reap_s``. A None handle or an already-exited child needs no stop.
+    """
+    if proc is None or proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=grace_s)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=kill_reap_s)
+
+
 def fail(message: str) -> None:
     raise SystemExit(f"BROWSER HARNESS FAILED: {message}")
 
@@ -2838,17 +2852,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             if stop_event is not None:
                 stop_event.set()
             live_process = handles.get("process")
-            if live_process is not None and live_process.poll() is None:
-                live_process.terminate()
-                try:
-                    live_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    live_process.kill()
-            chrome_proc.terminate()
-            try:
-                chrome_proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                chrome_proc.kill()
+            stop_child(live_process, grace_s=5, kill_reap_s=5)
+            stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
             server.should_exit = True
             try:
                 await asyncio.wait_for(serve_task, timeout=10)

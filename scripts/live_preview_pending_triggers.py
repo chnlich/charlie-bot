@@ -54,6 +54,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     open_evidence_dir,
     pick_free_port,
     resolve_chrome,
+    stop_child,
 )
 from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     build_source_home,
@@ -311,17 +312,8 @@ async def run_harness(args: argparse.Namespace) -> None:
               default=str))
       log(f"evidence: {evidence_dir}")
     finally:
-      if chrome_proc is not None:
-        chrome_proc.terminate()
-        try:
-          chrome_proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-          chrome_proc.kill()
-      proc.terminate()
-      try:
-        proc.wait(timeout=10)
-      except subprocess.TimeoutExpired:
-        proc.kill()
+      stop_child(chrome_proc, grace_s=10, kill_reap_s=10)
+      stop_child(proc, grace_s=10, kill_reap_s=10)
 
 
 def main() -> None:

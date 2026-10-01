@@ -54,7 +54,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -110,17 +110,18 @@ GUARD_SOURCE = """
 
 
 async def click(cdp: CDP, session_id: str, selector: str) -> None:
-    await evaluate(cdp, session_id,
-                   f"(() => {{ const el = document.querySelector({json.dumps(selector)});"
-                   f" if (!el) throw new Error('missing element ' + {json.dumps(selector)}); el.click(); }})()")
+  await evaluate(
+      cdp, session_id, f"(() => {{ const el = document.querySelector({json.dumps(selector)});"
+      f" if (!el) throw new Error('missing element ' + {json.dumps(selector)}); el.click(); }})()")
 
 
 async def click_button_by_text(cdp: CDP, session_id: str, text: str, scope: str = "body") -> None:
-    expr = (f"(() => {{ const root = document.querySelector({json.dumps(scope)});"
-            f" const btn = [...root.querySelectorAll('button')].find(b => b.textContent.trim() ==="
-            f" {json.dumps(text)}); if (!btn) throw new Error('missing button ' + {json.dumps(text)});"
-            " btn.click(); })()")
-    await evaluate(cdp, session_id, expr)
+  expr = (
+      f"(() => {{ const root = document.querySelector({json.dumps(scope)});"
+      f" const btn = [...root.querySelectorAll('button')].find(b => b.textContent.trim() ==="
+      f" {json.dumps(text)}); if (!btn) throw new Error('missing button ' + {json.dumps(text)});"
+      " btn.click(); })()")
+  await evaluate(cdp, session_id, expr)
 
 
 TREE_ROW_ACTIVITY_SNIPPET = """
@@ -154,46 +155,55 @@ TREE_ROW_ACTIVITY_SNIPPET = """
 
 
 async def tree_row_activity(cdp: CDP, session_id: str, node_id: str) -> dict:
-    """One tree row's live activity facts: which shared cue is visible and its state label."""
-    expr = TREE_ROW_ACTIVITY_SNIPPET.replace("__NODE_ID__", node_id)
-    value = await evaluate(cdp, session_id, expr)
-    if value is None:
-        raise RuntimeError(f"tree row for {node_id} is not rendered")
-    return value
+  """One tree row's live activity facts: which shared cue is visible and its state label."""
+  expr = TREE_ROW_ACTIVITY_SNIPPET.replace("__NODE_ID__", node_id)
+  value = await evaluate(cdp, session_id, expr)
+  if value is None:
+    raise RuntimeError(f"tree row for {node_id} is not rendered")
+  return value
 
 
 async def tree_row_activity_tolerant(cdp: CDP, session_id: str, node_id: str) -> dict | None:
-    """Like tree_row_activity, but a node whose task left the open tree (its
+  """Like tree_row_activity, but a node whose task left the open tree (its
     automation completed it mid-scenario) reads as None instead of aborting."""
-    try:
-        return await tree_row_activity(cdp, session_id, node_id)
-    except RuntimeError:
-        return None
+  try:
+    return await tree_row_activity(cdp, session_id, node_id)
+  except RuntimeError:
+    return None
 
 
-async def wait_row_activity(cdp: CDP, session_id: str, node_id: str, want: dict,
-                            timeout: float, label: str, samples: list[str] | None = None) -> dict:
-    """Bounded wait for one row's cue state; every distinct state label seen on the
+async def wait_row_activity(
+    cdp: CDP,
+    session_id: str,
+    node_id: str,
+    want: dict,
+    timeout: float,
+    label: str,
+    samples: list[str] | None = None) -> dict:
+  """Bounded wait for one row's cue state; every distinct state label seen on the
     way is kept so the observed transition sequence is reported, not assumed."""
-    deadline = time.monotonic() + timeout
-    last = {}
-    while time.monotonic() < deadline:
-        last = await tree_row_activity(cdp, session_id, node_id)
-        if samples is not None:
-            state = last.get("label", "")
-            if not samples or samples[-1] != state:
-                samples.append(state)
-        if all(last.get(k) == v for k, v in want.items()):
-            return last
-        await asyncio.sleep(0.4)
-    raise TimeoutError(f"{label}: last row state {last}")
+  deadline = time.monotonic() + timeout
+  last = {}
+  while time.monotonic() < deadline:
+    last = await tree_row_activity(cdp, session_id, node_id)
+    if samples is not None:
+      state = last.get("label", "")
+      if not samples or samples[-1] != state:
+        samples.append(state)
+    if all(last.get(k) == v for k, v in want.items()):
+      return last
+    await asyncio.sleep(0.4)
+  raise TimeoutError(f"{label}: last row state {last}")
 
 
 async def open_task_tab(cdp: CDP, session_id: str, tab: str) -> None:
-    await evaluate(cdp, session_id, f"switchTab({json.dumps(tab)})")
-    await wait_for(cdp, session_id,
-                   f"!document.getElementById('tab-{tab}').classList.contains('hidden')",
-                   timeout=10, label=f"tab {tab} visible")
+  await evaluate(cdp, session_id, f"switchTab({json.dumps(tab)})")
+  await wait_for(
+      cdp,
+      session_id,
+      f"!document.getElementById('tab-{tab}').classList.contains('hidden')",
+      timeout=10,
+      label=f"tab {tab} visible")
 
 
 # Motion observation: one temporal window proves a cue actually moves. The
@@ -228,9 +238,8 @@ MOTION_TIMELINE_SNIPPET = """
 """
 
 
-async def wait_motion_live(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
-                           timeout: float = 15.0) -> None:
-    """Bounded wait until both cues' first animation instance is actually running.
+async def wait_motion_live(cdp: CDP, session_id: str, spinner_id: str, gear_id: str, timeout: float = 15.0) -> None:
+  """Bounded wait until both cues' first animation instance is actually running.
 
     A freshly rendered row reports its animationName before any animation
     instance exists (the first sample after a reload can predate the animation
@@ -238,40 +247,42 @@ async def wait_motion_live(cdp: CDP, session_id: str, spinner_id: str, gear_id: 
     window must begin on a running animation or its first sample would
     misread a not-yet-started animation as a restart.
     """
-    expr = ("((ids) => ids.every(id => { const el = document.getElementById(id);"
-            " return !!el && !el.classList.contains('hidden') && el.getAnimations().length > 0"
-            " && el.getAnimations()[0].playState === 'running'; }))("
-            + json.dumps([spinner_id, gear_id]) + ")")
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if await evaluate(cdp, session_id, expr):
-            return
-        await asyncio.sleep(0.2)
-    raise TimeoutError(f"animation not running on {spinner_id}/{gear_id} within {timeout}s")
+  expr = (
+      "((ids) => ids.every(id => { const el = document.getElementById(id);"
+      " return !!el && !el.classList.contains('hidden') && el.getAnimations().length > 0"
+      " && el.getAnimations()[0].playState === 'running'; }))(" + json.dumps([spinner_id, gear_id]) + ")")
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if await evaluate(cdp, session_id, expr):
+      return
+    await asyncio.sleep(0.2)
+  raise TimeoutError(f"animation not running on {spinner_id}/{gear_id} within {timeout}s")
 
 
 async def sample_motion_timeline(cdp: CDP, session_id: str, spinner_id: str, gear_id: str,
                                  intervals: list[float]) -> list[list[dict]]:
-    """Sample two cues' animation timelines at the given unequal spacing.
+  """Sample two cues' animation timelines at the given unequal spacing.
 
     pageNow is read inside the page so CDP latency cancels in the
     advance-versus-wall comparison; the dataset stamp marks element identity so
     a tree repaint (which rebuilds the row) is observable as a generation
     change.
     """
-    expr = (MOTION_TIMELINE_SNIPPET
-            .replace('__SPIN_ID__', json.dumps(spinner_id))
-            .replace('__GEAR_ID__', json.dumps(gear_id)))
-    samples: list[list[dict]] = []
-    for delay in intervals:
-        await asyncio.sleep(delay)
-        samples.append(await evaluate(cdp, session_id, expr))
-    return samples
+  expr = (
+      MOTION_TIMELINE_SNIPPET.replace('__SPIN_ID__',
+                                      json.dumps(spinner_id)).replace('__GEAR_ID__', json.dumps(gear_id)))
+  samples: list[list[dict]] = []
+  for delay in intervals:
+    await asyncio.sleep(delay)
+    samples.append(await evaluate(cdp, session_id, expr))
+  return samples
 
 
-def motion_timeline_verdict(samples: list[list[dict]], kind: str,
-                            min_span_s: float, max_generations: int = 2) -> tuple[bool, str]:
-    """Temporal motion proof for one cue across a sampled window.
+def motion_timeline_verdict(samples: list[list[dict]],
+                            kind: str,
+                            min_span_s: float,
+                            max_generations: int = 2) -> tuple[bool, str]:
+  """Temporal motion proof for one cue across a sampled window.
 
     Passing requires: the cue rendered and live from the window's start; one
     element generation (at most one rebuild, the legal fact-driven repaint)
@@ -280,53 +291,56 @@ def motion_timeline_verdict(samples: list[list[dict]], kind: str,
     own wall clock (a restart or stall falls behind), running playState, and
     at least two distinct transforms.
     """
-    rows = [entry for sample in samples for entry in sample if entry.get('kind') == kind]
-    if len(rows) < 3:
-        return False, f'{kind}: fewer than 3 samples: {rows}'
-    if rows[0].get('missing') or rows[0].get('hidden'):
-        return False, f'{kind}: cue not live at window start: {rows[0]}'
-    generations: list[list[dict]] = []
-    current: list[dict] = []
-    for r in rows:
-        if r.get('missing') or r.get('hidden'):
-            if current:
-                generations.append(current)
-                current = []
-            continue
-        if current and current[-1].get('stamp') != r.get('stamp'):
-            generations.append(current)
-            current = []
-        current.append(r)
-    if current:
+  rows = [entry for sample in samples for entry in sample if entry.get('kind') == kind]
+  if len(rows) < 3:
+    return False, f'{kind}: fewer than 3 samples: {rows}'
+  if rows[0].get('missing') or rows[0].get('hidden'):
+    return False, f'{kind}: cue not live at window start: {rows[0]}'
+  generations: list[list[dict]] = []
+  current: list[dict] = []
+  for r in rows:
+    if r.get('missing') or r.get('hidden'):
+      if current:
         generations.append(current)
-    if len(generations) > max_generations:
-        return False, (f'{kind}: {len(generations)} element generations in one window '
-                       f'(constant restarts): {[g[0].get("stamp") for g in generations]}')
-    best = max(generations, key=lambda g: g[-1]['pageNow'] - g[0]['pageNow'])
-    wall = best[-1]['pageNow'] - best[0]['pageNow']
-    if wall < min_span_s * 1000:
-        return False, f'{kind}: continuous window {wall:.0f}ms < {min_span_s}s: {best}'
-    starts = {g.get('start') for g in best}
-    if len(starts) != 1 or None in starts:
-        return False, f'{kind}: startTime moved inside one generation (animation restart): {best}'
-    times = [g.get('time') for g in best]
-    if (any(not isinstance(t, (int, float)) for t in times)
-            or any(times[i + 1] <= times[i] for i in range(len(times) - 1))):
-        return False, f'{kind}: currentTime not strictly advancing: {times}'
-    advance = times[-1] - times[0]
-    if abs(advance - wall) > 250:
-        return False, (f'{kind}: animation advanced {advance:.0f}ms while the page clock moved '
-                       f'{wall:.0f}ms (restart or stall)')
-    if any(g.get('state') != 'running' for g in best):
-        return False, f'{kind}: playState not running throughout: {[g.get("state") for g in best]}'
-    if any('spin' not in str(g.get('animationName')) for g in best):
-        return False, f'{kind}: animationName lost mid-window: {[g.get("animationName") for g in best]}'
-    transforms = {g.get('transform') for g in best}
-    if len(transforms) < 2:
-        return False, f'{kind}: transform never changed: {transforms}'
-    return True, (f'{kind}: {len(best)} samples over {wall:.0f}ms, advance {advance:.0f}ms, '
-                  f'{len(transforms)} transforms, startTime constant, '
-                  f'{len(generations)} generation(s)')
+        current = []
+      continue
+    if current and current[-1].get('stamp') != r.get('stamp'):
+      generations.append(current)
+      current = []
+    current.append(r)
+  if current:
+    generations.append(current)
+  if len(generations) > max_generations:
+    return False, (
+        f'{kind}: {len(generations)} element generations in one window '
+        f'(constant restarts): {[g[0].get("stamp") for g in generations]}')
+  best = max(generations, key=lambda g: g[-1]['pageNow'] - g[0]['pageNow'])
+  wall = best[-1]['pageNow'] - best[0]['pageNow']
+  if wall < min_span_s * 1000:
+    return False, f'{kind}: continuous window {wall:.0f}ms < {min_span_s}s: {best}'
+  starts = {g.get('start') for g in best}
+  if len(starts) != 1 or None in starts:
+    return False, f'{kind}: startTime moved inside one generation (animation restart): {best}'
+  times = [g.get('time') for g in best]
+  if (any(not isinstance(t, (int, float)) for t in times) or
+      any(times[i + 1] <= times[i] for i in range(len(times) - 1))):
+    return False, f'{kind}: currentTime not strictly advancing: {times}'
+  advance = times[-1] - times[0]
+  if abs(advance - wall) > 250:
+    return False, (
+        f'{kind}: animation advanced {advance:.0f}ms while the page clock moved '
+        f'{wall:.0f}ms (restart or stall)')
+  if any(g.get('state') != 'running' for g in best):
+    return False, f'{kind}: playState not running throughout: {[g.get("state") for g in best]}'
+  if any('spin' not in str(g.get('animationName')) for g in best):
+    return False, f'{kind}: animationName lost mid-window: {[g.get("animationName") for g in best]}'
+  transforms = {g.get('transform') for g in best}
+  if len(transforms) < 2:
+    return False, f'{kind}: transform never changed: {transforms}'
+  return True, (
+      f'{kind}: {len(best)} samples over {wall:.0f}ms, advance {advance:.0f}ms, '
+      f'{len(transforms)} transforms, startTime constant, '
+      f'{len(generations)} generation(s)')
 
 
 def build_source_home(source: Path, backend_ids: list[str]) -> None:

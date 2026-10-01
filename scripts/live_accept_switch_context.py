@@ -60,7 +60,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import ast  # noqa: E402
@@ -112,7 +112,7 @@ REPLY_OPENING_CHARS = 400
 
 
 def fail(message: str) -> NoReturn:
-    raise SystemExit(f"SWITCH-ACCEPT FAILED: {redact(message)}")
+  raise SystemExit(f"SWITCH-ACCEPT FAILED: {redact(message)}")
 
 
 # ---------------------------------------------------------------------------
@@ -121,66 +121,65 @@ def fail(message: str) -> NoReturn:
 
 
 def preflight() -> None:
-    """Assert the source config, launchers, isolation seam and credentials exist.
+  """Assert the source config, launchers, isolation seam and credentials exist.
 
     A failed check exits nonzero naming the missing mechanism. Reads the source
     (production) config and credentials only; the production server is never
     contacted.
     """
-    from src.core.claude_accounts import credentials_present
-    from src.core.config import claude_config_dir, load_config, load_credentials
-    from src.core.home import CREDENTIALS_FILE
-    from src.core.models import ClaudeAccount
+  from src.core.claude_accounts import credentials_present
+  from src.core.config import claude_config_dir, load_config, load_credentials
+  from src.core.home import CREDENTIALS_FILE
+  from src.core.models import ClaudeAccount
 
-    cfg = load_config()
-    for backend_id in BACKEND_IDS:
-        if cfg.get_backend_option(backend_id) is None:
-            fail(f"backend option {backend_id!r} missing from the source config; "
-                 f"the switch legs cannot be built")
-    from src.agents.backends.base import USER_LOCAL_BIN, resolve_binary
-    binaries: dict[str, str] = {}
-    for name in ("claude", "codex", "charlie-code"):
-        try:
-            binaries[name] = resolve_binary(name, USER_LOCAL_BIN)
-        except FileNotFoundError as exc:
-            fail(f"{name} launcher not found on PATH or {USER_LOCAL_BIN}: {exc}")
-    help_text = subprocess.run(
-        [binaries["charlie-code"], "--help"], capture_output=True, text=True, check=False)
-    if "--session-dir" not in help_text.stdout + help_text.stderr:
-        fail("installed charlie-code does not support --session-dir; native CLC session "
-             "isolation cannot be guaranteed")
-    creds = load_credentials()
-    for backend_id in BACKEND_IDS:
-        entry = cfg.get_backend_option(backend_id)
-        credential = getattr(entry, "credential", None)
-        if credential and credential not in creds.sections:
-            fail(f"backend {backend_id!r} references credential section {credential!r} "
-                 f"which is missing from credentials.yaml")
-    login_dir = claude_config_dir()
-    account = ClaudeAccount(label="preflight", config_dir=str(login_dir))
-    if not credentials_present(account):
-        fail(f"the claude login at {login_dir} carries no access token "
-             f"({CREDENTIALS_FILE} missing or empty claudeAiOauth.accessToken); "
-             f"the cc-claude legs cannot run")
-    codex_auth = Path.home() / ".codex" / "auth.json"
-    if not codex_auth.is_file():
-        fail(f"codex login missing: {codex_auth} not found; the codex legs cannot run")
+  cfg = load_config()
+  for backend_id in BACKEND_IDS:
+    if cfg.get_backend_option(backend_id) is None:
+      fail(f"backend option {backend_id!r} missing from the source config; "
+           f"the switch legs cannot be built")
+  from src.agents.backends.base import USER_LOCAL_BIN, resolve_binary
+  binaries: dict[str, str] = {}
+  for name in ("claude", "codex", "charlie-code"):
+    try:
+      binaries[name] = resolve_binary(name, USER_LOCAL_BIN)
+    except FileNotFoundError as exc:
+      fail(f"{name} launcher not found on PATH or {USER_LOCAL_BIN}: {exc}")
+  help_text = subprocess.run([binaries["charlie-code"], "--help"], capture_output=True, text=True, check=False)
+  if "--session-dir" not in help_text.stdout + help_text.stderr:
+    fail("installed charlie-code does not support --session-dir; native CLC session "
+         "isolation cannot be guaranteed")
+  creds = load_credentials()
+  for backend_id in BACKEND_IDS:
+    entry = cfg.get_backend_option(backend_id)
+    credential = getattr(entry, "credential", None)
+    if credential and credential not in creds.sections:
+      fail(
+          f"backend {backend_id!r} references credential section {credential!r} "
+          f"which is missing from credentials.yaml")
+  login_dir = claude_config_dir()
+  account = ClaudeAccount(label="preflight", config_dir=str(login_dir))
+  if not credentials_present(account):
+    fail(
+        f"the claude login at {login_dir} carries no access token "
+        f"({CREDENTIALS_FILE} missing or empty claudeAiOauth.accessToken); "
+        f"the cc-claude legs cannot run")
+  codex_auth = Path.home() / ".codex" / "auth.json"
+  if not codex_auth.is_file():
+    fail(f"codex login missing: {codex_auth} not found; the codex legs cannot run")
 
 
 def load_source_entries() -> dict[str, dict]:
-    """Read the four backend entries from the source config, redacting endpoints."""
-    from src.core.config import load_config
-    cfg = load_config()
-    entries: dict[str, dict] = {}
-    for backend_id in BACKEND_IDS:
-        option = cfg.get_backend_option(backend_id)
-        if option is None:
-            fail(f"backend option {backend_id!r} is not configured in the source config")
-        entries[backend_id] = json.loads(option.model_dump_json())
-        register_secret(
-            str(entries[backend_id].get("api_base") or ""),
-            str(entries[backend_id].get("api_key") or ""))
-    return entries
+  """Read the four backend entries from the source config, redacting endpoints."""
+  from src.core.config import load_config
+  cfg = load_config()
+  entries: dict[str, dict] = {}
+  for backend_id in BACKEND_IDS:
+    option = cfg.get_backend_option(backend_id)
+    if option is None:
+      fail(f"backend option {backend_id!r} is not configured in the source config")
+    entries[backend_id] = json.loads(option.model_dump_json())
+    register_secret(str(entries[backend_id].get("api_base") or ""), str(entries[backend_id].get("api_key") or ""))
+  return entries
 
 
 # ---------------------------------------------------------------------------
@@ -189,30 +188,33 @@ def load_source_entries() -> dict[str, dict]:
 
 
 def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str]:
-    """Write the synthetic home's config and credentials; return (port, access_key).
+  """Write the synthetic home's config and credentials; return (port, access_key).
 
     Only the four backend entries reach the synthetic config — no triggers, no
     account pool, no production state. Without an account pool both cc-claude
     entries draw the process login directory, so they share one continuation
     domain exactly as the legs need.
     """
-    port = pick_free_port()
-    (home / "clc-sessions").mkdir(parents=True, exist_ok=True)
-    from src.core.session_tree_preview import install_native_session_isolation
-    install_native_session_isolation(home / "clc-sessions")
-    config = {
-        "server": {"port": port, "host": "127.0.0.1"},
-        "backends": {
-            "options": [entries[backend_id] for backend_id in BACKEND_IDS],
-            "preference": list(BACKEND_IDS),
-        },
-    }
-    (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    access_key = "switch-accept-key-" + os.urandom(8).hex()
-    (home / "credentials.yaml").write_text(
-        f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    register_secret(access_key)
-    return port, access_key
+  port = pick_free_port()
+  (home / "clc-sessions").mkdir(parents=True, exist_ok=True)
+  from src.core.session_tree_preview import install_native_session_isolation
+  install_native_session_isolation(home / "clc-sessions")
+  config = {
+      "server": {
+          "port": port,
+          "host": "127.0.0.1"
+      },
+      "backends": {
+          "options": [entries[backend_id] for backend_id in BACKEND_IDS],
+          "preference": list(BACKEND_IDS),
+      },
+  }
+  (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+  access_key = "switch-accept-key-" + os.urandom(8).hex()
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  register_secret(access_key)
+  return port, access_key
+
 
 # ---------------------------------------------------------------------------
 # Trial-state readers

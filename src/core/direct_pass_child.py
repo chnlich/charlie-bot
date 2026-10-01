@@ -90,10 +90,16 @@ def _split_chunks(path: Path, size: int, min_chunk_bytes: int) -> tuple[bool, by
     nominal = size * i // k
     if nominal <= prev:
       continue
-    # The split wants the last element line at or before the boundary; a file
-    # whose elements all sit later takes the first one after, so a split still
-    # makes progress on a small file, where one window covers the whole file.
-    anchor = anchor_near(prev, min(nominal, size), from_end=True)
+    # The split wants an element line at or before the boundary; element lines
+    # recur every few hundred bytes on a pretty-printed trace, so a window
+    # ending at the boundary answers without reading the span since the last
+    # boundary. The full-span scan stays for files whose element lines sit
+    # wider apart than the window; a file whose elements all sit later takes
+    # the first one after, so a split still makes progress on a small file,
+    # where one window covers the whole file.
+    anchor = anchor_near(max(prev, nominal - _ANCHOR_WINDOW_BYTES), min(nominal, size), from_end=True)
+    if anchor is None:
+      anchor = anchor_near(prev, min(nominal, size), from_end=True)
     if anchor is None:
       anchor = anchor_near(nominal, min(nominal + _ANCHOR_WINDOW_BYTES, size), from_end=False)
     if anchor is None or anchor <= prev:

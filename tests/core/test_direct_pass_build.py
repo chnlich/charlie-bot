@@ -116,6 +116,28 @@ def test_corrupt_pretty_trace_fails_loud_after_fallback(tmp_path: Path, monkeypa
   assert _run_child(monkeypatch, trace, tmp_path / "sep.gz") == direct_pass_child.EXIT_PARSE_FAILED
 
 
+def test_split_window_probe_and_full_span_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  # The backward anchor probe reads only a window ending at the boundary; a
+  # window of zero always misses, and the full-span scan must still land
+  # element-aligned bounds every chunk parses from.
+  import orjson
+
+  trace = tmp_path / "trace.json"
+  _write_pretty_trace(trace, [_event(i) for i in range(60_000)])
+  for window in (1 << 16, 0):
+    monkeypatch.setattr(direct_pass_child, "_ANCHOR_WINDOW_BYTES", window)
+    split = _split_of(trace)
+    assert split is not None
+    object_form, indent, starts = split
+    bounds = [0, *starts, trace.stat().st_size]
+    assert bounds == sorted(bounds)
+    for index in range(len(bounds) - 1):
+      wrapped = direct_pass_child._chunk_parse_input(
+          trace, bounds[index], bounds[index + 1], index,
+          len(bounds) - 1, object_form, indent)
+      orjson.loads(wrapped)
+
+
 def test_unsplittable_shapes_return_no_split(tmp_path: Path) -> None:
   compact = tmp_path / "compact.json"
   compact.write_text(json.dumps({"traceEvents": [_event(i) for i in range(50)]}))

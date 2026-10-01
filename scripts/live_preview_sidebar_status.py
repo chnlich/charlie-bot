@@ -173,7 +173,7 @@ async def delegate(base: str, key: str, manager_id: str, description: str, repo:
 
 
 async def wait_status(
-    base: str, key: str, ids: list[str], session_id: str, predicate, label: str, timeout: float = 60.0) -> dict:
+    base: str, key: str, ids: list[str], session_id: str, predicate, label: str, timeout: float) -> dict:
   """Poll /api/sessions/status until one node's payload satisfies *predicate*."""
   deadline = time.monotonic() + timeout
   last: dict = {}

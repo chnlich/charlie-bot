@@ -234,7 +234,7 @@ def read_chat_events(home: Path, session_id: str) -> list[dict]:
     return events
 
 
-def assistant_text(events: list[dict], after_index: int = -1) -> str:
+def assistant_text(events: list[dict], after_index: int) -> str:
     """The assistant reply text carried by the events after *after_index*.
 
     Groups the way MessageAggregator renders: an assistant event's text blocks

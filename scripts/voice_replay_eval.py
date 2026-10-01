@@ -81,7 +81,7 @@ class Clip:
     return self.samples.size / SAMPLE_RATE
 
 
-def load_clips(cfg: CharlieBotConfig, only: str = "", limit: int = 0) -> list[Clip]:
+def load_clips(cfg: CharlieBotConfig, only: str, limit: int) -> list[Clip]:
   """Every 16 kHz mono PCM16 recording under sessions/*/voice/, oldest first.
 
   Any file that is not that format — or whose name does not carry the upload

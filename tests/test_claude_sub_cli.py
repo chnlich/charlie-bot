@@ -31,7 +31,7 @@ def _payload(event_name: str, **fields: object) -> dict:
   return payload
 
 
-def _state(prompt: str = PROMPT) -> HookTurnState:
+def _state(prompt: str) -> HookTurnState:
   return HookTurnState(
       expected_session_id=SESSION_ID,
       expected_cwd=WORKING_DIRECTORY,

@@ -507,7 +507,7 @@ def user_event(content: str, timestamp: str | None = None) -> dict:
   return event
 
 
-def scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict:
+def scheduled_trigger_event(content: str, timestamp: str | None) -> dict:
   """A SCHEDULED_TRIGGER chat event; a test needing extra fields builds its own or merges them in."""
   event: dict[str, Any] = {"type": ET.SCHEDULED_TRIGGER, "content": content}
   if timestamp is not None:
@@ -515,7 +515,7 @@ def scheduled_trigger_event(content: str, timestamp: str | None = None) -> dict:
   return event
 
 
-def assistant_event(content: str, event_id: str = "assistant") -> dict:
+def assistant_event(content: str, event_id: str) -> dict:
   """An ASSISTANT event whose message is a single text block; projection and aggregator tests build on this
   shape, and a test needing extra fields (timestamp, token usage) builds its own or merges them in."""
   return {
@@ -624,7 +624,7 @@ def codex_token_count_event(timestamp: Any, **payload_inner: Any) -> dict:
 
 
 def compact_boundary_event(
-    trigger: str | None = "manual", pre_tokens: int | None = None, post_tokens: int | None = None) -> dict:
+    trigger: str | None = "manual", *, pre_tokens: int | None, post_tokens: int | None = None) -> dict:
   """A translated compact_boundary system event in the shape the stream carries and
   handle_compaction_events reads; *trigger* = None omits the key (the shape some fixtures carry)."""
   meta: dict[str, Any] = {}
@@ -1956,7 +1956,7 @@ def write_plans(cfg: CharlieBotConfig, session_id: str, data: dict) -> Path:
   return plans_path
 
 
-def plan_version_v1(file: str = "artifacts/plan_01.html") -> dict:
+def plan_version_v1(file: str) -> dict:
   """One plan-registry version in the current schema: v1, initial trigger, no base, no note
   (present has no predecessor), fixed timestamp."""
   return {

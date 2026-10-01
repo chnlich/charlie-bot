@@ -33,7 +33,7 @@ FABLE_OPTION = backend_option(
 
 def _assistant(
     model: str | None,
-    text: str | None = "reply",
+    text: str | None,
     *,
     blocks: list[dict] | None = None,
     parent_tool_use_id: str | None = None,

@@ -435,7 +435,7 @@ class PlanRegistryManager:
       session_id: str,
       file: str,
       note: str,
-      plan_id: int | None = None,
+      plan_id: int | None,
       trigger: str = "feedback",
       base: dict | None = None,
   ) -> dict:

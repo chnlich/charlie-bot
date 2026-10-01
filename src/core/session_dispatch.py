@@ -605,7 +605,7 @@ class TaskInputDispatcher:
         source_event: dict,
         outcome: str,
         summary: str,
-        result_refs: list[str] | None = None,
+        result_refs: list[str] | None,
         recipient: str | None,
         actor: str = ACTOR_AGENT,
     ) -> tuple[dict, bool]:

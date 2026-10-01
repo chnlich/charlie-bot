@@ -90,13 +90,13 @@ def _codex_turn(model: str) -> dict:
   return {"type": "turn_context", "payload": {"model": model}}
 
 
-def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
+def _codex_count(last: dict, total: dict, ts: str) -> dict:
   return codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
 
 def _capture_all(
     ledger: UsageLedger,
-    claude: Claude | None = None,
+    claude: Claude | None,
     codex: Codex | None = None,
     cache: Path | None = None,
     sessions: Path | None = None) -> dict[str, int]:

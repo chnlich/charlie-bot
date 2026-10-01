@@ -17,6 +17,13 @@ deletes a usage row, so re-reading a pruned-away file's captured rows and their
 spans stays possible forever. (The only DELETE in the schema reaps the aggregate's
 own zero-count day rows; usage rows are never touched.)
 
+``in_unsplit`` holds input tokens whose cache hit/miss split was never logged, and it
+counts toward every total like the other input columns. The one-time schema-2 upgrade
+(run on open while ``ledger_meta`` has no ``schema`` key) moves a ``master:`` or native
+``thread:`` record's input into it when the record's source file is gone -- the one
+case where the split can never be recovered. A record whose file remains keeps its
+input in ``in_fresh``: the file can still be re-parsed with the correct split.
+
 ``captured_files`` remembers the last signature written per (host, path), so a
 collector can skip files it already ingested by content, not by existence.
 
@@ -55,11 +62,12 @@ CREATE TABLE IF NOT EXISTS usage (
   in_fresh INTEGER NOT NULL,
   cache_write INTEGER NOT NULL,
   cache_read INTEGER NOT NULL,
+  in_unsplit INTEGER NOT NULL DEFAULT 0,
   output INTEGER NOT NULL,
   origin TEXT NOT NULL,
   captured_at TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS usage_group_cover ON usage(kind, source, model, account, ts, in_fresh, cache_write, cache_read, output);
+CREATE INDEX IF NOT EXISTS usage_group_cover ON usage(kind, source, model, account, ts, in_fresh, cache_write, cache_read, in_unsplit, output);
 CREATE TABLE IF NOT EXISTS captured_files (
   host TEXT NOT NULL,
   path TEXT NOT NULL,
@@ -99,6 +107,7 @@ CREATE TABLE IF NOT EXISTS usage_agg (
   in_fresh INTEGER NOT NULL,
   cache_write INTEGER NOT NULL,
   cache_read INTEGER NOT NULL,
+  in_unsplit INTEGER NOT NULL DEFAULT 0,
   output INTEGER NOT NULL,
   PRIMARY KEY (source, model, account, kind, day)
 );
@@ -132,50 +141,52 @@ def _agg_contribute_sql(which: str, calls: str) -> str:
   every subtract is a no-op the backfill's own pass subsumes, while a subtract that could
   create a row would plant a negative orphan no later pass removes."""
   return f"""
-  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
   SELECT {which}.source, {which}.model, {which}.account, {which}.kind, SUBSTR({which}.ts, 1, 10), {calls},
          {'-' if calls.startswith('-') else ''}{which}.in_fresh,
          {'-' if calls.startswith('-') else ''}{which}.cache_write,
          {'-' if calls.startswith('-') else ''}{which}.cache_read,
+         {'-' if calls.startswith('-') else ''}{which}.in_unsplit,
          {'-' if calls.startswith('-') else ''}{which}.output
   WHERE NOT ({which}.kind = 'fallback' AND EXISTS ({_COUNTED_SESSIONS_SQL.format(r=which)}))
     AND ({'EXISTS' if calls.startswith('-') else 'NOT EXISTS'} ({_AGG_DAY_EXISTS_SQL.format(r=which)}))
   ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
     calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
     cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
-    output = output + excluded.output;"""
+    in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;"""
 
 
-_AGG_TRIGGERS = f"""
+_AGG_TRIGGER_STATEMENTS = (
+    f"""
 CREATE TRIGGER IF NOT EXISTS usage_agg_after_insert AFTER INSERT ON usage
 BEGIN
   {_agg_contribute_sql('new', '1')}
-END;
-
+END;""",
+    f"""
 CREATE TRIGGER IF NOT EXISTS usage_agg_after_update AFTER UPDATE ON usage
 WHEN old.kind <> new.kind OR old.source <> new.source OR old.model <> new.model
   OR old.account <> new.account OR old.ts <> new.ts OR old.in_fresh <> new.in_fresh
   OR old.cache_write <> new.cache_write OR old.cache_read <> new.cache_read
-  OR old.output <> new.output
+  OR old.in_unsplit <> new.in_unsplit OR old.output <> new.output
 BEGIN
   {_agg_contribute_sql('old', '-1')}
   {_agg_contribute_sql('new', '1')}
-END;
-
+END;""",
+    f"""
 CREATE TRIGGER IF NOT EXISTS usage_agg_after_delete AFTER DELETE ON usage
 BEGIN
   {_agg_contribute_sql('old', '-1')}
-END;
-
+END;""",
+    """
 CREATE TRIGGER IF NOT EXISTS usage_agg_after_native_session AFTER INSERT ON native_sessions
 BEGIN
   -- A newly registered native session retires every counted fallback row carrying it:
   -- one whose other sessions match no native record, so this insert is the flip. The
   -- subtract fires only when the (group, day) row exists (see _agg_contribute_sql):
   -- before the backfill it is a no-op the backfill subsumes.
-  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
   SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
-         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.in_unsplit, -u.output
   FROM usage u
   WHERE u.kind = 'fallback'
     AND EXISTS (SELECT 1 FROM usage_agg a WHERE a.source = u.source AND a.model = u.model
@@ -187,9 +198,9 @@ BEGIN
   ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
     calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
     cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
-    output = output + excluded.output;
-END;
-
+    in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
+END;""",
+    """
 CREATE TRIGGER IF NOT EXISTS usage_agg_after_fallback_session AFTER INSERT ON fallback_sessions
 BEGIN
   -- A fallback's first registered session closes the gap the previous release's write
@@ -198,9 +209,9 @@ BEGIN
   -- present here, so the subtract lands on an existing (group, day) row; this release's
   -- own order (sessions first) reaches this trigger before the usage row exists, where
   -- the SELECT finds nothing and a later registration fails the first-session guard.
-  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+  INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
   SELECT u.source, u.model, u.account, u.kind, SUBSTR(u.ts, 1, 10), -1,
-         -u.in_fresh, -u.cache_write, -u.cache_read, -u.output
+         -u.in_fresh, -u.cache_write, -u.cache_read, -u.in_unsplit, -u.output
   FROM usage u
   WHERE u.record_id = new.record_id
     AND u.kind = 'fallback'
@@ -215,23 +226,34 @@ BEGIN
   ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
     calls = calls + excluded.calls, in_fresh = in_fresh + excluded.in_fresh,
     cache_write = cache_write + excluded.cache_write, cache_read = cache_read + excluded.cache_read,
-    output = output + excluded.output;
-END;
-
+    in_unsplit = in_unsplit + excluded.in_unsplit, output = output + excluded.output;
+END;""",
+    """
 CREATE TRIGGER IF NOT EXISTS usage_agg_purge_empty AFTER UPDATE OF calls ON usage_agg
 WHEN new.calls = 0
 BEGIN
   DELETE FROM usage_agg WHERE source = new.source AND model = new.model AND account = new.account
     AND kind = new.kind AND day = new.day;
-END;
-"""
+END;""",
+)
+
+# The five triggers that sum the token columns. The schema-2 upgrade drops these by name
+# before the move: CREATE TRIGGER IF NOT EXISTS never replaces an existing trigger, so a
+# ledger upgraded in place would otherwise keep four-sum trigger bodies forever.
+_AGG_SUM_TRIGGER_NAMES = (
+    "usage_agg_after_insert",
+    "usage_agg_after_update",
+    "usage_agg_after_delete",
+    "usage_agg_after_native_session",
+    "usage_agg_after_fallback_session",
+)
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
 # from another file or host): the latest capture wins on every non-key column.
 _UPSERT_USAGE_SQL = """
 INSERT INTO usage (record_id, kind, source, model, account, host, ts,
-                   in_fresh, cache_write, cache_read, output, origin, captured_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(record_id) DO UPDATE SET
   kind = excluded.kind,
   source = excluded.source,
@@ -242,6 +264,7 @@ ON CONFLICT(record_id) DO UPDATE SET
   in_fresh = excluded.in_fresh,
   cache_write = excluded.cache_write,
   cache_read = excluded.cache_read,
+  in_unsplit = excluded.in_unsplit,
   output = excluded.output,
   origin = excluded.origin,
   captured_at = excluded.captured_at
@@ -271,6 +294,7 @@ SELECT source, model, account, kind,
        SUM(in_fresh) AS in_fresh,
        SUM(cache_write) AS cache_write,
        SUM(cache_read) AS cache_read,
+       SUM(in_unsplit) AS in_unsplit,
        SUM(output) AS output,
        MIN(NULLIF(SUBSTR(ts, 1, 10), '')) AS first,
        MAX(NULLIF(SUBSTR(ts, 1, 10), '')) AS last
@@ -297,6 +321,7 @@ SELECT source, model, account, kind,
        SUM(in_fresh) AS in_fresh,
        SUM(cache_write) AS cache_write,
        SUM(cache_read) AS cache_read,
+       SUM(in_unsplit) AS in_unsplit,
        SUM(output) AS output,
        MIN(NULLIF(day, '')) AS first,
        MAX(NULLIF(day, '')) AS last
@@ -310,16 +335,21 @@ GROUP BY source, model, account, kind
 # otherwise empty aggregate, and the locked full pass below is the ground truth that
 # subsumes them.
 _AGG_BACKFILL_SQL = f"""
-INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, output)
+INSERT INTO usage_agg (source, model, account, kind, day, calls, in_fresh, cache_write, cache_read, in_unsplit, output)
 SELECT source, model, account, kind, SUBSTR(ts, 1, 10) AS day,
-       COUNT(*), SUM(in_fresh), SUM(cache_write), SUM(cache_read), SUM(output)
+       COUNT(*), SUM(in_fresh), SUM(cache_write), SUM(cache_read), SUM(in_unsplit), SUM(output)
 FROM usage u
 {_COUNTED_WHERE_SQL}
 GROUP BY source, model, account, kind, day
 ON CONFLICT(source, model, account, kind, day) DO UPDATE SET
   calls = excluded.calls, in_fresh = excluded.in_fresh, cache_write = excluded.cache_write,
-  cache_read = excluded.cache_read, output = excluded.output
+  cache_read = excluded.cache_read, in_unsplit = excluded.in_unsplit, output = excluded.output
 """
+
+# The records whose input the schema-2 upgrade may move into in_unsplit once their source
+# file is gone: the manager's master: records and the native thread: ones. codex: records
+# carry their rollout's own hit/miss split, so they never move.
+_UPGRADE_MOVE_RECORDS_SQL = "(record_id GLOB 'master:*' OR (record_id GLOB 'thread:*' AND kind = 'native'))"
 
 
 class RecordKind(StrEnum):
@@ -336,6 +366,8 @@ class UsageRecord:
 
   ``ts`` is ISO 8601 UTC; ``sessions`` names the CLI sessions the call's log belongs
   to, and a fallback record must carry at least one — exclusion is keyed on them.
+  ``in_unsplit`` is input whose cache hit/miss split was never logged; it counts toward
+  every total like the split input columns.
   """
 
   record_id: str
@@ -348,6 +380,7 @@ class UsageRecord:
   cache_write: int
   cache_read: int
   output: int
+  in_unsplit: int = 0
   sessions: tuple[str, ...] = ()
 
   def __post_init__(self) -> None:
@@ -369,9 +402,10 @@ class LedgerAccount:
 class LedgerRow:
   """One aggregated per-model row for the /token-usage page.
 
-  ``fallback_calls``/``fallback_output`` cover only the counted FALLBACK rows behind
-  this row — the part of the row that could still change if a pruned CLI log
-  resurfaces and retires the fallbacks.
+  ``in_unsplit`` is input whose cache hit/miss split was never logged; it counts
+  toward ``total`` like the other input columns. ``fallback_calls``/``fallback_output``
+  cover only the counted FALLBACK rows behind this row — the part of the row that could
+  still change if a pruned CLI log resurfaces and retires the fallbacks.
   """
 
   source: str
@@ -379,6 +413,7 @@ class LedgerRow:
   in_fresh: int
   cache_write: int
   cache_read: int
+  in_unsplit: int
   output: int
   calls: int
   total: int
@@ -391,7 +426,7 @@ class LedgerRow:
 
 @dataclass
 class _Sum:
-  """Mutable token accumulator for one bucket; ``total`` is the four token fields.
+  """Mutable token accumulator for one bucket; ``total`` is the five token fields.
 
   ``add`` folds one aggregate group row, whose ``calls`` column carries the group's
   record count.
@@ -401,6 +436,7 @@ class _Sum:
   in_fresh: int = 0
   cache_write: int = 0
   cache_read: int = 0
+  in_unsplit: int = 0
   output: int = 0
 
   def add(self, row: sqlite3.Row) -> None:
@@ -408,11 +444,12 @@ class _Sum:
     self.in_fresh += row["in_fresh"]
     self.cache_write += row["cache_write"]
     self.cache_read += row["cache_read"]
+    self.in_unsplit += row["in_unsplit"]
     self.output += row["output"]
 
   @property
   def total(self) -> int:
-    return self.in_fresh + self.cache_write + self.cache_read + self.output
+    return self.in_fresh + self.cache_write + self.cache_read + self.in_unsplit + self.output
 
 
 @dataclass
@@ -455,7 +492,8 @@ def _fold_raw_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row) -> N
   """Fold one raw usage row (the delta read's shape, one record) into the accs."""
   day = row["ts"][:10] or None  # the grouped pass's NULLIF(SUBSTR(ts, 1, 10), '')
   grouped = {
-      k: row[k] for k in ("source", "model", "account", "kind", "in_fresh", "cache_write", "cache_read", "output")
+      k: row[k]
+      for k in ("source", "model", "account", "kind", "in_fresh", "cache_write", "cache_read", "in_unsplit", "output")
   }
   grouped.update(calls=1, first=day, last=day)
   _fold_grouped_row(accs, grouped)
@@ -470,6 +508,7 @@ def _rows_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> list[LedgerRow]:
           in_fresh=acc.sums.in_fresh,
           cache_write=acc.sums.cache_write,
           cache_read=acc.sums.cache_read,
+          in_unsplit=acc.sums.in_unsplit,
           output=acc.sums.output,
           calls=acc.sums.calls,
           total=acc.sums.total,
@@ -525,6 +564,8 @@ class UsageLedger:
 
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
   ledger and an existing one keeps every row. No statement here deletes a usage row.
+  A ledger with no ``schema`` stamp in ``ledger_meta`` upgrades to '2' once on open
+  (``_upgrade_schema``).
   """
 
   # The page-rows memo, one entry for the one production ledger path: the rows
@@ -560,8 +601,62 @@ class UsageLedger:
     self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
     self._conn.row_factory = sqlite3.Row
     self._conn.executescript(_SCHEMA)
-    self._conn.executescript(_AGG_TRIGGERS)
+    stamp = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'schema'").fetchone()
+    if stamp is None or stamp["value"] != "2":
+      self._upgrade_schema()  # recreates the aggregate triggers inside its transaction
+    else:
+      for statement in _AGG_TRIGGER_STATEMENTS:
+        self._conn.execute(statement)
     self._conn.commit()
+
+  def _upgrade_schema(self) -> None:
+    """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
+    tables, swap the five token-summing aggregate triggers for bodies that carry it, move
+    the gone-source records' input, bump the rewrite epoch, and stamp.
+
+    The triggers are dropped and recreated before the move so the update trigger
+    subtracts and re-adds every moved row's aggregate contribution -- after the move the
+    aggregate still equals the table pass. Only records whose source file is gone move: a
+    record whose file remains is re-parsed with the correct split, and an old-code
+    process rewriting its row would put the input back into ``in_fresh`` beside a moved
+    ``in_unsplit`` and count the same input twice. BEGIN IMMEDIATE re-checks the stamp
+    under the write lock, so two processes opening an un-stamped ledger upgrade once.
+    """
+    self._conn.execute("BEGIN IMMEDIATE")
+    try:
+      stamp = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'schema'").fetchone()
+      if stamp is not None and stamp["value"] == "2":
+        self._conn.rollback()  # another process upgraded while this one waited on the lock
+        return
+      for table in ("usage", "usage_agg"):
+        columns = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+        if "in_unsplit" not in columns:
+          self._conn.execute(f"ALTER TABLE {table} ADD COLUMN in_unsplit INTEGER NOT NULL DEFAULT 0")
+      for name in _AGG_SUM_TRIGGER_NAMES:
+        self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
+      for statement in _AGG_TRIGGER_STATEMENTS:
+        self._conn.execute(statement)
+      origins = [
+          row["origin"]
+          for row in self._conn.execute(f"SELECT DISTINCT origin FROM usage WHERE {_UPGRADE_MOVE_RECORDS_SQL}")
+      ]
+      gone = [origin for origin in origins if not origin or not Path(origin).exists()]
+      for start in range(0, len(gone), 900):  # SQLite's host-parameter ceiling
+        chunk = gone[start:start + 900]
+        marks = ",".join("?" * len(chunk))
+        self._conn.execute(
+            f"""UPDATE usage SET in_unsplit = in_fresh, in_fresh = 0
+            WHERE {_UPGRADE_MOVE_RECORDS_SQL} AND origin IN ({marks})""", chunk)
+      self._conn.execute(
+          "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
+          " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
+      self._conn.execute(
+          "INSERT INTO ledger_meta (key, value) VALUES ('schema', '2')"
+          " ON CONFLICT(key) DO UPDATE SET value = '2'")
+      self._conn.commit()
+    except BaseException:
+      self._conn.rollback()
+      raise
 
   def __enter__(self) -> Self:
     return self
@@ -632,14 +727,14 @@ class UsageLedger:
       marks = ",".join("?" * len(chunk))
       for row in self._conn.execute(
           f"SELECT record_id, kind, source, model, account, ts, in_fresh, cache_write, cache_read,"
-          f" output FROM usage WHERE record_id IN ({marks})", chunk):
+          f" in_unsplit, output FROM usage WHERE record_id IN ({marks})", chunk):
         existing[row["record_id"]] = tuple(row)[1:]
     rewrote = False
     with self._conn:
       for rec in records:
         new_values = (
             rec.kind.value, rec.source, rec.model, rec.account, rec.ts, rec.in_fresh, rec.cache_write, rec.cache_read,
-            rec.output)
+            rec.in_unsplit, rec.output)
         old_values = existing.get(rec.record_id)
         if old_values is None:
           self._inserted_ids.add(rec.record_id)
@@ -659,7 +754,7 @@ class UsageLedger:
         self._conn.execute(
             _UPSERT_USAGE_SQL, (
                 rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
-                rec.cache_write, rec.cache_read, rec.output, path, captured_at))
+                rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at))
       if rewrote:
         # A value rewrite invalidates every aggregate built before it in any process,
         # so the witness lives in the database, not in this process.
@@ -827,7 +922,7 @@ class UsageLedger:
       marks = ",".join("?" * len(chunk))
       delta.extend(
           self._conn.execute(
-              f"""SELECT source, model, account, kind, ts, in_fresh, cache_write, cache_read, output
+              f"""SELECT source, model, account, kind, ts, in_fresh, cache_write, cache_read, in_unsplit, output
               FROM usage u WHERE u.record_id IN ({marks}) AND NOT EXISTS (
                 SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
                 WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)""", chunk))

@@ -21,7 +21,7 @@ def _identity(event: dict) -> list[dict]:
 
 
 def _write_raw(thread_dir: Path, lines: list[str], age_seconds: float = 0.0) -> Path:
-  raw = thread_dir / "data" / runs.RAW_LOG_NAME
+  raw = thread_dir / runs.DATA_DIR_NAME / runs.RAW_LOG_NAME
   raw.parent.mkdir(parents=True, exist_ok=True)
   raw.write_text("\n".join(lines) + "\n", encoding="utf-8")
   if age_seconds:
@@ -138,7 +138,7 @@ def test_result_success_matrix() -> None:
 
 def _resolve(thread_dir: Path, **overrides: object) -> runs.RunResolution:
   kwargs = {
-      "raw_path": runs.raw_log_path(thread_dir),
+      "raw_path": thread_dir / runs.DATA_DIR_NAME / runs.RAW_LOG_NAME,
       "pid": None,
       "pid_start": None,
       "started_at": NOW,
@@ -160,7 +160,7 @@ def test_resolve_completed_uses_result_event(tmp_path: Path) -> None:
   _write_raw(tmp_path, [ASSISTANT_LINE, RESULT_SUCCESS_LINE])
   resolution = _resolve(tmp_path, pid=None)
   assert resolution.outcome is runs.RunOutcome.COMPLETED
-  assert resolution.completed_at == runs.raw_completion_time(runs.raw_log_path(tmp_path))
+  assert resolution.completed_at == runs.raw_completion_time(tmp_path / runs.DATA_DIR_NAME / runs.RAW_LOG_NAME)
 
   _write_raw(tmp_path, ['{"type": "result", "subtype": "error_during_execution", "is_error": true}'])
   resolution = _resolve(tmp_path)

@@ -396,7 +396,7 @@ class Worker:
 
   def _raw_log_path(self) -> Path:
     # The events log lives in <thread>/data/, which is also the backend's
-    # log_dir — runs.*_path takes the THREAD dir, so join names directly here.
+    # log_dir, so the raw name joins onto the dir the worker already holds.
     return self._events_log.parent / runs.RAW_LOG_NAME
 
   async def _emit_terminal_events(

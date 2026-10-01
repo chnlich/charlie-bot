@@ -313,13 +313,10 @@ def _count_manager_wakes(monkeypatch: pytest.MonkeyPatch, tree, manager_id: str)
   return wakes
 
 
-@pytest.mark.asyncio
-async def test_pooled_iteration_launches_on_the_selected_pool_account(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
-  """The improve controller's iteration Runs are fresh worker launches: with a
-  non-empty pool and a cc-claude backend, each one hands Worker the account
-  claude_accounts.select returned, and the relay loop is armed (the backend
-  build receives the same account)."""
+async def _pooled_pm_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple:
+  """One pooled-account trial stage: the account registry reset, the pooled env,
+  and its root PM manager node. The pooled-account tests script their own
+  backends and wake recording on top of this stage."""
   claude_accounts.reset_for_tests()
   cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
@@ -330,6 +327,17 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
       name="PM",
       backend=None,
       caller=OPERATOR)
+  return cfg, session_mgr, tree, manager
+
+
+@pytest.mark.asyncio
+async def test_pooled_iteration_launches_on_the_selected_pool_account(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
+  """The improve controller's iteration Runs are fresh worker launches: with a
+  non-empty pool and a cc-claude backend, each one hands Worker the account
+  claude_accounts.select returned, and the relay loop is armed (the backend
+  build receives the same account)."""
+  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   recorder = WorkerAccountRecorder()
   recorder.install(monkeypatch)
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -369,16 +377,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   its events log carries the pool-exhausted error (with the earliest reset
   time); the loop classifies it as a quota blocker and ends at that iteration
   failed — no second iteration — and the parent is woken once."""
-  claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller=OPERATOR)
+  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   # An empty build queue: a spawned process would pop from it and fail loudly.
   builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
@@ -445,16 +444,7 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
   """The delivered final report is the parent's new durable input: the delivery
   entry wakes the parent exactly once per loop, whichever way it ends; a
   replayed delivery of the same report (created False) wakes nobody."""
-  claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
-  manager = await tree.create_task(
-      request_id="root",
-      task_parent_id=None,
-      profile="manager",
-      task=TaskSpec(goal="pm"),
-      name="PM",
-      backend=None,
-      caller=OPERATOR)
+  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 

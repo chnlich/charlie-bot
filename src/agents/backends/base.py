@@ -393,6 +393,7 @@ async def tail_follow_events(
     cursor: Path | None = None,
     start_offset: int = 0,
     post_result_timeout: float,
+    buffer_limit: int,
     poll_interval: float = _TAIL_POLL_INTERVAL,
     on_silence: Callable[[], Awaitable[None]] | None = None,
     silence_threshold: float = NO_OUTPUT_REPORT_THRESHOLD,
@@ -413,6 +414,10 @@ async def tail_follow_events(
       The loop ends when the producer is dead AND drained, or when the raw
       file has not grown for *post_result_timeout* after the first RESULT
       (pending tool calls suppress that clock exactly like the live loop did).
+    - A completed line longer than ``buffer_limit`` — the piped funnel's
+      StreamReader delivery limit — is not a real backend event; the drain
+      consumes its bytes without a parse, and the cursor advances past it
+      exactly as for a malformed line.
     - ``is_alive()`` is the producer-liveness source: the asyncio process
       handle on the live path, the (pid, pid_start) identity pair after
       re-attach. A producer that closed stdout or had its raw file replaced
@@ -483,6 +488,15 @@ async def tail_follow_events(
               # The line rides a zero-copy view: orjson parses straight from
               # the mapping, where a bytes slice paid a full copy per line.
               offset = nl + 1
+              if nl - pos > buffer_limit:
+                # A completed line over the piped funnel's delivery limit
+                # cannot be a real backend event, and orjson's scan of a
+                # gigabyte-class line is a multi-second event-loop stall that
+                # ends in the same skip (the 2.1 GB runaway line measured
+                # 6.1 s of parse-fail per drain round over it).
+                log.debug("backend_line_over_limit", bytes=nl - pos, limit=buffer_limit)
+                pos = nl + 1
+                continue
               event = parse_ndjson_line(view[pos:nl], log_event="backend_line_not_json", log_fields={})
               pos = nl + 1
               if event is None:
@@ -990,6 +1004,7 @@ class AgentBackend(ABC):
           cursor=cursor_path,
           start_offset=0,
           post_result_timeout=self._POST_RESULT_TIMEOUT,
+          buffer_limit=self._buffer_limit,
       ):
         yield event
       await self._wait_for_exit_and_cleanup(self._CLEANUP_TIMEOUT, stderr_path)

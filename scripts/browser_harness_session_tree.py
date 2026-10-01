@@ -53,7 +53,8 @@ import tempfile  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
 import urllib.request  # noqa: E402
-from collections.abc import Callable  # noqa: E402
+from collections.abc import AsyncIterator, Callable  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
 from datetime import datetime, timezone  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
@@ -901,6 +902,32 @@ async def screenshot(cdp: CDP, session_id: str, results: Results, name: str) -> 
     return path.name
 
 
+@asynccontextmanager
+async def scenario(cdp: CDP, session_id: str, results: Results, label: str, fail_shot: str,
+                   fail_label: str | None = None) -> AsyncIterator[Callable[[str, str | None], None]]:
+    """One browser scenario: the body's closing ``done(detail, shot)`` records the PASS row; any body
+    exception records the FAIL row over a fresh failure screenshot named *fail_shot*.
+
+    *fail_label* (default *label*) names the FAIL row. A body that ends without calling ``done``
+    is a harness bug and fails loud instead of dropping the row.
+    """
+    recorded = False
+
+    def done(detail: str, shot: str | None) -> None:
+        nonlocal recorded
+        recorded = True
+        results.record(label, ok=True, detail=detail, screenshot=shot)
+
+    try:
+        yield done
+    except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, fail_shot)
+        results.record(fail_label or label, ok=False, detail=repr(exc), screenshot=shot)
+    else:
+        if not recorded:
+            raise AssertionError(f"scenario body finished without recording: {label}")
+
+
 async def expand_to(cdp: CDP, session_id: str, node_ids: list[str]) -> None:
     """Expand the managers above *node_ids* through the sidebar's own API.
 
@@ -1221,7 +1248,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             base = f"http://127.0.0.1:{server_port}"
 
             # ---- S1: desktop load; the session tree is the primary navigation --
-            try:
+            async with scenario(cdp, session_id, results, "desktop tree primary navigation",
+                                "s1_desktop_tree_FAILED") as done:
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
                 await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
@@ -1234,15 +1262,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 active = await evaluate(cdp, session_id, "SESSION_ID")
                 assert_true(active == ids["root"], "the deep link opened the root manager's chat")
                 shot = await screenshot(cdp, session_id, results, "s1_desktop_tree")
-                results.record("desktop tree primary navigation", ok=True,
-                               detail="nested task rows render in the sidebar; the deep link opens the manager chat",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s1_desktop_tree_FAILED")
-                results.record("desktop tree primary navigation", ok=False, detail=repr(exc), screenshot=shot)
+                done("nested task rows render in the sidebar; the deep link opens the manager chat", shot)
 
             # ---- S9: an out-of-band change repaints the open tree in place ----
-            try:
+            async with scenario(cdp, session_id, results, "live tree change repaints the open sidebar",
+                                "s9_live_update_FAILED") as done:
                 await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
                 cdp.drain_list_fetches()
                 # Rename the feature out of band (the server broadcasts a tree
@@ -1266,14 +1290,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 active_ok = await evaluate(cdp, session_id, "SESSION_ID")
                 assert_true(active_ok == ids["root"], "an update to another node never switches the active session")
                 shot = await screenshot(cdp, session_id, results, "s9_live_update")
-                results.record("live tree change repaints the open sidebar", ok=True,
-                               detail="row refreshed in place; bounded list fetches for the change; session unchanged", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s9_live_update_FAILED")
-                results.record("live tree change repaints the open sidebar", ok=False, detail=repr(exc), screenshot=shot)
+                done("row refreshed in place; bounded list fetches for the change; session unchanged", shot)
 
             # ---- S12: creation from a separate client reaches the observer ----
-            try:
+            async with scenario(cdp, session_id, results, "creation from a separate client reaches the observer",
+                                "s12_creation_FAILED") as done:
                 log("  s12: cross-client root creation")
                 await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
                 await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
@@ -1303,15 +1324,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 """)
                 assert_true(names.count("Remote root") == 1, "exactly one row for the new root")
                 shot = await screenshot(cdp, session_id, results, "s12_cross_client_creation")
-                results.record("creation from a separate client reaches the observer", ok=True,
-                               detail="row appeared from the notification alone; bounded list work; session unchanged",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s12_creation_FAILED")
-                results.record("creation from a separate client reaches the observer", ok=False, detail=repr(exc), screenshot=shot)
+                done("row appeared from the notification alone; bounded list work; session unchanged", shot)
 
             # ---- S13: deeper-than-one-level creation and collapsed levels -----
-            try:
+            async with scenario(cdp, session_id, results, "deeper-than-one-level creation from a separate client",
+                                "s13_deep_creation_FAILED") as done:
                 log("  s13: deep creation")
                 await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
                 status, mid = await asyncio.to_thread(
@@ -1352,14 +1369,12 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .some(el => el.textContent === 'Remote leaf')
                 """, timeout=8, label="s13 leaf visible after expanding the mid")
                 shot = await screenshot(cdp, session_id, results, "s13_deep_creation")
-                results.record("deeper-than-one-level creation from a separate client", ok=True,
-                               detail="mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s13_deep_creation_FAILED")
-                results.record("deeper-than-one-level creation from a separate client", ok=False, detail=repr(exc), screenshot=shot)
+                done("mid appeared under the expanded parent; collapsed mid gained the count; "
+                     "expansion reveals the idle leaf", shot)
 
             # ---- S14: agent-scoped creation reaches the observer --------------
-            try:
+            async with scenario(cdp, session_id, results, "agent-scoped creation reaches a connected observer",
+                                "s14_agent_creation_FAILED") as done:
                 log("  s14: scoped-agent creation")
                 from src.core.run_token import RunTokenClaims, sign_run_token
                 agent_token = sign_run_token(
@@ -1377,14 +1392,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                       .some(el => el.textContent === 'Agent worker')
                 """, timeout=10, label="s14 agent-created worker appeared")
                 shot = await screenshot(cdp, session_id, results, "s14_agent_creation")
-                results.record("agent-scoped creation reaches a connected observer", ok=True,
-                               detail="run-token agent created a worker under its manager; the observer saw it live", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s14_agent_creation_FAILED")
-                results.record("agent-scoped creation reaches a connected observer", ok=False, detail=repr(exc), screenshot=shot)
+                done("run-token agent created a worker under its manager; the observer saw it live", shot)
 
             # ---- S20: the name stays readable at any depth ---------------------
-            try:
+            async with scenario(cdp, session_id, results, "tree names stay readable at any depth",
+                                "s20_readability_FAILED") as done:
                 log("  s20: name readability at depth")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -1426,11 +1438,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.documentElement.scrollWidth - document.documentElement.clientWidth")
                 assert_true(spill <= 1, f"no horizontal spill at depth ({spill}px)")
                 shot = await screenshot(cdp, session_id, results, "s20_desktop_readability")
-                results.record("tree names stay readable at any depth", ok=True,
-                               detail="full names render, truncate rather than spill, indent per level, controls kept", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s20_readability_FAILED")
-                results.record("tree names stay readable at any depth", ok=False, detail=repr(exc), screenshot=shot)
+                done("full names render, truncate rather than spill, indent per level, controls kept", shot)
 
             # ---- S21: the live worker's transcript in the main chat ------------
             # A real local process is the Run: its pid is recorded through the
@@ -1441,7 +1449,11 @@ async def run_harness(args: argparse.Namespace) -> None:
             handles = ids["_live_handles"]
             from src.core import event_types as ET
             from src.core.control_events import build_control_event
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "(b) finished: cues clear, delivery summary and four links shown",
+                                "s21_FAILED",
+                                fail_label="(a)-(e) live worker transcript cycle") as done:
                 log("  s21: live worker transcript")
                 # (a) parent page: worker spinner, the parent's gear in both
                 # states, Delegated card live line + link — all following the
@@ -1596,17 +1608,14 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(spinner_hidden and parent_shown == [],
                             f"the running-state cues clear once the Run finished (parent icons {parent_shown})")
                 shot = await screenshot(cdp, session_id, results, "s21c_worker_delivered")
-                results.record("(b) finished: cues clear, delivery summary and four links shown", ok=True,
-                               detail="banner with summary + Raw log/Events/Result/Diff; gear and spinner cleared without a reload", screenshot=shot)
-            except Exception as exc:
-                # The failure probe: which link in the paint chain broke — the
-                # row's presence, its limit hiding, or the stamped thinking
-                # state the spinner renders from.
-                shot = await screenshot(cdp, session_id, results, "s21_FAILED")
-                results.record("(a)-(e) live worker transcript cycle", ok=False, detail=repr(exc), screenshot=shot)
+                done("banner with summary + Raw log/Events/Result/Diff; gear and spinner cleared without a reload"
+                     , shot)
 
             # ---- S22: the legacy thread opens in the main chat ------------------
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "(d) a legacy thread row opens in the main chat at the thread URL",
+                                "s22_FAILED") as done:
                 log("  s22: legacy thread view")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['legacy']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -1634,11 +1643,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                     "document.getElementById('input-area').classList.contains('hidden')")
                 assert_true(hidden_input, "the thread view takes no message input")
                 shot = await screenshot(cdp, session_id, results, "s22_legacy_thread_view")
-                results.record("(d) a legacy thread row opens in the main chat at the thread URL", ok=True,
-                               detail="row click navigates to /?session=<parent>&thread=<id>; transcript renders read-only, no input", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s22_FAILED")
-                results.record("(d) a legacy thread row opens in the main chat at the thread URL", ok=False, detail=repr(exc), screenshot=shot)
+                done("row click navigates to /?session=<parent>&thread=<id>; transcript renders read-only, no input"
+                     , shot)
 
             # ---- S23: an unread reply in a child manager (the subtree mark) --
             # The reply is seeded through the same in-process owner the scenario
@@ -1732,7 +1738,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
                                ok=False, detail=repr(exc) + " | " + diag, screenshot=shot)
             # ---- S24: the withheld launch --------------------------------------
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "(a) a withheld Run shows 'withheld · <reason>' in its Run header",
+                                "s24_FAILED",
+                                fail_label="withheld run scenario") as done:
                 log("  s24: withheld run")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -1750,18 +1760,16 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(header and withheld_text in header,
                             f"the Run header shows the withheld state with its reason ({header})")
                 shot = await screenshot(cdp, session_id, results, "s24_withheld_run")
-                results.record("(a) a withheld Run shows 'withheld · <reason>' in its Run header", ok=True,
-                               detail="cancelled task's queued Run; reason from the durable run_launch_withheld fact", screenshot=shot)
+                done("cancelled task's queued Run; reason from the durable run_launch_withheld fact", shot)
 
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s24_FAILED")
-                results.record("withheld run scenario", ok=False, detail=repr(exc), screenshot=shot)
 
             # ---- S25: the three view pills — Workspace, Later, Archive --------
             # The strip's labels render in order, each pill's click lands in its
             # view (Later serves /api/sessions/starred, Archive builds its
             # project-grouped tree), and coming back to Workspace repaints it.
-            try:
+            async with scenario(cdp, session_id, results, "the pills round-trip Workspace / Later / Archive",
+                                "s25_FAILED",
+                                fail_label="the three view pills") as done:
                 log("  s25: the three view pills")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -1800,12 +1808,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                                f" && !!document.getElementById('session-{ids['root']}')",
                                timeout=12, label="Workspace repaints on return")
                 shot = await screenshot(cdp, session_id, results, "s25_pill_round_trip")
-                results.record("the pills round-trip Workspace / Later / Archive", ok=True,
-                               detail="each pill lands in its view; the archived tree and the Workspace tree both render",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s25_FAILED")
-                results.record("the three view pills", ok=False, detail=repr(exc), screenshot=shot)
+                done("each pill lands in its view; the archived tree and the Workspace tree both render", shot)
 
             # ---- S25b: the Threads pill — the chat-thread subtree's own view --
             # Workspace (the first paint's own list) lists neither the
@@ -1813,7 +1816,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # lists the pair nested under "Discord #general" with no
             # group-header plus button (the Settings gear stays); reloading
             # with filter=threads in the URL stays on Threads.
-            try:
+            async with scenario(cdp, session_id, results, "filter=threads survives a reload", "s25b_FAILED",
+                                fail_label="the Threads pill serves the chat-thread subtree") as done:
                 log("  s25b: the Threads pill")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -1862,20 +1866,18 @@ async def run_harness(args: argparse.Namespace) -> None:
                                f" && !!document.getElementById('session-{ids['discord_thread']}')",
                                timeout=12, label="the reload stays on Threads")
                 shot = await screenshot(cdp, session_id, results, "s25b_threads_reload")
-                results.record("filter=threads survives a reload", ok=True,
-                               detail="the restore path re-enters Threads and refetches the chat-threads list",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s25b_FAILED")
-                results.record("the Threads pill serves the chat-thread subtree", ok=False, detail=repr(exc),
-                               screenshot=shot)
+                done("the restore path re-enters Threads and refetches the chat-threads list", shot)
 
             # ---- S26: a bound node's schedule rides its Workspace row ---------
             # The enabled bound node shows the blue clock, the "Next:" line and
             # the truncated cron · timezone line, with the Settings gear (its
             # menu carries Edit schedule); the disabled one goes grey with
             # "Disabled" and no next run.
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "a bound node's schedule rides its Workspace row; disabled goes grey",
+                                "s26_FAILED",
+                                fail_label="bound nodes' schedule rows in Workspace") as done:
                 log("  s26: bound nodes' schedule rows in Workspace")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id,
@@ -1920,17 +1922,16 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(paused["clock"] and paused["grey"] and paused["disabled"] and not paused["next"],
                             f"the disabled bound row goes grey, says Disabled, and names no next run ({paused})")
                 shot = await screenshot(cdp, session_id, results, "s26_bound_rows_workspace")
-                results.record("a bound node's schedule rides its Workspace row; disabled goes grey", ok=True,
-                               detail="blue clock + Next + cron·timezone + Settings; the disabled row is grey with Disabled",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s26_FAILED")
-                results.record("bound nodes' schedule rows in Workspace", ok=False, detail=repr(exc), screenshot=shot)
+                done("blue clock + Next + cron·timezone + Settings; the disabled row is grey with Disabled", shot)
 
             # ---- S27: the Workspace error badge --------------------------------
             # One broken cron file on disk; the badge renders at the top of the
             # Workspace view and opens the cron editor on the broken task.
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "the Workspace error badge renders from the broken cron entries",
+                                "s27_FAILED",
+                                fail_label="the Workspace error badge") as done:
                 log("  s27: the Workspace error badge")
                 await wait_for(cdp, session_id,
                                'document.querySelector("#session-list [role=button][title=\'Open the first failed task\']") !== null'
@@ -1955,18 +1956,17 @@ async def run_harness(args: argparse.Namespace) -> None:
                             f"the badge opens the cron editor on the first broken task ({badge_info})")
                 assert_true(badge_info["onTop"], "the badge renders at the top of the Workspace view")
                 shot = await screenshot(cdp, session_id, results, "s27_workspace_error_badge")
-                results.record("the Workspace error badge renders from the broken cron entries", ok=True,
-                               detail="⚠ 1 scheduled tasks failed to load, above the tree, opening the cron editor",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s27_FAILED")
-                results.record("the Workspace error badge", ok=False, detail=repr(exc), screenshot=shot)
+                done("⚠ 1 scheduled tasks failed to load, above the tree, opening the cron editor", shot)
 
             # ---- S28: the Archive tree with its dimmed context ancestor --------
             # The archived firing nests under its still-active bound node: the
             # ancestor arrives as a context_only row, dimmed with the active
             # tag, carrying a star and none of the archived row's actions.
-            try:
+            async with scenario(
+                                cdp, session_id, results,
+                                "the Archive tree nests the archived firing under its dimmed context node",
+                                "s28_FAILED",
+                                fail_label="the Archive tree with a dimmed context node") as done:
                 log("  s28: the Archive tree with a dimmed context node")
                 await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
                 await wait_for(cdp, session_id,
@@ -2017,12 +2017,7 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await evaluate(cdp, session_id,
                                f"document.getElementById('session-{ids['bound_node']}').scrollIntoView({{block: 'center'}})")
                 shot = await screenshot(cdp, session_id, results, "s28_archive_context_tree")
-                results.record("the Archive tree nests the archived firing under its dimmed context node", ok=True,
-                               detail="context_only ancestor: dimmed, active tag, star only; the strip counts archived rows alone",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s28_FAILED")
-                results.record("the Archive tree with a dimmed context node", ok=False, detail=repr(exc), screenshot=shot)
+                done("context_only ancestor: dimmed, active tag, star only; the strip counts archived rows alone", shot)
 
             # ---- S29: a row's actions take no width until the row is hovered --
             # The quantified hover-reveal contract on the seeded ops tree: at
@@ -2033,7 +2028,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # the current row keeps its buttons in flow; a starred row shows
             # its solid star at rest; and the star toggles in place, with no
             # list repaint, in both directions.
-            try:
+            async with scenario(cdp, session_id, results, "a row's actions take no width until the row is hovered",
+                                "s29_hover_reveal_FAILED") as done:
                 log("  s29: hover reveal action buttons")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -2305,16 +2301,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(fetches == [], f"the unstar repainted no list: {fetches}")
 
                 shot = await screenshot(cdp, session_id, results, "s29_hover_reveal")
-                results.record("a row's actions take no width until the row is hovered", ok=True,
-                               detail=(f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
-                                       f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
-                                       f"exposes Star/New child session/Archive/Settings on the opaque cover, each "
-                                       f"button spanning the row's full height y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px; "
-                                       f"current row in flow; starred rest star toggles in place, no list repaint"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
-                results.record("a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
+                done((f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
+                     f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
+                     f"exposes Star/New child session/Archive/Settings on the opaque cover, each "
+                     f"button spanning the row's full height y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px; "
+                     f"current row in flow; starred rest star toggles in place, no list repaint"), shot)
 
             # The desktop viewport baseline the touch scenarios must restore.
             desktop_viewport = await evaluate(
@@ -2327,7 +2318,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # pair in the Archive view; Escape closes between rows and exactly
             # one .row-menu ever exists.
             group_name = ids["group_name"]
-            try:
+            async with scenario(cdp, session_id, results, "the desktop Settings menus' item lists",
+                                "s30_desktop_row_menus_FAILED") as done:
                 log("  s30: the desktop row menus' item lists")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -2378,13 +2370,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                     measured.append(f"{name} {len(actual)}")
                     await close_row_menu(cdp, session_id, name)
                 shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus")
-                results.record("the desktop Settings menus' item lists", ok=True,
-                               detail=("every row kind's gear opens exactly one .row-menu with the plan's "
-                                       "items (item counts: " + ", ".join(measured) + "); Escape closes each"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus_FAILED")
-                results.record("the desktop Settings menus' item lists", ok=False, detail=repr(exc), screenshot=shot)
+                done(("every row kind's gear opens exactly one .row-menu with the plan's "
+                     "items (item counts: " + ", ".join(measured) + "); Escape closes each"), shot)
 
             # ---- S30b: the hover reveal stays scoped to the hovered row -------
             # The live check this slice fixes: the row buttons reveal with
@@ -2397,7 +2384,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # actions alone; hovering the named group header reveals no row's
             # buttons, while the header's own + and gear keep today's
             # section-hover reveal.
-            try:
+            async with scenario(cdp, session_id, results, "the hover reveal stays scoped to the hovered row",
+                                "s30b_hover_scope_FAILED") as done:
                 log("  s30b: hover scope stays on the hovered row")
                 await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
                 await wait_for(cdp, session_id, "document.querySelectorAll('#session-list .session-name').length >= 1")
@@ -2472,17 +2460,11 @@ async def run_harness(args: argparse.Namespace) -> None:
                 await hover_point(6, 6)
 
                 shot = await screenshot(cdp, session_id, results, "s30b_hover_scope")
-                results.record("the hover reveal stays scoped to the hovered row", ok=True,
-                               detail=(f"hovering one row's name lights its Star/New child session/"
-                                       f"Archive/Settings alone ({rows_h} visible rows, {buttons_h} "
-                                       f"non-pinned buttons checked); hovering the named group header "
-                                       f"lights no row's buttons ({rows_g} rows, {buttons_g} buttons "
-                                       f"checked)"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s30b_hover_scope_FAILED")
-                results.record("the hover reveal stays scoped to the hovered row", ok=False,
-                               detail=repr(exc), screenshot=shot)
+                done((f"hovering one row's name lights its Star/New child session/"
+                     f"Archive/Settings alone ({rows_h} visible rows, {buttons_h} "
+                     f"non-pinned buttons checked); hovering the named group header "
+                     f"lights no row's buttons ({rows_g} rows, {buttons_g} buttons "
+                     f"checked)"), shot)
 
             # ---- S31: touch row actions at 412x915 -----------------------------
             # The phone input profile (mobile metrics, touch on, hover none and
@@ -2493,7 +2475,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # and the bound row stays within three name lines. The touch menus
             # lead with the Later toggle and the touch-only actions; every item
             # is at least 44px tall.
-            try:
+            async with scenario(cdp, session_id, results, "the touch row actions at 412x915",
+                                "s31_touch_row_actions_FAILED") as done:
                 log("  s31: touch row actions at 412x915")
                 await cdp.send("Emulation.setDeviceMetricsOverride",
                                {"mobile": True, "width": 412, "height": 915,
@@ -2667,13 +2650,8 @@ async def run_harness(args: argparse.Namespace) -> None:
                 touch_numbers.append(f"archived child menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived child')}px")
                 await close_row_menu(cdp, session_id, "touch archived child")
 
-                results.record("the touch row actions at 412x915", ok=True,
-                               detail=("drawer open at 412x915, hover none + pointer coarse: "
-                                       + "; ".join(touch_numbers)),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions_FAILED")
-                results.record("the touch row actions at 412x915", ok=False, detail=repr(exc), screenshot=shot)
+                done(("drawer open at 412x915, hover none + pointer coarse: "
+                     + "; ".join(touch_numbers)), shot)
 
             # ---- S31b: the scheduled row's Last line at 412x915 ----------------
             # The second live check this slice fixes: the seeded fire's Last
@@ -2684,7 +2662,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             # shows the four text lines -- name, Disabled, cron - timezone,
             # Last -- each one line tall, with the Last line truncating like
             # the cron line above it and carrying its full text in title.
-            try:
+            async with scenario(cdp, session_id, results, "the scheduled row's Last line stays on one line at 412x915",
+                                "s31b_last_line_FAILED") as done:
                 log("  s31b: the scheduled row's Last line at 412x915")
                 await cdp.send("Emulation.setDeviceMetricsOverride",
                                {"mobile": True, "width": 412, "height": 915,
@@ -2737,23 +2716,18 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(last["title"] == last["text"] and last["title"].startswith("Last: "),
                             f"the Last line's title carries its full text: {last!r}")
                 shot = await screenshot(cdp, session_id, results, "s31b_last_line")
-                results.record("the scheduled row's Last line stays on one line at 412x915", ok=True,
-                               detail=(f"paused row {measured['rowH']}px tall; line heights "
-                                       + "/".join(f"{line['h']}" for line in lines)
-                                       + f"px at line-height {lines[0]['lineHeight']}px; the Last line "
-                                         "truncates with an ellipsis like the cron line and its title "
-                                         f"carries the full text ({last['title']})"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s31b_last_line_FAILED")
-                results.record("the scheduled row's Last line stays on one line at 412x915", ok=False,
-                               detail=repr(exc), screenshot=shot)
+                done((f"paused row {measured['rowH']}px tall; line heights "
+                     + "/".join(f"{line['h']}" for line in lines)
+                     + f"px at line-height {lines[0]['lineHeight']}px; the Last line "
+                     "truncates with an ellipsis like the cron line and its title "
+                     f"carries the full text ({last['title']})"), shot)
 
             # ---- S32: the cover screen at 280x800 ------------------------------
             # Same touch emulation at the Z Fold cover width: the drawer clamps
             # to the screen (its right edge at most 280) and every visible row
             # entry lies within 0..280.
-            try:
+            async with scenario(cdp, session_id, results, "the cover-screen drawer at 280x800",
+                                "s32_cover_drawer_FAILED") as done:
                 log("  s32: the cover-screen drawer at 280x800")
                 await cdp.send("Emulation.setDeviceMetricsOverride",
                                {"mobile": True, "width": 280, "height": 800,
@@ -2803,14 +2777,9 @@ async def run_harness(args: argparse.Namespace) -> None:
                 assert_true(sweep["leftmost"] >= -0.5 and sweep["rightmost"] <= 280.5,
                             f"every visible row lies within 0..280: {sweep}")
                 shot = await screenshot(cdp, session_id, results, "s32_cover_drawer")
-                results.record("the cover-screen drawer at 280x800", ok=True,
-                               detail=(f"drawer right edge {drawer['right']}px of 280 "
-                                       f"(width {drawer['width']}px); {sweep['count']} visible rows within "
-                                       f"0..280, leftmost {sweep['leftmost']}px, rightmost {sweep['rightmost']}px"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s32_cover_drawer_FAILED")
-                results.record("the cover-screen drawer at 280x800", ok=False, detail=repr(exc), screenshot=shot)
+                done((f"drawer right edge {drawer['right']}px of 280 "
+                     f"(width {drawer['width']}px); {sweep['count']} visible rows within "
+                     f"0..280, leftmost {sweep['leftmost']}px, rightmost {sweep['rightmost']}px"), shot)
 
             # The touch scenarios leave the desktop emulation behind: media
             # features cleared, touch off, and the capture viewport pinned back

@@ -88,7 +88,7 @@ select = [
     "PERF401",
     "PGH003",
     "PIE807",
-    "PLR0402", "PLR5501", "PLR1714", "PLR1716",
+    "PLR0402", "PLR1714", "PLR1716", "PLR5501",
     "PLW0127",
     "PYI025", "PYI034", "PYI036", "PYI041",
     "RET501", "RET504",

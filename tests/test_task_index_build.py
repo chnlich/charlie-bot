@@ -77,17 +77,13 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
 
   The structural read and the inheritance fold need the same node's facts;
   without the pass cache the fold re-walks the events-cache consults the
-  structural read settled, and a two-node build pays three chains for two
-  nodes.
+  structural read settled, and a two-node build pays four chains for two
+  nodes (2 structural + 2 fold).
   """
-  from src.core.task_sessions import TaskTreeManager
-
   await tree.create_task(
       request_id="child", task_parent_id=None, profile="worker", task=None, name="Child", backend=None, caller=OPERATOR)
-  root_id = next(sid for sid, meta in tree._sessions.fresh_cached_metas().items() if meta.profile == "manager")
-  child_id = next(sid for sid, meta in tree._sessions.fresh_cached_metas().items() if meta.profile == "worker")
   calls = {"n": 0}
-  orig = TaskTreeManager._facts_of
+  orig = type(tree)._facts_of
 
   def counting(session_id):
     calls["n"] += 1
@@ -95,4 +91,4 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
 
   monkeypatch.setattr(tree, "_facts_of", counting)
   tree._build_index_sync(tree._sessions.fresh_cached_metas())
-  assert calls["n"] == 2, (f"2-node build made {calls['n']} facts consults (root {root_id}, child {child_id})")
+  assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"

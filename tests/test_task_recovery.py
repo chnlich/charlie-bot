@@ -554,129 +554,139 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
 
 
 @pytest.mark.asyncio
-async def test_boot_node_out_of_space_hands_node_to_retry(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(g) Boot reconcile's node pass failing out of space hands the node to
+async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(g) Boot reconcile's node pass failing out of space hands the node to
     the retry entry; the retry's own round delivers the parent report."""
-    import src.core.task_execution as task_execution_module
-    from src.core.task_recovery import reconcile_task_tree
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
-    await tree.runs.register_run(
-        RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-    await tree.dispatch.finish_run(worker.id, "run-failed", outcome="failed", exit_code=-1)
-    assert child_reports(tree, manager.id) == []
+  import src.core.task_execution as task_execution_module
+  from src.core.task_recovery import reconcile_task_tree
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  await tree.runs.register_run(
+      RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, "run-failed", outcome="failed", exit_code=-1)
+  assert child_reports(tree, manager.id) == []
 
-    # The boot pass's delivery write fails out of space: the node pass raises,
-    # the boot hands the node to the retry, and the retry's round delivers.
-    inject_chat_append_fault(
-        monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
-    await reconcile_task_tree(cfg, tree, adapter)
-    await poll_until(
-        lambda: len(child_reports(tree, manager.id)) == 1,
-        what="the retry's parent report delivery", timeout=10.0)
-    reports = child_reports(tree, manager.id)
-    assert [r.get("outcome") for r in reports] == ["failed"]
-    await poll_until(
-        lambda: worker.id not in adapter._landing_retries,
-        what="the clean round ending the retry task")
-    assert len(child_reports(tree, manager.id)) == 1  # exactly one report
+  # The boot pass's delivery write fails out of space: the node pass raises,
+  # the boot hands the node to the retry, and the retry's round delivers.
+  inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
+  await reconcile_task_tree(cfg, tree, adapter)
+  await poll_until(
+      lambda: len(child_reports(tree, manager.id)) == 1, what="the retry's parent report delivery", timeout=10.0)
+  reports = child_reports(tree, manager.id)
+  assert [r.get("outcome") for r in reports] == ["failed"]
+  await poll_until(lambda: worker.id not in adapter._landing_retries, what="the clean round ending the retry task")
+  assert len(child_reports(tree, manager.id)) == 1  # exactly one report
 
 
 @pytest.mark.asyncio
 async def test_retry_round_skips_runs_this_process_already_drives(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(h) A retry's node reconcile pass never makes a second follower for a
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(h) A retry's node reconcile pass never makes a second follower for a
     run whose execute task is in flight, a run a previous round already
     follows, or a manager-turn follow queued in the master queue; replayed
     delivery starts no second review process."""
-    from src.core import task_recovery
-    from src.core.models import TaskType
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
-        tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  from src.core import task_recovery
+  from src.core.models import TaskType
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+      tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
-    # A run whose execute task is in flight, and a worker run a previous round
-    # already follows: both stay this process's property.
-    for run_key, pid in (("run-inflight", 424811), ("run-followed", 424812)):
-        await tree.runs.register_run(
-            RunRecord(id=run_key, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-        await tree.runs.record_launch(worker.id, run_key, pid=pid, pid_start="1-424000")
-    adapter._launch_inflight.add((worker.id, "run-inflight"))
-    adapter._resume_follows.add((worker.id, "run-followed"))
-
-    # A delivered (terminal) work run whose review is registered but
-    # unfinished: the replayed delivery re-enters _maybe_spawn_review, which
-    # must return the existing review, never a second review process.
+  # A run whose execute task is in flight, and a worker run a previous round
+  # already follows: both stay this process's property.
+  for run_key, pid in (("run-inflight", 424811), ("run-followed", 424812)):
     await tree.runs.register_run(
-        RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-    await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
-    await tree.runs.register_run(
-        RunRecord(id="review-pending", session_id=worker.id, kind="review",
-                  review_of_run_id="run-work", backend="fake", model="fake-model"))
+        RunRecord(id=run_key, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+    await tree.runs.record_launch(worker.id, run_key, pid=pid, pid_start="1-424000")
+  adapter._launch_inflight.add((worker.id, "run-inflight"))
+  adapter._resume_follows.add((worker.id, "run-followed"))
 
-    # A manager-turn follow queued in the master queue: its future stays
-    # pending until released, and the pair stays registered the whole time.
-    await tree.runs.register_run(
-        RunRecord(id="run-mturn", session_id=manager.id, kind="manager_turn",
-                  backend="fake", model="fake-model"))
-    await tree.runs.record_launch(manager.id, "run-mturn", pid=424813, pid_start="1-424000")
-    released = asyncio.Event()
-    resume_calls: list = []
+  # A delivered (terminal) work run whose review is registered but
+  # unfinished: the replayed delivery re-enters _maybe_spawn_review, which
+  # must return the existing review, never a second review process.
+  await tree.runs.register_run(
+      RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.finish_run(worker.id, "run-work", outcome="success", exit_code=0)
+  await tree.runs.register_run(
+      RunRecord(
+          id="review-pending",
+          session_id=worker.id,
+          kind="review",
+          review_of_run_id="run-work",
+          backend="fake",
+          model="fake-model"))
 
-    async def blocked_resume_cc(item):
-        resume_calls.append(item)
-        await asyncio.wait_for(released.wait(), timeout=5)
-        return (None, 0, None, {})
+  # A manager-turn follow queued in the master queue: its future stays
+  # pending until released, and the pair stays registered the whole time.
+  await tree.runs.register_run(
+      RunRecord(id="run-mturn", session_id=manager.id, kind="manager_turn", backend="fake", model="fake-model"))
+  await tree.runs.record_launch(manager.id, "run-mturn", pid=424813, pid_start="1-424000")
+  released = asyncio.Event()
+  resume_calls: list = []
 
-    patch_resume_seams(monkeypatch, resume_cc=blocked_resume_cc)
-    async with fresh_master_state(manager.id):
-        await adapter.resume_run(manager.id, "run-mturn", is_alive=lambda: False)
-        assert (manager.id, "run-mturn") in adapter._resume_follows
+  async def blocked_resume_cc(item):
+    resume_calls.append(item)
+    await asyncio.wait_for(released.wait(), timeout=5)
+    return (None, 0, None, {})
 
-        driven = lambda run: adapter._drives_run(worker.id, run)  # noqa: E731
-        counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
-        await task_recovery._reconcile_node(worker.id, tree, adapter, counters, cfg, is_driven=driven)
-        # No second follower, no second review process: the skipped runs stay
-        # non-terminal and the builds queue is untouched.
-        assert builds == []
-        for run_key in ("run-inflight", "run-followed"):
-            run = await tree.runs.get_run(worker.id, run_key)
-            assert run is not None and run.pid is not None
-            assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_key) is None
-        reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
-        assert [r.id for r in reviews] == ["review-pending"]
+  patch_resume_seams(monkeypatch, resume_cc=blocked_resume_cc)
+  async with fresh_master_state(manager.id):
+    await adapter.resume_run(manager.id, "run-mturn", is_alive=lambda: False)
+    assert (manager.id, "run-mturn") in adapter._resume_follows
 
-        # The manager turn's round skips the queued follow too: still exactly
-        # one resume call (the test's own), and the pair stays registered.
-        await task_recovery._reconcile_node(
-            manager.id, tree, adapter,
-            {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}, cfg,
-            is_driven=lambda run: adapter._drives_run(manager.id, run))
-        assert len(resume_calls) == 1
-        assert (manager.id, "run-mturn") in adapter._resume_follows
+    driven = lambda run: adapter._drives_run(worker.id, run)  # noqa: E731
+    counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
+    await task_recovery._reconcile_node(worker.id, tree, adapter, counters, cfg, is_driven=driven)
+    # No second follower, no second review process: the skipped runs stay
+    # non-terminal and the builds queue is untouched.
+    assert builds == []
+    for run_key in ("run-inflight", "run-followed"):
+      run = await tree.runs.get_run(worker.id, run_key)
+      assert run is not None and run.pid is not None
+      assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), run_key) is None
+    reviews = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+    assert [r.id for r in reviews] == ["review-pending"]
 
-        # Releasing the future resolves the follow: the pair leaves the
-        # registry only then, and the run lands exactly once.
-        released.set()
-        await poll_until(
-            lambda: (manager.id, "run-mturn") not in adapter._resume_follows,
-            what="the manager-turn follow pair release")
-        await wait_for_terminal_run(tree, manager.id, "run-mturn")
-        assert len(resume_calls) == 1
+    # The manager turn's round skips the queued follow too: still exactly
+    # one resume call (the test's own), and the pair stays registered.
+    await task_recovery._reconcile_node(
+        manager.id,
+        tree,
+        adapter, {
+            "nodes": 0,
+            "resumed": 0,
+            "drained": 0,
+            "followups": 0
+        },
+        cfg,
+        is_driven=lambda run: adapter._drives_run(manager.id, run))
+    assert len(resume_calls) == 1
+    assert (manager.id, "run-mturn") in adapter._resume_follows
 
-        # Without the driver the retry follows the worker run itself: the
-        # registry pair was the only thing holding the round back.
-        adapter._launch_inflight.discard((worker.id, "run-inflight"))
-        await task_recovery._reconcile_node(worker.id, tree, adapter,
-                                            {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}, cfg)
-        await wait_for_terminal_run(tree, worker.id, "run-inflight")
+    # Releasing the future resolves the follow: the pair leaves the
+    # registry only then, and the run lands exactly once.
+    released.set()
+    await poll_until(
+        lambda: (manager.id, "run-mturn") not in adapter._resume_follows, what="the manager-turn follow pair release")
+    await wait_for_terminal_run(tree, manager.id, "run-mturn")
+    assert len(resume_calls) == 1
+
+    # Without the driver the retry follows the worker run itself: the
+    # registry pair was the only thing holding the round back.
+    adapter._launch_inflight.discard((worker.id, "run-inflight"))
+    await task_recovery._reconcile_node(
+        worker.id, tree, adapter, {
+            "nodes": 0,
+            "resumed": 0,
+            "drained": 0,
+            "followups": 0
+        }, cfg)
+    await wait_for_terminal_run(tree, worker.id, "run-inflight")

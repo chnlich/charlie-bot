@@ -414,10 +414,6 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# Projection: hidden ancestors, revisions, message parity
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
 # Who closed the gate: the parent's own turn skips the wake, others wake it
 # ---------------------------------------------------------------------------
 

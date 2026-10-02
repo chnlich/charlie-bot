@@ -88,6 +88,7 @@ from src.core.codex_usage import (
 from src.core.config import default_claude_dir, get_config
 from src.core.constants import (
     USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CHARLIE_CODE,
     USAGE_SOURCE_CLAUDE_CODE,
     USAGE_SOURCE_CODEX,
     USAGE_SOURCE_OPENCODE,
@@ -1025,6 +1026,52 @@ def _classify_backend(backend: str, registry: dict) -> str | None:
   if btype == BackendType.CODEX:
     return "codex"
   return "skip"
+
+
+# The page source a charlie-bot record's account attributes to, by backend type: the CLI
+# that ran the call (the cc-* types run the Claude Code CLI against other models). The
+# usage panel (src/api/pages.py) keys its tiles and row slots on these spellings; the
+# ledger keeps the log spelling (USAGE_SOURCE_CHARLIE_BOT) it read the record from.
+_BACKEND_TYPE_SOURCES = {
+    BackendType.CHARLIE_CODE.value: USAGE_SOURCE_CHARLIE_CODE,
+    BackendType.CODEX.value: USAGE_SOURCE_CODEX,
+    BackendType.CC_CLAUDE.value: USAGE_SOURCE_CLAUDE_CODE,
+    BackendType.CC_KIMI.value: USAGE_SOURCE_CLAUDE_CODE,
+    BackendType.CC_OPENAI_COMPATIBLE.value: USAGE_SOURCE_CLAUDE_CODE,
+    BackendType.OPENCODE.value: USAGE_SOURCE_OPENCODE,
+}
+
+# The same id prefixes _BACKEND_ID_PREFIXES judges, resolved to page sources for an id off
+# config (a retired id): the id rule (BackendsConfig in src/core/config.py) keeps the
+# prefix on every id, so a retired id still names its backend type.
+_BACKEND_PREFIX_SOURCES = (
+    ("charlie-code-", USAGE_SOURCE_CHARLIE_CODE),
+    ("codex-", USAGE_SOURCE_CODEX),
+    ("claude-", USAGE_SOURCE_CLAUDE_CODE),
+    ("opencode-", USAGE_SOURCE_OPENCODE),
+)
+
+
+def backend_page_source(backend: str, registry: dict) -> str:
+  """One charlie-bot record's account id attributed to the page source of the CLI that ran
+  the call — one of the four the usage panel keys its tiles and row slots on. A registered
+  id reads its config type; an id off config reads its type prefix; ``clc-master`` is the
+  master-run account for a context model matching no registered CLC backend, CLC's own.
+  Every other type or id raises: a backend with no collection rule must not land silently
+  under a wrong CLI.
+  """
+  if backend == _CLC_MASTER_ACCOUNT:
+    return USAGE_SOURCE_CHARLIE_CODE
+  opt = registry.get(backend)
+  if opt is not None:
+    source = _BACKEND_TYPE_SOURCES.get(str(opt.type))
+    if source is None:
+      raise ValueError(f"{backend}: backend type {opt.type} has no page source")
+    return source
+  for prefix, source in _BACKEND_PREFIX_SOURCES:
+    if backend.startswith(prefix):
+      return source
+  raise ValueError(f"{backend}: neither a registered backend type nor a known type prefix")
 
 
 # The row prefilter: a blob without a tokens key cannot carry token counts. ASCII-case-

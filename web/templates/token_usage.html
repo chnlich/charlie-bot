@@ -93,7 +93,7 @@
   different spellings the sources give it.</p>
   <div class="meta">
     <span class="mtag">window &middot; {{ window[0] }} &rarr; {{ window[1] }}</span>
-    <span class="mtag">sources &middot; Claude Code / Codex / opencode / charlie-bot local logs</span>
+    <span class="mtag">sources &middot; Claude Code / Codex / opencode / CLC local logs</span>
     <span class="mtag">scope &middot; one model = one row (merged across sources and subscriptions)</span>
     <span class="mtag">API calls &middot; {{ ctx.tot_calls }}</span>
     <span class="mtag">generated &middot; {{ generated }}</span>
@@ -119,7 +119,7 @@
       {#- A clause renders only for a source the serving tally's per_src carries: the template
           reloads from disk while the serving process runs the python it started with, so a
           freshly added source's key stays absent until that process restarts. -#}
-      {%- set known = ["Claude Code", "opencode", "Codex", "charlie-bot"] | select("in", ctx.per_src) | list -%}
+      {%- set known = ["Claude Code", "opencode", "Codex", "CLC"] | select("in", ctx.per_src) | list -%}
       {%- for src in known -%}
         {%- set ps = ctx.per_src[src] -%}
         {{- " " if loop.first else ", " -}}
@@ -147,15 +147,16 @@
 
   <h2><span class="n">5</span>Methodology</h2>
   <ul>
-    <li><b>Sources:</b> the same four local-log sources (Claude Code, Codex, opencode, charlie-bot) feed a
+    <li><b>Sources:</b> the same four local-log sources (Claude Code, Codex, opencode, CLC) feed a
       per-call ledger (<code>usage/ledger.sqlite3</code> under this profile&rsquo;s charliebot home): every
       capture &mdash; a page load like this one, the daily cron, the start of every storage-cool sweep,
       <code>charliebot usage-ledger capture</code>
       &mdash; upserts one record per API call into it (deduped on the CLI&rsquo;s own message id), and this page
       reads its rows from that ledger alone. No vendor usage API is called, and ledger rows are never deleted,
-      so the numbers stop shrinking when the source logs they were parsed from are pruned. charlie-bot thread
-      and Run result totals count only when none of their CLI sessions has per-call records, so those rows
-      are a lower bound.</li>
+      so the numbers stop shrinking when the source logs they were parsed from are pruned. CLC usage and the
+      fallback records both come from CharlieBot&rsquo;s own logs; a fallback record counts only when the
+      CLI&rsquo;s own log holds no record of the same session, so a sub-row marked (fallback) is a lower
+      bound.</li>
     <li><b>Dedupe:</b> Claude Code replays history verbatim on resume / fork, so responses are deduped on <code>message.id</code>.</li>
     <li><b>Codex cumulative totals are not additive:</b> subagent threads inherit the parent&rsquo;s
       <code>total_token_usage</code>, so summing across files double counts; the per-request

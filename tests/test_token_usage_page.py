@@ -3,7 +3,8 @@
 The ledger lives under tmp_path and ``capture_local`` is stubbed, so no test reads the
 real charliebot home or scans any real log; every number on the page must come out of
 the seeded ledger alone. The row-merge tests go one step further back: they build synthetic
-``LedgerRow`` s and call the page's context builder directly, with no ledger behind them.
+``LedgerRow`` s and call the page's context builder directly, with no ledger behind them
+and an empty registry — the synthetic charlie-bot accounts resolve by their id prefix.
 """
 
 from __future__ import annotations
@@ -18,7 +19,8 @@ from conftest import make_page_request
 from src.api import pages
 from src.core.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
 
-CC, CODEX, OC, CB = "Claude Code", "Codex", "opencode", "charlie-bot"
+CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
+CB = "charlie-bot"  # the ledger's stored spelling for its own-log records
 CC_TS, CODEX_TS, OC_TS, CB_TS = (
     "2026-01-10T08:00:00+00:00", "2026-01-11T09:00:00+00:00", "2026-01-12T10:00:00+00:00", "2026-01-13T11:00:00+00:00")
 
@@ -40,13 +42,14 @@ def _record(
     output: int,
     kind: RecordKind = RecordKind.NATIVE,
     sessions: tuple[str, ...] = (),
+    account: str = "acct-a",
 ) -> UsageRecord:
   return UsageRecord(
       record_id=record_id,
       kind=kind,
       source=source,
       model=model,
-      account="acct-a",
+      account=account,
       ts=ts,
       in_fresh=10,
       cache_write=0,
@@ -77,12 +80,14 @@ def _seed(path: Path) -> None:
                 sessions=("sess-pruned",))
         ])
     ledger.record_file("host", "/logs/oc.jsonl", "sig-oc", [_record("oc-1", OC, "o3", OC_TS, 300)])
-    ledger.record_file("host", "/logs/cb.jsonl", "sig-cb", [_record("cb-1", CB, "claude-haiku-4", CB_TS, 400)])
+    ledger.record_file(
+        "host", "/logs/cb.jsonl", "sig-cb", [_record("cb-1", CB, "claude-haiku-4", CB_TS, 400, account="charlie-code-x")])
 
 
 def _stub_capture(monkeypatch: pytest.MonkeyPatch, ledger_path: Path, written: dict[str, int]) -> None:
   monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
   monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: written)
+  monkeypatch.setattr(pages, "_backend_registry", dict)
 
 
 def _data_rows(body: str) -> list[dict]:
@@ -102,7 +107,7 @@ def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
 
 async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
   ledger_path = _seeded_ledger(monkeypatch, tmp_path)
-  _stub_capture(monkeypatch, ledger_path, {"Codex": 3})
+  _stub_capture(monkeypatch, ledger_path, {"Codex": 3, CB: 5})
   response = await pages.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   return response.body.decode("utf-8")
@@ -159,7 +164,7 @@ def _ledger_row(
 
 def _payload_rows(rows: list[LedgerRow]) -> list[dict]:
   """The serialized rows the page's JS would feed its charts and table from."""
-  return json.loads(pages._token_usage_context(rows, {}, {}, 0.0)["payload"])["rows"]
+  return json.loads(pages._token_usage_context(rows, {}, {}, 0.0, {})["payload"])["rows"]
 
 
 @pytest.mark.asyncio
@@ -184,10 +189,11 @@ async def test_counted_fallback_row_carries_a_lower_bound_and_native_rows_do_not
 
 @pytest.mark.asyncio
 async def test_each_source_native_start_appears(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """The Retention item names every source's first native date, source beside its date."""
+  """The Retention item names every source's first native date, source beside its date;
+  CLC's date is the charlie-bot span, whose native records are all CLC usage."""
   body = await _get_page(monkeypatch, tmp_path)
   retention = re.search(r"<li><b>Retention:</b>(.*?)</li>", body, re.DOTALL).group(1)
-  for src, date in ((CC, CC_TS[:10]), (CODEX, CODEX_TS[:10]), (OC, OC_TS[:10]), (CB, CB_TS[:10])):
+  for src, date in ((CC, CC_TS[:10]), (CODEX, CODEX_TS[:10]), (OC, OC_TS[:10]), (CLC, CB_TS[:10])):
     assert src in retention
     assert date in retention
 
@@ -218,14 +224,14 @@ def test_spellings_of_one_model_merge_into_one_row() -> None:
   total order and sum to the row, and the per-source segments sum to it too."""
   rows = [
       _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
-      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("b", 1, 10, 10)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("charlie-code-b", 1, 10, 10)]),
   ]
   (row,) = _payload_rows(rows)
   assert row["model"] == "GLM-5.3-Flash"
   assert row["total"] == 40
-  assert [(a["name"], a["total"]) for a in row["accounts"]] == [("opencode · a", 30), ("charlie-bot · b", 10)]
+  assert [(a["name"], a["total"]) for a in row["accounts"]] == [("opencode · a", 30), ("CLC · charlie-code-b", 10)]
   assert [s["total"] for s in row["segments"]] == [30, 10]
-  assert [s["slot"] for s in row["segments"]] == [pages._USAGE_SLOT[OC], pages._USAGE_SLOT[CB]]
+  assert [s["slot"] for s in row["segments"]] == [pages._USAGE_SLOT[OC], pages._USAGE_SLOT[CLC]]
   assert sum(s["total"] for s in row["segments"]) == row["total"]
 
 
@@ -245,30 +251,35 @@ def test_canonical_name_merges_spellings_but_keeps_versions_apart() -> None:
   assert got == [("GLM-5.3-Flash", 7), ("Kimi-K3", 12), ("claude-fable-5", 9), ("claude-fable-5-1", 11)]
 
 
-def test_per_source_tiles_still_count_the_unmerged_rows() -> None:
-  """The tiles answer how much each CLI used, so their totals and model counts come from
-  the ledger's own rows: opencode's three spellings show three tile models behind the
-  page's two merged rows."""
+def test_per_source_tiles_count_attributed_accounts() -> None:
+  """The tiles answer how much each CLI ran, so they sum the accounts attributed to the
+  source and dedupe their model count on the canonical name: opencode's three spellings
+  show two tile models behind the page's two merged rows, and one charlie-bot row splits
+  between the CLC and Codex tiles its accounts attribute to."""
   rows = [
-      _ledger_row(OC, "moonshotai/Kimi-K3", in_fresh=5),
-      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7),
-      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4),
-      _ledger_row(CB, "GLM-5.3-Flash", output=3),
+      _ledger_row(OC, "moonshotai/Kimi-K3", in_fresh=5, accounts=[LedgerAccount("a", 1, 0, 5)]),
+      _ledger_row(OC, "Kimi-K3 (amd-kimi-k3)", output=7, accounts=[LedgerAccount("a", 1, 7, 7)]),
+      _ledger_row(OC, "zai-org/GLM-5.3-Flash", output=4, accounts=[LedgerAccount("a", 1, 4, 4)]),
+      _ledger_row(
+          CB,
+          "GLM-5.3-Flash",
+          output=3,
+          accounts=[LedgerAccount("charlie-code-x", 1, 2, 2), LedgerAccount("codex-y", 1, 1, 1)]),
   ]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0)["ctx"]
-  for src in (CC, CODEX, OC, CB):
-    sub = [r for r in rows if r.source == src]
-    assert ctx["per_src"][src]["models"] == len(sub)
-    assert ctx["per_src"][src]["t_comp"] == pages._compact(sum(r.total for r in sub))
-  assert ctx["per_src"][OC]["models"] == 3
-  assert len(_payload_rows(rows)) == 2
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  assert ctx["per_src"][OC]["models"] == 2
+  assert ctx["per_src"][OC]["total"] == 16
+  assert ctx["per_src"][CLC]["t_comp"] == pages._compact(2)
+  assert ctx["per_src"][CLC]["models"] == 1
+  assert ctx["per_src"][CODEX]["total"] == 1
+  assert ctx["per_src"][CC]["total"] == 0
 
 
 def test_in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() -> None:
   """The unsplit input rides the payload row that feeds the table column, and the hero's
   total and input figures count it like the other input columns."""
   rows = [_ledger_row(CC, "claude-sonnet-4", in_fresh=7, cache_write=3, cache_read=11, in_unsplit=5, output=4)]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0)["ctx"]
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
   (row,) = _payload_rows(rows)
   assert row["in_unsplit"] == 5
   assert row["total"] == 30
@@ -282,14 +293,74 @@ async def test_rendered_page_has_one_row_per_canonical_model(monkeypatch: pytest
   page row, carrying the merged source · account sub-rows and both sources' segments."""
   rows = [
       _ledger_row(OC, "zai-org/GLM-5.3-Flash", in_fresh=20, output=10, accounts=[LedgerAccount("a", 3, 10, 30)]),
-      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("b", 1, 10, 10)]),
+      _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("charlie-code-b", 1, 10, 10)]),
       _ledger_row(CC, "claude-sonnet-4", output=100),
   ]
-  monkeypatch.setattr(pages, "_capture_ledger_rows", lambda: (rows, {}, {}, 0.0))
+  monkeypatch.setattr(pages, "_capture_ledger_rows", lambda: (rows, {}, {}, 0.0, {}))
   response = await pages.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   data = _data_rows(response.body.decode("utf-8"))
   assert [(r["model"], r["total"]) for r in data] == [("claude-sonnet-4", 100), ("GLM-5.3-Flash", 40)]
   glm = data[1]
-  assert [a["name"] for a in glm["accounts"]] == ["opencode · a", "charlie-bot · b"]
+  assert [a["name"] for a in glm["accounts"]] == ["opencode · a", "CLC · charlie-code-b"]
   assert [s["total"] for s in glm["segments"]] == [30, 10]
+
+
+def test_charlie_bot_native_accounts_read_as_clc() -> None:
+  """A charlie-bot row's CLC-backend account attributes to CLC: one CLC segment, the
+  CLC · account sub-row, the CLC tile — and CLC's native start is the ledger's charlie-bot
+  native start, whose native records are all CLC usage."""
+  rows = [_ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)])]
+  (row,) = _payload_rows(rows)
+  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(pages._USAGE_SLOT[CLC], 140)]
+  assert [a["name"] for a in row["accounts"]] == ["CLC · charlie-code-x"]
+  ctx = pages._token_usage_context(rows, {CB: "2026-01-01"}, {}, 0.0, {})["ctx"]
+  assert ctx["per_src"][CLC]["t_comp"] == pages._compact(140)
+  assert ctx["per_src"][CLC]["native_start"] == "2026-01-01"
+
+
+def test_charlie_bot_fallback_accounts_join_their_cli_s_source() -> None:
+  """A charlie-bot row's fallback account merges into the CLI that ran it: model gpt-z's
+  Codex row and charlie-bot fallback row give one row of 40 with a single Codex segment,
+  the CLI's own account unmarked and the fallback account's sub-row marked, and a Codex
+  tile of 40."""
+  rows = [
+      _ledger_row(CODEX, "gpt-z", output=30, accounts=[LedgerAccount("work", 3, 30, 30)]),
+      _ledger_row(CB, "gpt-z", output=10, fallback_output=10, accounts=[LedgerAccount("codex-y", 1, 10, 10)]),
+  ]
+  (row,) = _payload_rows(rows)
+  assert row["total"] == 40
+  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(pages._USAGE_SLOT[CODEX], 40)]
+  assert [(a["name"], a["total"]) for a in row["accounts"]] == [
+      ("Codex · work", 30),
+      ("Codex · codex-y (fallback)", 10),
+  ]
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  assert ctx["per_src"][CODEX]["total"] == 40
+  assert ctx["per_src"][CLC]["total"] == 0
+
+
+def test_four_tile_totals_sum_to_the_page_total() -> None:
+  """Every token lands in exactly one tile: the four attributed tile totals sum to the
+  page total across all rows."""
+  rows = [
+      _ledger_row(CC, "claude-sonnet-4", in_fresh=7, output=4, accounts=[LedgerAccount("acct-a", 1, 4, 11)]),
+      _ledger_row(CODEX, "gpt-z", output=30, accounts=[LedgerAccount("work", 3, 30, 30)]),
+      _ledger_row(CB, "gpt-z", output=10, accounts=[LedgerAccount("codex-y", 1, 10, 10)]),
+      _ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)]),
+      _ledger_row(OC, "o3", output=300, accounts=[LedgerAccount("acct-a", 3, 300, 300)]),
+  ]
+  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  assert sum(ctx["per_src"][src]["total"] for src in (CC, CODEX, OC, CLC)) == sum(r.total for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The rendered legend lists Claude Code, Codex, opencode, CLC in slot order, the
+  self-check names CharlieBot's own log, and no charlie-bot text reaches the page."""
+  body = await _get_page(monkeypatch, tmp_path)
+  leg = re.search(r"const LEG = (\[[^\]]*\])", body).group(1)
+  assert json.loads(leg) == [CC, CODEX, OC, CLC]
+  assert "CharlieBot logs: 5 records written this load" in body
+  assert "charlie-bot" not in body

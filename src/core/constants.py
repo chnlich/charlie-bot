@@ -111,14 +111,20 @@ NCU_VIEWER_PATH = "/ncu"
 AUTH_STATUS_PATH = "/api/auth/status"
 
 # Usage-source vocabulary: the token tally (src/core/token_tally.py) tags every row with
-# one of these corpus sources, and the usage panel (src/api/pages.py) keys its per-source
-# tiles and row slots on the same spellings. The panel reads rows the tally produces but
-# must not import it — the tally pulls the config and model stack onto every page render —
-# so the shared spellings live in this stdlib-only module.
+# one of these corpus sources — the log the record was read from — and the usage panel
+# (src/api/pages.py) attributes each charlie-bot row's accounts to the CLI that ran the
+# call, so the panel's tiles and row slots key on the four CLI spellings below plus
+# USAGE_SOURCE_CHARLIE_CODE, never on USAGE_SOURCE_CHARLIE_BOT. The panel reads rows the
+# tally produces but must not import it — the tally pulls the config and model stack onto
+# every page render — so the shared spellings live in this stdlib-only module.
 USAGE_SOURCE_CLAUDE_CODE = "Claude Code"
 USAGE_SOURCE_CODEX = "Codex"
 USAGE_SOURCE_OPENCODE = "opencode"
 USAGE_SOURCE_CHARLIE_BOT = "charlie-bot"
+# The panel's CLC source: Charlie Code's own usage, which only CharlieBot's own logs hold.
+# The constant spells the full name; the value is the CLC spelling the interface uses.
+# Not to be confused with USAGE_SOURCE_CLAUDE_CODE above, the Claude Code CLI's source.
+USAGE_SOURCE_CHARLIE_CODE = "CLC"
 
 
 class WatchKind(StrEnum):

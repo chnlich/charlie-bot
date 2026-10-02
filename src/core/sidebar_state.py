@@ -84,11 +84,11 @@ _derived_maps: BoundedMemo[tuple, dict] = BoundedMemo(_DERIVED_MAP_MEMO_LIMIT)
 _revisions: dict[str, int] = {}
 
 # session id -> row-source paths the writers marked since the last take. The
-# workers-panel list poll proves its stored body against exactly these files
-# (one stat per mark) instead of re-walking every row-source file; a mark
-# without a path, or a taken-and-dropped race, leaves the poll on the full
-# walk. Capped per session: an overflowing burst clears the set, and the next
-# proof full-walks — the same verdict an empty set gets.
+# session list route proves its stored body against exactly these files (one
+# stat per mark) instead of re-walking every row-source file; a mark without a
+# path, or a taken-and-dropped race, leaves the request on the full walk.
+# Capped per session: an overflowing burst clears the set, and the next proof
+# full-walks — the same verdict an empty set gets.
 _MARKED_PATHS_CAP = 64
 _marked_paths: dict[str, set[str]] = {}
 

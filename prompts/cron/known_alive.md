@@ -473,3 +473,24 @@ Known-alive symbols:
   Python-only reference scan reads it as a test-only wrapper. Never delete it on that
   evidence: the sweep rounds that digest rows die with AttributeError (the collector-failure
   class the ledger refactor's 2026-09-29 history row documents).
+- `list_threads`, `get_thread`, `get_thread_events` (`src/api/threads.py`, the
+  `/{session_id}/list`, `/{session_id}/threads/{thread_id}` and
+  `.../events` routes under `server.py`'s `/api/threads` prefix) and the row
+  shapes they serve (`description_full_len`, the attach pair
+  `build_attach_command`/`_attach_available` build) — reached by the perf
+  sweep's doc-embedded collectors: `scripts/perf_sweep.py` executes
+  `docs/perf_baseline.md`'s collector blocks verbatim, and the standing M36/M68
+  (list poll, its `?etag=` conditional and the marked rebuild), M59 (detail
+  row, full and `?attach=1`, asserting the two-key attach body) and M34
+  (events fetch, the `after=` envelope) collectors drive exactly these routes
+  through an in-process ASGI app mounting this router, the live smoke harness
+  GETs the detail route's alias resolution
+  (`/api/threads/{owner}/threads/{run}` in `scripts/live_smoke_task_tree.py`),
+  and the routes' own tests fetch all three. The web UI's workers panel — the
+  routes' original browser client — is gone (its JS files were deleted), so a
+  `web/` + `src/cli/` grep finds no fetch of the three GET paths, and the zero
+  browser reads can read as a deletable surface. Never delete them on that
+  evidence: the collectors' contract assertions then fail on the 404 body
+  ("attach-mode contract changed", the collector-failure class the baseline
+  doc's history rows document), the smoke harness's alias check fails, and the
+  tests lose their routes.

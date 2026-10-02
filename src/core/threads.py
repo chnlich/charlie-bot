@@ -64,7 +64,7 @@ class ThreadManager:
   def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
     # StatSignatureMemo keyed by metadata.json path. Re-validating every thread
-    # file on each 3 s workers-panel poll costs ~176 us per thread; the
+    # file on each list walk costs ~176 us per thread; the
     # stat-before-read contract keeps a rewrite from serving old data (a
     # rewrite always moves (mtime_ns, size)). Each walk drops the entries for
     # files it did not see, so a deleted thread never lingers, and concurrent
@@ -87,8 +87,8 @@ class ThreadManager:
 
     def load_all() -> list[ThreadMetadata | None]:
       # One executor hop for the whole scan: a per-file aiofiles read costs
-      # ~0.5 ms in thread-pool hand-off, so per-file reads make the 3s
-      # workers-panel poll scale linearly with thread count.
+      # ~0.5 ms in thread-pool hand-off, so per-file reads make the list walk
+      # scale linearly with thread count.
       if not threads_dir.is_dir():
         return []
       return self._metas_from_stats(iter_thread_meta_stats(threads_dir), str(threads_dir))

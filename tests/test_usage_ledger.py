@@ -9,6 +9,7 @@ than a hard-coded total.
 from __future__ import annotations
 
 import sqlite3
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1144,6 +1145,27 @@ def _pre_fix_ledger(path: Path, served: list[UsageRecord], late: list[UsageRecor
     raw.executemany("INSERT INTO ledger_meta (key, value) VALUES (?, ?)", [("agg_backfilled", "1"), ("schema", "2")])
     raw.commit()
   finally:
+    raw.close()
+
+
+def test_open_of_a_current_ledger_does_not_queue_behind_a_live_writer(tmp_path):
+  """The open's trigger match check reads before it locks: against a held write
+  transaction the open completes at the read's own speed instead of waiting out the
+  writer's busy ceiling — every opener (CLI, page, collector) pays the open."""
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    ledger.record_file(
+        HOST, "/logs/a.jsonl", "sig-a", [_record("rec-1", RecordKind.NATIVE, sessions=("sess-a",), output=5)])
+  raw = sqlite3.connect(path, timeout=5)
+  try:
+    raw.execute("CREATE TABLE open_probe (x)")  # uncommitted write transaction: the write lock held
+    raw.execute("INSERT INTO open_probe VALUES (1)")
+    started = time.monotonic()
+    with UsageLedger(path):
+      pass
+    assert time.monotonic() - started < 15  # the open's own read, not the 30 s writer wait
+  finally:
+    raw.rollback()
     raw.close()
 
 

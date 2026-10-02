@@ -62,7 +62,12 @@ from src.core.models import SessionStatus
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
-from src.core.timeouts import HOME_SERVICE_PROBE_TIMEOUT, SUBPROCESS_GIT_VERSION_TIMEOUT
+from src.core.timeouts import (
+    HOME_SERVICE_PROBE_TIMEOUT,
+    SUBPROCESS_GIT_VERSION_TIMEOUT,
+    USAGE_LEDGER_LOCK_WAIT_SECONDS,
+    USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS,
+)
 
 if TYPE_CHECKING:
   from fastapi.templating import Jinja2Templates
@@ -748,18 +753,34 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
   alone — so the numbers survive deletion of the logs they were parsed from — plus the
   backend registry the rows' charlie-bot accounts attribute against.
 
-  Runs in a thread as the page's single-flight task body. Capture and read errors propagate
-  to the awaiting request: the page fails loudly instead of rendering stale rows.
+  Runs in a thread as the page's single-flight task body. A capture error propagates to the
+  awaiting request: the page fails loudly instead of rendering rows the broken capture may
+  have left wrong. A capture whose writes time out on the ledger's write lock is the one
+  exception: the lock says this load could not add rows, not that the stored rows are wrong,
+  so the load skips the capture and serves the stored truth (a rollback-journal writer waits
+  out every long reader on this machine — the bot's own workers query the ledger — and the
+  request cannot carry the scheduler-capture's 30 s tolerance).
   """
   # The ledger + capture stack (sqlite3, the token_tally walkers) rides the page like
   # croniter rides its next-run resolutions: the M99 server import floor carries no
   # tally stack for a page that may never load.
+  import sqlite3
+
   from src.core.token_tally import capture_local
   from src.core.usage_ledger import UsageLedger, default_ledger_path
 
   started = time.monotonic()
   with UsageLedger(default_ledger_path()) as ledger:
-    written = capture_local(ledger)
+    ledger.set_lock_wait(USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS)
+    try:
+      written = capture_local(ledger)
+    except sqlite3.OperationalError as e:
+      if "database is locked" not in str(e):
+        raise
+      log.warning("token_usage_capture_skipped_locked", error=str(e))
+      written = {}
+    finally:
+      ledger.set_lock_wait(USAGE_LEDGER_LOCK_WAIT_SECONDS)
     rows, native_starts = ledger.model_rows_with_native_starts()
   return rows, native_starts, written, time.monotonic() - started, _backend_registry()
 

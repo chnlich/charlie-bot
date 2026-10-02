@@ -716,6 +716,17 @@ class UsageLedger:
     aggregate is not served yet -- its one-time backfill prices the same ground truth when
     it runs. A ledger whose stored bodies match this module's runs nothing.
     """
+    # The match check reads first, under the read lock every writer leaves open between
+    # commits: the matched case -- every open of a current-release ledger -- takes no
+    # write lock at all, so an open never queues behind another process's live write
+    # transaction. The unmatched case takes BEGIN IMMEDIATE and re-checks under it, the
+    # same serialize-the-swap discipline the upgrade path runs.
+    stored = {
+        row["name"]: row["sql"]
+        for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
+    }
+    if all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items()):
+      return
     self._conn.execute("BEGIN IMMEDIATE")
     try:
       stored = {
@@ -723,7 +734,7 @@ class UsageLedger:
           for row in self._conn.execute("SELECT name, sql FROM sqlite_master WHERE type = 'trigger'")
       }
       if all(stored.get(name) == expected for name, expected in _AGG_TRIGGER_SQLS.items()):
-        self._conn.rollback()  # the stored bodies already match this module's
+        self._conn.rollback()  # another process swapped while this one waited on the lock
         return
       for name in _AGG_SUM_TRIGGER_NAMES:
         self._conn.execute(f"DROP TRIGGER IF EXISTS {name}")
@@ -745,6 +756,17 @@ class UsageLedger:
 
   def close(self) -> None:
     self._conn.close()
+
+  def set_lock_wait(self, seconds: float) -> None:
+    """Rebind this connection's busy-handler ceiling to *seconds*.
+
+    The connect-time value (``USAGE_LEDGER_LOCK_WAIT_SECONDS``) stays the contract for
+    writers that run outside a request; a caller whose work sits inside one request
+    (the /token-usage page's capture) lowers it for its own statements and restores the
+    connect-time value afterwards, so no later statement on this connection inherits the
+    short bound.
+    """
+    self._conn.execute(f"PRAGMA busy_timeout = {int(seconds * 1000)}")
 
   def captured_sigs(self, host: str) -> dict[str, str]:
     """Every captured file path and its last-recorded signature for one host."""

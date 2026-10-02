@@ -81,7 +81,14 @@ from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import DiscordOrigin
 from src.core.sessions import SessionManager
-from src.core.thread_entry import LINKED_PAGES_LINE, ThreadAdapter, ThreadMessage, ThreadPlatform, summon_prompt_tail
+from src.core.thread_entry import (
+    LINKED_PAGES_LINE,
+    ThreadAdapter,
+    ThreadMessage,
+    ThreadPlatform,
+    follow_wake_label,
+    summon_prompt_tail,
+)
 from src.core.triggers import TriggerManager
 
 if TYPE_CHECKING:
@@ -192,21 +199,13 @@ def _build_summon_prompt(link: str, cfg: CharlieBotConfig) -> str:
 
 
 def _build_follow_wake_message(floor: str, link: str) -> str:
-  """The armed follow trigger's label: the chain floor id, the thread link, and the wake contract.
+  """The Discord follow-wake label: the shared frame with Discord's read rule.
 
-  ``floor=<id>`` on the first line is machine-readable: a re-arm parses it back
-  so the wake always reads from the chain's oldest unacked message, independent
-  of watermark state. The read is server-side too, so the wake orders the read
-  first — the round must read even when it plans to stay silent — and the
-  reply under the shared redline and format docs.
+  The read is server-side and marks the returned messages read, so the label
+  carries no ack rule; the wake orders the read first — the round must read
+  even when it plans to stay silent.
   """
-  return (
-      f"{_FOLLOW_TRIGGER_PREFIX} floor={floor}\n"
-      f"Discord 线程跟帖唤醒：{link}\n"
-      f"用 `{_READ_COMMAND}` 读线程里的新消息（本次返回的未读消息随之记为已读，本轮沉默也要先读）；"
-      f"回复之前从仓库重读 prompts/{DISCORD.scope_doc}、prompts/thread_reply_redline.md 与 "
-      "prompts/thread_reply_format.md；"
-      f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
+  return follow_wake_label(DISCORD, floor, link, f"用 `{_READ_COMMAND}` 读线程里的新消息（本次返回的未读消息随之记为已读，本轮沉默也要先读）；", "")
 
 
 # ---------------------------------------------------------------------------

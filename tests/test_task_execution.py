@@ -700,7 +700,8 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
     await tree.runs.register_run(
         RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn",
                   backend="fake", model="fake-model"))
-    await tree.dispatch.claim_input_batch(manager.id, "run-failed")
+    async with tree.control_lock:
+      await tree.dispatch.claim_input_batch_locked(manager.id, "run-failed")
     await tree.dispatch.finish_run(manager.id, "run-failed", outcome="failed", exit_code=1)
     assert tree.dispatch.pending_inputs(manager.id) == []
     admitted = await tree.dispatch.admit_input(

@@ -34,7 +34,7 @@ from src.core.discord_listener import (
     post_reply,
     summon_session_id,
 )
-from src.core.models import CreateSessionRequest, DiscordOrigin, SessionStatus, TriggerStatus
+from src.core.models import CreateSessionRequest, DiscordOrigin, SessionMetadata, SessionStatus, TriggerStatus
 from src.core.sessions import SessionManager
 from src.core.thread_entry import ThreadReplyError
 from src.core.triggers import TriggerManager
@@ -379,28 +379,14 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_path: Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await session_mgr.create_session(
-      CreateSessionRequest(
-          session_id=summon_session_id(_GUILD, _THREAD),
-          name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+  meta = await _discord_session(session_mgr)
   # A 3-digit watermark: string order would flip it against the 19-digit
   # message id below, so arming at all proves the comparison went through
   # snowflake_key.
   meta.discord_watermark_id = "999"
   await session_mgr.save_metadata(meta)
   message_id = "1000000000000000100"
-  message = {
-      "id": message_id,
-      "guild_id": _GUILD,
-      "channel_id": _THREAD,
-      "author": {
-          "id": _USER
-      },
-      "type": 0,
-      "content": "the follow-up",
-      "mentions": [],
-  }
+  message = _message(id=message_id, channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
     sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
@@ -426,23 +412,9 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
   trigger is armed exactly as for an active session (the revived session
   returns to the Threads view)."""
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await session_mgr.create_session(
-      CreateSessionRequest(
-          session_id=summon_session_id(_GUILD, _THREAD),
-          name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+  meta = await _discord_session(session_mgr)
   await session_mgr.archive_session(meta.id)
-  message = {
-      "id": "1000000000000000100",
-      "guild_id": _GUILD,
-      "channel_id": _THREAD,
-      "author": {
-          "id": _USER
-      },
-      "type": 0,
-      "content": "the follow-up",
-      "mentions": [],
-  }
+  message = _message(id="1000000000000000100", channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
     sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
@@ -503,14 +475,13 @@ async def test_read_eligible_pages_two_calls_and_drops_bots(tmp_path: Path) -> N
   ]
 
 
-async def _discord_session(session_mgr: SessionManager) -> str:
-  """Create the session bound to the test thread and return its id."""
-  meta = await session_mgr.create_session(
+async def _discord_session(session_mgr: SessionManager) -> SessionMetadata:
+  """Create the session bound to the test thread and return its metadata."""
+  return await session_mgr.create_session(
       CreateSessionRequest(
           session_id=summon_session_id(_GUILD, _THREAD),
           name="discord session",
           discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
-  return meta.id
 
 
 @pytest.mark.asyncio
@@ -518,7 +489,7 @@ async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tm
   cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
   cfg = cfg.model_copy(
       update={"publish": PublishConfig(dir=deploy_publish_lane(tmp_path), public_base_url=PUBLISH_BASE_URL)})
-  sid = await _discord_session(session_mgr)
+  sid = (await _discord_session(session_mgr)).id
   page = tmp_path / "page.html"
   page.write_text("<p>hi</p>", encoding="utf-8")
   file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
@@ -550,7 +521,7 @@ async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tm
 @pytest.mark.asyncio
 async def test_post_reply_refuses_422_and_posts_nothing_without_the_publish_lane(tmp_path: Path) -> None:
   cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
-  sid = await _discord_session(session_mgr)
+  sid = (await _discord_session(session_mgr)).id
   page = tmp_path / "page.html"
   page.write_text("<p>hi</p>", encoding="utf-8")
   file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"

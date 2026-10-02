@@ -771,14 +771,9 @@ async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = De
 
 def _parse_session_ids(ids: str) -> list[str]:
   """Split the `ids` query parameter into a deduplicated, order-preserving id list."""
-  parsed: list[str] = []
-  seen: set[str] = set()
-  for part in ids.split(','):
-    sid = part.strip()
-    if not sid or sid in seen:
-      continue
-    seen.add(sid)
-    parsed.append(sid)
+  # dict.fromkeys dedups in C while keeping first occurrence order; the empty
+  # filter runs after it because a stripped-to-empty part is dropped either way.
+  parsed = [sid for sid in dict.fromkeys(map(str.strip, ids.split(','))) if sid]
   if not parsed:
     raise HTTPException(status_code=422, detail="ids must name at least one session")
   return parsed
@@ -790,14 +785,17 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
   return [meta for meta in loaded if meta is not None]
 
 
-# The /status poll's whole-body memo: (resolved ids, sidebar generation) -> the
+# The /status poll's whole-body memo: (requested ids, sidebar generation) -> the
 # rendered body bytes. Every payload input sits behind the sidebar generation
-# (mark_sidebar_dirty bumps it for busy flips and every metadata write,
-# store_snapshot_entry for probe stores), so an unchanged generation is the
-# staleness contract — the same one the derived-map memo holds. Keyed at the
-# generation the request started at: a bump that lands mid-handler keys the
-# next poll's rebuild, never this body. force=1 keeps its synchronous probe
-# off this memo.
+# (mark_sidebar_dirty bumps it for busy flips, every metadata write through
+# save_metadata's funnel, and every whole-session deletion through
+# delete_session_permanently; store_snapshot_entry for probe stores) — the row
+# set included — so an unchanged generation proves the stored body current and
+# the hit path serves it without resolving the ids at all. The requested ids key the memo: the sidebar asks
+# for exactly the rows it renders, and a row leaves the request set when the
+# listing that feeds the sidebar refreshes. Keyed at the generation the
+# request started at: a bump that lands mid-handler keys the next poll's
+# rebuild, never this body. force=1 keeps its synchronous probe off this memo.
 _STATUS_BODY_MEMO_LIMIT = 4
 _status_body_memo: BoundedMemo[tuple, bytes] = BoundedMemo(_STATUS_BODY_MEMO_LIMIT)
 
@@ -812,21 +810,29 @@ async def all_sessions_status(
   """Return derived sidebar state for the requested sessions.
 
   A poll at an unchanged sidebar generation serves the last rendered body
-  whole. Clean sessions are served from the in-process snapshot with zero disk
-  access; only sessions whose probed state changed since the last poll are
-  re-probed from disk. Pass ``force=1`` to skip the dirty check and re-probe
-  every requested session; every 10th poll also schedules the detached
-  single-flight self-heal sweep (its results land for the polls that follow
-  it), while ``force=1`` keeps its probe synchronous and full.
+  whole, without resolving the requested ids. A memo miss resolves the ids and
+  re-probes only the sessions whose probed state changed since the last poll.
+  Pass ``force=1`` to skip the memo and the dirty check, re-probing every
+  requested session; every 10th poll also schedules the detached single-flight
+  self-heal sweep (its results land for the polls that follow it), while
+  ``force=1`` keeps its probe synchronous and full.
   """
-  # The 3 s poll reads the cached metadata references as they are (the
-  # manager's per-row get_session path — model_copy, stamp, and the gather —
-  # measured ~0.3 ms of this route); the payload's derived fields come from
-  # resolve_sidebar_state so the cache stays untouched. resolve_sidebar_state
-  # stays on every poll: its register_poll count is the every-10th self-heal
-  # sweep's cadence, which a body-memo hit must not starve.
+  requested = _parse_session_ids(ids)
   generation = sidebar_state.derived_generation()
-  sessions = await session_mgr.get_sessions_readonly(_parse_session_ids(ids))
+  body_key = (tuple(requested), generation)
+  if not force:
+    cached_body = _status_body_memo.get(body_key)
+    if cached_body is not None:
+      if sidebar_state.register_poll(force=False):
+        # The every-10th tick keeps its sweep: the sweep's probe builds from
+        # the sessions' metadata, so the resolution the memo hit skipped
+        # happens here, on the one poll in ten that carries the tick.
+        sessions = await session_mgr.get_sessions_readonly(requested)
+        active = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
+        if active:
+          session_mgr.schedule_sidebar_sweep(active)
+      return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
+  sessions = await session_mgr.get_sessions_readonly(requested)
   if not sessions:
     return await _switch_payload_response(request, {})
   derived = await session_mgr.resolve_sidebar_state(
@@ -836,11 +842,6 @@ async def all_sessions_status(
       include_pending_plan_approval=True,
       force=force,
   )
-  body_key = (tuple(meta.id for meta in sessions), generation)
-  if not force:
-    cached_body = _status_body_memo.get(body_key)
-    if cached_body is not None:
-      return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
   result: dict[str, dict] = {}
   for meta in sessions:
     busy = thinking_state.busy_since(meta.id)

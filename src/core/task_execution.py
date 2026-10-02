@@ -1854,7 +1854,6 @@ class TaskExecutionAdapter:
         CompletionEvidence,
         LandingEvidence,
     )
-    from src.core.task_sessions import TaskConflictError
 
     session_id = meta.id
     work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")
@@ -2208,7 +2207,6 @@ async def prepare_tui_task_launch(
     and the node never keeps a permanently queued ghost Run.
     """
   from src.agents.backends.pty_common import tmux_session_exists
-  from src.core.backend_models import BackendType
 
   if tree is None:
     # The server's singleton owner (the same one every API route uses); the

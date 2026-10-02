@@ -137,7 +137,6 @@ def _default_backend_id(cfg: CharlieBotConfig) -> str:
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
-  from src.core.cron_sequence import bound_task_name
   active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
@@ -920,7 +919,6 @@ async def stop_tui(
   # same first-fact-wins record every other Run uses. Silence or detach alone
   # lands nothing.
   if meta.profile is not None:
-    from src.core.runs import RunNotFoundError
     for run in await asyncio.to_thread(task_mgr.runs.list_run_records_sync, session_id):
       if run.kind != "manager_turn" or run.pid is None:
         continue
@@ -1675,7 +1673,6 @@ async def switch_session_backend(
   if body.backend == effective_current:
     return parent
 
-  from src.core.cron_sequence import bound_task_name
   bound_task = bound_task_name(parent.id)
   if bound_task is not None and not claude_accounts.same_continuation_domain(effective_current, body.backend, cfg):
     raise HTTPException(
@@ -1748,7 +1745,6 @@ async def archive_session(
     if not caller.is_operator:
       raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
     archived = require_found(await task_mgr.set_presentation(session_id, "hidden"))
-    from src.core.cron_sequence import bound_task_name
     bound_task = bound_task_name(session_id)
     if bound_task is not None:
       await asyncio.to_thread(write_cron_key, bound_task, "enabled", value=False)

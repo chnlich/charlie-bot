@@ -19,7 +19,13 @@ import pytest
 from conftest import codex_token_count_event
 
 from src.core import token_tally as tt
-from src.core.constants import USAGE_SOURCE_CHARLIE_BOT, USAGE_SOURCE_CODEX
+from src.core.constants import (
+    USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CHARLIE_CODE,
+    USAGE_SOURCE_CLAUDE_CODE,
+    USAGE_SOURCE_CODEX,
+    USAGE_SOURCE_OPENCODE,
+)
 from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 
 NAME = "claude-model"
@@ -260,6 +266,41 @@ class _Option:
 
   def __init__(self, option_id: str, option_type: str, model: str | None = None) -> None:
     self.id, self.type, self.model = option_id, option_type, model
+
+
+def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> None:
+  """The page attribution reads a registered id's config type first (the type wins over
+  the id's prefix), an off-config id's type prefix next, and the master-run account as
+  CLC; a backend type with no collection rule raises, naming the id, instead of landing
+  under a wrong CLI."""
+  registry = {
+      "charlie-code-glm": _Option("charlie-code-glm", "charlie-code", "openai/zai-org/GLM-5.3-Flash"),
+      "codex-gpt": _Option("codex-gpt", "codex", "openai/gpt-5"),
+      "claude-opus": _Option("claude-opus", "cc-claude", "anthropic/claude-opus-5-5"),
+      "kimi-k3": _Option("kimi-k3", "cc-kimi", "moonshotai/Kimi-K3"),
+      "glm-air": _Option("glm-air", "cc-openai-compatible", "openai/GLM-Air"),
+      "oc-qwen": _Option("oc-qwen", "opencode", "qwen/qwen3"),
+      # A registered id whose type disagrees with its prefix: the type wins.
+      "claude-mislabeled": _Option("claude-mislabeled", "codex", "openai/gpt-5"),
+  }
+  assert tt.backend_page_source("charlie-code-glm", registry) == USAGE_SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("codex-gpt", registry) == USAGE_SOURCE_CODEX
+  assert tt.backend_page_source("claude-opus", registry) == USAGE_SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("kimi-k3", registry) == USAGE_SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("glm-air", registry) == USAGE_SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("oc-qwen", registry) == USAGE_SOURCE_OPENCODE
+  assert tt.backend_page_source("claude-mislabeled", registry) == USAGE_SOURCE_CODEX
+  assert tt.backend_page_source("charlie-code-retired", {}) == USAGE_SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("codex-retired", {}) == USAGE_SOURCE_CODEX
+  assert tt.backend_page_source("claude-retired", {}) == USAGE_SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("opencode-retired", {}) == USAGE_SOURCE_OPENCODE
+  assert tt.backend_page_source("clc-master", {}) == USAGE_SOURCE_CHARLIE_CODE
+  with pytest.raises(ValueError, match="ag-1"):
+    tt.backend_page_source("ag-1", {"ag-1": _Option("ag-1", "antigravity", "model")})
+  with pytest.raises(ValueError, match="tui-1"):
+    tt.backend_page_source("tui-1", {"tui-1": _Option("tui-1", "tui-cli", "model")})
+  with pytest.raises(ValueError, match="gem-1"):
+    tt.backend_page_source("gem-1", {})
 
 
 class _Backends:

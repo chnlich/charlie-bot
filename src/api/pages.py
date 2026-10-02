@@ -51,6 +51,7 @@ from src.core.constants import (
     PERFETTO_VIEWER_PATH,
     REPO_ROOT,
     USAGE_SOURCE_CHARLIE_BOT,
+    USAGE_SOURCE_CHARLIE_CODE,
     USAGE_SOURCE_CLAUDE_CODE,
     USAGE_SOURCE_CODEX,
     USAGE_SOURCE_OPENCODE,
@@ -722,14 +723,30 @@ def _compact(n: float) -> str:
 
 
 # The usage panel's source display order: the per-source tiles iterate it, and each
-# row's slot number sent to the charts is its position here.
-_USAGE_SOURCES = (USAGE_SOURCE_CLAUDE_CODE, USAGE_SOURCE_CODEX, USAGE_SOURCE_OPENCODE, USAGE_SOURCE_CHARLIE_BOT)
+# row's slot number sent to the charts is its position here. The four sources are the
+# CLIs that ran the calls: a charlie-bot row's accounts attribute to their CLI (see
+# _account_source), so its CLC usage and counted fallbacks land here, and the ledger's
+# own charlie-bot spelling never reaches the page.
+_USAGE_SOURCES = (USAGE_SOURCE_CLAUDE_CODE, USAGE_SOURCE_CODEX, USAGE_SOURCE_OPENCODE, USAGE_SOURCE_CHARLIE_CODE)
 _USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
 
+# The self-check notes name the log each captured source read. The tally's charlie-bot
+# log is CharlieBot's own, not a CLI, so its label spells that instead of the ledger's
+# source spelling.
+_NOTE_SOURCE_LABELS = {USAGE_SOURCE_CHARLIE_BOT: "CharlieBot logs"}
 
-def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, int], float]:
+
+def _backend_registry() -> dict[str, object]:
+  """config.yaml's backend options by id — the registry the charlie-bot accounts'
+  attribution reads. The tally's capture builds the same map per capture; a backend added
+  or retired reclassifies the affected accounts on the next page load."""
+  return {opt.id: opt for opt in get_config().backends.options}
+
+
+def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, int], float, dict[str, object]]:
   """Capture this host's new usage into the ledger, then read the page rows from the ledger
-  alone — so the numbers survive deletion of the logs they were parsed from.
+  alone — so the numbers survive deletion of the logs they were parsed from — plus the
+  backend registry the rows' charlie-bot accounts attribute against.
 
   Runs in a thread as the page's single-flight task body. Capture and read errors propagate
   to the awaiting request: the page fails loudly instead of rendering stale rows.
@@ -744,7 +761,7 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
   with UsageLedger(default_ledger_path()) as ledger:
     written = capture_local(ledger)
     rows, native_starts = ledger.model_rows_with_native_starts()
-  return rows, native_starts, written, time.monotonic() - started
+  return rows, native_starts, written, time.monotonic() - started, _backend_registry()
 
 
 _MODEL_LEAF_SUFFIX = re.compile(r"\s*\([^()]*\)$")
@@ -757,30 +774,57 @@ def _model_leaf(model: str) -> str:
   return _MODEL_LEAF_SUFFIX.sub("", model.rsplit("/", 1)[-1])
 
 
-def _merge_ledger_rows(rows: list[LedgerRow]) -> list[dict]:
+def _account_source(row: LedgerRow, account: str, registry: dict) -> tuple[str, bool]:
+  """(page source, fallback mark) for one ledger account.
+
+  A row's own source names the CLI whose log its records were read from, so its accounts
+  keep it. A charlie-bot row's accounts are backend ids instead, so each attributes to the
+  CLI that ran the call (``backend_page_source`` on *registry*): CLC usage is native to
+  CharlieBot's own logs, while every other backend's counted records are fallbacks behind
+  their CLI's own log — the mark the account's sub-row carries.
+  """
+  if row.source != USAGE_SOURCE_CHARLIE_BOT:
+    return row.source, False
+  # The tally rides the page like the capture stack does (see _capture_ledger_rows):
+  # imported here so the module stays off the server's import floor.
+  from src.core.token_tally import backend_page_source
+
+  source = backend_page_source(account, registry)
+  return source, source != USAGE_SOURCE_CHARLIE_CODE
+
+
+def _merge_ledger_rows(rows: list[LedgerRow], registry: dict) -> list[dict]:
   """Fold the ledger's per-(source, model) rows into one page row per model.
 
   Sources spell one model differently — opencode `zai-org/GLM-5.3-Flash`, charlie-bot
   `GLM-5.3-Flash`, opencode path models `Kimi-K3 (amd-kimi-k3)` — so rows group on the
   casefolded leaf name, and versions (`claude-fable-5` vs `claude-fable-5-1`) stay apart.
   The merged row displays the largest part's (by total) spelling, carries one segment per
-  source for the stacked charts, and lists one (source · account) sub-row per account
-  across the parts; the segments and sub-rows sum to the row.
+  attributed source for the stacked charts, and lists one (source · account) sub-row per
+  account across the parts; the segments and sub-rows sum to the row. The attributed
+  source is the CLI that ran the call (see ``_account_source``), so a charlie-bot row
+  splits between CLC and the fallback CLIs its accounts ran on.
   """
   groups: dict[str, list[LedgerRow]] = {}
   for row in rows:
     groups.setdefault(_model_leaf(row.model).casefold(), []).append(row)
   merged = []
   for parts in groups.values():
-    accounts: dict[tuple[str, str], dict[str, int]] = {}
+    accounts: dict[tuple[str, str, bool], dict[str, int]] = {}
+    seg_totals: dict[str, int] = {}
+    seg_outputs: dict[str, int] = {}
     for part in parts:
       for account in part.accounts:
-        acc = accounts.setdefault((part.source, account.name), {"calls": 0, "output": 0, "total": 0})
+        source, fallback = _account_source(part, account.name, registry)
+        acc = accounts.setdefault((source, account.name, fallback), {"calls": 0, "output": 0, "total": 0})
         acc["calls"] += account.calls
         acc["output"] += account.output
         acc["total"] += account.total
+        seg_totals[source] = seg_totals.get(source, 0) + account.total
+        seg_outputs[source] = seg_outputs.get(source, 0) + account.output
     first = min((p.first for p in parts if p.first), default="")
     last = max((p.last for p in parts if p.last), default="")
+    ranked = sorted(accounts.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
     merged.append(
         {
             "model": _model_leaf(max(parts, key=lambda p: p.total).model),
@@ -795,19 +839,19 @@ def _merge_ledger_rows(rows: list[LedgerRow]) -> list[dict]:
             "accounts":
                 [
                     {
-                        "name": f"{source} · {name}",
+                        "name": f"{source} · {name}{' (fallback)' if fallback else ''}",
                         "calls": acc["calls"],
                         "output": acc["output"],
                         "total": acc["total"]
-                    } for (source, name), acc in sorted(accounts.items(), key=lambda kv: (-kv[1]["total"], kv[0]))
+                    } for (source, name, fallback), acc in ranked
                 ],
             "segments":
                 [
                     {
                         "slot": _USAGE_SLOT[source],
-                        "total": sum(p.total for p in parts if p.source == source),
-                        "output": sum(p.output for p in parts if p.source == source),
-                    } for source in _USAGE_SOURCES if any(p.source == source for p in parts)
+                        "total": seg_totals[source],
+                        "output": seg_outputs[source],
+                    } for source in _USAGE_SOURCES if source in seg_totals
                 ],
             "window": f"{first} → {last}",
         })
@@ -816,13 +860,18 @@ def _merge_ledger_rows(rows: list[LedgerRow]) -> list[dict]:
 
 
 def _token_usage_context(
-    rows: list[LedgerRow], native_starts: dict[str, str], written: dict[str, int], elapsed_s: float) -> dict:
+    rows: list[LedgerRow],
+    native_starts: dict[str, str],
+    written: dict[str, int],
+    elapsed_s: float,
+    registry: dict,
+) -> dict:
   """Prepare the display context for the token_usage template from one ledger read.
 
   Merges the ledger's rows into one page row per model for the charts, the table and the
-  top ranks, while the per-source tiles keep counting the unmerged rows (they answer how
-  much each CLI used). Computes the aggregate stats the page renders server-side (hero,
-  tiles, conclusions) and the serialized JS payload for the charts and table.
+  top ranks, while the per-source tiles count attributed accounts (they answer how much
+  each CLI ran). Computes the aggregate stats the page renders server-side (hero, tiles,
+  conclusions) and the serialized JS payload for the charts and table.
   """
   tot = {
       "in_fresh": sum(r.in_fresh for r in rows),
@@ -833,7 +882,7 @@ def _token_usage_context(
       "total": sum(r.total for r in rows),
       "calls": sum(r.calls for r in rows),
   }
-  merged = _merge_ledger_rows(rows)
+  merged = _merge_ledger_rows(rows, registry)
   window = (
       (min(r.first for r in rows if r.first),
        max(r.last for r in rows if r.last)) if rows and any(r.first for r in rows) else ("", ""))
@@ -841,15 +890,30 @@ def _token_usage_context(
   out_share = tot["output"] / tot["total"] if tot["total"] else 0.0
   top = max(merged, key=lambda m: m["total"]) if merged else None
   top_out = max(merged, key=lambda m: m["output"]) if merged else None
+  # The tiles count attributed accounts: a charlie-bot row's accounts attribute to the CLI
+  # that ran the call, so a model's CLC usage and its counted fallbacks land under their
+  # own sources, and the model count dedupes on the canonical name the merged rows key on.
+  sums: dict[str, dict] = {src: {"total": 0, "output": 0, "models": set()} for src in _USAGE_SOURCES}
+  for row in rows:
+    canonical = _model_leaf(row.model).casefold()
+    for account in row.accounts:
+      source, _fallback = _account_source(row, account.name, registry)
+      bucket = sums[source]
+      bucket["total"] += account.total
+      bucket["output"] += account.output
+      bucket["models"].add(canonical)
   per_src: dict[str, dict] = {}
-  for src in _USAGE_SOURCES:
-    sub = [r for r in rows if r.source == src]
+  for src, bucket in sums.items():
+    # The ledger's charlie-bot rows are all CLC usage (CLC backend threads, manager runs,
+    # CLC Runs), so CLC's native start is the charlie-bot span the ledger keeps.
+    ledger_src = USAGE_SOURCE_CHARLIE_BOT if src == USAGE_SOURCE_CHARLIE_CODE else src
     per_src[src] = {
-        "t_comp": _compact(sum(r.total for r in sub)),
-        "output": sum(r.output for r in sub),
-        "models": len(sub),
-        "share": sum(r.total for r in sub) / tot["total"] * 100 if tot["total"] else 0.0,
-        "native_start": native_starts.get(src, ""),
+        "total": bucket["total"],
+        "t_comp": _compact(bucket["total"]),
+        "output": bucket["output"],
+        "models": len(bucket["models"]),
+        "share": bucket["total"] / tot["total"] * 100 if tot["total"] else 0.0,
+        "native_start": native_starts.get(ledger_src, ""),
     }
   payload = json.dumps({"rows": merged}, ensure_ascii=False)
   ctx = {
@@ -879,7 +943,11 @@ def _token_usage_context(
       "window_str": f"{window[0]} → {window[1]}" if rows else "",
       "cache_share": cache_share,
       "generated": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
-      "notes": [f"{src}: {written.get(src, 0):,} records written this load" for src in _USAGE_SOURCES],
+      "notes":
+          [
+              f"{_NOTE_SOURCE_LABELS.get(src, src)}: {count:,} records written this load"
+              for src, count in written.items()
+          ],
   }
 
 
@@ -896,7 +964,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
   if task is None:
     task = _token_usage_task = asyncio.create_task(asyncio.to_thread(_capture_ledger_rows))
   try:
-    rows, native_starts, written, elapsed_s = await task
+    rows, native_starts, written, elapsed_s, registry = await task
   finally:
     if _token_usage_task is task:
       # Only the last joiner to observe its own task still installed clears it; a joiner that
@@ -907,7 +975,7 @@ async def token_usage_viewer(request: Request) -> HTMLResponse:
   return _templates().TemplateResponse(
       request,
       "token_usage.html",
-      context=_token_usage_context(rows, native_starts, written, elapsed_s),
+      context=_token_usage_context(rows, native_starts, written, elapsed_s, registry),
   )
 
 

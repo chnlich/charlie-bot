@@ -393,16 +393,16 @@ class TaskTreeManager:
     self._index_build_generation = -1
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
-    # Activity cells: (records_generation, live events or None, archived count
-    # or -1, covered live length or -1, verdict). A None live list marks a
-    # runless node's cell — its verdict is a constant that only a record write
-    # (a generation bump) can move, so it skips the events load the
-    # runs-bearing key needs. The covered length is in the key because the
-    # events cache takes an append in place: the list identity and the
-    # archived extent survive a new fact, and unlike the suffix folds this
-    # memo returns a stored verdict, so the only append a key check can see
-    # is the length move.
-    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, int, TaskTreeActivity]] = {}
+    # Activity cells: (records_generation, live events or None, covered live
+    # length or -1, verdict). A None live list marks a runless node's cell —
+    # its verdict is a constant that only a record write (a generation bump)
+    # can move, so it skips the events load the runs-bearing key needs. The
+    # covered length is in the key because the events cache takes an append in
+    # place: the list identity survives a new fact, and unlike the suffix
+    # folds this memo returns a stored verdict, so the only append a key
+    # check can see is the length move. The archived extent needs no slot —
+    # it rides the identity under the facts memo's contract (see _facts_of).
+    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, TaskTreeActivity]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property

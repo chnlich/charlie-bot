@@ -954,8 +954,7 @@ class RunStore:
     self._aliases.register_run_thread(record.session_id, record.id)
     # A registered Run is a new fact transition (queued work exists where none
     # did): the node's sidebar state must re-probe on the next poll. No path
-    # rides the mark: a run metadata file is not a workers-panel row source,
-    # and the sidebar probe's own signature walk covers the file.
+    # rides the mark: the sidebar probe's own signature walk covers the file.
     mark_sidebar_dirty(record.session_id)
     return record
 
@@ -1008,7 +1007,7 @@ class RunStore:
       await self.write_record(session_id, run)
       # The launch fact flipped the derived state (queued -> running): the next
       # poll must re-probe (same contract as the terminal fact below). No path
-      # rides the mark: a run metadata file is not a workers-panel row source.
+      # rides the mark: the sidebar probe's own signature walk covers the file.
       mark_sidebar_dirty(session_id)
       if first_launch:
         # The durable identity flipped the node's derived work state (queued ->
@@ -1190,7 +1189,7 @@ class RunStore:
     await self.write_record(session_id, run)
     # The terminal fact flipped the derived state (running/waiting -> idle):
     # the next poll must re-probe. No path rides
-    # the mark: a run metadata file is not a workers-panel row source.
+    # the mark: the sidebar probe's own signature walk covers the file.
     mark_sidebar_dirty(session_id)
     return run
 

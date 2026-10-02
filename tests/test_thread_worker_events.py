@@ -1,4 +1,4 @@
-"""Incremental read semantics of read_thread_worker_events (the 5 s workers-panel poll path)."""
+"""Incremental read semantics of read_thread_worker_events (the thread events route's read path)."""
 
 import json
 from pathlib import Path

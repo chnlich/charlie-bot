@@ -1946,8 +1946,8 @@ async def list_session_runs(
   other.
 
   Each row carries its fact-derived display state and stop-request flag — the
-  same fold the guards consume, so the Runs panel never guesses state from a
-  status badge.
+  same fold the guards consume, so a client never guesses state from a status
+  badge.
   """
   if order not in ("asc", "desc"):
     raise HTTPException(status_code=400, detail=f"unknown runs order: {order!r} (use 'asc' or 'desc')")

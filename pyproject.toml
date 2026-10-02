@@ -66,13 +66,21 @@ max_integration_tests = 50
 # B027 stays out: the AgentBackend no-op hooks are deliberate optional overrides.
 # DTZ005 stays out: backup.py's datetime.now() calls are deliberate local time —
 #   the backup filename timestamp and the retention age against local-time filenames.
-# ERA001 stays out: base.py's wire-format examples in comments parse as code.
+# ERA001 stays out: the flagged comments are prose the parser reads as code —
+#   JSON wire-format examples, quoted id shapes, budget formulas, parenthesized
+#   cross-references, and dash-line section banners.
 # FBT001/FBT002 stay out: bool positional parameters in definitions are the repo's
 #   normal shape; only a literal True/False at a call site must name its parameter (FBT003).
-# FLY002 stays out: the one flagged join lists its disallowed tools one per line.
+# FLY002 stays out: the flagged joins keep their separator visible — the
+#   disallowed-tools list's one-group-per-line layout, the delegation request
+#   id's NUL-separated key, and the rule sections' newline.
 # PLW0108 stays out: the flagged lambdas defer evaluation on purpose (stub seams).
-# SIM300 stays out: the subset assertions read best with the named constant left.
-# SLOT000 stays out: _Instructions assigns instance attributes, so __slots__ = () breaks it.
+# SIM300 stays out: the flagged comparisons read their subject first — the
+#   genre drift guard, the event-type vocabulary equality, and the harness
+#   text asserts.
+# SLOT000 stays out: two str subclasses carry an extra attribute
+#   (_Instructions' overlay_error, PublishResult's path), so
+#   __slots__ = () breaks them.
 # UP046/UP047 stay out: yapf's pinned lib2to3 parser rejects PEP 695 type-parameter
 #   lists, which would make the whole tree unparseable to `yapf -r`
 #   (the same constraint src/core/process.py records on its TypeVar).

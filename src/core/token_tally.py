@@ -1290,8 +1290,8 @@ _RUNS_MARKERS = (
 )
 
 
-def _iter_run_logs(sessions_dir: Path) -> Iterator[str]:
-  """Yield every Run raw capture's path: ``<session>/data/runs/<run id>/agent.raw.ndjson``.
+def _iter_run_logs(sessions_dir: Path) -> Iterator[tuple[str, os.stat_result]]:
+  """Yield every Run raw capture's ``(path, stat)``: ``<session>/data/runs/<run id>/agent.raw.ndjson``.
 
   Both directory levels list through ``_charliebot_listing``; a session without a
   ``data/runs`` directory — most of them, the sessions tree predating Run records — is
@@ -1311,10 +1311,9 @@ def _iter_run_logs(sessions_dir: Path) -> Iterator[str]:
     for run_dir in run_dirs:
       run_log = run_dir + _WALK_SEP + RAW_LOG_NAME
       try:
-        os.stat(run_log)
+        yield run_log, os.stat(run_log)
       except FileNotFoundError:
         continue
-      yield run_log
 
 
 def _run_metadata(run_dir: str) -> dict:
@@ -1450,7 +1449,7 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path, captured: d
   The corpus is ``<session>/data/runs/<run id>/agent.raw.ndjson`` — the execution record
   the Run workers write. One record per run at most,
   deduped on the run id; the backend verdict in the run's metadata picks the usage arm (see
-  ``_run_record``). Each candidate is stat'ed before anything opens it: its
+  ``_run_record``). The walk's own stat pairs each candidate before anything opens it: its
   ``st_mtime_ns:st_size`` pair is the signature, and ``captured`` (the caller's one
   captured-sigs read for the whole capture) already holding for this host skips the file
   outright — no log read, no metadata.json — so an unchanged corpus pays one stat per run. Otherwise the file parses
@@ -1463,8 +1462,7 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path, captured: d
   """
   registry = _backend_registry()
   written = 0
-  for path in _iter_run_logs(sessions_dir):
-    st = os.stat(path)
+  for path, st in _iter_run_logs(sessions_dir):
     sig = f"{st.st_mtime_ns}:{st.st_size}"
     if captured.get(path) == sig:
       continue

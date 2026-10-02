@@ -140,6 +140,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M133 claude-sub launch plugin-validate pre-flight, pair-cached | M133 collector below | seconds per `_validate_hook_plugin` round (the subscription launch's pre-respawn guard), steady state with the pair cache warm — one warm pass writes it; the deploy-day round that validates and writes reads the pre-fix band | median < 0.005 s (the cache-hit band reads 0.2-0.3 ms — the state-home cache read plus the key's digest over the written plugin bytes; the pre-fix shape reads 475-500 ms of claude CLI boot per launch and trips ~100x; the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 | M134 run-scoped memory-CLI query wall, worst chat corpus | M134 collector below | seconds per run-scoped `memory query --topic ... --index` — `CHARLIEBOT_RUN_TOKEN` present, the shape every delegated worker's invocation runs (the standing M98 line prices the same shape at the sweep env's own token session; this row pins the worst on-disk live chat corpus) | median < max(0.030 s, bytes ÷ 6500 MB/s) (the after band reads 0.155-0.156 s over the 1051.3 MB corpus — a 6.7 GB/s mapped line scan; the pre-fix shape re-parsed the whole corpus through the events-cache funnel, 3.5-3.7 s, and trips ~23x) | — (introduced with its first history row) |
 | M135 funnel-written metadata expiry revalidation, changed-round listing | M135 collector below | milliseconds per revalidation round (the post-TTL listing walk plus the follow-on walk, 300 fresh funnel-written sessions aged past the 30 s TTL); re-reads per round | median < max(0.005 s, sessions × 0.000012 s) (the after band reads 3.20-3.25 ms at 300 sessions — 10.7-10.8 µs/session, the expiry's one stat per entry — and the line sits ~1.4x over it, the M119 line's convention; the signature-less entry's evict-and-re-read shape reads 57-58 µs/session and trips, and its forced re-walk rides the same line) | — (introduced with its first history row) |
+| M136 runs-walk capture leg, warm full corpus | M136 collector below | milliseconds per warm ``capture_runs`` pass over the live sessions tree (the token-usage page's per-load runs leg: the memoized directory listings, one stat per run-log candidate, the captured-sig skip dict; scratch ledger seeded from the live ledger's captured-file signatures — one read-only SELECT, the live server writes its own ledger, never this collector — and the cold pass re-parses only the files the copied sigs stale-parse) | median < 0.045 s (the after band reads 28.89-29.24 ms — the listings, the one stat per candidate, and the skip dict; the line sits ~1.5x over the band top, the M119 line's convention, so gross breaks trip it — a lost listing memo or a per-file re-parse read 2-10x in the fix's diagnosis — while the pre-fix double-stat shape, 33.90-35.01 ms, sits inside it on purpose: the fix's own witness is the paired A/B in the history row, and the cron-collision bias the M56 history documents applies) | — (introduced with its first history row) |
 Note — every healthy range is provisional: a single-sample calibration from the 2026-08-30 seed
 measurements against the design intent (load below the CPU count, serve CPU total well under
 machine capacity, API median in the low tens of milliseconds, zero hung sessions). The serve CPU
@@ -9588,6 +9589,61 @@ asyncio.run(main())
 EOF
 ```
 
+M136 — runs-walk capture leg, warm full corpus. The token-usage page's per-load ``capture_runs``
+leg, priced in-process against the branch checkout (the CHECKOUT convention the M62/M130/M132
+blocks set) while the served instance may still run older code. The scratch ledger opens by
+copying the live ledger's captured-file signatures for this host (one read-only SELECT — the
+M132 block's seed shape); the cold pass re-parses only the files the copied sigs stale-parse and
+stores their parse-time signatures, so the timed rounds ride the captured-sig skip path — the
+unchanged corpus's production shape, one stat per candidate. ``captured`` is re-read per timed
+round, the production shape (the caller's one captured-sigs read per capture):
+
+```bash
+CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} "$HOME/workspace/charlie-bot/.venv/bin/python" - <<'EOF'
+import os, socket, sqlite3, sys, tempfile, time
+from pathlib import Path
+
+sys.path.insert(0, os.environ["CHECKOUT"])
+from src.core.token_tally import capture_runs
+from src.core.usage_ledger import UsageLedger
+
+scratch = Path(tempfile.mkdtemp(prefix="m136-runs-"))
+LEDGER = scratch / "ledger.sqlite3"
+LIVE = Path.home() / ".charliebot/usage/ledger.sqlite3"
+HOST = socket.gethostname()
+seed = UsageLedger(LEDGER)  # the open builds the scratch schema the copy writes into
+seed.close()
+live = sqlite3.connect(f"file:{LIVE}?mode=ro", uri=True)
+try:
+    rows = live.execute("SELECT path, sig FROM captured_files WHERE host = ?", (HOST,)).fetchall()
+finally:
+    live.close()
+seed = sqlite3.connect(LEDGER)
+try:
+    with seed:
+        seed.executemany("INSERT OR REPLACE INTO captured_files (host, path, sig) VALUES (?, ?, ?)",
+                         [(HOST, path, sig) for path, sig in rows])
+finally:
+    seed.close()
+SESS = Path.home() / ".charliebot/sessions"
+
+def capture():
+    with UsageLedger(LEDGER) as ledger:
+        return capture_runs(ledger, HOST, SESS, ledger.captured_sigs(HOST))
+
+capture()  # cold pass re-parses the files the copied sigs stale-parse, storing parse-time sigs; not timed
+times, written = [], None
+for _ in range(9):
+    t0 = time.perf_counter()
+    written = capture()
+    times.append((time.perf_counter() - t0) * 1e3)
+times.sort()
+print(f"checkout {Path(os.environ['CHECKOUT']).name}: runs-walk capture leg median "
+      f"{times[4]:.2f} ms, max {times[-1]:.2f} ms over 9, records written {written}")
+import shutil; shutil.rmtree(scratch)
+EOF
+```
+
 
 ## Sampling history
 | 2026-10-01 | this PR | M121 solo invalidated rebuild median 8.54/8.39/7.93 → 6.06/5.83/6.36 ms (−27.8 % median-of-medians, every paired round faster), 6-reader burst 8.82/8.26/7.92 → 6.38/6.04/6.85 ms (−22.8 %), M120 invalidated page 9.55/10.59/9.65 → 8.95/8.87/10.93 ms (−7.2 % median-of-medians, the page adds the thread-hop and serve noise the solo build does not carry) (three interleaved rounds of the verbatim collectors per arm, main checkout before vs branch worktree after, arm order alternating, 2111-2112 metadata files / 758-759 task nodes, load 0.9-1.4 one-minute; tree revision digests identical within every round across arms — 832f925d3b9e and ed44cd3aad62, page sha1 98dbdd13745c/47fe2c7618ab/f1f7aa3b44af). The standing sweep reads M121 solo 14.97 ms, burst 15.96 ms, M120 invalidated 19.26 ms over 2110 metas / 757 task nodes: M120 sits under its recalibrated max(0.010 s, metas × 0.0000060 s + task nodes × 0.0000150 s) = 24.0 ms line, M121 under its own. M120's line gains the build's node term: the corpus's node dimension grew 71 → 759 since the 2026-09-26 line was set at 2.4 µs/meta over 71 nodes, and the invalidated page is one solo build plus the warm serve — the per-meta term alone prices neither the build's facts folds nor the sweep-context reading the M113 recognizer block's placement roughly doubles (the quiet paired rounds above read 8.9-9.0 ms). No-regression witnesses: the revision digest identical across all twelve arms, the full suite 1412 passed, ruff and yapf clean | the invalidated-index build paid its facts twice — the structural read and the inheritance fold each ran _facts_of per node, plus one more per parent-receipt lookup, 2175 consult chains for 757 nodes — so every delegation takeoff and every structural write's reader burst re-paid the fold the pass had already settled |
@@ -10018,3 +10074,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-10-01 | this PR | M107 multi-trace merged build, each member's walk chunk-parallel: the route's memory wave serializes the worst dir's 1.42 GB members (8x-bytes priced footprints cannot coexist in the 12 GiB cgroup), so the wall was the members' sum at the single-trace rate and each member paid the sequential parse+remap walk inside one GIL-bound pool worker (~18.5 s each). The member build now rides the single-trace build's chunk-helper protocol: the member's id stride moves the maps' allocation base, the walk rides the member's file_index, the fragments concatenate unwrapped into the member fragment, each helper reports its emitted count (the route's skip/empty logic reads the sum), and the stride bound still fails the build loudly (the check rides the assemble sink, its ValueError landing in the core's fallback the inline walk re-raises); any helper failure answers with the inline sequential walk. Interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of each side's verbatim collector over the worst dir (2 traces, 2836.5 MB) at load 2.5-5.5 one-minute: build medians 37.75/37.41/38.89 -> 25.13/25.10/24.98 s (median-of-medians 37.75 -> 25.10, -33.5%), every paired round faster, byte-identity digest d7edbc932fc8 identical across all six arms. No-regression witnesses: the shared single-trace core reads 7.55 s median quiet (the sweep's main reading 7.75 s, band parity) with the 113.6 MB.gz artifact, and the route-shape paired overhead reads -0.20 s median / -0.03 s max (line max(+0.30 s, in-process x 2.5%)); the new member byte-identity tests (chunked vs sequential, plain and slim) and the full suite (1412 passed) hold. The healthy line stays: 25.1 s against the max(8 s, bytes / 70 MB/s) = 40.5 s line | the merged view's first build of a big trace dir paid a 2x-serialized GIL-bound walk the day's own chunk machinery already knows how to parallelize — every delegated trace-dir merge pays it again |
 | 2026-10-01 | this PR | M118 grown-line drain's torn-tail exit read bounded: the drain-end torn-tail check read the whole trailing partial (`f.read(read_to - tail_start)`) only to decide whether it is whitespace, so every drain that ends on an unclosed line materialized the line's full body — the 1074 MB collector tail measured ~0.55-0.63 s of page-cache copy plus a same-size transient allocation in the server process, the event-loop stall the tick-gap reading rode (98-122 ms), and the 2.1 GB production runaway line doubles it. The scan now reads 1 MB windows and stops at the first non-whitespace byte — a torn line's body starts at the region's first byte, so the common tail answers from the first window (a whitespace-only tail still scans every window, minus the giant allocation). Interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, five rounds of each side's verbatim collector over the 8 × 128 MB unclosed-line corpus at load 1.45-3.67 one-minute: drain wall medians 3.05/3.05/3.02/3.13/3.13 → 2.31/2.32/2.31/2.37/2.33 s (median-of-medians 3.05 → 2.32, −24%), every paired round faster, max loop tick gap 106/98/122/106/103 → 8/8/9/8/8 ms; the final head re-reads 2.35/2.31/2.40 s (tick gaps 6-10 ms). No-regression witnesses: M84's standing collector over the same function, three interleaved rounds, tail-follow replay medians 178.7-180.3 ms both arms with parity divergences 0 both arms and the stdout-stream arm 0.2 ms both; the backend stream-parse suite (7, including the new window-boundary test — the region's only content byte exactly at the 1 MB window edge) and the full suite (1414 passed) hold. The M118 healthy lines stay: the wall reads 2.32 s against the 4.0 s line (the drain work its parenthetical prices shrinks by the removed read) and the tick gap 8-9 ms against the 0.15 s line | every killed or timed-out run's drain ends on a torn line — the re-attach path pays the whole-tail read again on every server restart, at the tail's full gigabyte-class size |
 | 2026-10-02 | this PR | M135 funnel-written metadata expiry revalidation, introduced with its landing fix: the entry `save_metadata` stores carried no stat signature, so every funnel-written session aged past the 30 s TTL was evicted at its next listing — a full re-read+re-parse of a file the funnel itself had just written, plus a listings-revision bump that forced the next listing to re-walk. The entry now re-keys from the write's own proven signature (the tmp's stat taken before the swap publishes that inode), so the expiry revalidates by one stat. Interleaved A/B, main checkout before vs branch worktree after back-to-back, four rounds of the verbatim M135 collector over 300 synthetic funnel-written sessions at load 0.9-1.2 one-minute: revalidation walk1 medians 17.51/17.27 → 3.25/3.20 ms (−81 %, every paired round faster), follow-on walk2 0.31/0.33 → 0.01/0.02 ms, re-reads 300/300 → 0/0 per round. No-regression witnesses on the same pass, main before vs worktree after, interleaved: M10 torn reads 0/0 both arms over 3000 saves each; M119 steady list serve 2.39/2.41 → 2.31/2.29 ms; M129 changed-round serve 8.34/7.33 → 7.60/7.18 ms (its rounds are in-memory overlay moves — young caches, no expiry); M21 sidebar sweep 10.7/9.5 → 10.5/9.8 ms. The full suite holds. The M135 healthy line prices the after band | every metadata write's cache entry used to buy one guaranteed re-read at its TTL edge — the sidebar's changed-round cost scaled with sessions written in the last 30 s instead of sessions actually changed on disk |
+| 2026-10-02 | this PR | M136 runs-walk capture leg, introduced with its landing fix: the Run walk stat'ed every candidate twice — ``_iter_run_logs`` stat'ed for existence, ``capture_runs`` re-stat'ed for the signature — so the warm skip path paid two stats per run log where the charlie-bot walk's one-stat floor (its docstring's contract) pays one. The walk now yields the stat it took. Interleaved A/B, main checkout before vs branch worktree after back-to-back, four rounds of the verbatim M136 collector over the live sessions tree (1,989 run logs) at load 1.3-1.6 one-minute: leg medians 35.01/34.71/33.90/34.45 → 29.24/29.11/28.89/29.00 ms (−16.0 % median-of-medians, every paired round faster, within-arm spread ±0.4 ms — ~1,989 stats saved per capture, ~5.2 ms at this corpus). No-regression witnesses on the same pass, main before vs worktree after interleaved: M132 standing capture wall medians 0.1324/0.1325/0.1396/0.1338 → 0.1284/0.1374/0.1280/0.1538 s (the whole-capture reading's round noise, ±4-15 %, sits above the fix's 3-4 % share, so the leg row above is the metric that resolves it — both arms hold the 0.17 s line); the touched-module suites (test_token_tally.py, test_token_usage_page.py, test_usage_ledger.py: 94 passed) and ruff/yapf hold. The M136 healthy line prices the after band | every run log's capture paid two stats where one proves both existence and signature |

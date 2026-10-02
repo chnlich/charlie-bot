@@ -1369,137 +1369,134 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Work, review, verify, iteration and scheduled-step launches ride the same
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Work, review, verify, iteration and scheduled-step launches ride the same
     assembler with their applicable contracts and separate task/input context."""
-    _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path)
-    worker = await create_task(
-        tree, parent=manager.id, profile="worker", request_id="w",
-        task=TaskSpec(goal="ship it", repo_path=str(repo), task_type="script-run"))
-    builds: list[dict] = []
-    scripted: list[SpawningScriptedBackend] = []
+  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  worker = await create_task(
+      tree,
+      parent=manager.id,
+      profile="worker",
+      request_id="w",
+      task=TaskSpec(goal="ship it", repo_path=str(repo), task_type="script-run"))
+  builds: list[dict] = []
+  scripted: list[SpawningScriptedBackend] = []
 
-    def build(option, cfg_, **kwargs):
-        b = SpawningScriptedBackend([result_event("worker done")])
-        if kwargs.get("on_spawn") is not None:
-            b.set_on_spawn(kwargs["on_spawn"])
-        builds.append({"option": option, "kwargs": kwargs})
-        scripted.append(b)
-        return b
+  def build(option, cfg_, **kwargs):
+    b = SpawningScriptedBackend([result_event("worker done")])
+    if kwargs.get("on_spawn") is not None:
+      b.set_on_spawn(kwargs["on_spawn"])
+    builds.append({"option": option, "kwargs": kwargs})
+    scripted.append(b)
+    return b
 
-    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, build)
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, build)
 
-    # The delegation gate needs a real user authorization along the ancestor chain.
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="take off", actor="user")
+  # The delegation gate needs a real user authorization along the ancestor chain.
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="take off", actor="user")
 
-    # Work launch: worker contract + bindings context.
-    run_id = await _admit_and_dispatch(tree, worker.id, "do the thing", "in-1")
-    await wait_for_terminal_run(tree, worker.id, run_id)
-    run = await tree.runs.get_run(worker.id, run_id)
-    assert run is not None
-    stored = _snapshot_of(run)
-    joined = "\n\n".join(b["text"] for b in stored["blocks"])
-    assert builds[0]["kwargs"]["instructions_content"] == joined
-    scope_refs = [s["source_ref"] for b in stored["blocks"] for s in b["sources"]]
-    assert "prompts/worker.md" in scope_refs
-    assert "prompts/task_manager.md" not in scope_refs
-    launch_text = (tree.runs.run_dir(worker.id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert "ship it" in launch_text
-    assert "do the thing" in launch_text
-    assert "isolated sandbox" in launch_text  # the script-run bindings context
-    assert "This is a script-run task" not in launch_text  # that rule is managed
-    # A repo-backed script-run task gets its sandbox worktree, recorded on the Run.
-    assert run.worktree_path is not None
-    assert run.branch_name is not None
+  # Work launch: worker contract + bindings context.
+  run_id = await _admit_and_dispatch(tree, worker.id, "do the thing", "in-1")
+  await wait_for_terminal_run(tree, worker.id, run_id)
+  run = await tree.runs.get_run(worker.id, run_id)
+  assert run is not None
+  stored = _snapshot_of(run)
+  joined = "\n\n".join(b["text"] for b in stored["blocks"])
+  assert builds[0]["kwargs"]["instructions_content"] == joined
+  scope_refs = [s["source_ref"] for b in stored["blocks"] for s in b["sources"]]
+  assert "prompts/worker.md" in scope_refs
+  assert "prompts/task_manager.md" not in scope_refs
+  launch_text = (tree.runs.run_dir(worker.id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert "ship it" in launch_text
+  assert "do the thing" in launch_text
+  assert "isolated sandbox" in launch_text  # the script-run bindings context
+  assert "This is a script-run task" not in launch_text  # that rule is managed
+  # A repo-backed script-run task gets its sandbox worktree, recorded on the Run.
+  assert run.worktree_path is not None
+  assert run.branch_name is not None
 
-    # Verify contract: the verify task's managed block is the verify contract.
-    verify_task = await create_task(
-        tree, parent=manager.id, profile="worker", request_id="v",
-        task=TaskSpec(goal="verify it", task_type="verify"))
-    await tree.dispatch.admit_input(
-        verify_task.id, event_type=ET.USER, content="verify the result", actor="user")
-    decision = await tree.dispatch.dispatch_pending(verify_task.id)
-    assert decision.get("launch") is True
-    await wait_for_terminal_run(tree, verify_task.id, decision["run_id"])
-    vrun = await tree.runs.get_run(verify_task.id, decision["run_id"])
-    assert vrun is not None
-    vstored = _snapshot_of(vrun)
-    vrefs = [s["source_ref"] for b in vstored["blocks"] for s in b["sources"]]
-    assert "prompts/verify.md" in vrefs
-    assert "prompts/worker.md" not in vrefs
+  # Verify contract: the verify task's managed block is the verify contract.
+  verify_task = await create_task(
+      tree, parent=manager.id, profile="worker", request_id="v", task=TaskSpec(goal="verify it", task_type="verify"))
+  await tree.dispatch.admit_input(verify_task.id, event_type=ET.USER, content="verify the result", actor="user")
+  decision = await tree.dispatch.dispatch_pending(verify_task.id)
+  assert decision.get("launch") is True
+  await wait_for_terminal_run(tree, verify_task.id, decision["run_id"])
+  vrun = await tree.runs.get_run(verify_task.id, decision["run_id"])
+  assert vrun is not None
+  vstored = _snapshot_of(vrun)
+  vrefs = [s["source_ref"] for b in vstored["blocks"] for s in b["sources"]]
+  assert "prompts/verify.md" in vrefs
+  assert "prompts/worker.md" not in vrefs
 
 
 @pytest.mark.asyncio
 async def test_manager_native_continuation_gates_on_instruction_hash(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Same rules and backend ⇒ the anchor's conversation continues; a rule
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Same rules and backend ⇒ the anchor's conversation continues; a rule
     change starts a fresh native context carrying a reset notice; an
     input-only change does not reset anything."""
-    _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    first = SpawningScriptedBackend([result_event("turn one")])
-    second = SpawningScriptedBackend([result_event("turn two")])
-    third = SpawningScriptedBackend([result_event("turn three")])
-    install_backends(
-        monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
+  _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  first = SpawningScriptedBackend([result_event("turn one")])
+  second = SpawningScriptedBackend([result_event("turn two")])
+  third = SpawningScriptedBackend([result_event("turn three")])
+  install_backends(monkeypatch, [first, second, third], BUILD_BACKEND_PATCH_TARGET)
 
-    # Turn 1: no anchor — a fresh native context, identity recorded at spawn.
-    run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
-    await wait_for_terminal_run(tree, manager.id, run1)
-    meta = await tree.load_meta(manager.id)
-    assert meta.native_prompt_hash is not None and meta.native_backend == "fake"
-    snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
-    assert meta.native_prompt_hash == snapshot1["prompt_hash"]
-    # The scripted backend never persists a native anchor; record one the way
-    # the real turn-finish path does, so turn 2 has an anchor to continue.
-    anchor_id = "native-anchor-1"
-    await tree.record_native_anchor(
-        manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
-        model="fake-model", reset_anchor=False)
-    # The conversation anchor changes only through its authorized channel: a
-    # whole-object save's anchor reconciliation would correct it back to disk.
-    await session_mgr.persist_cc_session_id(manager.id, anchor_id)
+  # Turn 1: no anchor — a fresh native context, identity recorded at spawn.
+  run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
+  await wait_for_terminal_run(tree, manager.id, run1)
+  meta = await tree.load_meta(manager.id)
+  assert meta.native_prompt_hash is not None and meta.native_backend == "fake"
+  snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
+  assert meta.native_prompt_hash == snapshot1["prompt_hash"]
+  # The scripted backend never persists a native anchor; record one the way
+  # the real turn-finish path does, so turn 2 has an anchor to continue.
+  anchor_id = "native-anchor-1"
+  await tree.record_native_anchor(
+      manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
+  # The conversation anchor changes only through its authorized channel: a
+  # whole-object save's anchor reconciliation would correct it back to disk.
+  await session_mgr.persist_cc_session_id(manager.id, anchor_id)
 
-    # Turn 2 (input-only change): same instructions ⇒ the conversation continues
-    # (no reset notice, anchor untouched).
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision.get("launch") is True
-    run2 = decision["run_id"]
-    await wait_for_terminal_run(tree, manager.id, run2)
-    meta2 = await tree.load_meta(manager.id)
-    assert meta2.cc_session_id == anchor_id  # the anchor persists across the input-only turn
-    assert meta2.native_prompt_hash == snapshot1["prompt_hash"]
-    launch2 = (tree.runs.run_dir(manager.id, run2) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert "Context reset" not in launch2
+  # Turn 2 (input-only change): same instructions ⇒ the conversation continues
+  # (no reset notice, anchor untouched).
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True
+  run2 = decision["run_id"]
+  await wait_for_terminal_run(tree, manager.id, run2)
+  meta2 = await tree.load_meta(manager.id)
+  assert meta2.cc_session_id == anchor_id  # the anchor persists across the input-only turn
+  assert meta2.native_prompt_hash == snapshot1["prompt_hash"]
+  launch2 = (tree.runs.run_dir(manager.id, run2) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert "Context reset" not in launch2
 
-    # Turn 3 (a rule changed): fresh native context, history retained elsewhere.
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="changed rule"),
-                          caller=OPERATOR)
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn three", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision.get("launch") is True
-    run3 = decision["run_id"]
-    await wait_for_terminal_run(tree, manager.id, run3)
-    meta3 = await tree.load_meta(manager.id)
-    snapshot3 = _snapshot_of(await tree.runs.get_run(manager.id, run3))
-    assert snapshot3["prompt_hash"] != snapshot1["prompt_hash"]
-    assert meta3.native_prompt_hash == snapshot3["prompt_hash"]
-    # The stale anchor was cleared at spawn (the fresh native context's own
-    # conversation replaces it); the old transcript's history is untouched.
-    assert meta3.cc_session_id is None or meta3.cc_session_id != anchor_id
-    # The reset notice is the whole assembled note: the standing reason, the
-    # task's goal, where earlier history lives, and the clone-style
-    # read-the-log instruction.
-    launch_text = (tree.runs.run_dir(manager.id, run3) / "launch_prompt.md").read_text(encoding="utf-8")
-    note, sep, tail = launch_text.partition("\n\n")
-    assert sep
-    assert note == (
-        "[Context reset: this task's managed instructions or sources changed since the "
-        "previous turn, so this turn starts a fresh native conversation. "
-        f"The task is: {meta3.name}. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
-    assert "turn three" in tail
+  # Turn 3 (a rule changed): fresh native context, history retained elsewhere.
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="changed rule"), caller=OPERATOR)
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn three", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True
+  run3 = decision["run_id"]
+  await wait_for_terminal_run(tree, manager.id, run3)
+  meta3 = await tree.load_meta(manager.id)
+  snapshot3 = _snapshot_of(await tree.runs.get_run(manager.id, run3))
+  assert snapshot3["prompt_hash"] != snapshot1["prompt_hash"]
+  assert meta3.native_prompt_hash == snapshot3["prompt_hash"]
+  # The stale anchor was cleared at spawn (the fresh native context's own
+  # conversation replaces it); the old transcript's history is untouched.
+  assert meta3.cc_session_id is None or meta3.cc_session_id != anchor_id
+  # The reset notice is the whole assembled note: the standing reason, the
+  # task's goal, where earlier history lives, and the clone-style
+  # read-the-log instruction.
+  launch_text = (tree.runs.run_dir(manager.id, run3) / "launch_prompt.md").read_text(encoding="utf-8")
+  note, sep, tail = launch_text.partition("\n\n")
+  assert sep
+  assert note == (
+      "[Context reset: this task's managed instructions or sources changed since the "
+      "previous turn, so this turn starts a fresh native conversation. "
+      f"The task is: {meta3.name}. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+  assert "turn three" in tail
 
 
 @pytest.mark.asyncio

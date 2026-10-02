@@ -448,3 +448,18 @@ Known-alive symbols:
   (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
   field), but the error would no longer name `allowed_users`, the successor the
   operator must move each id into.
+- `cancel_master` (`src/agents/master_cc_queue.py`, re-exported by the
+  `src/agents/master_cc.py` facade) — reached by string: `src/api/chat.py`'s deferred
+  loader `deferred_import_loader("cancel_master", "src.agents.master_cc")` imports the
+  facade and reads the attribute on first use; the production cancel path
+  (`cancel_master_agent`) calls the loader's binding directly, and the
+  `CHAT_CANCEL_MASTER_PATCH_TARGET` spelling `src.api.chat.cancel_master` resolves through
+  the same loader (the `__getattr__` PEP 562 entry above covers the hook; this entry covers
+  the resolution target the hook's loader names). A static grep finds no
+  `master_cc.cancel_master` attribute read and no import-form use — every `cancel_master`
+  match outside the def is the re-export line, the loader's string literals, the
+  patch-target constant, and comment/prose mentions — so vulture flags the def as an unused
+  function and the re-export line reads as an unused-import leftover. Never delete either
+  on that evidence: the cancel tests' `patch(CHAT_CANCEL_MASTER_PATCH_TARGET, ...)`
+  resolves the attribute through the loader and raises AttributeError, and the chat cancel
+  endpoint breaks on its first production call.

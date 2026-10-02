@@ -470,6 +470,23 @@ _workspace_list_memos = _SessionsListMemos()
 _chat_threads_list_memos = _SessionsListMemos()
 
 
+async def _active_listing_corpus(session_mgr: SessionManager) -> tuple[list[SessionMetadata], dict[str, dict]]:
+  """The active non-scheduled corpus with its status derivations, read-only.
+
+  One home for the fetch both sidebar root lists ride: the Workspace list and
+  the Threads view split this one corpus by subtree membership, so a change to
+  the corpus definition (a new derivation flag) lands here and reaches both
+  lists.
+  """
+  return await session_mgr.list_sessions_readonly(
+      status=SessionStatus.ACTIVE,
+      scheduled=False,
+      include_running_status=True,
+      include_pending_trigger_status=True,
+      include_pending_plan_approval=True,
+  )
+
+
 async def _sessions_list_response(
     request: Request,
     rows: list[SessionMetadata],
@@ -575,13 +592,7 @@ async def list_sessions(
   /chat-threads), so a parentless leaf never flattens into a top-level row.
   Every row's schedule fields come from the one join (row_schedule_fields).
   """
-  rows, derived = await session_mgr.list_sessions_readonly(
-      status=SessionStatus.ACTIVE,
-      scheduled=False,
-      include_running_status=True,
-      include_pending_trigger_status=True,
-      include_pending_plan_approval=True,
-  )
+  rows, derived = await _active_listing_corpus(session_mgr)
   cron_subtree = await session_mgr.cron_subtree_roots()
   chat_threads = await session_mgr.chat_thread_subtree_roots()
   rows = [row for row in rows if row.id not in cron_subtree and row.id not in chat_threads]
@@ -605,13 +616,7 @@ async def list_chat_threads(
   helper's; the render memos are this route's own, so the two lists never
   evict each other.
   """
-  rows, derived = await session_mgr.list_sessions_readonly(
-      status=SessionStatus.ACTIVE,
-      scheduled=False,
-      include_running_status=True,
-      include_pending_trigger_status=True,
-      include_pending_plan_approval=True,
-  )
+  rows, derived = await _active_listing_corpus(session_mgr)
   chat_threads = await session_mgr.chat_thread_subtree_roots()
   rows = [row for row in rows if row.id in chat_threads]
   return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _chat_threads_list_memos)

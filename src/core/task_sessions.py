@@ -73,7 +73,6 @@ from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.core.takeoff_gate import is_verify_exempt
-from src.core.task_completion import TaskCompletionManager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
@@ -367,6 +366,9 @@ class TaskTreeManager:
     # The notification is the tree owner's because only the tree index knows
     # which nodes are workers.
     self.runs.set_liveness_notifier(self._note_run_liveness)
+    # The M99 server import floor carries no completion-owner stack; the import
+    # rides the owner's once-per-process construction.
+    from src.core.task_completion import TaskCompletionManager
     self.dispatch = TaskInputDispatcher(self)
     self.completion = TaskCompletionManager(self)
     # The pending-input blockers of one session ([] when none): the structural

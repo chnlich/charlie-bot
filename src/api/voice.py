@@ -25,15 +25,17 @@ from collections.abc import AsyncIterator
 from contextlib import suppress
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import APIRouter, Form, Request, UploadFile, WebSocket
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend
-from src.agents.transcription.registry import build_transcription_backend
 from src.api.responses import FastJsonResponse
 from src.core.config import CharlieBotConfig, get_config
 from src.core.log_once import LazyStructlogLogger
+
+if TYPE_CHECKING:
+  from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend
 
 log = LazyStructlogLogger()
 
@@ -330,6 +332,7 @@ async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id:
   draining until the browser closes. Closing the socket from either side closes
   the backend iterator, which closes the backend's own connection.
   """
+  from src.agents.transcription.registry import build_transcription_backend
   cfg = get_config()
   try:
     backend = build_transcription_backend(backend_id, cfg)

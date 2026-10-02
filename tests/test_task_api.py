@@ -184,8 +184,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
 
   await task_mgr.runs.register_run(RunRecord(id="r2", session_id=worker))
   await task_mgr.runs.record_finish(worker, "r2", "completed")
-  warm = task_mgr._run_outcomes_of(
-      worker, task_mgr._sessions.load_chat_events_sync(worker), meta.archive_offset)
+  warm = task_mgr._run_outcomes_of(worker, task_mgr._sessions.load_chat_events_sync(worker), meta.archive_offset)
   assert warm == {"r1": "completed", "r2": "completed"}
 
   task_mgr._facts_memo.clear()

@@ -843,8 +843,10 @@ class AgentBackend(ABC):
   def _prepare_session_cgroup(self) -> SessionCgroup | None:
     """Ensure this backend's session cgroup exists and snapshot its counters; None when off.
 
-    Shared pre-spawn step for every spawn point, called from
-    :meth:`_spawn_preexec`. The cgroup is keyed by the session id the caller
+    Every spawn point calls this once, parent-side, before its spawn. The
+    move itself rides the child-side preexec composition for spawns that
+    keep one (:meth:`_spawn_preexec`), and :meth:`_apply_turn_tree_limits`
+    for the rest. The cgroup is keyed by the session id the caller
     pinned at construction (master turn, worker task, session-scoped
     one-shot); a backend constructed with cgroup_session_id=None (a spawn
     with no session home) never enters one.

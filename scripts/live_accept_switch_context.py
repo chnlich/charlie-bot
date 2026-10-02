@@ -487,144 +487,137 @@ async def create_session(base: str, key: str, spec: LegSpec) -> str:
     return str(created["id"])
 
 
-async def run_leg(spec: LegSpec, base: str, key: str, home: Path,
-                  natives: list[NativeRecord]) -> dict:
-    """One leg: turn 1, the switch(es), turn 2, and its assertions. Never raises."""
-    record: dict = {
-        "leg": spec.name,
-        "session_kind": spec.kind,
-        "backends": list(spec.route),
-        "session_id": None,
-        "native_ids": [],
-        "assertions": {},
-        "reply_opening": None,
-        "failures": [],
-        "passed": False,
-    }
+async def run_leg(spec: LegSpec, base: str, key: str, home: Path, natives: list[NativeRecord]) -> dict:
+  """One leg: turn 1, the switch(es), turn 2, and its assertions. Never raises."""
+  record: dict = {
+      "leg": spec.name,
+      "session_kind": spec.kind,
+      "backends": list(spec.route),
+      "session_id": None,
+      "native_ids": [],
+      "assertions": {},
+      "reply_opening": None,
+      "failures": [],
+      "passed": False,
+  }
 
-    def note(assertion: str, passed: bool, detail: str) -> None:
-        record["assertions"][assertion] = {"passed": passed, "detail": detail}
-        if not passed:
-            record["failures"].append(f"{assertion}: {detail}")
+  def note(assertion: str, passed: bool, detail: str) -> None:
+    record["assertions"][assertion] = {"passed": passed, "detail": detail}
+    if not passed:
+      record["failures"].append(f"{assertion}: {detail}")
 
-    try:
-        session_id = await create_session(base, key, spec)
-        record["session_id"] = session_id
-        log(f"[{spec.name}] session {session_id} on {spec.route[0]}")
+  try:
+    session_id = await create_session(base, key, spec)
+    record["session_id"] = session_id
+    log(f"[{spec.name}] session {session_id} on {spec.route[0]}")
 
-        # -- turn 1: fix the conventions -------------------------------------
-        if spec.kind == "v2":
-            known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
-            status, posted = await arequest(
-                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
-            if status != 202:
-                fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
-            _run1_id, run1, outcome1 = await wait_v2_run(session_id, known, f"{spec.name} turn 1")
-            if outcome1 != "success":
-                fail(f"leg {spec.name}: turn-1 run failed: outcome={outcome1}")
-            native1 = run1.native_session_id
-        else:
-            events_before = await asyncio.to_thread(read_chat_events, home, session_id)
-            baseline = len([
-                e for e in events_before
-                if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
-            status, posted = await arequest(
-                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
-            if status != 202:
-                fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
-            await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 1")
-            status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
-            if status != 200:
-                fail(f"leg {spec.name}: session read failed: {status} {detail}")
-            native1 = detail.get("cc_session_id")
-        if not native1:
-            fail(f"leg {spec.name}: turn 1 landed no native conversation id")
-        record["native_ids"].append(native1)
-        natives.append(NativeRecord(backend_family(spec.route[0]), session_id, str(native1)))
-        log(f"[{spec.name}] turn 1 native id {str(native1)[:16]}... ({backend_family(spec.route[0])})")
+    # -- turn 1: fix the conventions -------------------------------------
+    if spec.kind == "v2":
+      known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
+      status, posted = await arequest(
+          base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
+      if status != 202:
+        fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
+      _run1_id, run1, outcome1 = await wait_v2_run(session_id, known, f"{spec.name} turn 1")
+      if outcome1 != "success":
+        fail(f"leg {spec.name}: turn-1 run failed: outcome={outcome1}")
+      native1 = run1.native_session_id
+    else:
+      events_before = await asyncio.to_thread(read_chat_events, home, session_id)
+      baseline = len([e for e in events_before if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
+      status, posted = await arequest(
+          base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN1_CONVENTIONS})
+      if status != 202:
+        fail(f"leg {spec.name}: turn-1 admission failed: {status} {posted}")
+      await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 1")
+      status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
+      if status != 200:
+        fail(f"leg {spec.name}: session read failed: {status} {detail}")
+      native1 = detail.get("cc_session_id")
+    if not native1:
+      fail(f"leg {spec.name}: turn 1 landed no native conversation id")
+    record["native_ids"].append(native1)
+    natives.append(NativeRecord(backend_family(spec.route[0]), session_id, str(native1)))
+    log(f"[{spec.name}] turn 1 native id {str(native1)[:16]}... ({backend_family(spec.route[0])})")
 
-        # -- the switch(es) ---------------------------------------------------
-        for target in spec.route[1:]:
-            status, switched = await arequest(
-                base, key, "POST", f"/api/sessions/{session_id}/backend", {"backend": target})
-            if status != 200:
-                fail(f"leg {spec.name}: switch to {target} failed: {status} {switched}")
-            log(f"[{spec.name}] switched to {target}")
+    # -- the switch(es) ---------------------------------------------------
+    for target in spec.route[1:]:
+      status, switched = await arequest(base, key, "POST", f"/api/sessions/{session_id}/backend", {"backend": target})
+      if status != 200:
+        fail(f"leg {spec.name}: switch to {target} failed: {status} {switched}")
+      log(f"[{spec.name}] switched to {target}")
 
-        # -- turn 2: the task -------------------------------------------------
-        if spec.kind == "v2":
-            known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
-            status, posted = await arequest(
-                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
-            if status != 202:
-                fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
-            run2_id, run2, outcome2 = await wait_v2_run(session_id, known, f"{spec.name} turn 2")
-            if outcome2 != "success":
-                fail(f"leg {spec.name}: turn-2 run failed: outcome={outcome2}")
-            native2 = run2.native_session_id
-            launch_path = tree_run_dir(session_id, run2_id) / "launch_prompt.md"
-            received = launch_path.read_text(encoding="utf-8") if launch_path.is_file() else None
-            if received is None:
-                fail(f"leg {spec.name}: turn-2 launch_prompt.md missing at {launch_path}")
-        else:
-            events_before = await asyncio.to_thread(read_chat_events, home, session_id)
-            baseline = len([
-                e for e in events_before
-                if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
-            status, posted = await arequest(
-                base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
-            if status != 202:
-                fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
-            await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 2")
-            status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
-            if status != 200:
-                fail(f"leg {spec.name}: session read failed: {status} {detail}")
-            native2 = detail.get("cc_session_id")
-            family2 = backend_family(spec.route[-1])
-            received = None if not native2 else received_prompt_record(family2, str(native2), TURN2_TASK)
-            if received is None:
-                fail(f"leg {spec.name}: the {family2} transcript/rollout for turn 2 "
-                     f"(native id {native2}) carries no user prompt containing the task text")
-        if not native2:
-            fail(f"leg {spec.name}: turn 2 landed no native conversation id")
-        record["native_ids"].append(native2)
-        natives.append(NativeRecord(backend_family(spec.route[-1]), session_id, str(native2)))
-        log(f"[{spec.name}] turn 2 native id {str(native2)[:16]}... ({backend_family(spec.route[-1])})")
+    # -- turn 2: the task -------------------------------------------------
+    if spec.kind == "v2":
+      known = {r.id for r in deps_tree().runs.list_run_records_sync(session_id)}
+      status, posted = await arequest(base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
+      if status != 202:
+        fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
+      run2_id, run2, outcome2 = await wait_v2_run(session_id, known, f"{spec.name} turn 2")
+      if outcome2 != "success":
+        fail(f"leg {spec.name}: turn-2 run failed: outcome={outcome2}")
+      native2 = run2.native_session_id
+      launch_path = tree_run_dir(session_id, run2_id) / "launch_prompt.md"
+      received = launch_path.read_text(encoding="utf-8") if launch_path.is_file() else None
+      if received is None:
+        fail(f"leg {spec.name}: turn-2 launch_prompt.md missing at {launch_path}")
+    else:
+      events_before = await asyncio.to_thread(read_chat_events, home, session_id)
+      baseline = len([e for e in events_before if e.get("type") == ET.MASTER_DONE and not e.get(ET.STILL_THINKING)])
+      status, posted = await arequest(base, key, "POST", f"/api/chat/{session_id}/message", {"content": TURN2_TASK})
+      if status != 202:
+        fail(f"leg {spec.name}: turn-2 admission failed: {status} {posted}")
+      await wait_v1_round(home, session_id, baseline, f"{spec.name} turn 2")
+      status, detail = await arequest(base, key, "GET", f"/api/sessions/{session_id}")
+      if status != 200:
+        fail(f"leg {spec.name}: session read failed: {status} {detail}")
+      native2 = detail.get("cc_session_id")
+      family2 = backend_family(spec.route[-1])
+      received = None if not native2 else received_prompt_record(family2, str(native2), TURN2_TASK)
+      if received is None:
+        fail(
+            f"leg {spec.name}: the {family2} transcript/rollout for turn 2 "
+            f"(native id {native2}) carries no user prompt containing the task text")
+    if not native2:
+      fail(f"leg {spec.name}: turn 2 landed no native conversation id")
+    record["native_ids"].append(native2)
+    natives.append(NativeRecord(backend_family(spec.route[-1]), session_id, str(native2)))
+    log(f"[{spec.name}] turn 2 native id {str(native2)[:16]}... ({backend_family(spec.route[-1])})")
 
-        # -- the reply --------------------------------------------------------
-        events = await asyncio.to_thread(read_chat_events, home, session_id)
-        last_user = max((i for i, e in enumerate(events) if e.get("type") == "user"), default=-1)
-        reply = assistant_text(events, last_user)
-        record["reply_opening"] = reply_opening(reply)
-        if not reply:
-            fail(f"leg {spec.name}: turn 2 produced no assistant reply text")
+    # -- the reply --------------------------------------------------------
+    events = await asyncio.to_thread(read_chat_events, home, session_id)
+    last_user = max((i for i, e in enumerate(events) if e.get("type") == "user"), default=-1)
+    reply = assistant_text(events, last_user)
+    record["reply_opening"] = reply_opening(reply)
+    if not reply:
+      fail(f"leg {spec.name}: turn 2 produced no assistant reply text")
 
-        # -- assertions -------------------------------------------------------
-        if spec.expect == "conventions":
-            ok, detail = reply_code_follows_conventions(reply)
-            note("reply_follows_conventions", ok, detail)
-            has_instruction = received is not None and (
-                "[Context reset" in received and CONTEXT_RESET_INSTRUCTION in received)
-            note("prompt_carries_instruction", bool(has_instruction),
-                 "the prompt the new backend received carries the reset note and instruction"
-                 if has_instruction else
-                 f"the received prompt lacks the reset note/instruction "
-                 f"(head={'' if received is None else received[:120]!r})")
-        else:
-            note("native_conversation_continues",
-                 bool(native1) and str(native1) == str(native2),
-                 f"turn 2 native id {native2} vs turn 1 {native1}")
-            no_note = received is not None and "[Context reset" not in received
-            note("prompt_has_no_reset_note", bool(no_note),
-                 "the received prompt carries no [Context reset note"
-                 if no_note else "the received prompt carries a [Context reset note")
-    except SystemExit as exc:
-        record["failures"].append(redact(str(exc)))
-    except Exception as exc:
-        record["failures"].append(f"{type(exc).__name__}: {redact(str(exc))}")
-    record["passed"] = not record["failures"]
-    log(f"[{spec.name}] {'PASSED' if record['passed'] else 'FAILED'}")
-    return record
+    # -- assertions -------------------------------------------------------
+    if spec.expect == "conventions":
+      ok, detail = reply_code_follows_conventions(reply)
+      note("reply_follows_conventions", ok, detail)
+      has_instruction = received is not None and (
+          "[Context reset" in received and CONTEXT_RESET_INSTRUCTION in received)
+      note(
+          "prompt_carries_instruction", bool(has_instruction),
+          "the prompt the new backend received carries the reset note and instruction"
+          if has_instruction else f"the received prompt lacks the reset note/instruction "
+          f"(head={'' if received is None else received[:120]!r})")
+    else:
+      note(
+          "native_conversation_continues",
+          bool(native1) and str(native1) == str(native2), f"turn 2 native id {native2} vs turn 1 {native1}")
+      no_note = received is not None and "[Context reset" not in received
+      note(
+          "prompt_has_no_reset_note", bool(no_note), "the received prompt carries no [Context reset note"
+          if no_note else "the received prompt carries a [Context reset note")
+  except SystemExit as exc:
+    record["failures"].append(redact(str(exc)))
+  except Exception as exc:
+    record["failures"].append(f"{type(exc).__name__}: {redact(str(exc))}")
+  record["passed"] = not record["failures"]
+  log(f"[{spec.name}] {'PASSED' if record['passed'] else 'FAILED'}")
+  return record
 
 
 # ---------------------------------------------------------------------------

@@ -206,7 +206,7 @@ async def test_live_goal_change_affects_next_iteration(
 async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """No take-off anywhere in the chain: 403 with the gate's reason, never a
-    500, and nothing reserved."""
+  500, and nothing reserved."""
   from src.core.improve_command import _active_loop_path, _loops_dir, find_running_loop
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(

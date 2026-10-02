@@ -14,7 +14,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M1 host: load + serve CPU | `uptime`; M1 collector below | load 1/5/15; serve count; %CPU total | load < 4 (CPU count); serve CPU total < 300 % | 3.27 / 2.42 / 2.94; 4 serve processes, 237.9 % CPU |
 | M2 UI polls | M2 collector below | polls/h; log MB | < 6000 polls/h | 2755 polls/h; 3.1 MB log |
 | M3 API latency, 401 path | M3 collector below | seconds per request; the in-server floor sub-reading (the raw-ASGI drive of the same 401 path through the real app stack — middleware chain plus the http_request log line — the served path uvicorn runs after its lifespan installs the lean log renderer) | median < 0.005 s; in-server floor median < 0.000060 s (the line sits at the pre-fix dev-render floor — a regression to it trips; the cron-collision bias the M56 history documents applies) | median 0.002 s, max 0.002 s |
-| M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung — `_session_archived`'s rule; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
+| M4 turns | M4 collector below | seconds per turn; hung sessions (an archived session is never hung; neither is a session whose running threads' own worker logs moved within the hour — a delegation's chat file goes quiet for the delegation's whole run, see the 2026-09-14 history row) | median < 600 s (recalibrated from < 300 s: the median tracks the bot's own cron-delegation workload mix, not code health — see the 2026-09-12 history row); hung = 0 | median 53 s, max 1133 s; 0 hung |
 | M5 threads/list latency | M5 collector below | seconds per request, worst session | median < 0.05 s | — (introduced with its first history row) |
 | M6 session usage latency | M6 collector below | seconds per request, worst session; the append-round repeat (one appended event before each timed resolution — the 3 s usage poll during a streamed turn — scratch home) | median < 0.05 s; append-round median < 0.005 s | — (introduced with its first history row) |
 | M7 token-usage page | M7 collector below | seconds per page load; the changed-round capture+read (one corpus move since the last collect — the hourly cron's shape: scratch copy of the two transcript corpora, per timed round one final-~1 MB line-aligned append to each corpus's largest transcript, timed capture plus the row read it feeds, ledger rows digest as the cross-arm witness; live corpus read once for the copy, never written; the opencode and charlie-bot legs stay on the standing page line); the restart-cold collect (fresh process, the first page load after a server start — scratch cache doc + ledger seeded by one capture over the live corpus read-only, timed from the page's deferred tally-stack import through the ledger read) | median < 3 s; changed-round median < 0.15 s (the retargeted capture reads 70.5-73.9 ms over the 528 MB copied corpus at the 2026-09-29 landing — the line sits ~2x over the band and trips the lost-cache-gate shape, whose full-corpus re-parse prices ~2.1 s at the M78 floor); restart-cold median < 0.35 s (the fresh-process band reads 213-227 ms — the deferred tally-stack import the page pays, the M99 import-floor shape; a lost cache gate re-parses the live corpus, ~2.1 s, and trips). The warm-gate changed round retired with the ledger refactor (2026-09-29): its subject — the in-process row memo and proof gate a persistent server advanced between collects — is gone, every page load reads model_rows from the ledger fresh, and the costs that survive ride these two shapes | — (introduced with its first history row) |
@@ -273,9 +273,8 @@ EOF
 M4 — turn durations and hung sessions. The projection reads only `type` and `timestamp` from chat
 events and `status` from thread and session metadata; session content is never read. A session whose
 own metadata says `archived` is never hung — archiving is the user's statement that the session is
-finished, the same rule the boot recovery applies (`_session_archived`), so the stale `running`
-thread markers an archived session keeps do not count; the session metadata is read only when a
-thread claims `running`, so the common scan pays nothing extra:
+finished, so the stale `running` thread markers an archived session keeps do not count; the session
+metadata is read only when a thread claims `running`, so the common scan pays nothing extra:
 
 ```bash
 python3 - <<'EOF'
@@ -308,9 +307,8 @@ for session_dir in root.iterdir():
                 running_threads.append(thread_meta.parent)
     if running:
         # An archived session's threads are not work to resume: archiving is the
-        # user's statement that the session is finished, the rule the boot
-        # recovery applies (_session_archived), so its stale "running" thread
-        # markers are not a hung session. Read only when a thread claims running.
+        # user's statement that the session is finished, so its stale "running"
+        # thread markers are not a hung session. Read only when a thread claims running.
         meta_path = session_dir / "metadata.json"
         if meta_path.is_file():
             try:

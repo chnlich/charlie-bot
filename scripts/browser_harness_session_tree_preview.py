@@ -1543,8 +1543,8 @@ async def drive_browser(debug_port: int, base: str,
                    screenshot=await screenshot(cdp, sid, results, "s14f-after-desktop"))
 
     # --- S15: unread-reply feedback on the real writer path -----------------
-    # The unread writer is the finalize chain's summary delivery
-    # (SessionManager.mark_unread inside _persist_worker_summary_once). The two
+    # The unread writer is the real summary delivery
+    # (SessionManager.mark_unread when the manager turn's output lands). The two
     # pristine roots from S6b/S6c (no history, no pending automation, root rows
     # always rendered) each get one real bounded manager turn: the row spins
     # while the run is live, shows the familiar unread dot once the summary

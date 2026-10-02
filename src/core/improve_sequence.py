@@ -198,7 +198,7 @@ async def run_improve_sequence(
     child_id: str,
     goal: str,
 ) -> None:
-    """Run the improve sequence on the v2 child (the background controller task).
+  """Run the improve sequence on the v2 child (the background controller task).
 
     The child and the loop state already exist (the API handler reserved both
     under the stable ids). Each iteration launches through the shared adapter,
@@ -209,185 +209,189 @@ async def run_improve_sequence(
     stop, or a quota blocker, and the ONE final result is delivered to the
     parent through the report owner.
     """
-    from src.core.task_execution import TaskExecutionAdapter
+  from src.core.task_execution import TaskExecutionAdapter
+
+  state = await improve_command.require_loop_state(session_id, loop_id, cfg)
+  loop_dir = cfg.sessions_dir / session_id / "loops" / str(loop_id)
+  resolved_repo = Path(state.repo_path)
+  work_branch = state.work_branch
+  base_branch = state.base_branch
+  merge_back = state.merge_back
+  resolved_backend = state.backend or ""
+  resolved_model = state.model
+  adapter = tree.dispatch.executor
+  if not isinstance(adapter, TaskExecutionAdapter):
+    raise RuntimeError("task execution adapter is not installed; cannot run an improve sequence")
+
+  previous_summaries: list[str] = []
+  blocked: tuple[int, str, str] | None = None  # (iteration, reason, summary)
+  completed_iterations = 0
+
+  try:
+    # The single shared worktree every iteration commits to. Created here
+    # (the controller owns it) and pinned on each iteration Run.
+    wt_path = Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
+    Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
+    try:
+      resolution = await git.git_create_worktree(
+          resolved_repo, base_branch or await git.git_current_branch(resolved_repo), work_branch, wt_path)
+      state.base_branch = resolution.canonical
+      await improve_command.save_loop_state(session_id, state, cfg)
+      base_branch = resolution.canonical
+    except Exception as e:
+      state.status = 'failed'
+      await improve_command.save_loop_state(session_id, state, cfg)
+      await improve_command.clear_active_loop_lock(session_id, cfg)
+      log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
+      await tree.sessions.deliver_to_successor(
+          session_id, {
+              "type": ET.IMPROVE_FAILED,
+              "goal": goal,
+              "error": improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)
+          })
+      await _deliver_sequence_report(
+          tree, child_id, session_id, loop_id, "failed", f"Improve loop failed to create its worktree: {e}", [])
+      return
+
+    for i in range(1, iterations + 1):
+      state = await improve_command.require_loop_state(session_id, loop_id, cfg)
+      if state.status == "stopped":
+        break
+      # The live goal (and optional plan) is re-read every iteration so a
+      # mid-loop edit steers the next one; a missing goal.md fails loudly.
+      goal = await improve_command.read_loop_goal(loop_dir)
+      plan = await improve_command.read_loop_plan(loop_dir)
+      description = _compose_iteration_description(goal, plan, previous_summaries)
+      tip_before = await git._git_rev_parse(wt_path, "HEAD") or ""
+
+      run = await register_iteration_run(
+          tree,
+          child_id,
+          session_id,
+          loop_id,
+          i,
+          cfg,
+          resolved_backend=resolved_backend,
+          resolved_model=resolved_model,
+          repo_path=str(resolved_repo),
+          base_branch=base_branch,
+          work_branch=work_branch,
+          worktree_path=str(wt_path))
+      outcome = await tree.runs.terminal_outcome_of(child_id, run.id)
+      if outcome is None:
+        # This controller's work: launch the iteration with its
+        # composed description and await the launch/wait settlement.
+        # (A replayed registration of an already-terminal Run keeps
+        # its recorded outcome above; a live process from a replayed
+        # registration is followed, never relaunched.)
+        observation = await adapter.launch_and_settle(child_id, run.id, prompt=description)
+        if observation.withheld is not None:
+          # No process started and no terminal fact will arrive: the
+          # loop cannot continue. Settle honestly — blocked state,
+          # released active lock, the actual reason reported — and
+          # leave the queued iteration Run standing as the retained
+          # pending request (resume/retry uses the existing policy;
+          # the whole loop is never automatically restarted).
+          await _settle_withheld_iteration(
+              tree, session_id, cfg, loop_id, goal, i, run.id, observation.withheld, previous_summaries, iterations)
+          return
+        outcome = observation.outcome
+        assert outcome is not None
+      completed_iterations = i
+
+      if outcome != "success":
+        blocker_reason, failed_summary = await _iteration_blocker(tree, child_id, run.id, i, outcome)
+        if blocker_reason:
+          log.warning(
+              "improve_sequence_blocked", session=session_id, loop_id=loop_id, iteration=i, reason=blocker_reason)
+          blocked = (i, blocker_reason, failed_summary)
+          break
+        # A non-quota failure is recorded and the loop continues, as
+        # the legacy controller did.
+
+      judgment = await _judge_iteration(tree, child_id, run.id, i, wt_path, loop_dir, tip_before)
+      previous_summaries.append(judgment.summary)
+      await _broadcast_iteration_progress(
+          tree, session_id, child_id, run.id, i, iterations, outcome, judgment.summary, loop_dir)
+      await _deliver_iteration_report(tree, session_id, child_id, loop_id, run, i, iterations, outcome, judgment)
 
     state = await improve_command.require_loop_state(session_id, loop_id, cfg)
-    loop_dir = cfg.sessions_dir / session_id / "loops" / str(loop_id)
-    resolved_repo = Path(state.repo_path)
-    work_branch = state.work_branch
-    base_branch = state.base_branch
-    merge_back = state.merge_back
-    resolved_backend = state.backend or ""
-    resolved_model = state.model
-    adapter = tree.dispatch.executor
-    if not isinstance(adapter, TaskExecutionAdapter):
-        raise RuntimeError("task execution adapter is not installed; cannot run an improve sequence")
+    stopped_by_user = state.status == 'stopped'
 
-    previous_summaries: list[str] = []
-    blocked: tuple[int, str, str] | None = None  # (iteration, reason, summary)
-    completed_iterations = 0
+    merge_result: dict | None = None
+    if blocked is None and not stopped_by_user:
+      merge_result = await improve_command._land_work_branch_after_loop(
+          resolved_repo, work_branch, base_branch, merge_back, stopped_by_user, previous_summaries, session_id)
 
+    if blocked is not None:
+      state.status = 'failed'
+      outcome_label = "failed"
+      summary = improve_command.blocked_loop_summary(blocked[0], blocked[1])
+    elif stopped_by_user:
+      state.status = 'stopped'
+      outcome_label = "cancelled"
+      summary = (
+          f"Improve loop stopped by user after {completed_iterations} iteration(s); "
+          "evidence retained on the loop's task, no further iterations will run.")
+    elif merge_result is not None and merge_result.get('merged') is True:
+      state.status = 'completed'
+      outcome_label = "completed"
+      summary = (
+          f"Improve loop completed {completed_iterations} iteration(s); work branch "
+          f"{work_branch} landed on {base_branch}.")
+    else:
+      # Exhausted iterations without proven delivery: never a fabricated
+      # success. The child stays open; the parent decides what is next.
+      state.status = 'blocked'
+      outcome_label = "blocked"
+      detail = ""
+      if merge_result is not None and merge_result.get('merged') is False:
+        detail = (
+            f" The fast-forward landing onto {base_branch} failed "
+            f"({merge_result.get('error')}); the work branch was pushed to origin.")
+      summary = (
+          f"Improve loop ran {completed_iterations} iteration(s) on branch {work_branch}; "
+          f"the goal is not proven and the sequence delivered no landing.{detail} "
+          "Decide whether to land the branch, continue iterating, or close the task.")
+    await improve_command.save_loop_state(session_id, state, cfg)
+    await improve_command.clear_active_loop_lock(session_id, cfg)
+
+    payload = improve_command._build_summary_payload(
+        ET.IMPROVE_COMPLETED if outcome_label == "completed" else
+        ET.IMPROVE_STOPPED if outcome_label == "cancelled" else ET.IMPROVE_FAILED, goal, previous_summaries)
+    if blocked is not None:
+      payload['blocked_iteration'] = blocked[0]
+      payload['reason'] = blocked[1]
+      payload['blocked_summary'] = blocked[2][:500]
+    payload['work_branch'] = work_branch
+    payload['base_branch'] = base_branch
+    if merge_result is not None:
+      payload['merge_result'] = merge_result
+    await tree.sessions.deliver_to_successor(session_id, payload)
+
+    await _deliver_sequence_report(tree, child_id, session_id, loop_id, outcome_label, summary, previous_summaries)
+  except asyncio.CancelledError:
+    log.warning("improve_sequence_cancelled", session=session_id, loop_id=loop_id)
+    raise
+  except Exception as exc:
+    log.exception("improve_sequence_failed", session=session_id, loop_id=loop_id)
+    state = await improve_command.load_loop_state(session_id, loop_id, cfg)
+    if state is not None:
+      state.status = 'failed'
+      await improve_command.save_loop_state(session_id, state, cfg)
+    await improve_command.clear_active_loop_lock(session_id, cfg)
     try:
-        # The single shared worktree every iteration commits to. Created here
-        # (the controller owns it) and pinned on each iteration Run.
-        wt_path = Path(cfg.paths.worktree_dir) / work_branch.replace('/', '-')
-        Path(cfg.paths.worktree_dir).mkdir(parents=True, exist_ok=True)
-        try:
-            resolution = await git.git_create_worktree(
-                resolved_repo, base_branch or await git.git_current_branch(resolved_repo), work_branch, wt_path)
-            state.base_branch = resolution.canonical
-            await improve_command.save_loop_state(session_id, state, cfg)
-            base_branch = resolution.canonical
-        except Exception as e:
-            state.status = 'failed'
-            await improve_command.save_loop_state(session_id, state, cfg)
-            await improve_command.clear_active_loop_lock(session_id, cfg)
-            log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
-            await tree.sessions.deliver_to_successor(
-                session_id, {"type": ET.IMPROVE_FAILED, "goal": goal,
-                             "error": improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)})
-            await _deliver_sequence_report(
-                tree, child_id, session_id, loop_id, "failed",
-                f"Improve loop failed to create its worktree: {e}", [])
-            return
-
-        for i in range(1, iterations + 1):
-            state = await improve_command.require_loop_state(session_id, loop_id, cfg)
-            if state.status == "stopped":
-                break
-            # The live goal (and optional plan) is re-read every iteration so a
-            # mid-loop edit steers the next one; a missing goal.md fails loudly.
-            goal = await improve_command.read_loop_goal(loop_dir)
-            plan = await improve_command.read_loop_plan(loop_dir)
-            description = _compose_iteration_description(goal, plan, previous_summaries)
-            tip_before = await git._git_rev_parse(wt_path, "HEAD") or ""
-
-            run = await register_iteration_run(
-                tree, child_id, session_id, loop_id, i, cfg,
-                resolved_backend=resolved_backend, resolved_model=resolved_model,
-                repo_path=str(resolved_repo), base_branch=base_branch,
-                work_branch=work_branch, worktree_path=str(wt_path))
-            outcome = await tree.runs.terminal_outcome_of(child_id, run.id)
-            if outcome is None:
-                # This controller's work: launch the iteration with its
-                # composed description and await the launch/wait settlement.
-                # (A replayed registration of an already-terminal Run keeps
-                # its recorded outcome above; a live process from a replayed
-                # registration is followed, never relaunched.)
-                observation = await adapter.launch_and_settle(child_id, run.id, prompt=description)
-                if observation.withheld is not None:
-                    # No process started and no terminal fact will arrive: the
-                    # loop cannot continue. Settle honestly — blocked state,
-                    # released active lock, the actual reason reported — and
-                    # leave the queued iteration Run standing as the retained
-                    # pending request (resume/retry uses the existing policy;
-                    # the whole loop is never automatically restarted).
-                    await _settle_withheld_iteration(
-                        tree, session_id, cfg, loop_id, goal, i, run.id,
-                        observation.withheld, previous_summaries, iterations)
-                    return
-                outcome = observation.outcome
-                assert outcome is not None
-            completed_iterations = i
-
-            if outcome != "success":
-                blocker_reason, failed_summary = await _iteration_blocker(
-                    tree, child_id, run.id, i, outcome)
-                if blocker_reason:
-                    log.warning("improve_sequence_blocked", session=session_id, loop_id=loop_id,
-                                iteration=i, reason=blocker_reason)
-                    blocked = (i, blocker_reason, failed_summary)
-                    break
-                # A non-quota failure is recorded and the loop continues, as
-                # the legacy controller did.
-
-            judgment = await _judge_iteration(
-                tree, child_id, run.id, i, wt_path, loop_dir, tip_before)
-            previous_summaries.append(judgment.summary)
-            await _broadcast_iteration_progress(
-                tree, session_id, child_id, run.id, i, iterations, outcome, judgment.summary, loop_dir)
-            await _deliver_iteration_report(
-                tree, session_id, child_id, loop_id, run, i, iterations, outcome, judgment)
-
-        state = await improve_command.require_loop_state(session_id, loop_id, cfg)
-        stopped_by_user = state.status == 'stopped'
-
-        merge_result: dict | None = None
-        if blocked is None and not stopped_by_user:
-            merge_result = await improve_command._land_work_branch_after_loop(
-                resolved_repo, work_branch, base_branch, merge_back, stopped_by_user,
-                previous_summaries, session_id)
-
-        if blocked is not None:
-            state.status = 'failed'
-            outcome_label = "failed"
-            summary = improve_command.blocked_loop_summary(blocked[0], blocked[1])
-        elif stopped_by_user:
-            state.status = 'stopped'
-            outcome_label = "cancelled"
-            summary = (
-                f"Improve loop stopped by user after {completed_iterations} iteration(s); "
-                "evidence retained on the loop's task, no further iterations will run.")
-        elif merge_result is not None and merge_result.get('merged') is True:
-            state.status = 'completed'
-            outcome_label = "completed"
-            summary = (
-                f"Improve loop completed {completed_iterations} iteration(s); work branch "
-                f"{work_branch} landed on {base_branch}.")
-        else:
-            # Exhausted iterations without proven delivery: never a fabricated
-            # success. The child stays open; the parent decides what is next.
-            state.status = 'blocked'
-            outcome_label = "blocked"
-            detail = ""
-            if merge_result is not None and merge_result.get('merged') is False:
-                detail = (f" The fast-forward landing onto {base_branch} failed "
-                          f"({merge_result.get('error')}); the work branch was pushed to origin.")
-            summary = (
-                f"Improve loop ran {completed_iterations} iteration(s) on branch {work_branch}; "
-                f"the goal is not proven and the sequence delivered no landing.{detail} "
-                "Decide whether to land the branch, continue iterating, or close the task.")
-        await improve_command.save_loop_state(session_id, state, cfg)
-        await improve_command.clear_active_loop_lock(session_id, cfg)
-
-        payload = improve_command._build_summary_payload(
-            ET.IMPROVE_COMPLETED if outcome_label == "completed"
-            else ET.IMPROVE_STOPPED if outcome_label == "cancelled"
-            else ET.IMPROVE_FAILED, goal, previous_summaries)
-        if blocked is not None:
-            payload['blocked_iteration'] = blocked[0]
-            payload['reason'] = blocked[1]
-            payload['blocked_summary'] = blocked[2][:500]
-        payload['work_branch'] = work_branch
-        payload['base_branch'] = base_branch
-        if merge_result is not None:
-            payload['merge_result'] = merge_result
-        await tree.sessions.deliver_to_successor(session_id, payload)
-
-        await _deliver_sequence_report(
-            tree, child_id, session_id, loop_id, outcome_label, summary, previous_summaries)
-    except asyncio.CancelledError:
-        log.warning("improve_sequence_cancelled", session=session_id, loop_id=loop_id)
-        raise
-    except Exception as exc:
-        log.exception("improve_sequence_failed", session=session_id, loop_id=loop_id)
-        state = await improve_command.load_loop_state(session_id, loop_id, cfg)
-        if state is not None:
-            state.status = 'failed'
-            await improve_command.save_loop_state(session_id, state, cfg)
-        await improve_command.clear_active_loop_lock(session_id, cfg)
-        try:
-            await tree.sessions.deliver_to_successor(session_id, {
-                "type": ET.IMPROVE_FAILED,
-                "goal": goal,
-                "error": improve_command.LOOP_FAILURE_ERROR_PREFIX + str(exc),
-                "iterations_completed": completed_iterations,
-            })
-            await _deliver_sequence_report(
-                tree, child_id, session_id, loop_id, "failed",
-                f"Improve loop controller failed: {exc}", previous_summaries)
-        except Exception:
-            log.exception("improve_sequence_failure_report_failed", session=session_id, loop_id=loop_id)
+      await tree.sessions.deliver_to_successor(
+          session_id, {
+              "type": ET.IMPROVE_FAILED,
+              "goal": goal,
+              "error": improve_command.LOOP_FAILURE_ERROR_PREFIX + str(exc),
+              "iterations_completed": completed_iterations,
+          })
+      await _deliver_sequence_report(
+          tree, child_id, session_id, loop_id, "failed", f"Improve loop controller failed: {exc}", previous_summaries)
+    except Exception:
+      log.exception("improve_sequence_failure_report_failed", session=session_id, loop_id=loop_id)
 
 
 async def _settle_withheld_iteration(

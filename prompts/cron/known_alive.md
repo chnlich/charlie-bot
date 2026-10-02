@@ -495,3 +495,18 @@ Known-alive symbols:
   ("attach-mode contract changed", the collector-failure class the baseline
   doc's history rows document), the smoke harness's alias check fails, and the
   tests lose their routes.
+- `voice_preview_websocket`, `session_websocket`, `terminal_websocket` (`server.py`, the
+  `@app.websocket` handlers for `/ws/voice/{session_id}`, `/ws/sessions/{session_id}` and
+  `/ws/terminal`) — reached by URL string: the browser JS opens the composed paths
+  (`web/static/js/voice-input.js`, `web/static/js/websocket.js`, `web/static/js/terminal_panel.js`),
+  and `@app.websocket` registers the handler the way the router decorators register the
+  `src/api/*.py` routes the FastAPI entry covers; `server.py`'s app-level handlers sit outside
+  that entry's `src/api/*.py` scope, so vulture flags each as an unused function (60%
+  confidence). Never delete them on that evidence.
+- `prompts/model_overlays/Kimi-K3.md` — reached by runtime config: the host's charliebot
+  config (`~/.charliebot/config.yaml`) carries the `backends.options` entry
+  `charlie-code-kimi-k3` with `prompt_overlay: Kimi-K3`, and the prompt builders f-string
+  `prompts/model_overlays/{prompt_overlay}.md` (`src/core/task_prompts.py`,
+  `src/agents/master_cc_run.py`). The repo carries no reference to the file's name — the
+  reference lives outside the repo — so the Step 3 whole-repo grep does not protect it. Never
+  delete it on zero-match evidence.

@@ -2304,162 +2304,153 @@ def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:
 
 @pytest.mark.asyncio
 async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(a) The run_finished write raises ENOSPC, the retry drains the dead run
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(a) The run_finished write raises ENOSPC, the retry drains the dead run
     from its raw log and lands the end record; the parent gets exactly one
     report and no second process ever starts."""
-    from src.core.thinking_state import busy_since
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    worker_builds = install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
-    fault_hits = inject_chat_append_fault(
-        monkeypatch, event_type=ET.RUN_FINISHED, session_ids={worker.id})
+  from src.core.thinking_state import busy_since
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  worker_builds = install_worker_launch_and_resume_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  fault_hits = inject_chat_append_fault(monkeypatch, event_type=ET.RUN_FINISHED, session_ids={worker.id})
 
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run_id = decision["run_id"]
-    await wait_for_terminal_run(tree, worker.id, run_id)
-    assert fault_hits == [True, False]  # one failed write; the retry's write landed
-    # The worker header timer the failed finish could not close is closed by
-    # the hook-1 handover (the process is dead): the node shows idle again.
-    await poll_until(lambda: busy_since(worker.id) is None, what="the worker header timer")
-    # The retried landing delivered the success-based report exactly once, and
-    # the parent's report turn settles without a restart. The report rides the
-    # retry task's async delivery chain, so wait for the report itself: an
-    # idle-parent poll can win the race against the not-yet-appended report.
-    await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried landing's report")
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    reports = child_reports(tree, manager.id)
-    assert [r.get("outcome") for r in reports] == ["completed"]
-    assert adapter._landing_retries == {}  # a clean round ended the retry task
-    assert len(worker_builds) == 1  # one process: the retry drained, never relaunched
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run_id = decision["run_id"]
+  await wait_for_terminal_run(tree, worker.id, run_id)
+  assert fault_hits == [True, False]  # one failed write; the retry's write landed
+  # The worker header timer the failed finish could not close is closed by
+  # the hook-1 handover (the process is dead): the node shows idle again.
+  await poll_until(lambda: busy_since(worker.id) is None, what="the worker header timer")
+  # The retried landing delivered the success-based report exactly once, and
+  # the parent's report turn settles without a restart. The report rides the
+  # retry task's async delivery chain, so wait for the report itself: an
+  # idle-parent poll can win the race against the not-yet-appended report.
+  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried landing's report")
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  reports = child_reports(tree, manager.id)
+  assert [r.get("outcome") for r in reports] == ["completed"]
+  assert adapter._landing_retries == {}  # a clean round ended the retry task
+  assert len(worker_builds) == 1  # one process: the retry drained, never relaunched
 
 
 @pytest.mark.asyncio
 async def test_manager_turn_master_done_enospc_retries_through_master_queue(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(b) The manager turn's MASTER_DONE write raises ENOSPC; the retry's node
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(b) The manager turn's MASTER_DONE write raises ENOSPC; the retry's node
     reconcile pass re-attaches the dead turn through the master queue (the kept
     future's done-callback releases the follow pair) and lands the end record
     with the raw log's last write time."""
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    run_id = decision["run_id"]
-    run_dir = tree.runs.run_dir(manager.id, run_id)
-    # The turn's own MASTER_DONE write fails out of space; the drain reads the
-    # raw log the live turn never wrote (the scripted double writes none), so
-    # the fault itself stages it — the retry's drain outruns any later write.
-    _staged: list[tuple[Path, object]] = []
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  run_id = decision["run_id"]
+  run_dir = tree.runs.run_dir(manager.id, run_id)
+  # The turn's own MASTER_DONE write fails out of space; the drain reads the
+  # raw log the live turn never wrote (the scripted double writes none), so
+  # the fault itself stages it — the retry's drain outruns any later write.
+  _staged: list[tuple[Path, object]] = []
 
-    def _stage_drain_raw_log() -> None:
-        _staged.append(write_raw_result(run_dir, "drained turn result"))
+  def _stage_drain_raw_log() -> None:
+    _staged.append(write_raw_result(run_dir, "drained turn result"))
 
-    fault_hits = inject_chat_append_fault(
-        monkeypatch, event_type=ET.MASTER_DONE, session_ids={manager.id},
-        on_raise=_stage_drain_raw_log)
-    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-    assert fault_hits == [True, False]  # the live write failed; the drain's landed
-    assert len(_staged) == 1
-    raw_mtime = _staged[0][1]
-    assert outcome == "success"
-    assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
-    # The follow pair released only when the master-queue future resolved.
-    await poll_until(lambda: (manager.id, run_id) not in adapter._resume_follows,
-               what="the manager-turn follow pair release")
-    assert adapter._landing_retries == {}
+  fault_hits = inject_chat_append_fault(
+      monkeypatch, event_type=ET.MASTER_DONE, session_ids={manager.id}, on_raise=_stage_drain_raw_log)
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  assert fault_hits == [True, False]  # the live write failed; the drain's landed
+  assert len(_staged) == 1
+  raw_mtime = _staged[0][1]
+  assert outcome == "success"
+  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
+  # The follow pair released only when the master-queue future resolved.
+  await poll_until(
+      lambda: (manager.id, run_id) not in adapter._resume_follows, what="the manager-turn follow pair release")
+  assert adapter._landing_retries == {}
 
 
 @pytest.mark.asyncio
-async def test_parent_report_enospc_retry_delivers_report_once(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(c)+(i)+(k) A successful run's delivery write raises ENOSPC: the end
+async def test_parent_report_enospc_retry_delivers_report_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(c)+(i)+(k) A successful run's delivery write raises ENOSPC: the end
     record is already on disk, the retry delivers the success-based report
     exactly once (never a failed report), and the run's live ended_at survives
     the retry untouched."""
-    monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-    cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
-    fault_hits = inject_chat_append_fault(
-        monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
+  monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
+  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
+  fault_hits = inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
 
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    run_id = decision["run_id"]
-    run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
-    assert outcome == "success"
-    # The retry's re-delivery is asynchronous with the live finish: wait for
-    # the one report before naming the appends and settling the parent.
-    await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried delivery's report")
-    assert fault_hits == [True, False]  # the live delivery failed; the retry's landed
-    ended_at = run.ended_at
-    assert ended_at is not None
-    await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-    reports = child_reports(tree, manager.id)
-    assert [r.get("outcome") for r in reports] == ["completed"]  # success-based, once
-    fresh = await tree.runs.get_run(worker.id, run_id)
-    assert fresh is not None and fresh.ended_at == ended_at  # (k) the retry kept it
-    assert adapter._landing_retries == {}
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  run_id = decision["run_id"]
+  run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  assert outcome == "success"
+  # The retry's re-delivery is asynchronous with the live finish: wait for
+  # the one report before naming the appends and settling the parent.
+  await poll_until(lambda: len(child_reports(tree, manager.id)) == 1, what="the retried delivery's report")
+  assert fault_hits == [True, False]  # the live delivery failed; the retry's landed
+  ended_at = run.ended_at
+  assert ended_at is not None
+  await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
+  reports = child_reports(tree, manager.id)
+  assert [r.get("outcome") for r in reports] == ["completed"]  # success-based, once
+  fresh = await tree.runs.get_run(worker.id, run_id)
+  assert fresh is not None and fresh.ended_at == ended_at  # (k) the retry kept it
+  assert adapter._landing_retries == {}
 
 
 @pytest.mark.asyncio
 async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """(d) A drained run's ended_at is the raw log's last write time; a live
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """(d) A drained run's ended_at is the raw log's last write time; a live
     exit's ended_at stays the observed-exit write time."""
-    from src.core.task_recovery import reconcile_task_tree
-    cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-    adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    tree.dispatch.executor = adapter
-    patch_instructions_content(monkeypatch)
-    install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("drained work")])])
+  from src.core.task_recovery import reconcile_task_tree
+  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = adapter
+  patch_instructions_content(monkeypatch)
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("drained work")])])
 
-    # Drain: a launched run whose process died unseen, raw log stamped an hour ago.
-    run_id = "run-drained"
-    await tree.runs.register_run(
-        RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
-    await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
-    await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
-    await tree.runs.record_launch(worker.id, run_id, pid=424901, pid_start="1-424000")
-    _raw, raw_mtime = write_raw_result(
-        tree.runs.run_dir(worker.id, run_id), "drained result", age_seconds=3600)
-    await reconcile_task_tree(cfg, tree, adapter)
-    run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
-    assert outcome == "success"
-    assert run.exit_code == 0
-    assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
+  # Drain: a launched run whose process died unseen, raw log stamped an hour ago.
+  run_id = "run-drained"
+  await tree.runs.register_run(
+      RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+  await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
+  await tree.dispatch.claim_input_batch_locked(worker.id, run_id)
+  await tree.runs.record_launch(worker.id, run_id, pid=424901, pid_start="1-424000")
+  _raw, raw_mtime = write_raw_result(tree.runs.run_dir(worker.id, run_id), "drained result", age_seconds=3600)
+  await reconcile_task_tree(cfg, tree, adapter)
+  run, outcome = await wait_for_terminal_run(tree, worker.id, run_id)
+  assert outcome == "success"
+  assert run.exit_code == 0
+  assert run.ended_at is not None and abs(run.ended_at - raw_mtime) < timedelta(seconds=1)
 
-    # Live exit: the observed-exit write time, never a staged raw-log mtime.
-    # A fresh child node: the drained node's trailing dispatch would race a
-    # second input admitted on it.
-    worker2 = await create_task(
-        tree, parent=manager.id, request_id="child-2", profile="worker",
-        task=TaskSpec(goal="more work"))
-    install_worker_launch_and_resume_backends(
-        monkeypatch, [SpawningScriptedBackend([result_event("live work")])])
-    await tree.dispatch.admit_input(worker2.id, event_type=ET.USER, content="Start.", actor="user")
-    decision = await tree.dispatch.dispatch_pending(worker2.id)
-    live_run, live_outcome = await wait_for_terminal_run(tree, worker2.id, decision["run_id"])
-    assert live_outcome == "success"
-    assert live_run.ended_at is not None and live_run.ended_at > raw_mtime
+  # Live exit: the observed-exit write time, never a staged raw-log mtime.
+  # A fresh child node: the drained node's trailing dispatch would race a
+  # second input admitted on it.
+  worker2 = await create_task(
+      tree, parent=manager.id, request_id="child-2", profile="worker", task=TaskSpec(goal="more work"))
+  install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("live work")])])
+  await tree.dispatch.admit_input(worker2.id, event_type=ET.USER, content="Start.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(worker2.id)
+  live_run, live_outcome = await wait_for_terminal_run(tree, worker2.id, decision["run_id"])
+  assert live_outcome == "success"
+  assert live_run.ended_at is not None and live_run.ended_at > raw_mtime
 
 
 @pytest.mark.asyncio

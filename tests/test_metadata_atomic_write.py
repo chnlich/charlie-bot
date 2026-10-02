@@ -14,6 +14,7 @@ specific wrong implementation.
 
 import asyncio
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -28,6 +29,7 @@ from conftest import (
 )
 from conftest import make_session_mgr as _make_session_mgr
 
+from src.core.memo import stat_signature
 from src.core.models import SessionMetadata
 from src.core.sessions import SessionManager
 
@@ -148,3 +150,30 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   raw = target.read_text(encoding="utf-8")
   assert raw.strip() != ""
   assert raw.strip().startswith("{")
+
+
+@pytest.mark.asyncio
+async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Path) -> None:
+  """A funnel save's cache entry carries the published file's stat signature.
+
+  The signature is what the TTL expiry's revalidation stats: with it, an
+  expired entry whose file still carries the funnel's bytes re-times in place;
+  without it (the signature-less entry) the expiry evicts, bumps the listings
+  revision, and forces a full re-read -- per entry, on every listing after the
+  30 s TTL. The discriminating assertion is the survived entry: an entry keyed
+  with a foreign or absent signature fails here.
+  """
+  mgr = _make_session_mgr(tmp_path)
+  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
+  await mgr.save_metadata(meta)
+  stored_sig = mgr._metadata_cache[meta.id][2]
+  assert stored_sig is not None
+  assert stored_sig == stat_signature(mgr._metadata_path(meta.id))
+
+  # Past the TTL, the revalidation stats and re-times instead of evicting:
+  # the entry survives and the listings revision stands.
+  meta_ts = mgr._metadata_cache[meta.id][1]
+  mgr._metadata_cache[meta.id] = (mgr._metadata_cache[meta.id][0], time.monotonic() - 60.0, stored_sig)
+  served = mgr._fresh_cached_meta(meta.id)
+  assert served is not None and served.id == meta.id
+  assert mgr._metadata_cache[meta.id][1] > meta_ts  # re-timed, not re-read

@@ -62,19 +62,22 @@ def load_json_dict(path: Path) -> dict:
   return json.loads(path.read_text(encoding="utf-8"))
 
 
-def atomic_write_text(path: Path, text: str, *, private: bool = False) -> None:
-  """Write *text* to *path* atomically, UTF-8 encoded.
+def atomic_write_text(path: Path, text: str, *, private: bool = False) -> tuple[int, int] | None:
+  """Write *text* to *path* atomically, UTF-8 encoded; return the published signature.
 
   The tmp-naming, 0600, swap, and mid-write cleanup rules are
   :func:`atomic_write_stream`'s; this adapter fixes its payload as encoded
   text.
   """
-  atomic_write_stream(path, lambda stream: stream.write(text.encode("utf-8")), private=private)
+  return atomic_write_stream(path, lambda stream: stream.write(text.encode("utf-8")), private=private)
 
 
-def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> None:
+def atomic_write_stream(path: Path,
+                        write: Callable[[BinaryIO], None],
+                        *,
+                        private: bool = False) -> tuple[int, int] | None:
   """Stream the payload ``write`` emits into *path* atomically: a uniquely named tmp sibling
-  swapped in by ``os.replace``.
+  swapped in by ``os.replace``. Returns the published file's ``(mtime_ns, size)`` signature.
 
   ``write`` receives the tmp sibling open for binary writing and runs to
   completion before the swap, so a large payload never materializes as one
@@ -83,6 +86,12 @@ def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, privat
   crash mid-write leaves the previous content intact and no half-written tmp
   behind. ``private=True`` marks the file 0600, so a secret never appears at
   its final path readable by anyone but the owner.
+
+  The signature is the tmp's own stat taken after close, before the swap: the
+  swap publishes that inode unchanged, so the returned pair is the signature
+  ``stat_signature`` reads at *path* until another writer's swap replaces the
+  inode. A caller keying a parse memo on it proves the file still carries the
+  bytes this call wrote. None means the stat failed; the swap still ran.
 
   The swap must stay an ``os.replace`` attribute lookup on this module's ``os``:
   tests hook the swap by patching ``os.replace`` here.
@@ -95,7 +104,12 @@ def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, privat
       temporary.touch(mode=0o600)
     with temporary.open("wb") as stream:
       write(stream)
+    try:
+      st = os.stat(temporary)
+    except OSError:
+      st = None
     os.replace(temporary, path)
+    return None if st is None else (st.st_mtime_ns, st.st_size)
   except BaseException:
     with contextlib.suppress(OSError):
       temporary.unlink()

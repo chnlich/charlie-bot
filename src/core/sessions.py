@@ -1009,11 +1009,12 @@ class SessionManager:
     self._cfg = cfg
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
     # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
-    # that produced the entry (None for entries populated by a write, which cannot prove
-    # the on-disk signature their bytes carry). TTL-based to bound the per-read work within
-    # a poll cycle; on expiry the signature revalidates the entry with one stat instead of
-    # a re-read — every writer publishes through the atomic tmp rename, so a content change
-    # always moves st_mtime_ns, and a same-signature stat proves the parsed bytes current.
+    # that produced the entry (write-populated entries carry the write's own published
+    # signature; None only when the reader could not stat). TTL-based to bound the per-read
+    # work within a poll cycle; on expiry the signature revalidates the entry with one stat
+    # instead of a re-read — every writer publishes through the atomic tmp rename, so a
+    # content change always moves st_mtime_ns, and a same-signature stat proves the parsed
+    # bytes current.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]] = {}
     # Per-session asyncio.Lock guarding metadata read-modify-write operations.
     # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
@@ -2716,8 +2717,8 @@ class SessionManager:
     entry revalidates against metadata.json with one stat — a same-signature
     stat proves the parsed bytes unchanged (every writer publishes through the
     atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
-    re-times the entry, while a moved or unprovable signature (``None``, the
-    write-funnel populate) evicts for the caller's disk read. The stat
+    re-times the entry, while a moved or unprovable signature (``None``, a
+    stat failure) evicts for the caller's disk read. The stat
     revalidation keeps an active entry serving only while its bytes provably
     stand, not on the clock alone. The two
     TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
@@ -2744,7 +2745,7 @@ class SessionManager:
         pass
     del self._metadata_cache[session_id]
     # The entry's file moved or became unprovable without a write funnel bump
-    # (an out-of-band edit, or a write-funnel entry past its TTL): raise the
+    # (an out-of-band edit, or a stat failure on an expired entry): raise the
     # listings revision so the next listing re-reads instead of serving the
     # memoized rows this eviction just proved stale.
     self._listings_revision += 1
@@ -3335,11 +3336,16 @@ class SessionManager:
       path.parent.mkdir(parents=True, exist_ok=True)
       serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
-      await asyncio.to_thread(atomic_write_text, path, serialized)
-      # Signature stays None: a write cannot prove the on-disk signature its bytes
-      # carry (a concurrent rename could land before any post-write stat), so the
-      # entry re-reads at its next expiry and re-keys from that read's own stat.
-      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
+      sig = await asyncio.to_thread(atomic_write_text, path, serialized)
+      # The entry re-keys from the write's own proven signature: the swap
+      # publishes the tmp inode the writer just statted, so a later
+      # same-signature stat proves the file still carries the funnel's bytes
+      # and the expiry revalidates by one stat instead of evicting into a full
+      # re-read (whose revision bump also forced the next listing to re-walk).
+      # A concurrent publish after this one replaces the inode; the next
+      # expiry's stat then evicts and re-reads — the same bound the
+      # signature-less entry paid on every expiry.
+      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), sig)
       # The single funnel for every session-metadata write (35+ call sites, plus
       # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.

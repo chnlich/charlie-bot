@@ -60,13 +60,13 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
     write_credentials_yaml,
 )
 from tools.live_preview_task_tree import request  # noqa: E402
-from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"
 RUN_TIMEOUT_SECONDS = 420.0

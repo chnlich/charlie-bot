@@ -49,6 +49,7 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     evaluate,
     open_evidence_dir,
@@ -68,7 +69,6 @@ from tools.live_preview_task_tree import (  # noqa: E402
     pick_trial_port,
     request,
 )
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_HOME = Path.home() / ".charliebot"
 

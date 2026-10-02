@@ -172,14 +172,14 @@ def block_sources(snapshot: dict) -> list[tuple[str, str]]:
 async def run_harness(args: argparse.Namespace) -> None:
     import yaml
 
-    from tools.browser_harness_session_tree_preview import (
-        build_source_home,
-        preview_instance_env,
-        preview_invocation,
-        trial_home_root,
-        wait_preview_ready,
-    )
     from src.core.constants import INHERITED_IDENTITY_ENV_VARS
+    from tools.browser_harness_session_tree_preview import (
+      build_source_home,
+      preview_instance_env,
+      preview_invocation,
+      trial_home_root,
+      wait_preview_ready,
+    )
 
     evidence_dir = Path(args.evidence_dir)
     commit = open_evidence_dir(evidence_dir)

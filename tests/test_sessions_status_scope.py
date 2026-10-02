@@ -230,8 +230,6 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   the served body must still equal a full re-render's bytes.
   """
   sidebar_state.reset_for_tests()
-  import src.api.sessions as sessions_api
-
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
   cfg = build_tui_sessions_cfg(tmp_path)

@@ -239,10 +239,14 @@ A raw log that stops growing while the process is still alive is what the server
   split_before_first_argument = true
   column_limit = 120
   ```
-  Nothing in the tracked tree invokes YAPF, so the config reads as unused to every
-  in-repo scan; the CI "Formatter config present" step keeps `.style.yapf` and the
-  pin from being deleted on that evidence. Without the config, a yapf run falls
-  back to pep8 defaults and reformats the tree to 4-space indent.
+  `tools/check-google-style.sh` runs YAPF and the module-import check over the tree;
+  the code-health cron takes its style cleanups from that probe's report. Without
+  `.style.yapf`, a yapf run falls back to pep8 defaults and reformats the tree to
+  4-space indent, which is why the CI "Formatter config present" step keeps the
+  config and the pin in place.
+- **Imports**: modules only (Google Python Style Guide 2.2), checked by
+  `tools/check-google-style.sh` through the pylint-google-style plugin
+  (`[tool.pylint]` in `pyproject.toml`).
 
 ### 10.2 Worker Instructions
 Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt

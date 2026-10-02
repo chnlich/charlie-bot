@@ -53,8 +53,10 @@ from src.core.models import (
 from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.core.run_token import CallerIdentity
 from src.core.runs import (
+    DATA_DIR_NAME,
     RUN_EVENTS_NAME,
     RUN_METADATA_NAME,
+    RUNS_DIR_NAME,
     RunIdentityConflictError,
     RunNotFoundError,
     stop_requested_in_events,
@@ -575,7 +577,7 @@ async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: Thr
   def walk_and_parse(
   ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
     threads_dir = str(session_dir / THREADS_DIR_NAME)
-    thread_pairs, run_pairs = _row_source_stats(threads_dir, str(session_dir / "data" / "runs"))
+    thread_pairs, run_pairs = _row_source_stats(threads_dir, str(session_dir / DATA_DIR_NAME / RUNS_DIR_NAME))
     return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs, threads_dir)
 
   thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
@@ -673,7 +675,7 @@ async def list_threads(
       _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
       return await _list_response(request, body, etag_value, etag)
     thread_pairs, run_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / "data" / "runs"))
+        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / DATA_DIR_NAME / RUNS_DIR_NAME))
     sig = _signature_from_stats(thread_pairs, run_pairs)
     if hit is not None and hit[0] == sig:
       _sig_gate.mark_proven(session_id, rev)

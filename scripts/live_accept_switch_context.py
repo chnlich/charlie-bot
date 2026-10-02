@@ -411,27 +411,27 @@ def received_prompt_record(family: str, native_id: str, needle: str) -> str | No
 
 
 def reply_code_follows_conventions(reply: str) -> tuple[bool, str]:
-    """True when the reply's Python code defines a cb_ function with the three
+  """True when the reply's Python code defines a cb_ function with the three
     turn-1 conventions: 2-space indentation, type annotations, a docstring."""
-    fence = re.search(r"```(?:python|py)?[^\n]*\n(.*?)```", reply, re.DOTALL)
-    code = fence.group(1) if fence else reply
-    try:
-        module = ast.parse(code)
-    except SyntaxError as exc:
-        return False, f"reply code does not parse: {exc}"
-    functions = [n for n in module.body if isinstance(n, ast.FunctionDef) and n.name.startswith("cb_")]
-    if not functions:
-        return False, "no top-level cb_-prefixed function definition"
-    func = functions[0]
-    unannotated = [a.arg for a in func.args.args + func.args.kwonlyargs if a.annotation is None]
-    if unannotated or func.returns is None:
-        return False, f"missing type annotations: args={unannotated} returns={func.returns is not None}"
-    if not ast.get_docstring(func):
-        return False, "no docstring"
-    indents = sorted({n.col_offset for n in func.body})
-    if indents != [2]:
-        return False, f"function body indents {indents}, expected 2 spaces"
-    return True, func.name
+  fence = re.search(r"```(?:python|py)?[^\n]*\n(.*?)```", reply, re.DOTALL)
+  code = fence.group(1) if fence else reply
+  try:
+    module = ast.parse(code)
+  except SyntaxError as exc:
+    return False, f"reply code does not parse: {exc}"
+  functions = [n for n in module.body if isinstance(n, ast.FunctionDef) and n.name.startswith("cb_")]
+  if not functions:
+    return False, "no top-level cb_-prefixed function definition"
+  func = functions[0]
+  unannotated = [a.arg for a in func.args.args + func.args.kwonlyargs if a.annotation is None]
+  if unannotated or func.returns is None:
+    return False, f"missing type annotations: args={unannotated} returns={func.returns is not None}"
+  if not ast.get_docstring(func):
+    return False, "no docstring"
+  indents = sorted({n.col_offset for n in func.body})
+  if indents != [2]:
+    return False, f"function body indents {indents}, expected 2 spaces"
+  return True, func.name
 
 
 # ---------------------------------------------------------------------------
@@ -441,10 +441,10 @@ def reply_code_follows_conventions(reply: str) -> tuple[bool, str]:
 
 @dataclass
 class LegSpec:
-    name: str
-    kind: str  # "v2" (task-tree manager) or "v1" (legacy session)
-    route: list[str]  # [start backend, *switch targets, ...] in order
-    expect: str  # "conventions" or "continue"
+  name: str
+  kind: str  # "v2" (task-tree manager) or "v1" (legacy session)
+  route: list[str]  # [start backend, *switch targets, ...] in order
+  expect: str  # "conventions" or "continue"
 
 
 LEGS = [
@@ -459,32 +459,36 @@ LEGS = [
 
 @dataclass
 class NativeRecord:
-    family: str  # "claude" | "codex" | "charlie-code"
-    session_id: str
-    native_id: str
-    cleanup: str = "pending"
-    deleted: list[str] = field(default_factory=list)
+  family: str  # "claude" | "codex" | "charlie-code"
+  session_id: str
+  native_id: str
+  cleanup: str = "pending"
+  deleted: list[str] = field(default_factory=list)
 
 
 def backend_family(backend_id: str) -> str:
-    return {"claude-sonnet-5": "claude", "claude-opus-5": "claude",
-            "codex-gpt-luna": "codex", "charlie-code-glm53-flash": "charlie-code"}[backend_id]
+  return {
+      "claude-sonnet-5": "claude",
+      "claude-opus-5": "claude",
+      "codex-gpt-luna": "codex",
+      "charlie-code-glm53-flash": "charlie-code"
+  }[backend_id]
 
 
 async def create_session(base: str, key: str, spec: LegSpec) -> str:
-    if spec.kind == "v2":
-        payload = {
-            "request_id": f"switch-accept-{spec.name}",
-            "profile": "manager",
-            "name": spec.name,
-            "backend": spec.route[0],
-        }
-    else:
-        payload = {"name": spec.name, "backend": spec.route[0]}
-    status, created = await arequest(base, key, "POST", "/api/sessions/", payload)
-    if status != 200 or not created.get("id"):
-        fail(f"leg {spec.name}: session create failed: {status} {created}")
-    return str(created["id"])
+  if spec.kind == "v2":
+    payload = {
+        "request_id": f"switch-accept-{spec.name}",
+        "profile": "manager",
+        "name": spec.name,
+        "backend": spec.route[0],
+    }
+  else:
+    payload = {"name": spec.name, "backend": spec.route[0]}
+  status, created = await arequest(base, key, "POST", "/api/sessions/", payload)
+  if status != 200 or not created.get("id"):
+    fail(f"leg {spec.name}: session create failed: {status} {created}")
+  return str(created["id"])
 
 
 async def run_leg(spec: LegSpec, base: str, key: str, home: Path, natives: list[NativeRecord]) -> dict:

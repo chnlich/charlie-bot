@@ -545,140 +545,137 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
 
 @pytest.mark.asyncio
 async def test_delegate_creates_one_child_and_replays_are_stable(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    backend = SpawningScriptedBackend([result_event("phrase")])
-    builds = install_backends(
-        monkeypatch,
-        [backend, SpawningScriptedBackend([result_event("phrase")]),
-         SpawningScriptedBackend([result_event("phrase")])],
-        WORKER_BUILD_BACKEND_PATCH_TARGET)
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  pm_builds = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
+  backend = SpawningScriptedBackend([result_event("phrase")])
+  builds = install_backends(
+      monkeypatch,
+      [backend,
+       SpawningScriptedBackend([result_event("phrase")]),
+       SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
 
-    # The nearest-user authorization gate re-judges at delegation: the manager
-    # needs a real user message with the takeoff phrase.
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER,
-        content="Take off and delegate the phrase task.", actor="user")
-    from src.api import internal as internal_api
-    monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
-    with make_api_client(cfg, session_mgr, tree) as client:
-        payload = {
-            "session_id": manager.id,
-            "description": "## Goal\n\nsay the phrase\n",
-            "task_type": "quick-edit",
-            "keep_worktree": False,
-            "repo_path": str(repo),
-            "base_branch": "main",
-        }
-        first = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
-        assert first.status_code == 200, first.text
-        body = first.json()
-        child_id, run_id = body["session_id"], body["run_id"]
-        assert body["parent_session_id"] == manager.id
-        assert body["thread_id"] == run_id
-        child_meta = await tree.load_meta(child_id)
-        assert child_meta is not None and child_meta.profile == "worker"
-        assert child_meta.task_parent_id == manager.id
+  # The nearest-user authorization gate re-judges at delegation: the manager
+  # needs a real user message with the takeoff phrase.
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
+  from src.api import internal as internal_api
+  monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
+  with make_api_client(cfg, session_mgr, tree) as client:
+    payload = {
+        "session_id": manager.id,
+        "description": "## Goal\n\nsay the phrase\n",
+        "task_type": "quick-edit",
+        "keep_worktree": False,
+        "repo_path": str(repo),
+        "base_branch": "main",
+    }
+    first = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
+    assert first.status_code == 200, first.text
+    body = first.json()
+    child_id, run_id = body["session_id"], body["run_id"]
+    assert body["parent_session_id"] == manager.id
+    assert body["thread_id"] == run_id
+    child_meta = await tree.load_meta(child_id)
+    assert child_meta is not None and child_meta.profile == "worker"
+    assert child_meta.task_parent_id == manager.id
 
-        # The replayed request (same spec, derived stable id) returns the
-        # original child and Run instead of a second process.
-        replay = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
-        assert replay.status_code == 200, replay.text
-        assert replay.json()["session_id"] == child_id
-        assert replay.json()["run_id"] == run_id
+    # The replayed request (same spec, derived stable id) returns the
+    # original child and Run instead of a second process.
+    replay = client.post("/api/internal/delegate", json=payload, headers=OP_HEADERS)
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["session_id"] == child_id
+    assert replay.json()["run_id"] == run_id
 
-        # The same explicit request_id replays identically; a distinct explicit
-        # id names a genuinely different operation (an intentional sibling).
-        first_named = client.post("/api/internal/delegate",
-                                  json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
-        assert first_named.json()["session_id"] != child_id
-        replay_named = client.post("/api/internal/delegate",
-                                   json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
-        assert replay_named.json()["session_id"] == first_named.json()["session_id"]
-        sibling = client.post("/api/internal/delegate", json=dict(payload, request_id="op-2"),
-                              headers=OP_HEADERS)
-        assert sibling.json()["session_id"] != first_named.json()["session_id"]
+    # The same explicit request_id replays identically; a distinct explicit
+    # id names a genuinely different operation (an intentional sibling).
+    first_named = client.post("/api/internal/delegate", json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
+    assert first_named.json()["session_id"] != child_id
+    replay_named = client.post("/api/internal/delegate", json=dict(payload, request_id="op-1"), headers=OP_HEADERS)
+    assert replay_named.json()["session_id"] == first_named.json()["session_id"]
+    sibling = client.post("/api/internal/delegate", json=dict(payload, request_id="op-2"), headers=OP_HEADERS)
+    assert sibling.json()["session_id"] != first_named.json()["session_id"]
 
-        # The runs execute through the worker adapter while the API loop that
-        # scheduled them is still alive. Every delivery follow-up — child close,
-        # parent report dispatch, the parent's serialized turns — is scheduled
-        # on that same loop, so it must outlive them all.
-        deadline = asyncio.get_event_loop().time() + 30
-        while asyncio.get_event_loop().time() < deadline:
-            states = [tree.task_state(s) for s in (
-                child_id, first_named.json()["session_id"], sibling.json()["session_id"])]
-            if all(s == "completed" for s in states):
-                break
-            await asyncio.sleep(0.1)
-        for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
-            assert tree.task_state(cid) == "completed"
+    # The runs execute through the worker adapter while the API loop that
+    # scheduled them is still alive. Every delivery follow-up — child close,
+    # parent report dispatch, the parent's serialized turns — is scheduled
+    # on that same loop, so it must outlive them all.
+    deadline = asyncio.get_event_loop().time() + 30
+    while asyncio.get_event_loop().time() < deadline:
+      states = [tree.task_state(s) for s in (child_id, first_named.json()["session_id"], sibling.json()["session_id"])]
+      if all(s == "completed" for s in states):
+        break
+      await asyncio.sleep(0.1)
+    for cid in (child_id, first_named.json()["session_id"], sibling.json()["session_id"]):
+      assert tree.task_state(cid) == "completed"
 
-        # The completed delivery closed and auto-archived the worker; the
-        # manager remains open and received the completed report.
-        deadline = asyncio.get_event_loop().time() + 20
-        archived = False
-        while asyncio.get_event_loop().time() < deadline:
-            if tree.task_state(child_id) == "completed" and tree.archived_of(
-                    await tree._get_index(), await tree.load_meta(child_id)):
-                archived = True
-                break
-            await asyncio.sleep(0.1)
-        assert archived, "the worker task was not auto-archived after its delivered report"
-        assert tree.task_state(manager.id) == "open"
-        reports = [e for e in tree.events.load_events(manager.id)
-                   if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id]
-        assert reports and reports[-1]["outcome"] == "completed"
+    # The completed delivery closed and auto-archived the worker; the
+    # manager remains open and received the completed report.
+    deadline = asyncio.get_event_loop().time() + 20
+    archived = False
+    while asyncio.get_event_loop().time() < deadline:
+      if tree.task_state(child_id) == "completed" and tree.archived_of(await tree._get_index(), await
+                                                                       tree.load_meta(child_id)):
+        archived = True
+        break
+      await asyncio.sleep(0.1)
+    assert archived, "the worker task was not auto-archived after its delivered report"
+    assert tree.task_state(manager.id) == "open"
+    reports = [
+        e for e in tree.events.load_events(manager.id)
+        if e["type"] == ET.CHILD_REPORT and e["child_session_id"] == child_id
+    ]
+    assert reports and reports[-1]["outcome"] == "completed"
 
-        # The parent-addressed compatibility alias (thread_id from the delegate
-        # contract) resolves to the child's Run — not to a run on the parent.
-        resolved = tree.aliases.resolve_thread(manager.id, run_id)
-        assert resolved == {"session_id": child_id, "run_id": run_id}
-        from src.api import deps
-        monkeypatch.setattr(deps, "_task_manager", tree)
-        row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OP_HEADERS)
-        assert row.status_code == 200, row.text
-        assert row.json()["id"] == run_id
-        assert row.json()["session_id"] == child_id
+    # The parent-addressed compatibility alias (thread_id from the delegate
+    # contract) resolves to the child's Run — not to a run on the parent.
+    resolved = tree.aliases.resolve_thread(manager.id, run_id)
+    assert resolved == {"session_id": child_id, "run_id": run_id}
+    from src.api import deps
+    monkeypatch.setattr(deps, "_task_manager", tree)
+    row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OP_HEADERS)
+    assert row.status_code == 200, row.text
+    assert row.json()["id"] == run_id
+    assert row.json()["session_id"] == child_id
 
-        # The legacy list route exposes the same Run as a compatibility row:
-        # its real id, backend and finished status — no ThreadMetadata exists.
-        listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
-        assert listed.status_code == 200, listed.text
-        rows = listed.json()
-        assert isinstance(rows, list)
-        compat = [r for r in rows if r.get("id") == run_id]
-        assert compat, f"the worker run did not surface in the legacy list: {listed.text[:400]}"
-        assert compat[0]["backend"] == "fake" and compat[0]["status"] == "completed"
-        legacy_dir = cfg.sessions_dir / child_id / "threads"
-        assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True
+    # The legacy list route exposes the same Run as a compatibility row:
+    # its real id, backend and finished status — no ThreadMetadata exists.
+    listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
+    assert listed.status_code == 200, listed.text
+    rows = listed.json()
+    assert isinstance(rows, list)
+    compat = [r for r in rows if r.get("id") == run_id]
+    assert compat, f"the worker run did not surface in the legacy list: {listed.text[:400]}"
+    assert compat[0]["backend"] == "fake" and compat[0]["status"] == "completed"
+    legacy_dir = cfg.sessions_dir / child_id / "threads"
+    assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True
 
-        # Every delivered child report triggered the parent's next serialized
-        # turn: all reports were consumed and acknowledged, the parent stays open.
-        await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
-        assert pm_builds, "the delivered child reports never triggered a parent manager turn"
-        assert tree.task_state(manager.id) == "open"
+    # Every delivered child report triggered the parent's next serialized
+    # turn: all reports were consumed and acknowledged, the parent stays open.
+    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+    assert pm_builds, "the delivered child reports never triggered a parent manager turn"
+    assert tree.task_state(manager.id) == "open"
 
-    # Three distinct operations, three builds: the replays did not spawn a
-    # second process for their operation.
-    assert len(builds) == 3
-    captured_env = builds[0]["backend"].env or {}
-    assert captured_env.get(SESSION_ID_ENV_VAR) == child_id
-    assert captured_env.get(RUN_TOKEN_ENV)
-    assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
-    worker_run = await tree.runs.get_run(child_id, run_id)
-    assert worker_run is not None and worker_run.kind == "work"
-    assert worker_run.backend == "fake"
-    pm_events = tree.runs.load_events_sync(manager.id)
-    for r in tree.runs.list_run_records_sync(manager.id):
-        assert tree.runs.terminal_outcome(pm_events, r.id) == "success"
+  # Three distinct operations, three builds: the replays did not spawn a
+  # second process for their operation.
+  assert len(builds) == 3
+  captured_env = builds[0]["backend"].env or {}
+  assert captured_env.get(SESSION_ID_ENV_VAR) == child_id
+  assert captured_env.get(RUN_TOKEN_ENV)
+  assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
+  worker_run = await tree.runs.get_run(child_id, run_id)
+  assert worker_run is not None and worker_run.kind == "work"
+  assert worker_run.backend == "fake"
+  pm_events = tree.runs.load_events_sync(manager.id)
+  for r in tree.runs.list_run_records_sync(manager.id):
+    assert tree.runs.terminal_outcome(pm_events, r.id) == "success"
 
 
 # ---------------------------------------------------------------------------

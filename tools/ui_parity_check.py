@@ -65,6 +65,7 @@ SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
   sys.path.insert(0, str(SCRIPT_REPO))
 
+from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     devtools_ws_url,
@@ -75,7 +76,6 @@ from tools.browser_harness_session_tree import (  # noqa: E402
     stop_child,
     write_credentials_yaml,
 )
-from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
 
 READY_PREFIX = "PARITY SERVE READY "
 WIDTHS = ((1440, 900, False), (390, 844, True))

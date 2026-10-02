@@ -70,6 +70,7 @@ import traceback  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
@@ -89,7 +90,6 @@ from tools.browser_harness_session_tree import (  # noqa: E402
     stop_child,
     wait_for,
 )
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 # The dropdown's id->label map, read from the live page after login.
 BACKEND_LABELS: dict[str, str] = {}

@@ -99,8 +99,8 @@ if str(_REPO_ROOT) not in sys.path:
 import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
-from tools.browser_harness_session_tree import stop_child  # noqa: E402
 from src.core.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
+from tools.browser_harness_session_tree import stop_child  # noqa: E402
 
 LIST_SELECTOR = "#session-list"
 CHAT_SELECTOR_CANDIDATES = ("#messages", "#chat-messages", "#message-list", "main .overflow-y-auto")

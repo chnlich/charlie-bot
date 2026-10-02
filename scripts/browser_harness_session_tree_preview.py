@@ -538,73 +538,73 @@ async def wait_preview_ready(
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = resolve_chrome(args.chrome, fail)
+  chrome = resolve_chrome(args.chrome, fail)
 
-    evidence_dir = Path(args.evidence_dir)
-    commit = open_evidence_dir(evidence_dir)
+  evidence_dir = Path(args.evidence_dir)
+  commit = open_evidence_dir(evidence_dir)
 
-    with tempfile.TemporaryDirectory(prefix="charliebot-preview-harness-") as tmp:
-        tmp_path = Path(tmp)
-        source = tmp_path / "source-home"
-        backends = [b.strip() for b in args.backends.split(",") if b.strip()]
-        if not backends:
-            raise SystemExit("--backends names at least one backend id")
-        build_source_home(source, backends)
-        # The harness process itself must keep production identities out of any
-        # child it spawns; the preview CLI clears its own in addition.
-        for var in INHERITED_IDENTITY_ENV_VARS:
-            os.environ.pop(var, None)
-        home = tmp_path / "preview-home"
-        port = pick_free_port()
-        invocation = preview_invocation(home, port, backends[0], backends[1:])
-        env = preview_instance_env(source)
-        server_out = tmp_path / "server-console.log"
-        results = Results(evidence_dir, commit,
-                          browser="google-chrome headless (CDP), isolated private profile",
-                          entry_point="charliebot session-tree preview (fresh process, foreground)",
-                          invocation=invocation,
-                          results_name="session_tree_preview_browser_results.json")
-        log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
-        with open(server_out, "w", encoding="utf-8") as server_log_file:
-            proc = subprocess.Popen(
-                invocation, cwd=str(REPO_ROOT), env=env,
-                stdout=server_log_file, stderr=subprocess.STDOUT)
-        try:
-            record = await wait_preview_ready(proc, home, server_out, fail, 120.0)
-            base = record["url"]
-            log(f"preview ready: {base} (branch {record['source_branch']}, sha {record['source_sha'][:12]})")
-            import yaml
+  with tempfile.TemporaryDirectory(prefix="charliebot-preview-harness-") as tmp:
+    tmp_path = Path(tmp)
+    source = tmp_path / "source-home"
+    backends = [b.strip() for b in args.backends.split(",") if b.strip()]
+    if not backends:
+      raise SystemExit("--backends names at least one backend id")
+    build_source_home(source, backends)
+    # The harness process itself must keep production identities out of any
+    # child it spawns; the preview CLI clears its own in addition.
+    for var in INHERITED_IDENTITY_ENV_VARS:
+      os.environ.pop(var, None)
+    home = tmp_path / "preview-home"
+    port = pick_free_port()
+    invocation = preview_invocation(home, port, backends[0], backends[1:])
+    env = preview_instance_env(source)
+    server_out = tmp_path / "server-console.log"
+    results = Results(
+        evidence_dir,
+        commit,
+        browser="google-chrome headless (CDP), isolated private profile",
+        entry_point="charliebot session-tree preview (fresh process, foreground)",
+        invocation=invocation,
+        results_name="session_tree_preview_browser_results.json")
+    log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
+    with open(server_out, "w", encoding="utf-8") as server_log_file:
+      proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env, stdout=server_log_file, stderr=subprocess.STDOUT)
+    try:
+      record = await wait_preview_ready(proc, home, server_out, fail, 120.0)
+      base = record["url"]
+      log(f"preview ready: {base} (branch {record['source_branch']}, sha {record['source_sha'][:12]})")
+      import yaml
 
-            access_key = yaml.safe_load((home / "credentials.yaml").read_text())["charliebot"]["access_key"]
+      access_key = yaml.safe_load((home / "credentials.yaml").read_text())["charliebot"]["access_key"]
 
-            profile = tmp_path / "chrome-profile"
-            profile.mkdir()
-            debug_port = pick_free_port()
-            chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
-            try:
-                await drive_browser(debug_port=debug_port, base=base,
-                                    access_key=access_key, results=results, home=home)
-            except Exception as exc:
-                # A harness error must stay visible in the evidence, not be
-                # masked by the failed-scenario exit below; the finally block's
-                # SystemExit would otherwise swallow this traceback.
-                log("harness exception traceback: " + traceback.format_exc())
-                results.record("harness-error", ok=False, detail=f"{type(exc).__name__}: {exc}", screenshot=None)
-                raise
-            finally:
-                stop_child(chrome_proc, grace_s=15, kill_reap_s=10)
-        finally:
-            from src.core.home_writer_fence import probe_writer_fence
+      profile = tmp_path / "chrome-profile"
+      profile.mkdir()
+      debug_port = pick_free_port()
+      chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
+      try:
+        await drive_browser(debug_port=debug_port, base=base, access_key=access_key, results=results, home=home)
+      except Exception as exc:
+        # A harness error must stay visible in the evidence, not be
+        # masked by the failed-scenario exit below; the finally block's
+        # SystemExit would otherwise swallow this traceback.
+        log("harness exception traceback: " + traceback.format_exc())
+        results.record("harness-error", ok=False, detail=f"{type(exc).__name__}: {exc}", screenshot=None)
+        raise
+      finally:
+        stop_child(chrome_proc, grace_s=15, kill_reap_s=10)
+    finally:
+      from src.core.home_writer_fence import probe_writer_fence
 
-            stop_child(proc, grace_s=60, kill_reap_s=30)
-            holder = probe_writer_fence(home)
-            results.record("server-fence-released-on-stop", holder["exclusive_holder_alive"] is False,
-                           f"writer fence holder alive: {holder['exclusive_holder_alive']}", None)
-            log("server console: " + server_out.read_text()[-600:])
-            results.save()
-            failed = [s for s in results.scenarios if not s["ok"]]
-            if failed:
-                raise SystemExit(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
+      stop_child(proc, grace_s=60, kill_reap_s=30)
+      holder = probe_writer_fence(home)
+      results.record(
+          "server-fence-released-on-stop", holder["exclusive_holder_alive"] is False,
+          f"writer fence holder alive: {holder['exclusive_holder_alive']}", None)
+      log("server console: " + server_out.read_text()[-600:])
+      results.save()
+      failed = [s for s in results.scenarios if not s["ok"]]
+      if failed:
+        raise SystemExit(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
 
 
 async def drive_browser(debug_port: int, base: str,

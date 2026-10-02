@@ -61,7 +61,7 @@ log = LazyStructlogLogger()
 
 def loop_owner_ref(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> str:
   """The sequence owner_ref of one improve loop: the loop directory, exactly
-    as the plan's sequence_ref contract names it ("owner_ref 指向该循环目录")."""
+  as the plan's sequence_ref contract names it ("owner_ref 指向该循环目录")."""
   return str(improve_command._loops_dir(session_id, cfg) / str(loop_id))
 
 
@@ -72,7 +72,7 @@ def improve_child_request_id(loop_id: int) -> str:
 
 def iteration_run_request_id(loop_id: int, iteration: int) -> str:
   """The stable run request_id of one iteration: a replayed finalization
-    binds to the same Run, never a duplicate."""
+  binds to the same Run, never a duplicate."""
   return f"improve:{loop_id}:iter:{iteration}"
 
 
@@ -87,11 +87,11 @@ async def create_improve_child(
 ) -> SessionMetadata:
   """Create (or re-admit) the loop's one worker child under the manager.
 
-    Stable by request id: a replayed admission returns the original child. The
-    child carries the loop goal as its task text and no task_type: the improve
-    loop is its own deliverable kind, and the implement delivery policy
-    (review + landing) is the delegate path's contract, not this one.
-    """
+  Stable by request id: a replayed admission returns the original child. The
+  child carries the loop goal as its task text and no task_type: the improve
+  loop is its own deliverable kind, and the implement delivery policy
+  (review + landing) is the delegate path's contract, not this one.
+  """
   return await tree.create_task(
       request_id=improve_child_request_id(loop_id),
       task_parent_id=session_id,
@@ -135,11 +135,11 @@ async def register_iteration_run(
 ) -> RunRecord:
   """Register one iteration Run with its full shared-worktree provenance.
 
-    The loop's single worktree, branch and base are pinned on the Run before
-    launch, so the adapter never creates a worktree of its own and every
-    iteration commits to the same branch the controller merges back. Stable by
-    (child, request id): a replayed registration returns the original Run.
-    """
+  The loop's single worktree, branch and base are pinned on the Run before
+  launch, so the adapter never creates a worktree of its own and every
+  iteration commits to the same branch the controller merges back. Stable by
+  (child, request id): a replayed registration returns the original Run.
+  """
   run_id = stable_run_id(child_id, iteration_run_request_id(loop_id, iteration))
   existing = await tree.runs.get_run(child_id, run_id)
   if existing is not None:
@@ -176,9 +176,9 @@ async def _iteration_blocker(
 ) -> tuple[str | None, str]:
   """The failed iteration's quota blocker and summary, from its own event log.
 
-    Reuses the legacy mechanical judgments over the Run's translated events —
-    the same quota-shaped-event definition, no new matcher.
-    """
+  Reuses the legacy mechanical judgments over the Run's translated events —
+  the same quota-shaped-event definition, no new matcher.
+  """
   events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
   if not events_path.is_file():
     return None, f"Iteration {iteration} {outcome} (no events log)."
@@ -200,15 +200,15 @@ async def run_improve_sequence(
 ) -> None:
   """Run the improve sequence on the v2 child (the background controller task).
 
-    The child and the loop state already exist (the API handler reserved both
-    under the stable ids). Each iteration launches through the shared adapter,
-    is awaited to its terminal fact, and is judged by the existing mechanical
-    rules; every judged iteration is delivered to the parent as one
-    child_report (the delivery wakes the parent's master, which audits the
-    iteration while the loop moves on), the loop ends on exhaustion, user
-    stop, or a quota blocker, and the ONE final result is delivered to the
-    parent through the report owner.
-    """
+  The child and the loop state already exist (the API handler reserved both
+  under the stable ids). Each iteration launches through the shared adapter,
+  is awaited to its terminal fact, and is judged by the existing mechanical
+  rules; every judged iteration is delivered to the parent as one
+  child_report (the delivery wakes the parent's master, which audits the
+  iteration while the loop moves on), the loop ends on exhaustion, user
+  stop, or a quota blocker, and the ONE final result is delivered to the
+  parent through the report owner.
+  """
   from src.core.task_execution import TaskExecutionAdapter
 
   state = await improve_command.require_loop_state(session_id, loop_id, cfg)
@@ -408,14 +408,14 @@ async def _settle_withheld_iteration(
 ) -> None:
   """Settle a loop whose iteration launch was withheld (no terminal fact will arrive).
 
-    The loop state cannot keep saying "running": the controller marks it
-    blocked with the actual reason and releases the active lock. The launch
-    itself already recorded the durable run_launch_withheld fact and delivered
-    the ONE blocked report to the manager (once, by stable id) — the
-    controller's chat progress event is all it still owes. No side effect ran
-    and none is retried automatically; the queued iteration Run stays as the
-    retained pending request for the existing explicit resume/retry policy.
-    """
+  The loop state cannot keep saying "running": the controller marks it
+  blocked with the actual reason and releases the active lock. The launch
+  itself already recorded the durable run_launch_withheld fact and delivered
+  the ONE blocked report to the manager (once, by stable id) — the
+  controller's chat progress event is all it still owes. No side effect ran
+  and none is retried automatically; the queued iteration Run stays as the
+  retained pending request for the existing explicit resume/retry policy.
+  """
   state = await improve_command.require_loop_state(session_id, loop_id, cfg)
   state.status = "blocked"
   await improve_command.save_loop_state(session_id, state, cfg)
@@ -439,10 +439,10 @@ async def _settle_withheld_iteration(
 class IterationJudgment:
   """One iteration's mechanical judgment and the evidence its report carries.
 
-    ``tip`` is the work branch head after the iteration and ``commits_added``
-    the commits over the tip the iteration started from; ``invalid_reason`` is
-    None exactly when ``report_valid`` is true.
-    """
+  ``tip`` is the work branch head after the iteration and ``commits_added``
+  the commits over the tip the iteration started from; ``invalid_reason`` is
+  None exactly when ``report_valid`` is true.
+  """
 
   summary: str
   report_valid: bool
@@ -463,14 +463,14 @@ async def _judge_iteration(
 ) -> IterationJudgment:
   """The mechanical iteration judgment: report validity over the git delta.
 
-    Same rules as the legacy controller (report file + commit count over the
-    worktree tip this iteration started from), sourced from the Run's shared
-    worktree and the loop's report file. The git delta is computed and the
-    verdict decided on every path. On the no-report path the verdict is
-    decided BEFORE the fallback file is written (the legacy controller's
-    ordering), so the placeholder the controller writes never flips it: the
-    verdict is invalid with the reason "no report file".
-    """
+  Same rules as the legacy controller (report file + commit count over the
+  worktree tip this iteration started from), sourced from the Run's shared
+  worktree and the loop's report file. The git delta is computed and the
+  verdict decided on every path. On the no-report path the verdict is
+  decided BEFORE the fallback file is written (the legacy controller's
+  ordering), so the placeholder the controller writes never flips it: the
+  verdict is invalid with the reason "no report file".
+  """
   report_path = loop_dir / f'iter_{iteration:04d}.md'
   tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
   del diffstat
@@ -522,10 +522,10 @@ async def _broadcast_iteration_progress(
 ) -> None:
   """The per-iteration progress event: chat visibility only, never an input.
 
-    The per-iteration master input is the delivered child report
-    (:func:`_deliver_iteration_report`), not this event; the final sequence
-    result reaches the manager as input through the same owner.
-    """
+  The per-iteration master input is the delivered child report
+  (:func:`_deliver_iteration_report`), not this event; the final sequence
+  result reaches the manager as input through the same owner.
+  """
   report_path = loop_dir / f'iter_{iteration:04d}.md'
   await tree.sessions.deliver_to_successor(
       session_id, {
@@ -553,16 +553,16 @@ async def _deliver_iteration_report(
 ) -> None:
   """The ONE per-iteration report: the parent's wake and audit input.
 
-    Delivered through the common report owner right after the chat progress
-    event; a freshly created report wakes the parent's next serialized turn
-    (the master's per-iteration audit), a replayed one (created False) wakes
-    nobody. The source event id carries the ``improve-iteration:`` prefix over
-    this Run's own ``run_finished`` event id, so it never collides with the
-    final report's id (the raw latest ``run_finished``) and a replay dedups to
-    the same stable id. A delivery error propagates: the loop ends failed and
-    its final report carries the error, so a missed audit never passes
-    silently.
-    """
+  Delivered through the common report owner right after the chat progress
+  event; a freshly created report wakes the parent's next serialized turn
+  (the master's per-iteration audit), a replayed one (created False) wakes
+  nobody. The source event id carries the ``improve-iteration:`` prefix over
+  this Run's own ``run_finished`` event id, so it never collides with the
+  final report's id (the raw latest ``run_finished``) and a replay dedups to
+  the same stable id. A delivery error propagates: the loop ends failed and
+  its final report carries the error, so a missed audit never passes
+  silently.
+  """
   from src.core.task_completion import RUN_REF_PREFIX
   meta = await tree.load_meta(child_id)
   if meta is None or not meta.task_parent_id:
@@ -610,10 +610,10 @@ async def _deliver_sequence_report(
 ) -> None:
   """The ONE final sequence result, delivered through the common report owner.
 
-    The child itself stays open: its evidence (the iteration Runs and loop
-    reports) remains, and the parent — or the operator — closes it through the
-    common closure guards.
-    """
+  The child itself stays open: its evidence (the iteration Runs and loop
+  reports) remains, and the parent — or the operator — closes it through the
+  common closure guards.
+  """
   meta = await tree.load_meta(child_id)
   if meta is None or not meta.task_parent_id:
     log.warning("improve_sequence_report_no_parent", session=session_id, child=child_id)
@@ -643,16 +643,16 @@ async def reconcile_interrupted_sequences(
 ) -> int:
   """Mark every improve loop whose controller died with the old process.
 
-    The loop CONTINUATION is an explicit non-goal (the existing improve
-    boundary): a restart never resumes the loop. What recovery owes is
-    honesty — the state file cannot keep saying "running" with no controller,
-    the active lock cannot block the next loop forever, and the chat stream
-    carries one visible notice. The launched iteration itself is reconciled by
-    the Run recovery pass, not here.
+  The loop CONTINUATION is an explicit non-goal (the existing improve
+  boundary): a restart never resumes the loop. What recovery owes is
+  honesty — the state file cannot keep saying "running" with no controller,
+  the active lock cannot block the next loop forever, and the chat stream
+  carries one visible notice. The launched iteration itself is reconciled by
+  the Run recovery pass, not here.
 
-    A loop whose state says running under THIS process's pid has a live
-    controller and is left alone.
-    """
+  A loop whose state says running under THIS process's pid has a live
+  controller and is left alone.
+  """
   pid = boot_pid if boot_pid is not None else os.getpid()
   repaired = 0
   sessions_dir = cfg.sessions_dir

@@ -22,8 +22,9 @@ _USAGE = "usage: claude_sub_hook.py --socket PATH --token TOKEN [--gate]"
 
 
 def _terminate_parent_group() -> None:
-  # signal stays inside this function: enum and types behind it cost ~2 ms of
-  # every hook event's import floor, and only the terminate path needs SIGTERM.
+  # signal stays inside this function: its own module, linecache, and _signal
+  # cost ~0.5 ms of every hook event's import floor (enum rides json->re
+  # either way), and only the terminate path needs SIGTERM.
   import signal
 
   parent_pid = os.getppid()

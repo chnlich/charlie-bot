@@ -37,7 +37,13 @@ def scheduled_report_prefix(task_name: str) -> str:
 
 
 def _last_saturday_1am_utc(now: datetime) -> datetime:
-  """The most recent Saturday 01:00 America/Los_Angeles before *now*, in UTC."""
+  """The most recent Saturday 01:00 America/Los_Angeles, in UTC.
+
+  Inside Saturday 00:00-00:59 PT that grid point is the coming 01:00, still
+  ahead of *now*. The caller's window check (started before the boundary,
+  boundary already past) drops a future boundary, so the recycle waits for
+  the first wake after 01:00.
+  """
   now_pt = now.astimezone(ZoneInfo(HOUSE_TIMEZONE))
   days_since_sat = (now_pt.weekday() - 5) % 7
   last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)

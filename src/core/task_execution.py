@@ -1191,11 +1191,9 @@ class TaskExecutionAdapter:
     elif run.kind == "iteration":
       context = await self._build_iteration_context(meta, run, launch_prompt)
     elif launch_prompt is not None:
-      # The sequence controllers' explicit launch text (a cron step's
-      # prompt rides verbatim, exactly as the legacy scheduled worker's
-      # prompt_override did). The controller owns the composition; the
-      # adapter renders it as the task/input context of the assembled
-      # instructions.
+      # The sequence controllers' explicit launch text: a cron step's prompt
+      # rides verbatim. The controller owns the composition; the adapter
+      # renders it as the task/input context of the assembled instructions.
       context = await self._build_step_context(meta, run, launch_prompt, task_type)
     else:
       context = await self._build_work_context(meta, run, task_type)

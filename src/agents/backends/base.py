@@ -595,8 +595,8 @@ async def tail_follow_events(
           await on_silence()
         await asyncio.sleep(poll_interval)
 
-      # The trailing partial's bytes, read once at follow end from the still
-      # -open fd — a per-round copy would re-materialize the whole tail on
+      # The trailing partial's bytes, read once at follow end from the
+      # still-open fd — a per-round copy would re-materialize the whole tail on
       # every poll. Dropping it makes a restart replay the run's tail as at
       # most a duplicate — never a loss.
       if tail_start < read_to and _tail_region_has_content(f, tail_start, read_to):

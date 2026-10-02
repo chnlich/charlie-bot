@@ -1,6 +1,6 @@
 """Tests for the ``charliebot artifact wrap`` assembly verb and its pre-render driver.
 
-The driver runs the checkout's scripts/prerender_math.js against the vendored
+The driver runs the checkout's src/core/prerender_math.js against the vendored
 KaTeX build (one CDN fetch per pytest session); the byte-integrity gate
 and the render-path assertion come from src/core/artifact_check.py.
 """
@@ -15,7 +15,7 @@ from conftest import ROOT
 from src.cli.artifact import main as artifact_main
 from src.core.artifact_wrap import ensure_vendored_katex, wrap_fragment
 
-_DRIVER = ROOT / "scripts" / "prerender_math.js"
+_DRIVER = ROOT / "src" / "core" / "prerender_math.js"
 
 
 @pytest.fixture(scope="session")

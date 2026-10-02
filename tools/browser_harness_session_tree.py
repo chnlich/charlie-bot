@@ -28,7 +28,7 @@ before running it. Isolation contract:
   per-scenario assertion results and the exact tested commit land in
   --evidence-dir (default: a directory under the host temp dir, never in git).
 
-Run:  uv run python scripts/browser_harness_session_tree.py \
+Run:  uv run python tools/browser_harness_session_tree.py \
         [--evidence-dir DIR] [--keep] [--chrome BIN]
 """
 

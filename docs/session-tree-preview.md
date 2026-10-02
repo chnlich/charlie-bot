@@ -98,10 +98,10 @@ the whole launch, additions included, as one structured diagnostic.
 Three repo-owned harnesses drive a preview instance end to end; each is an
 executable verification recipe, never a mock:
 
-- `scripts/live_preview_task_tree.py` — the live execution trial: a root
+- `tools/live_preview_task_tree.py` — the live execution trial: a root
   manager's real takeoff turn, a repo-less quick-edit worker, a synthetic-repo
   implement worker with its auto-spawned review, and the workspace boundary.
-- `scripts/live_preview_sidebar_status.py` — the sidebar-status trial: real
+- `tools/live_preview_sidebar_status.py` — the sidebar-status trial: real
   Chrome over CDP against the same kind of fresh preview home, asserting the
   sidebar's live work states through `/api/sessions/status` and the
   `GET /api/sessions/` list the sidebar paints from, the DOM icons and
@@ -110,7 +110,7 @@ executable verification recipe, never a mock:
   never its expansion state, and icons clearing after finish), goal-derived row names (never a raw
   Markdown heading in any worker-facing title), and list rows that already
   carry each task-tree node's `work_state` on first paint.
-- `scripts/browser_harness_session_tree_preview.py` — the fresh-home browser
+- `tools/browser_harness_session_tree_preview.py` — the fresh-home browser
   trial: the full operator walk on real Chrome over CDP — first login, the
   creation toolbar and the one-click New Session flow (drafts kept, the
   dropdown's selected model carried on the create), explicit child/worker
@@ -132,7 +132,7 @@ snapshot, so nothing outside the trial changes. Evidence (screenshots,
 assertion JSON, the tested commit) goes to `--evidence-dir`, never into git.
 
 The same task-tree surfaces also have an in-process sibling trial that starts
-no preview instance, `scripts/browser_harness_session_tree.py`: the real
+no preview instance, `tools/browser_harness_session_tree.py`: the real
 shipped app over an isolated in-process server with a seeded task tree,
 driving Chrome over CDP. It asserts tree nesting and expansion, the live
 worker's transcript cycle, and the parent-row icon rule: a running worker's

@@ -25,7 +25,7 @@ def __getattr__(name: str) -> Any:
   return deferred_module_getattr(name, __name__, globals(), "requests", load_requests)
 
 
-_PRERENDER_DRIVER = REPO_ROOT / "scripts" / "prerender_math.js"
+_PRERENDER_DRIVER = Path(__file__).resolve().parent / "prerender_math.js"
 
 KATEX_VERSION = "0.16.21"
 KATEX_CDN_URL = f"https://cdn.jsdelivr.net/npm/katex@{KATEX_VERSION}/dist/katex.min.js"

@@ -35,7 +35,7 @@ CHARLIE_CODE_API_KEY_ENV = "CHARLIE_CODE_API_KEY"
 # isolated trial or its children: the server-side preview pops them when it
 # activates the preview profile (session_tree_preview.activate_preview_environment),
 # and the live-trial harnesses pop them from the harness environment before they
-# spawn the trial instance (scripts/browser_harness_session_tree_preview.py).
+# spawn the trial instance (tools/browser_harness_session_tree_preview.py).
 INHERITED_IDENTITY_ENV_VARS = (
     SESSION_ID_ENV_VAR,
     RUN_TOKEN_ENV,

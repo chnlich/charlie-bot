@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 from conftest import ROOT
 
-import scripts.perf_sweep
+import tools.perf_sweep
 
 _PAIR_UNITS = ("M35", "M55", "M70", "M71", "M112", "M120")
 
@@ -47,7 +47,7 @@ def _fake_doc(consumer_body: str) -> str:
 
 
 def test_parse_collectors_on_the_real_doc() -> None:
-  preamble, units = scripts.perf_sweep.parse_collectors(ROOT / "docs" / "perf_baseline.md")
+  preamble, units = tools.perf_sweep.parse_collectors(ROOT / "docs" / "perf_baseline.md")
   assert len(preamble) == 1
   assert "fetch origin main" in preamble[0]
   labels = [label for label, _ in units]
@@ -62,7 +62,7 @@ def test_parse_collectors_on_the_real_doc() -> None:
 def test_runner_carries_builder_env_and_sweeps_scratch(tmp_path: Path, capsys: pytest.Capsys) -> None:
   doc = tmp_path / "perf_baseline.md"
   doc.write_text(_fake_doc('test -f "$T_HOME/marker" && echo consumer-read-the-env'))
-  assert scripts.perf_sweep.SweepRunner(doc, None).run() == 0
+  assert tools.perf_sweep.SweepRunner(doc, None).run() == 0
   out = capsys.readouterr().out
   assert "consumer-read-the-env" in out
   assert not list(Path("/tmp").glob("perf-sweep-test-*")), "the exit-path sweep removes the scratch"
@@ -71,7 +71,7 @@ def test_runner_carries_builder_env_and_sweeps_scratch(tmp_path: Path, capsys: p
 def test_runner_marks_failed_unit_and_still_sweeps(tmp_path: Path, capsys: pytest.Capsys) -> None:
   doc = tmp_path / "perf_baseline.md"
   doc.write_text(_fake_doc('[ -n "$T_HOME" ] || exit 9; [ -f "$T_HOME/marker" ] || exit 8; exit 7'))
-  assert scripts.perf_sweep.SweepRunner(doc, None).run() == 1
+  assert tools.perf_sweep.SweepRunner(doc, None).run() == 1
   out = capsys.readouterr().out
   assert "FAILED units: M99" in out
   assert "rc=7" in out, "the consumer's own exit surfaces; an env-carry failure would read rc=9 or rc=8"
@@ -85,7 +85,7 @@ def test_unparseable_export_line_fails_the_unit_not_the_sweep(tmp_path: Path, ca
   # The corpus shapes: a space-bearing value splits into a token with no '='.
   lines.insert(lines.index("## Sampling history") - 2, 'echo "export BAD_VALUE=two words"')
   doc.write_text("\n".join(lines) + "\n")
-  assert scripts.perf_sweep.SweepRunner(doc, None).run() == 1
+  assert tools.perf_sweep.SweepRunner(doc, None).run() == 1
   out = capsys.readouterr().out
   assert "the unit fails, the sweep continues" in out
   assert "FAILED units: M99" in out

@@ -49,18 +49,18 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     evaluate,
     open_evidence_dir,
     resolve_chrome,
     stop_child,
 )
-from scripts.browser_harness_session_tree_preview import (  # noqa: E402
+from tools.browser_harness_session_tree_preview import (  # noqa: E402
     build_source_home,
     open_authenticated_page,
     trial_home_root,
 )
-from scripts.live_preview_task_tree import (  # noqa: E402
+from tools.live_preview_task_tree import (  # noqa: E402
     DEFAULT_BACKEND,
     fail,
     log,

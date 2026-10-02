@@ -6,7 +6,7 @@ tree row's bright name-glyph band inside the sidebar column, measures how much
 horizontal space the painted name occupies, verifies the secondary badge band
 renders below it, and exports zoomed crops for human review.
 
-Usage: uv run --with pillow python scripts/visual_name_check.py <evidence_dir>
+Usage: uv run --with pillow python tools/visual_name_check.py <evidence_dir>
 Exits non-zero if any expectation fails. Pure analysis — no browser, no server.
 """
 import json

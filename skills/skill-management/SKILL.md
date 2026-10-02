@@ -55,9 +55,9 @@ Repo-level skills must also stay free of session-specific debug artifacts: dated
 
 A local pre-commit hook enforces this boundary. One-time setup per clone:
 
-    git config --local core.hooksPath scripts/git-hooks
+    git config --local core.hooksPath tools/git-hooks
 
-Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `~/.charliebot/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `scripts/check-skills-host-leak.sh` manually anytime to scan the whole tree.
+Additional host-specific blocklist patterns (real names, internal project names, tenant identifiers, etc.) live at `~/.charliebot/skills_leak_patterns.local.txt` — one regex per line, NEVER committed to this repo. Run `tools/check-skills-host-leak.sh` manually anytime to scan the whole tree.
 
 ## Person-Identifying Session Content Boundary
 
@@ -68,7 +68,7 @@ Examples in skills and docs are synthetic end to end, covering people,
 items, and quantities alike, even when a real session supplies the
 template. The authoring-time test: a reader who knows this repository's
 owner learns nothing about any real person from the content.
-scripts/check-skills-host-leak.sh scans for host identifiers only, so
+tools/check-skills-host-leak.sh scans for host identifiers only, so
 this boundary rides on the author's judgment; a skill drafted from a live
 session applies the test to every example before it lands.
 

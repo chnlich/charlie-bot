@@ -158,7 +158,7 @@ reports the in-process metrics unmeasured rather than measuring a stale tree (a 
 leave the checkout on its own branch after its pull request merges — the 2026-09-17 M108 history
 row is the ghost reading that produces).
 
-The blocks' execution contract homes in the sweep runner, `scripts/perf_sweep.py`: it runs the
+The blocks' execution contract homes in the sweep runner, `tools/perf_sweep.py`: it runs the
 preflight, then every unit below verbatim in doc order, carrying one block's `export K=v` stdout
 lines into the same unit's later blocks (the M35/M55/M70/M71/M120 builder→consumer pairs;
 M112's two blocks are order-coupled on the builder's fixed corpus path, no env),

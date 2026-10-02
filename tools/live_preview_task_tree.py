@@ -43,13 +43,13 @@ import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     EVIDENCE_ROOT_DEFAULT,
     open_evidence_dir,
     pick_free_port,
     stop_child,
 )
-from scripts.browser_harness_session_tree_preview import PRODUCTION_PORT  # noqa: E402
+from tools.browser_harness_session_tree_preview import PRODUCTION_PORT  # noqa: E402
 
 DEFAULT_BACKEND = "charlie-code-glm-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
@@ -172,7 +172,7 @@ def block_sources(snapshot: dict) -> list[tuple[str, str]]:
 async def run_harness(args: argparse.Namespace) -> None:
     import yaml
 
-    from scripts.browser_harness_session_tree_preview import (
+    from tools.browser_harness_session_tree_preview import (
         build_source_home,
         preview_instance_env,
         preview_invocation,

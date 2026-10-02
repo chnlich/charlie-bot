@@ -92,13 +92,35 @@ def _data_rows(body: str) -> list[dict]:
   return json.loads(match.group(1))["rows"]
 
 
-async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+  """Seed the ledger under tmp_path and point the page's ledger read at it."""
   ledger_path = tmp_path / "usage" / "ledger.sqlite3"
   _seed(ledger_path)
+  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
+  return ledger_path
+
+
+async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
+  ledger_path = _seeded_ledger(monkeypatch, tmp_path)
   _stub_capture(monkeypatch, ledger_path, {"Codex": 3})
   response = await pages.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   return response.body.decode("utf-8")
+
+
+async def _request_with_failing_capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+  """The seeded-ledger request whose one capture raises: the request itself fails.
+
+  Returns the ledger path so a follow-up request can prove recovery against it."""
+  ledger_path = _seeded_ledger(monkeypatch, tmp_path)
+
+  def boom(ledger: UsageLedger) -> dict[str, int]:
+    raise RuntimeError("capture exploded")
+
+  monkeypatch.setattr("src.core.token_tally.capture_local", boom)
+  with pytest.raises(RuntimeError, match="capture exploded"):
+    await pages.token_usage_viewer(make_page_request("/token-usage"))
+  return ledger_path
 
 
 def _ledger_row(
@@ -173,16 +195,7 @@ async def test_each_source_native_start_appears(monkeypatch: pytest.MonkeyPatch,
 @pytest.mark.asyncio
 async def test_capture_failure_fails_the_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A capture error propagates out of the request instead of rendering stale rows."""
-  ledger_path = tmp_path / "usage" / "ledger.sqlite3"
-  _seed(ledger_path)
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
-
-  def boom(ledger: UsageLedger) -> dict[str, int]:
-    raise RuntimeError("capture exploded")
-
-  monkeypatch.setattr("src.core.token_tally.capture_local", boom)
-  with pytest.raises(RuntimeError, match="capture exploded"):
-    await pages.token_usage_viewer(make_page_request("/token-usage"))
+  await _request_with_failing_capture(monkeypatch, tmp_path)
 
 
 @pytest.mark.asyncio
@@ -190,16 +203,7 @@ async def test_failed_capture_clears_itself_so_the_next_request_renders(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """A failed capture uninstalls itself instead of poisoning later requests: once the
   capture works again, the very next request renders the seeded rows (no server restart)."""
-  ledger_path = tmp_path / "usage" / "ledger.sqlite3"
-  _seed(ledger_path)
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
-
-  def boom(ledger: UsageLedger) -> dict[str, int]:
-    raise RuntimeError("capture exploded")
-
-  monkeypatch.setattr("src.core.token_tally.capture_local", boom)
-  with pytest.raises(RuntimeError, match="capture exploded"):
-    await pages.token_usage_viewer(make_page_request("/token-usage"))
+  ledger_path = await _request_with_failing_capture(monkeypatch, tmp_path)
 
   _stub_capture(monkeypatch, ledger_path, {"Codex": 3})
   body = (await pages.token_usage_viewer(make_page_request("/token-usage"))).body.decode("utf-8")

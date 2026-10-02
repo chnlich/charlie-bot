@@ -1055,166 +1055,158 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 
 @pytest.mark.asyncio
 async def test_repo_less_implement_delivers_after_review_passes(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
-        "task_type": "implement",
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
-                                           "Take off and refresh the host lint config.")
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {
+      "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
+      "task_type": "implement",
+  }
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  pm_builds = await _launch_manager_turn(
+      cfg, session_mgr, tree, monkeypatch, manager, "Take off and refresh the host lint config.")
 
-    report = ("Created: /tmp/lint/ruff.toml\n"
-              "Modified: /tmp/lint/setup.cfg\n"
-              "Acceptance tests: config parses — pass")
-    work_backend = SpawningScriptedBackend([result_event(report)])
-    review_backend = SpawningScriptedBackend([result_event("review ok")])
-    install_backends(
-        monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  report = (
+      "Created: /tmp/lint/ruff.toml\n"
+      "Modified: /tmp/lint/setup.cfg\n"
+      "Acceptance tests: config parses — pass")
+  work_backend = SpawningScriptedBackend([result_event(report)])
+  review_backend = SpawningScriptedBackend([result_event("review ok")])
+  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
-    assert outcome == "success"
-    # Repo-less: the Run directory is the working directory; no worktree or
-    # branch is ever recorded.
-    assert work_run.repo_path is None and work_run.worktree_path is None
-    assert work_run.branch_name is None
-    assert work_backend.cwd == str(tree.runs.run_dir(worker.id, "run-work"))
+  work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+  assert outcome == "success"
+  # Repo-less: the Run directory is the working directory; no worktree or
+  # branch is ever recorded.
+  assert work_run.repo_path is None and work_run.worktree_path is None
+  assert work_run.branch_name is None
+  assert work_backend.cwd == str(tree.runs.run_dir(worker.id, "run-work"))
 
-    # The implement work Run's review spawns without a repo and reads the
-    # spec-plus-paths context, not a diff.
-    review_run = await wait_for_review_terminal(tree, worker.id, timeout=10.0,
-                                                what="the repo-less review")
-    assert review_run.review_of_run_id == "run-work"
-    assert review_run.repo_path is None and review_run.worktree_path is None
-    prompt = review_backend.prompt
-    assert "no diff to read" in prompt
-    assert "nothing to merge or push" in prompt
-    assert "## Acceptance Tests" in prompt
-    assert "Created: /tmp/lint/ruff.toml" in prompt
+  # The implement work Run's review spawns without a repo and reads the
+  # spec-plus-paths context, not a diff.
+  review_run = await wait_for_review_terminal(tree, worker.id, timeout=10.0, what="the repo-less review")
+  assert review_run.review_of_run_id == "run-work"
+  assert review_run.repo_path is None and review_run.worktree_path is None
+  prompt = review_backend.prompt
+  assert "no diff to read" in prompt
+  assert "nothing to merge or push" in prompt
+  assert "## Acceptance Tests" in prompt
+  assert "Created: /tmp/lint/ruff.toml" in prompt
 
-    # The reviewer's verdict is the delivery: the task closes and reports
-    # completed to the parent with no landing step.
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less implement task never closed after its review passed")
-    # The close and the report land in separate awaits of the delivery chain;
-    # a loaded runner's poll can see the closed task before the report
-    # append, so the report gets the same bounded wait the review did.
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-        if reports:
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less implement task never reported to its parent")
-    assert reports[-1]["outcome"] == "completed"
+  # The reviewer's verdict is the delivery: the task closes and reports
+  # completed to the parent with no landing step.
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
+    if tree.task_state(worker.id) == "completed":
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the repo-less implement task never closed after its review passed")
+  # The close and the report land in separate awaits of the delivery chain;
+  # a loaded runner's poll can see the closed task before the report
+  # append, so the report gets the same bounded wait the review did.
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    if reports:
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the repo-less implement task never reported to its parent")
+  assert reports[-1]["outcome"] == "completed"
 
-    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
-    assert pm_builds, "the delivered report never triggered a parent manager turn"
-    assert tree.task_state(manager.id) == "open"
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  assert pm_builds, "the delivered report never triggered a parent manager turn"
+  assert tree.task_state(manager.id) == "open"
 
 
 @pytest.mark.asyncio
 async def test_repo_less_implement_review_failure_takes_the_failure_report(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {"goal": "fix the host script", "task_type": "implement"}
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "fix the host script", "task_type": "implement"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
 
-    work_backend = SpawningScriptedBackend([result_event("done; modified /tmp/x.sh")])
-    # The single configured reviewer fails (no result event: the durable
-    # outcome is failed); the retry policy exhausts and the existing
-    # blocked-report path reports to the parent.
-    review_backend = SpawningScriptedBackend([])
-    install_backends(
-        monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  work_backend = SpawningScriptedBackend([result_event("done; modified /tmp/x.sh")])
+  # The single configured reviewer fails (no result event: the durable
+  # outcome is failed); the retry policy exhausts and the existing
+  # blocked-report path reports to the parent.
+  review_backend = SpawningScriptedBackend([])
+  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    await wait_for_terminal_run(tree, worker.id, "run-work")
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-        if reports and reports[-1]["outcome"] == "blocked":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the failed repo-less review never reported blocked to the parent")
-    assert "review of work run run-work failed on every configured reviewer backend" in reports[-1]["summary"]
-    assert tree.task_state(worker.id) == "open"
+  await wait_for_terminal_run(tree, worker.id, "run-work")
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    if reports and reports[-1]["outcome"] == "blocked":
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the failed repo-less review never reported blocked to the parent")
+  assert "review of work run run-work failed on every configured reviewer backend" in reports[-1]["summary"]
+  assert tree.task_state(worker.id) == "open"
 
 
 @pytest.mark.asyncio
-async def test_repo_less_quick_edit_closes_without_review(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
-                                           "Take off and bump it.")
+async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and bump it.")
 
-    work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
-    install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
+  install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake", model="fake-model")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    await wait_for_terminal_run(tree, worker.id, "run-work")
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    else:
-        pytest.fail("the repo-less quick-edit task never closed on its successful work Run")
-    # No review Run exists for a quick-edit delivery.
-    review_runs = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
-    assert review_runs == []
-    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-    assert reports[-1]["outcome"] == "completed"
+  await wait_for_terminal_run(tree, worker.id, "run-work")
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
+    if tree.task_state(worker.id) == "completed":
+      break
+    await asyncio.sleep(0.1)
+  else:
+    pytest.fail("the repo-less quick-edit task never closed on its successful work Run")
+  # No review Run exists for a quick-edit delivery.
+  review_runs = [r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "review"]
+  assert review_runs == []
+  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  assert reports[-1]["outcome"] == "completed"
 
-    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
-    assert pm_builds, "the delivered report never triggered a parent manager turn"
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  assert pm_builds, "the delivered report never triggered a parent manager turn"
 
 
 def _task_spec(tree: TaskTreeManager, spec: dict):
-    from src.core.models import TaskSpec, TaskType
-    return TaskSpec(
-        goal=spec["goal"],
-        context_refs=[],
-        repo_path=spec.get("repo_path"),
-        base_branch=spec.get("base_branch"),
-        task_type=TaskType(spec.get("task_type", "implement")),
-        keep_worktree=bool(spec.get("keep_worktree", False)),
-    )
+  from src.core.models import TaskSpec, TaskType
+  return TaskSpec(
+      goal=spec["goal"],
+      context_refs=[],
+      repo_path=spec.get("repo_path"),
+      base_branch=spec.get("base_branch"),
+      task_type=TaskType(spec.get("task_type", "implement")),
+      keep_worktree=bool(spec.get("keep_worktree", False)),
+  )
 
 
 # ---------------------------------------------------------------------------

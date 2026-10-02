@@ -88,7 +88,7 @@ class LandingEvidence:
 
 @dataclass(frozen=True)
 class CompletionEvidence:
-    """The internal evidence bundle a completion claim carries.
+  """The internal evidence bundle a completion claim carries.
 
     Manual complete builds it from the request body; the execution stage's
     automatic worker completion builds it from the run's recorded artifacts.
@@ -96,11 +96,11 @@ class CompletionEvidence:
     and target-branch delivery evidence.
     """
 
-    summary: str = ""
-    result_refs: list[str] = field(default_factory=list)
-    run_ids: list[str] = field(default_factory=list)
-    review_run_ids: list[str] = field(default_factory=list)
-    landing: LandingEvidence | None = None
+  summary: str = ""
+  result_refs: list[str] = field(default_factory=list)
+  run_ids: list[str] = field(default_factory=list)
+  review_run_ids: list[str] = field(default_factory=list)
+  landing: LandingEvidence | None = None
 
 
 class TaskCompletionManager:

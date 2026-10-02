@@ -2879,13 +2879,13 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT))
-    parser.add_argument("--chrome", default=None)
-    parser.add_argument("--keep", action="store_true", help="keep the temp dir (debugging)")
-    args = parser.parse_args()
-    asyncio.run(run_harness(args))
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT))
+  parser.add_argument("--chrome", default=None)
+  parser.add_argument("--keep", action="store_true", help="keep the temp dir (debugging)")
+  args = parser.parse_args()
+  asyncio.run(run_harness(args))
 
 
 if __name__ == "__main__":
-    main()
+  main()

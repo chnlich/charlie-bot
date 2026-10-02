@@ -698,31 +698,31 @@ class TaskInputDispatcher:
 
 
 def input_event_type_for_caller(caller: object) -> str:
-    """The input type a verified caller identity may produce on a message route.
+  """The input type a verified caller identity may produce on a message route.
 
     Browser and operator credentials are user input; a run-token agent on the
     same route stays agent input with its own session's provenance — it can
     never manufacture a real USER event or another caller's provenance.
     """
-    from src.core.run_token import CallerIdentity
-    from src.core.task_sessions import TaskForbiddenError
+  from src.core.run_token import CallerIdentity
+  from src.core.task_sessions import TaskForbiddenError
 
-    if isinstance(caller, CallerIdentity):
-        if caller.is_operator:
-            return ET.USER
-        claims = caller.claims
-        assert claims is not None
-        return ET.AGENT_MESSAGE
-    assert ET.USER in ROUTE_INPUT_TYPES and ET.AGENT_MESSAGE in ROUTE_INPUT_TYPES
-    raise TaskForbiddenError("message input requires verified caller credentials")
+  if isinstance(caller, CallerIdentity):
+    if caller.is_operator:
+      return ET.USER
+    claims = caller.claims
+    assert claims is not None
+    return ET.AGENT_MESSAGE
+  assert ET.USER in ROUTE_INPUT_TYPES and ET.AGENT_MESSAGE in ROUTE_INPUT_TYPES
+  raise TaskForbiddenError("message input requires verified caller credentials")
 
 
 def agent_provenance(caller: object) -> tuple[str | None, str | None]:
-    """The (from_session, from_session_name) provenance for agent-relayed input."""
-    from src.core.run_token import CallerIdentity
+  """The (from_session, from_session_name) provenance for agent-relayed input."""
+  from src.core.run_token import CallerIdentity
 
-    if isinstance(caller, CallerIdentity) and not caller.is_operator:
-        claims = caller.claims
-        assert claims is not None
-        return claims.session_id, None
-    return None, None
+  if isinstance(caller, CallerIdentity) and not caller.is_operator:
+    claims = caller.claims
+    assert claims is not None
+    return claims.session_id, None
+  return None, None

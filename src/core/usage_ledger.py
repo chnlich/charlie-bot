@@ -376,6 +376,14 @@ GROUP BY source, model, account, kind, day
 # carry their rollout's own hit/miss split, so they never move.
 _UPGRADE_MOVE_RECORDS_SQL = "(record_id GLOB 'master:*' OR (record_id GLOB 'thread:*' AND kind = 'native'))"
 
+# The rewrite-epoch bump is one statement because both rewrite paths must move
+# the same counter: the memo fold compares the epoch it stored against this
+# table's (``_rewrite_epoch``), and an upgrade-path bump the write path spells
+# differently would not invalidate the memos it must.
+_REWRITE_EPOCH_UPSERT_SQL = (
+    "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
+    " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
+
 
 class RecordKind(StrEnum):
   """How a usage row was learned: from a CLI-kept log (native) or from a charlie-bot
@@ -684,9 +692,7 @@ class UsageLedger:
       if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
         self._conn.execute(_AGG_WIPE_SQL)  # replace the served aggregate wholesale (see the docstring)
         self._conn.execute(_AGG_BACKFILL_SQL)
-      self._conn.execute(
-          "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
-          " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
+      self._conn.execute(_REWRITE_EPOCH_UPSERT_SQL)
       self._conn.execute(
           "INSERT INTO ledger_meta (key, value) VALUES ('schema', '2')"
           " ON CONFLICT(key) DO UPDATE SET value = '2'")
@@ -861,9 +867,7 @@ class UsageLedger:
         # and a superseding delete can pair N deletes with N inserts the fold's
         # row-count witness cannot see -- the witness lives in the database, not in
         # this process.
-        self._conn.execute(
-            "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
-            " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
+        self._conn.execute(_REWRITE_EPOCH_UPSERT_SQL)
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))

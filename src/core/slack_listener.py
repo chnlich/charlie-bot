@@ -58,6 +58,7 @@ from src.core.thread_entry import (
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
+    follow_wake_label,
     summon_prompt_tail,
 )
 from src.core.triggers import TriggerManager
@@ -322,20 +323,14 @@ def _eligible_thread_message(message: dict, allowed_user_ids: list[str]) -> bool
 
 
 def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
-  """The armed follow trigger's label: the chain floor ts, the thread link, and the wake contract.
+  """The Slack follow-wake label: the shared frame with Slack's read and ack rules.
 
-  ``floor=<ts>`` on the first line is machine-readable: a re-arm parses it back
-  so the wake always reads from the chain's oldest unacked message, independent
-  of watermark state.
+  The skill read does not advance the watermark by itself, so the label also
+  carries the ack rule: the round acks what it read even when it stays silent.
   """
-  return (
-      f"{_FOLLOW_TRIGGER_PREFIX} floor={floor_ts}\n"
-      f"Slack 线程跟帖唤醒：{permalink}\n"
-      "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；"
-      f"回复之前从仓库重读 prompts/{SLACK.scope_doc}、prompts/thread_reply_redline.md 与 "
-      "prompts/thread_reply_format.md；"
-      "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；"
-      f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
+  return follow_wake_label(
+      SLACK, floor_ts, permalink, "用 slack 技能从上面 floor 标注的消息读起（conversations.replies，channel 与 thread_ts 从链接解析）；",
+      "读到的消息用 `charliebot slack ack --message-id <ts> [...]` 确认，本轮沉默也要 ack；")
 
 
 async def handle_thread_message(

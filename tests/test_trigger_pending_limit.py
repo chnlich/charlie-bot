@@ -176,7 +176,10 @@ async def test_slack_follow_rearm_succeeds_on_a_full_session(tmp_path: Path) -> 
         session_id,
         floor="1700000000.000100",
         wake_label=lambda floor: adapter.follow_wake_message(floor, "https://slack/p"),
-        log_fields={"channel": "C1", "thread_ts": "1700000000.000100"},
+        log_fields={
+            "channel": "C1",
+            "thread_ts": "1700000000.000100"
+        },
     )
 
   assert trigger is not None

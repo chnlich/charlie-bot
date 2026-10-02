@@ -338,7 +338,6 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
       f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 
 
-
 async def handle_thread_message(
     event: dict,
     cfg: CharlieBotConfig,

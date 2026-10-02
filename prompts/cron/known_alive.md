@@ -463,3 +463,13 @@ Known-alive symbols:
   on that evidence: the cancel tests' `patch(CHAT_CANCEL_MASTER_PATCH_TARGET, ...)`
   resolves the attribute through the loader and raises AttributeError, and the chat cancel
   endpoint breaks on its first production call.
+- `model_rows` (`src/core/usage_ledger.py`, on `UsageLedger`) — reached by the perf sweep's
+  doc-embedded collectors: `scripts/perf_sweep.py` executes `docs/perf_baseline.md`'s
+  collector blocks verbatim, and the standing M7 (token-usage page) and M80 (changed round
+  under append churn) collectors call `ledger.model_rows()` for the rows digest and the timed
+  row read. Inside the Python tree the only callers are the ledger tests, which reach the
+  served path through the delegation (`model_rows` is exactly
+  `model_rows_with_native_starts()[0]`), so vulture flags the method as an unused method and a
+  Python-only reference scan reads it as a test-only wrapper. Never delete it on that
+  evidence: the sweep rounds that digest rows die with AttributeError (the collector-failure
+  class the ledger refactor's 2026-09-29 history row documents).

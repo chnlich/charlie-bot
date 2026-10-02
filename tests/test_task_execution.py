@@ -894,156 +894,165 @@ async def test_implement_delivery_requires_review_and_real_landing(
 
 
 def _advance_origin_from_second_clone(tmp_path: Path, origin: Path, filename: str) -> str:
-    """Push one commit to the bare origin from a second clone; returns the new tip."""
-    second = tmp_path / "second-clone"
-    subprocess.run(["git", "clone", "-q", str(origin), str(second)], check=True)
-    run_git(second, "config", "user.email", "t@example.com")
-    run_git(second, "config", "user.name", "t")
-    (second / filename).write_text("advance\n")
-    run_git(second, "add", "-A")
-    run_git(second, "commit", "-q", "-m", f"advance origin via {filename}")
-    run_git(second, "push", "-q", "origin", "main")
-    return run_git(second, "rev-parse", "refs/heads/main")
+  """Push one commit to the bare origin from a second clone; returns the new tip."""
+  second = tmp_path / "second-clone"
+  subprocess.run(["git", "clone", "-q", str(origin), str(second)], check=True)
+  run_git(second, "config", "user.email", "t@example.com")
+  run_git(second, "config", "user.name", "t")
+  (second / filename).write_text("advance\n")
+  run_git(second, "add", "-A")
+  run_git(second, "commit", "-q", "-m", f"advance origin via {filename}")
+  run_git(second, "push", "-q", "origin", "main")
+  return run_git(second, "rev-parse", "refs/heads/main")
 
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_bare_branch_base_behind_starts_from_origin_tip(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The bare-branch base form when the shared checkout's local branch is only
+async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The bare-branch base form when the shared checkout's local branch is only
     behind origin (the 2026-09-26 incident shape): the Run launches anyway, its
     work branch starts at the origin tip, and the local main ref is untouched."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "main",  # the bare form: local main is judged against origin/main
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
-                               "Take off and implement the marker file.")
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  repo, origin = init_repo_with_origin(tmp_path)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {
+      "goal": "## Goal\n\nadd a marker file\n",
+      "repo_path": str(repo),
+      "base_branch": "main",  # the bare form: local main is judged against origin/main
+      "task_type": "implement",
+      "keep_worktree": False,
+  }
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
-    # Origin gains a commit from a second clone while the fixture repo's local
-    # main stays put: local main is strictly behind origin/main.
-    origin_tip = _advance_origin_from_second_clone(tmp_path, origin, "ahead.txt")
-    local_main = run_git(repo, "rev-parse", "main")
-    assert local_main != origin_tip
+  # Origin gains a commit from a second clone while the fixture repo's local
+  # main stays put: local main is strictly behind origin/main.
+  origin_tip = _advance_origin_from_second_clone(tmp_path, origin, "ahead.txt")
+  local_main = run_git(repo, "rev-parse", "main")
+  assert local_main != origin_tip
 
-    work_backend = SpawningScriptedBackend([result_event("implemented")])
-    review_backend = SpawningScriptedBackend([result_event("review ok")])
-    install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  work_backend = SpawningScriptedBackend([result_event("implemented")])
+  review_backend = SpawningScriptedBackend([result_event("review ok")])
+  install_backends(monkeypatch, [work_backend, review_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model", repo_path=str(repo), base_branch="main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(
+      id="run-work",
+      session_id=worker.id,
+      kind="work",
+      backend="fake",
+      model="fake-model",
+      repo_path=str(repo),
+      base_branch="main")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
-    assert outcome == "success"
-    assert work_run.worktree_path
-    work_wt = Path(work_run.worktree_path)
-    # The work branch started at the new origin tip, never at the stale local main.
-    assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
-    assert run_git(repo, "rev-parse", "main") == local_main
+  work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+  assert outcome == "success"
+  assert work_run.worktree_path
+  work_wt = Path(work_run.worktree_path)
+  # The work branch started at the new origin tip, never at the stale local main.
+  assert run_git(work_wt, "rev-parse", "HEAD") == origin_tip
+  assert run_git(repo, "rev-parse", "main") == local_main
 
-    # The header the worker page projects for the launched Run: plain success,
-    # both refs pointing at the files the launch produced.
-    from src.core import worker_transcript
-    entry = worker_transcript.load_worker_transcript(tree, worker.id)
-    work_header = next(m for m in entry.projection.committed
-                       if m.get("kind") == ET.RUN_HEADER and m.get("run_id") == "run-work")
-    assert work_header["state"] == "success"
-    assert work_header["launched"] is True and work_header["launch_failed"] is False
-    assert Path(work_header["task_spec_ref"]).is_file()
-    assert Path(work_header["launch_prompt_ref"]).is_file()
+  # The header the worker page projects for the launched Run: plain success,
+  # both refs pointing at the files the launch produced.
+  from src.core import worker_transcript
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  work_header = next(
+      m for m in entry.projection.committed if m.get("kind") == ET.RUN_HEADER and m.get("run_id") == "run-work")
+  assert work_header["state"] == "success"
+  assert work_header["launched"] is True and work_header["launch_failed"] is False
+  assert Path(work_header["task_spec_ref"]).is_file()
+  assert Path(work_header["launch_prompt_ref"]).is_file()
 
-    # The chain settles through the real delivery path: the work branch adds
-    # nothing beyond its base, so the review lands it and the task completes.
-    reports: list[dict] = []
-    deadline = asyncio.get_event_loop().time() + 15
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-        if reports and reports[-1]["outcome"] == "completed":
-            break
-        await asyncio.sleep(0.05)
-    assert reports and reports[-1]["outcome"] == "completed"
-    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  # The chain settles through the real delivery path: the work branch adds
+  # nothing beyond its base, so the review lands it and the task completes.
+  reports: list[dict] = []
+  deadline = asyncio.get_event_loop().time() + 15
+  while asyncio.get_event_loop().time() < deadline:
+    reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+    if reports and reports[-1]["outcome"] == "completed":
+      break
+    await asyncio.sleep(0.05)
+  assert reports and reports[-1]["outcome"] == "completed"
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
 
 
 @pytest.mark.asyncio
 async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The case the bare-branch base check still refuses: the local branch holds
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The case the bare-branch base check still refuses: the local branch holds
     commits absent from origin. The real launch path lands the durable failure,
     and the worker page's header reads "launch failed" with the error text
     exactly once, a recorded task spec, and no launch prompt."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "main",
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
-                               "Take off and implement the marker file.")
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {
+      "goal": "## Goal\n\nadd a marker file\n",
+      "repo_path": str(repo),
+      "base_branch": "main",
+      "task_type": "implement",
+      "keep_worktree": False,
+  }
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
-    # One unpushed commit on the fixture repo's local main: origin does not
-    # have it, so the base check fails closed.
-    (repo / "local_only.txt").write_text("local work\n")
-    run_git(repo, "add", "-A")
-    run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
-    local_tip = run_git(repo, "rev-parse", "main")
+  # One unpushed commit on the fixture repo's local main: origin does not
+  # have it, so the base check fails closed.
+  (repo / "local_only.txt").write_text("local work\n")
+  run_git(repo, "add", "-A")
+  run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unpushed local commit")
+  local_tip = run_git(repo, "rev-parse", "main")
 
-    work_backend = SpawningScriptedBackend([result_event("never runs")])
-    install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  work_backend = SpawningScriptedBackend([result_event("never runs")])
+  install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model", repo_path=str(repo), base_branch="main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(
+      id="run-work",
+      session_id=worker.id,
+      kind="work",
+      backend="fake",
+      model="fake-model",
+      repo_path=str(repo),
+      base_branch="main")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
-    assert outcome == "failed"
-    # The real launch-failure path: the Run never spawned (no started_at, the
-    # backend double never ran), and the durable evidence carries the error.
-    assert work_run.started_at is None
-    assert work_backend.prompt is None
-    error_text = _read_error_event(tree.runs.run_dir(worker.id, "run-work") / "events.jsonl")
-    assert "BaseBranchResolutionError" in error_text
-    assert "differs from origin/main" in error_text
-    assert local_tip[:12] in error_text
-    assert "fast-forward" not in error_text
+  work_run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
+  assert outcome == "failed"
+  # The real launch-failure path: the Run never spawned (no started_at, the
+  # backend double never ran), and the durable evidence carries the error.
+  assert work_run.started_at is None
+  assert work_backend.prompt is None
+  error_text = _read_error_event(tree.runs.run_dir(worker.id, "run-work") / "events.jsonl")
+  assert "BaseBranchResolutionError" in error_text
+  assert "differs from origin/main" in error_text
+  assert local_tip[:12] in error_text
+  assert "fast-forward" not in error_text
 
-    from src.core import worker_transcript
-    entry = worker_transcript.load_worker_transcript(tree, worker.id)
-    messages = entry.projection.committed
-    header = messages[0]
-    assert header["kind"] == ET.RUN_HEADER
-    assert header["state"] == "failed"
-    assert header["content"].endswith("launch failed")
-    assert header["launched"] is False and header["launch_failed"] is True
-    assert header["error"] == error_text
-    # The error text appears exactly once across the projection: only in the
-    # header's error field, never as an ordinary row.
-    assert [m for m in messages if error_text in str(m.get("content") or "")] == []
-    assert [m for m in messages if m.get("error") == error_text] == [header]
-    assert header["task_spec_ref"] != "" and Path(header["task_spec_ref"]).is_file()
-    assert header["launch_prompt_ref"] == ""  # never assembled: no process started
+  from src.core import worker_transcript
+  entry = worker_transcript.load_worker_transcript(tree, worker.id)
+  messages = entry.projection.committed
+  header = messages[0]
+  assert header["kind"] == ET.RUN_HEADER
+  assert header["state"] == "failed"
+  assert header["content"].endswith("launch failed")
+  assert header["launched"] is False and header["launch_failed"] is True
+  assert header["error"] == error_text
+  # The error text appears exactly once across the projection: only in the
+  # header's error field, never as an ordinary row.
+  assert [m for m in messages if error_text in str(m.get("content") or "")] == []
+  assert [m for m in messages if m.get("error") == error_text] == [header]
+  assert header["task_spec_ref"] != "" and Path(header["task_spec_ref"]).is_file()
+  assert header["launch_prompt_ref"] == ""  # never assembled: no process started
 
-    # The failed launch reported to the parent through the real after-run path.
-    report = await _wait_for_parent_report(tree, manager.id)
-    assert report.get("outcome") == "failed"
-    assert "differs from origin/main" in str(report.get("summary"))
+  # The failed launch reported to the parent through the real after-run path.
+  report = await _wait_for_parent_report(tree, manager.id)
+  assert report.get("outcome") == "failed"
+  assert "differs from origin/main" in str(report.get("summary"))
 
 
 # ---------------------------------------------------------------------------

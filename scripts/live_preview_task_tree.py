@@ -631,16 +631,16 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT / "preview_live_evidence"),
-                        help="Where the results JSON lands")
-    parser.add_argument("--backend", default=DEFAULT_BACKEND,
-                        help="The charlie-code backend id the trial instance runs")
-    parser.add_argument("--keep", action="store_true",
-                        help="Keep the preview home for inspection instead of purging it")
-    args = parser.parse_args()
-    asyncio.run(run_harness(args))
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+      "--evidence-dir",
+      default=str(EVIDENCE_ROOT_DEFAULT / "preview_live_evidence"),
+      help="Where the results JSON lands")
+  parser.add_argument("--backend", default=DEFAULT_BACKEND, help="The charlie-code backend id the trial instance runs")
+  parser.add_argument("--keep", action="store_true", help="Keep the preview home for inspection instead of purging it")
+  args = parser.parse_args()
+  asyncio.run(run_harness(args))
 
 
 if __name__ == "__main__":
-    main()
+  main()

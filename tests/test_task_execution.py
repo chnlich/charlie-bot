@@ -773,120 +773,122 @@ async def test_first_terminal_fact_wins_governs_followups(
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path)
-    manager = await create_task(tree, parent=None, request_id="root")
-    task_spec = {
-        "goal": "## Goal\n\nadd a marker file\n",
-        "repo_path": str(repo),
-        "base_branch": "origin/main",
-        "task_type": "implement",
-        "keep_worktree": False,
-    }
-    worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker",
-                               task=_task_spec(tree, task_spec))
-    pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager,
-                                           "Take off and implement the marker file.")
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  manager = await create_task(tree, parent=None, request_id="root")
+  task_spec = {
+      "goal": "## Goal\n\nadd a marker file\n",
+      "repo_path": str(repo),
+      "base_branch": "origin/main",
+      "task_type": "implement",
+      "keep_worktree": False,
+  }
+  worker = await create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
+  pm_builds = await _launch_manager_turn(
+      cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
-    # The work run holds until the test has committed the implementation into
-    # the isolated worktree (the fake backend writes no commits itself).
-    work_committed: asyncio.Event = asyncio.Event()
-    work_backend = SpawningScriptedBackend(
-        [result_event("implemented")], gate=work_committed.wait)
+  # The work run holds until the test has committed the implementation into
+  # the isolated worktree (the fake backend writes no commits itself).
+  work_committed: asyncio.Event = asyncio.Event()
+  work_backend = SpawningScriptedBackend([result_event("implemented")], gate=work_committed.wait)
 
-    push_state = {"enabled": False}
+  push_state = {"enabled": False}
 
-    def reviewer_push() -> None:
-        """The reviewer's landing work: rebase the branch onto the target and push."""
-        if not push_state["enabled"]:
-            return  # this review passes judgment without landing the branch
-        record = tree.runs.read_run_sync(worker.id, "run-work")
-        assert record is not None and record.worktree_path and record.branch_name
-        work_wt = Path(record.worktree_path)
-        for args in (("fetch", "-q", "origin"),
-                     ("rebase", "-q", "origin/main"),
-                     ("push", "-q", "origin", f"{record.branch_name}:main")):
-            run_git(work_wt, *args)
+  def reviewer_push() -> None:
+    """The reviewer's landing work: rebase the branch onto the target and push."""
+    if not push_state["enabled"]:
+      return  # this review passes judgment without landing the branch
+    record = tree.runs.read_run_sync(worker.id, "run-work")
+    assert record is not None and record.worktree_path and record.branch_name
+    work_wt = Path(record.worktree_path)
+    for args in (("fetch", "-q", "origin"), ("rebase", "-q", "origin/main"), ("push", "-q", "origin",
+                                                                              f"{record.branch_name}:main")):
+      run_git(work_wt, *args)
 
-    review_backend = SpawningScriptedBackend([result_event("review ok")], pre_run=reviewer_push)
-    review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
-    install_backends(
-        monkeypatch, [work_backend, review_backend, review_retry_backend],
-        WORKER_BUILD_BACKEND_PATCH_TARGET)
+  review_backend = SpawningScriptedBackend([result_event("review ok")], pre_run=reviewer_push)
+  review_retry_backend = SpawningScriptedBackend([result_event("review ok again")], pre_run=reviewer_push)
+  install_backends(monkeypatch, [work_backend, review_backend, review_retry_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-    record = RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                       model="fake-model", repo_path=str(repo), base_branch="origin/main")
-    await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
-    tree.dispatch.executor.launch(worker.id, "run-work")
+  record = RunRecord(
+      id="run-work",
+      session_id=worker.id,
+      kind="work",
+      backend="fake",
+      model="fake-model",
+      repo_path=str(repo),
+      base_branch="origin/main")
+  await tree.runs.register_run(record, task_spec_text=task_spec["goal"])
+  tree.dispatch.executor.launch(worker.id, "run-work")
 
-    # The worker's implementation is its commit in the isolated worktree: wait
-    # for the worktree, then land the work commit on the work branch.
-    wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
-    assert wt.is_dir()
-    (wt / "marker.txt").write_text("implemented\n")
-    run_git(wt, "add", "-A")
-    run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
-    work_committed.set()
+  # The worker's implementation is its commit in the isolated worktree: wait
+  # for the worktree, then land the work commit on the work branch.
+  wt = await wait_for_worktree(tree, worker.id, "run-work", timeout=10.0)
+  assert wt.is_dir()
+  (wt / "marker.txt").write_text("implemented\n")
+  run_git(wt, "add", "-A")
+  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  work_committed.set()
 
-    await wait_for_review_terminal(tree, worker.id, timeout=10.0, what="the review chain")
+  await wait_for_review_terminal(tree, worker.id, timeout=10.0, what="the review chain")
 
-    runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
-    review_runs = [r for r in runs.values() if r.kind == "review"]
-    assert len(review_runs) == 1
-    review_run = review_runs[0]
-    # The review reuses the work Run's exact repo, branch and worktree.
-    work_run = runs["run-work"]
-    assert review_run.review_of_run_id == "run-work"
-    assert review_run.repo_path == work_run.repo_path
-    assert review_run.branch_name == work_run.branch_name
-    assert review_run.worktree_path == work_run.worktree_path
-    # Review-only success is not delivery: the work commit never landed on the
-    # requested target, so the task stays open with a blocked report and the
-    # worktree preserved.
-    assert tree.task_state(worker.id) == "open"
-    # The blocked report rides the delivery chain's own awaits (the landing
-    # check shells out to git), so it can land after the review's terminal
-    # fact is readable; wait for it the way the waits above wait for the
-    # worktree and the terminal fact.
-    reports: list[dict] = []
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-        if reports and reports[-1]["outcome"] == "blocked":
-            break
-        await asyncio.sleep(0.05)
-    assert reports and reports[-1]["outcome"] == "blocked"
-    assert Path(work_run.worktree_path).exists()
-
-    # The explicit authorized retry of the review — this time with the
-    # reviewer's landing work enabled — executes through the same launch path,
-    # and its landing completes the delivery.
-    push_state["enabled"] = True
-    retry = await tree.create_retry(worker.id, "review-retry-1", review_run.id)
-    assert retry["run_id"]
-    decision = await tree.dispatch.dispatch_pending(worker.id)
-    assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
-    retry_review, retry_outcome = await wait_for_terminal_run(tree, worker.id, retry["run_id"])
-    assert retry_outcome == "success"
-    assert retry_review.review_of_run_id == "run-work"
-
-    deadline = asyncio.get_event_loop().time() + 10
-    while asyncio.get_event_loop().time() < deadline:
-        if tree.task_state(worker.id) == "completed":
-            break
-        await asyncio.sleep(0.1)
-    assert tree.task_state(worker.id) == "completed"
+  runs = {r.id: r for r in tree.runs.list_run_records_sync(worker.id)}
+  review_runs = [r for r in runs.values() if r.kind == "review"]
+  assert len(review_runs) == 1
+  review_run = review_runs[0]
+  # The review reuses the work Run's exact repo, branch and worktree.
+  work_run = runs["run-work"]
+  assert review_run.review_of_run_id == "run-work"
+  assert review_run.repo_path == work_run.repo_path
+  assert review_run.branch_name == work_run.branch_name
+  assert review_run.worktree_path == work_run.worktree_path
+  # Review-only success is not delivery: the work commit never landed on the
+  # requested target, so the task stays open with a blocked report and the
+  # worktree preserved.
+  assert tree.task_state(worker.id) == "open"
+  # The blocked report rides the delivery chain's own awaits (the landing
+  # check shells out to git), so it can land after the review's terminal
+  # fact is readable; wait for it the way the waits above wait for the
+  # worktree and the terminal fact.
+  reports: list[dict] = []
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
     reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
-    assert reports[-1]["outcome"] == "completed"
-    finished = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.RUN_FINISHED]
-    assert [e["outcome"] for e in finished][-1] == "success"
+    if reports and reports[-1]["outcome"] == "blocked":
+      break
+    await asyncio.sleep(0.05)
+  assert reports and reports[-1]["outcome"] == "blocked"
+  assert Path(work_run.worktree_path).exists()
 
-    # The delivered blocked and completed reports each triggered the parent's
-    # next serialized turn, and the parent consumed them staying open.
-    await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
-    assert pm_builds, "the delivered reports never triggered a parent manager turn"
-    assert tree.task_state(manager.id) == "open"
+  # The explicit authorized retry of the review — this time with the
+  # reviewer's landing work enabled — executes through the same launch path,
+  # and its landing completes the delivery.
+  push_state["enabled"] = True
+  retry = await tree.create_retry(worker.id, "review-retry-1", review_run.id)
+  assert retry["run_id"]
+  decision = await tree.dispatch.dispatch_pending(worker.id)
+  assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
+  retry_review, retry_outcome = await wait_for_terminal_run(tree, worker.id, retry["run_id"])
+  assert retry_outcome == "success"
+  assert retry_review.review_of_run_id == "run-work"
+
+  deadline = asyncio.get_event_loop().time() + 10
+  while asyncio.get_event_loop().time() < deadline:
+    if tree.task_state(worker.id) == "completed":
+      break
+    await asyncio.sleep(0.1)
+  assert tree.task_state(worker.id) == "completed"
+  reports = [e for e in tree.events.load_events(manager.id) if e["type"] == ET.CHILD_REPORT]
+  assert reports[-1]["outcome"] == "completed"
+  finished = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.RUN_FINISHED]
+  assert [e["outcome"] for e in finished][-1] == "success"
+
+  # The delivered blocked and completed reports each triggered the parent's
+  # next serialized turn, and the parent consumed them staying open.
+  await _settle_parent(tree, manager, timeout=30.0, poll=0.2)
+  assert pm_builds, "the delivered reports never triggered a parent manager turn"
+  assert tree.task_state(manager.id) == "open"
 
 
 # ---------------------------------------------------------------------------

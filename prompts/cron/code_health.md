@@ -45,11 +45,30 @@ topic is a closed `code-health/*` pull request carrying a comment that starts
       '.[] | select(.headRefName | startswith("code-health/"))
        | select(any(.comments[].body; startswith("code-health-abandoned:"))) | .headRefName'
 
+Google Python Style conformance is a standing cleanup category, read from one probe:
+`tools/check-google-style.sh` lists every file YAPF would reformat and every import that
+names a symbol instead of a module (Google Python Style Guide 2.2: `from src.core import models`,
+then `models.SessionMetadata`). While the probe reports findings, the run takes its cleanup from
+them: a file YAPF would reformat comes first, then import conversions, starting from the file
+whose last commit on `main` is oldest, since that file is the least likely to sit in another
+session's open work. Each style PR carries one kind of change: a formatting PR holds YAPF output
+alone, and an import PR converts imports together with their call sites and the test patch
+targets that named the old import site. The probe is the record of style work, so the
+rejected-topic ledger leaves style files in play: an abandoned style PR's comment reads
+`code-health-abandoned: google-style <path>: <reason>`, and that file waits until the probe
+reports no other file, then returns. With the probe clean, the categories above apply as written.
+
 Open no PR when nothing survives the scan; a no-PR run's summary names what you checked.
 
 Step 2: respect the diff budget.
 Keep a PR diff at 300 lines or fewer. When you hit that budget in one PR, stop adding to it and
 leave the remainder to a later run.
+
+A formatting PR is the one case outside this budget: its diff is YAPF output alone, it carries
+the `split-series` label that the CI contract check requires above 300 lines, and its
+`## Evidence` quotes the probe reporting the file clean plus an `ast.dump` comparison showing
+each file's syntax tree unchanged. An import PR keeps the budget and may convert part of one
+file's imports.
 
 Step 3: delete only with full evidence.
 Before deleting any symbol, produce three pieces of evidence, all three quoted verbatim in the PR
@@ -79,6 +98,13 @@ with a slug that self-describes the cleanup topic. The body names every deleted 
 an `## Evidence` section: the Step 3 command-plus-output triple for each deletion, and for a
 cleanup-mode PR the vulture/grep probes plus the full-suite green line.
 
+A style PR's `## Evidence` carries the probe's finding count for the touched files before and
+after in place of the vulture and grep probes, plus the full-suite green line. An import PR adds
+a name-collision check on the touched files: `uv run ruff check` clean, and
+`uv run pylint --disable=all --enable=redefined-outer-name` printing no line that names a module
+the PR imports, because a local variable named like the imported module would capture its call
+sites.
+
 Step 6: review the diff on the pull request.
 Compose the review task file: `prompts/cron/code_review_prompt.md` verbatim, plus one
 final line `PR: <number> <url>`. Run the review with the repo's own reviewer CLI from a
@@ -98,6 +124,10 @@ import form, and docstring claims against source; its stdout is an NDJSON event 
 whose final `result` event carries the verdict in `final_output`. Post the verdict as
 one PR comment (findings, or the no-issues record), then act on findings on the same
 branch before merging; judging the design direction stays with the human reading the PR. A review that cannot run (endpoint unreachable, run cut short, or any other cause) MUST be reported explicitly with the reason in the run's final summary; a silent skip is a contract violation.
+
+A formatting PR's review is its evidence: the PR comment records the skip-note naming the
+`ast.dump` comparison, because a syntax tree that compares equal proves the change preserves
+behavior.
 
 Step 7: land it, or abandon it.
 Wait for the checks in this run:

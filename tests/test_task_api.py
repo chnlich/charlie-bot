@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -153,6 +154,44 @@ async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation
   assert task_mgr.activity_of(worker).work_state == "waiting"
   await task_mgr.runs.request_stop(worker, "r-stop", "stop-1")
   assert task_mgr.activity_of(worker).work_state == "idle"
+
+
+@pytest.mark.asyncio
+async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None:
+  """The facts and outcome memos key on the events cache's list identity alone;
+  the recycle is archive_offset's only writer and it rewrites the live file and
+  drops the events cache in the same flow, so the replaced list is what re-keys
+  the fold. Warm and cold folds must agree after the move and after a
+  post-recycle append: a writer that bumped the offset without that drop would
+  leave the warm memo folding the suffix at a stale archived base — silently
+  wrong facts on every tree page and sidebar probe."""
+  _cfg, session_mgr, task_mgr = task_env
+  ids = await seed_tree(task_mgr)
+  worker = ids["worker"]
+  await task_mgr.runs.register_run(RunRecord(id="r1", session_id=worker))
+  await task_mgr.runs.record_finish(worker, "r1", "completed")
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+  cutoff = datetime.now(UTC) + timedelta(hours=1)
+  result = await session_mgr.recycle_scheduled_session(worker, cutoff)
+  assert result["events_archived"] > 0
+  meta = await session_mgr.get_session(worker)
+  assert meta is not None and meta.archive_offset == result["events_archived"]
+
+  # The rotation replaced the events cache's list, so the warm fold re-keyed
+  # and re-folded from the archived half: r1's fact survives the move.
+  assert task_mgr.activity_of(worker).work_state == "idle"
+
+  await task_mgr.runs.register_run(RunRecord(id="r2", session_id=worker))
+  await task_mgr.runs.record_finish(worker, "r2", "completed")
+  warm = task_mgr._run_outcomes_of(worker, task_mgr._sessions.load_chat_events_sync(worker), meta.archive_offset)
+  assert warm == {"r1": "completed", "r2": "completed"}
+
+  task_mgr._facts_memo.clear()
+  task_mgr._outcomes_memo.clear()
+  cold_live = task_mgr._sessions.load_chat_events_sync(worker)
+  cold_count = task_mgr._archived_event_count(worker, cold_live)
+  assert task_mgr._run_outcomes_of(worker, cold_live, cold_count) == warm
 
 
 @pytest.mark.asyncio

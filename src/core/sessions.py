@@ -3073,7 +3073,7 @@ class SessionManager:
         if force_full:
           # The every-10th sweep serves the polls that follow it: its stores
           # bump the generation and the next poll re-derives with its results.
-          self._schedule_sidebar_sweep([m for m in sessions if m.status != SessionStatus.ARCHIVED])
+          self.schedule_sidebar_sweep([m for m in sessions if m.status != SessionStatus.ARCHIVED])
         return cached
 
     # Archived sessions cannot have running tasks or pending triggers, so skip
@@ -3100,7 +3100,7 @@ class SessionManager:
       # it runs detached (single-flight), so the poll's wall stays at the
       # dirty-set cost and a missed mark heals one poll later, inside the same
       # every-10th window. force=1 keeps its synchronous full probe.
-      self._schedule_sidebar_sweep(active_sessions)
+      self.schedule_sidebar_sweep(active_sessions)
       force_full = False
     metas_by_id = {meta.id: meta for meta in active_sessions}
     if force_full:
@@ -3151,7 +3151,7 @@ class SessionManager:
     sidebar_state.store_derived_map((ids, flags, generation), derived)
     return derived
 
-  def _schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:
+  def schedule_sidebar_sweep(self, sessions: list[SessionMetadata]) -> None:
     """Run the every-10th-poll self-heal sweep detached from the caller's request.
 
     Single-flight: a sweep still running covers the window, so a poll landing

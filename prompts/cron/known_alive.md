@@ -483,10 +483,14 @@ Known-alive symbols:
   (list poll, its `?etag=` conditional and the marked rebuild), M59 (detail
   row, full and `?attach=1`, asserting the two-key attach body) and M34
   (events fetch, the `after=` envelope) collectors drive exactly these routes
-  through an in-process ASGI app mounting this router. The web UI's workers
-  panel — the routes' original browser client — is gone (its JS files were
-  deleted), so a whole-repo URL grep finds no fetch of the three GET paths
-  outside the baseline doc, and the zero client reads can read as a deletable
-  surface. Never delete them on that evidence: the collectors' contract
-  assertions then fail on the 404 body ("attach-mode contract changed", the
-  collector-failure class the baseline doc's history rows document).
+  through an in-process ASGI app mounting this router, the live smoke harness
+  GETs the detail route's alias resolution
+  (`/api/threads/{owner}/threads/{run}` in `scripts/live_smoke_task_tree.py`),
+  and the routes' own tests fetch all three. The web UI's workers panel — the
+  routes' original browser client — is gone (its JS files were deleted), so a
+  `web/` + `src/cli/` grep finds no fetch of the three GET paths, and the zero
+  browser reads can read as a deletable surface. Never delete them on that
+  evidence: the collectors' contract assertions then fail on the 404 body
+  ("attach-mode contract changed", the collector-failure class the baseline
+  doc's history rows document), the smoke harness's alias check fails, and the
+  tests lose their routes.

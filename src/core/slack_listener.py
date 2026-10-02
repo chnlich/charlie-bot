@@ -50,18 +50,14 @@ from src.core import thread_entry, timeouts
 from src.core.config import CharlieBotConfig, get_credentials
 from src.core.http import get_http_client
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import PendingTrigger, SlackOrigin
+from src.core.models import SlackOrigin
 from src.core.sessions import SessionManager
-
-# _NO_REPLY_NOTICE keeps its importable Slack name for the delivery tests.
-from src.core.thread_entry import _NO_REPLY_NOTICE as _NO_REPLY_NOTICE
 from src.core.thread_entry import (
     LINKED_PAGES_LINE,
     ThreadAdapter,
     ThreadMessage,
     ThreadPlatform,
     ThreadReplyError,
-    lost_summons,
     summon_prompt_tail,
 )
 from src.core.triggers import TriggerManager
@@ -342,33 +338,6 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
       f"只在值得时用 `{_REPLY_COMMAND} --file <path>` 回复。")
 
 
-async def _arm_follow_trigger(
-    trigger_mgr: TriggerManager,
-    session_id: str,
-    channel_id: str,
-    thread_ts: str,
-    permalink: str,
-    floor_ts: str,
-) -> PendingTrigger | None:
-  """Cancel-then-create the session's one persisted follow trigger; the shared core on the Slack platform.
-
-  Kept as the importable Slack name (the pending-trigger-limit tests call it
-  with the channel/thread arguments); the cancel-then-create mechanics, the
-  chain-start stamp, and the floor parse-back live in the shared core
-  (``thread_entry.arm_follow_trigger``).
-  """
-  return await thread_entry.arm_follow_trigger(
-      SLACK,
-      trigger_mgr,
-      session_id,
-      floor=floor_ts,
-      wake_label=lambda floor: _build_follow_wake_message(floor, permalink),
-      log_fields={
-          "channel": channel_id,
-          "thread_ts": thread_ts
-      })
-
-
 async def handle_thread_message(
     event: dict,
     cfg: CharlieBotConfig,
@@ -552,15 +521,6 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
 # ---------------------------------------------------------------------------
 # Boot backfill
 # ---------------------------------------------------------------------------
-
-
-def _lost_summons(events: list[dict], *, owned: set[str], running: set[str]) -> list[dict]:
-  """The lost Slack summons of one session's log; the shared check on the Slack platform.
-
-  Kept as the importable Slack name (tests call it with the owned/running
-  keywords); the boot backfill goes through the shared core directly.
-  """
-  return lost_summons(SLACK, events, owned=owned, running=running)
 
 
 async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:

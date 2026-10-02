@@ -151,6 +151,41 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
 
 
 @pytest.mark.asyncio
+async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,) -> None:
+  """A permanent deletion bumps the generation the body memo keys on.
+
+  The memo keys on the requested ids, so a poll still carrying a just-deleted
+  id — a second open client, or the deleter's client before its listing
+  refresh — must miss and rebuild without the row. A deletion that failed to
+  bump would memo-hit at the unchanged generation and serve the deleted
+  session's ghost row for a full memo lifetime.
+  """
+  sidebar_state.reset_for_tests()
+  cfg = build_tui_sessions_cfg(tmp_path)
+  session_mgr = SessionManager(cfg)
+  kept = await session_mgr.create_session(CreateSessionRequest(name="Survivor"))
+  gone = await session_mgr.create_session(CreateSessionRequest(name="Deleted"))
+  ids = f"{kept.id},{gone.id}"
+
+  with _build_client(cfg, session_mgr) as client:
+    first = client.get(f"/api/sessions/status?ids={ids}")
+    assert first.status_code == 200
+    assert set(first.json()) == {kept.id, gone.id}
+    # The first poll's own probe stores bump the generation past its key; the
+    # second poll primes the memo at the generation that is current now, so a
+    # delete that fails to bump would memo-hit the ghost row below.
+    second = client.get(f"/api/sessions/status?ids={ids}")
+    assert second.status_code == 200
+    assert set(second.json()) == {kept.id, gone.id}
+
+    await session_mgr.delete_session_permanently(gone.id)
+
+    third = client.get(f"/api/sessions/status?ids={ids}")
+    assert third.status_code == 200
+    assert set(third.json()) == {kept.id}
+
+
+@pytest.mark.asyncio
 async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,) -> None:
   """Every listing row leaves the manager stamped and derived, as its own copy.
 

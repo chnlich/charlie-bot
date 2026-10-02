@@ -2039,6 +2039,11 @@ class SessionManager:
       await asyncio.to_thread(cleanup_session_cgroup, session_id)
       self._drop_session_runtime_state(session_id)
       self._invalidate_cache(session_id)
+      # The sidebar's whole-body memo keys on (requested ids, generation), so a
+      # deletion must bump the generation or a poll still carrying the deleted
+      # id serves the ghost row. The mark is never consumed — the fold probes
+      # resolved sessions only — and that is fine; the bump is the point.
+      sidebar_state.mark_sidebar_dirty(session_id)
       # Popping the lock from the dict while holding it is safe: the popped lock
       # object stays valid for this holder until the ``async with`` exits.
       self._metadata_locks.pop(session_id, None)

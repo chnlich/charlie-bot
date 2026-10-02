@@ -787,11 +787,11 @@ async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> lis
 
 # The /status poll's whole-body memo: (requested ids, sidebar generation) -> the
 # rendered body bytes. Every payload input sits behind the sidebar generation
-# (mark_sidebar_dirty bumps it for busy flips and every metadata write,
-# store_snapshot_entry for probe stores) — the row set included, because a
-# session's creation or deletion is a metadata write — so an unchanged
-# generation proves the stored body current and the hit path serves it without
-# resolving the ids at all. The requested ids key the memo: the sidebar asks
+# (mark_sidebar_dirty bumps it for busy flips, every metadata write through
+# save_metadata's funnel, and every whole-session deletion through
+# delete_session_permanently; store_snapshot_entry for probe stores) — the row
+# set included — so an unchanged generation proves the stored body current and
+# the hit path serves it without resolving the ids at all. The requested ids key the memo: the sidebar asks
 # for exactly the rows it renders, and a row leaves the request set when the
 # listing that feeds the sidebar refreshes. Keyed at the generation the
 # request started at: a bump that lands mid-handler keys the next poll's

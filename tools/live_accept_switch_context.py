@@ -75,6 +75,9 @@ import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
+from src.core import event_types as ET  # noqa: E402
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.core.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
@@ -90,9 +93,6 @@ from tools.live_smoke_task_tree import (  # noqa: E402
     start_server,
     tree_run_dir,
 )
-from src.core import event_types as ET  # noqa: E402
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
-from src.core.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
 
 # The four backend ids the legs switch between; both cc-claude entries must
 # share one login directory (no account pool in the synthetic config) so they

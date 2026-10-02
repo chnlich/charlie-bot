@@ -43,6 +43,7 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
+from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,
@@ -70,7 +71,6 @@ from tools.live_preview_task_tree import (  # noqa: E402
     snapshot_native_storage,
     wait_run_terminal,
 )
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
 PRODUCTION_HOMES = (
     Path.home() / ".charliebot",

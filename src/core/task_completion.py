@@ -75,11 +75,11 @@ LANDING_REF_PREFIX = "landed:"
 class LandingEvidence:
   """Target-branch landing proof one completion claim names.
 
-    The execution-stage adapters supply the actual artifacts; this stage
-    validates the claim against the task's frozen Run records (the landing
-    branch must be a branch this task's runs were based on) and leaves the
-    commit's merge verification to the adapters' own checks.
-    """
+  The execution-stage adapters supply the actual artifacts; this stage
+  validates the claim against the task's frozen Run records (the landing
+  branch must be a branch this task's runs were based on) and leaves the
+  commit's merge verification to the adapters' own checks.
+  """
 
   branch: str
   commit: str
@@ -90,11 +90,11 @@ class LandingEvidence:
 class CompletionEvidence:
   """The internal evidence bundle a completion claim carries.
 
-    Manual complete builds it from the request body; the execution stage's
-    automatic worker completion builds it from the run's recorded artifacts.
-    ``review_run_ids`` and ``landing`` carry the implement workflow's review
-    and target-branch delivery evidence.
-    """
+  Manual complete builds it from the request body; the execution stage's
+  automatic worker completion builds it from the run's recorded artifacts.
+  ``review_run_ids`` and ``landing`` carry the implement workflow's review
+  and target-branch delivery evidence.
+  """
 
   summary: str = ""
   result_refs: list[str] = field(default_factory=list)

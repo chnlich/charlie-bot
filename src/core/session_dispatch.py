@@ -700,10 +700,10 @@ class TaskInputDispatcher:
 def input_event_type_for_caller(caller: object) -> str:
   """The input type a verified caller identity may produce on a message route.
 
-    Browser and operator credentials are user input; a run-token agent on the
-    same route stays agent input with its own session's provenance — it can
-    never manufacture a real USER event or another caller's provenance.
-    """
+  Browser and operator credentials are user input; a run-token agent on the
+  same route stays agent input with its own session's provenance — it can
+  never manufacture a real USER event or another caller's provenance.
+  """
   from src.core.run_token import CallerIdentity
   from src.core.task_sessions import TaskForbiddenError
 

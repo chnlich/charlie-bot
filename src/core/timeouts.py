@@ -351,3 +351,8 @@ SQLITE_LOCK_WAIT_MS = 2000  # milliseconds — PRAGMA busy_timeout for VACUUM
 # whole life (no busy_timeout pragma lowers it): the scheduler's capture upserts
 # wait out a concurrent reader's transaction instead of failing the capture.
 USAGE_LEDGER_LOCK_WAIT_SECONDS = 30  # seconds
+
+# The /token-usage page load borrows the connection for one capture plus one read inside
+# one request, so a lock held longer than this turns the load into a skipped capture (the
+# stored rows serve) instead of a 30 s stall at every reader of the page.
+USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS = 1.0  # seconds

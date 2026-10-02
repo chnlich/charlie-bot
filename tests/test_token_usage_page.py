@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import re
+import sqlite3
+import time
 from pathlib import Path
 
 import pytest
 from conftest import make_page_request
 
 from src.api import pages
+from src.core.timeouts import USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS
 from src.core.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
 
 CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
@@ -216,6 +219,56 @@ async def test_failed_capture_clears_itself_so_the_next_request_renders(
   assert {(r["model"], r["output"]) for r in _data_rows(body)} == {
       ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
   }
+
+
+@pytest.mark.asyncio
+async def test_locked_capture_serves_the_stored_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """A capture that timed out on the ledger's write lock renders the stored rows: the lock
+  says this load could not add rows, not that the stored rows are wrong."""
+  _seeded_ledger(monkeypatch, tmp_path)
+
+  def locked(ledger: UsageLedger) -> dict[str, int]:
+    raise sqlite3.OperationalError("database is locked")
+
+  monkeypatch.setattr("src.core.token_tally.capture_local", locked)
+  response = await pages.token_usage_viewer(make_page_request("/token-usage"))
+  assert response.status_code == 200
+  assert {(r["model"], r["output"]) for r in _data_rows(response.body.decode("utf-8"))} == {
+      ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
+  }
+
+
+@pytest.mark.asyncio
+async def test_capture_operational_error_other_than_lock_still_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The lock fallback stays narrow: every other sqlite error still fails the request."""
+  _seeded_ledger(monkeypatch, tmp_path)
+
+  def broken(ledger: UsageLedger) -> dict[str, int]:
+    raise sqlite3.OperationalError("no such table: usage")
+
+  monkeypatch.setattr("src.core.token_tally.capture_local", broken)
+  with pytest.raises(sqlite3.OperationalError, match="no such table"):
+    await pages.token_usage_viewer(make_page_request("/token-usage"))
+
+
+def test_set_lock_wait_bounds_how_long_a_write_waits_out_a_lock(tmp_path: Path) -> None:
+  """The page's short bound is the busy handler's ceiling: a write against a held write
+  transaction raises within it instead of outlasting the request that set the bound."""
+  ledger_path = tmp_path / "usage" / "ledger.sqlite3"
+  with UsageLedger(ledger_path) as ledger:  # schema first: the blocker's lock must not eat the open
+    blocker = sqlite3.connect(ledger_path, timeout=5)
+    try:
+      blocker.execute("CREATE TABLE page_probe (x)")  # uncommitted write transaction: the lock held
+      blocker.execute("INSERT INTO page_probe VALUES (1)")
+      ledger.set_lock_wait(USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS)
+      started = time.monotonic()
+      with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        ledger.record_gate("host", "/logs/x.jsonl", (1, 1), None, "sig")
+      assert time.monotonic() - started < USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS * 10
+    finally:
+      blocker.rollback()
+      blocker.close()
 
 
 def test_spellings_of_one_model_merge_into_one_row() -> None:

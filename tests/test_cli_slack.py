@@ -7,8 +7,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import (
     CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
-    make_json_response,
     patched_cli_post,
+    run_reply_file_case,
     run_reply_stdin_case,
 )
 from conftest import setup_session_cwd as _setup_session_cwd
@@ -20,18 +20,7 @@ _READBACK = {"posted": True, "chars": 10, "chunks": 1, "over_budget": False, "an
 
 def test_reply_posts_the_file_text_for_the_cwd_session_and_prints_the_readback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
-  reply_file = tmp_path / "reply.md"
-  reply_file.write_text("the answer", encoding="utf-8")
-  resp = make_json_response(_READBACK)
-  with patched_cli_post(cfg, ["slack", "reply", "--file", str(reply_file)], return_value=resp) as post_mock:
-    main()
-
-  assert post_mock.call_args.args[0].endswith("/api/internal/slack/reply")
-  assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": "the answer"}
-  out = capsys.readouterr().out
-  assert out.count("\n") == 1
-  assert json.loads(out) == _READBACK
+  run_reply_file_case(monkeypatch, tmp_path, capsys, "slack", _READBACK)
 
 
 def test_reply_reads_stdin_when_the_file_is_a_dash(

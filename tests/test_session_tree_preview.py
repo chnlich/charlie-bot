@@ -22,6 +22,7 @@ import yaml
 from fastapi import WebSocket
 
 import src.core.session_tree_preview as preview_module
+from scripts.browser_harness_session_tree import pick_free_port
 from src.core.session_tree_preview import (
     PreviewRefusedError,
     PreviewUnavailableGate,
@@ -119,14 +120,10 @@ def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
     occupied = sock.getsockname()[1]
     with pytest.raises(PreviewRefusedError, match="not free"):
       check_port(occupied, source_server_port=18498)
-  free = _free_port()
+  free = pick_free_port()
   check_port(free, source_server_port=18498)
 
 
-def _free_port() -> int:
-  with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.bind(("127.0.0.1", 0))
-    return int(sock.getsockname()[1])
 
 
 # ---------------------------------------------------------------------------
@@ -299,5 +296,5 @@ def test_cli_refuses_symlinked_home_resolving_into_production(tmp_path: Path, so
   link.symlink_to(source_home / "nested-deeper")
   _refusal(
       tmp_path, source_home,
-      ["--home", str(link), "--port", str(_free_port()), "--backend", "clc-test"], "overlaps the production home")
+      ["--home", str(link), "--port", str(pick_free_port()), "--backend", "clc-test"], "overlaps the production home")
   assert not (source_home / "nested-deeper").exists()

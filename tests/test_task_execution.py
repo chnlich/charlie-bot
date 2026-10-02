@@ -1200,7 +1200,7 @@ async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkey
 
 
 def _task_spec(tree: TaskTreeManager, spec: dict):
-  from src.core.models import TaskSpec, TaskType
+  from src.core.models import TaskType
   return TaskSpec(
       goal=spec["goal"],
       context_refs=[],

@@ -214,8 +214,6 @@ def _seed_prompt_file_task(cron_dir: Path, tmp_path: Path, *, backend: str | Non
 
 
 def test_load_cron_file_loads_prompt_file(tmp_path: Path) -> None:
-  from src.core.config import CharlieBotConfig
-
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
   cfg = CharlieBotConfig(charliebot_home=tmp_path)

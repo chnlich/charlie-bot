@@ -95,6 +95,13 @@ def _codex_count(last: dict, total: dict, ts: str = "ts") -> dict:
   return codex_token_count_event(ts, info={"last_token_usage": last, "total_token_usage": total})
 
 
+def _codex_count_solo(ts: str) -> dict:
+  """One token_count event whose last usage equals its total (60 in, 20 cached, 7 out):
+  the one-call rollout shape whose derived 40/20/7 row values the tests assert."""
+  solo = {"input_tokens": 60, "cached_input_tokens": 20, "output_tokens": 7}
+  return _codex_count(solo, solo, ts)
+
+
 def _write_rollout(codex: Codex, sid: str, lines: list[dict]) -> Path:
   """One rollout named for *sid* — the file-name shape the real homes carry — with *lines*
   its whole record list, so fork trees and appended tails are written to order."""
@@ -399,16 +406,7 @@ def _claude_codex_corpus(tmp_path: Path) -> tuple[Claude, Codex]:
       "rollout", [
           _codex_meta(session_id="rolloutroot1"),
           _codex_turn("codex-some"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, "2024-01-03T00:00:00Z"),
+          _codex_count_solo("2024-01-03T00:00:00Z"),
       ])
   return claude, codex
 
@@ -637,16 +635,7 @@ def test_capture_supersedes_the_legacy_id_rows_of_its_rollout(tmp_path: Path) ->
       codex, sid, [
           _codex_meta(session_id=sid),
           _codex_turn("codex-m1"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, "2026-09-10T00:00:00Z"),
+          _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
 
   def legacy(legacy_sid: str, count: int) -> list[UsageRecord]:
@@ -683,16 +672,7 @@ def test_codex_signature_version_gates_the_skip(tmp_path: Path) -> None:
       codex, "sigthread1", [
           _codex_meta(session_id="sigthread1"),
           _codex_turn("codex-m1"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, "2026-09-10T00:00:00Z"),
+          _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     st = path.stat()
@@ -710,16 +690,7 @@ def test_codex_append_tail_parse_matches_a_full_parse(tmp_path: Path) -> None:
       codex, "tailthread1", [
           _codex_meta(session_id="tailroot1"),
           _codex_turn("codex-m1"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, "2026-09-10T00:00:00Z"),
+          _codex_count_solo("2026-09-10T00:00:00Z"),
           _codex_count(
               {
                   "input_tokens": 30,
@@ -886,16 +857,7 @@ def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
       codex, "norootthread1", [
           _codex_meta(),
           _codex_turn("codex-m1"),
-          _codex_count(
-              {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, {
-                  "input_tokens": 60,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 7
-              }, "2026-09-10T00:00:00Z"),
+          _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(ValueError, match="norootthread1"):
     _capture(None, codex, ledger)

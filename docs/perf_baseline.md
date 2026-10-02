@@ -44,7 +44,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M31 worker-log summary read, worker completion | M31 collector below | seconds per `_worker_summary_from_events_log` call (the completion path's surviving worker-log read; the pre-refactor subject `read_events_summary` left with the legacy thread executor), worst on-disk worker log | median < 0.02 s | — (introduced with its first history row) |
 | M32 memory-store assemble, steady state | M32 collector below | seconds per `assemble_master` call, live memory corpus | median < 0.005 s | — (introduced with its first history row) |
 | M33 assistant-stream draft render, full-turn replay | M33 collector below | seconds per replay of the largest on-disk assistant draft, 200 B deltas at 40 ms virtual cadence | median < 0.1 s | — (introduced with its first history row) |
-| M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log; the re-open repeat of the full fetch (the panel re-opening an unchanged log — the cold first parse + first deflate of a fresh body is the one-time cost, reported not priced) | after=total median < 0.002 s (recalibrated from < 0.02 s: the old line sat on the TestClient/httpx harness floor the 2026-09-17 repair removed — the served path reads 0.39-0.47 ms, the vacuous-read class the M36/M59/M71 repairs called out; see the 2026-09-17 history row); empty-tail body < 200 B; full fetch repeat median < 0.002 s (recalibrated with the same repair: the served re-open reads 1.11-1.17 ms after the FastJSON+gzip-memo landing, 1.85-2.00 ms before it); full fetch body < 200 KB | — (introduced with its first history row) |
+| M34 worker-events poll fetch at rendered count | M34 collector below | seconds + response bytes per events fetch, worst on-disk worker log; the re-open repeat of the full fetch (the deleted workers panel re-opening an unchanged log — the cold first parse + first deflate of a fresh body is the one-time cost, reported not priced) | after=total median < 0.002 s (recalibrated from < 0.02 s: the old line sat on the TestClient/httpx harness floor the 2026-09-17 repair removed — the served path reads 0.39-0.47 ms, the vacuous-read class the M36/M59/M71 repairs called out; see the 2026-09-17 history row); empty-tail body < 200 B; full fetch repeat median < 0.002 s (recalibrated with the same repair: the served re-open reads 1.11-1.17 ms after the FastJSON+gzip-memo landing, 1.85-2.00 ms before it); full fetch body < 200 KB | — (introduced with its first history row) |
 | M35 chat message-page responses, steady state | M35 collector below | seconds per request, worst projection corpus | events page median < 0.004 s (recalibrated from < 0.03 s: the old line sat on the TestClient harness floor and never saw the middleware's deflate — the repaired raw-ASGI drive reads the served path at 1.0-1.4 ms across the landing round's loads 2.4-3.0, the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
 | M36 worker list poll payload and handler time, steady state | M36 collector below | seconds per list request + response body bytes, worst thread-metadata corpus; the conditional repeat (?etag=) of an unchanged poll | full median < 0.002 s (recalibrated from < 0.004 s: the 2026-09-15 repair removed the TestClient/httpx harness floor — the served path read 1.3-1.6 ms across that round's loads 3.1-3.7, the cron-collision bias the M56 history documents — and the same day's gzip-memo landing reads 0.62-0.69 ms; see both 2026-09-15 history rows); full decoded body < 200 KB; conditional body 0 B (204) | — (introduced with its first history row) |
 | M37 archived-session chat tail page, steady state | M37 collector below | seconds per `parse_ndjson_tail(200)` call, worst on-disk archived live file | median < 0.005 s | — (introduced with its first history row) |
@@ -99,7 +99,7 @@ PR, and a calibration-only round may open a docs-only PR of under 50 lines.
 | M90 backend stdout pump, per chunk or startup line | M90 collector below | seconds per 8 KB chunk pumped through the opencode stdout pump (the streamed pump shape) and per startup line append (the run-start shape) to the covered backends' stdout.log | chunk median < 0.00003 s; line median < 0.0002 s | — (introduced with its first history row) |
 | M91 worker per-event quota-scan head, streamed-turn replay | M91 collector below | seconds per `Worker._process_event` call over a full-corpus replay of the worst on-disk worker events log — per-event median, worst single event, and the replay's total wall (scratch append target, zero-subscriber broadcast) | per-event median < 0.0002 s; worst single event < 0.020 s (recalibrated from < 1.0 ms: the worst on-disk worker log now carries one 9.5 MB tool_result line whose orjson dumps + page-cache write floor measures ~13-14 ms — the funnel's floor; the 2026-09-11 range was set on the 234 KB-era corpus. The write half rides the host's dirty-page state — writeback throttling stretches one 9.5 MB append past 200 ms while a backlog drains, and the pre-fix shape this line guards reads 75.8-80.1 ms, inside that stall band, so no line separates a regression from host state: a tripped reading whose per-event median holds the ~5 us append floor re-reads next round, the M56 collision convention); replay wall median < 0.30 s | — (introduced with its first history row) |
 | M92 CLI invocation startup, common-family command | M92 collector below | seconds per `charliebot` invocation's import-and-dispatch floor (`schedule-trigger --help`: fresh process, the shared `src.cli.common` chain, no server round trip); a real common-family command (delegate/plan/improve) pays the same floor plus its request | median < 0.10 s (recalibrated from < 0.40 s: the config-deferral landing's readings sit 0.044-0.047 s, ~8x under the old line the three earlier deferral rows had already been shaving toward) | — (introduced with its first history row) |
-| M93 thread-detail 500s, per 24 h server log | M93 collector below | 500 responses per newest server log for `GET /api/threads/{sid}/threads/{tid}` (the workers panel's per-thread detail fetch and its 5 s `?attach=1` poll — a 500 here fails the poll continuously while the panel is open, and each failure ships a ~30-line traceback into the log) | 0 | 9 (the AttributeError 500s the 2026-09-11 cli-binary fix removed; the live server carries the fix from its next deploy on) |
+| M93 thread-detail 500s, per 24 h server log | M93 collector below | 500 responses per newest server log for `GET /api/threads/{sid}/threads/{tid}` (the deleted workers panel's per-thread detail fetch and its 5 s `?attach=1` poll — a 500 here failed that poll continuously while the panel was open, and each failure ships a ~30-line traceback into the log) | 0 | 9 (the AttributeError 500s the 2026-09-11 cli-binary fix removed; the live server carries the fix from its next deploy on) |
 | M94 projection page + stream-delta serialization, giant-tool-output corpus | M94 collector below | tail-40 page body bytes + its json.dumps wall + the projection build wall; streamed replay serialized MB + dumps wall (the live broadcast shape: one json.dumps per emitted delta) | page body median < 1 MB; streamed replay serialized median < 30 MB and dumps wall median < 0.130 s (recalibrated from < 0.060 s: the dumps wall is the same replay's own stdlib re-serialization of the deltas the serialized sub-metric counts — ~237 MB/s measured on both the landing-day and the 2026-09-15 corpora — so the serialized line's 30 MB bound implies ~127 ms, and the old line sat below that floor on the landing day's 6.3 MB corpus; the corpus's largest tool_result grew 1.11 → 13.77 MB since — see the 2026-09-15 history row) | — (introduced with its first history row) |
 | M95 worker-log newest-first scans, reviewer completion + failed improve iteration | M95 collector below | seconds per reviewer-completion worker-summary scan (early stop at the first answer); seconds per failed-iteration judgment pair (the quota scan and the summary sharing one newest-first pass), worst on-disk worker log | review median < 0.001 s; judgment-pair median < 0.004 s (recalibrated from < 0.005 s / < 0.012 s: the mapped backward scan removed the walk's window reads — the pair's 4.0 ms BufferedReader.read slice on the 9.5 MB tool_result line the head filter rejects; see the 2026-09-18 history row) | — (introduced with its first history row) |
 | M96 switch-bootstrap chat payload, active-session sweep | M96 collector below | body bytes per `GET /api/sessions/{id}/bootstrap` over the active-session set (the SPA switch's fetch — the live `diag_switch` telemetry carries the client-measured switch elapsed it feeds; the sidebar list's projected worker-leaf rows are excluded — a leaf's id is a thread id and no bootstrap fetch exists for it); the after-cap body carries each tool's 500-char input/output previews with their truncation markers, full text on the persisted event | median body < 0.15 MB; max body < max(0.60 MB, worst-session tool rows × 0.0011 MB) (recalibrated from < 0.60 MB: the fixed line priced the 2026-09-12 post-trim corpus whose worst session carried 371 KB, and the payload's weight is the messages' ``tools`` arrays — the worst live turn now carries 1007 previewed tool rows at 769 B/row with the trim's caps verified holding on the live wire (max raw output exactly the 500-char preview, 0 rows over; max raw input 555 B), so the line tracks the turn corpus the way the M72 entry line does; a tripped reading is still read as host load first — the cron-collision bias the M56 history documents) | — (introduced with its first history row) |
@@ -370,7 +370,7 @@ EOF
 ```
 
 M5 — threads/list latency for the session with the most thread metadata files on disk (the worst
-case the 3 s workers-panel poll can hit; the key is read read-only from the host credentials):
+case the deleted workers panel's 3 s poll could hit; the key is read read-only from the host credentials):
 
 ```bash
 KEY=$(awk '/^charliebot:/{f=1;next} f&&/^  access_key:/{print $2;exit}' ~/.charliebot/credentials.yaml); read SID N <<<"$(python3 -c '
@@ -667,7 +667,7 @@ M10 — thread-metadata torn reads: the invariant behind the threads/list endpoi
 coordination against `save_metadata`'s rewrite, so a save that publishes the file
 truncated lets a concurrent poll observe a half-written file; that read fails
 `ThreadMetadata` validation and 500s the whole list response (the same failure the
-3 s workers-panel poll hits). The collector cannot drive that race through HTTP on the
+deleted workers panel's 3 s poll hit). The collector cannot drive that race through HTTP on the
 live instance without writing to its state, so it reproduces the race against the main
 checkout's code with scratch state: 3000 `save_metadata` calls on one thread's file
 while four reader threads validate every read. A torn read under this stream is a read
@@ -776,7 +776,7 @@ print(f"{len(rollouts)} rollout files; steady-state usage scrape median {times[2
 EOF
 ```
 
-M13 — thread-events read+transform, steady state. The workers panel polls
+M13 — thread-events read+transform, steady state. The deleted workers panel polled
 `GET /api/threads/{sid}/threads/{tid}/events` every 5 s for each expanded
 running worker, and the endpoint projects the worker's whole events log on
 every call. The cost is invisible to HTTP probes of the standing metrics, so
@@ -949,7 +949,7 @@ EOF
 
 M16 — trigger-file torn reads: the invariant behind the trigger files the polls read.
 `_save_trigger` rewrites a trigger's JSON on schedule/cancel/fire while
-`list_triggers` (the 3 s workers-panel poll, the session view) and the sidebar
+`list_triggers` (the deleted workers panel's 3 s poll, the session view) and the sidebar
 probe (`pending_trigger_state_sync`) read it from executor threads with no
 coordination; a save that publishes the file truncated lets a concurrent read
 observe a half-written file, fail JSON parsing, and drop the trigger from that
@@ -1566,7 +1566,7 @@ shutil.rmtree(home)
 EOF
 ```
 
-M24 — trigger list, steady state. The 3 s workers-panel poll
+M24 — trigger list, steady state. The deleted workers panel's 3 s poll
 (`GET /api/threads/{sid}/list`) and the session view render call
 `TriggerManager.list_triggers`, whose pre-fix form read and parsed every
 trigger file of the session on every call. The cost is invisible to the
@@ -2109,8 +2109,8 @@ worktree root, live state read-only), the same shape as the M18 protocol:
 CHECKOUT=${CHECKOUT:-$HOME/workspace/charlie-bot} node "$HOME/workspace/charlie-bot/tests/stream_render_collector.js"
 ```
 
-M34 — worker-events poll fetch at the client's rendered count. The 5 s
-workers-panel events poll served the whole projected history every round —
+M34 — worker-events poll fetch at the client's rendered count. The deleted
+workers panel's 5 s events poll served the whole projected history every round —
 860706 B and 2177 events for the worst on-disk log; the projection itself
 is memoized (M13), but serialization, transfer, and the client's full
 innerHTML rebuild stayed O(history) per poll. The endpoint's ``after=N``
@@ -2123,7 +2123,7 @@ ride pre-dumped rows through FastJsonResponse (a Response skips
 response_model's jsonable_encoder pass, ~6x ``model_dump`` on mapped
 returns), and the full fetch's gzip form rides the body-keyed memo — one
 off-loop deflate per distinct projection, ``Content-Encoding`` set upstream
-so the middleware skips (the M59/M71 mechanism); the panel's re-open of an
+so the middleware skips (the M59/M71 mechanism); the deleted workers panel's re-open of an
 unchanged log is the repeat shape the full-fetch line prices, the cold
 first parse + first deflate of a fresh body is the panel's one-time cost
 and is reported, not priced. The collector copies
@@ -2411,8 +2411,8 @@ finally:
 EOF
 ```
 
-M36 — worker list poll payload and handler time, steady state. The 3 s
-workers-panel poll (``GET /api/threads/{sid}/list``) serves an unchanged
+M36 — worker list poll payload and handler time, steady state. The deleted
+workers panel's 3 s poll (``GET /api/threads/{sid}/list``) serves an unchanged
 session from the whole-body memo; a poll repeating the ETag it rendered via
 ``?etag=`` gets a bodyless 204 instead of the full rows, so the steady state
 transfers zero body bytes and the client skips its JSON.parse. The conditional
@@ -3779,7 +3779,7 @@ EOF
 
 M56 — sidebar status poll, steady state. The sidebar polls `GET /api/sessions/status?ids=…` every
 3 s per open dashboard tab with the sessions it renders (this host's second-busiest route after
-the workers-panel list); the handler resolves every id's metadata plus the derived sidebar state
+the deleted workers panel's list); the handler resolves every id's metadata plus the derived sidebar state
 and the pre-fix mapped return paid FastAPI's jsonable_encoder pass over the 41-row dict. The cost
 is per-poll latency invisible to the standing HTTP probes (M3 reads the 401 floor), so the
 collector drives the endpoint raw-ASGI — the served path the middleware and route actually run; a
@@ -3997,12 +3997,12 @@ print(f"{frag} config.d entries; steady-state get_config "
 EOF
 ```
 
-M59 — worker thread-detail poll payload and handler time, steady state. The workers panel polls
+M59 — worker thread-detail poll payload and handler time, steady state. The deleted workers panel polled
 `GET /api/threads/{sid}/threads/{tid}` every 5 s per expanded running worker (in the same
 `Promise.all` as the M34 events poll) and the pre-fix route served the whole row — description-KB
 payload, an uncached aiofiles read+parse per call, and FastAPI's response-model validation plus
 jsonable_encoder render — for the client to read two derived fields (`attach_command`,
-`attach_available`); the full row remains the description modal's once-per-click fetch. The cost
+`attach_available`); the full row was the description modal's once-per-click fetch. The cost
 is a poll slice invisible to the standing HTTP probes, so the collector drives the endpoint
 raw-ASGI — the served path the middleware and route actually run; a TestClient drive adds ~1.5 ms
 of httpx harness per request and skips the gzip middleware whose deflate the browser's poll always
@@ -4553,9 +4553,9 @@ EOF
 ```
 
 M68 — worker-list marked changed-poll rebuild. During an active turn the running
-worker's metadata.json rewrites continuously, so nearly every 3 s poll of that
-session's workers panel takes the list body's rebuild path instead of the M36
-memo hit. The rebuild's shape is one writer mark plus one poll; the collector
+worker's metadata.json rewrites continuously, so nearly every 3 s poll the deleted
+workers panel made of that session's worker list takes the list body's rebuild path instead of
+the M36 memo hit. The rebuild's shape is one writer mark plus one poll; the collector
 copies the session whose threads directory carries the most metadata bytes into
 a scratch `CHARLIEBOT_HOME` under /tmp (live home read once for the copy, never
 written), wires the copy through the config dependency the endpoint resolves
@@ -6643,9 +6643,9 @@ print(f"checkout {os.path.basename(CHECKOUT)}: schedule-trigger --help (import+d
 EOF
 ```
 
-M93 — thread-detail 500s. The workers panel polls `GET /api/threads/{sid}/threads/{tid}`
-(`?attach=1` every 5 s per expanded thread row, full row on click); a 500 here fails that
-poll continuously while the panel is open and each failure ships a ~30-line traceback into
+M93 — thread-detail 500s. The deleted workers panel polled `GET /api/threads/{sid}/threads/{tid}`
+(`?attach=1` every 5 s per expanded thread row, full row on click); a 500 here failed that
+poll continuously while the panel was open and each failure ships a ~30-line traceback into
 the server log beside the structured `http_request … status=500` line the count matches.
 The count reads the newest server log (its filename carries the server start time) and
 appends `|| [ $? -eq 1 ]` for the same reason M11's count does: `grep -c` exits 1 on the
@@ -6954,8 +6954,10 @@ history's run-start marker (the stable-history projection's interval key — loa
 durable append is by design) and the worker funnel keeps it as the worker log's session-id
 record (the token tally's codex reconciliation reads the id from the raw line). Neither funnel
 renders it: a signal line without a type fails WorkerEvent validation on every cold
-read+transform of that log and renders a `type='raw'` row in the workers panel, and the worker
-funnel broadcasts a frame no subscriber reads. The signal writes state, so the collector drives
+read+transform of that log, whose projection answers with a `type='raw'` row (the deleted
+workers panel was the row's only renderer), and the worker funnel broadcasts a frame no
+subscriber reads. The signal
+writes state, so the collector drives
 both funnels over a scratch `CHARLIEBOT_HOME` under /tmp (scratch chat file and scratch worker
 log; live home untouched): the master funnel through the real `persist_and_broadcast` (the
 marker-line parity witness), the worker funnel through a real Worker on a real O_APPEND fd with

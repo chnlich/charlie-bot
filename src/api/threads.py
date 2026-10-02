@@ -69,10 +69,10 @@ log = LazyStructlogLogger()
 
 router = APIRouter()
 
-# Cap on the description prefix shipped in the workers-panel list rows; the
-# card paints one CSS-truncated line (overflow hidden + ellipsis), so 100 chars
-# — a text-sm line at ~700 px — already exceeds what any width shows. Longer
-# text reaches the modal through the description_full_len click-fetch.
+# Cap on the description prefix shipped in every thread row: a row never
+# carries task-spec-length description text (~KB each), so the list and view
+# bodies stay bounded on delegation-heavy sessions. A truncated row carries
+# ``description_full_len``, the length behind the prefix.
 _LIST_DESCRIPTION_CAP = 100
 
 # One wire sentence for every thread-missing 404, whatever the endpoint raised it.
@@ -242,16 +242,13 @@ def _v2_run_list_item(
 
 
 def _thread_list_item(t: ThreadMetadata) -> dict:
-  """One thread row of the workers-panel list and session-view payloads.
+  """One thread row of the list body and the view-row payloads.
 
-  The description ships as a prefix: the card it backs paints one CSS-truncated
-  line and the full-text modal fetches the thread row on click, so neither
-  payload ships task-spec-length descriptions (~KB each). A truncated row
-  carries ``description_full_len`` so the client knows to fetch. Timestamps
-  (created/started/completed) ship as epoch milliseconds: the client reads
-  them through ``new Date()``, which accepts the integer and the ISO string
-  alike, and the int form halves their wire bytes on a body that scales with
-  the session's thread count.
+  The description ships as a prefix, never task-spec-length text (~KB each);
+  a truncated row carries ``description_full_len``, the length behind the
+  prefix. Timestamps (created/started/completed) ship as epoch milliseconds
+  — the int form halves their wire bytes on a body that scales with the
+  session's thread count.
   """
   description = t.description or ""
   item = {
@@ -269,14 +266,13 @@ def _thread_list_item(t: ThreadMetadata) -> dict:
   return item
 
 
-# Whole-body memo for the 3 s workers-panel list poll: body bytes per session
-# keyed on the union file signature. Every row field derives from thread
-# metadata.json files, and every writer rewrites them atomically (a rename
-# always moves mtime_ns), so an unchanged signature proves the built body is
-# still current. Single slot per session with an LRU
-# cap: one slot holds the worst body (its bytes scale with the session's
-# thread count), and deeper caps buy nothing because a session's poll reuses
-# its one slot.
+# Whole-body memo for the session list route: body bytes per session keyed on
+# the union file signature. Every row field derives from thread metadata.json
+# files, and every writer rewrites them atomically (a rename always moves
+# mtime_ns), so an unchanged signature proves the built body is still current.
+# Single slot per session with an LRU cap: one slot holds the worst body (its
+# bytes scale with the session's thread count), and deeper caps buy nothing
+# because a session's requests reuse its one slot.
 _LIST_BODY_MEMO_LIMIT = 8
 _list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
                                         str]] = BoundedMemo(_LIST_BODY_MEMO_LIMIT)
@@ -615,8 +611,8 @@ async def view_thread_rows(
   Serves the stored rows while the session's write revision stands; a mark
   rebuilds synchronously, and the countdown's insurance sweep runs detached
   (its fresh proof landing for the polls that follow). Rows are shared
-  read-only with the workers-panel list's row memo and sorted newest-first,
-  the list_threads order.
+  read-only with the list route's row memo and sorted newest-first, the
+  list_threads order.
   """
   hit = _view_rows_memo.get(session_id)
   rev = session_revision(session_id)
@@ -711,11 +707,9 @@ async def get_thread(
 ) -> Response:
   """Return a thread's metadata plus the derived attach pair.
 
-  With ``attach`` the response is only ``{"attach_command", "attach_available"}``
-  — the 5 s poll's shape (the poll reads nothing else of the row). Without it
-  the response is the full row minus ``context`` (the task-spec body; no HTTP
-  consumer reads it off this endpoint, and the modal fetches ``description``
-  once per click).
+  With ``attach`` the response is only ``{"attach_command", "attach_available"}``.
+  Without it the response is the full row minus ``context`` (the task-spec
+  body; this endpoint never ships it).
   """
   v2_run = await _resolve_v2_run(session_id, thread_id)
   if v2_run is not None:
@@ -774,10 +768,10 @@ async def _resolve_v2_run(owner_session_id: str, thread_id: str) -> tuple[str, s
   return (session_id, run_id) if run is not None else None
 
 
-# Reads from read_thread_worker_events, per events-log path. The workers-panel
-# poll re-reads the same append-only log every 5 s per expanded running worker,
-# so parsed results are retained and a call parses only the bytes appended since
-# the last one. A file that shrank (truncate/rewrite) restarts its entry.
+# Reads from read_thread_worker_events, per events-log path. Calls re-read the
+# same append-only log, so parsed results are retained and a call parses only
+# the bytes appended since the last one. A file that shrank (truncate/rewrite)
+# restarts its entry.
 _THREAD_EVENTS_CACHE_CAP = 32
 
 
@@ -837,9 +831,8 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
 def _thread_events_snapshot(events_path: Path) -> tuple[list[WorkerEvent], _ThreadEventsCacheEntry, int] | None:
   """Return the unchanged-log projection plus its store token, or None.
 
-  The 5 s workers-panel poll of an unchanged log needs one stat to
-  prove the memo current, and the executor round-trip around it measures
-  ~95 us against a ~12 us hit. Returns None — the caller re-runs
+  An unchanged-log hit needs one stat to prove the memo current, and the
+  executor round-trip around it measures ~95 us against a ~12 us hit. Returns None — the caller re-runs
   ``read_thread_worker_events`` on a thread — for a cold memo, a grown or
   shrunk log, or a lock held by a concurrent reader's incremental read: the
   holder may be mid-file-read, so this path never waits on the lock.
@@ -945,10 +938,9 @@ def _append_worker_events(
               WorkerEvent(
                   type=ET.TOOL_USE,
                   tool_name=block['name'],
-                  # The panel renders the same one-line input summary the chat
-                  # wire's renderer reads (toolInputSummary), so the row's
-                  # input rides the same preview bound; the persisted events
-                  # log keeps the full input.
+                  # The row's input rides the same preview bound the chat
+                  # wire's renderer reads (toolInputSummary); the persisted
+                  # events log keeps the full input.
                   input=tool_preview({
                       "name": block["name"],
                       "input": block.get('input', {})
@@ -1000,10 +992,10 @@ async def get_thread_events(
   """Return historical Worker events from the on-disk events.jsonl log.
 
   Without ``after`` the response is the full projected list. With ``after``
-  (the client's rendered raw count) it is an envelope ``{"events", "total",
-  "reset"}`` carrying only the events past that count; ``reset`` marks the
-  count as ahead of the projection (log replaced), so the client re-renders
-  the envelope's full payload. The projection is append-only
+  (the caller's already-rendered raw count) it is an envelope
+  ``{"events", "total", "reset"}`` carrying only the events past that count;
+  ``reset`` marks the count as ahead of the projection (log replaced), so the
+  caller rebuilds from the envelope's full payload. The projection is append-only
   (_append_worker_events never rewrites an emitted row), so a count inside
   it is a sound prefix cut.
   """

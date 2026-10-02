@@ -1,5 +1,7 @@
 import io
 import shutil
+import subprocess
+import sys
 import types
 from pathlib import Path
 
@@ -237,3 +239,42 @@ async def test_validate_hook_plugin_failure_writes_no_cache(
     await claude_sub._validate_hook_plugin(plugin_dir)
   assert len(calls) == 1
   assert not (tmp_path / "home" / "claude-sub-sessions" / "plugin-validate-cache.json").exists()
+
+
+def _hook_helper_path() -> Path:
+  return Path(claude_sub.__file__).with_name("claude_sub_hook.py").resolve()
+
+
+def test_hook_helper_gate_transport_failure_returns_rc2_without_signalling(tmp_path: Path) -> None:
+  """The registered gate path fails rc 2 and leaves the parent group alive."""
+  proc = subprocess.run(
+      [
+          sys.executable, "-S",
+          str(_hook_helper_path()), "--socket",
+          str(tmp_path / "absent.sock"), "--token", "t", "--gate"
+      ],
+      input=b"{}",
+      capture_output=True,
+      timeout=30,
+  )
+  assert proc.returncode == 2
+  assert b"transport failure" in proc.stderr
+
+
+def test_hook_helper_malformed_json_terminates_parent_group(tmp_path: Path) -> None:
+  """A malformed hook payload SIGTERMs the helper's parent group; a broken
+  terminate path would return rc 1 instead and leave the turn hanging."""
+  shim = (
+      "import subprocess, sys\n"
+      "subprocess.run([sys.executable, '-S', sys.argv[1], '--socket', sys.argv[2],"
+      " '--token', 't'], input=b'not-json', capture_output=True)\n")
+  # The shim leads its own session, so the helper's killpg lands on the shim's
+  # group alone and pytest's group survives.
+  proc = subprocess.run(
+      [sys.executable, "-c", shim, str(_hook_helper_path()),
+       str(tmp_path / "absent.sock")],
+      start_new_session=True,
+      capture_output=True,
+      timeout=30,
+  )
+  assert proc.returncode == -15

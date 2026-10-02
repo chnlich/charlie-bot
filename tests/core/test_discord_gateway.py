@@ -24,6 +24,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
     build_slack_cfg,
+    cancel_and_drain,
     fake_backends,
     make_task_spawner,
     stub_credentials,
@@ -186,13 +187,6 @@ async def _until(predicate: Callable[[], bool], timeout: float = 0.9) -> None:
     await _REAL_SLEEP(0.005)
 
 
-async def _stop(task: asyncio.Task) -> None:
-  """Cancel the listener and let its teardown land."""
-  task.cancel()
-  with contextlib.suppress(asyncio.CancelledError):
-    await task
-
-
 def _hello(interval_ms: int = 30_000) -> dict:
   return {"op": 10, "d": {"heartbeat_interval": interval_ms}}
 
@@ -234,7 +228,7 @@ async def test_identify_carries_token_and_intents(tmp_path: Path) -> None:
       }
       assert _INTENTS == 37377
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -246,7 +240,7 @@ async def test_heartbeat_carries_the_last_seq(tmp_path: Path) -> None:
     try:
       await _until(lambda: any(m == {"op": 1, "d": 7} for m in ws.sent))
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -262,7 +256,7 @@ async def test_acked_heartbeats_keep_beating_one_interval_apart(tmp_path: Path) 
       await _until(lambda: len([m for m in ws.sent if m.get("op") == 1]) >= 3)
       assert ws.closes == []
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -280,7 +274,7 @@ async def test_server_op1_is_answered_at_once(tmp_path: Path) -> None:
       assert ws.sent[0]["op"] == 2
       assert ws.sent[1:] == [{"op": 1, "d": None}]
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +294,7 @@ async def test_missing_ack_closes_and_reconnects(tmp_path: Path) -> None:
       assert ws1.closes[0] == 4000
       assert any(e["event"] == "discord_listener_connection_dropped" for e in logs)
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -319,7 +313,7 @@ async def test_op7_and_op9_end_the_connection_and_reconnect(tmp_path: Path) -> N
       for ws in (ws1, ws2, ws3):
         assert any(m.get("op") == 2 for m in ws.sent)
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -360,7 +354,7 @@ async def test_ready_runs_the_backfill_per_connection(tmp_path: Path) -> None:
       assert isinstance(trigger_arg, TriggerManager)
       assert any(e["event"] == "discord_listener_connected" for e in logs)
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 @pytest.mark.asyncio
@@ -382,7 +376,7 @@ async def test_message_create_reaches_the_handler_and_survives_its_errors(tmp_pa
       assert len(failed) == 1
       assert failed[0]["log_level"] == "error"
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 # ---------------------------------------------------------------------------
@@ -418,7 +412,7 @@ async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_pat
       assert missing[0]["guild"] == _GUILD
       assert missing[0]["missing"] == ["ADD_REACTIONS"]
     finally:
-      await _stop(task)
+      await cancel_and_drain(task)
 
 
 # ---------------------------------------------------------------------------

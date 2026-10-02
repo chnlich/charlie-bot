@@ -264,17 +264,6 @@ class TaskInputDispatcher:
     # Claims
     # ------------------------------------------------------------------
 
-    async def claim_input_batch(self, session_id: str, run_id: str, *, input_ids: list[str] | None = None) -> list[str]:
-        """Atomically bind the exact pending batch to *run_id* before launch.
-
-        Later arrivals stay pending for the next run. The binding is the run
-        record's own metadata write under the control lock, so a concurrent
-        consumer can never double-claim, and a finished or already-launched or
-        stop-requested run claims nothing.
-        """
-        async with self._tree.control_lock:
-            return await self.claim_input_batch_locked(session_id, run_id, input_ids=input_ids)
-
     async def claim_input_batch_locked(
         self, session_id: str, run_id: str, *, input_ids: list[str] | None = None
     ) -> list[str]:

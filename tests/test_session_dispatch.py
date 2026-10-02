@@ -50,7 +50,8 @@ class ScriptedExecutor:
     self.batches.append((session_id, batch_ids))
     run = await self.tree.runs.register_run(
         RunRecord(id=f"consumer-{self.counter}", session_id=session_id, kind="work"))
-    bound = await self.tree.dispatch.claim_input_batch(session_id, run.id)
+    async with self.tree.control_lock:
+      bound = await self.tree.dispatch.claim_input_batch_locked(session_id, run.id)
     assert bound == batch_ids
     if self.finish:
       await self.tree.dispatch.finish_run(session_id, run.id, outcome=self.outcome)
@@ -283,7 +284,8 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
   node = await create_task(tree, parent=None, request_id="node")
   await admit(tree, node.id, "work to do", input_id="job-1")
   queued = await tree.runs.register_run(RunRecord(id="run-queued", session_id=node.id))
-  await tree.dispatch.claim_input_batch(node.id, queued.id)
+  async with tree.control_lock:
+    await tree.dispatch.claim_input_batch_locked(node.id, queued.id)
   stop = await tree.runs.request_stop(node.id, "run-queued", "stop-1")
   assert stop.stop_requested is True and stop.outcome is None  # no exit was observed
 
@@ -294,7 +296,8 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
   assert executor.batches and executor.batches[0][1] == ["job-1"]
 
   with pytest.raises(TaskConflictError, match="stop request"):
-    await tree.dispatch.claim_input_batch(node.id, "run-queued")
+    async with tree.control_lock:
+      await tree.dispatch.claim_input_batch_locked(node.id, "run-queued")
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +538,8 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
         })
     assert ok.status_code == 409  # the worker's report is unprocessed input
     await tree.runs.register_run(RunRecord(id="run-root-turn", session_id=root.id, kind="manager_turn"))
-    await tree.dispatch.claim_input_batch(root.id, "run-root-turn")
+    async with tree.control_lock:
+      await tree.dispatch.claim_input_batch_locked(root.id, "run-root-turn")
     await tree.dispatch.finish_run(root.id, "run-root-turn", outcome="success")
     ok = client.post(
         f"/api/sessions/{root.id}/complete",
@@ -596,7 +600,8 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   task = await create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
   await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))
-  claimed = await tree.dispatch.claim_input_batch(task.id, "run-b")
+  async with tree.control_lock:
+    claimed = await tree.dispatch.claim_input_batch_locked(task.id, "run-b")
   assert claimed == ["in-1"]
   await tree.runs.register_run(RunRecord(id="run-a", session_id=task.id, kind="manager_turn"))
   with pytest.raises(RunInputMismatchError, match="claimed batch"):

@@ -25,9 +25,9 @@ Ownership boundaries it never crosses:
 
 Serialization evidence: concurrent dispatch calls reserve the consumer under
 the control lock — a fresh consumer binds the exact pending batch through
-``claim_input_batch``, so the second caller's claim comes back empty and it
-never spawns; a queued Run is launched through the in-process launch guard so
-two dispatch calls cannot both start it. The spawned process identity
+``claim_input_batch_locked`` inside that hold, so the second caller's claim
+comes back empty and it never spawns; a queued Run is launched through the
+in-process launch guard so two dispatch calls cannot both start it. The spawned process identity
 (``pid`` + ``pid_start``) lands on the Run before any call from its credential
 is accepted (:meth:`RunStore.record_launch` runs inside the backend's
 on_spawn callback, and the caller-identity dependency requires both fields).

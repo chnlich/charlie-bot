@@ -90,7 +90,7 @@ def _seed(path: Path) -> None:
 def _stub_capture(monkeypatch: pytest.MonkeyPatch, ledger_path: Path, written: dict[str, int]) -> None:
   monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
   monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: written)
-  monkeypatch.setattr(pages, "_backend_registry", dict)
+  monkeypatch.setattr("src.core.token_tally.backend_registry", dict)
 
 
 def _data_rows(body: str) -> list[dict]:

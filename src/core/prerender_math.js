@@ -4,7 +4,7 @@
 // katex.renderToString markup (pages ship pre-rendered), and writes the
 // transformed fragment to stdout.
 //
-//   node scripts/prerender_math.js <fragment-path> <katex.min.js-path>
+//   node src/core/prerender_math.js <fragment-path> <katex.min.js-path>
 //
 // The vendored katex.min.js (UMD build) is resolved by the caller
 // (src/core/artifact_wrap.py) and passed explicitly.
@@ -18,11 +18,11 @@
 // behavior.
 
 const fs = require('node:fs');
-const { mathSpan } = require('../web/static/js/math-scanner.js');
+const { mathSpan } = require('../../web/static/js/math-scanner.js');
 
 const [fragmentPath, katexPath] = process.argv.slice(2);
 if (!fragmentPath || !katexPath) {
-  console.error('usage: node scripts/prerender_math.js <fragment-path> <katex.min.js-path>');
+  console.error('usage: node src/core/prerender_math.js <fragment-path> <katex.min.js-path>');
   process.exit(2);
 }
 const katex = require(katexPath);

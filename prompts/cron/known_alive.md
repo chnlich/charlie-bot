@@ -465,7 +465,7 @@ Known-alive symbols:
   resolves the attribute through the loader and raises AttributeError, and the chat cancel
   endpoint breaks on its first production call.
 - `model_rows` (`src/core/usage_ledger.py`, on `UsageLedger`) — reached by the perf sweep's
-  doc-embedded collectors: `scripts/perf_sweep.py` executes `docs/perf_baseline.md`'s
+  doc-embedded collectors: `tools/perf_sweep.py` executes `docs/perf_baseline.md`'s
   collector blocks verbatim, and the standing M7 (token-usage page) and M80 (changed round
   under append churn) collectors call `ledger.model_rows()` for the rows digest and the timed
   row read. Inside the Python tree the only callers are the ledger tests, which reach the
@@ -479,14 +479,14 @@ Known-alive symbols:
   `.../events` routes under `server.py`'s `/api/threads` prefix) and the row
   shapes they serve (`description_full_len`, the attach pair
   `build_attach_command`/`_attach_available` build) — reached by the perf
-  sweep's doc-embedded collectors: `scripts/perf_sweep.py` executes
+  sweep's doc-embedded collectors: `tools/perf_sweep.py` executes
   `docs/perf_baseline.md`'s collector blocks verbatim, and the standing M36/M68
   (list poll, its `?etag=` conditional and the marked rebuild), M59 (detail
   row, full and `?attach=1`, asserting the two-key attach body) and M34
   (events fetch, the `after=` envelope) collectors drive exactly these routes
   through an in-process ASGI app mounting this router, the live smoke harness
   GETs the detail route's alias resolution
-  (`/api/threads/{owner}/threads/{run}` in `scripts/live_smoke_task_tree.py`),
+  (`/api/threads/{owner}/threads/{run}` in `tools/live_smoke_task_tree.py`),
   and the routes' own tests fetch all three. The web UI's workers panel — the
   routes' original browser client — is gone (its JS files were deleted), so a
   `web/` + `src/cli/` grep finds no fetch of the three GET paths, and the zero

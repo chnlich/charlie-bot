@@ -43,14 +43,14 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,
     open_evidence_dir,
     resolve_chrome,
     stop_child,
 )
-from scripts.browser_harness_session_tree_preview import (  # noqa: E402
+from tools.browser_harness_session_tree_preview import (  # noqa: E402
     PRODUCTION_PORT,
     build_source_home,
     open_authenticated_page,
@@ -59,7 +59,7 @@ from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     trial_home_root,
     wait_preview_ready,
 )
-from scripts.live_preview_task_tree import (  # noqa: E402
+from tools.live_preview_task_tree import (  # noqa: E402
     DEFAULT_BACKEND,
     build_synthetic_repo,
     fail,

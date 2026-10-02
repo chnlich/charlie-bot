@@ -70,7 +70,7 @@ import traceback  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
     EVIDENCE_ROOT_DEFAULT,

@@ -11,6 +11,7 @@ lifecycle automatically.
 - Type annotations on all functions
 - Docstrings for public APIs only
 - Test budget: a unit test under 2 s, a `@pytest.mark.integration` test under 10 s, at most 50 integration tests — `tests/conftest.py` enforces all three
+- `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (style and leak checks, git hooks, browser and live harnesses, builds, perf and eval runners) live in `tools/`.
 
 ## Git Conventions
 - Commit frequently with descriptive messages

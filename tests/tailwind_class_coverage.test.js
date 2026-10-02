@@ -171,7 +171,7 @@ const CHAT_MESSAGES = [
     content: 'Sure, looking now.', thinking: 'Let me check the repo layout first.',
     tools: [
       { name: 'Bash', input: { command: LONG_BASH_COMMAND }, output: LONG_TOOL_OUTPUT, is_error: false },
-      { name: 'Read', input: { file_path: '/repo/scripts/build-css.sh' } },
+      { name: 'Read', input: { file_path: '/repo/tools/build-css.sh' } },
       { name: 'Grep', input: { pattern: 'tailwind', path: 'web' }, output: 'no matches', is_error: true },
     ],
   },
@@ -269,5 +269,5 @@ test('tailwind utility classes used by rendered messages/cards are all present i
 
   assert.deepEqual(missing, [],
       `Tailwind rules used by rendered output are missing from the committed CSS ` +
-      `(rerun scripts/build-css.sh?):\n${missing.join('\n')}`);
+      `(rerun tools/build-css.sh?):\n${missing.join('\n')}`);
 });

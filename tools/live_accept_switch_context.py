@@ -50,7 +50,7 @@ of the default test run) and must be reviewed for isolation before it runs:
   opening. The exit code is nonzero when any assertion (or the native-file
   cleanup) fails. ``--keep`` keeps the trial home for inspection.
 
-Run:  uv run python scripts/live_accept_switch_context.py --out PATH [--keep]
+Run:  uv run python tools/live_accept_switch_context.py --out PATH [--keep]
 """
 
 from __future__ import annotations
@@ -75,12 +75,12 @@ import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
     write_credentials_yaml,
 )
-from scripts.live_smoke_task_tree import (  # noqa: E402
+from tools.live_smoke_task_tree import (  # noqa: E402
     arequest,
     deps_tree,
     log,

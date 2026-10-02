@@ -10,7 +10,7 @@ the whole clip at once; the others receive the capture worklet's chunk cadence
 (VOICE_CHUNK_SAMPLES) on a real-time schedule, so every stop-to-final number
 measures from the recording's end.
 
-Run as ``uv run python scripts/voice_replay_eval.py`` from the repository root.
+Run as ``uv run python tools/voice_replay_eval.py`` from the repository root.
 ``--dry-run`` prints recording, ground-truth, and audio-minute counts only.
 
 Results contain the user's own speech and sent messages: they are personal

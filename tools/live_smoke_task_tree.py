@@ -38,7 +38,7 @@ of the default test run) and must be reviewed for isolation before it runs:
   stored snapshot, and the manager's second turn (the delivered report) keeps
   the same instruction hash with its native anchor retained.
 
-Run:  uv run python scripts/live_smoke_task_tree.py [--backend ID] [--purge]
+Run:  uv run python tools/live_smoke_task_tree.py [--backend ID] [--purge]
 """
 
 from __future__ import annotations
@@ -60,12 +60,12 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
     write_credentials_yaml,
 )
-from scripts.live_preview_task_tree import request  # noqa: E402
+from tools.live_preview_task_tree import request  # noqa: E402
 from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 
 SMOKE_PHRASE = "SMOKE-TASK-TREE-OK-7Q4F"

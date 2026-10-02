@@ -22,7 +22,6 @@ import yaml
 from fastapi import WebSocket
 
 import src.core.session_tree_preview as preview_module
-from scripts.browser_harness_session_tree import pick_free_port
 from src.core.session_tree_preview import (
     PreviewRefusedError,
     PreviewUnavailableGate,
@@ -33,6 +32,7 @@ from src.core.session_tree_preview import (
     read_source_backend,
     refusal_reason,
 )
+from tools.browser_harness_session_tree import pick_free_port
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 

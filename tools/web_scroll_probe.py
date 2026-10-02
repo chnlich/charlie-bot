@@ -21,9 +21,9 @@ promotes compositor animations onto the main thread). All metrics are read
 from the trace after the run.
 
 Usage:
-  python scripts/web_scroll_probe.py --session <id> [--url URL] [--out DIR] \\
+  python tools/web_scroll_probe.py --session <id> [--url URL] [--out DIR] \\
       [--inject-css FILE] [--cpu-throttle N]
-  python scripts/web_scroll_probe.py --report TRACE.json
+  python tools/web_scroll_probe.py --report TRACE.json
 
 Drive mode opens a headless Chrome (binary from config key
 ``headless_chrome_bin``) against the running server (default
@@ -99,7 +99,7 @@ if str(_REPO_ROOT) not in sys.path:
 import websockets  # noqa: E402
 from websockets.asyncio import client  # noqa: E402
 
-from scripts.browser_harness_session_tree import stop_child  # noqa: E402
+from tools.browser_harness_session_tree import stop_child  # noqa: E402
 from src.core.config import CharlieBotConfig, configured_access_key, get_config  # noqa: E402
 
 LIST_SELECTOR = "#session-list"

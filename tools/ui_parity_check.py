@@ -39,7 +39,7 @@ does not reach: every group holds at most five rows even when flat. Apart from
 the whitelist, the logo's build label (served commit and date) is compared as a
 placeholder.
 
-Run:  uv run python scripts/ui_parity_check.py [--main-ref REF] [--chrome BIN]
+Run:  uv run python tools/ui_parity_check.py [--main-ref REF] [--chrome BIN]
         [--evidence-dir DIR]
 Exit 0: no difference outside the whitelist. Exit 1: differences, printed as a
 unified diff per view. Exit 2: the check could not run.
@@ -65,7 +65,7 @@ SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
   sys.path.insert(0, str(SCRIPT_REPO))
 
-from scripts.browser_harness_session_tree import (  # noqa: E402
+from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     devtools_ws_url,
     launch_chrome,

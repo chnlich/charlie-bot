@@ -1636,133 +1636,120 @@ async def test_corrupt_rule_fails_before_launch_with_the_reason(
 
 @pytest.mark.asyncio
 async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Process recovery replays the Run's own saved snapshot/anchor — it never
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Process recovery replays the Run's own saved snapshot/anchor — it never
     recomposes from current memory/templates; an explicit retry uses current sources."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"),
-                          caller=OPERATOR)
-    _backends, _builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr, events=[result_event("turn")])
-    run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
-    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-    assert outcome == "success"
-    stored = _snapshot_of(run)
-    # The rule is deleted afterwards; the Run's stored snapshot still reads.
-    meta = await tree.load_meta(manager.id)
-    (cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md").unlink()
-    ctx_resp_snapshot = _snapshot_of(run)
-    assert ctx_resp_snapshot == stored
-    # The history endpoint serves the stored object without touching live sources.
-    from src.core.task_prompts import PromptSnapshot
-    restored = PromptSnapshot.from_json_dict(stored)
-    assert "original rule" in restored.instructions_text
-    # An explicit retry is a new Run with current sources: restoring the body
-    # first, then retrying, assembles fresh (hash changes with the new body).
-    (cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md").write_text(
-        "rewritten rule", encoding="utf-8")
-    retry = await tree.create_retry(manager.id, "retry-1", run_id)
-    assert retry["run_id"] != run_id
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"), caller=OPERATOR)
+  _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("turn")])
+  run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  assert outcome == "success"
+  stored = _snapshot_of(run)
+  # The rule is deleted afterwards; the Run's stored snapshot still reads.
+  meta = await tree.load_meta(manager.id)
+  (cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md").unlink()
+  ctx_resp_snapshot = _snapshot_of(run)
+  assert ctx_resp_snapshot == stored
+  # The history endpoint serves the stored object without touching live sources.
+  from src.core.task_prompts import PromptSnapshot
+  restored = PromptSnapshot.from_json_dict(stored)
+  assert "original rule" in restored.instructions_text
+  # An explicit retry is a new Run with current sources: restoring the body
+  # first, then retrying, assembles fresh (hash changes with the new body).
+  (cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md").write_text("rewritten rule", encoding="utf-8")
+  retry = await tree.create_retry(manager.id, "retry-1", run_id)
+  assert retry["run_id"] != run_id
 
 
 @pytest.mark.asyncio
 async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_failure(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The snapshot's durable write is part of preparation: a failure there is a
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The snapshot's durable write is part of preparation: a failure there is a
     withheld verdict (no backend invocation, no Run process, input unconsumed)."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"),
-                          caller=OPERATOR)
-    _backends, builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
-    from src.core import json_utils
-    real_atomic = json_utils.atomic_write_text
-    calls = {"n": 0}
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  from src.core import json_utils
+  real_atomic = json_utils.atomic_write_text
+  calls = {"n": 0}
 
-    def failing_atomic(path, text):
-        if str(path).endswith("prompt_snapshot.json"):
-            calls["n"] += 1
-            raise OSError("injected snapshot publish failure")
-        return real_atomic(path, text)
+  def failing_atomic(path, text):
+    if str(path).endswith("prompt_snapshot.json"):
+      calls["n"] += 1
+      raise OSError("injected snapshot publish failure")
+    return real_atomic(path, text)
 
-    monkeypatch.setattr("src.core.json_utils.atomic_write_text", failing_atomic)
-    admitted = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="launch me", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
-    assert observation.withheld is not None
-    assert "failed-to-start" in observation.withheld
-    assert "injected snapshot publish failure" in observation.withheld
-    assert builds == []  # the backend was never invoked
-    run = await tree.runs.get_run(manager.id, decision["run_id"])
-    assert run is not None and run.pid is None
-    # The input stays unconsumed by the queued run.
-    assert run.input_event_ids == [str(admitted["id"])]
+  monkeypatch.setattr("src.core.json_utils.atomic_write_text", failing_atomic)
+  admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
+  assert observation.withheld is not None
+  assert "failed-to-start" in observation.withheld
+  assert "injected snapshot publish failure" in observation.withheld
+  assert builds == []  # the backend was never invoked
+  run = await tree.runs.get_run(manager.id, decision["run_id"])
+  assert run is not None and run.pid is None
+  # The input stays unconsumed by the queued run.
+  assert run.input_event_ids == [str(admitted["id"])]
 
 
 @pytest.mark.asyncio
 async def test_own_subtree_rule_launch_parity_and_edit_boundary(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The own-subtree scope holds at the actual launch boundary.
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The own-subtree scope holds at the actual launch boundary.
 
     A manager with its own subtree rule launches: the committed snapshot equals
     the next-start preview byte for byte (hash parity) and carries the own
     rule. Editing that rule changes the node's AND a descendant's next-start
     preview while the current Run's stored snapshot stays fixed.
     """
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    child = await create_task(tree, parent=manager.id, request_id="child")
-    await tree.patch_task(
-        manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"),
-        caller=OPERATOR)
-    _backends, _builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr,
-        events=[result_event("manager turn done")])
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  child = await create_task(tree, parent=manager.id, request_id="child")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"), caller=OPERATOR)
+  _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("manager turn done")])
 
-    run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
-    await wait_for_terminal_run(tree, manager.id, run_id)
-    run = await tree.runs.get_run(manager.id, run_id)
-    assert run is not None
-    stored = _snapshot_of(run)
-    scope_refs = [(s["scope"], s["source_session_id"])
-                  for b in stored["blocks"] for s in b["sources"]]
-    assert ("subtree", manager.id) in scope_refs
-    joined = "\n\n".join(b["text"] for b in stored["blocks"])
-    assert "program-wide rule" in joined
+  run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
+  await wait_for_terminal_run(tree, manager.id, run_id)
+  run = await tree.runs.get_run(manager.id, run_id)
+  assert run is not None
+  stored = _snapshot_of(run)
+  scope_refs = [(s["scope"], s["source_session_id"]) for b in stored["blocks"] for s in b["sources"]]
+  assert ("subtree", manager.id) in scope_refs
+  joined = "\n\n".join(b["text"] for b in stored["blocks"])
+  assert "program-wide rule" in joined
 
-    # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
-    from src.core.task_execution import capture_prompt_chain
-    from src.core.task_prompts import assemble_snapshot, build_segments
-    meta = await tree.load_meta(manager.id)
-    index = await tree._get_index()
-    chain, node_ref = capture_prompt_chain(tree, index, meta)
-    segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-    preview = assemble_snapshot(segments)
-    assert preview.to_json_dict() == stored
+  # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
+  from src.core.task_execution import capture_prompt_chain
+  from src.core.task_prompts import assemble_snapshot, build_segments
+  meta = await tree.load_meta(manager.id)
+  index = await tree._get_index()
+  chain, node_ref = capture_prompt_chain(tree, index, meta)
+  segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  preview = assemble_snapshot(segments)
+  assert preview.to_json_dict() == stored
 
-    # Editing the own subtree rule: the next-start preview changes for the node
-    # itself and for its descendant, while the current Run's snapshot stays fixed.
-    await tree.patch_task(
-        manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"),
-        caller=OPERATOR)
-    meta = await tree.load_meta(manager.id)
-    index = await tree._get_index()
-    chain, node_ref = capture_prompt_chain(tree, index, meta)
-    segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-    next_preview = assemble_snapshot(segments)
-    assert next_preview.prompt_hash != stored["prompt_hash"]
-    assert "program-wide rule v2" in "\n\n".join(b.text for b in next_preview.blocks)
+  # Editing the own subtree rule: the next-start preview changes for the node
+  # itself and for its descendant, while the current Run's snapshot stays fixed.
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule v2"), caller=OPERATOR)
+  meta = await tree.load_meta(manager.id)
+  index = await tree._get_index()
+  chain, node_ref = capture_prompt_chain(tree, index, meta)
+  segments, _err = build_segments(cfg, meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  next_preview = assemble_snapshot(segments)
+  assert next_preview.prompt_hash != stored["prompt_hash"]
+  assert "program-wide rule v2" in "\n\n".join(b.text for b in next_preview.blocks)
 
-    child_meta = await tree.load_meta(child.id)
-    chain, node_ref = capture_prompt_chain(tree, index, child_meta)
-    segments, _err = build_segments(cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
-    child_preview = assemble_snapshot(segments)
-    assert "program-wide rule v2" in "\n\n".join(b.text for b in child_preview.blocks)
-    # The finished Run's evidence is immutable history.
-    assert _snapshot_of(run) == stored
+  child_meta = await tree.load_meta(child.id)
+  chain, node_ref = capture_prompt_chain(tree, index, child_meta)
+  segments, _err = build_segments(cfg, child_meta, "manager_turn", chain=chain, node_ref=node_ref, overlay=None)
+  child_preview = assemble_snapshot(segments)
+  assert "program-wide rule v2" in "\n\n".join(b.text for b in child_preview.blocks)
+  # The finished Run's evidence is immutable history.
+  assert _snapshot_of(run) == stored
 
 
 # ---------------------------------------------------------------------------

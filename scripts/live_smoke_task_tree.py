@@ -218,56 +218,55 @@ async def shutdown_servers() -> None:
 
 
 async def wait_for_terminal_run(session_id: str, run_id: str, label: str) -> tuple[object, str]:
-    """Poll one Run until it carries a terminal fact; the timeout is an explicit failure."""
-    store = deps_tree().runs
-    deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
-    last_pid = None
-    while time.monotonic() < deadline:
-        run = await asyncio.to_thread(store.read_run_sync, session_id, run_id)
-        if run is None:
-            fail(f"{label}: run {run_id} vanished from {session_id}")
-        events = await asyncio.to_thread(store.load_events_sync, session_id)
-        if store.run_has_terminal_fact(run, events):
-            return run, str(store.terminal_outcome(events, run_id))
-        last_pid = run.pid
-        await asyncio.sleep(1.0)
-    fail(f"{label}: run {run_id} still running after {RUN_TIMEOUT_SECONDS}s (pid={last_pid})")
+  """Poll one Run until it carries a terminal fact; the timeout is an explicit failure."""
+  store = deps_tree().runs
+  deadline = time.monotonic() + RUN_TIMEOUT_SECONDS
+  last_pid = None
+  while time.monotonic() < deadline:
+    run = await asyncio.to_thread(store.read_run_sync, session_id, run_id)
+    if run is None:
+      fail(f"{label}: run {run_id} vanished from {session_id}")
+    events = await asyncio.to_thread(store.load_events_sync, session_id)
+    if store.run_has_terminal_fact(run, events):
+      return run, str(store.terminal_outcome(events, run_id))
+    last_pid = run.pid
+    await asyncio.sleep(1.0)
+  fail(f"{label}: run {run_id} still running after {RUN_TIMEOUT_SECONDS}s (pid={last_pid})")
 
 
 async def wait_for_dispatch_run(session_id: str, label: str) -> str:
-    """Wait for the dispatcher to reserve its consumer Run for the admitted input.
+  """Wait for the dispatcher to reserve its consumer Run for the admitted input.
 
     The reservation id is deterministic (the dispatch request binds the sorted
     pending-batch ids), so the poll reads the same fact the dispatcher wrote.
     """
-    from src.core.control_events import sha256_hex, stable_run_id
+  from src.core.control_events import sha256_hex, stable_run_id
 
-    tree = deps_tree()
-    deadline = time.monotonic() + 30
-    while time.monotonic() < deadline:
-        pending = tree.dispatch.pending_inputs(session_id)
-        ids = sorted(str(e.get("id")) for e in pending)
-        if ids:
-            predicted = stable_run_id(session_id, "dispatch:" + sha256_hex("\x00".join(ids)))
-            run = await tree.runs.get_run(session_id, predicted)
-            if run is not None:
-                return run.id
-        # The route's admission already dispatched inline: the claim usually
-        # lands before the first poll, so pending is empty and the
-        # deterministic prediction never fires — the single registered run is
-        # the reservation.
-        registered = await asyncio.to_thread(tree.runs.list_run_records_sync, session_id)
-        if len(registered) == 1:
-            return registered[0].id
-        await asyncio.sleep(0.2)
-    fail(f"{label}: the dispatcher never reserved a run for the admitted input")
+  tree = deps_tree()
+  deadline = time.monotonic() + 30
+  while time.monotonic() < deadline:
+    pending = tree.dispatch.pending_inputs(session_id)
+    ids = sorted(str(e.get("id")) for e in pending)
+    if ids:
+      predicted = stable_run_id(session_id, "dispatch:" + sha256_hex("\x00".join(ids)))
+      run = await tree.runs.get_run(session_id, predicted)
+      if run is not None:
+        return run.id
+    # The route's admission already dispatched inline: the claim usually
+    # lands before the first poll, so pending is empty and the
+    # deterministic prediction never fires — the single registered run is
+    # the reservation.
+    registered = await asyncio.to_thread(tree.runs.list_run_records_sync, session_id)
+    if len(registered) == 1:
+      return registered[0].id
+    await asyncio.sleep(0.2)
+  fail(f"{label}: the dispatcher never reserved a run for the admitted input")
 
 
-async def arequest(base: str, key: str, method: str, path: str,
-                   payload: dict | None = None) -> tuple[int, dict | list]:
-    """request() off the loop thread: the isolated uvicorn server lives on this same
+async def arequest(base: str, key: str, method: str, path: str, payload: dict | None = None) -> tuple[int, dict | list]:
+  """request() off the loop thread: the isolated uvicorn server lives on this same
     loop, so a blocking urlopen here would deadlock the server that must answer it."""
-    return await asyncio.to_thread(request, base, key, method, path, payload)
+  return await asyncio.to_thread(request, base, key, method, path, payload)
 
 
 async def smoke(backend_id: str, purge: bool) -> None:

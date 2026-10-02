@@ -119,7 +119,8 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
   # The feature's manager consumes its two child reports before closing: they
   # are unprocessed input, and closure blocks on them.
   await tree.runs.register_run(RunRecord(id="run-feature-turn", session_id=feature.id, kind="manager_turn"))
-  await tree.dispatch.claim_input_batch(feature.id, "run-feature-turn")
+  async with tree.control_lock:
+    await tree.dispatch.claim_input_batch_locked(feature.id, "run-feature-turn")
   await tree.dispatch.finish_run(feature.id, "run-feature-turn", outcome="success")
   assert tree.dispatch.pending_inputs(feature.id) == []
 

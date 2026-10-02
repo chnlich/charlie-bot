@@ -1128,10 +1128,9 @@ async def backfill_followed_threads(
   # Both status filters ride the readonly listings: the shared cached metas
   # are handed out uncopied (the backfill only reads them) and the corpus
   # outside the followed threads is never copied+stamped.
-  for meta in [
-      *(await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)),
-      *(await session_mgr.list_sessions_readonly(status=SessionStatus.ARCHIVED)),
-  ]:
+  active, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
+  archived, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ARCHIVED)
+  for meta in [*active, *archived]:
     origin = getattr(meta, platform.origin_field)
     if origin is None:
       continue

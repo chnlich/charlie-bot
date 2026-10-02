@@ -724,12 +724,12 @@ _COMMIT_REV_RE = re.compile(r"[0-9a-f]{7,40}")
 async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) -> tuple[bool, str]:
   """Whether *commit* exists in *repo_path* and is an ancestor of (or equal to) *branch*'s tip.
 
-    The completion evidence check behind every ``landed:<branch>@<commit>`` claim:
-    a commit that does not exist, a real commit the target branch does not
-    contain, or an unresolvable target all fail with an explicit reason —
-    never a silent pass. An ``origin/<branch>`` target is fetched first, so
-    the judgment reads the published tip; a local branch is judged as-is.
-    """
+  The completion evidence check behind every ``landed:<branch>@<commit>`` claim:
+  a commit that does not exist, a real commit the target branch does not
+  contain, or an unresolvable target all fail with an explicit reason —
+  never a silent pass. An ``origin/<branch>`` target is fetched first, so
+  the judgment reads the published tip; a local branch is judged as-is.
+  """
   if not _COMMIT_REV_RE.fullmatch(commit):
     return False, f"commit {commit!r} is not a git commit hash"
   if branch.startswith("origin/"):

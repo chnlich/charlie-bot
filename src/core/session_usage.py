@@ -347,12 +347,12 @@ def _resolve_reading_tier(facts: _UsageFacts) -> dict:
 def resolve_events_usage(events: list[dict]) -> dict | None:
   """One-shot tier resolution over an already-loaded event list (no memo).
 
-    The worker transcript's usage path (src/core/worker_transcript.py): the
-    shared tier dispatch ``_resolve_fold_tier``, with neither the codex
-    native-rollout tier nor the cross-resolution fold memo — the transcript
-    projection memo already holds the events list, and the 3 s header poll
-    folds a few hundred events in well under a millisecond.
-    """
+  The worker transcript's usage path (src/core/worker_transcript.py): the
+  shared tier dispatch ``_resolve_fold_tier``, with neither the codex
+  native-rollout tier nor the cross-resolution fold memo — the transcript
+  projection memo already holds the events list, and the 3 s header poll
+  folds a few hundred events in well under a millisecond.
+  """
   fold = _UsageFold()
   fold.feed(events)
   return _resolve_fold_tier(fold.facts(), events)

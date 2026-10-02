@@ -34,20 +34,20 @@ def _install_replace(current: T | None, fresh: T) -> T:
 class _HotReloadCache(Generic[T]):
   """One file-backed cache that reloads through a loader when the file's fingerprint moves.
 
-    ``get(loader)`` re-runs *loader* only when the fingerprint differs from both
-    the cached value's and the last failure's; the surrounding bookkeeping is the
-    one state machine every hot-reload cache shares:
+  ``get(loader)`` re-runs *loader* only when the fingerprint differs from both
+  the cached value's and the last failure's; the surrounding bookkeeping is the
+  one state machine every hot-reload cache shares:
 
-    - a failed reload keeps the previous value and logs one warning per error
-      string per process (the key is exactly the field the line logs); the
-      failed fingerprint is recorded, so the same broken corpus pays no parse
-      and no line until it moves — the freshness rule the successful path
-      follows, applied to failure;
-    - a reload with nothing cached re-raises: with no fallback the raise is what
-      surfaces the broken file, so no failed fingerprint is recorded;
-    - a successful reload installs, clears the failed fingerprint, and re-arms
-      the registry: a later relapse is a new onset and earns one new line.
-    """
+  - a failed reload keeps the previous value and logs one warning per error
+    string per process (the key is exactly the field the line logs); the
+    failed fingerprint is recorded, so the same broken corpus pays no parse
+    and no line until it moves — the freshness rule the successful path
+    follows, applied to failure;
+  - a reload with nothing cached re-raises: with no fallback the raise is what
+    surfaces the broken file, so no failed fingerprint is recorded;
+  - a successful reload installs, clears the failed fingerprint, and re-arms
+    the registry: a later relapse is a new onset and earns one new line.
+  """
 
   def __init__(
       self,
@@ -101,17 +101,17 @@ class _HotReloadCache(Generic[T]):
 def _file_fingerprint(name: str) -> tuple[float, int]:
   """The ``(mtime, size)`` reload cache key over one file in the profile home.
 
-    Size comes from the same stat call and costs nothing extra; it catches
-    mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
-    on a coarse-resolution filesystem) that an mtime-only key would miss silently.
-    A content change that preserves both mtime and size is deliberately not
-    covered. A missing file stats to a sentinel rather than raising.
+  Size comes from the same stat call and costs nothing extra; it catches
+  mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
+  on a coarse-resolution filesystem) that an mtime-only key would miss silently.
+  A content change that preserves both mtime and size is deliberately not
+  covered. A missing file stats to a sentinel rather than raising.
 
-    This is the per-request path (the auth middleware's ``get_config``), so the
-    stat stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
-    ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
-    corpus, against ~10 µs of unavoidable fresh stats.
-    """
+  This is the per-request path (the auth middleware's ``get_config``), so the
+  stat stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
+  ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
+  corpus, against ~10 µs of unavoidable fresh stats.
+  """
   try:
     st = os.stat(os.path.join(_resolve_home()[1], name))
   except OSError:
@@ -122,16 +122,16 @@ def _file_fingerprint(name: str) -> tuple[float, int]:
 class Credentials:
   """One profile's ``credentials.yaml``: ``section -> key -> scalar`` secret values.
 
-    ``path`` is the file the sections were read from; ``sections`` maps each
-    top-level section to its scalar values (strings or integers, ``None``
-    dropped). Deliberately outside :class:`CharlieBotConfig`: the structure
-    file never carries secrets, so nothing holding a config can leak one.
-    :meth:`get` answers "is it set"; :meth:`require` turns a missing value
-    into a :class:`ValueError` naming the key path and the file it is missing
-    from. A plain class, not a dataclass: the CLI verbs that read credentials
-    are fresh processes, and the ``dataclasses`` import pulls ``inspect``
-    (~9 ms of the M97 verb wall) for machinery no consumer calls.
-    """
+  ``path`` is the file the sections were read from; ``sections`` maps each
+  top-level section to its scalar values (strings or integers, ``None``
+  dropped). Deliberately outside :class:`CharlieBotConfig`: the structure
+  file never carries secrets, so nothing holding a config can leak one.
+  :meth:`get` answers "is it set"; :meth:`require` turns a missing value
+  into a :class:`ValueError` naming the key path and the file it is missing
+  from. A plain class, not a dataclass: the CLI verbs that read credentials
+  are fresh processes, and the ``dataclasses`` import pulls ``inspect``
+  (~9 ms of the M97 verb wall) for machinery no consumer calls.
+  """
 
   __slots__ = ("path", "sections")
 
@@ -154,13 +154,13 @@ class Credentials:
 def load_credentials() -> Credentials:
   """Load this profile's ``credentials.yaml``, the secrets file split out of ``config.yaml``.
 
-    A missing file loads as empty sections. The document must be a mapping whose
-    values are mappings whose values are strings or integers; a ``None`` value
-    counts as unset and is dropped. Any other shape raises :class:`ValueError`
-    naming the offending path as ``credentials.<section>`` or
-    ``credentials.<section>.<key>``. Section and key names are never validated:
-    any name loads.
-    """
+  A missing file loads as empty sections. The document must be a mapping whose
+  values are mappings whose values are strings or integers; a ``None`` value
+  counts as unset and is dropped. Any other shape raises :class:`ValueError`
+  naming the offending path as ``credentials.<section>`` or
+  ``credentials.<section>.<key>``. Section and key names are never validated:
+  any name loads.
+  """
   path = charliebot_home_dir() / CREDENTIALS_FILENAME
   data = load_yaml(path, default={})
   if data is None:
@@ -194,19 +194,19 @@ _credentials_cache = _HotReloadCache(
 def get_credentials() -> Credentials:
   """Return the process-wide credentials, refreshed when ``credentials.yaml`` changes.
 
-    Independent of :func:`get_config`: the reload key is ``credentials.yaml``'s
-    ``(mtime, size)`` (see :func:`_credentials_fingerprint`), and the cached
-    :class:`Credentials` is replaced wholesale — its consumers read per call and
-    hold no instance references. A failed reload keeps the previous value and
-    logs one warning per onset; with nothing cached yet the error propagates.
-    """
+  Independent of :func:`get_config`: the reload key is ``credentials.yaml``'s
+  ``(mtime, size)`` (see :func:`_credentials_fingerprint`), and the cached
+  :class:`Credentials` is replaced wholesale — its consumers read per call and
+  hold no instance references. A failed reload keeps the previous value and
+  logs one warning per onset; with nothing cached yet the error propagates.
+  """
   return _credentials_cache.get(load_credentials)
 
 
 def configured_access_key() -> str:
   """Return the ``charliebot.access_key`` credential, or "" when it is unset.
 
-    One home of the read every access-key gate repeats; an empty value means
-    every gate passes unauthenticated readers through.
-    """
+  One home of the read every access-key gate repeats; an empty value means
+  every gate passes unauthenticated readers through.
+  """
   return str(get_credentials().get("charliebot", "access_key") or "")

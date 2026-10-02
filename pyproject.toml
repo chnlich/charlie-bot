@@ -123,3 +123,27 @@ python-preference = "only-managed"
 
 [tool.ruff]
 line-length = 120
+
+# Google Python Style Guide 2.2 import rules via the pylint-google-style dev
+# dependency. tools/check-google-style.sh is the only intended runner; the
+# disable=all + enable list keeps a plain `uv run pylint <paths>` from
+# reporting anything the probe does not count.
+[tool.pylint.main]
+load-plugins = [
+    "pylint_google_style.import_module",
+    "pylint_google_style.relative_import",
+]
+
+[tool.pylint."messages control"]
+disable = ["all"]
+enable = [
+    "import-symbol-not-module",
+    "import-symbol-not-package",
+    "relative-import",
+    "import-module-unresolvable",
+]
+
+# gpu-voice dependencies: the group is not installed by a default `uv sync`,
+# so these imports cannot resolve and W9001 would fire on every one of them.
+[tool.pylint."import-module"]
+import-module-exceptions = ["PIL", "huggingface_hub", "transformers"]

@@ -51,10 +51,9 @@ Known-alive symbols:
   underscore-name ignore covers underscore-prefixed variables — so the underscore-prefixed ones
   rely on fixture-name discovery alone, while `def` forms surface as unused functions. Vulture
   also flags
-  `pidfd_open_available` (`tests/conftest.py`, shared skip gate for the pid/slurm watch
-  tests, requested by name in `tests/test_trigger_pid_watch.py`, `tests/test_trigger_slurm_watch.py`,
-  and `tests/test_trigger_succession.py`), but it is named in the parameter lists of the tests
-  that use it, so the Step 3 grep already finds its references; no list entry needed.
+  `pidfd_open_available` (`tests/conftest.py`, the pid-watch tests' skip gate, requested
+  by name in `tests/test_trigger_pid_watch.py`), but it is named in the parameter lists of the
+  tests that use it, so the Step 3 grep already finds its references; no list entry needed.
 - `_fresh_single_flight` (`tests/test_token_usage_page.py`) — `@pytest.fixture(autouse=True)`,
   reached by fixture-name discovery like the block above. It resets `pages._token_usage_task`
   (the /token-usage page's module-global single-flight holder) to None around each test. A task
@@ -285,8 +284,9 @@ Known-alive symbols:
   — attribute writes on the MagicMock asyncio subprocess the helper installs on a spawn
   patch target: `AgentBackend._write_stdin_prompt` (src/agents/backends/base.py) awaits
   them by attribute read when a backend feeds a prompt over stdin, so nothing in the repo
-  reads the names statically. Vulture flags each write as an unused attribute. Same
-  dynamic-read class as the `speedup` stub entry above.
+  reads the names statically. Vulture flags each write as an unused attribute: the only
+  reader is the runtime attribute access on the double, which static analysis cannot tie
+  back to this write site.
 - `search_sessions` (the `SessionManager` method in `src/core/sessions.py`) — deliberately
   retained two-tier search API, not an orphan. The `/api/sessions/search` route serves
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
@@ -380,7 +380,8 @@ Known-alive symbols:
 - `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
   a production module-global write from test setup, read in `src/api/host_auth.py`. A tests-only
   vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
-  and stays silent. Same class as the `_cron_snapshot` entry above.- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
+  and stays silent. Same class as the `_cron_snapshot` entry above.
+- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`

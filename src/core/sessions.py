@@ -3335,11 +3335,16 @@ class SessionManager:
       path.parent.mkdir(parents=True, exist_ok=True)
       serialized = meta.model_dump_json(indent=2, exclude=_TRANSIENT_METADATA_FIELDS)
 
-      await asyncio.to_thread(atomic_write_text, path, serialized)
-      # Signature stays None: a write cannot prove the on-disk signature its bytes
-      # carry (a concurrent rename could land before any post-write stat), so the
-      # entry re-reads at its next expiry and re-keys from that read's own stat.
-      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), None)
+      sig = await asyncio.to_thread(atomic_write_text, path, serialized)
+      # The entry re-keys from the write's own proven signature: the swap
+      # publishes the tmp inode the writer just statted, so a later
+      # same-signature stat proves the file still carries the funnel's bytes
+      # and the expiry revalidates by one stat instead of evicting into a full
+      # re-read (whose revision bump also forced the next listing to re-walk).
+      # A concurrent publish after this one replaces the inode; the next
+      # expiry's stat then evicts and re-reads — the same bound the
+      # signature-less entry paid on every expiry.
+      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), sig)
       # The single funnel for every session-metadata write (35+ call sites, plus
       # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.

@@ -34,7 +34,7 @@ from src.core.message_projection import MessageProjection
 from src.core.models import RunRecord, ThreadMetadata, utc_now_iso
 from src.core.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
 from src.core.task_prompts import LAUNCH_TEXT_FILENAME
-from src.core.threads import EVENTS_LOG_NAME, METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME, thread_events_log_path
 
 # The projection memos: session (or session+thread) -> entry. Bounded like the
 # other read-path memos; one open worker page holds one entry.
@@ -312,13 +312,14 @@ def load_worker_transcript(tree, session_id: str) -> TranscriptEntry:
 
 
 def _thread_dir(session_dir: Path, thread_id: str) -> Path:
-  return session_dir / "threads" / thread_id
+  return session_dir / THREADS_DIR_NAME / thread_id
 
 
 def thread_signature_sync(session_dir: Path, thread_id: str) -> tuple:
   """Stat-only identity of one legacy thread's metadata and events files."""
-  thread_dir = _thread_dir(session_dir, thread_id)
-  return (stat_signature(thread_dir / METADATA_NAME), stat_signature(thread_dir / "data" / EVENTS_LOG_NAME))
+  return (
+      stat_signature(_thread_dir(session_dir, thread_id) / METADATA_NAME),
+      stat_signature(thread_events_log_path(session_dir, thread_id)))
 
 
 def _thread_state(meta: ThreadMetadata) -> str:

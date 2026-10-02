@@ -69,9 +69,11 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
     devtools_ws_url,
     launch_chrome,
+    mint_access_key,
     open_cdp_page,
     pick_free_port,
     stop_child,
+    write_credentials_yaml,
 )
 from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
 
@@ -160,7 +162,7 @@ def write_home(home: Path, port: int, access_key: str, sessions: list[dict]) -> 
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  write_credentials_yaml(home, access_key)
   for meta in sessions:
     session_dir = home / "sessions" / meta["id"]
     session_dir.mkdir(parents=True)
@@ -192,7 +194,7 @@ class Side:
     self.name = name
     self.repo = repo
     self.port = pick_free_port()
-    self.access_key = f"parity-{name}-" + os.urandom(8).hex()
+    self.access_key = mint_access_key(f"parity-{name}-")
     self.home = tmp / f"home-{name}"
     write_home(self.home, self.port, self.access_key, sessions)
     self.log_path = tmp / f"serve-{name}.log"

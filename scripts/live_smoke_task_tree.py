@@ -215,6 +215,8 @@ async def shutdown_servers() -> None:
   for server in _SERVERS:
     server.should_exit = True
   await asyncio.sleep(0.5)
+
+
 async def wait_for_terminal_run(session_id: str, run_id: str, label: str) -> tuple[object, str]:
     """Poll one Run until it carries a terminal fact; the timeout is an explicit failure."""
     store = deps_tree().runs

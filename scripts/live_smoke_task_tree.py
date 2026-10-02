@@ -557,14 +557,15 @@ async def smoke(backend_id: str, purge: bool) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Isolated live smoke for the v2 session task tree")
-    parser.add_argument(
-        "--backend", default="charlie-code-glm-flash",
-        help="The configured backend option id the smoke runs on (default: charlie-code-glm-flash)")
-    parser.add_argument("--purge", action="store_true", help="Remove the synthetic home after the run")
-    args = parser.parse_args()
-    asyncio.run(smoke(args.backend, args.purge))
+  parser = argparse.ArgumentParser(description="Isolated live smoke for the v2 session task tree")
+  parser.add_argument(
+      "--backend",
+      default="charlie-code-glm-flash",
+      help="The configured backend option id the smoke runs on (default: charlie-code-glm-flash)")
+  parser.add_argument("--purge", action="store_true", help="Remove the synthetic home after the run")
+  args = parser.parse_args()
+  asyncio.run(smoke(args.backend, args.purge))
 
 
 if __name__ == "__main__":
-    main()
+  main()

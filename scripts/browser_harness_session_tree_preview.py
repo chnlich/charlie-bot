@@ -1862,18 +1862,22 @@ async def drive_browser(debug_port: int, base: str,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", default=str(EVIDENCE_ROOT_DEFAULT / "preview_browser_evidence"),
-                        help="Where screenshots and results land")
-    parser.add_argument("--backends", required=True,
-                        help="Comma-separated charlie-code backend ids: the first is the "
-                             "trial's default, the rest become the selectable model "
-                             "dropdown entries. Required: the trial's model catalog is "
-                             "always named by the invocation, never baked in.")
-    parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome)")
-    args = parser.parse_args()
-    asyncio.run(run_harness(args))
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+      "--evidence-dir",
+      default=str(EVIDENCE_ROOT_DEFAULT / "preview_browser_evidence"),
+      help="Where screenshots and results land")
+  parser.add_argument(
+      "--backends",
+      required=True,
+      help="Comma-separated charlie-code backend ids: the first is the "
+      "trial's default, the rest become the selectable model "
+      "dropdown entries. Required: the trial's model catalog is "
+      "always named by the invocation, never baked in.")
+  parser.add_argument("--chrome", default=None, help="Chrome binary (default: google-chrome)")
+  args = parser.parse_args()
+  asyncio.run(run_harness(args))
 
 
 if __name__ == "__main__":
-    main()
+  main()

@@ -28,17 +28,23 @@ export PYTHONPATH="$repo_root${PYTHONPATH:+:$PYTHONPATH}"
 
 # pylint's exit code is a bitmask of finding classes: 2 error, 4 warning,
 # 8 refactor, 16 convention. The probe enables only those classes, so a run
-# with findings exits inside the mask. 1 (fatal) and 32 (usage error) mean
-# the run itself broke and must fail loudly instead of counting as zero.
+# with findings exits inside the mask 30; 1 (fatal) and 32 (usage error)
+# mean the run itself broke and must fail loudly instead of counting as
+# zero. yapf instead exits 1 when diffs exist -- its normal finding case --
+# so its mask is 1. The status must be read in the else branch: after a
+# failed if condition with no else, $? reads 0 and the real code is lost.
 run_capture() {
+  local mask=$1
+  shift
   local output
   local status
   if output=$("$@" 2>&1); then
     printf '%s' "$output"
     return 0
+  else
+    status=$?
   fi
-  status=$?
-  if (( (status & 30) == status )); then
+  if (( (status & mask) == status )); then
     printf '%s' "$output"
     return 0
   fi
@@ -46,8 +52,8 @@ run_capture() {
   return "$status"
 }
 
-yapf_output=$(run_capture uv run yapf --diff --recursive "${paths[@]}")
-pylint_output=$(run_capture uv run pylint --score=n "${paths[@]}")
+yapf_output=$(run_capture 1 uv run yapf --diff --recursive "${paths[@]}")
+pylint_output=$(run_capture 30 uv run pylint --score=n "${paths[@]}")
 
 if [[ -n "$yapf_output" ]]; then
   printf '%s\n' "$yapf_output"

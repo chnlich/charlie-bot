@@ -1009,11 +1009,12 @@ class SessionManager:
     self._cfg = cfg
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
     # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
-    # that produced the entry (None for entries populated by a write, which cannot prove
-    # the on-disk signature their bytes carry). TTL-based to bound the per-read work within
-    # a poll cycle; on expiry the signature revalidates the entry with one stat instead of
-    # a re-read — every writer publishes through the atomic tmp rename, so a content change
-    # always moves st_mtime_ns, and a same-signature stat proves the parsed bytes current.
+    # that produced the entry (write-populated entries carry the write's own published
+    # signature; None only when the reader could not stat). TTL-based to bound the per-read
+    # work within a poll cycle; on expiry the signature revalidates the entry with one stat
+    # instead of a re-read — every writer publishes through the atomic tmp rename, so a
+    # content change always moves st_mtime_ns, and a same-signature stat proves the parsed
+    # bytes current.
     self._metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]] = {}
     # Per-session asyncio.Lock guarding metadata read-modify-write operations.
     # Prevents clobber races between concurrent mutators (e.g. mark_unread vs
@@ -2716,8 +2717,8 @@ class SessionManager:
     entry revalidates against metadata.json with one stat — a same-signature
     stat proves the parsed bytes unchanged (every writer publishes through the
     atomic tmp rename, so a content change always moves ``st_mtime_ns``) and
-    re-times the entry, while a moved or unprovable signature (``None``, the
-    write-funnel populate) evicts for the caller's disk read. The stat
+    re-times the entry, while a moved or unprovable signature (``None``, a
+    stat failure) evicts for the caller's disk read. The stat
     revalidation keeps an active entry serving only while its bytes provably
     stand, not on the clock alone. The two
     TTL-checked metadata readers (``get_session`` and ``_load_session_metas``)
@@ -2744,7 +2745,7 @@ class SessionManager:
         pass
     del self._metadata_cache[session_id]
     # The entry's file moved or became unprovable without a write funnel bump
-    # (an out-of-band edit, or a write-funnel entry past its TTL): raise the
+    # (an out-of-band edit, or a stat failure on an expired entry): raise the
     # listings revision so the next listing re-reads instead of serving the
     # memoized rows this eviction just proved stale.
     self._listings_revision += 1

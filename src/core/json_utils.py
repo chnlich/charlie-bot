@@ -72,7 +72,10 @@ def atomic_write_text(path: Path, text: str, *, private: bool = False) -> tuple[
   return atomic_write_stream(path, lambda stream: stream.write(text.encode("utf-8")), private=private)
 
 
-def atomic_write_stream(path: Path, write: Callable[[BinaryIO], None], *, private: bool = False) -> tuple[int, int] | None:
+def atomic_write_stream(path: Path,
+                        write: Callable[[BinaryIO], None],
+                        *,
+                        private: bool = False) -> tuple[int, int] | None:
   """Stream the payload ``write`` emits into *path* atomically: a uniquely named tmp sibling
   swapped in by ``os.replace``. Returns the published file's ``(mtime_ns, size)`` signature.
 

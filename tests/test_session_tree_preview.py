@@ -124,8 +124,6 @@ def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
   check_port(free, source_server_port=18498)
 
 
-
-
 # ---------------------------------------------------------------------------
 # Backend selection and launcher preflight
 # ---------------------------------------------------------------------------

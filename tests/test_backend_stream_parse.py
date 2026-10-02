@@ -20,11 +20,11 @@ import pytest
 from conftest import _async_wait_for, cancel_and_drain
 
 from src.agents.backends.base import (
-  _TORN_TAIL_WINDOW_BYTES,
-  DEFAULT_BUFFER_LIMIT,
-  _tail_region_has_content,
-  iter_ndjson_events,
-  tail_follow_events,
+    _TORN_TAIL_WINDOW_BYTES,
+    DEFAULT_BUFFER_LIMIT,
+    _tail_region_has_content,
+    iter_ndjson_events,
+    tail_follow_events,
 )
 
 _LINES = [

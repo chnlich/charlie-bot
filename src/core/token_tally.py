@@ -829,9 +829,11 @@ def _bare_model(model: str) -> str:
   return model.rsplit("/", 1)[-1]
 
 
-def _backend_registry() -> dict[str, object]:
-  """config.yaml's backend options by id. Re-read per capture: a backend added or retired
-  reclassifies a moved file on its next parse without touching any cached parse."""
+def backend_registry() -> dict[str, object]:
+  """config.yaml's backend options by id — the map the capture (a backend added or retired
+  reclassifies a moved file on its next parse) and the usage page's account attribution
+  (the affected accounts reclassify on the next page load) both read. Re-read per call,
+  without touching any cached parse."""
   return {opt.id: opt for opt in get_config().backends.options}
 
 
@@ -1254,7 +1256,7 @@ def capture_charliebot(
 
   Returns the records written.
   """
-  registry = _backend_registry()
+  registry = backend_registry()
   notes: list[str] = []
   written = 0
   for kind, path, mtime_ns, size, error in _walk_charliebot(sessions_dir, notes):
@@ -1507,7 +1509,7 @@ def capture_runs(ledger: UsageLedger, host: str, sessions_dir: Path, captured: d
 
   Returns the records written.
   """
-  registry = _backend_registry()
+  registry = backend_registry()
   written = 0
   for path, st in _iter_run_logs(sessions_dir):
     sig = f"{st.st_mtime_ns}:{st.st_size}"

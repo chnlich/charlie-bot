@@ -741,13 +741,6 @@ _USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
 _NOTE_SOURCE_LABELS = {USAGE_SOURCE_CHARLIE_BOT: "CharlieBot logs"}
 
 
-def _backend_registry() -> dict[str, object]:
-  """config.yaml's backend options by id — the registry the charlie-bot accounts'
-  attribution reads. The tally's capture builds the same map per capture; a backend added
-  or retired reclassifies the affected accounts on the next page load."""
-  return {opt.id: opt for opt in get_config().backends.options}
-
-
 def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, int], float, dict[str, object]]:
   """Capture this host's new usage into the ledger, then read the page rows from the ledger
   alone — so the numbers survive deletion of the logs they were parsed from — plus the
@@ -766,7 +759,7 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
   # tally stack for a page that may never load.
   import sqlite3
 
-  from src.core.token_tally import capture_local
+  from src.core.token_tally import backend_registry, capture_local
   from src.core.usage_ledger import UsageLedger, default_ledger_path
 
   started = time.monotonic()
@@ -782,7 +775,7 @@ def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, i
     finally:
       ledger.set_lock_wait(USAGE_LEDGER_LOCK_WAIT_SECONDS)
     rows, native_starts = ledger.model_rows_with_native_starts()
-  return rows, native_starts, written, time.monotonic() - started, _backend_registry()
+  return rows, native_starts, written, time.monotonic() - started, backend_registry()
 
 
 _MODEL_LEAF_SUFFIX = re.compile(r"\s*\([^()]*\)$")

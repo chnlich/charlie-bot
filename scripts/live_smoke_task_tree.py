@@ -48,7 +48,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
+  sys.path.insert(0, str(REPO_ROOT))
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
@@ -70,41 +70,41 @@ _REDACTIONS: list[str] = []
 
 
 def redact(text: str) -> str:
-    """Redact every registered secret out of any log line."""
-    for secret in _REDACTIONS:
-        if secret:
-            text = text.replace(secret, "<redacted>")
-    return text
+  """Redact every registered secret out of any log line."""
+  for secret in _REDACTIONS:
+    if secret:
+      text = text.replace(secret, "<redacted>")
+  return text
 
 
 def register_secret(*secrets: str) -> None:
-    """Register one secret the log lines must never print; empty strings are dropped."""
-    _REDACTIONS.extend(secret for secret in secrets if secret)
+  """Register one secret the log lines must never print; empty strings are dropped."""
+  _REDACTIONS.extend(secret for secret in secrets if secret)
 
 
 def log(message: str) -> None:
-    print(redact(message), flush=True)
+  print(redact(message), flush=True)
 
 
 def fail(message: str) -> NoReturn:
-    raise SystemExit(f"LIVE SMOKE FAILED: {redact(message)}")
+  raise SystemExit(f"LIVE SMOKE FAILED: {redact(message)}")
 
 
 def load_production_backend_entry(backend_id: str) -> dict:
-    """Read the selected backend entry from the production config (redacted in logs).
+  """Read the selected backend entry from the production config (redacted in logs).
 
     Only this entry is copied into the synthetic home; nothing else from the
     production config (triggers, accounts, session state) reaches it.
     """
-    from src.core.config import load_config
-    option = load_config().get_backend_option(backend_id)
-    if option is None:
-        fail(f"backend option {backend_id!r} is not configured in the production config")
-    return json.loads(option.model_dump_json())
+  from src.core.config import load_config
+  option = load_config().get_backend_option(backend_id)
+  if option is None:
+    fail(f"backend option {backend_id!r} is not configured in the production config")
+  return json.loads(option.model_dump_json())
 
 
 def install_native_session_dir_isolation(clc_sessions: Path) -> None:
-    """Route charlie-code builds' extra_flags through --session-dir in THIS process.
+  """Route charlie-code builds' extra_flags through --session-dir in THIS process.
 
     The production config is untouched: the harness wraps the two build entry
     points the adapter uses (the registry — which the master path imports at
@@ -112,109 +112,109 @@ def install_native_session_dir_isolation(clc_sessions: Path) -> None:
     backend for these runs appends the isolation flag through the existing
     extra_flags constructor kwarg.
     """
-    master_module = __import__("src.agents.backends.registry", fromlist=["build_backend"])
-    worker_module = __import__("src.agents.worker", fromlist=["build_backend"])
-    original = master_module.build_backend
+  master_module = __import__("src.agents.backends.registry", fromlist=["build_backend"])
+  worker_module = __import__("src.agents.worker", fromlist=["build_backend"])
+  original = master_module.build_backend
 
-    def wrapped(option, cfg, **kwargs):
-        from src.core.backend_models import BackendType
-        if option.type == BackendType.CHARLIE_CODE:
-            kwargs["extra_flags"] = [
-                *(kwargs.get("extra_flags") or []), "--session-dir", str(clc_sessions)]
-        return original(option, cfg, **kwargs)
+  def wrapped(option, cfg, **kwargs):
+    from src.core.backend_models import BackendType
+    if option.type == BackendType.CHARLIE_CODE:
+      kwargs["extra_flags"] = [*(kwargs.get("extra_flags") or []), "--session-dir", str(clc_sessions)]
+    return original(option, cfg, **kwargs)
 
-    master_module.build_backend = wrapped
-    worker_module.build_backend = wrapped
+  master_module.build_backend = wrapped
+  worker_module.build_backend = wrapped
 
 
 def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int, str]:
-    """Write the synthetic home's config and credentials; return (port, access_key)."""
-    port = pick_free_port()
-    entry = dict(entry)
-    clc_sessions = home / "clc-sessions"
-    clc_sessions.mkdir(parents=True, exist_ok=True)
-    install_native_session_dir_isolation(clc_sessions)
-    config = {
-        "server": {"port": port, "host": "127.0.0.1"},
-        "backends": {"options": [entry], "preference": [backend_id]},
-    }
-    (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-    access_key = "smoke-operator-key-" + os.urandom(8).hex()
-    (home / "credentials.yaml").write_text(
-        f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
-    register_secret(
-        access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
-    return port, access_key
+  """Write the synthetic home's config and credentials; return (port, access_key)."""
+  port = pick_free_port()
+  entry = dict(entry)
+  clc_sessions = home / "clc-sessions"
+  clc_sessions.mkdir(parents=True, exist_ok=True)
+  install_native_session_dir_isolation(clc_sessions)
+  config = {
+      "server": {
+          "port": port,
+          "host": "127.0.0.1"
+      },
+      "backends": {
+          "options": [entry],
+          "preference": [backend_id]
+      },
+  }
+  (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+  access_key = "smoke-operator-key-" + os.urandom(8).hex()
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  register_secret(access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
+  return port, access_key
 
 
 def preflight(backend_id: str) -> None:
-    """Assert the mechanisms this smoke depends on before anything starts."""
-    binary = shutil.which("charlie-code")
-    if binary is None:
-        fail("charlie-code binary is not installed; the live smoke cannot run")
-    help_text = subprocess.run(
-        [binary, "--help"], capture_output=True, text=True, check=False)
-    if "--session-dir" not in help_text.stdout + help_text.stderr:
-        fail("installed charlie-code does not support --session-dir; native session "
-             "isolation cannot be guaranteed")
-    from src.core.config import load_config
-    if load_config().get_backend_option(backend_id) is None:
-        fail(f"backend option {backend_id!r} missing from the production config")
+  """Assert the mechanisms this smoke depends on before anything starts."""
+  binary = shutil.which("charlie-code")
+  if binary is None:
+    fail("charlie-code binary is not installed; the live smoke cannot run")
+  help_text = subprocess.run([binary, "--help"], capture_output=True, text=True, check=False)
+  if "--session-dir" not in help_text.stdout + help_text.stderr:
+    fail("installed charlie-code does not support --session-dir; native session "
+         "isolation cannot be guaranteed")
+  from src.core.config import load_config
+  if load_config().get_backend_option(backend_id) is None:
+    fail(f"backend option {backend_id!r} missing from the production config")
 
 
 def deps_tree():
-    from src.api.deps import task_manager
-    return task_manager()
+  from src.api.deps import task_manager
+  return task_manager()
 
 
 def tree_run_dir(session_id: str, run_id: str) -> Path:
-    return deps_tree().runs.run_dir(session_id, run_id)
+  return deps_tree().runs.run_dir(session_id, run_id)
 
 
 _SERVERS: list = []
 
 
 async def start_server(port: int, title: str) -> None:
-    """Start the isolated API server on the reserved port, without the normal lifespan.
+  """Start the isolated API server on the reserved port, without the normal lifespan.
 
     The started server lands in _SERVERS, so shutdown_servers() stops it; *title*
     names the app in /docs and openapi.json and is the calling harness's own.
     """
-    import uvicorn
-    from fastapi import FastAPI
+  import uvicorn
+  from fastapi import FastAPI
 
-    from src.api import chat, internal, sessions, threads
-    from src.api.auth import AuthMiddleware
+  from src.api import chat, internal, sessions, threads
+  from src.api.auth import AuthMiddleware
 
-    app = FastAPI(title=title)
-    app.add_middleware(AuthMiddleware)
-    app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
-    app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-    app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-    app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-    config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
-    server = uvicorn.Server(config)
-    task = asyncio.get_running_loop().create_task(server.serve())
-    deadline = time.monotonic() + 30
-    while not server.started:
-        # RuntimeError, not fail(): fail() carries this module's smoke prefix,
-        # and the accept harness imports this helper — each call site maps the
-        # error to its own exit message.
-        if task.done():
-            raise RuntimeError(f"isolated server failed to start: {task.exception()!r}")
-        if time.monotonic() > deadline:
-            raise RuntimeError("isolated server did not start within 30s")
-        await asyncio.sleep(0.05)
-    _SERVERS.append(server)
+  app = FastAPI(title=title)
+  app.add_middleware(AuthMiddleware)
+  app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
+  app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
+  app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
+  app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
+  config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
+  server = uvicorn.Server(config)
+  task = asyncio.get_running_loop().create_task(server.serve())
+  deadline = time.monotonic() + 30
+  while not server.started:
+    # RuntimeError, not fail(): fail() carries this module's smoke prefix,
+    # and the accept harness imports this helper — each call site maps the
+    # error to its own exit message.
+    if task.done():
+      raise RuntimeError(f"isolated server failed to start: {task.exception()!r}")
+    if time.monotonic() > deadline:
+      raise RuntimeError("isolated server did not start within 30s")
+    await asyncio.sleep(0.05)
+  _SERVERS.append(server)
 
 
 async def shutdown_servers() -> None:
-    """Ask every server start_server() started to exit and give uvicorn a beat to land."""
-    for server in _SERVERS:
-        server.should_exit = True
-    await asyncio.sleep(0.5)
-
-
+  """Ask every server start_server() started to exit and give uvicorn a beat to land."""
+  for server in _SERVERS:
+    server.should_exit = True
+  await asyncio.sleep(0.5)
 async def wait_for_terminal_run(session_id: str, run_id: str, label: str) -> tuple[object, str]:
     """Poll one Run until it carries a terminal fact; the timeout is an explicit failure."""
     store = deps_tree().runs

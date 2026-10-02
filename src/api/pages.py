@@ -24,7 +24,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from starlette.responses import Response
 
-from src.agents.transcription.registry import build_transcription_backends
 from src.api.code_server import is_code_server_available
 from src.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
@@ -59,7 +58,6 @@ from src.core.constants import (
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import SessionStatus
-from src.core.session_tree_preview import is_preview_mode
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.threads import ThreadManager
@@ -970,6 +968,10 @@ async def index(
   transcript); ``/?session=<parent>&thread=<id>`` opens one legacy worker
   thread projected into the same main-chat view, read-only.
   """
+  # The M99 import floor carries no speech stack (the M99 row's rule) and no
+  # preview probe; both serve only this page's context build.
+  from src.agents.transcription.registry import build_transcription_backends
+  from src.core.session_tree_preview import is_preview_mode
   load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(

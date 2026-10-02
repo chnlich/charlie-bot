@@ -43,7 +43,7 @@ from src.api.responses import (
     request_wants_gzip,
 )
 from src.api.threads import view_thread_rows
-from src.core import claude_accounts, sidebar_state, task_completion, thinking_state
+from src.core import claude_accounts, sidebar_state, thinking_state
 from src.core.chat_events import chat_events_path
 from src.core.compression import gzip_level1
 from src.core.config import (
@@ -53,7 +53,6 @@ from src.core.config import (
 )
 from src.core.constants import BackendType
 from src.core.control_events import sha256_hex
-from src.core.cron_sequence import bound_task_name
 from src.core.event_types import BACKEND_SWITCHED
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import BoundedMemo, StatSignatureMemo
@@ -102,8 +101,6 @@ from src.core.sessions import (
 )
 from src.core.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.core.takeoff_gate import DelegationBlockedError
-from src.core.task_execution import assemble_coherent_snapshot
-from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.core.task_sessions import (
     AGENT_CREATE_SCOPE_REFUSAL,
     TASK_CREATE_REQUEST_ID_REQUIRED,
@@ -397,6 +394,7 @@ def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[s
   if (hit is not None and now_utc < hit[3] and hit[1] == ids and fingerprint == hit[0]):
     return hit[2]
   out: dict[str, dict] = {}
+  from src.core.cron_sequence import bound_task_name  # the M99 import floor carries no schedule chain
   for session_id in ids:
     task_name = bound_task_name(session_id, tasks)
     if task_name is None:
@@ -2003,6 +2001,10 @@ async def get_effective_prompt(
     if not cfg.backends.options:
       raise HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
+  # The M99 import floor carries no launch-snapshot stack; the assembly rides the
+  # endpoints that render it.
+  from src.core.task_execution import assemble_coherent_snapshot
+  from src.core.task_prompts import TaskPromptError
   try:
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(cfg, task_mgr, meta, resolved_kind, option)
   except TaskPromptError as e:
@@ -2063,6 +2065,7 @@ async def get_run_context(
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
     raise HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
+  from src.core.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
@@ -2208,6 +2211,7 @@ async def complete_session_task(
   names one); the close re-evaluates only after that Run succeeds. Duplicate
   request ids replay the original outcome, across later epochs included.
   """
+  from src.core import task_completion
   evidence = task_completion.CompletionEvidence(summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
   try:
     status, payload = await task_mgr.completion.complete_task(

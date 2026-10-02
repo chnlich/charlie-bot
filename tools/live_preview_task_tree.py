@@ -174,11 +174,11 @@ async def run_harness(args: argparse.Namespace) -> None:
 
     from src.core.constants import INHERITED_IDENTITY_ENV_VARS
     from tools.browser_harness_session_tree_preview import (
-      build_source_home,
-      preview_instance_env,
-      preview_invocation,
-      trial_home_root,
-      wait_preview_ready,
+        build_source_home,
+        preview_instance_env,
+        preview_invocation,
+        trial_home_root,
+        wait_preview_ready,
     )
 
     evidence_dir = Path(args.evidence_dir)

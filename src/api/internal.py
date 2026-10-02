@@ -16,10 +16,8 @@ from src.api.deps import (
 )
 from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
-from src.core import discord_listener
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, get_config
-from src.core.discord_commands import check_setup, read_thread
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
     ImproveState,
@@ -50,12 +48,6 @@ from src.core.models import (
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
-from src.core.slack_listener import (
-    SlackReplyError,
-    ack_messages,
-    assert_thread_fresh,
-    post_reply,
-)
 from src.core.spawner import (
     resolve_requested_subagent_backend_model,
     select_verify_backend,
@@ -63,7 +55,6 @@ from src.core.spawner import (
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
-from src.core.thread_entry import ThreadReplyError
 from src.core.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
 log = LazyStructlogLogger()
@@ -586,6 +577,11 @@ async def slack_reply(
   eligible thread messages above the session's watermark refuse with a 412
   ``stale_thread`` payload naming each unseen message, before any chunk posts.
   """
+  from src.core.slack_listener import (
+      SlackReplyError,
+      assert_thread_fresh,
+      post_reply,
+  )
   try:
     await assert_thread_fresh(req.session_id, cfg, session_mgr)
     return await post_reply(req.session_id, req.text, cfg, session_mgr)
@@ -610,6 +606,7 @@ async def slack_ack(
   watermark is an idempotent no-op counted as acked. Refusals map
   SlackReplyError's status: 404 unknown session, 409 no Slack thread.
   """
+  from src.core.slack_listener import SlackReplyError, ack_messages
   try:
     return await ack_messages(req.session_id, req.message_ids, cfg, session_mgr)
   except SlackReplyError as exc:
@@ -633,6 +630,10 @@ async def discord_reply(
   above the session's watermark refuse with a 412 ``stale_thread`` payload
   naming each unseen message, before any chunk posts.
   """
+  # The M99 server import floor carries no Discord-gateway stack for endpoints a
+  # server may never call; the imports ride the handlers that reach the gateway.
+  from src.core import discord_listener
+  from src.core.thread_entry import ThreadReplyError
   try:
     await discord_listener.assert_thread_fresh(req.session_id, cfg, session_mgr)
     return await discord_listener.post_reply(req.session_id, req.text, cfg, session_mgr)
@@ -659,6 +660,8 @@ async def discord_read(
   thread, 422 a *url* that is not a discord.com link, 404 a channel the bot
   cannot see, 502 Discord refused the read.
   """
+  from src.core.discord_commands import read_thread
+  from src.core.thread_entry import ThreadReplyError
   try:
     return await read_thread(req.session_id, req.url, req.limit, cfg, session_mgr)
   except ThreadReplyError as exc:
@@ -678,6 +681,8 @@ async def discord_check(
   not set, 502 when Discord refuses the token (a 401 means it is invalid). The
   readback carries no token.
   """
+  from src.core.discord_commands import check_setup
+  from src.core.thread_entry import ThreadReplyError
   try:
     return await check_setup(cfg)
   except ThreadReplyError as exc:

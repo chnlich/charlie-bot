@@ -267,37 +267,35 @@ async def wait_for_worktree(tree: TaskTreeManager, session_id: str, run_id: str,
   pytest.fail(f"run {run_id} never recorded its worktree within {timeout}s")
 
 
-async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeout: float,
-                                   what: str) -> RunRecord:
-    """Poll a session's runs until its first review Run carries a terminal fact; return it.
+async def wait_for_review_terminal(tree: TaskTreeManager, session_id: str, timeout: float, what: str) -> RunRecord:
+  """Poll a session's runs until its first review Run carries a terminal fact; return it.
 
     The review Run's id is not known before the work Run's gate releases, so the
     poll matches on ``kind == "review"`` rather than on a run id.
     """
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
-        runs = {r.id: r for r in tree.runs.list_run_records_sync(session_id)}
-        review = [r for r in runs.values() if r.kind == "review"]
-        if review and tree.runs.terminal_outcome(
-                tree.runs.load_events_sync(session_id), review[0].id) is not None:
-            return review[0]
-        await asyncio.sleep(0.1)
-    pytest.fail(f"{what} never reached a terminal fact within {timeout}s")
+  deadline = asyncio.get_event_loop().time() + timeout
+  while asyncio.get_event_loop().time() < deadline:
+    runs = {r.id: r for r in tree.runs.list_run_records_sync(session_id)}
+    review = [r for r in runs.values() if r.kind == "review"]
+    if review and tree.runs.terminal_outcome(tree.runs.load_events_sync(session_id), review[0].id) is not None:
+      return review[0]
+    await asyncio.sleep(0.1)
+  pytest.fail(f"{what} never reached a terminal fact within {timeout}s")
 
 
 def work_run_worktree(tree: TaskTreeManager, worker_id: str) -> Path:
-    """The one work-kind run's worktree path (asserts exactly one work run)."""
-    work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
-    assert len(work) == 1 and work[0].worktree_path
-    return Path(work[0].worktree_path)
+  """The one work-kind run's worktree path (asserts exactly one work run)."""
+  work = [r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work"]
+  assert len(work) == 1 and work[0].worktree_path
+  return Path(work[0].worktree_path)
 
 
 def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
-    """The implement backend's side effect: commit marker.txt on the work branch."""
-    wt = work_run_worktree(tree, worker_id)
-    (wt / "marker.txt").write_text("implemented\n")
-    run_git(wt, "add", "-A")
-    run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
+  """The implement backend's side effect: commit marker.txt on the work branch."""
+  wt = work_run_worktree(tree, worker_id)
+  (wt / "marker.txt").write_text("implemented\n")
+  run_git(wt, "add", "-A")
+  run_git(wt, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "implement marker")
 
 
 # ---------------------------------------------------------------------------
@@ -307,93 +305,90 @@ def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
 
 @pytest.mark.asyncio
 async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-    builds = install_backends(
-        monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    patch_instructions_content(monkeypatch)
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  backend = SpawningScriptedBackend([result_event("SMOKE reply")])
+  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
 
-    admitted = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.",
-        actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True
-    run_id = decision["run_id"]
-    assert run_id is not None
+  admitted = await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  run_id = decision["run_id"]
+  assert run_id is not None
 
-    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-    from conftest import drain_session_consumer
-    await drain_session_consumer(manager.id, timeout=5)
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  from conftest import drain_session_consumer
+  await drain_session_consumer(manager.id, timeout=5)
 
-    runs = tree.runs.list_run_records_sync(manager.id)
-    assert [r.id for r in runs] == [run_id]
-    assert run.kind == "manager_turn"
-    assert run.pid == 424001 and run.pid_start == "1-424000"
-    assert run.native_session_id is None or isinstance(run.native_session_id, str)
-    assert run.model == "fake-model"
-    # The ref names the Run's own transport dir (the backend double writes no
-    # raw file; the live smoke asserts the real file exists).
-    assert run.raw_log_ref == str(
-        tree.runs.run_dir(manager.id, run_id) / "agent.raw.ndjson")
-    assert run.input_event_ids == [str(admitted["id"])]
-    assert outcome == "success"
-    # The exact claimed batch is acknowledged; no second synthetic USER copy
-    # was persisted and no master_run mirror exists for the v2 turn.
-    assert tree.dispatch.pending_inputs(manager.id) == []
-    events = tree.events.load_events(manager.id)
-    assert [e["type"] for e in events if e["type"] == ET.USER] == ["user"]
-    assert not (cfg.sessions_dir / manager.id / "data" / "master_runs").exists()
-    # The launched process identity is the precondition of a run credential:
-    # a queued run's token is rejected, a launched run's is accepted, and a
-    # finished run's is not.
-    from fastapi import HTTPException
+  runs = tree.runs.list_run_records_sync(manager.id)
+  assert [r.id for r in runs] == [run_id]
+  assert run.kind == "manager_turn"
+  assert run.pid == 424001 and run.pid_start == "1-424000"
+  assert run.native_session_id is None or isinstance(run.native_session_id, str)
+  assert run.model == "fake-model"
+  # The ref names the Run's own transport dir (the backend double writes no
+  # raw file; the live smoke asserts the real file exists).
+  assert run.raw_log_ref == str(tree.runs.run_dir(manager.id, run_id) / "agent.raw.ndjson")
+  assert run.input_event_ids == [str(admitted["id"])]
+  assert outcome == "success"
+  # The exact claimed batch is acknowledged; no second synthetic USER copy
+  # was persisted and no master_run mirror exists for the v2 turn.
+  assert tree.dispatch.pending_inputs(manager.id) == []
+  events = tree.events.load_events(manager.id)
+  assert [e["type"] for e in events if e["type"] == ET.USER] == ["user"]
+  assert not (cfg.sessions_dir / manager.id / "data" / "master_runs").exists()
+  # The launched process identity is the precondition of a run credential:
+  # a queued run's token is rejected, a launched run's is accepted, and a
+  # finished run's is not.
+  from fastapi import HTTPException
 
-    from src.api.deps import require_caller
-    from src.core.run_token import RunTokenClaims
-    queued_claims = RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
-    await tree.runs.register_run(RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
-    with pytest.raises(HTTPException, match="has not launched"):
-        await require_caller(_bearer(queued_claims), tree.runs)
-    launched_claims = RunTokenClaims(session_id=manager.id, run_id="run-launched", agent=manager.name or "m")
-    await tree.runs.register_run(RunRecord(id="run-launched", session_id=manager.id, kind="manager_turn"))
-    await tree.runs.record_launch(manager.id, "run-launched", pid=424900, pid_start="ps-900")
-    identity = await require_caller(_bearer(launched_claims), tree.runs)
-    assert identity.claims.run_id == "run-launched"
-    finished_claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent=manager.name or "m")
-    with pytest.raises(HTTPException, match="active run"):
-        await require_caller(_bearer(finished_claims), tree.runs)
-    assert len(builds) == 1
-    assert builds[0]["kwargs"].get("on_spawn") is not None
-    captured_env = builds[0]["backend"].env or {}
-    assert captured_env.get(SESSION_ID_ENV_VAR) == manager.id
-    assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
+  from src.api.deps import require_caller
+  from src.core.run_token import RunTokenClaims
+  queued_claims = RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
+  await tree.runs.register_run(RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
+  with pytest.raises(HTTPException, match="has not launched"):
+    await require_caller(_bearer(queued_claims), tree.runs)
+  launched_claims = RunTokenClaims(session_id=manager.id, run_id="run-launched", agent=manager.name or "m")
+  await tree.runs.register_run(RunRecord(id="run-launched", session_id=manager.id, kind="manager_turn"))
+  await tree.runs.record_launch(manager.id, "run-launched", pid=424900, pid_start="ps-900")
+  identity = await require_caller(_bearer(launched_claims), tree.runs)
+  assert identity.claims.run_id == "run-launched"
+  finished_claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent=manager.name or "m")
+  with pytest.raises(HTTPException, match="active run"):
+    await require_caller(_bearer(finished_claims), tree.runs)
+  assert len(builds) == 1
+  assert builds[0]["kwargs"].get("on_spawn") is not None
+  captured_env = builds[0]["backend"].env or {}
+  assert captured_env.get(SESSION_ID_ENV_VAR) == manager.id
+  assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
 
 
 def _bearer(claims):
-    """A signed run-token request against the synthetic home's seeded key."""
-    import src.core.config as core_config
-    from src.core.run_token import sign_run_token
-    key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
-    token = sign_run_token(claims, key)
-    # Lowercase key: the real Header object is case-insensitive; the plain
-    # dict double must match the exact key require_caller reads.
-    return type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
+  """A signed run-token request against the synthetic home's seeded key."""
+  import src.core.config as core_config
+  from src.core.run_token import sign_run_token
+  key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
+  token = sign_run_token(claims, key)
+  # Lowercase key: the real Header object is case-insensitive; the plain
+  # dict double must match the exact key require_caller reads.
+  return type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
 
 
 def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
-    from src.agents.master_cc_queue import streaming_manager
-    from src.core.task_execution import TaskExecutionAdapter
-    monkeypatch.setattr(streaming_manager, "broadcast", _async_noop)
-    return TaskExecutionAdapter(cfg, session_mgr, tree)
+  from src.agents.master_cc_queue import streaming_manager
+  from src.core.task_execution import TaskExecutionAdapter
+  monkeypatch.setattr(streaming_manager, "broadcast", _async_noop)
+  return TaskExecutionAdapter(cfg, session_mgr, tree)
 
 
 async def _async_noop(*args, **kwargs) -> None:
-    return None
+  return None
 
 
 async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, content) -> list:
-    """The launch rig the implement and quick-edit tests share: silent-broadcast
+  """The launch rig the implement and quick-edit tests share: silent-broadcast
     executor, the parent-manager build double, the instructions patch, the
     operator credentials, and the user takeoff message through admit_input.
 
@@ -401,49 +396,52 @@ async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, con
     dispatches, and the build double before the manager turn builds. Returns
     the pm_builds list for tests that assert the parent turn built one.
     """
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    pm_builds = []
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-    patch_instructions_content(monkeypatch)
-    stub_credentials({"charliebot": {"access_key": "op-secret"}})
-    # The work-run launch re-judges the nearest-user authorization gate; the
-    # manager carries the real user takeoff message the delegation rode in on.
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content=content, actor="user")
-    return pm_builds
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  pm_builds = []
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
+  patch_instructions_content(monkeypatch)
+  stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  # The work-run launch re-judges the nearest-user authorization gate; the
+  # manager carries the real user takeoff message the delegation rode in on.
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content=content, actor="user")
+  return pm_builds
 
 
 @pytest.mark.asyncio
 async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The one-click New Task product (empty goal, no acceptance, no refs) takes
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The one-click New Task product (empty goal, no acceptance, no refs) takes
     the user's first message through the normal durable input path: the message
     is admitted, one manager_turn Run claims exactly that batch, and the turn
     executes — no Goal-required obstacle anywhere in the dispatch."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(
-        tree, parent=None, request_id="one-click-root", profile="manager",
-        task=TaskSpec(goal="", acceptance=[], context_refs=[]), name=None)
-    assert manager.task is not None and manager.task.goal == ""
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    backend = SpawningScriptedBackend([result_event("SMOKE reply")])
-    install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    patch_instructions_content(monkeypatch)
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(
+      tree,
+      parent=None,
+      request_id="one-click-root",
+      profile="manager",
+      task=TaskSpec(goal="", acceptance=[], context_refs=[]),
+      name=None)
+  assert manager.task is not None and manager.task.goal == ""
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  backend = SpawningScriptedBackend([result_event("SMOKE reply")])
+  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
 
-    admitted = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="First message on a brand-new task.",
-        actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True
-    run_id = decision["run_id"]
+  admitted = await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="First message on a brand-new task.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  run_id = decision["run_id"]
 
-    run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
-    assert outcome == "success"
-    assert run.kind == "manager_turn"
-    assert run.input_event_ids == [str(admitted["id"])]
-    assert tree.dispatch.pending_inputs(manager.id) == []
-    events = tree.events.load_events(manager.id)
-    user_events = [e for e in events if e["type"] == ET.USER]
-    assert [e["content"] for e in user_events] == ["First message on a brand-new task."]
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  assert outcome == "success"
+  assert run.kind == "manager_turn"
+  assert run.input_event_ids == [str(admitted["id"])]
+  assert tree.dispatch.pending_inputs(manager.id) == []
+  events = tree.events.load_events(manager.id)
+  user_events = [e for e in events if e["type"] == ET.USER]
+  assert [e["content"] for e in user_events] == ["First message on a brand-new task."]
 
 
 @pytest.mark.asyncio

@@ -2169,6 +2169,30 @@ def run_reply_stdin_case(
   assert json.loads(capsys.readouterr().out) == readback
 
 
+def run_reply_file_case(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], verb: str,
+    readback: dict[str, Any]) -> None:
+  """Drive one platform reply CLI's ``--file <path>`` arm with the reply text on disk.
+
+  The reply mains share their transport (src.cli.common's read_reply_text and
+  post_internal_api, the one-JSON-line readback print), so the file contract
+  is asserted once here per verb: the file's text rides the body's ``text``
+  beside the resolved session id, the readback prints as one JSON line, and
+  the post names the platform's endpoint.
+  """
+  cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
+  reply_file = tmp_path / "reply.md"
+  reply_file.write_text("the answer", encoding="utf-8")
+  with patched_cli_post(cfg, [verb, "reply", "--file", str(reply_file)],
+                        return_value=make_json_response(readback)) as post_mock:
+    importlib.import_module(f"src.cli.{verb}").main()
+  assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
+  assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": "the answer"}
+  out = capsys.readouterr().out
+  assert out.count("\n") == 1
+  assert json.loads(out) == readback
+
+
 def make_task_spawner(tasks: list[asyncio.Task]) -> Callable[..., asyncio.Task]:
   """A create_logged_task substitute that spawns eagerly and captures every task."""
 

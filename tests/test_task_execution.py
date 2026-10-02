@@ -688,81 +688,76 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
 @pytest.mark.asyncio
 async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launches(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    patch_instructions_content(monkeypatch)
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  patch_instructions_content(monkeypatch)
 
-    # A manager round claims its batch and fails. The failed round counts as
-    # handled whatever its outcome: its batch never reappears as pending, and
-    # a new message dispatches a new round at once — no explicit retry gate.
-    first_in = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
-    await tree.runs.register_run(
-        RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn",
-                  backend="fake", model="fake-model"))
-    async with tree.control_lock:
-      await tree.dispatch.claim_input_batch_locked(manager.id, "run-failed")
-    await tree.dispatch.finish_run(manager.id, "run-failed", outcome="failed", exit_code=1)
-    assert tree.dispatch.pending_inputs(manager.id) == []
-    admitted = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
-    backend = SpawningScriptedBackend([result_event("next round")])
-    install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True
-    next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
-    assert next_run.input_event_ids == [str(admitted["id"])]
+  # A manager round claims its batch and fails. The failed round counts as
+  # handled whatever its outcome: its batch never reappears as pending, and
+  # a new message dispatches a new round at once — no explicit retry gate.
+  first_in = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
+  await tree.runs.register_run(
+      RunRecord(id="run-failed", session_id=manager.id, kind="manager_turn", backend="fake", model="fake-model"))
+  async with tree.control_lock:
+    await tree.dispatch.claim_input_batch_locked(manager.id, "run-failed")
+  await tree.dispatch.finish_run(manager.id, "run-failed", outcome="failed", exit_code=1)
+  assert tree.dispatch.pending_inputs(manager.id) == []
+  admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Next.", actor="user")
+  backend = SpawningScriptedBackend([result_event("next round")])
+  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  next_run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  assert next_run.input_event_ids == [str(admitted["id"])]
 
-    # The explicit retry of the failed manager round reruns that round's OWN
-    # batch: the retry Run binds the original's input_event_ids, so it
-    # launches with nothing pending and finishes with exactly that payload.
-    retry = await tree.create_retry(manager.id, "retry-1", "run-failed")
-    retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
-    assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
-    backend2 = SpawningScriptedBackend([result_event("retried")])
-    install_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
-    retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
-    assert retried.input_event_ids == [str(first_in["id"])]
-    finished = [e for e in tree.events.load_events(manager.id)
-                if e["type"] == ET.RUN_FINISHED and e.get("run_id") == retry["run_id"]]
-    assert finished and finished[0]["input_event_ids"] == [str(first_in["id"])]
+  # The explicit retry of the failed manager round reruns that round's OWN
+  # batch: the retry Run binds the original's input_event_ids, so it
+  # launches with nothing pending and finishes with exactly that payload.
+  retry = await tree.create_retry(manager.id, "retry-1", "run-failed")
+  retry_run = await tree.runs.get_run(manager.id, retry["run_id"])
+  assert retry_run is not None and retry_run.input_event_ids == [str(first_in["id"])]
+  backend2 = SpawningScriptedBackend([result_event("retried")])
+  install_backends(monkeypatch, [backend2], BUILD_BACKEND_PATCH_TARGET)
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True and decision["run_id"] == retry["run_id"]
+  retried, _retried_outcome = await wait_for_terminal_run(tree, manager.id, retry["run_id"])
+  assert retried.input_event_ids == [str(first_in["id"])]
+  finished = [
+      e for e in tree.events.load_events(manager.id)
+      if e["type"] == ET.RUN_FINISHED and e.get("run_id") == retry["run_id"]
+  ]
+  assert finished and finished[0]["input_event_ids"] == [str(first_in["id"])]
 
-    # A stop request on a queued retry keeps THAT retry from ever launching;
-    # the pending message still dispatches as a fresh round of its own.
-    third_in = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="Take off. Again.", actor="user")
-    retry2 = await tree.create_retry(manager.id, "retry-2", "run-failed")
-    await tree.runs.request_stop(manager.id, retry2["run_id"], "stop-1")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision["launch"] is True and decision["run_id"] != retry2["run_id"]
-    fresh_run, _fresh_outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
-    assert fresh_run.input_event_ids == [str(third_in["id"])]
-    stopped_run = await tree.runs.get_run(manager.id, retry2["run_id"])
-    assert stopped_run is not None and stopped_run.pid is None
-    assert tree.runs.terminal_outcome(
-        tree.runs.load_events_sync(manager.id), retry2["run_id"]) is None
-    assert tree.dispatch.pending_inputs(manager.id) == []
+  # A stop request on a queued retry keeps THAT retry from ever launching;
+  # the pending message still dispatches as a fresh round of its own.
+  third_in = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Again.", actor="user")
+  retry2 = await tree.create_retry(manager.id, "retry-2", "run-failed")
+  await tree.runs.request_stop(manager.id, retry2["run_id"], "stop-1")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True and decision["run_id"] != retry2["run_id"]
+  fresh_run, _fresh_outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  assert fresh_run.input_event_ids == [str(third_in["id"])]
+  stopped_run = await tree.runs.get_run(manager.id, retry2["run_id"])
+  assert stopped_run is not None and stopped_run.pid is None
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(manager.id), retry2["run_id"]) is None
+  assert tree.dispatch.pending_inputs(manager.id) == []
 
 
 @pytest.mark.asyncio
-async def test_first_terminal_fact_wins_governs_followups(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
-    root = await create_task(tree, parent=None, request_id="root")
-    worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
-    await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
-    # Two concurrent finishers: the recorded failed fact stands even though the
-    # losing finisher passed outcome="success", so the worker never closes.
-    await asyncio.gather(
-        tree.dispatch.finish_run(worker.id, "run-w", outcome="failed", exit_code=1),
-        tree.dispatch.finish_run(worker.id, "run-w", outcome="success", exit_code=0),
-    )
-    assert tree.runs.terminal_outcome(
-        tree.runs.load_events_sync(worker.id), "run-w") == "failed"
-    assert tree.task_state(worker.id) == "open"
-    assert [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT] == []
+async def test_first_terminal_fact_wins_governs_followups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  root = await create_task(tree, parent=None, request_id="root")
+  worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
+  # Two concurrent finishers: the recorded failed fact stands even though the
+  # losing finisher passed outcome="success", so the worker never closes.
+  await asyncio.gather(
+      tree.dispatch.finish_run(worker.id, "run-w", outcome="failed", exit_code=1),
+      tree.dispatch.finish_run(worker.id, "run-w", outcome="success", exit_code=0),
+  )
+  assert tree.runs.terminal_outcome(tree.runs.load_events_sync(worker.id), "run-w") == "failed"
+  assert tree.task_state(worker.id) == "open"
+  assert [e for e in tree.events.load_events(root.id) if e["type"] == ET.CHILD_REPORT] == []
 
 
 # ---------------------------------------------------------------------------
@@ -2273,31 +2268,31 @@ def child_reports(tree: TaskTreeManager, session_id: str) -> list[dict]:
 
 
 def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:
-    """Only ENOSPC/EDQUOT enter the retry, wherever they sit on the chain."""
-    from src.core.task_execution import is_out_of_space_error
-    enospc = OSError(errno.ENOSPC, "No space left on device")
-    edquot = OSError(errno.EDQUOT, "Disk quota exceeded")
-    assert is_out_of_space_error(enospc)
-    assert is_out_of_space_error(edquot)
-    assert is_out_of_space_error(RuntimeError("landing failed")) is False
-    assert is_out_of_space_error(PermissionError("raw log locked")) is False
-    # Both chain links: an explicit cause and an implicit context.
-    wrapped_cause = RuntimeError("wrap")
-    wrapped_cause.__cause__ = enospc
-    assert is_out_of_space_error(wrapped_cause)
-    wrapped_context = RuntimeError("wrap")
-    wrapped_context.__context__ = edquot
-    assert is_out_of_space_error(wrapped_context)
-    # A cycle on the context chain must not spin.
-    a: BaseException = RuntimeError("a")
-    b: BaseException = RuntimeError("b")
-    b.__context__ = a
-    a.__context__ = b
-    assert is_out_of_space_error(a) is False
-    # A cause nested behind a non-OSError wrapper is still found.
-    deep: BaseException = ValueError("outer")
-    deep.__cause__ = wrapped_cause
-    assert is_out_of_space_error(deep)
+  """Only ENOSPC/EDQUOT enter the retry, wherever they sit on the chain."""
+  from src.core.task_execution import is_out_of_space_error
+  enospc = OSError(errno.ENOSPC, "No space left on device")
+  edquot = OSError(errno.EDQUOT, "Disk quota exceeded")
+  assert is_out_of_space_error(enospc)
+  assert is_out_of_space_error(edquot)
+  assert is_out_of_space_error(RuntimeError("landing failed")) is False
+  assert is_out_of_space_error(PermissionError("raw log locked")) is False
+  # Both chain links: an explicit cause and an implicit context.
+  wrapped_cause = RuntimeError("wrap")
+  wrapped_cause.__cause__ = enospc
+  assert is_out_of_space_error(wrapped_cause)
+  wrapped_context = RuntimeError("wrap")
+  wrapped_context.__context__ = edquot
+  assert is_out_of_space_error(wrapped_context)
+  # A cycle on the context chain must not spin.
+  a: BaseException = RuntimeError("a")
+  b: BaseException = RuntimeError("b")
+  b.__context__ = a
+  a.__context__ = b
+  assert is_out_of_space_error(a) is False
+  # A cause nested behind a non-OSError wrapper is still found.
+  deep: BaseException = ValueError("outer")
+  deep.__cause__ = wrapped_cause
+  assert is_out_of_space_error(deep)
 
 
 @pytest.mark.asyncio

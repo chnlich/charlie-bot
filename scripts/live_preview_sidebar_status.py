@@ -546,19 +546,17 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--evidence-dir", required=True,
-                        help="Where the screenshots, assertion JSON and tested commit land")
-    parser.add_argument("--backend", default=DEFAULT_BACKEND,
-                        help="The charlie-code backend id the trial instance runs")
-    parser.add_argument("--port", type=int, default=None,
-                        help="Fixed preview port (default: a free port; 18498 is refused)")
-    parser.add_argument("--keep", action="store_true",
-                        help="Keep the preview home for inspection instead of purging it")
-    parser.add_argument("--chrome", default=None)
-    args = parser.parse_args()
-    asyncio.run(run_harness(args))
+  parser = argparse.ArgumentParser(description=__doc__)
+  parser.add_argument(
+      "--evidence-dir", required=True, help="Where the screenshots, assertion JSON and tested commit land")
+  parser.add_argument("--backend", default=DEFAULT_BACKEND, help="The charlie-code backend id the trial instance runs")
+  parser.add_argument(
+      "--port", type=int, default=None, help="Fixed preview port (default: a free port; 18498 is refused)")
+  parser.add_argument("--keep", action="store_true", help="Keep the preview home for inspection instead of purging it")
+  parser.add_argument("--chrome", default=None)
+  args = parser.parse_args()
+  asyncio.run(run_harness(args))
 
 
 if __name__ == "__main__":
-    main()
+  main()

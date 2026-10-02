@@ -439,7 +439,8 @@ const planPanel = (() => {
 
   // -- Data: single commit point ------------------------------------------
 
-  // The only writer of _registry / _loaded / _loadedSessionId. Discards the
+  // Sole writer of _loadedSessionId; the only other writer of _registry /
+  // _loaded is _resetForSessionChange, which only clears. Discards the
   // write when the session has changed (sid !== current) or when a newer
   // fetch generation has superseded this one (monotonic guard against stale
   // completions from a slow/older fetch landing after a newer one).

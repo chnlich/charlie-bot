@@ -393,16 +393,16 @@ class TaskTreeManager:
     self._index_build_generation = -1
     self._facts_memo: dict[str, tuple[list[dict], int, _TaskFacts]] = {}
     self._outcomes_memo: dict[str, tuple[list[dict], int, dict[str, str], int]] = {}
-    # Activity cells: (records_generation, live events or None, archived count
-    # or -1, covered live length or -1, verdict). A None live list marks a
-    # runless node's cell — its verdict is a constant that only a record write
-    # (a generation bump) can move, so it skips the events load the
-    # runs-bearing key needs. The covered length is in the key because the
-    # events cache takes an append in place: the list identity and the
-    # archived extent survive a new fact, and unlike the suffix folds this
-    # memo returns a stored verdict, so the only append a key check can see
-    # is the length move.
-    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, int, TaskTreeActivity]] = {}
+    # Activity cells: (records_generation, live events or None, covered live
+    # length or -1, verdict). A None live list marks a runless node's cell —
+    # its verdict is a constant that only a record write (a generation bump)
+    # can move, so it skips the events load the runs-bearing key needs. The
+    # covered length is in the key because the events cache takes an append in
+    # place: the list identity survives a new fact, and unlike the suffix
+    # folds this memo returns a stored verdict, so the only append a key
+    # check can see is the length move. The archived extent needs no slot —
+    # it rides the identity under the facts memo's contract (see _facts_of).
+    self._activity_memo: dict[str, tuple[int, list[dict] | None, int, TaskTreeActivity]] = {}
     self._prompt_bodies_dir = cfg.charliebot_home / PROMPT_BODIES_DIR_NAME
 
   @property
@@ -660,18 +660,24 @@ class TaskTreeManager:
   def _facts_of(self, session_id: str) -> _TaskFacts:
     """The session's folded task/run facts over the full history (suffix-memoized).
 
-    The memo rides the chat-events cache's list identity (append-only growth or
-    wholesale replacement) plus the archived extent: token streaming extends
-    the fold by its suffix, and a rotation re-keys the archived half. A
+    The memo rides the chat-events cache's list identity alone (append-only
+    growth or wholesale replacement): token streaming extends the fold by its
+    suffix, and a rotation re-keys the archived half because it rewrites the
+    live file and drops the events cache, replacing the list. The archived
+    extent rides that identity, so the warm path never re-derives it:
+    archive_offset's only writer (the scheduled recycle) pairs the bump with
+    the same rewrite and drop, so a warm path holding the list holds the
+    extent, and the cell's stored count feeds the suffix fold. A
     task_imported fact in the suffix moves the input boundary, so the suffix
     fold that sees one restarts from the whole history.
     """
     live = self._sessions.load_chat_events_sync(session_id)
-    archived_count = self._archived_event_count(session_id, live)
     cached = self._facts_memo.get(session_id)
-    if cached is not None and cached[0] is live and cached[1] == archived_count:
+    if cached is not None and cached[0] is live:
       facts = cached[2]
+      archived_count = cached[1]
     else:
+      archived_count = self._archived_event_count(session_id, live)
       facts = _TaskFacts()
       if archived_count:
         facts = _fold_task_events(facts, self._load_archived_events(session_id, archived_count), 0)
@@ -693,14 +699,14 @@ class TaskTreeManager:
   def _run_outcomes_of(self, session_id: str, live: list[dict], archived_count: int) -> dict[str, str]:
     """The session's run-finished outcome map over the full history (suffix-memoized).
 
-    Rides the same key the facts memo does — the live events cache's list
-    identity plus the archived extent — with the covered cursor in the cell:
-    an append folds only the new suffix (a run_finished fact never
-    un-happens, so the merge stays last-finish-wins), and a rotation re-keys
-    the whole fold.
+    Rides the facts memo's key (``_facts_of`` owns the extent-through-identity
+    contract) — the live events cache's list identity — with the covered
+    cursor in the cell: an append folds only the new suffix (a run_finished
+    fact never un-happens, so the merge stays last-finish-wins), and a
+    rotation's replaced list re-keys the whole fold.
     """
     cached = self._outcomes_memo.get(session_id)
-    if cached is not None and cached[0] is live and cached[1] == archived_count:
+    if cached is not None and cached[0] is live:
       outcomes, covered = cached[2], cached[3]
     else:
       outcomes = _run_outcomes(self._load_archived_events(session_id, archived_count)) if archived_count else {}
@@ -755,11 +761,12 @@ class TaskTreeManager:
     Memoized per node on the inputs that can move the verdict: the run
     records' generation (every record mutation funnels through one
     :meth:`RunStore.write_record` bump) plus, for a node with runs, the
-    chat-events identity, its covered length, and the archived extent the
-    facts/outcomes memos key on. The length is in the key because the events
-    cache takes an append in place — identity and archived extent survive a
+    chat-events identity and its covered length. The length is in the key
+    because the events cache takes an append in place — identity survives a
     new fact, and a fact transition with no record write (a stop request, a
-    close/reopen) moves only the length.
+    close/reopen) moves only the length. The archived extent needs no key
+    slot: it rides the identity under the facts memo's contract (see
+    ``_facts_of``).
     A verdict that consulted /proc is never stored: a process death moves it
     with no file write to bump the key, so that node re-derives until its
     runs settle (the sidebar probe's recheck_liveness contract, unchanged).
@@ -768,18 +775,17 @@ class TaskTreeManager:
     cached = self._activity_memo.get(session_id)
     if cached is not None and cached[0] == generation:
       if cached[1] is None:
-        return cached[4]
+        return cached[3]
       live = self._sessions.load_chat_events_sync(session_id)
-      archived_count = self._archived_event_count(session_id, live)
-      if cached[1] is live and cached[2] == archived_count and cached[3] == len(live):
-        return cached[4]
+      if cached[1] is live and cached[2] == len(live):
+        return cached[3]
     runs = self.runs.list_run_records_sync(session_id)
     if not runs:
       # No Run is no activity: the derivation's own guard answers without any
       # event load, so a listing's per-descendant derivation over a runless
       # node pays one runs-dir stat, not the node's whole event history.
       activity = derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
-      self._activity_memo[session_id] = (generation, None, -1, -1, activity)
+      self._activity_memo[session_id] = (generation, None, -1, activity)
       return activity
     live = self._sessions.load_chat_events_sync(session_id)
     archived_count = self._archived_event_count(session_id, live)
@@ -797,7 +803,7 @@ class TaskTreeManager:
     if probed:
       self._activity_memo.pop(session_id, None)
     else:
-      self._activity_memo[session_id] = (generation, live, archived_count, len(live), activity)
+      self._activity_memo[session_id] = (generation, live, len(live), activity)
     return activity
 
   def activity_pair_of(self, session_id: str) -> tuple[bool, str]:

@@ -13,8 +13,6 @@ dependencies = [
     "numpy>=2.5.1",
     "orjson>=3.11.0",
     "pydantic>=2.12.5",
-    "pytest>=9.0.2",
-    "pytest-asyncio>=1.3.0",
     "python-multipart>=0.0.22",
     "pyyaml>=6.0.3",
     "requests>=2.33.0",
@@ -31,6 +29,8 @@ dependencies = [
 
 [dependency-groups]
 dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
     "ruff==0.16.1",
 ]
 # Optional GPU voice engine (qwen3_hf): official transformers Qwen3-ASR weights on

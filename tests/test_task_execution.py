@@ -2163,7 +2163,7 @@ def inject_run_record_write_fault(
     err: int = errno.ENOSPC,
     on_raise: Callable[[], None] | None = None,
 ) -> list[bool]:
-    """The first *times* run-metadata writes raise OSError(*err*); every other
+  """The first *times* run-metadata writes raise OSError(*err*); every other
     write — and every later one — writes through the real method.
 
     Sits at ``RunStore.write_record`` (the one record-mirror write funnel over
@@ -2171,108 +2171,114 @@ def inject_run_record_write_fault(
     write, the one that carries ``ended_at``. Returns one bool per matching
     write — True when that write raised — in order.
     """
-    from src.core.runs import RunStore
-    real = RunStore.write_record
-    state = {"raised": 0}
-    hits: list[bool] = []
+  from src.core.runs import RunStore
+  real = RunStore.write_record
+  state = {"raised": 0}
+  hits: list[bool] = []
 
-    async def flaky(self, session_id, run):
-        if not only_finished or run.ended_at is not None:
-            if state["raised"] < times:
-                state["raised"] += 1
-                hits.append(True)
-                if on_raise is not None:
-                    on_raise()
-                raise OSError(err, os.strerror(err))
-            hits.append(False)
-        return await real(self, session_id, run)
+  async def flaky(self, session_id, run):
+    if not only_finished or run.ended_at is not None:
+      if state["raised"] < times:
+        state["raised"] += 1
+        hits.append(True)
+        if on_raise is not None:
+          on_raise()
+        raise OSError(err, os.strerror(err))
+      hits.append(False)
+    return await real(self, session_id, run)
 
-    monkeypatch.setattr(RunStore, "write_record", flaky)
-    return hits
+  monkeypatch.setattr(RunStore, "write_record", flaky)
+  return hits
 
 
 def write_raw_result(run_dir: Path, text: str, *, age_seconds: float = 0.0) -> tuple[Path, datetime]:
-    """The run's raw transport log with one successful result event, optionally
+  """The run's raw transport log with one successful result event, optionally
     mtime-stamped into the past — the drain's truth source. Returns (path, mtime)."""
-    raw = run_dir / RAW_LOG_NAME
-    raw.parent.mkdir(parents=True, exist_ok=True)
-    raw.write_text(json.dumps({
-        "type": "result", "subtype": "success", "is_error": False, "result": text,
-    }) + "\n", encoding="utf-8")
-    mtime = datetime.fromtimestamp(raw.stat().st_mtime, tz=UTC)
-    if age_seconds:
-        ts = time.time() - age_seconds
-        os.utime(raw, (ts, ts))
-        mtime = datetime.fromtimestamp(ts, tz=UTC)
-    return raw, mtime
+  raw = run_dir / RAW_LOG_NAME
+  raw.parent.mkdir(parents=True, exist_ok=True)
+  raw.write_text(
+      json.dumps({
+          "type": "result",
+          "subtype": "success",
+          "is_error": False,
+          "result": text,
+      }) + "\n", encoding="utf-8")
+  mtime = datetime.fromtimestamp(raw.stat().st_mtime, tz=UTC)
+  if age_seconds:
+    ts = time.time() - age_seconds
+    os.utime(raw, (ts, ts))
+    mtime = datetime.fromtimestamp(ts, tz=UTC)
+  return raw, mtime
 
 
 async def _wired_root_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """(cfg, session_mgr, tree, manager): a root manager task over build_env's home, its
+  """(cfg, session_mgr, tree, manager): a root manager task over build_env's home, its
     dispatch wired to the silent-broadcast adapter — the rig prefix the manager-turn tests
     share. Each site unpacks the names it uses."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    return cfg, session_mgr, tree, manager
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  return cfg, session_mgr, tree, manager
 
 
-async def _manager_with_worker_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-                                     task_type: str | None = None):
-    """(cfg, session_mgr, tree, manager, worker): a manager node with one
+async def _manager_with_worker_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str | None = None):
+  """(cfg, session_mgr, tree, manager, worker): a manager node with one
     worker child, the shape the end-landing tests report against."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    worker = await create_task(
-        tree, parent=manager.id, request_id="child", profile="worker",
-        task=TaskSpec(goal="do the work", task_type=task_type))
-    return cfg, session_mgr, tree, manager, worker
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  worker = await create_task(
+      tree,
+      parent=manager.id,
+      request_id="child",
+      profile="worker",
+      task=TaskSpec(goal="do the work", task_type=task_type))
+  return cfg, session_mgr, tree, manager, worker
 
 
 class _IdentityTranslator:
-    """A translate-only double: the staged raw bytes already carry standard
+  """A translate-only double: the staged raw bytes already carry standard
     event dicts, so a resume's stream translator passes them through."""
 
-    _POST_RESULT_TIMEOUT = 5.0
+  _POST_RESULT_TIMEOUT = 5.0
 
-    def translate_event(self, event: dict) -> list[dict]:
-        return [event]
+  def translate_event(self, event: dict) -> list[dict]:
+    return [event]
 
 
 def install_worker_launch_and_resume_backends(monkeypatch: pytest.MonkeyPatch, backends: list) -> list[dict]:
-    """Serve worker launcher builds one at a time; translate-only builds (the
+  """Serve worker launcher builds one at a time; translate-only builds (the
     resume follow's fresh translate) get the identity translator instead of
     consuming a launcher double."""
-    builds: list[dict] = []
-    queue = list(backends)
+  builds: list[dict] = []
+  queue = list(backends)
 
-    def fake_build(option, cfg, **kwargs):
-        if kwargs.get("on_spawn") is None:
-            return _IdentityTranslator()
-        backend = queue.pop(0)
-        on_spawn = kwargs.get("on_spawn")
-        if on_spawn is not None:
-            backend.set_on_spawn(on_spawn)
-        builds.append({"option": option, "backend": backend})
-        return backend
+  def fake_build(option, cfg, **kwargs):
+    if kwargs.get("on_spawn") is None:
+      return _IdentityTranslator()
+    backend = queue.pop(0)
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      backend.set_on_spawn(on_spawn)
+    builds.append({"option": option, "backend": backend})
+    return backend
 
-    monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, fake_build)
-    return builds
+  monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, fake_build)
+  return builds
 
 
 async def poll_until(predicate, *, timeout: float = 5.0, poll: float = 0.02, what: str) -> None:
-    """Poll a sync predicate to truth without starving the event loop the work
+  """Poll a sync predicate to truth without starving the event loop the work
     runs on; fail naming *what* on timeout."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if predicate():
-            return
-        await asyncio.sleep(poll)
-    pytest.fail(f"{what} never settled within {timeout}s")
+  deadline = time.monotonic() + timeout
+  while time.monotonic() < deadline:
+    if predicate():
+      return
+    await asyncio.sleep(poll)
+  pytest.fail(f"{what} never settled within {timeout}s")
 
 
 def child_reports(tree: TaskTreeManager, session_id: str) -> list[dict]:
-    return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
+  return [e for e in tree.fact_history(session_id) if e.get("type") == ET.CHILD_REPORT]
 
 
 def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:

@@ -238,6 +238,26 @@ def summon_prompt_tail(platform: ThreadPlatform, platform_line: str, cfg: Charli
   return f"{platform_line}\n\n{scope_doc}\n{red_line}\n{reply_format}"
 
 
+def follow_wake_label(platform: ThreadPlatform, floor: str, link: str, read_rule: str, ack_rule: str) -> str:
+  """The armed follow trigger's label: the chain *floor* id, the thread *link*, and the wake contract.
+
+  ``floor=<id>`` on the first line is machine-readable: a re-arm parses it back
+  so the wake always reads from the chain's oldest unacked message, independent
+  of watermark state. *read_rule* and *ack_rule* are the platform's own
+  sentences — how the wake reads the thread, and how the round acks what it
+  read — and the frame around them is shared: the trigger prefix, the link
+  line, the docs the round re-reads before replying, and the reply command.
+  """
+  return (
+      f"{platform.follow_trigger_prefix} floor={floor}\n"
+      f"{platform.display_name} 线程跟帖唤醒：{link}\n"
+      f"{read_rule}"
+      f"回复之前从仓库重读 prompts/{platform.scope_doc}、prompts/thread_reply_redline.md 与 "
+      "prompts/thread_reply_format.md；"
+      f"{ack_rule}"
+      f"只在值得时用 `{platform.reply_command} --file <path>` 回复。")
+
+
 def chunk_text(text: str, limit: int) -> list[str]:
   """Split *text* into chunks of at most *limit* chars for sequential posting.
 

@@ -1501,147 +1501,136 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
 
 @pytest.mark.asyncio
 async def test_backend_identity_change_starts_a_fresh_native_context(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-    first = SpawningScriptedBackend([result_event("one")])
-    second = SpawningScriptedBackend([result_event("two")])
-    install_backends(
-        monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
-    run1 = await _admit_and_dispatch(tree, manager.id, "one", "in-1")
-    await wait_for_terminal_run(tree, manager.id, run1)
-    snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
-    anchor = "native-anchor-id"
-    await tree.record_native_anchor(
-        manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
-        model="fake-model", reset_anchor=False)
-    # The conversation anchor changes only through its authorized channel.
-    await session_mgr.persist_cc_session_id(manager.id, anchor)
-    # The anchor's recorded identity no longer matches (a backend switch
-    # happened): the next turn cannot claim continuity over it. The identity
-    # changes only through its authorized anchor channel — native_backend is an
-    # anchor field now, so a whole-object save would be corrected back to disk.
-    await session_mgr.persist_native_backend(manager.id, "some-other-backend")
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision.get("launch") is True
-    await wait_for_terminal_run(tree, manager.id, decision["run_id"])
-    meta = await tree.load_meta(manager.id)
-    # The launch re-pinned the identity to the actual backend and the old
-    # anchor cannot serve it.
-    assert meta.native_backend == "fake"
-    assert meta.cc_session_id is None or meta.cc_session_id != anchor
-    # The reset note names the switch: the recorded producer, the backend that
-    # ran, and where the earlier history lives.
-    launch_text = (tree.runs.run_dir(manager.id, decision["run_id"]) / "launch_prompt.md").read_text(
-        encoding="utf-8")
-    note, sep, tail = launch_text.partition("\n\n")
-    assert sep
-    assert note == (
-        "[Context reset: this session switched from backend some-other-backend to fake, "
-        f"which starts its own conversation. The task is: {meta.name}. "
-        f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
-    assert "two" in tail
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  first = SpawningScriptedBackend([result_event("one")])
+  second = SpawningScriptedBackend([result_event("two")])
+  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  run1 = await _admit_and_dispatch(tree, manager.id, "one", "in-1")
+  await wait_for_terminal_run(tree, manager.id, run1)
+  snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
+  anchor = "native-anchor-id"
+  await tree.record_native_anchor(
+      manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
+  # The conversation anchor changes only through its authorized channel.
+  await session_mgr.persist_cc_session_id(manager.id, anchor)
+  # The anchor's recorded identity no longer matches (a backend switch
+  # happened): the next turn cannot claim continuity over it. The identity
+  # changes only through its authorized anchor channel — native_backend is an
+  # anchor field now, so a whole-object save would be corrected back to disk.
+  await session_mgr.persist_native_backend(manager.id, "some-other-backend")
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True
+  await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  meta = await tree.load_meta(manager.id)
+  # The launch re-pinned the identity to the actual backend and the old
+  # anchor cannot serve it.
+  assert meta.native_backend == "fake"
+  assert meta.cc_session_id is None or meta.cc_session_id != anchor
+  # The reset note names the switch: the recorded producer, the backend that
+  # ran, and where the earlier history lives.
+  launch_text = (tree.runs.run_dir(manager.id, decision["run_id"]) / "launch_prompt.md").read_text(encoding="utf-8")
+  note, sep, tail = launch_text.partition("\n\n")
+  assert sep
+  assert note == (
+      "[Context reset: this session switched from backend some-other-backend to fake, "
+      f"which starts its own conversation. The task is: {meta.name}. "
+      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+  assert "two" in tail
 
 
 @pytest.mark.asyncio
 async def test_switch_away_and_back_before_next_turn_continues_native_conversation(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A mis-click — the backend switched away and back before the next
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A mis-click — the backend switched away and back before the next
     message — never resets the anchor: the recorded producer still names the
     current backend, so turn 2 continues turn 1's native conversation and the
     launch prompt carries no reset note."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
-    manager = await create_task(tree, parent=None, request_id="root")
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    first = SpawningScriptedBackend([result_event("turn one")])
-    second = SpawningScriptedBackend([result_event("turn two")])
-    install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
+  manager = await create_task(tree, parent=None, request_id="root")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  first = SpawningScriptedBackend([result_event("turn one")])
+  second = SpawningScriptedBackend([result_event("turn two")])
+  install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
 
-    run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
-    await wait_for_terminal_run(tree, manager.id, run1)
-    snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
-    anchor = "native-anchor-mis-click"
-    await tree.record_native_anchor(
-        manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake",
-        model="fake-model", reset_anchor=False)
-    await session_mgr.persist_cc_session_id(manager.id, anchor)
+  run1 = await _admit_and_dispatch(tree, manager.id, "turn one", "in-1")
+  await wait_for_terminal_run(tree, manager.id, run1)
+  snapshot1 = _snapshot_of(await tree.runs.get_run(manager.id, run1))
+  anchor = "native-anchor-mis-click"
+  await tree.record_native_anchor(
+      manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
+  await session_mgr.persist_cc_session_id(manager.id, anchor)
 
-    # The mis-click: switch away and back before the next message goes out.
-    await session_mgr.switch_backend(manager.id, "fake-2")
-    await session_mgr.switch_backend(manager.id, "fake")
+  # The mis-click: switch away and back before the next message goes out.
+  await session_mgr.switch_backend(manager.id, "fake-2")
+  await session_mgr.switch_backend(manager.id, "fake")
 
-    await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    assert decision.get("launch") is True
-    run2 = decision["run_id"]
-    await wait_for_terminal_run(tree, manager.id, run2)
-    meta = await tree.load_meta(manager.id)
-    assert meta.cc_session_id == anchor  # the native conversation continued
-    launch_text = (tree.runs.run_dir(manager.id, run2) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert "Context reset" not in launch_text
-    assert "turn two" in launch_text
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True
+  run2 = decision["run_id"]
+  await wait_for_terminal_run(tree, manager.id, run2)
+  meta = await tree.load_meta(manager.id)
+  assert meta.cc_session_id == anchor  # the native conversation continued
+  launch_text = (tree.runs.run_dir(manager.id, run2) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert "Context reset" not in launch_text
+  assert "turn two" in launch_text
 
 
 @pytest.mark.asyncio
 async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"),
-                          caller=OPERATOR)
-    meta = await tree.load_meta(manager.id)
-    body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
-    body.unlink()  # the rule vanished before the launch
-    _backends, builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
-    admitted = await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="launch me", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    run_id = decision["run_id"]
-    observation = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
-    # Definitely unlaunched: a withheld verdict names the reason; no process,
-    # no terminal fact, and the input stays unconsumed.
-    assert observation.withheld is not None
-    assert "prompt preparation failed" in observation.withheld
-    assert builds == []
-    run = await tree.runs.get_run(manager.id, run_id)
-    assert run is not None and run.pid is None
-    # The input stays unconsumed: the queued run holds its claim (never
-    # acknowledged), and re-dispatching keeps surfacing the reason.
-    run = await tree.runs.get_run(manager.id, run_id)
-    assert run.input_event_ids == [str(admitted["id"])]
-    acks = [e for e in tree.events.load_events(manager.id)
-            if e.get("type") == ET.TASK_INPUT_ACKNOWLEDGED]
-    assert acks == []
-    # Re-dispatching keeps surfacing the reason (the queued run re-attempts).
-    observation2 = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
-    assert observation2.withheld is not None and "prompt preparation failed" in observation2.withheld
-    # Restoring the rule makes the next launch a real launch.
-    body.write_text("needed rule", encoding="utf-8")
-    observation3 = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
-    assert observation3.withheld is None
-    await wait_for_terminal_run(tree, manager.id, run_id)
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  meta = await tree.load_meta(manager.id)
+  body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
+  body.unlink()  # the rule vanished before the launch
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  run_id = decision["run_id"]
+  observation = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
+  # Definitely unlaunched: a withheld verdict names the reason; no process,
+  # no terminal fact, and the input stays unconsumed.
+  assert observation.withheld is not None
+  assert "prompt preparation failed" in observation.withheld
+  assert builds == []
+  run = await tree.runs.get_run(manager.id, run_id)
+  assert run is not None and run.pid is None
+  # The input stays unconsumed: the queued run holds its claim (never
+  # acknowledged), and re-dispatching keeps surfacing the reason.
+  run = await tree.runs.get_run(manager.id, run_id)
+  assert run.input_event_ids == [str(admitted["id"])]
+  acks = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.TASK_INPUT_ACKNOWLEDGED]
+  assert acks == []
+  # Re-dispatching keeps surfacing the reason (the queued run re-attempts).
+  observation2 = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
+  assert observation2.withheld is not None and "prompt preparation failed" in observation2.withheld
+  # Restoring the rule makes the next launch a real launch.
+  body.write_text("needed rule", encoding="utf-8")
+  observation3 = await tree.dispatch.executor.launch_and_settle(manager.id, run_id)
+  assert observation3.withheld is None
+  await wait_for_terminal_run(tree, manager.id, run_id)
 
 
 @pytest.mark.asyncio
 async def test_corrupt_rule_fails_before_launch_with_the_reason(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"),
-                          caller=OPERATOR)
-    meta = await tree.load_meta(manager.id)
-    body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
-    body.write_text("tampered bytes", encoding="utf-8")
-    _backends, builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
-    await tree.dispatch.admit_input(
-        manager.id, event_type=ET.USER, content="launch me", actor="user")
-    decision = await tree.dispatch.dispatch_pending(manager.id)
-    observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
-    assert observation.withheld is not None
-    assert "corrupt" in observation.withheld
-    assert builds == []
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
+  meta = await tree.load_meta(manager.id)
+  body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
+  body.write_text("tampered bytes", encoding="utf-8")
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
+  assert observation.withheld is not None
+  assert "corrupt" in observation.withheld
+  assert builds == []
 
 
 @pytest.mark.asyncio

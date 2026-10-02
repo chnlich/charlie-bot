@@ -1223,66 +1223,86 @@ def _task_spec(tree: TaskTreeManager, spec: dict):
 
 @pytest.mark.asyncio
 async def test_landing_verification_negative_cases(tmp_path: Path) -> None:
-    from src.core.git import git_verify_commit_landed
+  from src.core.git import git_verify_commit_landed
 
-    repo, _origin = init_repo_with_origin(tmp_path)
-    base_sha = run_git(repo, "rev-parse", "HEAD")
-    # The base commit IS landed on origin/main.
-    landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
-    assert landed is True
-    # A fake hash fails existence.
-    landed, reason = await git_verify_commit_landed(repo, "origin/main", "f" * 40)
-    assert landed is False and "existence" in reason
-    # A real but unmerged commit fails ancestry.
-    run_git(repo, "checkout", "-q", "-b", "feature")
-    (repo / "unmerged.txt").write_text("x\n")
-    run_git(repo, "add", ".")
-    run_git(repo, "commit", "-q", "-m", "unmerged")
-    unmerged = run_git(repo, "rev-parse", "HEAD")
-    landed, reason = await git_verify_commit_landed(repo, "origin/main", unmerged)
-    assert landed is False and "ancestry" in reason
-    # A commit on a different branch target fails.
-    landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
-    assert landed is True
+  repo, _origin = init_repo_with_origin(tmp_path)
+  base_sha = run_git(repo, "rev-parse", "HEAD")
+  # The base commit IS landed on origin/main.
+  landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
+  assert landed is True
+  # A fake hash fails existence.
+  landed, reason = await git_verify_commit_landed(repo, "origin/main", "f" * 40)
+  assert landed is False and "existence" in reason
+  # A real but unmerged commit fails ancestry.
+  run_git(repo, "checkout", "-q", "-b", "feature")
+  (repo / "unmerged.txt").write_text("x\n")
+  run_git(repo, "add", ".")
+  run_git(repo, "commit", "-q", "-m", "unmerged")
+  unmerged = run_git(repo, "rev-parse", "HEAD")
+  landed, reason = await git_verify_commit_landed(repo, "origin/main", unmerged)
+  assert landed is False and "ancestry" in reason
+  # A commit on a different branch target fails.
+  landed, _ = await git_verify_commit_landed(repo, "origin/main", base_sha)
+  assert landed is True
 
 
 @pytest.mark.asyncio
 async def test_manual_complete_with_forged_landing_ref_stays_open(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    from src.core.task_completion import CompletionEvidence
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  from src.core.task_completion import CompletionEvidence
 
-    _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
-    repo, _origin = init_repo_with_origin(tmp_path)
-    worker = await create_task(
-        tree, parent=None, request_id="w", profile="worker",
-        task=_task_spec(tree, {"goal": "## Goal\n\nwork\n", "repo_path": str(repo),
-                               "base_branch": "main", "task_type": "implement"}))
-    await tree.runs.register_run(
-        RunRecord(id="run-work", session_id=worker.id, kind="work", backend="fake",
-                  model="fake-model", repo_path=str(repo), base_branch="main"))
-    review = RunRecord(id="run-review", session_id=worker.id, kind="review", backend="fake",
-                       model="fake-model", repo_path=str(repo), base_branch="main",
-                       review_of_run_id="run-work")
-    await tree.runs.register_run(review, task_spec_text="review of work run run-work")
-    await tree.dispatch.finish_run(worker.id, "run-work", outcome="success")
-    await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
-    # A real commit that exists but is NOT on the target branch: ancestry must
-    # reject it just as strictly as a nonexistent hash.
-    run_git(repo, "checkout", "-q", "-b", "side-work")
-    (repo / "unlanded.txt").write_text("x\n")
-    run_git(repo, "add", "-A")
-    run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
-    unlanded = run_git(repo, "rev-parse", "HEAD")
-    run_git(repo, "checkout", "-q", "main")
-    evidence = CompletionEvidence(
-        summary="forged",
-        result_refs=["run:run-work", f"landed:main@{unlanded}"],
-        run_ids=["run-work"], review_run_ids=["run-review"])
-    from src.core.task_sessions import TaskConflictError as TCE
-    with pytest.raises(TCE, match="landing evidence unverified"):
-        await tree.completion.complete_task(
-            worker.id, request_id="manual-1", evidence=evidence, caller="operator")
-    assert tree.task_state(worker.id) == "open"
+  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  repo, _origin = init_repo_with_origin(tmp_path)
+  worker = await create_task(
+      tree,
+      parent=None,
+      request_id="w",
+      profile="worker",
+      task=_task_spec(
+          tree, {
+              "goal": "## Goal\n\nwork\n",
+              "repo_path": str(repo),
+              "base_branch": "main",
+              "task_type": "implement"
+          }))
+  await tree.runs.register_run(
+      RunRecord(
+          id="run-work",
+          session_id=worker.id,
+          kind="work",
+          backend="fake",
+          model="fake-model",
+          repo_path=str(repo),
+          base_branch="main"))
+  review = RunRecord(
+      id="run-review",
+      session_id=worker.id,
+      kind="review",
+      backend="fake",
+      model="fake-model",
+      repo_path=str(repo),
+      base_branch="main",
+      review_of_run_id="run-work")
+  await tree.runs.register_run(review, task_spec_text="review of work run run-work")
+  await tree.dispatch.finish_run(worker.id, "run-work", outcome="success")
+  await tree.dispatch.finish_run(worker.id, "run-review", outcome="success")
+  # A real commit that exists but is NOT on the target branch: ancestry must
+  # reject it just as strictly as a nonexistent hash.
+  run_git(repo, "checkout", "-q", "-b", "side-work")
+  (repo / "unlanded.txt").write_text("x\n")
+  run_git(repo, "add", "-A")
+  run_git(repo, "-c", "user.email=t@example.com", "-c", "user.name=t", "commit", "-q", "-m", "unlanded")
+  unlanded = run_git(repo, "rev-parse", "HEAD")
+  run_git(repo, "checkout", "-q", "main")
+  evidence = CompletionEvidence(
+      summary="forged",
+      result_refs=["run:run-work", f"landed:main@{unlanded}"],
+      run_ids=["run-work"],
+      review_run_ids=["run-review"])
+  from src.core.task_sessions import TaskConflictError as TCE
+  with pytest.raises(TCE, match="landing evidence unverified"):
+    await tree.completion.complete_task(worker.id, request_id="manual-1", evidence=evidence, caller="operator")
+  assert tree.task_state(worker.id) == "open"
 
 
 # ---------------------------------------------------------------------------
@@ -1292,64 +1312,59 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
 
 
 def _snapshot_of(run: RunRecord) -> dict:
-    assert run.prompt_snapshot_ref is not None, "the launched Run has no snapshot reference"
-    return json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
+  assert run.prompt_snapshot_ref is not None, "the launched Run has no snapshot reference"
+  return json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
 
 
-def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_mgr, *, events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
-    tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-    backend = SpawningScriptedBackend(events)
-    builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-    return [backend], builds
+def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_mgr, *,
+                     events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  backend = SpawningScriptedBackend(events)
+  builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+  return [backend], builds
 
 
 async def _admit_and_dispatch(tree, session_id: str, content: str, request_id: str) -> str:
-    await tree.dispatch.admit_input(
-        session_id, event_type=ET.USER, content=content, actor="user")
-    decision = await tree.dispatch.dispatch_pending(session_id)
-    assert decision.get("launch") is True, decision
-    return decision["run_id"]
+  await tree.dispatch.admit_input(session_id, event_type=ET.USER, content=content, actor="user")
+  decision = await tree.dispatch.dispatch_pending(session_id)
+  assert decision.get("launch") is True, decision
+  return decision["run_id"]
 
 
 @pytest.mark.asyncio
-async def test_manager_turn_launch_delivers_the_snapshot_bytes(
-        tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The real CLI/API execution path uses the assembler: the backend receives
+async def test_manager_turn_launch_delivers_the_snapshot_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The real CLI/API execution path uses the assembler: the backend receives
     exactly the committed snapshot's joined instruction bytes and the composed
     input, and the Run carries the snapshot/hash/char_count evidence."""
-    cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-    manager = await create_task(tree, parent=None, request_id="root")
-    await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"),
-                          caller=OPERATOR)
-    _backends, builds = _manager_backend(
-        monkeypatch, tree, cfg, session_mgr,
-        events=[result_event("manager turn done")])
+  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"), caller=OPERATOR)
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("manager turn done")])
 
-    run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
-    await wait_for_terminal_run(tree, manager.id, run_id)
+  run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
+  await wait_for_terminal_run(tree, manager.id, run_id)
 
-    run = await tree.runs.get_run(manager.id, run_id)
-    assert run is not None
-    stored = _snapshot_of(run)
-    joined = "\n\n".join(b["text"] for b in stored["blocks"])
-    assert stored["char_count"] == len(joined)
-    # The delivery boundary got exactly the saved bytes.
-    assert builds[0]["kwargs"]["instructions_content"] == joined
-    # The managed blocks name their real origins, including the inherited rule.
-    scope_refs = [(s["scope"], s["source_ref"], s["source_session_id"])
-                  for b in stored["blocks"] for s in b["sources"]]
-    assert ("base", "prompts/task_base.md", None) in scope_refs
-    assert ("base", "prompts/task_manager.md", None) in scope_refs
-    node_meta = await tree.load_meta(manager.id)
-    assert ("node", f"prompt_bodies/{node_meta.node_prompt_ref}.md", manager.id) in scope_refs
-    # The memory index header rides the memory scope, selected by the owner.
-    memory_blocks = [b for b in stored["blocks"] if any(s["scope"] == "memory" for s in b["sources"])]
-    # (A synthetic home has no memory store: the memory scope is absent, not fabricated.)
-    assert memory_blocks == []
-    # The task/input context is separate evidence: the composed input, not the rules.
-    launch_text = (tree.runs.run_dir(manager.id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
-    assert "Take off." in launch_text
-    assert "the node rule" not in launch_text
+  run = await tree.runs.get_run(manager.id, run_id)
+  assert run is not None
+  stored = _snapshot_of(run)
+  joined = "\n\n".join(b["text"] for b in stored["blocks"])
+  assert stored["char_count"] == len(joined)
+  # The delivery boundary got exactly the saved bytes.
+  assert builds[0]["kwargs"]["instructions_content"] == joined
+  # The managed blocks name their real origins, including the inherited rule.
+  scope_refs = [(s["scope"], s["source_ref"], s["source_session_id"]) for b in stored["blocks"] for s in b["sources"]]
+  assert ("base", "prompts/task_base.md", None) in scope_refs
+  assert ("base", "prompts/task_manager.md", None) in scope_refs
+  node_meta = await tree.load_meta(manager.id)
+  assert ("node", f"prompt_bodies/{node_meta.node_prompt_ref}.md", manager.id) in scope_refs
+  # The memory index header rides the memory scope, selected by the owner.
+  memory_blocks = [b for b in stored["blocks"] if any(s["scope"] == "memory" for s in b["sources"])]
+  # (A synthetic home has no memory store: the memory scope is absent, not fabricated.)
+  assert memory_blocks == []
+  # The task/input context is separate evidence: the composed input, not the rules.
+  launch_text = (tree.runs.run_dir(manager.id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
+  assert "Take off." in launch_text
+  assert "the node rule" not in launch_text
 
 
 @pytest.mark.asyncio

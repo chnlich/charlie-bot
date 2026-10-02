@@ -57,6 +57,7 @@ from src.core.runs import (
     MASTER_RUNS_DIR_NAME,
     RAW_LOG_NAME,
     RUN_METADATA_NAME,
+    RUNS_DIR_NAME,
     STDERR_LOG_NAME,
 )
 from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
@@ -321,7 +322,7 @@ def _run_referenced_transport(session_dir: Path) -> set[Path]:
   must not reclaim them. Unreferenced transport files keep the existing
   contract.
   """
-  runs_dir = session_dir / DATA_DIR_NAME / "runs"
+  runs_dir = session_dir / DATA_DIR_NAME / RUNS_DIR_NAME
   if not runs_dir.is_dir() or runs_dir.is_symlink():
     return set()
   referenced: set[str] = set()

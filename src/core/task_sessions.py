@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.core import event_types as ET
+from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig
 from src.core.control_events import (
     ACTOR_AGENT,
@@ -67,7 +68,7 @@ from src.core.models import (
 )
 from src.core.ndjson import append_ndjson
 from src.core.run_token import CallerIdentity, b64url_decode, b64url_encode
-from src.core.runs import RunStore, is_run_alive, stop_requested_in_events
+from src.core.runs import DATA_DIR_NAME, RunStore, is_run_alive, stop_requested_in_events
 from src.core.session_aliases import SessionAliasStore
 from src.core.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.core.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
@@ -75,7 +76,7 @@ from src.core.takeoff_gate import is_verify_exempt
 from src.core.task_completion import TaskCompletionManager
 from src.core.tasks import create_logged_task
 from src.core.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
-from src.core.threads import METADATA_NAME
+from src.core.threads import METADATA_NAME, THREADS_DIR_NAME
 
 if TYPE_CHECKING:
   from src.core.models import RunRecord
@@ -1203,8 +1204,8 @@ class TaskTreeManager:
         group=group,
     )
     try:
-      (temp_dir / "data").mkdir(parents=True)
-      (temp_dir / "threads").mkdir()
+      (temp_dir / DATA_DIR_NAME).mkdir(parents=True)
+      (temp_dir / THREADS_DIR_NAME).mkdir()
       # The creation fact is written into the temp node itself, so metadata and
       # the event log publish together with the one rename; post-publication
       # facts go through the sink.
@@ -1216,7 +1217,7 @@ class TaskTreeManager:
           task_parent_id=task_parent_id,
           task_spec_hash=canonical_task_spec_hash(task),
       )
-      await append_ndjson(temp_dir / "data" / "chat_events.jsonl", created_event)
+      await append_ndjson(chat_events_path(temp_dir), created_event)
       meta.created_by_event = EventRef(session_id=task_id, event_id=str(created_event["id"]))
       await asyncio.to_thread(
           atomic_write_text, temp_dir / METADATA_NAME,

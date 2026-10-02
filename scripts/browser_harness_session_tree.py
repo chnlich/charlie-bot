@@ -1061,9 +1061,9 @@ def assert_true(cond: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-# The one readiness probe every scenario waits on after a navigation: the
-# session list has rendered at least one name. When the sidebar markup changes
-# the selector, this constant is the single edit point.
+# The readiness predicate the shared post-navigation waits poll: the session
+# list has rendered at least one name. Scenario-specific waits (a filter's
+# rows, the bound rows) spell out their own predicates instead.
 SESSION_LIST_READY_JS = "document.querySelectorAll('#session-list .session-name').length >= 1"
 
 

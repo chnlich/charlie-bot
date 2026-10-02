@@ -951,12 +951,18 @@ def _token_usage_context(
       "captured_now": f"{sum(written.values()):,}",
   }
   return {
-      "ctx": ctx,
-      "payload": payload,
-      "window": window,
-      "window_str": f"{window[0]} → {window[1]}" if rows else "",
-      "cache_share": cache_share,
-      "generated": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
+      "ctx":
+          ctx,
+      "payload":
+          payload,
+      "window":
+          window,
+      "window_str":
+          f"{window[0]} → {window[1]}" if rows else "",
+      "cache_share":
+          cache_share,
+      "generated":
+          dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M %Z"),
       "notes":
           [
               f"{_NOTE_SOURCE_LABELS.get(src, src)}: {count:,} records written this load"

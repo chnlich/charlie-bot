@@ -84,7 +84,8 @@ def _seed(path: Path) -> None:
         ])
     ledger.record_file("host", "/logs/oc.jsonl", "sig-oc", [_record("oc-1", OC, "o3", OC_TS, 300)])
     ledger.record_file(
-        "host", "/logs/cb.jsonl", "sig-cb", [_record("cb-1", CB, "claude-haiku-4", CB_TS, 400, account="charlie-code-x")])
+        "host", "/logs/cb.jsonl", "sig-cb",
+        [_record("cb-1", CB, "claude-haiku-4", CB_TS, 400, account="charlie-code-x")])
 
 
 def _stub_capture(monkeypatch: pytest.MonkeyPatch, ledger_path: Path, written: dict[str, int]) -> None:
@@ -317,7 +318,8 @@ def test_per_source_tiles_count_attributed_accounts() -> None:
           CB,
           "GLM-5.3-Flash",
           output=3,
-          accounts=[LedgerAccount("charlie-code-x", 1, 2, 2), LedgerAccount("codex-y", 1, 1, 1)]),
+          accounts=[LedgerAccount("charlie-code-x", 1, 2, 2),
+                    LedgerAccount("codex-y", 1, 1, 1)]),
   ]
   ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
   assert ctx["per_src"][OC]["models"] == 2

@@ -19,7 +19,13 @@ from typing import Any
 import pytest
 from conftest import _async_wait_for, cancel_and_drain
 
-from src.agents.backends.base import DEFAULT_BUFFER_LIMIT, iter_ndjson_events, tail_follow_events
+from src.agents.backends.base import (
+    _TORN_TAIL_WINDOW_BYTES,
+    DEFAULT_BUFFER_LIMIT,
+    _tail_region_has_content,
+    iter_ndjson_events,
+    tail_follow_events,
+)
 
 _LINES = [
     b'{"type": "assistant", "seq": 1}\n',
@@ -190,3 +196,22 @@ async def test_tail_follow_events_skips_a_completed_line_over_the_buffer_limit()
   over_limit = b'{"type": "assistant", "seq": 9, "pad": "' + b"x" * 4096 + b'"}\n'
   events = await _collect_tail_events(b"".join([_LINES[0], over_limit, _LINES[4]]), 1024, post_result_timeout=60.0)
   assert [event["seq"] for event in events] == [1, 3]
+
+
+def test_tail_region_has_content_stops_at_the_first_content_byte(tmp_path: Path) -> None:
+  """The drain-end torn-tail scan reads bounded windows, not the whole tail.
+
+  The content byte sits exactly at the first window's edge: an off-by-one
+  there would silently drop the torn-line warning for every tail whose body
+  starts one window in. An all-whitespace region over several windows answers
+  False only after the last one.
+  """
+  raw = tmp_path / "agent.raw.ndjson"
+  raw.write_bytes(b" " * _TORN_TAIL_WINDOW_BYTES + b"{")
+  with raw.open("rb") as f:
+    assert not _tail_region_has_content(f, 0, _TORN_TAIL_WINDOW_BYTES)
+    assert _tail_region_has_content(f, 0, _TORN_TAIL_WINDOW_BYTES + 1)
+    assert _tail_region_has_content(f, _TORN_TAIL_WINDOW_BYTES, _TORN_TAIL_WINDOW_BYTES + 1)
+  raw.write_bytes(b'{"type": "assistant"')
+  with raw.open("rb") as f:
+    assert _tail_region_has_content(f, 0, raw.stat().st_size)

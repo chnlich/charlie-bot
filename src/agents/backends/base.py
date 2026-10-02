@@ -20,6 +20,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
+from typing import BinaryIO
 
 from src.agents.backends.claude_launch import (  # noqa: F401  (re-export: the established base import path)
     DISALLOWED_TOOLS_FLAG,
@@ -385,6 +386,29 @@ def _clamp_event_timestamp(translated: dict, mtime: float) -> None:
   translated["timestamp"] = min(now, mtime_dt).isoformat()
 
 
+_TORN_TAIL_WINDOW_BYTES = 1 << 20  # the drain-end torn-tail scan reads the still-open fd in windows of this size
+
+
+def _tail_region_has_content(f: BinaryIO, start: int, end: int) -> bool:
+  """Whether [start, end) of the open raw log holds any non-whitespace byte.
+
+  Reads in bounded windows and stops at the first non-whitespace one: a torn
+  line's body starts at the region's first byte, so the common tail answers
+  from the first window. The whole-region read this replaces materialized a
+  runaway line's full gigabyte-class body at drain end.
+  """
+  f.seek(start)
+  remaining = end - start
+  while remaining > 0:
+    window = f.read(min(_TORN_TAIL_WINDOW_BYTES, remaining))
+    if not window:
+      return False
+    if window.strip():
+      return True
+    remaining -= len(window)
+  return False
+
+
 async def tail_follow_events(
     raw_path: Path,
     *,
@@ -571,15 +595,12 @@ async def tail_follow_events(
           await on_silence()
         await asyncio.sleep(poll_interval)
 
-      if tail_start < read_to:
-        # The trailing partial's bytes, read once at follow end from the still
-        # -open fd — a per-round copy would re-materialize the whole tail on
-        # every poll. Dropping it makes a restart replay the run's tail as at
-        # most a duplicate — never a loss.
-        f.seek(tail_start)
-        carry = f.read(read_to - tail_start)
-        if carry.strip():
-          log.warning("raw_trailing_torn_line_dropped", bytes=len(carry))
+      # The trailing partial's bytes, read once at follow end from the still
+      # -open fd — a per-round copy would re-materialize the whole tail on
+      # every poll. Dropping it makes a restart replay the run's tail as at
+      # most a duplicate — never a loss.
+      if tail_start < read_to and _tail_region_has_content(f, tail_start, read_to):
+        log.warning("raw_trailing_torn_line_dropped", bytes=read_to - tail_start)
 
   finally:
     if cursor_writer is not None:

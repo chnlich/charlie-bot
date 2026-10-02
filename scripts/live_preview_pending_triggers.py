@@ -52,7 +52,6 @@ import urllib.request  # noqa: E402
 from scripts.browser_harness_session_tree import (  # noqa: E402
     evaluate,
     open_evidence_dir,
-    pick_free_port,
     resolve_chrome,
     stop_child,
 )
@@ -61,10 +60,16 @@ from scripts.browser_harness_session_tree_preview import (  # noqa: E402
     open_authenticated_page,
     trial_home_root,
 )
-from scripts.live_preview_task_tree import DEFAULT_BACKEND, fail, log, make_record, request  # noqa: E402
+from scripts.live_preview_task_tree import (  # noqa: E402
+    DEFAULT_BACKEND,
+    fail,
+    log,
+    make_record,
+    pick_trial_port,
+    request,
+)
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
-PRODUCTION_PORT = 18498
 PRODUCTION_HOME = Path.home() / ".charliebot"
 
 # The trigger delays the collapsed/expanded copy shows: the watched one sits
@@ -179,8 +184,6 @@ async def run_harness(args: argparse.Namespace) -> None:
 
   record = make_record(checks)
 
-  if args.port is not None and args.port == PRODUCTION_PORT:
-    fail("the requested port is the production port 18498")
   if PRODUCTION_HOME.exists():
     record("production home untouched (exists read-only, never written)", ok=True, detail=str(PRODUCTION_HOME))
 
@@ -189,9 +192,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   source = tmp_path / "source-home"
   build_source_home(source, [args.backend])
   home = tmp_path / "trial-home"
-  port = args.port or pick_free_port()
-  if port == PRODUCTION_PORT:
-    fail("the picked free port collided with the production port; refusing")
+  port = pick_trial_port(args.port)
   access_key = build_trial_home(source, home, port)
   base = f"http://127.0.0.1:{port}"
   server_env = scrub_identity_env()

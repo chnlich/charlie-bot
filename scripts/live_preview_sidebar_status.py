@@ -47,11 +47,11 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,
     open_evidence_dir,
-    pick_free_port,
     resolve_chrome,
     stop_child,
 )
 from scripts.browser_harness_session_tree_preview import (  # noqa: E402
+    PRODUCTION_PORT,
     build_source_home,
     open_authenticated_page,
     preview_instance_env,
@@ -65,13 +65,13 @@ from scripts.live_preview_task_tree import (  # noqa: E402
     fail,
     log,
     make_record,
+    pick_trial_port,
     request,
     snapshot_native_storage,
     wait_run_terminal,
 )
 from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 
-PRODUCTION_PORT = 18498
 PRODUCTION_HOMES = (
     Path.home() / ".charliebot",
     Path.home() / ".charliebot-session-task-tree",
@@ -272,10 +272,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
     record = make_record(checks)
 
-    # Isolation preflight: the production service and homes must be untouched
-    # by construction — the trial gets a fresh temp home and a free port.
-    if args.port is not None and args.port == PRODUCTION_PORT:
-        fail("the requested port is the production port 18498")
+    # Isolation preflight: the production homes are recorded read-only here, never written.
     for home in PRODUCTION_HOMES:
         if home.exists():
             record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
@@ -296,9 +293,7 @@ async def run_harness(args: argparse.Namespace) -> None:
     source = tmp_path / "source-home"
     build_source_home(source, [args.backend])
     home = tmp_path / "preview-home"
-    port = args.port or pick_free_port()
-    if port == PRODUCTION_PORT:
-        fail("the picked free port collided with the production port; refusing")
+    port = pick_trial_port(args.port)
     invocation = preview_invocation(home, port, args.backend, [])
     env = preview_instance_env(source)
     server_console = tmp_path / "server-console.log"

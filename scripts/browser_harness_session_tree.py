@@ -54,7 +54,7 @@ import threading  # noqa: E402
 import time  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
-from datetime import datetime, timezone  # noqa: E402
+from datetime import datetime, timedelta, timezone  # noqa: E402
 
 # Evidence defaults to a host temp directory so the public repo carries no
 # host path; pass --evidence-dir to keep evidence with its owning session.
@@ -342,8 +342,6 @@ async def seed_scenario(home: Path) -> dict:
         # distinguishable (generation 0001..0150), plus never-launched
         # reservations. The current-run Context selection must show generation
         # 0150 — the whole-history latest launch — not the first page's tail.
-        from datetime import datetime, timedelta, timezone
-
         from src.core.control_events import sha256_hex
         from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
         long_worker = await tree.create_task(

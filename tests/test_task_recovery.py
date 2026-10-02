@@ -185,8 +185,6 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     restart recovery any number of times registers none (the chain ends at
     the first successful review), while the review's own follow-up replay
     (landing recheck) stays idempotent."""
-  from conftest import init_repo_with_origin
-
   from src.core.models import PatchSessionTaskRequest
   from src.core.task_recovery import reconcile_task_tree
   cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -373,7 +371,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A failed review is a used attempt: recovery registers the next review
     on the next preference backend (the existing policy, unchanged)."""
-  from conftest import backend_option, init_repo_with_origin
+  from conftest import backend_option
 
   from src.core.models import PatchSessionTaskRequest
   from src.core.task_recovery import reconcile_task_tree
@@ -526,7 +524,6 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   """(f) A run_finished fact whose metadata write failed out of space: the
     retry fills ended_at/exit_code from the raw log once space returns, and a
     boot reconcile fills them too — from the drain rule's values, once."""
-  import src.core.task_execution as task_execution_module
   from src.core.task_recovery import reconcile_task_tree
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -588,7 +585,6 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
 async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(g) Boot reconcile's node pass failing out of space hands the node to
     the retry entry; the retry's own round delivers the parent report."""
-  import src.core.task_execution as task_execution_module
   from src.core.task_recovery import reconcile_task_tree
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
@@ -621,7 +617,6 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     follows, or a manager-turn follow queued in the master queue; replayed
     delivery starts no second review process."""
   from src.core import task_recovery
-  from src.core.models import TaskType
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)

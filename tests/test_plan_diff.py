@@ -226,8 +226,6 @@ def _anchors_as_quads(anchors: tuple) -> tuple[tuple | None, tuple | None]:
 
 
 def test_boundary_anchors_match_the_full_parse_on_the_fixture_pair_and_spliced_output() -> None:
-  from src.core.plan_diff import annotate
-
   base, new = _fixture_pair()
   for source in (base, new, annotate(base, new)):
     assert _anchors_as_quads(_parse_anchors(source)) == _anchors_from_full_parse(source)

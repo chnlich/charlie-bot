@@ -400,7 +400,6 @@ def _sessions_dir() -> Path:
   """The sessions root, derived from the env-resolved home (the same value the config model
   carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
   (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
-  from src.core.home import charliebot_home_dir
 
   return (charliebot_home_dir() / "sessions").resolve()
 

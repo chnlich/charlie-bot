@@ -60,7 +60,11 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree import (  # noqa: E402
+    mint_access_key,
+    pick_free_port,
+    write_credentials_yaml,
+)
 from scripts.live_preview_task_tree import request  # noqa: E402
 from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 
@@ -144,8 +148,8 @@ def build_synthetic_home(home: Path, backend_id: str, entry: dict) -> tuple[int,
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-  access_key = "smoke-operator-key-" + os.urandom(8).hex()
-  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  access_key = mint_access_key("smoke-operator-key-")
+  write_credentials_yaml(home, access_key)
   register_secret(access_key, str(entry.get("api_base") or ""), str(entry.get("api_key") or ""))
   return port, access_key
 

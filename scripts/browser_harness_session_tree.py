@@ -98,6 +98,20 @@ def pick_free_port() -> int:
     return int(sock.getsockname()[1])
 
 
+def mint_access_key(prefix: str) -> str:
+  """The trial home's operator credential: the caller's prefix plus 16 random hex chars."""
+  return prefix + os.urandom(8).hex()
+
+
+def write_credentials_yaml(home: Path, access_key: str) -> None:
+  """Seed the trial home's credentials.yaml with its operator key.
+
+  The body is the ``charliebot.access_key`` secret shape the credentials
+  loader reads (src/core/credentials.py).
+  """
+  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # CDP mini-client
 # ---------------------------------------------------------------------------
@@ -1182,9 +1196,8 @@ async def run_harness(args: argparse.Namespace) -> None:
             "paths": {"worktree_dir": str(home / "worktrees")},
         }
         (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-        access_key = "harness-operator-key-" + os.urandom(8).hex()
-        (home / "credentials.yaml").write_text(
-            f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+        access_key = mint_access_key("harness-operator-key-")
+        write_credentials_yaml(home, access_key)
         # Clear inherited production credentials from this process env.
         for var in ("CHARLIEBOT_ACCESS_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
             os.environ.pop(var, None)

@@ -75,7 +75,11 @@ import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from scripts.browser_harness_session_tree import pick_free_port  # noqa: E402
+from scripts.browser_harness_session_tree import (  # noqa: E402
+    mint_access_key,
+    pick_free_port,
+    write_credentials_yaml,
+)
 from scripts.live_smoke_task_tree import (  # noqa: E402
     arequest,
     deps_tree,
@@ -210,8 +214,8 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
       },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-  access_key = "switch-accept-key-" + os.urandom(8).hex()
-  (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
+  access_key = mint_access_key("switch-accept-key-")
+  write_credentials_yaml(home, access_key)
   register_secret(access_key)
   return port, access_key
 

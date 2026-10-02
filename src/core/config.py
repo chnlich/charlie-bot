@@ -155,7 +155,6 @@ class ScheduledTaskConfig(ScheduledTaskFields):
   # leaf, launched after the previous one's durable success, and the parent is
   # woken once at the end (src/core/cron_sequence.py).
   steps: list[StepConfig] | None = None
-  notify: str | None = None  # 'telegram' or None
 
   @model_validator(mode='after')
   def check_sources_and_mode(self) -> ScheduledTaskConfig:
@@ -185,8 +184,6 @@ class ScheduledTaskConfig(ScheduledTaskFields):
               f"step '{step.name}' has no prompt body; the loader resolves each step's "
               "'prompt_file' before validation")
       self._check_distinct_backends()
-    if self.notify and self.notify != 'telegram':
-      raise ValueError(f"notify must be 'telegram' or None, got '{self.notify}'")
     return self
 
   def _check_distinct_backends(self) -> None:

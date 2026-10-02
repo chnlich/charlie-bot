@@ -49,6 +49,7 @@ from scripts.browser_harness_session_tree import (  # noqa: E402
     pick_free_port,
     stop_child,
 )
+from scripts.browser_harness_session_tree_preview import PRODUCTION_PORT  # noqa: E402
 
 DEFAULT_BACKEND = "charlie-code-glm-flash"
 MANAGER_PHRASE = "LIVE-PREVIEW-MANAGER-OK-7Q4F"
@@ -62,6 +63,16 @@ def log(message: str) -> None:
 
 def fail(message: str) -> None:
   raise SystemExit(f"LIVE PREVIEW HARNESS FAILED: {message}")
+
+
+def pick_trial_port(requested: int | None) -> int:
+  """The trial instance's port: the operator-requested one, else a free one; never PRODUCTION_PORT."""
+  if requested is not None and requested == PRODUCTION_PORT:
+    fail("the requested port is the production port 18498")
+  port = requested or pick_free_port()
+  if port == PRODUCTION_PORT:
+    fail("the picked free port collided with the production port; refusing")
+  return port
 
 
 def make_record(checks: list[dict]) -> Callable[[str, bool, str], None]:

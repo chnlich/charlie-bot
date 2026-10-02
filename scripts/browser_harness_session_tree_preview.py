@@ -343,6 +343,12 @@ def motion_timeline_verdict(samples: list[list[dict]],
       f'{len(generations)} generation(s)')
 
 
+# The production server's port on this host: the source home's config carries
+# it, so the preview CLI's source-port refusal doubles as the production-port
+# refusal, and a harness that starts its own server refuses it explicitly.
+PRODUCTION_PORT = 18498
+
+
 def build_source_home(source: Path, backend_ids: list[str]) -> None:
   """The trial's private configuration source: the selected backend entries of the current profile.
 
@@ -393,7 +399,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
   config = {
       "server": {
           "host": "127.0.0.1",
-          "port": 18498
+          "port": PRODUCTION_PORT
       },
       "paths": {
           "workspace_dirs": [str(source / "workspaces")],

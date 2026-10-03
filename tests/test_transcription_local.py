@@ -1,10 +1,11 @@
 """The local transcription backend's offline decode fan-out.
 
-transcribe_pcm_offline fans a recording's VAD windows round-robin over the
-bundle's recognizer pool. The pins: the joined transcript is the window order no
-matter which instance finishes first, a busy recognizer never takes a second
-concurrent decode (two simultaneous voice requests share the resident bundle),
-and a failing window fails the whole call instead of dropping its text.
+transcribe_pcm_offline hands a recording's VAD windows to whichever recognizer
+frees first, longest padded span claimed first. The pins: the joined transcript
+is the window order no matter which instance finishes first, a busy recognizer
+never takes a second concurrent decode (two simultaneous voice requests share
+the resident bundle), and a failing window fails the whole call instead of
+dropping its text.
 """
 
 from __future__ import annotations
@@ -129,16 +130,24 @@ def test_concurrent_offline_decodes_never_share_a_recognizer(monkeypatch: pytest
   would enter decode_stream immediately and the entry count would tick."""
   pool_windows(2)
   entered = threading.Event()
+  # The claim order is timing-dependent, so either instance may take the first w0;
+  # the holder records itself on entry and the assert rides the holder, not a slot.
+  holder: list[_StubRecognizer] = []
 
-  def _on_enter(marker: int) -> None:
-    if marker == 0:
-      entered.set()
+  def _stub(name: str, delays: dict[int, float]) -> _StubRecognizer:
+    cell: list[_StubRecognizer] = []
+
+    def _on_enter(marker: int) -> None:
+      if marker == 0:
+        holder.append(cell[0])
+        entered.set()
+
+    recognizer = _StubRecognizer(name, delays, on_enter=_on_enter)
+    cell.append(recognizer)
+    return recognizer
 
   delays = {0: 0.2}
-  bundle = _stub_bundle([
-      _StubRecognizer("inst0", delays, on_enter=_on_enter),
-      _StubRecognizer("inst1", delays),
-  ])
+  bundle = _stub_bundle([_stub("inst0", delays), _stub("inst1", delays)])
   pcm = _pcm_for_windows(2)
   failures: list[BaseException] = []
 
@@ -154,8 +163,7 @@ def test_concurrent_offline_decodes_never_share_a_recognizer(monkeypatch: pytest
   second = threading.Thread(target=_request)
   second.start()
   time.sleep(0.05)  # the first w0 decode still holds its instance for another ~0.15 s
-  assert bundle.recognizers[0].enter_count == 1, (
-      "a second decode entered the instance whose first decode is still running")
+  assert holder[0].enter_count == 1, ("a second decode entered the instance whose first decode is still running")
   first.join(timeout=5)
   second.join(timeout=5)
   if failures:

@@ -78,14 +78,13 @@ def _fail(message: str, details: list[str] | None = None) -> None:
 
 
 def _cmd_preview(args: argparse.Namespace) -> None:
-  from src.core.home_writer_fence import HomeWriterActiveError
-  from src.core.session_tree_preview import PreviewRefusedError, run_preview_command
+  from src.core import home_writer_fence, session_tree_preview
 
   try:
-    run_preview_command(args.home, args.port, args.backend, args.add_backend or [])
-  except PreviewRefusedError as e:
+    session_tree_preview.run_preview_command(args.home, args.port, args.backend, args.add_backend or [])
+  except session_tree_preview.PreviewRefusedError as e:
     _fail(str(e), e.details)
-  except HomeWriterActiveError as e:
+  except home_writer_fence.HomeWriterActiveError as e:
     # A live holder (the running preview instance itself) refuses the whole
     # launch, additions included, as one structured diagnostic: never a
     # traceback, never a partial mutation.

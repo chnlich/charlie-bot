@@ -111,7 +111,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monke
   home.mkdir()
   monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
   fake_cfg = CharlieBotConfig(charliebot_home=home)
-  monkeypatch.setattr("src.core.init_seed.get_config", lambda: fake_cfg)
+  monkeypatch.setattr("src.core.config.get_config", lambda: fake_cfg)
   asyncio.run(init_charliebot_home())
   credentials_path = home / "credentials.yaml"
   assert credentials_path.exists()

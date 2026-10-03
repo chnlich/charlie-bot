@@ -8,26 +8,25 @@ fixture, which pins CHARLIEBOT_HOME at a fresh directory per test.
 """
 import tarfile
 
-from src.core.backup import _should_exclude, create_backup
-from src.core.config import charliebot_home_dir
+from src.core import backup, config
 
 
 def test_exclusions_cover_the_secrets_file_and_noise() -> None:
-  assert _should_exclude("credentials.yaml")
-  assert _should_exclude(".git/HEAD")
-  assert _should_exclude("__pycache__/x.pyc")
-  assert _should_exclude("cache/x.pyc")
-  assert _should_exclude("sessions/s1/threads/t1/metadata.json")
-  assert not _should_exclude("config.yaml")
-  assert not _should_exclude("sessions/s1/triggers/t1.json")
+  assert backup._should_exclude("credentials.yaml")
+  assert backup._should_exclude(".git/HEAD")
+  assert backup._should_exclude("__pycache__/x.pyc")
+  assert backup._should_exclude("cache/x.pyc")
+  assert backup._should_exclude("sessions/s1/threads/t1/metadata.json")
+  assert not backup._should_exclude("config.yaml")
+  assert not backup._should_exclude("sessions/s1/triggers/t1.json")
 
 
 def test_create_backup_omits_the_secrets_file() -> None:
-  home = charliebot_home_dir()
+  home = config.charliebot_home_dir()
   (home / "credentials.yaml").write_text("credentials:\n  access_key: secret\n", encoding="utf-8")
   (home / "config.yaml").write_text("server: {}\n", encoding="utf-8")
 
-  archive = create_backup()
+  archive = backup.create_backup()
   members = [m.name for m in tarfile.open(archive).getmembers()]
 
   assert "config.yaml" in members
@@ -35,11 +34,11 @@ def test_create_backup_omits_the_secrets_file() -> None:
 
 
 def test_create_backup_archive_round_trips_bytes() -> None:
-  home = charliebot_home_dir()
+  home = config.charliebot_home_dir()
   payload = "key: value\nlist:\n  - a\n  - b\n"
   (home / "config.yaml").write_text(payload, encoding="utf-8")
 
-  archive = create_backup()
+  archive = backup.create_backup()
   with tarfile.open(archive, "r:gz") as tar:
     extracted = tar.extractfile("config.yaml")
     assert extracted is not None

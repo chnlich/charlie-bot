@@ -6,40 +6,35 @@ ride.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
-from conftest import (
-    OPUS_BACKEND_OPTION,
-    assert_gzip_served,
-    mount_production_gzip,
-)
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+import conftest
+import fastapi
+from fastapi import testclient
 
-import src.api.sessions as sessions_api
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig
+from src.api import sessions
+from src.core import config
 
 PROBE_EVENTS = "".join(
     f'{{"id":"e{i}","type":"user","message":{{"role":"user","content":"probe {i}"}},'
     f'"timestamp":"2026-09-01T00:00:{i % 60:02d}Z"}}\n' for i in range(64))
 
 
-def _gzip_client(cfg: CharlieBotConfig) -> TestClient:
+def _gzip_client(cfg: config.CharlieBotConfig) -> testclient.TestClient:
   """The sessions router behind the production gzip mount, so the test sees the
   skip the pre-compressed body buys."""
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  mount_production_gzip(app)
-  app.dependency_overrides[sessions_api.get_config] = lambda: cfg
-  return TestClient(app)
+  app = fastapi.FastAPI()
+  app.include_router(sessions.router, prefix="/api/sessions")
+  conftest.mount_production_gzip(app)
+  app.dependency_overrides[sessions.get_config] = lambda: cfg
+  return testclient.TestClient(app)
 
 
-def _session_with_events(home: Path) -> tuple[CharlieBotConfig, str]:
+def _session_with_events(home: pathlib.Path) -> tuple[config.CharlieBotConfig, str]:
   """One session whose live chat file carries the probe events, staged under
   *home* — the profile_home fixture points the route's direct get_config() call
   at the same tree."""
-  cfg = CharlieBotConfig(charliebot_home=home, backends={"options": [OPUS_BACKEND_OPTION]})
+  cfg = config.CharlieBotConfig(charliebot_home=home, backends={"options": [conftest.OPUS_BACKEND_OPTION]})
   events_path = home / "sessions" / "s-probe" / "data" / "chat_events.jsonl"
   events_path.parent.mkdir(parents=True)
   events_path.write_text(PROBE_EVENTS, encoding="utf-8")
@@ -47,9 +42,9 @@ def _session_with_events(home: Path) -> tuple[CharlieBotConfig, str]:
   return cfg, "s-probe"
 
 
-def test_gzip_accepted_download_ships_precompressed_body(profile_home: Path) -> None:
+def test_gzip_accepted_download_ships_precompressed_body(profile_home: pathlib.Path) -> None:
   cfg, sid = _session_with_events(profile_home)
   resp = _gzip_client(cfg).get(f"/api/sessions/{sid}/events.jsonl", headers={"Accept-Encoding": "gzip"})
   assert resp.status_code == 200
-  assert_gzip_served(resp)
+  conftest.assert_gzip_served(resp)
   assert resp.text == PROBE_EVENTS

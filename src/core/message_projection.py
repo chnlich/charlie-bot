@@ -29,14 +29,16 @@ interval may still rewrite.
 
 import bisect
 
-from src.core.memo import BoundedMemo
-from src.core.message_aggregator import MessageAggregator
-from src.core.message_events import _stable_history_projection, stable_closed_prefix_len
+from src.core import memo, message_aggregator, message_events
 
 __all__ = ["MessageProjection"]
 
 
-def _fold_messages(agg: MessageAggregator, events: list[dict], base: int) -> tuple[list[dict], list[int]]:
+def _fold_messages(
+    agg: message_aggregator.MessageAggregator,
+    events: list[dict],
+    base: int,
+) -> tuple[list[dict], list[int]]:
   """Fold *events* through *agg*; return (messages, separator positions as indices into *messages*).
 
   *base* is the event-stream ordinal *agg* should attribute the first of *events* to; the
@@ -44,7 +46,7 @@ def _fold_messages(agg: MessageAggregator, events: list[dict], base: int) -> tup
   """
   msgs: list[dict] = []
   seps: list[int] = []
-  for delta in agg.feed_indexed([(base + idx, ev) for idx, ev in _stable_history_projection(events)]):
+  for delta in agg.feed_indexed([(base + idx, ev) for idx, ev in message_events._stable_history_projection(events)]):
     if delta["type"] != "message":
       continue
     msg = delta["message"]
@@ -85,12 +87,12 @@ class MessageProjection:
 
   def __init__(self, events: list[dict], event_index_offset: int = 0) -> None:
     self._offset = event_index_offset
-    self._agg = MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
+    self._agg = message_aggregator.MessageAggregator(event_index_offset=event_index_offset, emit_stream_deltas=False)
     self._committed_final: list[dict] = []
     self._seps_final: list[int] = []
     self._region_events: list[dict] = []
-    self._page_bodies: BoundedMemo[tuple[int, int], bytes] = BoundedMemo(self._PAGE_BODY_LIMIT)
-    self._page_body_gzips: BoundedMemo[tuple[int, int], bytes] = BoundedMemo(self._PAGE_BODY_LIMIT)
+    self._page_bodies: memo.BoundedMemo[tuple[int, int], bytes] = memo.BoundedMemo(self._PAGE_BODY_LIMIT)
+    self._page_body_gzips: memo.BoundedMemo[tuple[int, int], bytes] = memo.BoundedMemo(self._PAGE_BODY_LIMIT)
     self.event_count = event_index_offset
     self._ingest(events)
 
@@ -107,8 +109,8 @@ class MessageProjection:
     copied._committed_final = list(self._committed_final)
     copied._seps_final = list(self._seps_final)
     copied._region_events = list(self._region_events)
-    copied._page_bodies = BoundedMemo(self._PAGE_BODY_LIMIT)
-    copied._page_body_gzips = BoundedMemo(self._PAGE_BODY_LIMIT)
+    copied._page_bodies = memo.BoundedMemo(self._PAGE_BODY_LIMIT)
+    copied._page_body_gzips = memo.BoundedMemo(self._PAGE_BODY_LIMIT)
     copied.event_count = self.event_count
     copied._ingest(events)
     return copied
@@ -124,7 +126,7 @@ class MessageProjection:
     """
     self._region_events.extend(events)
     self.event_count += len(events)
-    closed = stable_closed_prefix_len(self._region_events)
+    closed = message_events.stable_closed_prefix_len(self._region_events)
     if closed:
       prefix = self._region_events[:closed]
       del self._region_events[:closed]
@@ -207,7 +209,7 @@ class MessageProjection:
     """Cache the rendered body of the (``before``, ``limit``) page, LRU-capped.
 
     A store follows a None read of the same key (the route's miss arm), so a
-    stored body is never None — the contract BoundedMemo.get relies on.
+    stored body is never None — the contract memo.BoundedMemo.get relies on.
     """
     self._page_bodies.store((before, limit), body)
 

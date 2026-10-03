@@ -171,6 +171,25 @@ def test_mixed_kind_file_sharing_one_session_keeps_the_fallback_excluded(tmp_pat
   assert fb_links == 1
 
 
+def test_relinked_counted_fallback_in_a_mixed_batch_is_retired_by_the_later_native_link(tmp_path):
+  """A counted fallback record that gains a session in the same mixed-kind batch where a
+  native record registers that session nets the fallback retired: its link lands before
+  the native link, whose retire trigger subtracts the count. The per-record order is what
+  reaches that scan -- links-first would strand the count on the aggregate behind the
+  first-session guard."""
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a",), model="model-fb")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/fb.jsonl", "sig-1", [fb])
+    counted = ledger.model_rows()
+    assert [row.fallback_calls for row in counted] == [1]
+    grown = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a", "sess-b"), model="model-fb")
+    native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-b",), model="model-native")
+    ledger.record_file(HOST, "/logs/mixed.jsonl", "sig-2", [grown, native])
+    models = {row.model: row for row in ledger.model_rows()}
+  assert set(models) == {"model-native"}
+  assert models["model-native"].calls == 1
+
+
 def test_rewrite_identical_records_leaves_rows_unchanged(tmp_path):
   recs = [
       _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",)),

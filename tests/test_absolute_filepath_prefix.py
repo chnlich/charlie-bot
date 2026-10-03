@@ -9,20 +9,14 @@ under the prefix is 401 (login page for a browser Accept, JSON otherwise).
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from types import SimpleNamespace
-from urllib.parse import parse_qs, urlsplit
+import pathlib
+import types
+from urllib import parse
 
+import conftest
+import fastapi
 import pytest
-from conftest import (
-    _ok_asgi_downstream,
-    asgi_response,
-    make_page_request,
-    run_through_asgi_middleware,
-    stub_credentials,
-)
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 import server
 from src.api import auth, pages
@@ -40,15 +34,15 @@ def _mounted_prefixes() -> list[str]:
 PREFIXES = _mounted_prefixes()
 
 
-def _client(access_key: str | None) -> TestClient:
+def _client(access_key: str | None) -> testclient.TestClient:
   """A client carrying *access_key* as the charliebot_access_key cookie; None sends
   no credential. The cookie rides the client because httpx deprecates per-request
   cookies."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   for prefix in PREFIXES:
     app.include_router(files_api.router, prefix=prefix)
   cookies = {"charliebot_access_key": access_key} if access_key is not None else None
-  return TestClient(app, cookies=cookies)
+  return testclient.TestClient(app, cookies=cookies)
 
 
 def test_one_handler_is_mounted_under_the_canonical_prefix() -> None:
@@ -58,7 +52,7 @@ def test_one_handler_is_mounted_under_the_canonical_prefix() -> None:
 
 
 @pytest.fixture
-def targets(tmp_path: Path) -> dict[str, Path]:
+def targets(tmp_path: pathlib.Path) -> dict[str, pathlib.Path]:
   artifacts = tmp_path / "sessions" / "abc" / "artifacts"
   artifacts.mkdir(parents=True)
   (artifacts / "plan_01.html").write_text("<html><body><h1>Plan</h1></body></html>", encoding="utf-8")
@@ -74,15 +68,15 @@ def targets(tmp_path: Path) -> dict[str, Path]:
 
 
 @pytest.fixture
-def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def isolated_config(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Own the config and credentials the file router reads: sessions root under tmp_path,
   empty access key (the gate is a no-op). Without this the route reads the host profile,
   which is not a test fixture."""
-  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
-  stub_credentials({"charliebot": {"access_key": ""}})
+  monkeypatch.setattr(files_api, "get_config", lambda: types.SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  conftest.stub_credentials({"charliebot": {"access_key": ""}})
 
 
-def test_a_non_html_file_is_served_byte_for_byte(targets: dict[str, Path], isolated_config: None) -> None:
+def test_a_non_html_file_is_served_byte_for_byte(targets: dict[str, pathlib.Path], isolated_config: None) -> None:
   client = _client(None)
   target = targets["non-HTML file"]
   assert client.get(f"{PREFIXES[0]}{target}").content == target.read_bytes()
@@ -91,7 +85,7 @@ def test_a_non_html_file_is_served_byte_for_byte(targets: dict[str, Path], isola
 @pytest.mark.asyncio
 @pytest.mark.parametrize("accept", [b"text/html", b"application/json"])
 async def test_an_unauthenticated_get_under_the_prefix_is_401(accept: bytes) -> None:
-  stub_credentials({"charliebot": {"access_key": "secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "secret"}})
   scope = {
       "type": "http",
       "method": "GET",
@@ -99,8 +93,8 @@ async def test_an_unauthenticated_get_under_the_prefix_is_401(accept: bytes) -> 
       "headers": [(b"accept", accept)],
       "query_string": b"",
   }
-  sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
-  status, headers, body = asgi_response(sent)
+  sent = await conftest.run_through_asgi_middleware(auth.AuthMiddleware(app=conftest._ok_asgi_downstream), scope)
+  status, headers, body = conftest.asgi_response(sent)
   assert status == 401
   content_type = headers[b"content-type"]
   if accept == b"text/html":
@@ -113,7 +107,7 @@ async def test_an_unauthenticated_get_under_the_prefix_is_401(accept: bytes) -> 
 
 @pytest.mark.asyncio
 async def test_an_authenticated_get_under_the_prefix_reaches_the_route() -> None:
-  stub_credentials({"charliebot": {"access_key": "secret"}})
+  conftest.stub_credentials({"charliebot": {"access_key": "secret"}})
   scope = {
       "type": "http",
       "method": "GET",
@@ -121,8 +115,8 @@ async def test_an_authenticated_get_under_the_prefix_reaches_the_route() -> None
       "headers": [(b"accept", b"text/html"), (b"cookie", b"charliebot_access_key=secret")],
       "query_string": b"",
   }
-  sent = await run_through_asgi_middleware(auth.AuthMiddleware(app=_ok_asgi_downstream), scope)
-  status, _, _ = asgi_response(sent)
+  sent = await conftest.run_through_asgi_middleware(auth.AuthMiddleware(app=conftest._ok_asgi_downstream), scope)
+  status, _, _ = conftest.asgi_response(sent)
   assert status == 200
 
 
@@ -130,12 +124,12 @@ async def test_an_authenticated_get_under_the_prefix_reaches_the_route() -> None
 @pytest.mark.parametrize("prefix", PREFIXES)
 async def test_the_viewer_resolves_a_trace_under_the_prefix_to_the_same_url(
     prefix: str,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   trace = tmp_path / "rank0.json"
   trace.write_text(json.dumps({"traceEvents": []}), encoding="utf-8")
   response = await pages.perfetto_viewer(
-      make_page_request("/perfetto"),
+      conftest.make_page_request("/perfetto"),
       trace=[f"{prefix}{trace}"],
       dir_path=None,
       pattern="*.json",
@@ -143,6 +137,6 @@ async def test_the_viewer_resolves_a_trace_under_the_prefix_to_the_same_url(
       slim=None)
 
   merged_url = response.context["trace_url"]
-  assert urlsplit(merged_url).path == "/perfetto/merged"
+  assert parse.urlsplit(merged_url).path == "/perfetto/merged"
   # What the page generates is unchanged: the merge URL carries the bare absolute path.
-  assert parse_qs(urlsplit(merged_url).query)["trace"] == [str(trace)]
+  assert parse.parse_qs(parse.urlsplit(merged_url).query)["trace"] == [str(trace)]

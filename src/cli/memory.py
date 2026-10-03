@@ -33,9 +33,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.cli.help_formatter import CliHelpFormatter
-from src.core import memory
 from src.core.home import charliebot_home_dir
-from src.core.run_token import load_run_token
+
+# The store and token stacks ride the verbs that read them: --help and parser
+# errors must not pay their import chain (the M137 dispatch floor).
 
 
 def _memory_dir() -> Path:
@@ -106,6 +107,9 @@ def main() -> None:
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
+  from src.core import memory
+  from src.core.run_token import load_run_token
+
   token = load_run_token()
   if token is not None:
     audience = _resolve_run_scoped_audience(token)
@@ -224,6 +228,8 @@ def _store_root(args: argparse.Namespace) -> Path:
 
 
 def _cmd_lint(args: argparse.Namespace) -> None:
+  from src.core import memory
+
   violations = memory.lint(_store_root(args))
   if violations:
     for v in violations:

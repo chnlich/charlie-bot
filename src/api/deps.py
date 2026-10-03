@@ -10,46 +10,31 @@ the websocket handlers in server.py and tui.py); the ``get_*`` names are the
 Depends forms.
 """
 
-from fastapi import Depends, HTTPException, Request
+import fastapi
 
-from src.core.config import CharlieBotConfig, configured_access_key, get_config
-from src.core.constants import CALLER_SESSION_HEADER
-from src.core.models import SessionMetadata
-from src.core.plans import PlanRegistryManager
-from src.core.run_token import (
-    RUN_TOKEN_ENV,
-    CallerIdentity,
-    RunTokenError,
-    bearer_from_authorization,
-    verify_run_token,
-)
-from src.core.runs import RunStore, run_identity_refusal
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
-from src.core.threads import ThreadManager
-from src.core.triggers import TriggerManager
+from src.core import config, constants, models, plans, run_token, runs, sessions, task_sessions, threads, triggers
 
 # Module-level singletons (created once per process)
-_session_manager: SessionManager | None = None
-_thread_manager: ThreadManager | None = None
-_trigger_manager: TriggerManager | None = None
-_plan_manager: PlanRegistryManager | None = None
-_task_manager: TaskTreeManager | None = None
+_session_manager: sessions.SessionManager | None = None
+_thread_manager: threads.ThreadManager | None = None
+_trigger_manager: triggers.TriggerManager | None = None
+_plan_manager: plans.PlanRegistryManager | None = None
+_task_manager: task_sessions.TaskTreeManager | None = None
 
 
-def session_manager() -> SessionManager:
+def session_manager() -> sessions.SessionManager:
   global _session_manager
   if _session_manager is None:
-    _session_manager = SessionManager(get_config())
+    _session_manager = sessions.SessionManager(config.get_config())
   return _session_manager
 
 
-async def get_session_manager() -> SessionManager:
+async def get_session_manager() -> sessions.SessionManager:
   return session_manager()
 
 
-def task_manager() -> TaskTreeManager:
-  """The task-tree owner singleton; it owns the control lock the RunStore shares.
+def task_manager() -> task_sessions.TaskTreeManager:
+  """The task-tree owner singleton; it owns the control lock the runs.RunStore shares.
 
   Construction installs the execution adapter as the input dispatcher's
   executor — the application initialization owner wiring durable dispatch to
@@ -58,77 +43,78 @@ def task_manager() -> TaskTreeManager:
   """
   global _task_manager
   if _task_manager is None:
-    _task_manager = TaskTreeManager(get_config(), session_manager())
-    from src.core.task_execution import TaskExecutionAdapter
-    _task_manager.dispatch.executor = TaskExecutionAdapter(get_config(), session_manager(), _task_manager)
+    _task_manager = task_sessions.TaskTreeManager(config.get_config(), session_manager())
+    from src.core import task_execution
+    _task_manager.dispatch.executor = task_execution.TaskExecutionAdapter(
+        config.get_config(), session_manager(), _task_manager)
   return _task_manager
 
 
-async def get_task_manager() -> TaskTreeManager:
+async def get_task_manager() -> task_sessions.TaskTreeManager:
   return task_manager()
 
 
-def run_store() -> RunStore:
+def run_store() -> runs.RunStore:
   return task_manager().runs
 
 
-async def get_run_store() -> RunStore:
+async def get_run_store() -> runs.RunStore:
   return task_manager().runs
 
 
-def set_task_manager(mgr: TaskTreeManager | None) -> None:
+def set_task_manager(mgr: task_sessions.TaskTreeManager | None) -> None:
   """Replace the task-tree owner singleton (tests); None restores lazy construction."""
   global _task_manager
   _task_manager = mgr
 
 
-def thread_manager() -> ThreadManager:
+def thread_manager() -> threads.ThreadManager:
   global _thread_manager
   if _thread_manager is None:
-    _thread_manager = ThreadManager(get_config())
+    _thread_manager = threads.ThreadManager(config.get_config())
   return _thread_manager
 
 
-async def get_thread_manager() -> ThreadManager:
+async def get_thread_manager() -> threads.ThreadManager:
   return thread_manager()
 
 
-def trigger_manager() -> TriggerManager:
+def trigger_manager() -> triggers.TriggerManager:
   global _trigger_manager
   if _trigger_manager is None:
-    _trigger_manager = TriggerManager(get_config(), session_manager())
+    _trigger_manager = triggers.TriggerManager(config.get_config(), session_manager())
   return _trigger_manager
 
 
-async def get_trigger_manager() -> TriggerManager:
+async def get_trigger_manager() -> triggers.TriggerManager:
   return trigger_manager()
 
 
-def set_trigger_manager(mgr: TriggerManager) -> None:
+def set_trigger_manager(mgr: triggers.TriggerManager) -> None:
   """Set the trigger manager singleton (called from server lifespan)."""
   global _trigger_manager
   _trigger_manager = mgr
 
 
-def plan_manager() -> PlanRegistryManager:
+def plan_manager() -> plans.PlanRegistryManager:
   global _plan_manager
   if _plan_manager is None:
-    _plan_manager = PlanRegistryManager(get_config(), session_manager())
+    _plan_manager = plans.PlanRegistryManager(config.get_config(), session_manager())
   return _plan_manager
 
 
-async def get_plan_manager() -> PlanRegistryManager:
+async def get_plan_manager() -> plans.PlanRegistryManager:
   return plan_manager()
 
 
-async def get_config_on_loop() -> CharlieBotConfig:
+async def get_config_on_loop() -> config.CharlieBotConfig:
   """Async config dependency for the polled routes.
 
-  ``Depends(get_config)`` on the sync core reader pays the threadpool handoff
+  ``Depends(config.get_config)`` on the sync core reader pays the threadpool handoff
   described in the module docstring on every request; this resolves the
   memoized instance on the event loop instead.
   """
-  return get_config()
+  return config.get_config()
 
 
 # Client-visible 404 detail for an unresolvable session id: the sites that
@@ -140,22 +126,22 @@ async def get_config_on_loop() -> CharlieBotConfig:
 SESSION_NOT_FOUND_DETAIL = "Session not found"
 
 
-def require_found(meta: SessionMetadata | None) -> SessionMetadata:
+def require_found(meta: models.SessionMetadata | None) -> models.SessionMetadata:
   """Return non-None session metadata, or raise 404 when the manager found no session."""
   if not meta:
-    raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
+    raise fastapi.HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   return meta
 
 
 async def require_session(
     session_id: str,
-    session_mgr: SessionManager = Depends(get_session_manager),
-) -> SessionMetadata:
+    session_mgr: sessions.SessionManager = fastapi.Depends(get_session_manager),
+) -> models.SessionMetadata:
   """Fetch a session or raise 404. Use as a FastAPI dependency."""
   return require_found(await session_mgr.get_session(session_id))
 
 
-def bad_request(exc: Exception) -> HTTPException:
+def bad_request(exc: Exception) -> fastapi.HTTPException:
   """Build the one expected-failure spelling: HTTP 400 whose detail is the exception's message.
 
   Route handlers raise this from the except clauses that translate a domain
@@ -164,13 +150,13 @@ def bad_request(exc: Exception) -> HTTPException:
   scheduling, the openai-compatible proxy's request translation); raising
   keeps the ``from e`` chain intact.
   """
-  return HTTPException(status_code=400, detail=str(exc))
+  return fastapi.HTTPException(status_code=400, detail=str(exc))
 
 
 async def require_caller(
-    request: Request,
-    run_store: RunStore = Depends(get_run_store),
-) -> CallerIdentity:
+    request: fastapi.Request,
+    run_store: runs.RunStore = fastapi.Depends(get_run_store),
+) -> run_token.CallerIdentity:
   """Resolve the verified caller identity of a structural request.
 
   A bearer equal to the operator access key (or no bearer at all — the cookie
@@ -185,25 +171,27 @@ async def require_caller(
   identities — an operator claiming a session can at most lose its own wake —
   while an agent's session always comes from its verified token.
   """
-  bearer = bearer_from_authorization(request.headers.get("authorization"))
+  bearer = run_token.bearer_from_authorization(request.headers.get("authorization"))
   if not bearer:
-    return CallerIdentity(kind="operator", session_id=request.headers.get(CALLER_SESSION_HEADER) or None)
-  key = configured_access_key()
+    return run_token.CallerIdentity(
+        kind="operator", session_id=request.headers.get(constants.CALLER_SESSION_HEADER) or None)
+  key = config.configured_access_key()
   if key and bearer == key:
-    return CallerIdentity(kind="operator", session_id=request.headers.get(CALLER_SESSION_HEADER) or None)
+    return run_token.CallerIdentity(
+        kind="operator", session_id=request.headers.get(constants.CALLER_SESSION_HEADER) or None)
   # Anything else is run-token use: fail closed, never fall back.
   if not key:
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=401,
-        detail=f"run token presented ({RUN_TOKEN_ENV}) but no signing key is configured",
+        detail=f"run token presented ({run_token.RUN_TOKEN_ENV}) but no signing key is configured",
     )
   try:
-    claims = verify_run_token(bearer, key)
-  except RunTokenError as e:
-    raise HTTPException(status_code=401, detail=f"invalid run token: {e}") from e
+    claims = run_token.verify_run_token(bearer, key)
+  except run_token.RunTokenError as e:
+    raise fastapi.HTTPException(status_code=401, detail=f"invalid run token: {e}") from e
   run = await run_store.get_run(claims.session_id, claims.run_id)
-  refusal = run_identity_refusal(run, run_store.load_events_sync(claims.session_id))
+  refusal = runs.run_identity_refusal(run, run_store.load_events_sync(claims.session_id))
   if refusal is not None:
-    raise HTTPException(status_code=401, detail=refusal)
+    raise fastapi.HTTPException(status_code=401, detail=refusal)
   assert run is not None
-  return CallerIdentity(kind="agent", claims=claims)
+  return run_token.CallerIdentity(kind="agent", claims=claims)

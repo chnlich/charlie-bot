@@ -87,12 +87,12 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   from src.api import chat as chat_api
   from src.api import sessions as sessions_api
   from src.api.deps import (
-      get_config,
       get_config_on_loop,
       get_run_store,
       get_session_manager,
       get_task_manager,
   )
+  from src.core import config
   from src.core.config import CharlieBotConfig
   from src.core.sessions import SessionManager
   from src.core.task_sessions import TaskTreeManager
@@ -190,7 +190,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   app.include_router(sessions_api.router, prefix="/api/sessions")
   app.include_router(chat_api.router, prefix="/api/chat")
   app.add_api_websocket_route("/ws/sessions/{session_id}", session_websocket)
-  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree

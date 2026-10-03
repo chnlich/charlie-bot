@@ -5,31 +5,30 @@ and only the manual `charliebot gc-trash --yes` command ever removes them. These
 helpers are shared by the sweep (size reporting) and the CLI (listing + purge).
 """
 
+import dataclasses
 import os
-from dataclasses import dataclass
-from pathlib import Path
+import pathlib
 
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now
+from src.core import log_once, models
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # On-disk name of the quarantine dir under the worktree root; the storage sweep
 # excludes the same directory by this name when it lists live worktrees.
 TRASH_DIR_NAME = ".trash"
 
 
-def trash_dir(worktree_dir: str) -> Path:
+def trash_dir(worktree_dir: str) -> pathlib.Path:
   """Return the quarantine trash dir under the worktree root."""
-  return Path(worktree_dir) / TRASH_DIR_NAME
+  return pathlib.Path(worktree_dir) / TRASH_DIR_NAME
 
 
-def dir_size_bytes(path: Path) -> int:
+def dir_size_bytes(path: pathlib.Path) -> int:
   """Total size in bytes of all files under path; unreadable entries are skipped."""
   total = 0
   for dirpath, _, filenames in os.walk(path, followlinks=False):
     for name in filenames:
-      file_path = Path(dirpath) / name
+      file_path = pathlib.Path(dirpath) / name
       try:
         total += file_path.lstat().st_size
       except OSError as e:
@@ -37,19 +36,19 @@ def dir_size_bytes(path: Path) -> int:
   return total
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class TrashEntry:
   """A single top-level directory sitting in the quarantine trash."""
-  path: Path
+  path: pathlib.Path
   age_days: float
   size_bytes: int
 
 
-def list_trash_entries(trash_path: Path) -> list[TrashEntry]:
+def list_trash_entries(trash_path: pathlib.Path) -> list[TrashEntry]:
   """List top-level entries in the trash dir with their age (since last modified) and size."""
   if not trash_path.is_dir():
     return []
-  now = utc_now().timestamp()
+  now = models.utc_now().timestamp()
   entries: list[TrashEntry] = []
   for child in sorted(trash_path.iterdir()):
     age_days = max(0.0, (now - child.lstat().st_mtime) / 86400.0)

@@ -24,15 +24,14 @@ code-fixed types (None, bool, int, ASCII strings).
 """
 
 import asyncio
-from pathlib import Path
+import pathlib
 from typing import Any
 
 import orjson
-from fastapi.responses import JSONResponse
-from starlette.requests import Request
-from starlette.responses import Response
+from fastapi import responses
+from starlette import requests
 
-from src.core.compression import gzip_level1
+from src.core import compression
 from src.core.memo import BoundedMemo, StatSignatureMemo
 
 
@@ -47,14 +46,14 @@ def fast_json_bytes(content: Any) -> bytes:
   return orjson.dumps(content)
 
 
-class FastJsonResponse(JSONResponse):
+class FastJsonResponse(responses.JSONResponse):
   """JSONResponse whose render goes through :func:`fast_json_bytes`."""
 
   def render(self, content: Any) -> bytes:
     return fast_json_bytes(content)
 
 
-class PreencodedJSONResponse(Response):
+class PreencodedJSONResponse(responses.Response):
   """JSON response serving body bytes a caller already rendered.
 
   The bytes must come from :func:`fast_json_bytes` (directly or via a memo of
@@ -72,7 +71,7 @@ class PreencodedJSONResponse(Response):
 GZIP_RESPONSE_HEADERS: dict[str, str] = {"Content-Encoding": "gzip", "Vary": "Accept-Encoding"}
 
 
-def request_wants_gzip(request: Request) -> bool:
+def request_wants_gzip(request: requests.Request) -> bool:
   """Whether the client's Accept-Encoding admits gzip.
 
   The same check the gzip middleware makes on the way in; answering with the
@@ -82,7 +81,8 @@ def request_wants_gzip(request: Request) -> bool:
   return "gzip" in request.headers.get("accept-encoding", "")
 
 
-def gzip_file_fresh(memo: StatSignatureMemo[Path, bytes], path: Path, max_bytes: int | None) -> bytes | None:
+def gzip_file_fresh(
+    memo: StatSignatureMemo[pathlib.Path, bytes], path: pathlib.Path, max_bytes: int | None) -> bytes | None:
   """The file's level-1 gzip form, memoized on the stat pair the read served.
 
   stat precedes the read in the same call (the StatSignatureMemo contract), so a
@@ -97,13 +97,14 @@ def gzip_file_fresh(memo: StatSignatureMemo[Path, bytes], path: Path, max_bytes:
   hit = memo.fresh(path, st)
   if hit is not None:
     return hit
-  compressed = gzip_level1(path.read_bytes())
+  compressed = compression.gzip_level1(path.read_bytes())
   memo.record(path, st, compressed)
   return compressed
 
 
 async def gzip_body_response(
-    request: Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes, bytes]) -> Response:
+    request: requests.Request, body: bytes, headers: dict[str, str], memo: BoundedMemo[bytes,
+                                                                                       bytes]) -> responses.Response:
   """Serve *body* plain or from *memo*'s gzip form (keyed on the bytes themselves).
 
   One off-loop level-1 deflate per distinct body, stored so a repeat serves
@@ -114,6 +115,6 @@ async def gzip_body_response(
     return PreencodedJSONResponse(body, headers=headers)
   gz = memo.get(body)
   if gz is None:
-    gz = await asyncio.to_thread(gzip_level1, body)
+    gz = await asyncio.to_thread(compression.gzip_level1, body)
     memo.store(body, gz)
   return PreencodedJSONResponse(gz, headers={**headers, **GZIP_RESPONSE_HEADERS})

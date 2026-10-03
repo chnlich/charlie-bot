@@ -10,14 +10,14 @@ the path was written.
 import asyncio
 import pathlib
 
+import conftest
 import pytest
-from conftest import ROOT, fresh_state_fixture, reset_config_caches
 
 from src.core import config as core_config
 
 # Both caches are keyed on nothing but their own mtimes, so a cached instance
 # from an earlier test would answer with the wrong profile.
-_reset_config_caches = fresh_state_fixture(reset_config_caches)
+_reset_config_caches = conftest.fresh_state_fixture(conftest.reset_config_caches)
 
 # (env value to set — None deletes the variable, "{home}" interpolates tmp_path —
 # and the directory the resolver must answer with, relative to tmp_path).
@@ -135,25 +135,25 @@ def test_no_new_hardcoded_state_paths() -> None:
   any path but only the two spellings that build one from the user's home directory.
   ``src/core/home.py`` owns the resolution and is the single exemption.
   """
-  exempt = {ROOT / "src" / "core" / "home.py"}
+  exempt = {conftest.ROOT / "src" / "core" / "home.py"}
   offenders: list[str] = []
 
-  python_files = [ROOT / "server.py", *sorted((ROOT / "src").rglob("*.py"))]
+  python_files = [conftest.ROOT / "server.py", *sorted((conftest.ROOT / "src").rglob("*.py"))]
   for path in python_files:
     if path in exempt:
       continue
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
       if "Path.home()" in line and ".charliebot" in line:
-        offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line.strip()}")
+        offenders.append(f"{path.relative_to(conftest.ROOT)}:{lineno}: {line.strip()}")
 
   web_files = [
-      *sorted((ROOT / "web" / "static" / "js").rglob("*.js")),
-      *sorted((ROOT / "web" / "templates").rglob("*.html")),
+      *sorted((conftest.ROOT / "web" / "static" / "js").rglob("*.js")),
+      *sorted((conftest.ROOT / "web" / "templates").rglob("*.html")),
   ]
   for path in web_files:
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
       if "/.charliebot/" in line:
-        offenders.append(f"{path.relative_to(ROOT)}:{lineno}: {line.strip()}")
+        offenders.append(f"{path.relative_to(conftest.ROOT)}:{lineno}: {line.strip()}")
 
   assert not offenders, (
       "state paths must come from CharlieBotConfig, not from the user's home directory:\n" + "\n".join(offenders))

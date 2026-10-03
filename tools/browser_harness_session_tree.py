@@ -245,7 +245,7 @@ def seed_memory_store(home: Path) -> None:
 
 
 async def seed_scenario(home: Path) -> dict:
-    """Create the acceptance scenario's task tree and recorded run facts.
+  """Create the acceptance scenario's task tree and recorded run facts.
 
     The operator-actions scenarios need collection sizes beyond one page:
     more roots than the move chooser's page, a manager with more direct
@@ -253,482 +253,729 @@ async def seed_scenario(home: Path) -> dict:
     than the completion dialog's page — all seeded through the same
     task_sessions owner the APIs serve, in-process only.
     """
-    os.environ["CHARLIEBOT_HOME"] = str(home)
-    from src.core import event_types as ET
-    from src.core.config import get_config
-    from src.core.models import (
-        CreateSessionRequest,
-        PatchSessionTaskRequest,
-        RunRecord,
-        TaskSpec,
-        ThreadMetadata,
-    )
-    from src.core.run_token import CallerIdentity
-    from src.core.sessions import SessionManager
-    from src.core.task_sessions import TaskTreeManager
+  os.environ["CHARLIEBOT_HOME"] = str(home)
+  from src.core import event_types as ET
+  from src.core.config import get_config
+  from src.core.models import (
+      CreateSessionRequest,
+      PatchSessionTaskRequest,
+      RunRecord,
+      TaskSpec,
+      ThreadMetadata,
+  )
+  from src.core.run_token import CallerIdentity
+  from src.core.sessions import SessionManager
+  from src.core.task_sessions import TaskTreeManager
 
-    cfg = get_config()
-    session_mgr = SessionManager(cfg)
-    tree = TaskTreeManager(cfg, session_mgr)
-    OP = CallerIdentity(kind="operator")
+  cfg = get_config()
+  session_mgr = SessionManager(cfg)
+  tree = TaskTreeManager(cfg, session_mgr)
+  OP = CallerIdentity(kind="operator")
 
-    async def seed() -> dict:
-        # Bulk roots first: created_at order puts them on the move chooser's
-        # first pages, so "Program rollout" and everything created after land
-        # on a LATER page.
-        bulk = {}
-        for i in range(1, 29):
-            meta = await tree.create_task(
-                request_id=f"seed-bulk-{i}", task_parent_id=None, profile="manager",
-                task=TaskSpec(goal=f"bulk root {i:02d}"), name=f"Bulk root {i:02d}",
-                backend=None, caller=OP)
-            if i <= 3:
-                bulk[f"bulk{i}"] = meta.id
-        root = await tree.create_task(
-            request_id="seed-root", task_parent_id=None, profile="manager", task=None,
-            name="Program rollout", backend=None, caller=OP)
-        await tree.patch_task(root.id, PatchSessionTaskRequest(
-            task={"goal": "Ship the program rollout", "acceptance": ["all features delivered"],
-                  "context_refs": [], "repo_path": None, "base_branch": None,
-                  "task_type": None, "keep_worktree": False}), caller=OP)
-        feature = await tree.create_task(
-            request_id="seed-feature", task_parent_id=root.id, profile="manager", task=None,
-            name="Feature alpha", backend=None, caller=OP)
-        await tree.patch_task(feature.id, PatchSessionTaskRequest(
-            task={"goal": "Deliver feature alpha end to end", "acceptance": ["tests pass"],
-                  "context_refs": [], "repo_path": None, "base_branch": None,
-                  "task_type": "implement", "keep_worktree": False}), caller=OP)
-        worker1 = await tree.create_task(
-            request_id="seed-w1", task_parent_id=feature.id, profile="worker", task=None,
-            name="Worker one", backend=None, caller=OP)
-        worker2 = await tree.create_task(
-            request_id="seed-w2", task_parent_id=feature.id, profile="worker", task=None,
-            name="Worker two", backend=None, caller=OP)
-        # Recorded run facts: worker one finished a work run and a review run
-        # (one leaf, two run rows); worker two has a pending input.
-        await tree.runs.register_run(
-            RunRecord(id="run-w1-work", session_id=worker1.id, kind="work",
-                      backend="fake-scripted", model="scripted-model"), task_spec_text="worker spec")
-        await tree.dispatch.finish_run(worker1.id, "run-w1-work", outcome="success")
-        await tree.runs.register_run(
-            RunRecord(id="run-w1-review", session_id=worker1.id, kind="review",
-                      backend="fake-scripted", model="scripted-model", review_of_run_id="run-w1-work"),
-            task_spec_text="review spec")
-        await tree.dispatch.finish_run(worker1.id, "run-w1-review", outcome="success")
-        # The delivered report lands on the feature manager as a pending input;
-        # acknowledge it so the feature task stays editable (worker two's user
-        # input stays pending on purpose — the blocker scenario uses it).
-        # A successfully delivered worker autoarchives (server facts); the
-        # scenario keeps it visible via its own presentation preference.
-        await tree.patch_task(worker1.id, PatchSessionTaskRequest(presentation="shown"), caller=OP)
-        report_inputs = tree.dispatch.pending_inputs(feature.id)
-        if report_inputs:
-            await tree.completion.acknowledge_inputs(
-                feature.id, request_id="seed-ack-report",
-                input_ids=[str(e["id"]) for e in report_inputs],
-                note="seed: report accepted", caller=OP)
-        await tree.dispatch.admit_input(
-            worker2.id, event_type=ET.USER, content="Please also verify the docs page", actor="user")
-        # The root manager carries the real-user takeoff authorization an
-        # agent-scoped creation is judged against (takeoff_gate).
-        await tree.events.append(root.id, {
-            "id": "seed-takeoff-user", "type": ET.USER,
+  async def seed() -> dict:
+    # Bulk roots first: created_at order puts them on the move chooser's
+    # first pages, so "Program rollout" and everything created after land
+    # on a LATER page.
+    bulk = {}
+    for i in range(1, 29):
+      meta = await tree.create_task(
+          request_id=f"seed-bulk-{i}",
+          task_parent_id=None,
+          profile="manager",
+          task=TaskSpec(goal=f"bulk root {i:02d}"),
+          name=f"Bulk root {i:02d}",
+          backend=None,
+          caller=OP)
+      if i <= 3:
+        bulk[f"bulk{i}"] = meta.id
+    root = await tree.create_task(
+        request_id="seed-root",
+        task_parent_id=None,
+        profile="manager",
+        task=None,
+        name="Program rollout",
+        backend=None,
+        caller=OP)
+    await tree.patch_task(
+        root.id,
+        PatchSessionTaskRequest(
+            task={
+                "goal": "Ship the program rollout",
+                "acceptance": ["all features delivered"],
+                "context_refs": [],
+                "repo_path": None,
+                "base_branch": None,
+                "task_type": None,
+                "keep_worktree": False
+            }),
+        caller=OP)
+    feature = await tree.create_task(
+        request_id="seed-feature",
+        task_parent_id=root.id,
+        profile="manager",
+        task=None,
+        name="Feature alpha",
+        backend=None,
+        caller=OP)
+    await tree.patch_task(
+        feature.id,
+        PatchSessionTaskRequest(
+            task={
+                "goal": "Deliver feature alpha end to end",
+                "acceptance": ["tests pass"],
+                "context_refs": [],
+                "repo_path": None,
+                "base_branch": None,
+                "task_type": "implement",
+                "keep_worktree": False
+            }),
+        caller=OP)
+    worker1 = await tree.create_task(
+        request_id="seed-w1",
+        task_parent_id=feature.id,
+        profile="worker",
+        task=None,
+        name="Worker one",
+        backend=None,
+        caller=OP)
+    worker2 = await tree.create_task(
+        request_id="seed-w2",
+        task_parent_id=feature.id,
+        profile="worker",
+        task=None,
+        name="Worker two",
+        backend=None,
+        caller=OP)
+    # Recorded run facts: worker one finished a work run and a review run
+    # (one leaf, two run rows); worker two has a pending input.
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-w1-work", session_id=worker1.id, kind="work", backend="fake-scripted", model="scripted-model"),
+        task_spec_text="worker spec")
+    await tree.dispatch.finish_run(worker1.id, "run-w1-work", outcome="success")
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-w1-review",
+            session_id=worker1.id,
+            kind="review",
+            backend="fake-scripted",
+            model="scripted-model",
+            review_of_run_id="run-w1-work"),
+        task_spec_text="review spec")
+    await tree.dispatch.finish_run(worker1.id, "run-w1-review", outcome="success")
+    # The delivered report lands on the feature manager as a pending input;
+    # acknowledge it so the feature task stays editable (worker two's user
+    # input stays pending on purpose — the blocker scenario uses it).
+    # A successfully delivered worker autoarchives (server facts); the
+    # scenario keeps it visible via its own presentation preference.
+    await tree.patch_task(worker1.id, PatchSessionTaskRequest(presentation="shown"), caller=OP)
+    report_inputs = tree.dispatch.pending_inputs(feature.id)
+    if report_inputs:
+      await tree.completion.acknowledge_inputs(
+          feature.id,
+          request_id="seed-ack-report",
+          input_ids=[str(e["id"]) for e in report_inputs],
+          note="seed: report accepted",
+          caller=OP)
+    await tree.dispatch.admit_input(
+        worker2.id, event_type=ET.USER, content="Please also verify the docs page", actor="user")
+    # The root manager carries the real-user takeoff authorization an
+    # agent-scoped creation is judged against (takeoff_gate).
+    await tree.events.append(
+        root.id, {
+            "id": "seed-takeoff-user",
+            "type": ET.USER,
             "timestamp": "2026-01-01T00:00:00+00:00",
-            "content": "take off and run the program rollout"})
-        await tree.completion.acknowledge_inputs(
-            root.id, request_id="seed-ack-takeoff", input_ids=["seed-takeoff-user"],
-            note="seed: operator authorization", caller=OP)
-        # Long-history node: 150 started runs whose committed snapshots are
-        # distinguishable (generation 0001..0150), plus never-launched
-        # reservations. The current-run Context selection must show generation
-        # 0150 — the whole-history latest launch — not the first page's tail.
-        from src.core.control_events import sha256_hex
-        from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
-        long_worker = await tree.create_task(
-            request_id="seed-long", task_parent_id=feature.id, profile="worker",
-            task=TaskSpec(goal="carry a long run history", task_type="implement"),
-            name="Long history worker", backend=None, caller=OP)
-        base = datetime(2026, 1, 1, tzinfo=timezone.utc)
-        latest_hash = None
-        for i in range(1, 151):
-            run_id = f"run-{i:04d}"
-            await tree.runs.register_run(RunRecord(
-                id=run_id, session_id=long_worker.id, kind="work", backend="fake-scripted",
-                model="scripted-model", started_at=base + timedelta(minutes=i)))
-            text = f"managed instructions generation {i:04d}"
-            block = PromptBlock(
-                sources=(PromptSource(scope="base", source_ref="base:work", source_session_id=None),),
-                body_ref=sha256_hex(text), delivery="full", text=text)
-            snapshot = PromptSnapshot(blocks=(block,))
-            snap_path = tree.runs.run_dir(long_worker.id, run_id) / "prompt_snapshot.json"
-            snap_path.parent.mkdir(parents=True, exist_ok=True)
-            snap_path.write_text(json.dumps(snapshot.to_json_dict()), encoding="utf-8")
-            await tree.runs.record_observation(
-                long_worker.id, run_id, prompt_snapshot_ref=str(snap_path))
-            await tree.dispatch.finish_run(long_worker.id, run_id, outcome="success")
-            if i == 150:
-                latest_hash = snapshot.prompt_hash
-        for q in ("queued-a", "queued-b"):
-            await tree.runs.register_run(RunRecord(id=q, session_id=long_worker.id, kind="work"))
-        # An active Run identity on the root manager: the seeded agent caller's
-        # run token must bind a launched, non-terminal Run (run_identity_refusal).
-        from src.core.runs import read_pid_stat
-        pid_start, _state = read_pid_stat(os.getpid())
-        await tree.runs.register_run(RunRecord(
-            id="agent-auth-run", session_id=root.id, kind="manager_turn",
-            pid=os.getpid(), pid_start=pid_start))
+            "content": "take off and run the program rollout"
+        })
+    await tree.completion.acknowledge_inputs(
+        root.id,
+        request_id="seed-ack-takeoff",
+        input_ids=["seed-takeoff-user"],
+        note="seed: operator authorization",
+        caller=OP)
+    # Long-history node: 150 started runs whose committed snapshots are
+    # distinguishable (generation 0001..0150), plus never-launched
+    # reservations. The current-run Context selection must show generation
+    # 0150 — the whole-history latest launch — not the first page's tail.
+    from src.core.control_events import sha256_hex
+    from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
+    long_worker = await tree.create_task(
+        request_id="seed-long",
+        task_parent_id=feature.id,
+        profile="worker",
+        task=TaskSpec(goal="carry a long run history", task_type="implement"),
+        name="Long history worker",
+        backend=None,
+        caller=OP)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    latest_hash = None
+    for i in range(1, 151):
+      run_id = f"run-{i:04d}"
+      await tree.runs.register_run(
+          RunRecord(
+              id=run_id,
+              session_id=long_worker.id,
+              kind="work",
+              backend="fake-scripted",
+              model="scripted-model",
+              started_at=base + timedelta(minutes=i)))
+      text = f"managed instructions generation {i:04d}"
+      block = PromptBlock(
+          sources=(PromptSource(scope="base", source_ref="base:work", source_session_id=None),),
+          body_ref=sha256_hex(text),
+          delivery="full",
+          text=text)
+      snapshot = PromptSnapshot(blocks=(block,))
+      snap_path = tree.runs.run_dir(long_worker.id, run_id) / "prompt_snapshot.json"
+      snap_path.parent.mkdir(parents=True, exist_ok=True)
+      snap_path.write_text(json.dumps(snapshot.to_json_dict()), encoding="utf-8")
+      await tree.runs.record_observation(long_worker.id, run_id, prompt_snapshot_ref=str(snap_path))
+      await tree.dispatch.finish_run(long_worker.id, run_id, outcome="success")
+      if i == 150:
+        latest_hash = snapshot.prompt_hash
+    for q in ("queued-a", "queued-b"):
+      await tree.runs.register_run(RunRecord(id=q, session_id=long_worker.id, kind="work"))
+    # An active Run identity on the root manager: the seeded agent caller's
+    # run token must bind a launched, non-terminal Run (run_identity_refusal).
+    from src.core.runs import read_pid_stat
+    pid_start, _state = read_pid_stat(os.getpid())
+    await tree.runs.register_run(
+        RunRecord(id="agent-auth-run", session_id=root.id, kind="manager_turn", pid=os.getpid(), pid_start=pid_start))
 
-        # --- operator-actions scenarios (S16-S20) ---------------------------
-        # A late root holding an intermediate manager (a move target reached
-        # through the chooser's later roots page) and a wide manager whose
-        # direct-children list exceeds the old single 100-record read.
-        late_root = await tree.create_task(
-            request_id="seed-late-root", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="late root for move paging"), name="Late root",
-            backend=None, caller=OP)
-        late_mid = await tree.create_task(
-            request_id="seed-late-mid", task_parent_id=late_root.id, profile="manager",
-            task=TaskSpec(goal="intermediate manager"), name="Late mid",
-            backend=None, caller=OP)
-        wide = await tree.create_task(
-            request_id="seed-wide", task_parent_id=late_mid.id, profile="manager",
-            task=TaskSpec(goal="a manager with more children than one page"), name="Wide manager",
-            backend=None, caller=OP)
-        for i in range(1, 106):
-            await tree.create_task(
-                request_id=f"seed-wide-child-{i}", task_parent_id=wide.id, profile="worker",
-                task=TaskSpec(goal=f"wide child {i:03d}"), name=f"Wide child {i:03d}",
-                backend=None, caller=OP)
+    # --- operator-actions scenarios (S16-S20) ---------------------------
+    # A late root holding an intermediate manager (a move target reached
+    # through the chooser's later roots page) and a wide manager whose
+    # direct-children list exceeds the old single 100-record read.
+    late_root = await tree.create_task(
+        request_id="seed-late-root",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="late root for move paging"),
+        name="Late root",
+        backend=None,
+        caller=OP)
+    late_mid = await tree.create_task(
+        request_id="seed-late-mid",
+        task_parent_id=late_root.id,
+        profile="manager",
+        task=TaskSpec(goal="intermediate manager"),
+        name="Late mid",
+        backend=None,
+        caller=OP)
+    wide = await tree.create_task(
+        request_id="seed-wide",
+        task_parent_id=late_mid.id,
+        profile="manager",
+        task=TaskSpec(goal="a manager with more children than one page"),
+        name="Wide manager",
+        backend=None,
+        caller=OP)
+    for i in range(1, 106):
+      await tree.create_task(
+          request_id=f"seed-wide-child-{i}",
+          task_parent_id=wide.id,
+          profile="worker",
+          task=TaskSpec(goal=f"wide child {i:03d}"),
+          name=f"Wide child {i:03d}",
+          backend=None,
+          caller=OP)
 
-        # A three-level ops tree whose leaf has a FAILED run: the terminal Run
-        # paints no sidebar activity, so the rows the readability scenario
-        # measures carry their names and subtree counts alone.
-        ops_root = await tree.create_task(
-            request_id="seed-ops-root", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="ops root"), name="Ops root", backend=None, caller=OP)
-        ops_mid = await tree.create_task(
-            request_id="seed-ops-mid", task_parent_id=ops_root.id, profile="manager",
-            task=TaskSpec(goal="ops mid manager"), name="Ops mid", backend=None, caller=OP)
-        failing = await tree.create_task(
-            request_id="seed-failing", task_parent_id=ops_mid.id, profile="worker",
-            task=TaskSpec(goal="a worker whose run failed"), name="Failing worker",
-            backend=None, caller=OP)
-        await tree.runs.register_run(RunRecord(
-            id="run-fail-1", session_id=failing.id, kind="work", backend="fake-scripted",
-            model="scripted-model", started_at=base + timedelta(minutes=500)))
-        await tree.dispatch.finish_run(failing.id, "run-fail-1", outcome="failed")
+    # A three-level ops tree whose leaf has a FAILED run: the terminal Run
+    # paints no sidebar activity, so the rows the readability scenario
+    # measures carry their names and subtree counts alone.
+    ops_root = await tree.create_task(
+        request_id="seed-ops-root",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="ops root"),
+        name="Ops root",
+        backend=None,
+        caller=OP)
+    ops_mid = await tree.create_task(
+        request_id="seed-ops-mid",
+        task_parent_id=ops_root.id,
+        profile="manager",
+        task=TaskSpec(goal="ops mid manager"),
+        name="Ops mid",
+        backend=None,
+        caller=OP)
+    failing = await tree.create_task(
+        request_id="seed-failing",
+        task_parent_id=ops_mid.id,
+        profile="worker",
+        task=TaskSpec(goal="a worker whose run failed"),
+        name="Failing worker",
+        backend=None,
+        caller=OP)
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-fail-1",
+            session_id=failing.id,
+            kind="work",
+            backend="fake-scripted",
+            model="scripted-model",
+            started_at=base + timedelta(minutes=500)))
+    await tree.dispatch.finish_run(failing.id, "run-fail-1", outcome="failed")
 
-        # Completion-evidence MANAGER: 120 successful manager_turn runs. A
-        # manager never auto-completes (that is worker-only), so the task stays
-        # open and manually completable, with early evidence beyond the first
-        # desc page and beyond the old 100-record read.
-        evidence = await tree.create_task(
-            request_id="seed-evidence", task_parent_id=feature.id, profile="manager",
-            task=TaskSpec(goal="carry enough runs to page the evidence picker"),
-            name="Evidence manager", backend=None, caller=OP)
-        for i in range(1, 121):
-            run_id = f"run-e{i:04d}"
-            await tree.runs.register_run(RunRecord(
-                id=run_id, session_id=evidence.id, kind="manager_turn", backend="fake-scripted",
-                model="scripted-model", started_at=base + timedelta(minutes=1000 + i)))
-            await tree.dispatch.finish_run(evidence.id, run_id, outcome="success")
+    # Completion-evidence MANAGER: 120 successful manager_turn runs. A
+    # manager never auto-completes (that is worker-only), so the task stays
+    # open and manually completable, with early evidence beyond the first
+    # desc page and beyond the old 100-record read.
+    evidence = await tree.create_task(
+        request_id="seed-evidence",
+        task_parent_id=feature.id,
+        profile="manager",
+        task=TaskSpec(goal="carry enough runs to page the evidence picker"),
+        name="Evidence manager",
+        backend=None,
+        caller=OP)
+    for i in range(1, 121):
+      run_id = f"run-e{i:04d}"
+      await tree.runs.register_run(
+          RunRecord(
+              id=run_id,
+              session_id=evidence.id,
+              kind="manager_turn",
+              backend="fake-scripted",
+              model="scripted-model",
+              started_at=base + timedelta(minutes=1000 + i)))
+      await tree.dispatch.finish_run(evidence.id, run_id, outcome="success")
 
-        # Dialog-binding pair: A is a run-less worker (open, completable in
-        # principle, nothing auto-closes it), B is a childless manager (its
-        # cancel succeeds — used for the late-response drop).
-        bind_a = await tree.create_task(
-            request_id="seed-bind-a", task_parent_id=root.id, profile="worker",
-            task=TaskSpec(goal="dialog binding task A"), name="Bind task A",
-            backend=None, caller=OP)
-        bind_b = await tree.create_task(
-            request_id="seed-bind-b", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="dialog binding task B"), name="Bind task B",
-            backend=None, caller=OP)
+    # Dialog-binding pair: A is a run-less worker (open, completable in
+    # principle, nothing auto-closes it), B is a childless manager (its
+    # cancel succeeds — used for the late-response drop).
+    bind_a = await tree.create_task(
+        request_id="seed-bind-a",
+        task_parent_id=root.id,
+        profile="worker",
+        task=TaskSpec(goal="dialog binding task A"),
+        name="Bind task A",
+        backend=None,
+        caller=OP)
+    bind_b = await tree.create_task(
+        request_id="seed-bind-b",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="dialog binding task B"),
+        name="Bind task B",
+        backend=None,
+        caller=OP)
 
-        # --- the live worker: a REAL process mid-Run --------------------------
-        # The node's own Run marks it busy (thinking_since at the recorded
-        # started_at), the collapsed parent's gear stands in for it, and
-        # the events file grows on a real thread while the browser scenario
-        # watches the transcript stream. The display backend differs from the
-        # inherited metadata.backend, so a correct page shows the Run's backend.
-        from src.core.control_events import build_control_event
-        from src.core.runs import read_pid_stat
+    # --- the live worker: a REAL process mid-Run --------------------------
+    # The node's own Run marks it busy (thinking_since at the recorded
+    # started_at), the collapsed parent's gear stands in for it, and
+    # the events file grows on a real thread while the browser scenario
+    # watches the transcript stream. The display backend differs from the
+    # inherited metadata.backend, so a correct page shows the Run's backend.
+    from src.core.control_events import build_control_event
+    from src.core.runs import read_pid_stat
 
-        # The live worker's own delegating manager: an otherwise idle parent,
-        # so its collapsed row's stand-in shows the gear. (The root's own
-        # agent-auth Run has no terminal fact and a stale identity, so its own
-        # row paints nothing and the stand-in is what shows.)
-        live_parent = await tree.create_task(
-            request_id="seed-live-parent", task_parent_id=root.id, profile="manager",
-            task=TaskSpec(goal="delegate the live worker"), name="Live rollout",
-            backend=None, caller=OP)
-        live = await tree.create_task(
-            request_id="seed-live", task_parent_id=live_parent.id, profile="worker",
-            task=TaskSpec(goal="watch this worker run live"), name="Live worker",
-            backend=None, caller=OP)
-        live_run_dir = tree.runs.run_dir(live.id, "run-live")
-        # The delivered history: one successful work Run with the four evidence
-        # refs, so the delivery close has real links to show.
-        await tree.runs.register_run(RunRecord(
-            id="run-live-done", session_id=live.id, kind="work",
-            backend="scripted-live", model="scripted-model",
+    # The live worker's own delegating manager: an otherwise idle parent,
+    # so its collapsed row's stand-in shows the gear. (The root's own
+    # agent-auth Run has no terminal fact and a stale identity, so its own
+    # row paints nothing and the stand-in is what shows.)
+    live_parent = await tree.create_task(
+        request_id="seed-live-parent",
+        task_parent_id=root.id,
+        profile="manager",
+        task=TaskSpec(goal="delegate the live worker"),
+        name="Live rollout",
+        backend=None,
+        caller=OP)
+    live = await tree.create_task(
+        request_id="seed-live",
+        task_parent_id=live_parent.id,
+        profile="worker",
+        task=TaskSpec(goal="watch this worker run live"),
+        name="Live worker",
+        backend=None,
+        caller=OP)
+    live_run_dir = tree.runs.run_dir(live.id, "run-live")
+    # The delivered history: one successful work Run with the four evidence
+    # refs, so the delivery close has real links to show.
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-live-done",
+            session_id=live.id,
+            kind="work",
+            backend="scripted-live",
+            model="scripted-model",
             started_at=base + timedelta(minutes=900),
-            repo_path=str(home / "harness-repo"), base_branch="main",
+            repo_path=str(home / "harness-repo"),
+            base_branch="main",
             branch_name="task/live-delivered"))
-        append_events_line(live_run_dir.parent / "run-live-done" / "events.jsonl", {
-            "type": ET.USER, "content": "deliver the checked piece",
-            "timestamp": (base + timedelta(minutes=900)).isoformat()})
-        await tree.runs.record_launch(live.id, "run-live-done", pid=424100, pid_start="1-424100")
-        await tree.runs.record_observation(
-            live.id, "run-live-done",
-            raw_log_ref=str(live_run_dir.parent / "run-live-done" / "raw.log"),
-            events_ref=str(live_run_dir.parent / "run-live-done" / "events.jsonl"),
-            result_ref=str(live_run_dir.parent / "run-live-done" / "raw.log"))
-        # The delivered Run's terminal fact lands at the runs layer only: the
-        # dispatch funnel's follow-up would evaluate automatic completion for
-        # a successful worker work Run, closing (and so derived-archiving) the
-        # very node the live scenario watches. The node under test stays open
-        # with one delivered Run in its history.
-        async with tree.control_lock:
-            done_run = await tree.runs.record_finish_locked(live.id, "run-live-done", "success")
-        await tree.runs.notify_liveness(live.id, done_run, launched=False)
+    append_events_line(
+        live_run_dir.parent / "run-live-done" / "events.jsonl", {
+            "type": ET.USER,
+            "content": "deliver the checked piece",
+            "timestamp": (base + timedelta(minutes=900)).isoformat()
+        })
+    await tree.runs.record_launch(live.id, "run-live-done", pid=424100, pid_start="1-424100")
+    await tree.runs.record_observation(
+        live.id,
+        "run-live-done",
+        raw_log_ref=str(live_run_dir.parent / "run-live-done" / "raw.log"),
+        events_ref=str(live_run_dir.parent / "run-live-done" / "events.jsonl"),
+        result_ref=str(live_run_dir.parent / "run-live-done" / "raw.log"))
+    # The delivered Run's terminal fact lands at the runs layer only: the
+    # dispatch funnel's follow-up would evaluate automatic completion for
+    # a successful worker work Run, closing (and so derived-archiving) the
+    # very node the live scenario watches. The node under test stays open
+    # with one delivered Run in its history.
+    async with tree.control_lock:
+      done_run = await tree.runs.record_finish_locked(live.id, "run-live-done", "success")
+    await tree.runs.notify_liveness(live.id, done_run, launched=False)
 
-        # The live Run: a real sleep process, recorded identity, growing events.
-        live_proc = subprocess.Popen(["/bin/sleep", "240"])
-        live_pid_start, _state = read_pid_stat(live_proc.pid)
-        assert live_pid_start is not None, "read_pid_stat failed for the live process"
-        live_events = live_run_dir / "events.jsonl"
-        live_events.parent.mkdir(parents=True, exist_ok=True)
-        append_events_line(live_events, {
-            "type": ET.USER, "content": "watch this worker run live",
-            "timestamp": datetime.now(timezone.utc).isoformat()})
-        append_events_line(live_events, {
-            "type": ET.SYSTEM, "subtype": ET.CONTEXT_READING,
-            "context_reading": {"context_tokens": 42000, "context_full": 200000,
-                                "context_compact_at": 160000, "model": "scripted-model"},
-            "timestamp": datetime.now(timezone.utc).isoformat()})
-        await tree.runs.register_run(RunRecord(
-            id="run-live", session_id=live.id, kind="work",
-            backend="scripted-live", model="scripted-model",
+    # The live Run: a real sleep process, recorded identity, growing events.
+    live_proc = subprocess.Popen(["/bin/sleep", "240"])
+    live_pid_start, _state = read_pid_stat(live_proc.pid)
+    assert live_pid_start is not None, "read_pid_stat failed for the live process"
+    live_events = live_run_dir / "events.jsonl"
+    live_events.parent.mkdir(parents=True, exist_ok=True)
+    append_events_line(
+        live_events, {
+            "type": ET.USER,
+            "content": "watch this worker run live",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    append_events_line(
+        live_events, {
+            "type": ET.SYSTEM,
+            "subtype": ET.CONTEXT_READING,
+            "context_reading":
+                {
+                    "context_tokens": 42000,
+                    "context_full": 200000,
+                    "context_compact_at": 160000,
+                    "model": "scripted-model"
+                },
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-live",
+            session_id=live.id,
+            kind="work",
+            backend="scripted-live",
+            model="scripted-model",
             started_at=datetime.now(timezone.utc)))
-        await tree.runs.record_observation(
-            live.id, "run-live",
-            repo_path=str(home / "harness-repo"), base_branch="main",
-            branch_name="task/run-live")
-        await tree.runs.record_launch(live.id, "run-live",
-                                      pid=live_proc.pid, pid_start=live_pid_start)
-        live_stop = threading.Event()
-        live_counter = {"lines": 0}
-        threading.Thread(target=grow_run_events, args=(live_events, live_stop, live_counter),
-                         daemon=True).start()
+    await tree.runs.record_observation(
+        live.id, "run-live", repo_path=str(home / "harness-repo"), base_branch="main", branch_name="task/run-live")
+    await tree.runs.record_launch(live.id, "run-live", pid=live_proc.pid, pid_start=live_pid_start)
+    live_stop = threading.Event()
+    live_counter = {"lines": 0}
+    threading.Thread(target=grow_run_events, args=(live_events, live_stop, live_counter), daemon=True).start()
 
-        # The parent's Delegated card: a new-style delegation whose event
-        # carries the child session id.
-        await tree.events.append(live_parent.id, build_control_event(
-            ET.TASK_DELEGATED, actor="agent", source_session_id=live_parent.id,
+    # The parent's Delegated card: a new-style delegation whose event
+    # carries the child session id.
+    await tree.events.append(
+        live_parent.id,
+        build_control_event(
+            ET.TASK_DELEGATED,
+            actor="agent",
+            source_session_id=live_parent.id,
             request_id="seed-delegate-live",
-            thread_id="run-live", child_session_id=live.id,
+            thread_id="run-live",
+            child_session_id=live.id,
             description="watch this worker run live",
-            backend="scripted-live", model="scripted-model",
-            **{ET.DELEGATE_INVOCATION: {
-                "task_type": "implement", "repo_path": str(home / "harness-repo"),
-                "base_branch": "main", "task_spec_file": "task.md",
-                "reviewer_context_file": None, "keep_worktree": False,
-                "backend": "scripted-live"}}))
+            backend="scripted-live",
+            model="scripted-model",
+            **{
+                ET.DELEGATE_INVOCATION:
+                    {
+                        "task_type": "implement",
+                        "repo_path": str(home / "harness-repo"),
+                        "base_branch": "main",
+                        "task_spec_file": "task.md",
+                        "reviewer_context_file": None,
+                        "keep_worktree": False,
+                        "backend": "scripted-live"
+                    }
+            }))
 
-        # --- the legacy worker thread: the 4.1 thread view --------------------
-        # A pre-task-tree delegation lives in the parent session's threads/
-        # directory; the sidebar projects it as a read-only row and the thread
-        # URL opens its transcript in the main chat.
-        legacy = await session_mgr.create_session(
-            CreateSessionRequest(name="Legacy operator"), backend="fake-scripted")
-        legacy_thread_id = "thread-legacy-1"
-        thread_dir = home / "sessions" / legacy.id / "threads" / legacy_thread_id
-        (thread_dir / "data").mkdir(parents=True)
-        started = base + timedelta(minutes=800)
-        thread_meta = ThreadMetadata(
-            id=legacy_thread_id, session_id=legacy.id, description="Review: ## Goal",
-            status="completed", started_at=started,
-            completed_at=started + timedelta(minutes=9), backend="fake-scripted",
-            pid=424050, pid_start="1-424050", exit_code=0)
-        (thread_dir / "metadata.json").write_text(
-            thread_meta.model_dump_json(indent=2), encoding="utf-8")
-        thread_events = []
-        for i, (kind, text) in enumerate([
-                (ET.USER, "review the delivered diff"), (ET.ASSISTANT, "review verdict: approve")]):
-            event = {"type": kind, "timestamp": (started + timedelta(minutes=i)).isoformat()}
-            if kind == ET.USER:
-                event["content"] = text
-            else:
-                event["message"] = {"content": [{"type": "text", "text": text}]}
-            thread_events.append(event)
-        thread_events.append({"type": "master_done",
-                              "timestamp": (started + timedelta(minutes=5)).isoformat()})
-        (thread_dir / "data" / "events.jsonl").write_text(
-            "".join(json.dumps(e) + "\n" for e in thread_events), encoding="utf-8")
+    # --- the legacy worker thread: the 4.1 thread view --------------------
+    # A pre-task-tree delegation lives in the parent session's threads/
+    # directory; the sidebar projects it as a read-only row and the thread
+    # URL opens its transcript in the main chat.
+    legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy operator"), backend="fake-scripted")
+    legacy_thread_id = "thread-legacy-1"
+    thread_dir = home / "sessions" / legacy.id / "threads" / legacy_thread_id
+    (thread_dir / "data").mkdir(parents=True)
+    started = base + timedelta(minutes=800)
+    thread_meta = ThreadMetadata(
+        id=legacy_thread_id,
+        session_id=legacy.id,
+        description="Review: ## Goal",
+        status="completed",
+        started_at=started,
+        completed_at=started + timedelta(minutes=9),
+        backend="fake-scripted",
+        pid=424050,
+        pid_start="1-424050",
+        exit_code=0)
+    (thread_dir / "metadata.json").write_text(thread_meta.model_dump_json(indent=2), encoding="utf-8")
+    thread_events = []
+    for i, (kind, text) in enumerate([(ET.USER, "review the delivered diff"),
+                                      (ET.ASSISTANT, "review verdict: approve")]):
+      event = {"type": kind, "timestamp": (started + timedelta(minutes=i)).isoformat()}
+      if kind == ET.USER:
+        event["content"] = text
+      else:
+        event["message"] = {"content": [{"type": "text", "text": text}]}
+      thread_events.append(event)
+    thread_events.append({"type": "master_done", "timestamp": (started + timedelta(minutes=5)).isoformat()})
+    (thread_dir / "data" / "events.jsonl").write_text(
+        "".join(json.dumps(e) + "\n" for e in thread_events), encoding="utf-8")
 
-        # --- the withheld launch and the legacy cron session (S24) -----------
-        # A cancelled task's queued Run carries its durable run_launch_withheld
-        # fact (one per run and reason) and one blocked report to its parent;
-        # the transcript header reads "withheld · <reason>". A pre-plan legacy
-        # cron session keeps parenting its firings' worker leaves.
-        withhold_parent = await tree.create_task(
-            request_id="seed-withhold-parent", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="hold a cancelled worker"), name="Withhold parent",
-            backend=None, caller=OP)
-        withhold_worker = await tree.create_task(
-            request_id="seed-withhold-worker", task_parent_id=withhold_parent.id, profile="worker",
-            task=TaskSpec(goal="a run the cancel withheld"), name="Withheld worker",
-            backend=None, caller=OP)
-        # The cancel lands before the queued Run exists (a queued Run would
-        # block the cancel); the later launch attempt is what the fact records.
-        await tree.completion.cancel_task(
-            withhold_worker.id, request_id="seed-withhold-cancel",
-            reason="operator cancelled", caller=OP)
-        await tree.runs.register_run(RunRecord(
-            id="run-withheld", session_id=withhold_worker.id, kind="work",
-            backend="fake-scripted", model="scripted-model"))
-        withheld_reason = f"task {withhold_worker.id} is cancelled"
-        withheld_event = build_control_event(
-            ET.RUN_LAUNCH_WITHHELD, actor="system", source_session_id=withhold_worker.id,
-            event_id="seed-withheld-fact", run_id="run-withheld",
-            reason=withheld_reason)
-        await tree.events.append(withhold_worker.id, withheld_event)
-        from src.core.control_events import ACTOR_SYSTEM
-        await tree.dispatch.deliver_child_report(
-            withhold_worker.id, source_event=withheld_event, outcome="blocked",
-            summary=withheld_reason, result_refs=["run:run-withheld"],
-            recipient=withhold_parent.id, actor=ACTOR_SYSTEM)
+    # --- the withheld launch and the legacy cron session (S24) -----------
+    # A cancelled task's queued Run carries its durable run_launch_withheld
+    # fact (one per run and reason) and one blocked report to its parent;
+    # the transcript header reads "withheld · <reason>". A pre-plan legacy
+    # cron session keeps parenting its firings' worker leaves.
+    withhold_parent = await tree.create_task(
+        request_id="seed-withhold-parent",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="hold a cancelled worker"),
+        name="Withhold parent",
+        backend=None,
+        caller=OP)
+    withhold_worker = await tree.create_task(
+        request_id="seed-withhold-worker",
+        task_parent_id=withhold_parent.id,
+        profile="worker",
+        task=TaskSpec(goal="a run the cancel withheld"),
+        name="Withheld worker",
+        backend=None,
+        caller=OP)
+    # The cancel lands before the queued Run exists (a queued Run would
+    # block the cancel); the later launch attempt is what the fact records.
+    await tree.completion.cancel_task(
+        withhold_worker.id, request_id="seed-withhold-cancel", reason="operator cancelled", caller=OP)
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-withheld",
+            session_id=withhold_worker.id,
+            kind="work",
+            backend="fake-scripted",
+            model="scripted-model"))
+    withheld_reason = f"task {withhold_worker.id} is cancelled"
+    withheld_event = build_control_event(
+        ET.RUN_LAUNCH_WITHHELD,
+        actor="system",
+        source_session_id=withhold_worker.id,
+        event_id="seed-withheld-fact",
+        run_id="run-withheld",
+        reason=withheld_reason)
+    await tree.events.append(withhold_worker.id, withheld_event)
+    from src.core.control_events import ACTOR_SYSTEM
+    await tree.dispatch.deliver_child_report(
+        withhold_worker.id,
+        source_event=withheld_event,
+        outcome="blocked",
+        summary=withheld_reason,
+        result_refs=["run:run-withheld"],
+        recipient=withhold_parent.id,
+        actor=ACTOR_SYSTEM)
 
-        # --- the sidebar views' schedule fixtures (S25-S28) -------------------
-        # Two manager nodes carry bound tasks (one enabled, one disabled) via
-        # the cron.d session_id binding; one archived worker under the bound
-        # node gives the Archive view its dimmed context ancestor; the feature
-        # manager is starred for Later; one broken cron file feeds the
-        # Workspace error badge. The host files point at prompt files under
-        # the synthetic home and ride the same loader the production cron dir
-        # uses; JSON bodies are valid YAML.
-        bound_node = await tree.create_task(
-            request_id="seed-bound-node", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="fire on a schedule"), name="Bound nightly",
-            backend=None, caller=OP)
-        paused_node = await tree.create_task(
-            request_id="seed-paused-node", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="a paused schedule"), name="Paused nightly",
-            backend=None, caller=OP)
-        archived_child = await tree.create_task(
-            request_id="seed-archived-child", task_parent_id=bound_node.id, profile="worker",
-            task=TaskSpec(goal="a firing the user archived"), name="Archived firing",
-            backend=None, caller=OP)
-        await tree.runs.register_run(RunRecord(
-            id="run-archived-child", session_id=archived_child.id, kind="work",
-            backend="fake-scripted", model="scripted-model"), task_spec_text="firing spec")
-        # The delivered run derives the archive: the worker leaves the active
-        # lists and rides /api/sessions/archived under its still-active parent.
-        await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
-        await session_mgr.star_session(feature.id)
+    # --- the sidebar views' schedule fixtures (S25-S28) -------------------
+    # Two manager nodes carry bound tasks (one enabled, one disabled) via
+    # the cron.d session_id binding; one archived worker under the bound
+    # node gives the Archive view its dimmed context ancestor; the feature
+    # manager is starred for Later; one broken cron file feeds the
+    # Workspace error badge. The host files point at prompt files under
+    # the synthetic home and ride the same loader the production cron dir
+    # uses; JSON bodies are valid YAML.
+    bound_node = await tree.create_task(
+        request_id="seed-bound-node",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="fire on a schedule"),
+        name="Bound nightly",
+        backend=None,
+        caller=OP)
+    paused_node = await tree.create_task(
+        request_id="seed-paused-node",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="a paused schedule"),
+        name="Paused nightly",
+        backend=None,
+        caller=OP)
+    archived_child = await tree.create_task(
+        request_id="seed-archived-child",
+        task_parent_id=bound_node.id,
+        profile="worker",
+        task=TaskSpec(goal="a firing the user archived"),
+        name="Archived firing",
+        backend=None,
+        caller=OP)
+    await tree.runs.register_run(
+        RunRecord(
+            id="run-archived-child",
+            session_id=archived_child.id,
+            kind="work",
+            backend="fake-scripted",
+            model="scripted-model"),
+        task_spec_text="firing spec")
+    # The delivered run derives the archive: the worker leaves the active
+    # lists and rides /api/sessions/archived under its still-active parent.
+    await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
+    await session_mgr.star_session(feature.id)
 
-        # --- the Threads view's chat-thread subtree (S25b) ------------------
-        # One discord-origin session in the group named for its channel, with
-        # one delegated child: Workspace lists neither, the Threads pill lists
-        # the pair nested, and no group-header plus button renders there.
-        from src.core.models import DiscordOrigin
-        discord_thread = await session_mgr.create_session(
-            CreateSessionRequest(
-                name="Discord #general 2026",
-                discord_origin=DiscordOrigin(
-                    guild_id="900000000000000010", parent_channel_id="900000000000000011",
-                    thread_id="900000000000000012"),
-                group="Discord #general"))
-        discord_thread_child = await tree.create_task(
-            request_id="seed-discord-child", task_parent_id=discord_thread.id, profile="manager",
-            task=TaskSpec(goal="the thread session's delegated child"), name="Discord thread child",
-            backend=None, caller=OP)
+    # --- the Threads view's chat-thread subtree (S25b) ------------------
+    # One discord-origin session in the group named for its channel, with
+    # one delegated child: Workspace lists neither, the Threads pill lists
+    # the pair nested, and no group-header plus button renders there.
+    from src.core.models import DiscordOrigin
+    discord_thread = await session_mgr.create_session(
+        CreateSessionRequest(
+            name="Discord #general 2026",
+            discord_origin=DiscordOrigin(
+                guild_id="900000000000000010", parent_channel_id="900000000000000011", thread_id="900000000000000012"),
+            group="Discord #general"))
+    discord_thread_child = await tree.create_task(
+        request_id="seed-discord-child",
+        task_parent_id=discord_thread.id,
+        profile="manager",
+        task=TaskSpec(goal="the thread session's delegated child"),
+        name="Discord thread child",
+        backend=None,
+        caller=OP)
 
-        # --- the row-menu scenarios' missing row kinds (S30-S32) --------------
-        # An archived ROOT manager (the archived root's Move-to-group menu) and
-        # a named group's root (the group header's + and gear): the two row
-        # kinds the tree above never produces, seeded through the same owner.
-        archived_root = await tree.create_task(
-            request_id="seed-archived-root", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="an archived root manager"), name="Archived root",
-            backend=None, caller=OP)
-        await session_mgr.archive_session(archived_root.id)
-        grouped_root = await tree.create_task(
-            request_id="seed-grouped-root", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="a root inside a named group"), name="Grouped root",
-            backend=None, caller=OP, group="Alpha team")
-        # The hover-scope scenario hovers one row of a named group and checks
-        # its neighbours, so the group needs at least three roots.
-        alpha_second = await tree.create_task(
-            request_id="seed-alpha-second", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="a root inside the named group"), name="Alpha second",
-            backend=None, caller=OP, group="Alpha team")
-        alpha_third = await tree.create_task(
-            request_id="seed-alpha-third", task_parent_id=None, profile="manager",
-            task=TaskSpec(goal="a root inside the named group"), name="Alpha third",
-            backend=None, caller=OP, group="Alpha team")
+    # --- the row-menu scenarios' missing row kinds (S30-S32) --------------
+    # An archived ROOT manager (the archived root's Move-to-group menu) and
+    # a named group's root (the group header's + and gear): the two row
+    # kinds the tree above never produces, seeded through the same owner.
+    archived_root = await tree.create_task(
+        request_id="seed-archived-root",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="an archived root manager"),
+        name="Archived root",
+        backend=None,
+        caller=OP)
+    await session_mgr.archive_session(archived_root.id)
+    grouped_root = await tree.create_task(
+        request_id="seed-grouped-root",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="a root inside a named group"),
+        name="Grouped root",
+        backend=None,
+        caller=OP,
+        group="Alpha team")
+    # The hover-scope scenario hovers one row of a named group and checks
+    # its neighbours, so the group needs at least three roots.
+    alpha_second = await tree.create_task(
+        request_id="seed-alpha-second",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="a root inside the named group"),
+        name="Alpha second",
+        backend=None,
+        caller=OP,
+        group="Alpha team")
+    alpha_third = await tree.create_task(
+        request_id="seed-alpha-third",
+        task_parent_id=None,
+        profile="manager",
+        task=TaskSpec(goal="a root inside the named group"),
+        name="Alpha third",
+        backend=None,
+        caller=OP,
+        group="Alpha team")
 
-        prompts_dir = home / "prompts"
-        prompts_dir.mkdir(parents=True, exist_ok=True)
-        cron_d = home / "config.d" / "cron.d"
-        cron_d.mkdir(parents=True, exist_ok=True)
-        for task_name, node_id, enabled, allow_failure in (
-                ("harness-daily", bound_node.id, True, False),
-                ("harness-paused", paused_node.id, False, True)):
-            (prompts_dir / f"{task_name}.md").write_text(
-                f"synthetic prompt for {task_name}\n", encoding="utf-8")
-            (cron_d / f"{task_name}.yaml").write_text(json.dumps({
-                "cron": "0 9 * * *",
-                "prompt_file": str(prompts_dir / f"{task_name}.md"),
-                "timezone": "America/Los_Angeles",
-                "enabled": enabled,
-                "allow_failure": allow_failure,
-                "session_id": node_id,
-            }, indent=2), encoding="utf-8")
-        # The paused node's firing bookkeeping (the touch Last-line scenario):
-        # one recorded fire with a failed status and a timestamp, through the
-        # same owner entry the scheduler itself calls; the task's
-        # allow_failure makes the row carry the "(review needed)" suffix, the
-        # longest the Last line renders. The enabled bound node stays
-        # unseeded, so its row keeps carrying no Last line.
-        from src.core.models import LastRunStatus
-        await tree.record_scheduled_fire(
-            paused_node.id, last_scheduled_run=(base + timedelta(minutes=1500)).isoformat(),
-            last_run_status=LastRunStatus.FAILED)
-        # The broken file: an inline prompt is a load error, so the loader
-        # surfaces one error entry and the Workspace badge counts it.
-        (cron_d / "harness-broken.yaml").write_text(json.dumps({
+    prompts_dir = home / "prompts"
+    prompts_dir.mkdir(parents=True, exist_ok=True)
+    cron_d = home / "config.d" / "cron.d"
+    cron_d.mkdir(parents=True, exist_ok=True)
+    for task_name, node_id, enabled, allow_failure in (("harness-daily", bound_node.id, True, False),
+                                                       ("harness-paused", paused_node.id, False, True)):
+      (prompts_dir / f"{task_name}.md").write_text(f"synthetic prompt for {task_name}\n", encoding="utf-8")
+      (cron_d / f"{task_name}.yaml").write_text(
+          json.dumps(
+              {
+                  "cron": "0 9 * * *",
+                  "prompt_file": str(prompts_dir / f"{task_name}.md"),
+                  "timezone": "America/Los_Angeles",
+                  "enabled": enabled,
+                  "allow_failure": allow_failure,
+                  "session_id": node_id,
+              },
+              indent=2),
+          encoding="utf-8")
+    # The paused node's firing bookkeeping (the touch Last-line scenario):
+    # one recorded fire with a failed status and a timestamp, through the
+    # same owner entry the scheduler itself calls; the task's
+    # allow_failure makes the row carry the "(review needed)" suffix, the
+    # longest the Last line renders. The enabled bound node stays
+    # unseeded, so its row keeps carrying no Last line.
+    from src.core.models import LastRunStatus
+    await tree.record_scheduled_fire(
+        paused_node.id,
+        last_scheduled_run=(base + timedelta(minutes=1500)).isoformat(),
+        last_run_status=LastRunStatus.FAILED)
+    # The broken file: an inline prompt is a load error, so the loader
+    # surfaces one error entry and the Workspace badge counts it.
+    (cron_d / "harness-broken.yaml").write_text(
+        json.dumps({
             "cron": "0 9 * * *",
             "prompt": "an inline prompt is a cron.d load error",
         }), encoding="utf-8")
 
-        seed_memory_store(home)
-        return {"root": root.id, "feature": feature.id, "worker1": worker1.id, "worker2": worker2.id,
-                "long": long_worker.id, "latest_hash": latest_hash,
-                "late_root": late_root.id, "late_mid": late_mid.id, "wide": wide.id,
-                "ops_root": ops_root.id, "ops_mid": ops_mid.id, "failing": failing.id,
-                "evidence": evidence.id, "bind_a": bind_a.id, "bind_b": bind_b.id,
-                "live": live.id, "live_parent": live_parent.id, "legacy": legacy.id, "legacy_thread": legacy_thread_id,
-                "withhold_parent": withhold_parent.id, "withhold_worker": withhold_worker.id,
-                "bound_node": bound_node.id, "paused_node": paused_node.id,
-                "archived_child": archived_child.id, "archived_root": archived_root.id,
-                "grouped_root": grouped_root.id, "group_name": "Alpha team",
-                "discord_thread": discord_thread.id, "discord_thread_child": discord_thread_child.id,
-                "alpha_second": alpha_second.id, "alpha_third": alpha_third.id,
-                "live_run": "run-live",
-                "_live_handles": {"process": live_proc, "stop": live_stop,
-                                  "counter": live_counter, "tree": tree,
-                                  "session_mgr": session_mgr},
-                **bulk}
+    seed_memory_store(home)
+    return {
+        "root": root.id,
+        "feature": feature.id,
+        "worker1": worker1.id,
+        "worker2": worker2.id,
+        "long": long_worker.id,
+        "latest_hash": latest_hash,
+        "late_root": late_root.id,
+        "late_mid": late_mid.id,
+        "wide": wide.id,
+        "ops_root": ops_root.id,
+        "ops_mid": ops_mid.id,
+        "failing": failing.id,
+        "evidence": evidence.id,
+        "bind_a": bind_a.id,
+        "bind_b": bind_b.id,
+        "live": live.id,
+        "live_parent": live_parent.id,
+        "legacy": legacy.id,
+        "legacy_thread": legacy_thread_id,
+        "withhold_parent": withhold_parent.id,
+        "withhold_worker": withhold_worker.id,
+        "bound_node": bound_node.id,
+        "paused_node": paused_node.id,
+        "archived_child": archived_child.id,
+        "archived_root": archived_root.id,
+        "grouped_root": grouped_root.id,
+        "group_name": "Alpha team",
+        "discord_thread": discord_thread.id,
+        "discord_thread_child": discord_thread_child.id,
+        "alpha_second": alpha_second.id,
+        "alpha_third": alpha_third.id,
+        "live_run": "run-live",
+        "_live_handles":
+            {
+                "process": live_proc,
+                "stop": live_stop,
+                "counter": live_counter,
+                "tree": tree,
+                "session_mgr": session_mgr
+            },
+        **bulk
+    }
 
-    return await seed()
+  return await seed()
 
 
 # ---------------------------------------------------------------------------
 # Chrome launch and page wire-up (shared by the browser harnesses)
 # ---------------------------------------------------------------------------
-
 
 # The desktop-capture browser runs share one flag set: the 1440x900 capture
 # viewport plus the throttling bans that keep the page fully active - a
@@ -1169,73 +1416,87 @@ async def wait_for(
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = resolve_chrome(args.chrome, fail)
+  chrome = resolve_chrome(args.chrome, fail)
 
-    evidence_dir = Path(args.evidence_dir)
-    commit = open_evidence_dir(evidence_dir)
-    results = Results(evidence_dir, commit,
-                      browser="google-chrome headless (CDP)",
-                      results_name="session_tree_browser_results.json")
+  evidence_dir = Path(args.evidence_dir)
+  commit = open_evidence_dir(evidence_dir)
+  results = Results(
+      evidence_dir, commit, browser="google-chrome headless (CDP)", results_name="session_tree_browser_results.json")
 
-    with tempfile.TemporaryDirectory(prefix="charliebot-browser-harness-") as tmp:
-        tmp_path = Path(tmp)
-        home = tmp_path / "charliebot-home"
-        home.mkdir()
-        server_port = pick_free_port()
-        config = {
-            "server": {"port": server_port, "host": "127.0.0.1"},
-            "backends": {"options": [{
-                "id": "fake-scripted", "label": "Scripted (never launches)",
-                "type": "cc-claude", "model": "scripted-model",
-            }, {
-                "id": "scripted-live", "label": "Scripted Live Runner",
-                "type": "cc-claude", "model": "scripted-model",
-            }], "preference": ["fake-scripted"]},
-            "paths": {"worktree_dir": str(home / "worktrees")},
-        }
-        (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
-        access_key = mint_access_key("harness-operator-key-")
-        write_credentials_yaml(home, access_key)
-        # Clear inherited production credentials from this process env.
-        for var in ("CHARLIEBOT_ACCESS_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
-            os.environ.pop(var, None)
-        os.environ["CHARLIEBOT_HOME"] = str(home)
+  with tempfile.TemporaryDirectory(prefix="charliebot-browser-harness-") as tmp:
+    tmp_path = Path(tmp)
+    home = tmp_path / "charliebot-home"
+    home.mkdir()
+    server_port = pick_free_port()
+    config = {
+        "server": {
+            "port": server_port,
+            "host": "127.0.0.1"
+        },
+        "backends":
+            {
+                "options":
+                    [
+                        {
+                            "id": "fake-scripted",
+                            "label": "Scripted (never launches)",
+                            "type": "cc-claude",
+                            "model": "scripted-model",
+                        }, {
+                            "id": "scripted-live",
+                            "label": "Scripted Live Runner",
+                            "type": "cc-claude",
+                            "model": "scripted-model",
+                        }
+                    ],
+                "preference": ["fake-scripted"]
+            },
+        "paths": {
+            "worktree_dir": str(home / "worktrees")
+        },
+    }
+    (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    access_key = mint_access_key("harness-operator-key-")
+    write_credentials_yaml(home, access_key)
+    # Clear inherited production credentials from this process env.
+    for var in ("CHARLIEBOT_ACCESS_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"):
+      os.environ.pop(var, None)
+    os.environ["CHARLIEBOT_HOME"] = str(home)
 
-        ids = await seed_scenario(home)
+    ids = await seed_scenario(home)
 
-        # Isolated server: the real app, lifespan disabled.
-        import uvicorn
+    # Isolated server: the real app, lifespan disabled.
+    import uvicorn
 
-        from server import app as server_app
+    from server import app as server_app
 
-        server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port,
-                                       log_level="error", lifespan="off")
-        server = uvicorn.Server(server_config)
-        serve_task = asyncio.get_running_loop().create_task(server.serve())
-        deadline = time.monotonic() + 30
-        while not server.started:
-            if serve_task.done():
-                fail(f"isolated server failed to start: {serve_task.exception()!r}")
-            if time.monotonic() > deadline:
-                fail("isolated server did not start within 30s")
-            await asyncio.sleep(0.05)
-        log(f"isolated server on 127.0.0.1:{server_port} (lifespan off)")
+    server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port, log_level="error", lifespan="off")
+    server = uvicorn.Server(server_config)
+    serve_task = asyncio.get_running_loop().create_task(server.serve())
+    deadline = time.monotonic() + 30
+    while not server.started:
+      if serve_task.done():
+        fail(f"isolated server failed to start: {serve_task.exception()!r}")
+      if time.monotonic() > deadline:
+        fail("isolated server did not start within 30s")
+      await asyncio.sleep(0.05)
+    log(f"isolated server on 127.0.0.1:{server_port} (lifespan off)")
 
-        # Private browser profile.
-        profile = tmp_path / "chrome-profile"
-        profile.mkdir()
-        debug_port = pick_free_port()
-        chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
-        try:
-            ws_url = await devtools_ws_url(chrome_proc, 20, fail)
-            cdp = await connect_cdp(ws_url)
-            session_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
-            # Isolation guard, injected before any app script: the browser
-            # terminal tab attaches to the HOST-GLOBAL tmux session. The
-            # harness must never attach to (or create) it — /ws/terminal is
-            # answered with an immediately-closed socket; every other app
-            # websocket passes through untouched.
-            guard_source = f"""
+    # Private browser profile.
+    profile = tmp_path / "chrome-profile"
+    profile.mkdir()
+    debug_port = pick_free_port()
+    chrome_proc = launch_chrome(chrome, profile, debug_port, DESKTOP_CAPTURE_FLAGS)
+    try:
+      ws_url = await devtools_ws_url(chrome_proc, 20, fail)
+      cdp = await connect_cdp(ws_url)
+      session_id, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
+      # Isolation guard, injected before any app script: the browser
+      # terminal tab attaches to the HOST-GLOBAL tmux session. The
+      # harness must never attach to (or create) it — /ws/terminal is
+      # answered with an immediately-closed socket; every other app
+      # websocket passes through untouched.
+      guard_source = f"""
                 (function () {{
                   try {{ localStorage.setItem('charliebot_access_key', {json.dumps(access_key)}); }} catch (e) {{}}
                   window.__treeEvents = 0;
@@ -1284,188 +1545,296 @@ async def run_harness(args: argparse.Namespace) -> None:
                   window.WebSocket = GuardedWebSocket;
                 }})();
             """
-            await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": guard_source}, session_id=session_id)
-            await cdp.send("Network.setCookie", {
-                "name": "charliebot_access_key", "value": access_key,
-                "url": f"http://127.0.0.1:{server_port}/",
-            }, session_id=session_id)
-            await cdp.send("Emulation.setDeviceMetricsOverride", {
-                "width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False,
-            }, session_id=session_id)
-            base = f"http://127.0.0.1:{server_port}"
+      await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": guard_source}, session_id=session_id)
+      await cdp.send(
+          "Network.setCookie", {
+              "name": "charliebot_access_key",
+              "value": access_key,
+              "url": f"http://127.0.0.1:{server_port}/",
+          },
+          session_id=session_id)
+      await cdp.send(
+          "Emulation.setDeviceMetricsOverride", {
+              "width": 1440,
+              "height": 900,
+              "deviceScaleFactor": 1,
+              "mobile": False,
+          },
+          session_id=session_id)
+      base = f"http://127.0.0.1:{server_port}"
 
-            # ---- S1: desktop load; the session tree is the primary navigation --
-            try:
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
-                names = await evaluate(cdp, session_id, """
+      # ---- S1: desktop load; the session tree is the primary navigation --
+      try:
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+        names = await evaluate(
+            cdp, session_id, """
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
                 """)
-                assert_true("Program rollout" in names and "Feature alpha" in names
-                            and "Worker one" in names and "Worker two" in names,
-                            f"the task nodes render nested in the sidebar: {names}")
-                active = await evaluate(cdp, session_id, "SESSION_ID")
-                assert_true(active == ids["root"], "the deep link opened the root manager's chat")
-                shot = await screenshot(cdp, session_id, results, "s1_desktop_tree")
-                results.record("desktop tree primary navigation", ok=True,
-                               detail="nested task rows render in the sidebar; the deep link opens the manager chat",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s1_desktop_tree_FAILED")
-                results.record("desktop tree primary navigation", ok=False, detail=repr(exc), screenshot=shot)
+        assert_true(
+            "Program rollout" in names and "Feature alpha" in names and "Worker one" in names and "Worker two" in names,
+            f"the task nodes render nested in the sidebar: {names}")
+        active = await evaluate(cdp, session_id, "SESSION_ID")
+        assert_true(active == ids["root"], "the deep link opened the root manager's chat")
+        shot = await screenshot(cdp, session_id, results, "s1_desktop_tree")
+        results.record(
+            "desktop tree primary navigation",
+            ok=True,
+            detail="nested task rows render in the sidebar; the deep link opens the manager chat",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s1_desktop_tree_FAILED")
+        results.record("desktop tree primary navigation", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S9: an out-of-band change repaints the open tree in place ----
-            try:
-                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
-                cdp.drain_list_fetches()
-                # Rename the feature out of band (the server broadcasts a tree
-                # change); the open page must refresh the affected row without
-                # switching session, with bounded list work.
-                import urllib.request as _u
-                req = _u.Request(
-                    f"{base}/api/sessions/{ids['feature']}",
-                    data=json.dumps({"name": "Feature alpha renamed"}).encode(),
-                    headers={"Authorization": f"Bearer {access_key}", "Content-Type": "application/json"},
-                    method="PATCH")
-                with await asyncio.to_thread(_u.urlopen, req, timeout=10) as resp:
-                    assert resp.status == 200
-                await wait_for(cdp, session_id, """
+      # ---- S9: an out-of-band change repaints the open tree in place ----
+      try:
+        await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+        cdp.drain_list_fetches()
+        # Rename the feature out of band (the server broadcasts a tree
+        # change); the open page must refresh the affected row without
+        # switching session, with bounded list work.
+        import urllib.request as _u
+        req = _u.Request(
+            f"{base}/api/sessions/{ids['feature']}",
+            data=json.dumps({
+                "name": "Feature alpha renamed"
+            }).encode(),
+            headers={
+                "Authorization": f"Bearer {access_key}",
+                "Content-Type": "application/json"
+            },
+            method="PATCH")
+        with await asyncio.to_thread(_u.urlopen, req, timeout=10) as resp:
+          assert resp.status == 200
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     [...document.querySelectorAll('#session-list .session-name')]
                       .some(el => el.textContent === 'Feature alpha renamed')
-                """, timeout=8)
-                fetches = cdp.drain_list_fetches()
-                assert_true(1 <= len(fetches) <= 4,
-                            f"bounded list work for the change ({len(fetches)} list fetches)")
-                active_ok = await evaluate(cdp, session_id, "SESSION_ID")
-                assert_true(active_ok == ids["root"], "an update to another node never switches the active session")
-                shot = await screenshot(cdp, session_id, results, "s9_live_update")
-                results.record("live tree change repaints the open sidebar", ok=True,
-                               detail="row refreshed in place; bounded list fetches for the change; session unchanged", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s9_live_update_FAILED")
-                results.record("live tree change repaints the open sidebar", ok=False, detail=repr(exc), screenshot=shot)
+                """,
+            timeout=8)
+        fetches = cdp.drain_list_fetches()
+        assert_true(1 <= len(fetches) <= 4, f"bounded list work for the change ({len(fetches)} list fetches)")
+        active_ok = await evaluate(cdp, session_id, "SESSION_ID")
+        assert_true(active_ok == ids["root"], "an update to another node never switches the active session")
+        shot = await screenshot(cdp, session_id, results, "s9_live_update")
+        results.record(
+            "live tree change repaints the open sidebar",
+            ok=True,
+            detail="row refreshed in place; bounded list fetches for the change; session unchanged",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s9_live_update_FAILED")
+        results.record("live tree change repaints the open sidebar", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S12: creation from a separate client reaches the observer ----
-            try:
-                log("  s12: cross-client root creation")
-                await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
-                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
-                cdp.drain_list_fetches()
-                active_before = await evaluate(cdp, session_id, "SESSION_ID")
-                tree_events_before = await evaluate(cdp, session_id, "window.__treeEvents || 0")
-                status, meta = await asyncio.to_thread(
-                    api_request, base, access_key, "POST", "/api/sessions/",
-                    {"request_id": "harness-x-root-1", "profile": "manager", "name": "Remote root",
-                     "task": {"goal": "created outside the browser", "acceptance": [], "context_refs": []}},
-                    timeout=15.0)
-                assert_true(status == 200, f"the separate client's create succeeded ({status}: {meta})")
-                await wait_for(cdp, session_id, """
+      # ---- S12: creation from a separate client reaches the observer ----
+      try:
+        log("  s12: cross-client root creation")
+        await evaluate(cdp, session_id, f"switchSession('{ids['feature']}')")
+        await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+        cdp.drain_list_fetches()
+        active_before = await evaluate(cdp, session_id, "SESSION_ID")
+        tree_events_before = await evaluate(cdp, session_id, "window.__treeEvents || 0")
+        status, meta = await asyncio.to_thread(
+            api_request,
+            base,
+            access_key,
+            "POST",
+            "/api/sessions/", {
+                "request_id": "harness-x-root-1",
+                "profile": "manager",
+                "name": "Remote root",
+                "task": {
+                    "goal": "created outside the browser",
+                    "acceptance": [],
+                    "context_refs": []
+                }
+            },
+            timeout=15.0)
+        assert_true(status == 200, f"the separate client's create succeeded ({status}: {meta})")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     [...document.querySelectorAll('#session-list .session-name')]
                       .some(el => el.textContent === 'Remote root')
-                """, timeout=10, label="s12 remote root row appeared from the notification alone")
-                fetches = cdp.drain_list_fetches()
-                assert_true(1 <= len(fetches) <= 4,
-                            f"bounded list work for the creation ({len(fetches)} list fetches)")
-                active_after = await evaluate(cdp, session_id, "SESSION_ID")
-                assert_true(active_after == active_before, "the creation never switches the active session")
-                tree_events_after = await evaluate(cdp, session_id, "window.__treeEvents || 0")
-                assert_true(tree_events_after > tree_events_before,
-                            "the creation rode a real server-originated task_tree_changed event")
-                names = await evaluate(cdp, session_id, """
+                """,
+            timeout=10,
+            label="s12 remote root row appeared from the notification alone")
+        fetches = cdp.drain_list_fetches()
+        assert_true(1 <= len(fetches) <= 4, f"bounded list work for the creation ({len(fetches)} list fetches)")
+        active_after = await evaluate(cdp, session_id, "SESSION_ID")
+        assert_true(active_after == active_before, "the creation never switches the active session")
+        tree_events_after = await evaluate(cdp, session_id, "window.__treeEvents || 0")
+        assert_true(
+            tree_events_after > tree_events_before,
+            "the creation rode a real server-originated task_tree_changed event")
+        names = await evaluate(
+            cdp, session_id, """
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
                 """)
-                assert_true(names.count("Remote root") == 1, "exactly one row for the new root")
-                shot = await screenshot(cdp, session_id, results, "s12_cross_client_creation")
-                results.record("creation from a separate client reaches the observer", ok=True,
-                               detail="row appeared from the notification alone; bounded list work; session unchanged",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s12_creation_FAILED")
-                results.record("creation from a separate client reaches the observer", ok=False, detail=repr(exc), screenshot=shot)
+        assert_true(names.count("Remote root") == 1, "exactly one row for the new root")
+        shot = await screenshot(cdp, session_id, results, "s12_cross_client_creation")
+        results.record(
+            "creation from a separate client reaches the observer",
+            ok=True,
+            detail="row appeared from the notification alone; bounded list work; session unchanged",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s12_creation_FAILED")
+        results.record(
+            "creation from a separate client reaches the observer", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S13: deeper-than-one-level creation and collapsed levels -----
-            try:
-                log("  s13: deep creation")
-                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
-                status, mid = await asyncio.to_thread(
-                    api_request, base, access_key, "POST", "/api/sessions/",
-                    {"request_id": "harness-x-mid-1", "task_parent_id": ids["feature"],
-                     "profile": "manager", "name": "Remote mid",
-                     "task": {"goal": "mid manager", "acceptance": [], "context_refs": []}}, timeout=15.0)
-                assert_true(status == 200, f"nested manager create succeeded ({status})")
-                await wait_for(cdp, session_id, """
+      # ---- S13: deeper-than-one-level creation and collapsed levels -----
+      try:
+        log("  s13: deep creation")
+        await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+        status, mid = await asyncio.to_thread(
+            api_request,
+            base,
+            access_key,
+            "POST",
+            "/api/sessions/", {
+                "request_id": "harness-x-mid-1",
+                "task_parent_id": ids["feature"],
+                "profile": "manager",
+                "name": "Remote mid",
+                "task": {
+                    "goal": "mid manager",
+                    "acceptance": [],
+                    "context_refs": []
+                }
+            },
+            timeout=15.0)
+        assert_true(status == 200, f"nested manager create succeeded ({status})")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     [...document.querySelectorAll('#session-list .session-name')]
                       .some(el => el.textContent === 'Remote mid')
-                """, timeout=10, label="s13 remote mid row under the expanded feature")
-                # A worker under the new mid: the mid stays collapsed, so the
-                # leaf is not painted — the collapsed row carries the count.
-                status, _leaf = await asyncio.to_thread(
-                    api_request, base, access_key, "POST", "/api/sessions/",
-                    {"request_id": "harness-x-leaf-1", "task_parent_id": mid["id"],
-                     "profile": "worker", "name": "Remote leaf",
-                     "task": {"goal": "idle leaf worker", "acceptance": [], "context_refs": []}}, timeout=15.0)
-                assert_true(status == 200, f"deep leaf create succeeded ({status})")
-                await wait_for(cdp, session_id, f"""
+                """,
+            timeout=10,
+            label="s13 remote mid row under the expanded feature")
+        # A worker under the new mid: the mid stays collapsed, so the
+        # leaf is not painted — the collapsed row carries the count.
+        status, _leaf = await asyncio.to_thread(
+            api_request,
+            base,
+            access_key,
+            "POST",
+            "/api/sessions/", {
+                "request_id": "harness-x-leaf-1",
+                "task_parent_id": mid["id"],
+                "profile": "worker",
+                "name": "Remote leaf",
+                "task": {
+                    "goal": "idle leaf worker",
+                    "acceptance": [],
+                    "context_refs": []
+                }
+            },
+            timeout=15.0)
+        assert_true(status == 200, f"deep leaf create succeeded ({status})")
+        await wait_for(
+            cdp,
+            session_id,
+            f"""
                     (() => {{
                       const row = document.getElementById('session-{mid["id"]}');
                       const chev = row && row.querySelector('[data-tree-toggle="{mid["id"]}"]');
                       return chev && (chev.getAttribute('title') || '').includes('1 child task');
                     }})()
-                """, timeout=10, label="s13 mid row gained the child count while collapsed")
-                collapsed_ok = await evaluate(cdp, session_id, f"""
+                """,
+            timeout=10,
+            label="s13 mid row gained the child count while collapsed")
+        collapsed_ok = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const el = document.querySelector('[data-tree-children="{mid["id"]}"]');
                       return el && el.classList.contains('hidden');
                     }})()
                 """)
-                assert_true(collapsed_ok, "the collapsed level stays collapsed")
-                await evaluate(cdp, session_id, f"Sidebar.expandTreeNode('{mid['id']}')")
-                await wait_for(cdp, session_id, """
+        assert_true(collapsed_ok, "the collapsed level stays collapsed")
+        await evaluate(cdp, session_id, f"Sidebar.expandTreeNode('{mid['id']}')")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     [...document.querySelectorAll('#session-list .session-name')]
                       .some(el => el.textContent === 'Remote leaf')
-                """, timeout=8, label="s13 leaf visible after expanding the mid")
-                shot = await screenshot(cdp, session_id, results, "s13_deep_creation")
-                results.record("deeper-than-one-level creation from a separate client", ok=True,
-                               detail="mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s13_deep_creation_FAILED")
-                results.record("deeper-than-one-level creation from a separate client", ok=False, detail=repr(exc), screenshot=shot)
+                """,
+            timeout=8,
+            label="s13 leaf visible after expanding the mid")
+        shot = await screenshot(cdp, session_id, results, "s13_deep_creation")
+        results.record(
+            "deeper-than-one-level creation from a separate client",
+            ok=True,
+            detail=
+            "mid appeared under the expanded parent; collapsed mid gained the count; expansion reveals the idle leaf",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s13_deep_creation_FAILED")
+        results.record(
+            "deeper-than-one-level creation from a separate client", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S14: agent-scoped creation reaches the observer --------------
-            try:
-                log("  s14: scoped-agent creation")
-                from src.core.run_token import RunTokenClaims, sign_run_token
-                agent_token = sign_run_token(
-                    RunTokenClaims(session_id=ids["root"], run_id="agent-auth-run", agent="harness-agent"),
-                    access_key)
-                status, worker = await asyncio.to_thread(
-                    api_request, base, access_key, "POST", "/api/sessions/",
-                    {"request_id": "harness-agent-w1", "task_parent_id": ids["root"],
-                     "profile": "worker", "name": "Agent worker",
-                     "task": {"goal": "created by a scoped agent", "acceptance": [], "context_refs": []}},
-                    token=agent_token, timeout=15.0)
-                assert_true(status == 200, f"agent-scoped create succeeded ({status}: {worker})")
-                await wait_for(cdp, session_id, """
+      # ---- S14: agent-scoped creation reaches the observer --------------
+      try:
+        log("  s14: scoped-agent creation")
+        from src.core.run_token import RunTokenClaims, sign_run_token
+        agent_token = sign_run_token(
+            RunTokenClaims(session_id=ids["root"], run_id="agent-auth-run", agent="harness-agent"), access_key)
+        status, worker = await asyncio.to_thread(
+            api_request,
+            base,
+            access_key,
+            "POST",
+            "/api/sessions/", {
+                "request_id": "harness-agent-w1",
+                "task_parent_id": ids["root"],
+                "profile": "worker",
+                "name": "Agent worker",
+                "task": {
+                    "goal": "created by a scoped agent",
+                    "acceptance": [],
+                    "context_refs": []
+                }
+            },
+            token=agent_token,
+            timeout=15.0)
+        assert_true(status == 200, f"agent-scoped create succeeded ({status}: {worker})")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     [...document.querySelectorAll('#session-list .session-name')]
                       .some(el => el.textContent === 'Agent worker')
-                """, timeout=10, label="s14 agent-created worker appeared")
-                shot = await screenshot(cdp, session_id, results, "s14_agent_creation")
-                results.record("agent-scoped creation reaches a connected observer", ok=True,
-                               detail="run-token agent created a worker under its manager; the observer saw it live", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s14_agent_creation_FAILED")
-                results.record("agent-scoped creation reaches a connected observer", ok=False, detail=repr(exc), screenshot=shot)
+                """,
+            timeout=10,
+            label="s14 agent-created worker appeared")
+        shot = await screenshot(cdp, session_id, results, "s14_agent_creation")
+        results.record(
+            "agent-scoped creation reaches a connected observer",
+            ok=True,
+            detail="run-token agent created a worker under its manager; the observer saw it live",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s14_agent_creation_FAILED")
+        results.record(
+            "agent-scoped creation reaches a connected observer", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S20: the name stays readable at any depth ---------------------
-            try:
-                log("  s20: name readability at depth")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await expand_to(cdp, session_id, [ids["ops_root"]])
+      # ---- S20: the name stays readable at any depth ---------------------
+      try:
+        log("  s20: name readability at depth")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await expand_to(cdp, session_id, [ids["ops_root"]])
 
-                async def assert_readable(node_id: str, label: str) -> dict:
-                    geo = await evaluate(cdp, session_id, f"""
+        async def assert_readable(node_id: str, label: str) -> dict:
+          geo = await evaluate(
+              cdp, session_id, f"""
                         (() => {{
                           const row = document.getElementById('session-{node_id}');
                           if (!row) return null;
@@ -1481,68 +1850,83 @@ async def run_harness(args: argparse.Namespace) -> None:
                           }};
                         }})()
                     """)
-                    assert_true(geo, f"{label}: the row renders")
-                    assert_true(geo["nameText"], f"{label}: the name text renders")
-                    assert_true(geo["name"] and geo["name"]["w"] > 0 and geo["name"]["x"] >= geo["row"]["x"],
-                                f"{label}: the name renders inside the row: {geo}")
-                    assert_true(geo["clipped"] is not None,
-                                f"{label}: the name truncation is measurable: {geo}")
-                    return geo
+          assert_true(geo, f"{label}: the row renders")
+          assert_true(geo["nameText"], f"{label}: the name text renders")
+          assert_true(
+              geo["name"] and geo["name"]["w"] > 0 and geo["name"]["x"] >= geo["row"]["x"],
+              f"{label}: the name renders inside the row: {geo}")
+          assert_true(geo["clipped"] is not None, f"{label}: the name truncation is measurable: {geo}")
+          return geo
 
-                ops_geo = await assert_readable(ids["ops_root"], "ops root")
-                mid_geo = await assert_readable(ids["ops_mid"], "nested ops manager")
-                assert_true("Ops root" == ops_geo["nameText"] and "Ops mid" == mid_geo["nameText"],
-                            "both measured rows carry their full task names")
-                assert_true(mid_geo["name"]["x"] > ops_geo["name"]["x"] + 10,
-                            f"the nested row indents behind its parent ({ops_geo['name']['x']} -> {mid_geo['name']['x']})")
-                assert_true(mid_geo["newChild"], "the nested manager keeps its New child control")
-                spill = await evaluate(cdp, session_id,
-                    "document.documentElement.scrollWidth - document.documentElement.clientWidth")
-                assert_true(spill <= 1, f"no horizontal spill at depth ({spill}px)")
-                shot = await screenshot(cdp, session_id, results, "s20_desktop_readability")
-                results.record("tree names stay readable at any depth", ok=True,
-                               detail="full names render, truncate rather than spill, indent per level, controls kept", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s20_readability_FAILED")
-                results.record("tree names stay readable at any depth", ok=False, detail=repr(exc), screenshot=shot)
+        ops_geo = await assert_readable(ids["ops_root"], "ops root")
+        mid_geo = await assert_readable(ids["ops_mid"], "nested ops manager")
+        assert_true(
+            "Ops root" == ops_geo["nameText"] and "Ops mid" == mid_geo["nameText"],
+            "both measured rows carry their full task names")
+        assert_true(
+            mid_geo["name"]["x"] > ops_geo["name"]["x"] + 10,
+            f"the nested row indents behind its parent ({ops_geo['name']['x']} -> {mid_geo['name']['x']})")
+        assert_true(mid_geo["newChild"], "the nested manager keeps its New child control")
+        spill = await evaluate(
+            cdp, session_id, "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+        assert_true(spill <= 1, f"no horizontal spill at depth ({spill}px)")
+        shot = await screenshot(cdp, session_id, results, "s20_desktop_readability")
+        results.record(
+            "tree names stay readable at any depth",
+            ok=True,
+            detail="full names render, truncate rather than spill, indent per level, controls kept",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s20_readability_FAILED")
+        results.record("tree names stay readable at any depth", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S21: the live worker's transcript in the main chat ------------
-            # A real local process is the Run: its pid is recorded through the
-            # launch owner and its events file grows on a real thread during
-            # the scenario. Every phase asserts what a browser operator SEES.
-            live = ids["live"]
-            live_run = ids["live_run"]
-            handles = ids["_live_handles"]
-            from src.core import event_types as ET
-            from src.core.control_events import build_control_event
-            try:
-                log("  s21: live worker transcript")
-                # (a) parent page: worker spinner, the parent's gear in both
-                # states, Delegated card live line + link — all following the
-                # status poll. A parent row's icon reads facts only, so the
-                # gear survives expansion and collapse unchanged.
-                live_parent = ids["live_parent"]
-                parent_icons = f"""
+      # ---- S21: the live worker's transcript in the main chat ------------
+      # A real local process is the Run: its pid is recorded through the
+      # launch owner and its events file grows on a real thread during
+      # the scenario. Every phase asserts what a browser operator SEES.
+      live = ids["live"]
+      live_run = ids["live_run"]
+      handles = ids["_live_handles"]
+      from src.core import event_types as ET
+      from src.core.control_events import build_control_event
+      try:
+        log("  s21: live worker transcript")
+        # (a) parent page: worker spinner, the parent's gear in both
+        # states, Delegated card live line + link — all following the
+        # status poll. A parent row's icon reads facts only, so the
+        # gear survives expansion and collapse unchanged.
+        live_parent = ids["live_parent"]
+        parent_icons = f"""
                     ['spinner', 'worker-indicator', 'waiting-indicator', 'subtree-unread']
                       .filter(k => !document.getElementById(k + '-{live_parent}').classList.contains('hidden'))
                 """
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await expand_to(cdp, session_id, [ids["root"], live_parent])
-                await reveal_row(cdp, session_id, live)
-                await wait_for(cdp, session_id,
-                               f"document.getElementById('spinner-{live}') && !document.getElementById('spinner-{live}').classList.contains('hidden')",
-                               timeout=12, label="worker row spinner while its Run is live")
-                shown_expanded = await evaluate(cdp, session_id, parent_icons)
-                assert_true(shown_expanded == ["worker-indicator"],
-                            f"the expanded parent keeps the gear for its running worker ({shown_expanded})")
-                await wait_for(cdp, session_id, """
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={live_parent}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await expand_to(cdp, session_id, [ids["root"], live_parent])
+        await reveal_row(cdp, session_id, live)
+        await wait_for(
+            cdp,
+            session_id,
+            f"document.getElementById('spinner-{live}') && !document.getElementById('spinner-{live}').classList.contains('hidden')",
+            timeout=12,
+            label="worker row spinner while its Run is live")
+        shown_expanded = await evaluate(cdp, session_id, parent_icons)
+        assert_true(
+            shown_expanded == ["worker-indicator"],
+            f"the expanded parent keeps the gear for its running worker ({shown_expanded})")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     (() => {
                       const el = document.querySelector('.delegate-live-state[data-delegate-session]');
                       return el && el.textContent.includes('running') && el.textContent.includes('Scripted Live Runner');
                     })()
-                """, timeout=12, label="Delegated card live state line (running · backend)")
-                card_link = await evaluate(cdp, session_id, """
+                """,
+            timeout=12,
+            label="Delegated card live state line (running · backend)")
+        card_link = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const live = document.querySelector('.delegate-live-state[data-delegate-session]');
                       if (!live) return null;
@@ -1551,37 +1935,52 @@ async def run_harness(args: argparse.Namespace) -> None:
                       return link ? link.getAttribute('href') : null;
                     })()
                 """)
-                assert_true(card_link == f"/?session={live}", f"the Delegated card links its child ({card_link})")
-                shot = await screenshot(cdp, session_id, results, "s21a_parent_running")
-                await evaluate(cdp, session_id,
-                               f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
-                await reveal_row(cdp, session_id, live_parent)
-                await wait_for(cdp, session_id, f"JSON.stringify({parent_icons}) === '[\"worker-indicator\"]'",
-                               timeout=12, label="the collapsed parent's gear stands in for the running worker")
-                shot_collapsed = await screenshot(cdp, session_id, results, "s21a_parent_collapsed_gear")
-                await expand_to(cdp, session_id, [live_parent])
-                results.record("(a) parent sees the running worker (spinner, gear in both states, live Delegated card)", ok=True,
-                               detail="worker spinner visible; the parent shows the gear expanded and collapsed alike "
-                                      f"({shot_collapsed}); card shows 'running · Scripted Live Runner' and links the child",
-                               screenshot=shot)
+        assert_true(card_link == f"/?session={live}", f"the Delegated card links its child ({card_link})")
+        shot = await screenshot(cdp, session_id, results, "s21a_parent_running")
+        await evaluate(
+            cdp, session_id, f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
+        await reveal_row(cdp, session_id, live_parent)
+        await wait_for(
+            cdp,
+            session_id,
+            f"JSON.stringify({parent_icons}) === '[\"worker-indicator\"]'",
+            timeout=12,
+            label="the collapsed parent's gear stands in for the running worker")
+        shot_collapsed = await screenshot(cdp, session_id, results, "s21a_parent_collapsed_gear")
+        await expand_to(cdp, session_id, [live_parent])
+        results.record(
+            "(a) parent sees the running worker (spinner, gear in both states, live Delegated card)",
+            ok=True,
+            detail="worker spinner visible; the parent shows the gear expanded and collapsed alike "
+            f"({shot_collapsed}); card shows 'running · Scripted Live Runner' and links the child",
+            screenshot=shot)
 
-                # (c) the Delegated card opens the child.
-                await evaluate(cdp, session_id,
-                    "[...document.querySelectorAll('a[href^=\"/?session=\"]')].find(a => a.getAttribute('href') === '/?session=" + live + "').click()")
-                await wait_for(cdp, session_id,
-                               f"location.search === '?session={live}' && document.getElementById('header-session-name').textContent === 'Live worker'",
-                               timeout=12, label="the card's link opened the child page")
+        # (c) the Delegated card opens the child.
+        await evaluate(
+            cdp, session_id,
+            "[...document.querySelectorAll('a[href^=\"/?session=\"]')].find(a => a.getAttribute('href') === '/?session="
+            + live + "').click()")
+        await wait_for(
+            cdp,
+            session_id,
+            f"location.search === '?session={live}' && document.getElementById('header-session-name').textContent === 'Live worker'",
+            timeout=12,
+            label="the card's link opened the child page")
 
-                # (a) worker page, fresh mid-Run load: timer ticking, events
-                # streaming, the Run's backend, the context reading.
-                await wait_for(cdp, session_id,
-                               "!document.getElementById('thinking').classList.contains('hidden')",
-                               timeout=12, label="thinking timer visible on a fresh mid-Run load")
-                t1 = await evaluate(cdp, session_id, "document.getElementById('thinking-time').textContent")
-                await asyncio.sleep(1.6)
-                t2 = await evaluate(cdp, session_id, "document.getElementById('thinking-time').textContent")
-                assert_true(t1 != t2 and t2.endswith('s'), f"the header timer ticks ({t1} -> {t2})")
-                badge = await evaluate(cdp, session_id, """
+        # (a) worker page, fresh mid-Run load: timer ticking, events
+        # streaming, the Run's backend, the context reading.
+        await wait_for(
+            cdp,
+            session_id,
+            "!document.getElementById('thinking').classList.contains('hidden')",
+            timeout=12,
+            label="thinking timer visible on a fresh mid-Run load")
+        t1 = await evaluate(cdp, session_id, "document.getElementById('thinking-time').textContent")
+        await asyncio.sleep(1.6)
+        t2 = await evaluate(cdp, session_id, "document.getElementById('thinking-time').textContent")
+        assert_true(t1 != t2 and t2.endswith('s'), f"the header timer ticks ({t1} -> {t2})")
+        badge = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const b = document.getElementById('backend-badge');
                       if (!b) return null;
@@ -1589,61 +1988,93 @@ async def run_harness(args: argparse.Namespace) -> None:
                       return sel ? (sel.selectedOptions[0] ? sel.selectedOptions[0].text : null) : b.textContent;
                     })()
                 """)
-                assert_true(badge == "Scripted Live Runner", f"the header badge shows the Run's backend ({badge})")
-                await wait_for(cdp, session_id, """
+        assert_true(badge == "Scripted Live Runner", f"the header badge shows the Run's backend ({badge})")
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     (() => {
                       const ind = document.getElementById('usage-indicator');
                       const bar = document.getElementById('usage-bar');
                       return ind && !ind.classList.contains('hidden') && bar && parseFloat(bar.style.width) > 0;
                     })()
-                """, timeout=12, label="the header context reading from the Run's last context_reading")
-                before = await evaluate(cdp, session_id,
-                    "document.getElementById('messages').textContent.includes('streamed progress line')")
-                assert_true(before, "the streamed events render in the main chat")
-                last_line = await evaluate(cdp, session_id, """
+                """,
+            timeout=12,
+            label="the header context reading from the Run's last context_reading")
+        before = await evaluate(
+            cdp, session_id, "document.getElementById('messages').textContent.includes('streamed progress line')")
+        assert_true(before, "the streamed events render in the main chat")
+        last_line = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const m = document.getElementById('messages').textContent.match(/streamed progress line (\\d+)/g);
                       return m ? Math.max(...m.map(s => parseInt(s.match(/\\d+$/)[0]))) : 0;
                     })()
                 """)
-                await wait_for(cdp, session_id, f"""
+        await wait_for(
+            cdp,
+            session_id,
+            f"""
                     (() => {{
                       const m = document.getElementById('messages').textContent.match(/streamed progress line (\\d+)/g);
                       const top = m ? Math.max(...m.map(s => parseInt(s.match(/\\d+$/)[0]))) : 0;
                       return top >= {last_line} + 2;
                     }})()
-                """, timeout=8, label="new events appear in the open chat within one poll")
-                shot = await screenshot(cdp, session_id, results, "s21b_worker_running")
-                results.record("(a) worker page mid-Run (timer, streaming, run backend, context reading)", ok=True,
-                               detail=f"timer {t1}->{t2}; badge '{badge}'; context bar painted; streamed lines appear within ~3s", screenshot=shot)
+                """,
+            timeout=8,
+            label="new events appear in the open chat within one poll")
+        shot = await screenshot(cdp, session_id, results, "s21b_worker_running")
+        results.record(
+            "(a) worker page mid-Run (timer, streaming, run backend, context reading)",
+            ok=True,
+            detail=f"timer {t1}->{t2}; badge '{badge}'; context bar painted; streamed lines appear within ~3s",
+            screenshot=shot)
 
-                # (e) the stop control stops the active Run.
-                mark = cdp.mutation_mark()
-                await evaluate(cdp, session_id,
-                    "document.querySelector('#thinking button').click()")
-                await wait_for(cdp, session_id, "document.getElementById('thinking').classList.contains('hidden')",
-                               timeout=12, label="the thinking timer clears after the stop")
-                stop_calls = [m for m in cdp.mutations_since(mark) if m["url"].endswith(f"/runs/{live_run}/cancel")]
-                assert_true(len(stop_calls) == 1, f"the stop posts exactly one run cancel ({stop_calls})")
-                await wait_for(cdp, session_id,
-                               f"document.getElementById('spinner-{live}') && document.getElementById('spinner-{live}').classList.contains('hidden')",
-                               timeout=12, label="the worker row spinner clears after the stop")
-                results.record("(e) the stop control stops the active Run", ok=True,
-                               detail=f"one POST /runs/{live_run}/cancel; thinking timer and row spinner clear without a reload", screenshot=None)
+        # (e) the stop control stops the active Run.
+        mark = cdp.mutation_mark()
+        await evaluate(cdp, session_id, "document.querySelector('#thinking button').click()")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('thinking').classList.contains('hidden')",
+            timeout=12,
+            label="the thinking timer clears after the stop")
+        stop_calls = [m for m in cdp.mutations_since(mark) if m["url"].endswith(f"/runs/{live_run}/cancel")]
+        assert_true(len(stop_calls) == 1, f"the stop posts exactly one run cancel ({stop_calls})")
+        await wait_for(
+            cdp,
+            session_id,
+            f"document.getElementById('spinner-{live}') && document.getElementById('spinner-{live}').classList.contains('hidden')",
+            timeout=12,
+            label="the worker row spinner clears after the stop")
+        results.record(
+            "(e) the stop control stops the active Run",
+            ok=True,
+            detail=f"one POST /runs/{live_run}/cancel; thinking timer and row spinner clear without a reload",
+            screenshot=None)
 
-                # (b) the task closes: the delivery summary and the four links
-                # appear in the open chat without a reload. The fact rides the
-                # SERVING owner's append funnel: the seeded tree's instances
-                # warmed the app-side caches long ago, and an append through
-                # them would land on disk without advancing the caches the
-                # APIs read.
-                from src.api.deps import task_manager as serving_tree
-                serving = serving_tree()
-                await serving.events.append(live, build_control_event(
-                    ET.TASK_CLOSED, actor="worker", source_session_id=live,
-                    request_id="harness-close", outcome="completed",
-                    summary="the checked piece is delivered", result_refs=["evidence/harness.txt"]))
-                await wait_for(cdp, session_id, """
+        # (b) the task closes: the delivery summary and the four links
+        # appear in the open chat without a reload. The fact rides the
+        # SERVING owner's append funnel: the seeded tree's instances
+        # warmed the app-side caches long ago, and an append through
+        # them would land on disk without advancing the caches the
+        # APIs read.
+        from src.api.deps import task_manager as serving_tree
+        serving = serving_tree()
+        await serving.events.append(
+            live,
+            build_control_event(
+                ET.TASK_CLOSED,
+                actor="worker",
+                source_session_id=live,
+                request_id="harness-close",
+                outcome="completed",
+                summary="the checked piece is delivered",
+                result_refs=["evidence/harness.txt"]))
+        await wait_for(
+            cdp,
+            session_id,
+            """
                     (() => {
                       const banner = document.querySelector('[data-message-role="run_delivery"]');
                       if (!banner) return false;
@@ -1651,147 +2082,190 @@ async def run_harness(args: argparse.Namespace) -> None:
                       return text.includes('Delivered') && text.includes('the checked piece is delivered')
                         && ['Raw log', 'Events', 'Result', 'Diff'].every(l => text.includes(l));
                     })()
-                """, timeout=12, label="the delivery close with the four evidence links")
-                # Both cues checked where they would show: the worker row's own
-                # spinner (the delivered worker may already have left the list —
-                # a successful delivery auto-archives it), and the parent's gear
-                # with the parent collapsed (the only state the stand-in paints).
-                spinner_hidden = await evaluate(cdp, session_id, f"""
+                """,
+            timeout=12,
+            label="the delivery close with the four evidence links")
+        # Both cues checked where they would show: the worker row's own
+        # spinner (the delivered worker may already have left the list —
+        # a successful delivery auto-archives it), and the parent's gear
+        # with the parent collapsed (the only state the stand-in paints).
+        spinner_hidden = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const el = document.getElementById('spinner-{live}');
                       return !el || el.classList.contains('hidden');
                     }})()
                 """)
-                await evaluate(cdp, session_id,
-                               f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
-                await expand_to(cdp, session_id, [ids["root"]])
-                await reveal_row(cdp, session_id, live_parent)
-                parent_shown = await evaluate(cdp, session_id, parent_icons)
-                assert_true(spinner_hidden and parent_shown == [],
-                            f"the running-state cues clear once the Run finished (parent icons {parent_shown})")
-                shot = await screenshot(cdp, session_id, results, "s21c_worker_delivered")
-                results.record("(b) finished: cues clear, delivery summary and four links shown", ok=True,
-                               detail="banner with summary + Raw log/Events/Result/Diff; gear and spinner cleared without a reload", screenshot=shot)
-            except Exception as exc:
-                # The failure probe: which link in the paint chain broke — the
-                # row's presence, its limit hiding, or the stamped thinking
-                # state the spinner renders from.
-                shot = await screenshot(cdp, session_id, results, "s21_FAILED")
-                results.record("(a)-(e) live worker transcript cycle", ok=False, detail=repr(exc), screenshot=shot)
+        await evaluate(
+            cdp, session_id, f"if (Sidebar.isTreeNodeExpanded('{live_parent}')) toggleTreeNode('{live_parent}')")
+        await expand_to(cdp, session_id, [ids["root"]])
+        await reveal_row(cdp, session_id, live_parent)
+        parent_shown = await evaluate(cdp, session_id, parent_icons)
+        assert_true(
+            spinner_hidden and parent_shown == [],
+            f"the running-state cues clear once the Run finished (parent icons {parent_shown})")
+        shot = await screenshot(cdp, session_id, results, "s21c_worker_delivered")
+        results.record(
+            "(b) finished: cues clear, delivery summary and four links shown",
+            ok=True,
+            detail="banner with summary + Raw log/Events/Result/Diff; gear and spinner cleared without a reload",
+            screenshot=shot)
+      except Exception as exc:
+        # The failure probe: which link in the paint chain broke — the
+        # row's presence, its limit hiding, or the stamped thinking
+        # state the spinner renders from.
+        shot = await screenshot(cdp, session_id, results, "s21_FAILED")
+        results.record("(a)-(e) live worker transcript cycle", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S22: the legacy thread opens in the main chat ------------------
-            try:
-                log("  s22: legacy thread view")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['legacy']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                row = await evaluate(cdp, session_id, f"""
+      # ---- S22: the legacy thread opens in the main chat ------------------
+      try:
+        log("  s22: legacy thread view")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['legacy']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        row = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['legacy_thread']}');
                       if (!row) return null;
                       return {{onclick: row.getAttribute('onclick') || '', text: row.textContent.slice(0, 80)}};
                     }})()
                 """)
-                assert_true(row and "openThreadView" in row["onclick"],
-                            f"the projected thread row navigates to the thread view ({row})")
-                await evaluate(cdp, session_id,
-                               f"document.getElementById('session-{ids['legacy_thread']}').click()")
-                await wait_for(cdp, session_id,
-                               f"location.search === '?session={ids['legacy']}&thread={ids['legacy_thread']}'",
-                               timeout=12, label="the row landed on the thread URL")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('header-session-name').textContent === 'Review: ## Goal'",
-                               timeout=12, label="the header names the thread")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('messages').textContent.includes('review verdict: approve')",
-                               timeout=12, label="the thread events render in the main chat")
-                hidden_input = await evaluate(cdp, session_id,
-                    "document.getElementById('input-area').classList.contains('hidden')")
-                assert_true(hidden_input, "the thread view takes no message input")
-                shot = await screenshot(cdp, session_id, results, "s22_legacy_thread_view")
-                results.record("(d) a legacy thread row opens in the main chat at the thread URL", ok=True,
-                               detail="row click navigates to /?session=<parent>&thread=<id>; transcript renders read-only, no input", screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s22_FAILED")
-                results.record("(d) a legacy thread row opens in the main chat at the thread URL", ok=False, detail=repr(exc), screenshot=shot)
+        assert_true(
+            row and "openThreadView" in row["onclick"],
+            f"the projected thread row navigates to the thread view ({row})")
+        await evaluate(cdp, session_id, f"document.getElementById('session-{ids['legacy_thread']}').click()")
+        await wait_for(
+            cdp,
+            session_id,
+            f"location.search === '?session={ids['legacy']}&thread={ids['legacy_thread']}'",
+            timeout=12,
+            label="the row landed on the thread URL")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('header-session-name').textContent === 'Review: ## Goal'",
+            timeout=12,
+            label="the header names the thread")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('messages').textContent.includes('review verdict: approve')",
+            timeout=12,
+            label="the thread events render in the main chat")
+        hidden_input = await evaluate(
+            cdp, session_id, "document.getElementById('input-area').classList.contains('hidden')")
+        assert_true(hidden_input, "the thread view takes no message input")
+        shot = await screenshot(cdp, session_id, results, "s22_legacy_thread_view")
+        results.record(
+            "(d) a legacy thread row opens in the main chat at the thread URL",
+            ok=True,
+            detail="row click navigates to /?session=<parent>&thread=<id>; transcript renders read-only, no input",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s22_FAILED")
+        results.record(
+            "(d) a legacy thread row opens in the main chat at the thread URL",
+            ok=False,
+            detail=repr(exc),
+            screenshot=shot)
 
-            # ---- S23: an unread reply in a child manager (the subtree mark) --
-            # The reply is seeded through the same in-process owner the scenario
-            # tree was seeded with — SessionManager.mark_unread, the master
-            # turn's own writer — never by painting the DOM. The root row shows
-            # the hollow subtree-unread mark collapsed and expanded alike, the
-            # child manager shows its own dot, and opening the child clears
-            # both in one paint (the read path's refreshSessionIndicator).
-            try:
-                log("  s23: unread reply in a child manager")
-                handles = ids["_live_handles"]
-                await handles["session_mgr"].mark_unread(ids["feature"])
-                # The serving app's metadata and listing caches revalidate on
-                # their own clock (a 30 s TTL plus the listings sweep), so wait
-                # until ITS list reports the flip: from then on the page's
-                # first paint and its 3 s status poll agree, and the mark
-                # cannot flap back off mid-assertion.
-                deadline = time.monotonic() + 120
-                while True:
-                    status, rows = await asyncio.to_thread(
-                        api_request, base, access_key, "GET", "/api/sessions/", timeout=10.0)
-                    status_code, states = await asyncio.to_thread(
-                        api_request, base, access_key, "GET",
-                        f"/api/sessions/status?ids={ids['feature']}", timeout=10.0)
-                    if status != 200 or status_code != 200:
-                        fail(f"serving fetch failed: list {status}, status {status_code}")
-                    row = next((r for r in rows if r.get("id") == ids["feature"]), None)
-                    state = states.get(ids["feature"], {})
-                    if row and row.get("has_unread") and state.get("has_unread"):
-                        break
-                    if time.monotonic() > deadline:
-                        fail("the serving list/status never reported the seeded unread reply "
-                             f"(list={row and row.get('has_unread')}, status={state.get('has_unread')})")
-                    await asyncio.sleep(1.0)
-                # One row's icon table: the kinds whose element lacks the
-                # hidden class. Probes exist before the navigation so the
-                # failure path can dump them.
-                root_icons = f"""
+      # ---- S23: an unread reply in a child manager (the subtree mark) --
+      # The reply is seeded through the same in-process owner the scenario
+      # tree was seeded with — SessionManager.mark_unread, the master
+      # turn's own writer — never by painting the DOM. The root row shows
+      # the hollow subtree-unread mark collapsed and expanded alike, the
+      # child manager shows its own dot, and opening the child clears
+      # both in one paint (the read path's refreshSessionIndicator).
+      try:
+        log("  s23: unread reply in a child manager")
+        handles = ids["_live_handles"]
+        await handles["session_mgr"].mark_unread(ids["feature"])
+        # The serving app's metadata and listing caches revalidate on
+        # their own clock (a 30 s TTL plus the listings sweep), so wait
+        # until ITS list reports the flip: from then on the page's
+        # first paint and its 3 s status poll agree, and the mark
+        # cannot flap back off mid-assertion.
+        deadline = time.monotonic() + 120
+        while True:
+          status, rows = await asyncio.to_thread(api_request, base, access_key, "GET", "/api/sessions/", timeout=10.0)
+          status_code, states = await asyncio.to_thread(
+              api_request, base, access_key, "GET", f"/api/sessions/status?ids={ids['feature']}", timeout=10.0)
+          if status != 200 or status_code != 200:
+            fail(f"serving fetch failed: list {status}, status {status_code}")
+          row = next((r for r in rows if r.get("id") == ids["feature"]), None)
+          state = states.get(ids["feature"], {})
+          if row and row.get("has_unread") and state.get("has_unread"):
+            break
+          if time.monotonic() > deadline:
+            fail(
+                "the serving list/status never reported the seeded unread reply "
+                f"(list={row and row.get('has_unread')}, status={state.get('has_unread')})")
+          await asyncio.sleep(1.0)
+        # One row's icon table: the kinds whose element lacks the
+        # hidden class. Probes exist before the navigation so the
+        # failure path can dump them.
+        root_icons = f"""
                     ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread']
                       .filter(k => !document.getElementById(k + '-{ids['root']}').classList.contains('hidden'))
                 """
-                feature_icons = f"""
+        feature_icons = f"""
                     ['spinner', 'worker-indicator', 'waiting-indicator', 'unread', 'subtree-unread']
                       .filter(k => !document.getElementById(k + '-{ids['feature']}').classList.contains('hidden'))
                 """
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                # Collapsed root: the mark stands in for the child's unread reply.
-                await wait_for(cdp, session_id, f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
-                               timeout=60, label="the collapsed root shows the subtree mark for the child's unread reply")
-                shot = await screenshot(cdp, session_id, results, "s23_root_mark_collapsed")
-                # Expanded root: the mark stays — expansion never changes the icon.
-                await expand_to(cdp, session_id, [ids["root"]])
-                await wait_for(cdp, session_id, f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
-                               timeout=12, label="the expanded root keeps the subtree mark")
-                await reveal_row(cdp, session_id, ids["feature"])
-                await wait_for(cdp, session_id, f"JSON.stringify({feature_icons}) === '[\"unread\"]'",
-                               timeout=12, label="the child manager shows its own dot, no subtree mark")
-                shot = await screenshot(cdp, session_id, results, "s23_root_mark_expanded")
-                # Opening the child (the SPA switch's real read path) clears its
-                # dot and the root's mark in one paint.
-                await evaluate(cdp, session_id,
-                               f"document.getElementById('session-{ids['feature']}').click()")
-                await wait_for(cdp, session_id,
-                               f"location.search === '?session={ids['feature']}' && SESSION_ID === '{ids['feature']}'",
-                               timeout=12, label="the child manager's chat opened")
-                await wait_for(cdp, session_id,
-                               f"JSON.stringify({feature_icons}) === '[]' && JSON.stringify({root_icons}) === '[]'",
-                               timeout=12, label="opening the child clears its dot and the root's mark in one paint")
-                shot = await screenshot(cdp, session_id, results, "s23_after_opening_child")
-                results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
-                               ok=True,
-                               detail="root shows subtree-unread collapsed and expanded alike; the child shows its own dot; "
-                                      "opening the child clears both without a reload",
-                               screenshot=shot)
-            except Exception as exc:
-                diag = ""
-                try:
-                    diag = str(await evaluate(cdp, session_id, f"""
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        # Collapsed root: the mark stands in for the child's unread reply.
+        await wait_for(
+            cdp,
+            session_id,
+            f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
+            timeout=60,
+            label="the collapsed root shows the subtree mark for the child's unread reply")
+        shot = await screenshot(cdp, session_id, results, "s23_root_mark_collapsed")
+        # Expanded root: the mark stays — expansion never changes the icon.
+        await expand_to(cdp, session_id, [ids["root"]])
+        await wait_for(
+            cdp,
+            session_id,
+            f"JSON.stringify({root_icons}) === '[\"subtree-unread\"]'",
+            timeout=12,
+            label="the expanded root keeps the subtree mark")
+        await reveal_row(cdp, session_id, ids["feature"])
+        await wait_for(
+            cdp,
+            session_id,
+            f"JSON.stringify({feature_icons}) === '[\"unread\"]'",
+            timeout=12,
+            label="the child manager shows its own dot, no subtree mark")
+        shot = await screenshot(cdp, session_id, results, "s23_root_mark_expanded")
+        # Opening the child (the SPA switch's real read path) clears its
+        # dot and the root's mark in one paint.
+        await evaluate(cdp, session_id, f"document.getElementById('session-{ids['feature']}').click()")
+        await wait_for(
+            cdp,
+            session_id,
+            f"location.search === '?session={ids['feature']}' && SESSION_ID === '{ids['feature']}'",
+            timeout=12,
+            label="the child manager's chat opened")
+        await wait_for(
+            cdp,
+            session_id,
+            f"JSON.stringify({feature_icons}) === '[]' && JSON.stringify({root_icons}) === '[]'",
+            timeout=12,
+            label="opening the child clears its dot and the root's mark in one paint")
+        shot = await screenshot(cdp, session_id, results, "s23_after_opening_child")
+        results.record(
+            "an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
+            ok=True,
+            detail="root shows subtree-unread collapsed and expanded alike; the child shows its own dot; "
+            "opening the child clears both without a reload",
+            screenshot=shot)
+      except Exception as exc:
+        diag = ""
+        try:
+          diag = str(
+              await evaluate(
+                  cdp, session_id, f"""
                         JSON.stringify({{
                           rootIcons: {root_icons},
                           featureIcons: {feature_icons},
@@ -1800,110 +2274,140 @@ async def run_harness(args: argparse.Namespace) -> None:
                           rootExpanded: Sidebar.isTreeNodeExpanded('{ids['root']}'),
                         }})
                     """))
-                except Exception as diag_exc:
-                    diag = repr(diag_exc)
-                shot = await screenshot(cdp, session_id, results, "s23_FAILED")
-                results.record("an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
-                               ok=False, detail=repr(exc) + " | " + diag, screenshot=shot)
-            # ---- S24: the withheld launch --------------------------------------
-            try:
-                log("  s24: withheld run")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                # The worker transcript's Run header reads "withheld · <reason>".
-                withheld_text = f"withheld · task {ids['withhold_worker']} is cancelled"
-                await wait_for(cdp, session_id,
-                               f"document.getElementById('messages').textContent.includes({withheld_text!r})",
-                               timeout=12, label="the withheld header renders with its reason")
-                header = await evaluate(cdp, session_id, """
+        except Exception as diag_exc:
+          diag = repr(diag_exc)
+        shot = await screenshot(cdp, session_id, results, "s23_FAILED")
+        results.record(
+            "an unread reply in a child manager: root mark collapsed and expanded, cleared by opening the child",
+            ok=False,
+            detail=repr(exc) + " | " + diag,
+            screenshot=shot)
+      # ---- S24: the withheld launch --------------------------------------
+      try:
+        log("  s24: withheld run")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['withhold_worker']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        # The worker transcript's Run header reads "withheld · <reason>".
+        withheld_text = f"withheld · task {ids['withhold_worker']} is cancelled"
+        await wait_for(
+            cdp,
+            session_id,
+            f"document.getElementById('messages').textContent.includes({withheld_text!r})",
+            timeout=12,
+            label="the withheld header renders with its reason")
+        header = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const el = document.querySelector('[data-run-state="withheld"]');
                       return el ? el.textContent : null;
                     })()
                 """)
-                assert_true(header and withheld_text in header,
-                            f"the Run header shows the withheld state with its reason ({header})")
-                shot = await screenshot(cdp, session_id, results, "s24_withheld_run")
-                results.record("(a) a withheld Run shows 'withheld · <reason>' in its Run header", ok=True,
-                               detail="cancelled task's queued Run; reason from the durable run_launch_withheld fact", screenshot=shot)
+        assert_true(
+            header and withheld_text in header, f"the Run header shows the withheld state with its reason ({header})")
+        shot = await screenshot(cdp, session_id, results, "s24_withheld_run")
+        results.record(
+            "(a) a withheld Run shows 'withheld · <reason>' in its Run header",
+            ok=True,
+            detail="cancelled task's queued Run; reason from the durable run_launch_withheld fact",
+            screenshot=shot)
 
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s24_FAILED")
-                results.record("withheld run scenario", ok=False, detail=repr(exc), screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s24_FAILED")
+        results.record("withheld run scenario", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S25: the three view pills — Workspace, Later, Archive --------
-            # The strip's labels render in order, each pill's click lands in its
-            # view (Later serves /api/sessions/starred, Archive builds its
-            # project-grouped tree), and coming back to Workspace repaints it.
-            try:
-                log("  s25: the three view pills")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                labels = await evaluate(cdp, session_id, """
+      # ---- S25: the three view pills — Workspace, Later, Archive --------
+      # The strip's labels render in order, each pill's click lands in its
+      # view (Later serves /api/sessions/starred, Archive builds its
+      # project-grouped tree), and coming back to Workspace repaints it.
+      try:
+        log("  s25: the three view pills")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        labels = await evaluate(
+            cdp, session_id, """
                     [...document.querySelectorAll('#sidebar-filter-pills .filter-pill')].map(b => b.textContent.trim())
                 """)
-                assert_true(labels == ["Workspace", "Threads", "Later", "Archive"],
-                            f"the pill strip reads Workspace, Threads, Later, Archive in order ({labels})")
-                assert_true(await evaluate(cdp, session_id,
-                                           "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"),
-                            "Workspace is the active pill on load")
+        assert_true(
+            labels == ["Workspace", "Threads", "Later", "Archive"],
+            f"the pill strip reads Workspace, Threads, Later, Archive in order ({labels})")
+        assert_true(
+            await
+            evaluate(cdp, session_id, "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"),
+            "Workspace is the active pill on load")
 
-                await evaluate(cdp, session_id, "document.getElementById('filter-starred').click()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('filter-starred').classList.contains('bg-blue-600/20')"
-                               f" && !!document.getElementById('session-{ids['feature']}')",
-                               timeout=12, label="Later renders the starred row")
-                later_names = await evaluate(cdp, session_id, """
+        await evaluate(cdp, session_id, "document.getElementById('filter-starred').click()")
+        await wait_for(
+            cdp,
+            session_id, "document.getElementById('filter-starred').classList.contains('bg-blue-600/20')"
+            f" && !!document.getElementById('session-{ids['feature']}')",
+            timeout=12,
+            label="Later renders the starred row")
+        later_names = await evaluate(
+            cdp, session_id, """
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
                 """)
-                assert_true(any("Feature alpha" in n for n in later_names),
-                            f"the starred feature manager renders under Later ({later_names})")
-                shot = await screenshot(cdp, session_id, results, "s25_later_pill")
-                results.record("the Later pill serves the starred queue", ok=True,
-                               detail="strip reads Workspace/Later/Archive; Later shows the starred feature manager",
-                               screenshot=shot)
+        assert_true(
+            any("Feature alpha" in n for n in later_names),
+            f"the starred feature manager renders under Later ({later_names})")
+        shot = await screenshot(cdp, session_id, results, "s25_later_pill")
+        results.record(
+            "the Later pill serves the starred queue",
+            ok=True,
+            detail="strip reads Workspace/Later/Archive; Later shows the starred feature manager",
+            screenshot=shot)
 
-                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('filter-archived').classList.contains('bg-blue-600/20')"
-                               " && !!document.querySelector('#session-list .session-group')",
-                               timeout=12, label="Archive renders its tree")
-                await evaluate(cdp, session_id, "document.getElementById('filter-all').click()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"
-                               f" && !!document.getElementById('session-{ids['root']}')",
-                               timeout=12, label="Workspace repaints on return")
-                shot = await screenshot(cdp, session_id, results, "s25_pill_round_trip")
-                results.record("the pills round-trip Workspace / Later / Archive", ok=True,
-                               detail="each pill lands in its view; the archived tree and the Workspace tree both render",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s25_FAILED")
-                results.record("the three view pills", ok=False, detail=repr(exc), screenshot=shot)
+        await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+        await wait_for(
+            cdp,
+            session_id, "document.getElementById('filter-archived').classList.contains('bg-blue-600/20')"
+            " && !!document.querySelector('#session-list .session-group')",
+            timeout=12,
+            label="Archive renders its tree")
+        await evaluate(cdp, session_id, "document.getElementById('filter-all').click()")
+        await wait_for(
+            cdp,
+            session_id, "document.getElementById('filter-all').classList.contains('bg-blue-600/20')"
+            f" && !!document.getElementById('session-{ids['root']}')",
+            timeout=12,
+            label="Workspace repaints on return")
+        shot = await screenshot(cdp, session_id, results, "s25_pill_round_trip")
+        results.record(
+            "the pills round-trip Workspace / Later / Archive",
+            ok=True,
+            detail="each pill lands in its view; the archived tree and the Workspace tree both render",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s25_FAILED")
+        results.record("the three view pills", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S25b: the Threads pill — the chat-thread subtree's own view --
-            # Workspace (the first paint's own list) lists neither the
-            # discord-origin session nor its delegated child; clicking Threads
-            # lists the pair nested under "Discord #general" with no
-            # group-header plus button (the Settings gear stays); reloading
-            # with filter=threads in the URL stays on Threads.
-            try:
-                log("  s25b: the Threads pill")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                workspace_names = await evaluate(cdp, session_id, """
+      # ---- S25b: the Threads pill — the chat-thread subtree's own view --
+      # Workspace (the first paint's own list) lists neither the
+      # discord-origin session nor its delegated child; clicking Threads
+      # lists the pair nested under "Discord #general" with no
+      # group-header plus button (the Settings gear stays); reloading
+      # with filter=threads in the URL stays on Threads.
+      try:
+        log("  s25b: the Threads pill")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        workspace_names = await evaluate(
+            cdp, session_id, """
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
                 """)
-                assert_true(not any("Discord #general 2026" in n or "Discord thread child" in n
-                                    for n in workspace_names),
-                            f"Workspace lists neither the thread session nor its child ({workspace_names})")
+        assert_true(
+            not any("Discord #general 2026" in n or "Discord thread child" in n for n in workspace_names),
+            f"Workspace lists neither the thread session nor its child ({workspace_names})")
 
-                await evaluate(cdp, session_id, "document.getElementById('filter-threads').click()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
-                               f" && !!document.getElementById('session-{ids['discord_thread']}')",
-                               timeout=12, label="Threads renders the thread session")
-                nesting = json.loads(await evaluate(cdp, session_id, f"""
+        await evaluate(cdp, session_id, "document.getElementById('filter-threads').click()")
+        await wait_for(
+            cdp,
+            session_id, "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
+            f" && !!document.getElementById('session-{ids['discord_thread']}')",
+            timeout=12,
+            label="Threads renders the thread session")
+        nesting = json.loads(
+            await evaluate(
+                cdp, session_id, f"""
                     (() => {{
                       const child = document.getElementById('session-{ids['discord_thread_child']}');
                       const group = child && child.closest('.session-group');
@@ -1913,52 +2417,64 @@ async def run_harness(args: argparse.Namespace) -> None:
                       }});
                     }})()
                 """))
-                assert_true(nesting["group"] == "Discord #general" and nesting["nested"],
-                            f"the child nests under its parent in the channel group ({nesting})")
-                header_buttons = json.loads(await evaluate(cdp, session_id, """
+        assert_true(
+            nesting["group"] == "Discord #general" and nesting["nested"],
+            f"the child nests under its parent in the channel group ({nesting})")
+        header_buttons = json.loads(
+            await evaluate(
+                cdp, session_id, """
                     JSON.stringify([...document.querySelectorAll('#session-list [data-sgroup-toggle-key]')]
                       .map(h => [...h.querySelectorAll('button[title]')].map(b => b.title)))
                 """))
-                assert_true(all(not any("New session in group" in t for t in titles) for titles in header_buttons),
-                            f"no group-header plus button renders on Threads ({header_buttons})")
-                assert_true(all(any(t == "Settings" for t in titles) for titles in header_buttons),
-                            f"the group header's Settings gear stays ({header_buttons})")
-                shot = await screenshot(cdp, session_id, results, "s25b_threads_pill")
-                results.record("the Threads pill serves the chat-thread subtree", ok=True,
-                               detail="Workspace omits the subtree; Threads nests the pair under its channel group "
-                                      "with no group-header plus button",
-                               screenshot=shot)
+        assert_true(
+            all(not any("New session in group" in t for t in titles) for titles in header_buttons),
+            f"no group-header plus button renders on Threads ({header_buttons})")
+        assert_true(
+            all(any(t == "Settings" for t in titles) for titles in header_buttons),
+            f"the group header's Settings gear stays ({header_buttons})")
+        shot = await screenshot(cdp, session_id, results, "s25b_threads_pill")
+        results.record(
+            "the Threads pill serves the chat-thread subtree",
+            ok=True,
+            detail="Workspace omits the subtree; Threads nests the pair under its channel group "
+            "with no group-header plus button",
+            screenshot=shot)
 
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}&filter=threads"},
-                               session_id=session_id)
-                await wait_for(cdp, session_id,
-                               "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
-                               f" && !!document.getElementById('session-{ids['discord_thread']}')",
-                               timeout=12, label="the reload stays on Threads")
-                shot = await screenshot(cdp, session_id, results, "s25b_threads_reload")
-                results.record("filter=threads survives a reload", ok=True,
-                               detail="the restore path re-enters Threads and refetches the chat-threads list",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s25b_FAILED")
-                results.record("the Threads pill serves the chat-thread subtree", ok=False, detail=repr(exc),
-                               screenshot=shot)
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}&filter=threads"}, session_id=session_id)
+        await wait_for(
+            cdp,
+            session_id, "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
+            f" && !!document.getElementById('session-{ids['discord_thread']}')",
+            timeout=12,
+            label="the reload stays on Threads")
+        shot = await screenshot(cdp, session_id, results, "s25b_threads_reload")
+        results.record(
+            "filter=threads survives a reload",
+            ok=True,
+            detail="the restore path re-enters Threads and refetches the chat-threads list",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s25b_FAILED")
+        results.record("the Threads pill serves the chat-thread subtree", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S26: a bound node's schedule rides its Workspace row ---------
-            # The enabled bound node shows the blue clock, the "Next:" line and
-            # the truncated cron · timezone line, with the Settings gear (its
-            # menu carries Edit schedule); the disabled one goes grey with
-            # "Disabled" and no next run.
-            try:
-                log("  s26: bound nodes' schedule rows in Workspace")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id,
-                               f"!!document.getElementById('session-{ids['bound_node']}')"
-                               f" && !!document.getElementById('session-{ids['paused_node']}')",
-                               timeout=12, label="both bound rows render")
-                await reveal_row(cdp, session_id, ids["bound_node"])
-                await reveal_row(cdp, session_id, ids["paused_node"])
-                bound_row = await evaluate(cdp, session_id, f"""
+      # ---- S26: a bound node's schedule rides its Workspace row ---------
+      # The enabled bound node shows the blue clock, the "Next:" line and
+      # the truncated cron · timezone line, with the Settings gear (its
+      # menu carries Edit schedule); the disabled one goes grey with
+      # "Disabled" and no next run.
+      try:
+        log("  s26: bound nodes' schedule rows in Workspace")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(
+            cdp,
+            session_id, f"!!document.getElementById('session-{ids['bound_node']}')"
+            f" && !!document.getElementById('session-{ids['paused_node']}')",
+            timeout=12,
+            label="both bound rows render")
+        await reveal_row(cdp, session_id, ids["bound_node"])
+        await reveal_row(cdp, session_id, ids["paused_node"])
+        bound_row = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['bound_node']}');
                       const clock = row.querySelector('svg[title^="Scheduled:"]');
@@ -1972,13 +2488,16 @@ async def run_harness(args: argparse.Namespace) -> None:
                       }});
                     }})()
                 """)
-                bound = json.loads(bound_row)
-                assert_true(bound["clock"] and bound["blue"] and bound["title"] == "Scheduled: harness-daily",
-                            f"the bound row shows the blue clock naming its task ({bound})")
-                assert_true(bound["next"] and bound["cronTz"],
-                            f"the bound row shows the Next line and the cron · timezone line ({bound})")
-                assert_true(bound["settings"], "the bound row carries the Settings hover button")
-                paused_row = await evaluate(cdp, session_id, f"""
+        bound = json.loads(bound_row)
+        assert_true(
+            bound["clock"] and bound["blue"] and bound["title"] == "Scheduled: harness-daily",
+            f"the bound row shows the blue clock naming its task ({bound})")
+        assert_true(
+            bound["next"] and bound["cronTz"],
+            f"the bound row shows the Next line and the cron · timezone line ({bound})")
+        assert_true(bound["settings"], "the bound row carries the Settings hover button")
+        paused_row = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['paused_node']}');
                       const clock = row.querySelector('svg[title^="Scheduled:"]');
@@ -1990,27 +2509,34 @@ async def run_harness(args: argparse.Namespace) -> None:
                       }});
                     }})()
                 """)
-                paused = json.loads(paused_row)
-                assert_true(paused["clock"] and paused["grey"] and paused["disabled"] and not paused["next"],
-                            f"the disabled bound row goes grey, says Disabled, and names no next run ({paused})")
-                shot = await screenshot(cdp, session_id, results, "s26_bound_rows_workspace")
-                results.record("a bound node's schedule rides its Workspace row; disabled goes grey", ok=True,
-                               detail="blue clock + Next + cron·timezone + Settings; the disabled row is grey with Disabled",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s26_FAILED")
-                results.record("bound nodes' schedule rows in Workspace", ok=False, detail=repr(exc), screenshot=shot)
+        paused = json.loads(paused_row)
+        assert_true(
+            paused["clock"] and paused["grey"] and paused["disabled"] and not paused["next"],
+            f"the disabled bound row goes grey, says Disabled, and names no next run ({paused})")
+        shot = await screenshot(cdp, session_id, results, "s26_bound_rows_workspace")
+        results.record(
+            "a bound node's schedule rides its Workspace row; disabled goes grey",
+            ok=True,
+            detail="blue clock + Next + cron·timezone + Settings; the disabled row is grey with Disabled",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s26_FAILED")
+        results.record("bound nodes' schedule rows in Workspace", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S27: the Workspace error badge --------------------------------
-            # One broken cron file on disk; the badge renders at the top of the
-            # Workspace view and opens the cron editor on the broken task.
-            try:
-                log("  s27: the Workspace error badge")
-                await wait_for(cdp, session_id,
-                               'document.querySelector("#session-list [role=button][title=\'Open the first failed task\']") !== null'
-                               " && document.querySelector('#session-list').textContent.includes('1 scheduled tasks failed to load')",
-                               timeout=12, label="the error badge renders")
-                badge = await evaluate(cdp, session_id, """
+      # ---- S27: the Workspace error badge --------------------------------
+      # One broken cron file on disk; the badge renders at the top of the
+      # Workspace view and opens the cron editor on the broken task.
+      try:
+        log("  s27: the Workspace error badge")
+        await wait_for(
+            cdp,
+            session_id,
+            'document.querySelector("#session-list [role=button][title=\'Open the first failed task\']") !== null'
+            " && document.querySelector('#session-list').textContent.includes('1 scheduled tasks failed to load')",
+            timeout=12,
+            label="the error badge renders")
+        badge = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const list = document.getElementById('session-list');
                       const badge = list.querySelector('[role="button"][title="Open the first failed task"]');
@@ -2022,46 +2548,55 @@ async def run_harness(args: argparse.Namespace) -> None:
                       });
                     })()
                 """)
-                badge_info = json.loads(badge)
-                assert_true(badge_info["text"] == "⚠ 1 scheduled tasks failed to load",
-                            f"the badge names the broken count ({badge_info})")
-                assert_true("openCronEditor('harness-broken')" in (badge_info["onclick"] or ""),
-                            f"the badge opens the cron editor on the first broken task ({badge_info})")
-                assert_true(badge_info["onTop"], "the badge renders at the top of the Workspace view")
-                shot = await screenshot(cdp, session_id, results, "s27_workspace_error_badge")
-                results.record("the Workspace error badge renders from the broken cron entries", ok=True,
-                               detail="⚠ 1 scheduled tasks failed to load, above the tree, opening the cron editor",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s27_FAILED")
-                results.record("the Workspace error badge", ok=False, detail=repr(exc), screenshot=shot)
+        badge_info = json.loads(badge)
+        assert_true(
+            badge_info["text"] == "⚠ 1 scheduled tasks failed to load",
+            f"the badge names the broken count ({badge_info})")
+        assert_true(
+            "openCronEditor('harness-broken')" in (badge_info["onclick"] or ""),
+            f"the badge opens the cron editor on the first broken task ({badge_info})")
+        assert_true(badge_info["onTop"], "the badge renders at the top of the Workspace view")
+        shot = await screenshot(cdp, session_id, results, "s27_workspace_error_badge")
+        results.record(
+            "the Workspace error badge renders from the broken cron entries",
+            ok=True,
+            detail="⚠ 1 scheduled tasks failed to load, above the tree, opening the cron editor",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s27_FAILED")
+        results.record("the Workspace error badge", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S28: the Archive tree with its dimmed context ancestor --------
-            # The archived firing nests under its still-active bound node: the
-            # ancestor arrives as a context_only row, dimmed with the active
-            # tag, carrying a star and none of the archived row's actions.
-            try:
-                log("  s28: the Archive tree with a dimmed context node")
-                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
-                await wait_for(cdp, session_id,
-                               f"!!document.getElementById('session-{ids['archived_child']}')"
-                               f" && !!document.getElementById('session-{ids['bound_node']}')",
-                               timeout=12, label="the archived page and its context row render")
-                status, archived_page = await asyncio.to_thread(
-                    api_request, base, access_key, "GET", "/api/sessions/archived?limit=100", timeout=10.0)
-                assert_true(status == 200, f"the archived listing answers 200 ({status})")
-                strip_all = await evaluate(cdp, session_id, """
+      # ---- S28: the Archive tree with its dimmed context ancestor --------
+      # The archived firing nests under its still-active bound node: the
+      # ancestor arrives as a context_only row, dimmed with the active
+      # tag, carrying a star and none of the archived row's actions.
+      try:
+        log("  s28: the Archive tree with a dimmed context node")
+        await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+        await wait_for(
+            cdp,
+            session_id, f"!!document.getElementById('session-{ids['archived_child']}')"
+            f" && !!document.getElementById('session-{ids['bound_node']}')",
+            timeout=12,
+            label="the archived page and its context row render")
+        status, archived_page = await asyncio.to_thread(
+            api_request, base, access_key, "GET", "/api/sessions/archived?limit=100", timeout=10.0)
+        assert_true(status == 200, f"the archived listing answers 200 ({status})")
+        strip_all = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const pill = [...document.querySelectorAll('#session-list button')]
                         .find(b => b.textContent.trim().startsWith('All '));
                       return pill ? pill.textContent.replace(/[^0-9]/g, '') : null;
                     })()
                 """)
-                server_total = sum(g["total"] for g in archived_page["groups"])
-                assert_true(strip_all == str(server_total),
-                            f"the strip's All count equals the server's archived aggregate ({strip_all} vs {server_total})")
-                await expand_to(cdp, session_id, [ids["bound_node"]])
-                nest = await evaluate(cdp, session_id, f"""
+        server_total = sum(g["total"] for g in archived_page["groups"])
+        assert_true(
+            strip_all == str(server_total),
+            f"the strip's All count equals the server's archived aggregate ({strip_all} vs {server_total})")
+        await expand_to(cdp, session_id, [ids["bound_node"]])
+        nest = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const child = document.getElementById('session-{ids['archived_child']}');
                       const node = document.getElementById('session-{ids['bound_node']}');
@@ -2078,48 +2613,54 @@ async def run_harness(args: argparse.Namespace) -> None:
                       }});
                     }})()
                 """)
-                nest_info = json.loads(nest)
-                assert_true(nest_info["nested"],
-                            "the archived firing nests under its scheduled context node")
-                assert_true(nest_info["dimmed"] and nest_info["activeTag"],
-                            f"the context node renders dimmed with the active tag ({nest_info})")
-                assert_true(nest_info["star"] and not nest_info["unarchive"],
-                            f"the context row keeps the star and takes no unarchive action ({nest_info})")
-                assert_true(nest_info["childUnarchive"] and not nest_info["childDimmed"],
-                            f"the archived child keeps its own archived row form ({nest_info})")
-                await reveal_row(cdp, session_id, ids["archived_child"])
-                await evaluate(cdp, session_id,
-                               f"document.getElementById('session-{ids['bound_node']}').scrollIntoView({{block: 'center'}})")
-                shot = await screenshot(cdp, session_id, results, "s28_archive_context_tree")
-                results.record("the Archive tree nests the archived firing under its dimmed context node", ok=True,
-                               detail="context_only ancestor: dimmed, active tag, star only; the strip counts archived rows alone",
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s28_FAILED")
-                results.record("the Archive tree with a dimmed context node", ok=False, detail=repr(exc), screenshot=shot)
+        nest_info = json.loads(nest)
+        assert_true(nest_info["nested"], "the archived firing nests under its scheduled context node")
+        assert_true(
+            nest_info["dimmed"] and nest_info["activeTag"],
+            f"the context node renders dimmed with the active tag ({nest_info})")
+        assert_true(
+            nest_info["star"] and not nest_info["unarchive"],
+            f"the context row keeps the star and takes no unarchive action ({nest_info})")
+        assert_true(
+            nest_info["childUnarchive"] and not nest_info["childDimmed"],
+            f"the archived child keeps its own archived row form ({nest_info})")
+        await reveal_row(cdp, session_id, ids["archived_child"])
+        await evaluate(
+            cdp, session_id,
+            f"document.getElementById('session-{ids['bound_node']}').scrollIntoView({{block: 'center'}})")
+        shot = await screenshot(cdp, session_id, results, "s28_archive_context_tree")
+        results.record(
+            "the Archive tree nests the archived firing under its dimmed context node",
+            ok=True,
+            detail="context_only ancestor: dimmed, active tag, star only; the strip counts archived rows alone",
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s28_FAILED")
+        results.record("the Archive tree with a dimmed context node", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S29: a row's actions take no width until the row is hovered --
-            # The quantified hover-reveal contract on the seeded ops tree: at
-            # rest an unstarred non-current row's name and second-line spans
-            # reach the row's right edge with the four actions out of flow and
-            # invisible; hovering covers the text end with the four buttons on
-            # an opaque cover while the row's height and text layout stay put;
-            # the current row keeps its buttons in flow; a starred row shows
-            # its solid star at rest; and the star toggles in place, with no
-            # list repaint, in both directions.
-            try:
-                log("  s29: hover reveal action buttons")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await expand_to(cdp, session_id, [ids["ops_root"]])
-                await reveal_row(cdp, session_id, ids["ops_mid"])
-                cdp.drain_list_fetches()
+      # ---- S29: a row's actions take no width until the row is hovered --
+      # The quantified hover-reveal contract on the seeded ops tree: at
+      # rest an unstarred non-current row's name and second-line spans
+      # reach the row's right edge with the four actions out of flow and
+      # invisible; hovering covers the text end with the four buttons on
+      # an opaque cover while the row's height and text layout stay put;
+      # the current row keeps its buttons in flow; a starred row shows
+      # its solid star at rest; and the star toggles in place, with no
+      # list repaint, in both directions.
+      try:
+        log("  s29: hover reveal action buttons")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await expand_to(cdp, session_id, [ids["ops_root"]])
+        await reveal_row(cdp, session_id, ids["ops_mid"])
+        cdp.drain_list_fetches()
 
-                # One geometry read per state: row box and paddings, the name
-                # and second-line spans, and every direct action button with
-                # its computed position/opacity.
-                async def row_geo(node_id: str) -> dict:
-                    raw = await evaluate(cdp, session_id, f"""
+        # One geometry read per state: row box and paddings, the name
+        # and second-line spans, and every direct action button with
+        # its computed position/opacity.
+        async def row_geo(node_id: str) -> dict:
+          raw = await evaluate(
+              cdp, session_id, f"""
                         (() => {{
                           const row = document.getElementById('session-{node_id}');
                           if (!row) return null;
@@ -2148,70 +2689,87 @@ async def run_harness(args: argparse.Namespace) -> None:
                             }})()}};
                         }})()
                     """)
-                    assert_true(raw is not None, f"row {node_id} renders")
-                    return raw
+          assert_true(raw is not None, f"row {node_id} renders")
+          return raw
 
-                rest = await row_geo(ids["ops_mid"])
-                row, name, line = rest["row"], rest["name"], rest["line"]
-                assert_true(len(rest["buttons"]) == 4,
-                            f"the unstarred row renders its four actions: {[b['title'] for b in rest['buttons']]}")
-                assert_true(all(b["position"] == "absolute" for b in rest["buttons"]),
-                            f"the actions are out of flow at rest: {[(b['title'], b['position']) for b in rest['buttons']]}")
-                assert_true(all(float(b["opacity"]) == 0.0 for b in rest["buttons"]),
-                            f"the actions are invisible at rest: {[(b['title'], b['opacity']) for b in rest['buttons']]}")
-                # The name spans exactly the row minus its paddings and the
-                # lead the icons occupy (name.left - content left), and the
-                # second-line span reaches the same right edge.
-                lead = name["x"] - row["x"] - row["padLeft"]
-                expected = row["w"] - row["padLeft"] - row["padRight"] - lead
-                assert_true(abs(name["w"] - expected) <= 0.5,
-                            f"at rest the name spans the row minus lead icons and paddings: "
-                            f"name {name['w']:.1f}px, expected {expected:.1f}px, row {row['w']:.1f}px")
-                assert_true(abs(line["w"] - name["w"]) <= 0.5,
-                            f"the second-line span reaches the row's right edge too "
-                            f"({line['w']:.1f}px vs name {name['w']:.1f}px)")
+        rest = await row_geo(ids["ops_mid"])
+        row, name, line = rest["row"], rest["name"], rest["line"]
+        assert_true(
+            len(rest["buttons"]) == 4,
+            f"the unstarred row renders its four actions: {[b['title'] for b in rest['buttons']]}")
+        assert_true(
+            all(b["position"] == "absolute" for b in rest["buttons"]),
+            f"the actions are out of flow at rest: {[(b['title'], b['position']) for b in rest['buttons']]}")
+        assert_true(
+            all(float(b["opacity"]) == 0.0 for b in rest["buttons"]),
+            f"the actions are invisible at rest: {[(b['title'], b['opacity']) for b in rest['buttons']]}")
+        # The name spans exactly the row minus its paddings and the
+        # lead the icons occupy (name.left - content left), and the
+        # second-line span reaches the same right edge.
+        lead = name["x"] - row["x"] - row["padLeft"]
+        expected = row["w"] - row["padLeft"] - row["padRight"] - lead
+        assert_true(
+            abs(name["w"] - expected) <= 0.5, f"at rest the name spans the row minus lead icons and paddings: "
+            f"name {name['w']:.1f}px, expected {expected:.1f}px, row {row['w']:.1f}px")
+        assert_true(
+            abs(line["w"] - name["w"]) <= 0.5, f"the second-line span reaches the row's right edge too "
+            f"({line['w']:.1f}px vs name {name['w']:.1f}px)")
 
-                async def hover_row(node_id: str) -> None:
-                    geo = await row_geo(node_id)
-                    await cdp.send("Input.dispatchMouseEvent", {
-                        "type": "mouseMoved",
-                        "x": geo["row"]["x"] + geo["row"]["w"] / 2,
-                        "y": geo["row"]["y"] + geo["row"]["h"] / 2,
-                    }, session_id=session_id)
+        async def hover_row(node_id: str) -> None:
+          geo = await row_geo(node_id)
+          await cdp.send(
+              "Input.dispatchMouseEvent", {
+                  "type": "mouseMoved",
+                  "x": geo["row"]["x"] + geo["row"]["w"] / 2,
+                  "y": geo["row"]["y"] + geo["row"]["h"] / 2,
+              },
+              session_id=session_id)
 
-                async def unhover() -> None:
-                    await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 6, "y": 6},
-                                   session_id=session_id)
+        async def unhover() -> None:
+          await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": 6, "y": 6}, session_id=session_id)
 
-                # Hover through the input pipeline: the four buttons appear
-                # over the text end while the row's height and the text lines
-                # keep their rest layout.
-                await hover_row(ids["ops_mid"])
-                await wait_for(cdp, session_id, f"""
+        # Hover through the input pipeline: the four buttons appear
+        # over the text end while the row's height and the text lines
+        # keep their rest layout.
+        await hover_row(ids["ops_mid"])
+        await wait_for(
+            cdp,
+            session_id,
+            f"""
                     [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
                       .every(b => getComputedStyle(b).opacity === '1')
-                """, timeout=4, label="s29 hover reveals the four buttons")
-                hovered = await row_geo(ids["ops_mid"])
-                hrow, hname, hline = hovered["row"], hovered["name"], hovered["line"]
-                assert_true(abs(hrow["h"] - row["h"]) <= 0.5,
-                            f"the row's height is identical at rest and on hover ({row['h']:.1f}px -> {hrow['h']:.1f}px)")
-                assert_true(abs(hname["w"] - name["w"]) <= 0.5 and abs(hline["w"] - line["w"]) <= 0.5,
-                            f"the text lines keep their rest layout on hover "
-                            f"({name['w']:.1f}/{line['w']:.1f}px -> {hname['w']:.1f}/{hline['w']:.1f}px)")
-                titles = sorted(b["title"] for b in hovered["buttons"])
-                assert_true(titles == sorted(["Star", "New child session", "Archive", "Settings"]),
-                            f"hover exposes exactly the four actions: {titles}")
-                assert_true(all(b["position"] == "absolute" for b in hovered["buttons"]),
-                            "the revealed actions stack out of flow (no reflow)")
-                right_edge = hrow["x"] + hrow["w"] - hrow["padRight"]
-                assert_true(all(abs(b["right"] - (right_edge - 30 * i)) <= 0.5
-                                for i, b in enumerate(sorted(hovered["buttons"], key=lambda b: -b["right"]))),
-                            f"the actions stack right-to-left on the 30px pitch: "
-                            f"{[round(b['right'] - right_edge, 1) for b in hovered['buttons']]}")
-                assert_true(all(b["y"] >= hrow["y"] - 0.5 and b["y"] + b["h"] <= hrow["y"] + hrow["h"] + 0.5
-                                for b in hovered["buttons"]),
-                            "the revealed actions stay inside the row's box")
-                cover = await evaluate(cdp, session_id, f"""
+                """,
+            timeout=4,
+            label="s29 hover reveals the four buttons")
+        hovered = await row_geo(ids["ops_mid"])
+        hrow, hname, hline = hovered["row"], hovered["name"], hovered["line"]
+        assert_true(
+            abs(hrow["h"] - row["h"]) <= 0.5,
+            f"the row's height is identical at rest and on hover ({row['h']:.1f}px -> {hrow['h']:.1f}px)")
+        assert_true(
+            abs(hname["w"] - name["w"]) <= 0.5 and abs(hline["w"] - line["w"]) <= 0.5,
+            f"the text lines keep their rest layout on hover "
+            f"({name['w']:.1f}/{line['w']:.1f}px -> {hname['w']:.1f}/{hline['w']:.1f}px)")
+        titles = sorted(b["title"] for b in hovered["buttons"])
+        assert_true(
+            titles == sorted(["Star", "New child session", "Archive", "Settings"]),
+            f"hover exposes exactly the four actions: {titles}")
+        assert_true(
+            all(b["position"] == "absolute" for b in hovered["buttons"]),
+            "the revealed actions stack out of flow (no reflow)")
+        right_edge = hrow["x"] + hrow["w"] - hrow["padRight"]
+        assert_true(
+            all(
+                abs(b["right"] - (right_edge - 30 * i)) <= 0.5
+                for i, b in enumerate(sorted(hovered["buttons"], key=lambda b: -b["right"]))),
+            f"the actions stack right-to-left on the 30px pitch: "
+            f"{[round(b['right'] - right_edge, 1) for b in hovered['buttons']]}")
+        assert_true(
+            all(
+                b["y"] >= hrow["y"] - 0.5 and b["y"] + b["h"] <= hrow["y"] + hrow["h"] + 0.5
+                for b in hovered["buttons"]), "the revealed actions stay inside the row's box")
+        cover = await evaluate(
+            cdp, session_id, f"""
                     [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
                       .map(b => {{
                         const cs = getComputedStyle(b);
@@ -2220,26 +2778,28 @@ async def run_harness(args: argparse.Namespace) -> None:
                                  coversText: br.left < {name['right']}, opaqueRight: br.right <= {right_edge} + 8.5}};
                       }})
                 """)
-                assert_true(all(c["bg"] == "rgb(23, 32, 51)" and c["image"] for c in cover),
-                            f"the hovered actions sit on the panel+tint cover: {cover}")
-                assert_true(all(c["coversText"] for c in cover),
-                            f"the strip covers the text end (name right {name['right']:.1f}px): {cover}")
-                # The stretched cover: each revealed button's box reaches the
-                # row's top and bottom edges, so no sliver of the name or the
-                # second line shows above or below the strip, and the
-                # hit-test 2px under the name's top edge lands on the cover,
-                # not on the name.
-                extents = sorted(((b["title"], b["y"], b["y"] + b["h"]) for b in hovered["buttons"]),
-                                 key=lambda t: t[1])
-                assert_true(all(b["y"] <= hrow["y"] + 1 and b["y"] + b["h"] >= hrow["y"] + hrow["h"] - 1
-                                for b in hovered["buttons"]),
-                            f"each revealed button spans the row's full height "
-                            f"(row y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px, buttons "
-                            f"{[(t[0], round(t[1], 1), round(t[2], 1)) for t in extents]})")
-                log("    s29 cover extents: row y {:.1f}..{:.1f}px; {}".format(
-                    hrow["y"], hrow["y"] + hrow["h"],
-                    ", ".join(f"{t[0]} y {t[1]:.1f}..{t[2]:.1f}px" for t in extents)))
-                probe = await evaluate(cdp, session_id, f"""
+        assert_true(
+            all(c["bg"] == "rgb(23, 32, 51)" and c["image"] for c in cover),
+            f"the hovered actions sit on the panel+tint cover: {cover}")
+        assert_true(
+            all(c["coversText"] for c in cover),
+            f"the strip covers the text end (name right {name['right']:.1f}px): {cover}")
+        # The stretched cover: each revealed button's box reaches the
+        # row's top and bottom edges, so no sliver of the name or the
+        # second line shows above or below the strip, and the
+        # hit-test 2px under the name's top edge lands on the cover,
+        # not on the name.
+        extents = sorted(((b["title"], b["y"], b["y"] + b["h"]) for b in hovered["buttons"]), key=lambda t: t[1])
+        assert_true(
+            all(b["y"] <= hrow["y"] + 1 and b["y"] + b["h"] >= hrow["y"] + hrow["h"] - 1 for b in hovered["buttons"]),
+            f"each revealed button spans the row's full height "
+            f"(row y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px, buttons "
+            f"{[(t[0], round(t[1], 1), round(t[2], 1)) for t in extents]})")
+        log(
+            "    s29 cover extents: row y {:.1f}..{:.1f}px; {}".format(
+                hrow["y"], hrow["y"] + hrow["h"], ", ".join(f"{t[0]} y {t[1]:.1f}..{t[2]:.1f}px" for t in extents)))
+        probe = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['ops_mid']}');
                       const star = row.querySelector('button[title="Star"]');
@@ -2250,239 +2810,271 @@ async def run_harness(args: argparse.Namespace) -> None:
                               tag: el ? el.tagName : null, title: el ? (el.title || '') : null}};
                     }})()
                 """)
-                assert_true(probe["inside"],
-                            f"elementFromPoint at the Star slot 2px under the name's top edge "
-                            f"(y {hname['y'] + 2:.1f}px) returns the button, not the name: {probe}")
-                await unhover()
-                await wait_for(cdp, session_id, f"""
+        assert_true(
+            probe["inside"], f"elementFromPoint at the Star slot 2px under the name's top edge "
+            f"(y {hname['y'] + 2:.1f}px) returns the button, not the name: {probe}")
+        await unhover()
+        await wait_for(
+            cdp,
+            session_id,
+            f"""
                     [...document.getElementById('session-{ids['ops_mid']}').querySelectorAll(':scope > button')]
                       .every(b => getComputedStyle(b).opacity === '0')
-                """, timeout=4, label="s29 the actions hide again off hover")
+                """,
+            timeout=4,
+            label="s29 the actions hide again off hover")
 
-                # The current session keeps its four buttons in flow at rest,
-                # with the name truncating before them.
-                current = await row_geo(ids["ops_root"])
-                assert_true(len(current["buttons"]) == 4
-                            and all(b["position"] == "static" and float(b["opacity"]) == 1.0
-                                    for b in current["buttons"]),
-                            f"the current row shows its buttons at rest in flow: "
-                            f"{[(b['title'], b['position'], b['opacity']) for b in current['buttons']]}")
-                cur_edge = current["row"]["x"] + current["row"]["w"] - current["row"]["padRight"]
-                assert_true(abs(max(b["right"] for b in current["buttons"]) - cur_edge) <= 0.5,
-                            "the current row's actions end at the row's right content edge")
-                assert_true(current["name"]["right"] <= min(b["left"] for b in current["buttons"]) + 0.5,
-                            f"the current row's name truncates before its buttons "
-                            f"(name right {current['name']['right']:.1f}px, first button left "
-                            f"{min(b['left'] for b in current['buttons']):.1f}px)")
+        # The current session keeps its four buttons in flow at rest,
+        # with the name truncating before them.
+        current = await row_geo(ids["ops_root"])
+        assert_true(
+            len(current["buttons"]) == 4 and
+            all(b["position"] == "static" and float(b["opacity"]) == 1.0 for b in current["buttons"]),
+            f"the current row shows its buttons at rest in flow: "
+            f"{[(b['title'], b['position'], b['opacity']) for b in current['buttons']]}")
+        cur_edge = current["row"]["x"] + current["row"]["w"] - current["row"]["padRight"]
+        assert_true(
+            abs(max(b["right"] for b in current["buttons"]) - cur_edge) <= 0.5,
+            "the current row's actions end at the row's right content edge")
+        assert_true(
+            current["name"]["right"] <= min(b["left"] for b in current["buttons"]) + 0.5,
+            f"the current row's name truncates before its buttons "
+            f"(name right {current['name']['right']:.1f}px, first button left "
+            f"{min(b['left'] for b in current['buttons']):.1f}px)")
 
-                # A starred row shows its solid star at rest, in flow at the
-                # row end, with the other three actions still out of flow.
-                # feature nests under the root manager: its level's container
-                # starts collapsed on a fresh load, so open it before the
-                # reveal walks up to the group's Show-all.
-                await expand_to(cdp, session_id, [ids["root"]])
-                await reveal_row(cdp, session_id, ids["feature"])
-                starred = await row_geo(ids["feature"])
-                star = next(b for b in starred["buttons"] if b["title"] == "Star")
-                others = [b for b in starred["buttons"] if b["title"] != "Star"]
-                assert_true(star["position"] == "static" and float(star["opacity"]) == 1.0,
-                            f"the starred row shows its star at rest: {star}")
-                assert_true(starred["starFill"] == "currentColor",
-                            f"the rest star is solid (fill {starred['starFill']})")
-                star_edge = starred["row"]["x"] + starred["row"]["w"] - starred["row"]["padRight"]
-                assert_true(abs(star["right"] - star_edge) <= 0.5,
-                            f"the rest star sits at the row's right end "
-                            f"(right {star['right']:.1f}px vs edge {star_edge:.1f}px)")
-                assert_true(starred["name"]["right"] <= star["left"] + 0.5,
-                            f"the name truncates before the rest star "
-                            f"(name right {starred['name']['right']:.1f}px vs star left {star['left']:.1f}px)")
-                assert_true(all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in others),
-                            f"the starred row's other actions stay out of flow at rest: "
-                            f"{[(b['title'], b['position'], b['opacity']) for b in others]}")
+        # A starred row shows its solid star at rest, in flow at the
+        # row end, with the other three actions still out of flow.
+        # feature nests under the root manager: its level's container
+        # starts collapsed on a fresh load, so open it before the
+        # reveal walks up to the group's Show-all.
+        await expand_to(cdp, session_id, [ids["root"]])
+        await reveal_row(cdp, session_id, ids["feature"])
+        starred = await row_geo(ids["feature"])
+        star = next(b for b in starred["buttons"] if b["title"] == "Star")
+        others = [b for b in starred["buttons"] if b["title"] != "Star"]
+        assert_true(
+            star["position"] == "static" and float(star["opacity"]) == 1.0,
+            f"the starred row shows its star at rest: {star}")
+        assert_true(starred["starFill"] == "currentColor", f"the rest star is solid (fill {starred['starFill']})")
+        star_edge = starred["row"]["x"] + starred["row"]["w"] - starred["row"]["padRight"]
+        assert_true(
+            abs(star["right"] - star_edge) <= 0.5, f"the rest star sits at the row's right end "
+            f"(right {star['right']:.1f}px vs edge {star_edge:.1f}px)")
+        assert_true(
+            starred["name"]["right"] <= star["left"] + 0.5, f"the name truncates before the rest star "
+            f"(name right {starred['name']['right']:.1f}px vs star left {star['left']:.1f}px)")
+        assert_true(
+            all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in others),
+            f"the starred row's other actions stay out of flow at rest: "
+            f"{[(b['title'], b['position'], b['opacity']) for b in others]}")
 
-                # Star the unstarred row through a real pointer click on the
-                # revealed strip: the in-place toggle paints the rest star, the
-                # pointer leaving leaves it visible, and no list repaint rides
-                # either direction.
-                async def click_star(node_id: str, expect_visible: bool) -> dict:
-                    await hover_row(node_id)
-                    await wait_for(cdp, session_id, f"""
+        # Star the unstarred row through a real pointer click on the
+        # revealed strip: the in-place toggle paints the rest star, the
+        # pointer leaving leaves it visible, and no list repaint rides
+        # either direction.
+        async def click_star(node_id: str, expect_visible: bool) -> dict:
+          await hover_row(node_id)
+          await wait_for(
+              cdp,
+              session_id,
+              f"""
                         [...document.getElementById('session-{node_id}').querySelectorAll(':scope > button')]
                           .every(b => getComputedStyle(b).opacity === '1')
-                    """, timeout=4, label="s29 strip revealed for the star click")
-                    geo = await row_geo(node_id)
-                    btn = next(b for b in geo["buttons"] if b["title"] == "Star")
-                    sx, sy = btn["left"] + btn["w"] / 2, btn["y"] + btn["h"] / 2
-                    for kind in ("mousePressed", "mouseReleased"):
-                        await cdp.send("Input.dispatchMouseEvent", {
-                            "type": kind, "x": sx, "y": sy, "button": "left", "clickCount": 1,
-                        }, session_id=session_id)
-                    wanted = ["!opacity-100", "text-yellow-400"] if expect_visible else ["hover:text-yellow-400"]
-                    wanted_js = "[" + ", ".join(json.dumps(w) for w in wanted) + "]"
-                    await wait_for(cdp, session_id, f"""
+                    """,
+              timeout=4,
+              label="s29 strip revealed for the star click")
+          geo = await row_geo(node_id)
+          btn = next(b for b in geo["buttons"] if b["title"] == "Star")
+          sx, sy = btn["left"] + btn["w"] / 2, btn["y"] + btn["h"] / 2
+          for kind in ("mousePressed", "mouseReleased"):
+            await cdp.send(
+                "Input.dispatchMouseEvent", {
+                    "type": kind,
+                    "x": sx,
+                    "y": sy,
+                    "button": "left",
+                    "clickCount": 1,
+                },
+                session_id=session_id)
+          wanted = ["!opacity-100", "text-yellow-400"] if expect_visible else ["hover:text-yellow-400"]
+          wanted_js = "[" + ", ".join(json.dumps(w) for w in wanted) + "]"
+          await wait_for(
+              cdp,
+              session_id,
+              f"""
                         (() => {{
                           const btn = document.getElementById('star-{node_id}');
                           return btn && {wanted_js}.every(c => btn.classList.contains(c));
                         }})()
-                    """, timeout=6, label=f"s29 star toggle painted {'the rest star' if expect_visible else 'the unstar'} in place")
-                    await unhover()
-                    # The reveal fades over 150ms: measure only once the
-                    # not-forced buttons have finished fading out.
-                    await wait_for(cdp, session_id, f"""
+                    """,
+              timeout=6,
+              label=f"s29 star toggle painted {'the rest star' if expect_visible else 'the unstar'} in place")
+          await unhover()
+          # The reveal fades over 150ms: measure only once the
+          # not-forced buttons have finished fading out.
+          await wait_for(
+              cdp,
+              session_id,
+              f"""
                         [...document.getElementById('session-{node_id}').querySelectorAll(':scope > button')]
                           .filter(b => !b.classList.contains('!opacity-100'))
                           .every(b => getComputedStyle(b).opacity === '0')
-                    """, timeout=4, label="s29 the revealed actions faded out again")
-                    return await row_geo(node_id)
+                    """,
+              timeout=4,
+              label="s29 the revealed actions faded out again")
+          return await row_geo(node_id)
 
-                async def wait_for_mutation(suffix: str, mark: int) -> dict:
-                    deadline = time.monotonic() + 8
-                    while time.monotonic() < deadline:
-                        hits = [m for m in cdp.mutations_since(mark) if m["url"].endswith(suffix)]
-                        if hits:
-                            return hits[0]
-                        await asyncio.sleep(0.2)
-                    raise AssertionError(f"no API mutation against {suffix} within 8s")
+        async def wait_for_mutation(suffix: str, mark: int) -> dict:
+          deadline = time.monotonic() + 8
+          while time.monotonic() < deadline:
+            hits = [m for m in cdp.mutations_since(mark) if m["url"].endswith(suffix)]
+            if hits:
+              return hits[0]
+            await asyncio.sleep(0.2)
+          raise AssertionError(f"no API mutation against {suffix} within 8s")
 
-                # The starred-row reveal scrolled the list: bring the row
-                # under the pointer back on screen before the clicks.
-                await reveal_row(cdp, session_id, ids["ops_mid"])
-                mark = cdp.mutation_mark()
-                toggled = await click_star(ids["ops_mid"], expect_visible=True)
-                star_post = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/star", mark)
-                assert_true(star_post["method"] == "POST", f"the click starred the row through the API: {star_post}")
-                tstar = next(b for b in toggled["buttons"] if b["title"] == "Star")
-                assert_true(tstar["position"] == "static" and float(tstar["opacity"]) == 1.0,
-                            f"the pointer away, the solid star stays at rest: {tstar}")
-                assert_true(toggled["starFill"] == "currentColor",
-                            f"the rest star is solid (fill {toggled['starFill']})")
-                t_edge = toggled["row"]["x"] + toggled["row"]["w"] - toggled["row"]["padRight"]
-                assert_true(abs(tstar["right"] - t_edge) <= 0.5, "the toggled star sits at the row's right end")
-                assert_true(toggled["name"]["right"] <= tstar["left"] + 0.5,
-                            "the name truncates before the toggled rest star")
-                t_others = [b for b in toggled["buttons"] if b["title"] != "Star"]
-                assert_true(all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in t_others),
-                            "the starred row's other actions hid again off hover")
-                fetches = cdp.drain_list_fetches()
-                assert_true(fetches == [], f"the star toggle repainted no list: {fetches}")
+        # The starred-row reveal scrolled the list: bring the row
+        # under the pointer back on screen before the clicks.
+        await reveal_row(cdp, session_id, ids["ops_mid"])
+        mark = cdp.mutation_mark()
+        toggled = await click_star(ids["ops_mid"], expect_visible=True)
+        star_post = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/star", mark)
+        assert_true(star_post["method"] == "POST", f"the click starred the row through the API: {star_post}")
+        tstar = next(b for b in toggled["buttons"] if b["title"] == "Star")
+        assert_true(
+            tstar["position"] == "static" and float(tstar["opacity"]) == 1.0,
+            f"the pointer away, the solid star stays at rest: {tstar}")
+        assert_true(toggled["starFill"] == "currentColor", f"the rest star is solid (fill {toggled['starFill']})")
+        t_edge = toggled["row"]["x"] + toggled["row"]["w"] - toggled["row"]["padRight"]
+        assert_true(abs(tstar["right"] - t_edge) <= 0.5, "the toggled star sits at the row's right end")
+        assert_true(toggled["name"]["right"] <= tstar["left"] + 0.5, "the name truncates before the toggled rest star")
+        t_others = [b for b in toggled["buttons"] if b["title"] != "Star"]
+        assert_true(
+            all(b["position"] == "absolute" and float(b["opacity"]) == 0.0 for b in t_others),
+            "the starred row's other actions hid again off hover")
+        fetches = cdp.drain_list_fetches()
+        assert_true(fetches == [], f"the star toggle repainted no list: {fetches}")
 
-                mark = cdp.mutation_mark()
-                untoggled = await click_star(ids["ops_mid"], expect_visible=False)
-                star_unpost = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/unstar", mark)
-                assert_true(star_unpost["method"] == "POST", f"the second click unstarred the row: {star_unpost}")
-                ustar = next(b for b in untoggled["buttons"] if b["title"] == "Star")
-                assert_true(ustar["position"] == "absolute" and float(ustar["opacity"]) == 0.0,
-                            f"unstarred, the star hides from the rest state again: {ustar}")
-                assert_true(untoggled["starFill"] == "none",
-                            f"the unstarred star is hollow again (fill {untoggled['starFill']})")
-                fetches = cdp.drain_list_fetches()
-                assert_true(fetches == [], f"the unstar repainted no list: {fetches}")
+        mark = cdp.mutation_mark()
+        untoggled = await click_star(ids["ops_mid"], expect_visible=False)
+        star_unpost = await wait_for_mutation(f"/api/sessions/{ids['ops_mid']}/unstar", mark)
+        assert_true(star_unpost["method"] == "POST", f"the second click unstarred the row: {star_unpost}")
+        ustar = next(b for b in untoggled["buttons"] if b["title"] == "Star")
+        assert_true(
+            ustar["position"] == "absolute" and float(ustar["opacity"]) == 0.0,
+            f"unstarred, the star hides from the rest state again: {ustar}")
+        assert_true(
+            untoggled["starFill"] == "none", f"the unstarred star is hollow again (fill {untoggled['starFill']})")
+        fetches = cdp.drain_list_fetches()
+        assert_true(fetches == [], f"the unstar repainted no list: {fetches}")
 
-                shot = await screenshot(cdp, session_id, results, "s29_hover_reveal")
-                results.record("a row's actions take no width until the row is hovered", ok=True,
-                               detail=(f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
-                                       f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
-                                       f"exposes Star/New child session/Archive/Settings on the opaque cover, each "
-                                       f"button spanning the row's full height y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px; "
-                                       f"current row in flow; starred rest star toggles in place, no list repaint"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
-                results.record("a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
+        shot = await screenshot(cdp, session_id, results, "s29_hover_reveal")
+        results.record(
+            "a row's actions take no width until the row is hovered",
+            ok=True,
+            detail=(
+                f"rest name {name['w']:.1f}px of {expected:.1f}px expected on a {row['w']:.1f}px row, "
+                f"second line {line['w']:.1f}px; hover keeps height {row['h']:.1f}px and text layout, "
+                f"exposes Star/New child session/Archive/Settings on the opaque cover, each "
+                f"button spanning the row's full height y {hrow['y']:.1f}..{hrow['y'] + hrow['h']:.1f}px; "
+                f"current row in flow; starred rest star toggles in place, no list repaint"),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s29_hover_reveal_FAILED")
+        results.record(
+            "a row's actions take no width until the row is hovered", ok=False, detail=repr(exc), screenshot=shot)
 
-            # The desktop viewport baseline the touch scenarios must restore.
-            desktop_viewport = await evaluate(
-                cdp, session_id, "window.innerWidth + 'x' + window.innerHeight")
+      # The desktop viewport baseline the touch scenarios must restore.
+      desktop_viewport = await evaluate(cdp, session_id, "window.innerWidth + 'x' + window.innerHeight")
 
-            # ---- S30: the desktop Settings menus' item lists -------------------
-            # Every row kind's gear opens the one shared .row-menu with the
-            # plan's items -- labels, order, separators and red danger items
-            # compared exactly. The Workspace rows first, then the archived
-            # pair in the Archive view; Escape closes between rows and exactly
-            # one .row-menu ever exists.
-            group_name = ids["group_name"]
-            try:
-                log("  s30: the desktop row menus' item lists")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await expand_to(cdp, session_id, [ids["root"], ids["ops_root"]])
-                measured = []
-                for name, node_id, expected in [
-                        ("unbound root manager", ids["ops_root"],
-                         ["Rename", "Move to group…", "Task & context", "Add schedule…"]),
-                        ("child manager", ids["ops_mid"],
-                         ["Rename", "Task & context", "Add schedule…"]),
-                        ("legacy profile-null row", ids["legacy"],
-                         ["Rename", "Move to group…"]),
-                        ("bound root manager", ids["bound_node"],
-                         ["Rename", "Move to group…", "Task & context", "Edit schedule…"]),
-                ]:
-                    await reveal_row(cdp, session_id, node_id)
-                    actual = await open_row_menu(
-                        cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
-                    assert_menu_matches(actual, expected, name)
-                    measured.append(f"{name} {len(actual)}")
-                    await close_row_menu(cdp, session_id, name)
-                header_selector = f"[data-sgroup-toggle-key='{group_name}'] > button[title='Settings']"
-                await evaluate(cdp, session_id, f"""
+      # ---- S30: the desktop Settings menus' item lists -------------------
+      # Every row kind's gear opens the one shared .row-menu with the
+      # plan's items -- labels, order, separators and red danger items
+      # compared exactly. The Workspace rows first, then the archived
+      # pair in the Archive view; Escape closes between rows and exactly
+      # one .row-menu ever exists.
+      group_name = ids["group_name"]
+      try:
+        log("  s30: the desktop row menus' item lists")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await expand_to(cdp, session_id, [ids["root"], ids["ops_root"]])
+        measured = []
+        for name, node_id, expected in [
+            ("unbound root manager", ids["ops_root"], ["Rename", "Move to group…", "Task & context", "Add schedule…"]),
+            ("child manager", ids["ops_mid"], ["Rename", "Task & context", "Add schedule…"]),
+            ("legacy profile-null row", ids["legacy"], ["Rename", "Move to group…"]),
+            ("bound root manager", ids["bound_node"], ["Rename", "Move to group…", "Task & context", "Edit schedule…"]),
+        ]:
+          await reveal_row(cdp, session_id, node_id)
+          actual = await open_row_menu(cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
+          assert_menu_matches(actual, expected, name)
+          measured.append(f"{name} {len(actual)}")
+          await close_row_menu(cdp, session_id, name)
+        header_selector = f"[data-sgroup-toggle-key='{group_name}'] > button[title='Settings']"
+        await evaluate(
+            cdp, session_id, f"""
                     document.querySelector("[data-sgroup-toggle-key='{group_name}']").scrollIntoView({{block: 'center'}})
                 """)
-                actual = await open_row_menu(cdp, session_id, header_selector, "named group header")
-                assert_menu_matches(actual, ["New scheduled task", "Rename group", "sep",
-                                             "Delete group (danger)"], "named group header")
-                measured.append("named group header 4")
-                await close_row_menu(cdp, session_id, "named group header")
+        actual = await open_row_menu(cdp, session_id, header_selector, "named group header")
+        assert_menu_matches(
+            actual, ["New scheduled task", "Rename group", "sep", "Delete group (danger)"], "named group header")
+        measured.append("named group header 4")
+        await close_row_menu(cdp, session_id, "named group header")
 
-                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
-                await wait_for(cdp, session_id,
-                               f"!!document.getElementById('session-{ids['archived_root']}')"
-                               f" && !!document.getElementById('session-{ids['archived_child']}')",
-                               timeout=12, label="the archived rows render")
-                await expand_to(cdp, session_id, [ids["bound_node"]])
-                for name, node_id, expected in [
-                        ("archived root", ids["archived_root"],
-                         ["Move to group…", "sep", "Delete permanently (danger)"]),
-                        ("archived child", ids["archived_child"],
-                         ["Delete permanently (danger)"]),
-                ]:
-                    await reveal_row(cdp, session_id, node_id)
-                    actual = await open_row_menu(
-                        cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
-                    assert_menu_matches(actual, expected, name)
-                    measured.append(f"{name} {len(actual)}")
-                    await close_row_menu(cdp, session_id, name)
-                shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus")
-                results.record("the desktop Settings menus' item lists", ok=True,
-                               detail=("every row kind's gear opens exactly one .row-menu with the plan's "
-                                       "items (item counts: " + ", ".join(measured) + "); Escape closes each"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus_FAILED")
-                results.record("the desktop Settings menus' item lists", ok=False, detail=repr(exc), screenshot=shot)
+        await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+        await wait_for(
+            cdp,
+            session_id, f"!!document.getElementById('session-{ids['archived_root']}')"
+            f" && !!document.getElementById('session-{ids['archived_child']}')",
+            timeout=12,
+            label="the archived rows render")
+        await expand_to(cdp, session_id, [ids["bound_node"]])
+        for name, node_id, expected in [
+            ("archived root", ids["archived_root"], ["Move to group…", "sep", "Delete permanently (danger)"]),
+            ("archived child", ids["archived_child"], ["Delete permanently (danger)"]),
+        ]:
+          await reveal_row(cdp, session_id, node_id)
+          actual = await open_row_menu(cdp, session_id, f"#session-{node_id} > button[title='Settings']", name)
+          assert_menu_matches(actual, expected, name)
+          measured.append(f"{name} {len(actual)}")
+          await close_row_menu(cdp, session_id, name)
+        shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus")
+        results.record(
+            "the desktop Settings menus' item lists",
+            ok=True,
+            detail=(
+                "every row kind's gear opens exactly one .row-menu with the plan's "
+                "items (item counts: " + ", ".join(measured) + "); Escape closes each"),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s30_desktop_row_menus_FAILED")
+        results.record("the desktop Settings menus' item lists", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S30b: the hover reveal stays scoped to the hovered row -------
-            # The live check this slice fixes: the row buttons reveal with
-            # Tailwind's group-hover, which rides every ancestor carrying the
-            # `group` class -- each group section wrapper carries one -- so
-            # hovering anything inside a group section set every row's
-            # out-of-flow buttons in it to opacity 1, painted over those
-            # rows' text without their hover cover. In the seeded named group
-            # (three roots): hovering one row's NAME reveals that row's four
-            # actions alone; hovering the named group header reveals no row's
-            # buttons, while the header's own + and gear keep today's
-            # section-hover reveal.
-            try:
-                log("  s30b: hover scope stays on the hovered row")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await reveal_row(cdp, session_id, ids["alpha_second"])
-                cdp.drain_list_fetches()
+      # ---- S30b: the hover reveal stays scoped to the hovered row -------
+      # The live check this slice fixes: the row buttons reveal with
+      # Tailwind's group-hover, which rides every ancestor carrying the
+      # `group` class -- each group section wrapper carries one -- so
+      # hovering anything inside a group section set every row's
+      # out-of-flow buttons in it to opacity 1, painted over those
+      # rows' text without their hover cover. In the seeded named group
+      # (three roots): hovering one row's NAME reveals that row's four
+      # actions alone; hovering the named group header reveals no row's
+      # buttons, while the header's own + and gear keep today's
+      # section-hover reveal.
+      try:
+        log("  s30b: hover scope stays on the hovered row")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await reveal_row(cdp, session_id, ids["alpha_second"])
+        cdp.drain_list_fetches()
 
-                # One read per hover state: every visible row's non-pinned
-                # buttons (the !opacity-100 pins excluded) with their
-                # computed opacity.
-                async def visible_button_matrix() -> list[dict]:
-                    raw = await evaluate(cdp, session_id, """
+        # One read per hover state: every visible row's non-pinned
+        # buttons (the !opacity-100 pins excluded) with their
+        # computed opacity.
+        async def visible_button_matrix() -> list[dict]:
+          raw = await evaluate(
+              cdp, session_id, """
                         (() => {
                           const rows = [...document.querySelectorAll('#session-list a.session-row')]
                             .filter(a => a.offsetParent !== null);
@@ -2494,91 +3086,115 @@ async def run_harness(args: argparse.Namespace) -> None:
                           })));
                         })()
                     """)
-                    return json.loads(raw)
+          return json.loads(raw)
 
-                async def hover_point(x: float, y: float) -> None:
-                    await cdp.send("Input.dispatchMouseEvent",
-                                   {"type": "mouseMoved", "x": x, "y": y}, session_id=session_id)
-                    await asyncio.sleep(0.3)
+        async def hover_point(x: float, y: float) -> None:
+          await cdp.send("Input.dispatchMouseEvent", {"type": "mouseMoved", "x": x, "y": y}, session_id=session_id)
+          await asyncio.sleep(0.3)
 
-                async def hover_name(node_id: str) -> None:
-                    box = json.loads(await evaluate(cdp, session_id, f"""
+        async def hover_name(node_id: str) -> None:
+          box = json.loads(
+              await evaluate(
+                  cdp, session_id, f"""
                         (() => {{
                           const r = document.querySelector('#session-{node_id} .session-name')
                             .getBoundingClientRect();
                           return JSON.stringify({{x: r.x + r.width / 2, y: r.y + r.height / 2}});
                         }})()
                     """))
-                    await hover_point(box["x"], box["y"])
+          await hover_point(box["x"], box["y"])
 
-                async def assert_hover_scope(hovered_id: str | None,
-                                             label: str) -> tuple[int, int]:
-                    matrix = await visible_button_matrix()
-                    if hovered_id is None:
-                        lit = [(r["id"], b["title"], b["opacity"]) for r in matrix
-                               for b in r["buttons"] if float(b["opacity"]) != 0.0]
-                        assert_true(lit == [], f"the {label} lights row buttons: {lit[:6]}")
-                    else:
-                        hovered = next(r for r in matrix if r["id"] == f"session-{hovered_id}")
-                        titles = sorted(b["title"] for b in hovered["buttons"])
-                        assert_true(titles == ["Archive", "New child session", "Settings", "Star"],
-                                    f"the hovered row reveals its four actions: {titles}")
-                        assert_true(all(float(b["opacity"]) == 1.0 for b in hovered["buttons"]),
-                                    f"the hovered row's actions are visible: {hovered['buttons']}")
-                        lit = [(r["id"], b["title"], b["opacity"])
-                               for r in matrix if r["id"] != f"session-{hovered_id}"
-                               for b in r["buttons"] if float(b["opacity"]) != 0.0]
-                        assert_true(lit == [], f"the {label} lights other rows' buttons: {lit[:6]}")
-                    return len(matrix), sum(len(r["buttons"]) for r in matrix)
+        async def assert_hover_scope(hovered_id: str | None, label: str) -> tuple[int, int]:
+          matrix = await visible_button_matrix()
+          if hovered_id is None:
+            lit = [
+                (r["id"], b["title"], b["opacity"]) for r in matrix for b in r["buttons"] if float(b["opacity"]) != 0.0
+            ]
+            assert_true(lit == [], f"the {label} lights row buttons: {lit[:6]}")
+          else:
+            hovered = next(r for r in matrix if r["id"] == f"session-{hovered_id}")
+            titles = sorted(b["title"] for b in hovered["buttons"])
+            assert_true(
+                titles == ["Archive", "New child session", "Settings", "Star"],
+                f"the hovered row reveals its four actions: {titles}")
+            assert_true(
+                all(float(b["opacity"]) == 1.0 for b in hovered["buttons"]),
+                f"the hovered row's actions are visible: {hovered['buttons']}")
+            lit = [
+                (r["id"], b["title"], b["opacity"]) for r in matrix if r["id"] != f"session-{hovered_id}"
+                for b in r["buttons"] if float(b["opacity"]) != 0.0
+            ]
+            assert_true(lit == [], f"the {label} lights other rows' buttons: {lit[:6]}")
+          return len(matrix), sum(len(r["buttons"]) for r in matrix)
 
-                await hover_name(ids["alpha_second"])
-                rows_h, buttons_h = await assert_hover_scope(ids["alpha_second"], "row hover")
+        await hover_name(ids["alpha_second"])
+        rows_h, buttons_h = await assert_hover_scope(ids["alpha_second"], "row hover")
 
-                header_box = json.loads(await evaluate(cdp, session_id, f"""
+        header_box = json.loads(
+            await evaluate(
+                cdp, session_id, f"""
                     (() => {{
                       const r = document.querySelector(
                         "[data-sgroup-toggle-key='{ids['group_name']}']").getBoundingClientRect();
                       return JSON.stringify({{x: r.x + r.width / 2, y: r.y + r.height / 2}});
                     }})()
                 """))
-                await hover_point(header_box["x"], header_box["y"])
-                rows_g, buttons_g = await assert_hover_scope(None, "group-header hover")
-                await hover_point(6, 6)
+        await hover_point(header_box["x"], header_box["y"])
+        rows_g, buttons_g = await assert_hover_scope(None, "group-header hover")
+        await hover_point(6, 6)
 
-                shot = await screenshot(cdp, session_id, results, "s30b_hover_scope")
-                results.record("the hover reveal stays scoped to the hovered row", ok=True,
-                               detail=(f"hovering one row's name lights its Star/New child session/"
-                                       f"Archive/Settings alone ({rows_h} visible rows, {buttons_h} "
-                                       f"non-pinned buttons checked); hovering the named group header "
-                                       f"lights no row's buttons ({rows_g} rows, {buttons_g} buttons "
-                                       f"checked)"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s30b_hover_scope_FAILED")
-                results.record("the hover reveal stays scoped to the hovered row", ok=False,
-                               detail=repr(exc), screenshot=shot)
+        shot = await screenshot(cdp, session_id, results, "s30b_hover_scope")
+        results.record(
+            "the hover reveal stays scoped to the hovered row",
+            ok=True,
+            detail=(
+                f"hovering one row's name lights its Star/New child session/"
+                f"Archive/Settings alone ({rows_h} visible rows, {buttons_h} "
+                f"non-pinned buttons checked); hovering the named group header "
+                f"lights no row's buttons ({rows_g} rows, {buttons_g} buttons "
+                f"checked)"),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s30b_hover_scope_FAILED")
+        results.record("the hover reveal stays scoped to the hovered row", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S31: touch row actions at 412x915 -----------------------------
-            # The phone input profile (mobile metrics, touch on, hover none and
-            # pointer coarse) drives the drawer sidebar: normal and archived
-            # rows show the Settings gear alone, a starred row keeps its solid
-            # star as a read-only indicator, a worker row keeps Archive, the
-            # named header keeps + and the gear -- every tappable box 44x44 --
-            # and the bound row stays within three name lines. The touch menus
-            # lead with the Later toggle and the touch-only actions; every item
-            # is at least 44px tall.
-            try:
-                log("  s31: touch row actions at 412x915")
-                await cdp.send("Emulation.setDeviceMetricsOverride",
-                               {"mobile": True, "width": 412, "height": 915,
-                                "deviceScaleFactor": 2.625}, session_id=session_id)
-                await cdp.send("Emulation.setTouchEmulationEnabled",
-                               {"enabled": True, "maxTouchPoints": 5}, session_id=session_id)
-                await cdp.send("Emulation.setEmulatedMedia",
-                               {"features": [{"name": "hover", "value": "none"},
-                                             {"name": "pointer", "value": "coarse"}]},
-                               session_id=session_id)
-                emu = json.loads(await evaluate(cdp, session_id, """
+      # ---- S31: touch row actions at 412x915 -----------------------------
+      # The phone input profile (mobile metrics, touch on, hover none and
+      # pointer coarse) drives the drawer sidebar: normal and archived
+      # rows show the Settings gear alone, a starred row keeps its solid
+      # star as a read-only indicator, a worker row keeps Archive, the
+      # named header keeps + and the gear -- every tappable box 44x44 --
+      # and the bound row stays within three name lines. The touch menus
+      # lead with the Later toggle and the touch-only actions; every item
+      # is at least 44px tall.
+      try:
+        log("  s31: touch row actions at 412x915")
+        await cdp.send(
+            "Emulation.setDeviceMetricsOverride", {
+                "mobile": True,
+                "width": 412,
+                "height": 915,
+                "deviceScaleFactor": 2.625
+            },
+            session_id=session_id)
+        await cdp.send(
+            "Emulation.setTouchEmulationEnabled", {
+                "enabled": True,
+                "maxTouchPoints": 5
+            }, session_id=session_id)
+        await cdp.send(
+            "Emulation.setEmulatedMedia",
+            {"features": [{
+                "name": "hover",
+                "value": "none"
+            }, {
+                "name": "pointer",
+                "value": "coarse"
+            }]},
+            session_id=session_id)
+        emu = json.loads(
+            await evaluate(
+                cdp, session_id, """
                     JSON.stringify({
                       hoverNone: matchMedia('(hover: none)').matches,
                       hoverHover: matchMedia('(hover: hover)').matches,
@@ -2586,21 +3202,25 @@ async def run_harness(args: argparse.Namespace) -> None:
                       width: window.innerWidth, height: window.innerHeight,
                     })
                 """))
-                assert_true(emu["hoverNone"] and not emu["hoverHover"] and emu["coarse"],
-                            f"the emulated media profile is a touch device: {emu}")
-                assert_true((emu["width"], emu["height"]) == (412, 915),
-                            f"the emulated viewport is 412x915: {emu}")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await evaluate(cdp, session_id, "toggleMobileSidebar()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('sidebar').classList.contains('open')",
-                               timeout=6, label="the drawer opens")
-                await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
-                touch_numbers = []
+        assert_true(
+            emu["hoverNone"] and not emu["hoverHover"] and emu["coarse"],
+            f"the emulated media profile is a touch device: {emu}")
+        assert_true((emu["width"], emu["height"]) == (412, 915), f"the emulated viewport is 412x915: {emu}")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await evaluate(cdp, session_id, "toggleMobileSidebar()")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('sidebar').classList.contains('open')",
+            timeout=6,
+            label="the drawer opens")
+        await expand_to(cdp, session_id, [ids["root"], ids["feature"]])
+        touch_numbers = []
 
-                async def touch_buttons(node_id: str) -> list[dict]:
-                    raw = await evaluate(cdp, session_id, f"""
+        async def touch_buttons(node_id: str) -> list[dict]:
+          raw = await evaluate(
+              cdp, session_id, f"""
                         (() => {{
                           const row = document.getElementById('session-{node_id}');
                           if (!row) return null;
@@ -2615,42 +3235,41 @@ async def run_harness(args: argparse.Namespace) -> None:
                             .filter(b => b.display !== 'none');
                         }})()
                     """)
-                    assert_true(raw is not None, f"the touch row {node_id} renders")
-                    return raw
+          assert_true(raw is not None, f"the touch row {node_id} renders")
+          return raw
 
-                def assert_tappable(buttons: list[dict], label: str) -> None:
-                    for b in buttons:
-                        if b["pe"] == "none":
-                            continue
-                        assert_true(b["w"] >= 44 and b["h"] >= 44,
-                                    f"{label}: {b['title']} is a 44x44 target, got {b['w']}x{b['h']}")
+        def assert_tappable(buttons: list[dict], label: str) -> None:
+          for b in buttons:
+            if b["pe"] == "none":
+              continue
+            assert_true(
+                b["w"] >= 44 and b["h"] >= 44, f"{label}: {b['title']} is a 44x44 target, got {b['w']}x{b['h']}")
 
-                for node_id, label in ((ids["ops_root"], "normal current row"),
-                                       (ids["late_root"], "normal row")):
-                    await reveal_row(cdp, session_id, node_id)
-                    buttons = await touch_buttons(node_id)
-                    assert_true([b["title"] for b in buttons] == ["Settings"],
-                                f"the {label} shows Settings alone: {buttons}")
-                    assert_tappable(buttons, label)
-                    touch_numbers.append(f"{label} gear {buttons[0]['w']}x{buttons[0]['h']}")
+        for node_id, label in ((ids["ops_root"], "normal current row"), (ids["late_root"], "normal row")):
+          await reveal_row(cdp, session_id, node_id)
+          buttons = await touch_buttons(node_id)
+          assert_true([b["title"] for b in buttons] == ["Settings"], f"the {label} shows Settings alone: {buttons}")
+          assert_tappable(buttons, label)
+          touch_numbers.append(f"{label} gear {buttons[0]['w']}x{buttons[0]['h']}")
 
-                await reveal_row(cdp, session_id, ids["feature"])
-                buttons = await touch_buttons(ids["feature"])
-                assert_true([b["title"] for b in buttons] == ["Star", "Settings"],
-                            f"the starred row shows its star and Settings: {buttons}")
-                assert_true(buttons[0]["pe"] == "none",
-                            f"the rest star is a read-only indicator (pointer-events {buttons[0]['pe']})")
-                assert_tappable(buttons, "starred row")
-                touch_numbers.append(f"star pe {buttons[0]['pe']}, gear {buttons[1]['w']}x{buttons[1]['h']}")
+        await reveal_row(cdp, session_id, ids["feature"])
+        buttons = await touch_buttons(ids["feature"])
+        assert_true(
+            [b["title"] for b in buttons] == ["Star", "Settings"],
+            f"the starred row shows its star and Settings: {buttons}")
+        assert_true(
+            buttons[0]["pe"] == "none", f"the rest star is a read-only indicator (pointer-events {buttons[0]['pe']})")
+        assert_tappable(buttons, "starred row")
+        touch_numbers.append(f"star pe {buttons[0]['pe']}, gear {buttons[1]['w']}x{buttons[1]['h']}")
 
-                await reveal_row(cdp, session_id, ids["worker1"])
-                buttons = await touch_buttons(ids["worker1"])
-                assert_true([b["title"] for b in buttons] == ["Archive"],
-                            f"the worker row keeps Archive alone: {buttons}")
-                assert_tappable(buttons, "worker row")
-                touch_numbers.append(f"worker Archive {buttons[0]['w']}x{buttons[0]['h']}")
+        await reveal_row(cdp, session_id, ids["worker1"])
+        buttons = await touch_buttons(ids["worker1"])
+        assert_true([b["title"] for b in buttons] == ["Archive"], f"the worker row keeps Archive alone: {buttons}")
+        assert_tappable(buttons, "worker row")
+        touch_numbers.append(f"worker Archive {buttons[0]['w']}x{buttons[0]['h']}")
 
-                header_buttons = await evaluate(cdp, session_id, f"""
+        header_buttons = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const header = document.querySelector("[data-sgroup-toggle-key='{group_name}']");
                       if (!header) return null;
@@ -2663,15 +3282,17 @@ async def run_harness(args: argparse.Namespace) -> None:
                       }});
                     }})()
                 """)
-                assert_true(header_buttons is not None
-                            and [b["title"] for b in header_buttons] == ["New session in group", "Settings"],
-                            f"the named header keeps + and gear: {header_buttons}")
-                assert_tappable(header_buttons, "named group header")
-                touch_numbers.append(f"header + {header_buttons[0]['w']}x{header_buttons[0]['h']}, "
-                                     f"gear {header_buttons[1]['w']}x{header_buttons[1]['h']}")
+        assert_true(
+            header_buttons is not None and [b["title"] for b in header_buttons] == ["New session in group", "Settings"],
+            f"the named header keeps + and gear: {header_buttons}")
+        assert_tappable(header_buttons, "named group header")
+        touch_numbers.append(
+            f"header + {header_buttons[0]['w']}x{header_buttons[0]['h']}, "
+            f"gear {header_buttons[1]['w']}x{header_buttons[1]['h']}")
 
-                await reveal_row(cdp, session_id, ids["bound_node"])
-                bound = await evaluate(cdp, session_id, f"""
+        await reveal_row(cdp, session_id, ids["bound_node"])
+        bound = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['bound_node']}');
                       const r = row.getBoundingClientRect();
@@ -2683,100 +3304,122 @@ async def run_harness(args: argparse.Namespace) -> None:
                                limit: Math.round((padY + 3 * lh) * 10) / 10}};
                     }})()
                 """)
-                assert_true(bound["h"] <= bound["limit"],
-                            f"the bound touch row stays within three name lines: {bound}")
-                touch_numbers.append(f"bound row {bound['h']}px <= pad {bound['padY']}px + 3x{bound['lineHeight']}px")
+        assert_true(bound["h"] <= bound["limit"], f"the bound touch row stays within three name lines: {bound}")
+        touch_numbers.append(f"bound row {bound['h']}px <= pad {bound['padY']}px + 3x{bound['lineHeight']}px")
 
-                gear = "#session-{} > button[title='Settings']"
-                # Re-reveal before each open: the geometry reads above scrolled
-                # the list, and a gear below the fold click-tests as nothing.
-                await reveal_row(cdp, session_id, ids["ops_root"])
-                actual = await open_row_menu(
-                    cdp, session_id, gear.format(ids["ops_root"]), "touch unstarred root manager")
-                assert_menu_matches(actual, ["Add to Later", "New child session", "Rename",
-                                             "Move to group…", "Task & context", "Add schedule…",
-                                             "sep", "Archive"], "touch unstarred root manager")
-                touch_numbers.append(f"root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch unstarred root manager')}px")
-                await close_row_menu(cdp, session_id, "touch unstarred root manager")
+        gear = "#session-{} > button[title='Settings']"
+        # Re-reveal before each open: the geometry reads above scrolled
+        # the list, and a gear below the fold click-tests as nothing.
+        await reveal_row(cdp, session_id, ids["ops_root"])
+        actual = await open_row_menu(cdp, session_id, gear.format(ids["ops_root"]), "touch unstarred root manager")
+        assert_menu_matches(
+            actual, [
+                "Add to Later", "New child session", "Rename", "Move to group…", "Task & context", "Add schedule…",
+                "sep", "Archive"
+            ], "touch unstarred root manager")
+        touch_numbers.append(
+            f"root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch unstarred root manager')}px")
+        await close_row_menu(cdp, session_id, "touch unstarred root manager")
 
-                await reveal_row(cdp, session_id, ids["feature"])
-                actual = await open_row_menu(
-                    cdp, session_id, gear.format(ids["feature"]), "touch starred row")
-                assert_true(actual[0] == "Remove from Later",
-                            f"the starred row's first item is Remove from Later: {actual}")
-                assert_menu_matches(actual, ["Remove from Later", "New child session", "Rename",
-                                             "Task & context", "Add schedule…", "sep", "Archive"],
-                                    "touch starred row")
-                await assert_menu_item_heights(cdp, session_id, "touch starred row")
-                await close_row_menu(cdp, session_id, "touch starred row")
+        await reveal_row(cdp, session_id, ids["feature"])
+        actual = await open_row_menu(cdp, session_id, gear.format(ids["feature"]), "touch starred row")
+        assert_true(actual[0] == "Remove from Later", f"the starred row's first item is Remove from Later: {actual}")
+        assert_menu_matches(
+            actual,
+            ["Remove from Later", "New child session", "Rename", "Task & context", "Add schedule…", "sep", "Archive"],
+            "touch starred row")
+        await assert_menu_item_heights(cdp, session_id, "touch starred row")
+        await close_row_menu(cdp, session_id, "touch starred row")
 
-                await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
-                await wait_for(cdp, session_id,
-                               f"!!document.getElementById('session-{ids['archived_root']}')"
-                               f" && !!document.getElementById('session-{ids['archived_child']}')",
-                               timeout=12, label="the archived rows render in the drawer")
-                await expand_to(cdp, session_id, [ids["bound_node"]])
-                for node_id in (ids["archived_root"], ids["archived_child"]):
-                    await reveal_row(cdp, session_id, node_id)
-                    buttons = await touch_buttons(node_id)
-                    assert_true([b["title"] for b in buttons] == ["Settings"],
-                                f"the archived touch row shows Settings alone: {buttons}")
-                    assert_tappable(buttons, "archived row")
-                touch_numbers.append("archived gears 44x44")
+        await evaluate(cdp, session_id, "document.getElementById('filter-archived').click()")
+        await wait_for(
+            cdp,
+            session_id, f"!!document.getElementById('session-{ids['archived_root']}')"
+            f" && !!document.getElementById('session-{ids['archived_child']}')",
+            timeout=12,
+            label="the archived rows render in the drawer")
+        await expand_to(cdp, session_id, [ids["bound_node"]])
+        for node_id in (ids["archived_root"], ids["archived_child"]):
+          await reveal_row(cdp, session_id, node_id)
+          buttons = await touch_buttons(node_id)
+          assert_true(
+              [b["title"] for b in buttons] == ["Settings"], f"the archived touch row shows Settings alone: {buttons}")
+          assert_tappable(buttons, "archived row")
+        touch_numbers.append("archived gears 44x44")
 
-                await reveal_row(cdp, session_id, ids["archived_root"])
-                actual = await open_row_menu(
-                    cdp, session_id, gear.format(ids["archived_root"]), "touch archived root")
-                assert_menu_matches(actual, ["Add to Later", "Unarchive", "Move to group…", "sep",
-                                             "Delete permanently (danger)"], "touch archived root")
-                touch_numbers.append(f"archived root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived root')}px")
-                shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions")
-                await close_row_menu(cdp, session_id, "touch archived root")
+        await reveal_row(cdp, session_id, ids["archived_root"])
+        actual = await open_row_menu(cdp, session_id, gear.format(ids["archived_root"]), "touch archived root")
+        assert_menu_matches(
+            actual, ["Add to Later", "Unarchive", "Move to group…", "sep", "Delete permanently (danger)"],
+            "touch archived root")
+        touch_numbers.append(
+            f"archived root menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived root')}px")
+        shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions")
+        await close_row_menu(cdp, session_id, "touch archived root")
 
-                await reveal_row(cdp, session_id, ids["archived_child"])
-                actual = await open_row_menu(
-                    cdp, session_id, gear.format(ids["archived_child"]), "touch archived child")
-                assert_menu_matches(actual, ["Add to Later", "Unarchive", "sep",
-                                             "Delete permanently (danger)"], "touch archived child")
-                touch_numbers.append(f"archived child menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived child')}px")
-                await close_row_menu(cdp, session_id, "touch archived child")
+        await reveal_row(cdp, session_id, ids["archived_child"])
+        actual = await open_row_menu(cdp, session_id, gear.format(ids["archived_child"]), "touch archived child")
+        assert_menu_matches(
+            actual, ["Add to Later", "Unarchive", "sep", "Delete permanently (danger)"], "touch archived child")
+        touch_numbers.append(
+            f"archived child menu min item {await assert_menu_item_heights(cdp, session_id, 'touch archived child')}px")
+        await close_row_menu(cdp, session_id, "touch archived child")
 
-                results.record("the touch row actions at 412x915", ok=True,
-                               detail=("drawer open at 412x915, hover none + pointer coarse: "
-                                       + "; ".join(touch_numbers)),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions_FAILED")
-                results.record("the touch row actions at 412x915", ok=False, detail=repr(exc), screenshot=shot)
+        results.record(
+            "the touch row actions at 412x915",
+            ok=True,
+            detail=("drawer open at 412x915, hover none + pointer coarse: " + "; ".join(touch_numbers)),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s31_touch_row_actions_FAILED")
+        results.record("the touch row actions at 412x915", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S31b: the scheduled row's Last line at 412x915 ----------------
-            # The second live check this slice fixes: the seeded fire's Last
-            # line was the one schedule line without truncate, so it wrapped
-            # to a second row line on the touch drawer. The paused node
-            # carries the seeded fire (failed + timestamp through
-            # record_scheduled_fire, allow_failure on the task), so its row
-            # shows the four text lines -- name, Disabled, cron - timezone,
-            # Last -- each one line tall, with the Last line truncating like
-            # the cron line above it and carrying its full text in title.
-            try:
-                log("  s31b: the scheduled row's Last line at 412x915")
-                await cdp.send("Emulation.setDeviceMetricsOverride",
-                               {"mobile": True, "width": 412, "height": 915,
-                                "deviceScaleFactor": 2.625}, session_id=session_id)
-                await cdp.send("Emulation.setTouchEmulationEnabled",
-                               {"enabled": True, "maxTouchPoints": 5}, session_id=session_id)
-                await cdp.send("Emulation.setEmulatedMedia",
-                               {"features": [{"name": "hover", "value": "none"},
-                                             {"name": "pointer", "value": "coarse"}]},
-                               session_id=session_id)
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await evaluate(cdp, session_id, "toggleMobileSidebar()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('sidebar').classList.contains('open')",
-                               timeout=6, label="the drawer opens")
-                await reveal_row(cdp, session_id, ids["paused_node"])
-                raw = await evaluate(cdp, session_id, f"""
+      # ---- S31b: the scheduled row's Last line at 412x915 ----------------
+      # The second live check this slice fixes: the seeded fire's Last
+      # line was the one schedule line without truncate, so it wrapped
+      # to a second row line on the touch drawer. The paused node
+      # carries the seeded fire (failed + timestamp through
+      # record_scheduled_fire, allow_failure on the task), so its row
+      # shows the four text lines -- name, Disabled, cron - timezone,
+      # Last -- each one line tall, with the Last line truncating like
+      # the cron line above it and carrying its full text in title.
+      try:
+        log("  s31b: the scheduled row's Last line at 412x915")
+        await cdp.send(
+            "Emulation.setDeviceMetricsOverride", {
+                "mobile": True,
+                "width": 412,
+                "height": 915,
+                "deviceScaleFactor": 2.625
+            },
+            session_id=session_id)
+        await cdp.send(
+            "Emulation.setTouchEmulationEnabled", {
+                "enabled": True,
+                "maxTouchPoints": 5
+            }, session_id=session_id)
+        await cdp.send(
+            "Emulation.setEmulatedMedia",
+            {"features": [{
+                "name": "hover",
+                "value": "none"
+            }, {
+                "name": "pointer",
+                "value": "coarse"
+            }]},
+            session_id=session_id)
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await evaluate(cdp, session_id, "toggleMobileSidebar()")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('sidebar').classList.contains('open')",
+            timeout=6,
+            label="the drawer opens")
+        await reveal_row(cdp, session_id, ids["paused_node"])
+        raw = await evaluate(
+            cdp, session_id, f"""
                     (() => {{
                       const row = document.getElementById('session-{ids['paused_node']}');
                       if (!row) return null;
@@ -2793,71 +3436,85 @@ async def run_harness(args: argparse.Namespace) -> None:
                         lines}});
                     }})()
                 """)
-                assert_true(raw is not None, "the paused scheduled row renders in the drawer")
-                measured = json.loads(raw)
-                lines = measured["lines"]
-                texts = [line["text"] for line in lines]
-                assert_true(len(lines) == 4 and texts[1].startswith("Disabled")
-                            and texts[2].startswith("0 9 * * *") and texts[3].startswith("Last: "),
-                            f"the paused row renders name, Disabled, cron and Last lines: {texts}")
-                for line in lines:
-                    assert_true(line["h"] <= line["lineHeight"] + 1,
-                                f"each text line is one line tall: {line}")
-                last, cron = lines[3], lines[2]
-                assert_true(last["whiteSpace"] == "nowrap" and last["textOverflow"] == "ellipsis"
-                            and last["whiteSpace"] == cron["whiteSpace"]
-                            and last["textOverflow"] == cron["textOverflow"],
-                            f"the Last line truncates like the cron line above it: {last} vs {cron}")
-                assert_true(last["title"] == last["text"] and last["title"].startswith("Last: "),
-                            f"the Last line's title carries its full text: {last!r}")
-                shot = await screenshot(cdp, session_id, results, "s31b_last_line")
-                results.record("the scheduled row's Last line stays on one line at 412x915", ok=True,
-                               detail=(f"paused row {measured['rowH']}px tall; line heights "
-                                       + "/".join(f"{line['h']}" for line in lines)
-                                       + f"px at line-height {lines[0]['lineHeight']}px; the Last line "
-                                         "truncates with an ellipsis like the cron line and its title "
-                                         f"carries the full text ({last['title']})"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s31b_last_line_FAILED")
-                results.record("the scheduled row's Last line stays on one line at 412x915", ok=False,
-                               detail=repr(exc), screenshot=shot)
+        assert_true(raw is not None, "the paused scheduled row renders in the drawer")
+        measured = json.loads(raw)
+        lines = measured["lines"]
+        texts = [line["text"] for line in lines]
+        assert_true(
+            len(lines) == 4 and texts[1].startswith("Disabled") and texts[2].startswith("0 9 * * *") and
+            texts[3].startswith("Last: "), f"the paused row renders name, Disabled, cron and Last lines: {texts}")
+        for line in lines:
+          assert_true(line["h"] <= line["lineHeight"] + 1, f"each text line is one line tall: {line}")
+        last, cron = lines[3], lines[2]
+        assert_true(
+            last["whiteSpace"] == "nowrap" and last["textOverflow"] == "ellipsis" and
+            last["whiteSpace"] == cron["whiteSpace"] and last["textOverflow"] == cron["textOverflow"],
+            f"the Last line truncates like the cron line above it: {last} vs {cron}")
+        assert_true(
+            last["title"] == last["text"] and last["title"].startswith("Last: "),
+            f"the Last line's title carries its full text: {last!r}")
+        shot = await screenshot(cdp, session_id, results, "s31b_last_line")
+        results.record(
+            "the scheduled row's Last line stays on one line at 412x915",
+            ok=True,
+            detail=(
+                f"paused row {measured['rowH']}px tall; line heights " + "/".join(f"{line['h']}" for line in lines) +
+                f"px at line-height {lines[0]['lineHeight']}px; the Last line "
+                "truncates with an ellipsis like the cron line and its title "
+                f"carries the full text ({last['title']})"),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s31b_last_line_FAILED")
+        results.record(
+            "the scheduled row's Last line stays on one line at 412x915", ok=False, detail=repr(exc), screenshot=shot)
 
-            # ---- S32: the cover screen at 280x800 ------------------------------
-            # Same touch emulation at the Z Fold cover width: the drawer clamps
-            # to the screen (its right edge at most 280) and every visible row
-            # entry lies within 0..280.
-            try:
-                log("  s32: the cover-screen drawer at 280x800")
-                await cdp.send("Emulation.setDeviceMetricsOverride",
-                               {"mobile": True, "width": 280, "height": 800,
-                                "deviceScaleFactor": 2.625}, session_id=session_id)
-                cover = json.loads(await evaluate(cdp, session_id, """
+      # ---- S32: the cover screen at 280x800 ------------------------------
+      # Same touch emulation at the Z Fold cover width: the drawer clamps
+      # to the screen (its right edge at most 280) and every visible row
+      # entry lies within 0..280.
+      try:
+        log("  s32: the cover-screen drawer at 280x800")
+        await cdp.send(
+            "Emulation.setDeviceMetricsOverride", {
+                "mobile": True,
+                "width": 280,
+                "height": 800,
+                "deviceScaleFactor": 2.625
+            },
+            session_id=session_id)
+        cover = json.loads(
+            await evaluate(
+                cdp, session_id, """
                     JSON.stringify({
                       hoverNone: matchMedia('(hover: none)').matches,
                       width: window.innerWidth, height: window.innerHeight,
                     })
                 """))
-                assert_true(cover["hoverNone"] and (cover["width"], cover["height"]) == (280, 800),
-                            f"the cover emulation is 280x800 touch: {cover}")
-                await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-                await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-                await evaluate(cdp, session_id, "toggleMobileSidebar()")
-                await wait_for(cdp, session_id,
-                               "document.getElementById('sidebar').classList.contains('open')",
-                               timeout=6, label="the drawer opens on the cover screen")
-                drawer = await evaluate(cdp, session_id, """
+        assert_true(
+            cover["hoverNone"] and (cover["width"], cover["height"]) == (280, 800),
+            f"the cover emulation is 280x800 touch: {cover}")
+        await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+        await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+        await evaluate(cdp, session_id, "toggleMobileSidebar()")
+        await wait_for(
+            cdp,
+            session_id,
+            "document.getElementById('sidebar').classList.contains('open')",
+            timeout=6,
+            label="the drawer opens on the cover screen")
+        drawer = await evaluate(
+            cdp, session_id, """
                     (() => {
                       const r = document.getElementById('sidebar').getBoundingClientRect();
                       return {left: Math.round(r.left * 10) / 10, right: Math.round(r.right * 10) / 10,
                               width: Math.round(r.width * 10) / 10};
                     })()
                 """)
-                assert_true(drawer["right"] <= 280.5,
-                            f"the drawer's right edge stays on the cover screen: {drawer}")
-                # Show the whole (No group) group first: the widest possible row
-                # set is what must fit, not the 5-row preview.
-                sweep = await evaluate(cdp, session_id, """
+        assert_true(drawer["right"] <= 280.5, f"the drawer's right edge stays on the cover screen: {drawer}")
+        # Show the whole (No group) group first: the widest possible row
+        # set is what must fit, not the 5-row preview.
+        sweep = await evaluate(
+            cdp, session_id, """
                     (() => {
                       toggleSessionGroupLimit('');
                       const rows = [...document.querySelectorAll('#session-list a.session-row')]
@@ -2873,35 +3530,44 @@ async def run_harness(args: argparse.Namespace) -> None:
                               sample: rows.slice(0, 4)};
                     })()
                 """)
-                assert_true(sweep["count"] > 0, "rows render in the open drawer")
-                assert_true(sweep["leftmost"] >= -0.5 and sweep["rightmost"] <= 280.5,
-                            f"every visible row lies within 0..280: {sweep}")
-                shot = await screenshot(cdp, session_id, results, "s32_cover_drawer")
-                results.record("the cover-screen drawer at 280x800", ok=True,
-                               detail=(f"drawer right edge {drawer['right']}px of 280 "
-                                       f"(width {drawer['width']}px); {sweep['count']} visible rows within "
-                                       f"0..280, leftmost {sweep['leftmost']}px, rightmost {sweep['rightmost']}px"),
-                               screenshot=shot)
-            except Exception as exc:
-                shot = await screenshot(cdp, session_id, results, "s32_cover_drawer_FAILED")
-                results.record("the cover-screen drawer at 280x800", ok=False, detail=repr(exc), screenshot=shot)
+        assert_true(sweep["count"] > 0, "rows render in the open drawer")
+        assert_true(
+            sweep["leftmost"] >= -0.5 and sweep["rightmost"] <= 280.5, f"every visible row lies within 0..280: {sweep}")
+        shot = await screenshot(cdp, session_id, results, "s32_cover_drawer")
+        results.record(
+            "the cover-screen drawer at 280x800",
+            ok=True,
+            detail=(
+                f"drawer right edge {drawer['right']}px of 280 "
+                f"(width {drawer['width']}px); {sweep['count']} visible rows within "
+                f"0..280, leftmost {sweep['leftmost']}px, rightmost {sweep['rightmost']}px"),
+            screenshot=shot)
+      except Exception as exc:
+        shot = await screenshot(cdp, session_id, results, "s32_cover_drawer_FAILED")
+        results.record("the cover-screen drawer at 280x800", ok=False, detail=repr(exc), screenshot=shot)
 
-            # The touch scenarios leave the desktop emulation behind: media
-            # features cleared, touch off, and the capture viewport pinned back
-            # at its baseline (a bare clear leaves chrome's own window math).
-            # The live document keeps its notified feature set until the next
-            # navigation, so the restored profile is read on a fresh load.
-            await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=session_id)
-            await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=session_id)
-            await cdp.send("Emulation.setTouchEmulationEnabled",
-                           {"enabled": False}, session_id=session_id)
-            base_w, base_h = desktop_viewport.split("x")
-            await cdp.send("Emulation.setDeviceMetricsOverride",
-                           {"mobile": False, "width": int(base_w), "height": int(base_h),
-                            "deviceScaleFactor": 1}, session_id=session_id)
-            await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
-            await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
-            restored = json.loads(await evaluate(cdp, session_id, """
+      # The touch scenarios leave the desktop emulation behind: media
+      # features cleared, touch off, and the capture viewport pinned back
+      # at its baseline (a bare clear leaves chrome's own window math).
+      # The live document keeps its notified feature set until the next
+      # navigation, so the restored profile is read on a fresh load.
+      await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=session_id)
+      await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=session_id)
+      await cdp.send("Emulation.setTouchEmulationEnabled", {"enabled": False}, session_id=session_id)
+      base_w, base_h = desktop_viewport.split("x")
+      await cdp.send(
+          "Emulation.setDeviceMetricsOverride", {
+              "mobile": False,
+              "width": int(base_w),
+              "height": int(base_h),
+              "deviceScaleFactor": 1
+          },
+          session_id=session_id)
+      await cdp.send("Page.navigate", {"url": f"{base}/?session={ids['ops_root']}"}, session_id=session_id)
+      await wait_for(cdp, session_id, SESSION_LIST_READY_JS)
+      restored = json.loads(
+          await evaluate(
+              cdp, session_id, """
                 JSON.stringify({
                   size: window.innerWidth + 'x' + window.innerHeight,
                   hoverHover: matchMedia('(hover: hover)').matches,
@@ -2909,41 +3575,42 @@ async def run_harness(args: argparse.Namespace) -> None:
                   coarse: matchMedia('(pointer: coarse)').matches,
                 })
             """))
-            assert_true(restored["size"] == desktop_viewport and restored["hoverHover"]
-                        and not restored["hoverNone"] and not restored["coarse"],
-                        f"the desktop emulation is restored (baseline {desktop_viewport}): {restored}")
+      assert_true(
+          restored["size"] == desktop_viewport and restored["hoverHover"] and not restored["hoverNone"] and
+          not restored["coarse"], f"the desktop emulation is restored (baseline {desktop_viewport}): {restored}")
 
-            # The CDP collector records console.error calls and uncaught page
-            # exceptions from Runtime.enable onward — this list is the only
-            # source; an assertion over an always-empty list is a faked pass.
-            console_errors = [e for e in cdp.console_errors if "favicon" not in e]
-            results.console_errors = console_errors
-            results.record("console clean", len(console_errors) == 0,
-                           f"{len(console_errors)} console errors" + (f": {console_errors[:3]}" if console_errors else ""),
-                           None)
+      # The CDP collector records console.error calls and uncaught page
+      # exceptions from Runtime.enable onward — this list is the only
+      # source; an assertion over an always-empty list is a faked pass.
+      console_errors = [e for e in cdp.console_errors if "favicon" not in e]
+      results.console_errors = console_errors
+      results.record(
+          "console clean",
+          len(console_errors) == 0,
+          f"{len(console_errors)} console errors" + (f": {console_errors[:3]}" if console_errors else ""), None)
 
-            await cdp.close()
-        finally:
-            # The live-run scenario's real process and its events grower stop
-            # with the harness, whatever the scenarios concluded.
-            handles = ids.get("_live_handles") or {}
-            stop_event = handles.get("stop")
-            if stop_event is not None:
-                stop_event.set()
-            live_process = handles.get("process")
-            stop_child(live_process, grace_s=5, kill_reap_s=5)
-            stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
-            server.should_exit = True
-            try:
-                await asyncio.wait_for(serve_task, timeout=10)
-            except Exception as exc:
-                log(f"server stop: {exc!r}")
+      await cdp.close()
+    finally:
+      # The live-run scenario's real process and its events grower stop
+      # with the harness, whatever the scenarios concluded.
+      handles = ids.get("_live_handles") or {}
+      stop_event = handles.get("stop")
+      if stop_event is not None:
+        stop_event.set()
+      live_process = handles.get("process")
+      stop_child(live_process, grace_s=5, kill_reap_s=5)
+      stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
+      server.should_exit = True
+      try:
+        await asyncio.wait_for(serve_task, timeout=10)
+      except Exception as exc:
+        log(f"server stop: {exc!r}")
 
-    results.save()
-    failed = [s for s in results.scenarios if not s["ok"]]
-    if failed:
-        fail(f"{len(failed)} scenario(s) failed: {[f['name'] for f in failed]}")
-    log("BROWSER HARNESS PASSED")
+  results.save()
+  failed = [s for s in results.scenarios if not s["ok"]]
+  if failed:
+    fail(f"{len(failed)} scenario(s) failed: {[f['name'] for f in failed]}")
+  log("BROWSER HARNESS PASSED")
 
 
 def main() -> None:

@@ -1,36 +1,27 @@
 from __future__ import annotations
 
 import io
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
+import fastapi
 import pytest
-from conftest import (
-    CHAT_CREATE_LOGGED_TASK_PATCH_TARGET,
-    CHAT_RUN_AND_FINALIZE_PATCH_TARGET,
-    close_create_logged_task,
-    make_home_config,
-)
-from fastapi import UploadFile
 
-from src.api.chat import send_message, upload_file
-from src.core.models import (
-    SendMessageRequest,
-    SessionMetadata,
-    UploadedFileRef,
-)
+from src.api import chat
+from src.core import models
 
 
 @pytest.mark.asyncio
-async def test_upload_file_strips_directory_components(tmp_path: Path) -> None:
-  cfg = make_home_config(tmp_path)
-  meta = SessionMetadata(name="Upload Session")
+async def test_upload_file_strips_directory_components(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.make_home_config(tmp_path)
+  meta = models.SessionMetadata(name="Upload Session")
   outside_path = cfg.sessions_dir / "evil.txt"
   outside_path.parent.mkdir(parents=True)
   outside_path.write_text("do not overwrite", encoding="utf-8")
-  upload = UploadFile(file=io.BytesIO(b"safe contents"), filename="../../evil.txt")
+  upload = fastapi.UploadFile(file=io.BytesIO(b"safe contents"), filename="../../evil.txt")
 
-  response = await upload_file(
+  response = await chat.upload_file(
       meta.id,
       upload,
       _meta=meta,
@@ -44,22 +35,22 @@ async def test_upload_file_strips_directory_components(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path: Path) -> None:
-  cfg = make_home_config(tmp_path)
-  meta = SessionMetadata(name="Test Session")
-  session_mgr = AsyncMock()
-  req = SendMessageRequest(
+async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.make_home_config(tmp_path)
+  meta = models.SessionMetadata(name="Test Session")
+  session_mgr = mock.AsyncMock()
+  req = models.SendMessageRequest(
       content="Summarize this",
       uploaded_files=[
-          UploadedFileRef(filename="notes.txt", path="/tmp/notes.txt", size=12),
+          models.UploadedFileRef(filename="notes.txt", path="/tmp/notes.txt", size=12),
       ],
   )
 
   with (
-      patch(CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=AsyncMock()) as mock_run,
-      patch(CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=close_create_logged_task),
+      mock.patch(conftest.CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=mock.AsyncMock()) as mock_run,
+      mock.patch(conftest.CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.close_create_logged_task),
   ):
-    response = await send_message(
+    response = await chat.send_message(
         meta.id,
         req,
         meta=meta,

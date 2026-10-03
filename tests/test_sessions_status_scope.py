@@ -15,8 +15,13 @@ from conftest import make_sessions_client as _build_client
 
 from src.api import sessions as sessions_api
 from src.core import sidebar_state, thinking_state
-from src.core.models import CreateSessionRequest, SessionMetadata
-from src.core.sessions import SessionManager, _iter_trigger_stats, selective_probe_sidebar_state
+from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
+from src.core.sessions import (
+    SessionManager,
+    _iter_trigger_stats,
+    _listing_row_copy,
+    selective_probe_sidebar_state,
+)
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,6 +218,23 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   assert row.has_pending_plan_approval is False
   row.has_unread = True  # a caller mutation must never reach the shared cache
   assert (await session_mgr.list_sessions(**flags))[0].has_unread is False
+
+  # The row copy's fast path must stay dump- and field-set-equal to the
+  # pydantic copy it replaces: a SessionMetadata config change (extra="allow",
+  # private attrs) would otherwise take the new state out of the copy
+  # silently and corrupt every listing row.
+  update = {
+      "thinking_since": thinking_state.busy_since(session.id),
+      "run_backend": None,
+      "has_unread": True,
+      "has_running_tasks": True,
+      "status": SessionStatus.ARCHIVED,
+  }
+  for meta in await session_mgr._load_session_metas():
+    fast = _listing_row_copy(meta, update)
+    reference = meta.model_copy(update=update)
+    assert fast.model_dump() == reference.model_dump()
+    assert fast.__pydantic_fields_set__ == reference.__pydantic_fields_set__
 
 
 @pytest.mark.asyncio

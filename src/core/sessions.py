@@ -294,6 +294,24 @@ def _apply_sidebar_state(
       meta.has_pending_plan_approval = entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL]
 
 
+def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionMetadata:
+  """Return *meta* as a caller-safe listing row carrying *update*, as ``model_copy`` would.
+
+  SessionMetadata runs the default model config — unknown keys ignored, no
+  private attrs, no computed fields — so a row's ancillary state is
+  ``__pydantic_fields_set__`` alone and the copy reduces to the field dict
+  plus that set. The listing row test pins the result dump- and field-set-
+  equal to ``model_copy(update=...)``; a model-config change (extra="allow",
+  private attrs) must extend the copy with the new state in the same change.
+  """
+  row = SessionMetadata.__new__(SessionMetadata)
+  object.__setattr__(row, "__dict__", {**meta.__dict__, **update})
+  object.__setattr__(row, "__pydantic_extra__", None)
+  object.__setattr__(row, "__pydantic_fields_set__", meta.__pydantic_fields_set__ | update.keys())
+  object.__setattr__(row, "__pydantic_private__", None)
+  return row
+
+
 # ---------------------------------------------------------------------------
 # Sidebar probe cores — pure path-in/result-out functions shared by the
 # per-session probe methods below and by the poll's serial re-probe (one
@@ -1336,8 +1354,8 @@ class SessionManager:
         include_pending_plan_approval=include_pending_plan_approval,
     )
     return [
-        meta.model_copy(
-            update={
+        _listing_row_copy(
+            meta, {
                 "thinking_since": busy_since(meta.id),
                 "run_backend": run_backend(meta.id),
                 **derived[meta.id],

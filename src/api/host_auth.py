@@ -1,30 +1,16 @@
 """The host-auth panel: the standing probe poller and its page, status, and probe routes."""
 
 import asyncio
-from datetime import datetime
+import datetime
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+import fastapi
+from fastapi import responses
 
-from src.api.pages import _templates
-from src.core.host_auth import (
-    BLOCKED_BACKOFF_SEC,
-    PROBE_INTERVAL_SEC,
-    STATUS_NEEDS_INTERACTIVE_AUTH,
-    STATUS_NEEDS_OKTA,
-    STATUS_OK,
-    STATUS_UNREACHABLE,
-    TRUST_CACHE_TTL_SEC,
-    derive_estimate,
-    load_state,
-    run_round,
-)
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now
-from src.core.tasks import SingleTaskPoller, create_logged_task
+from src.api import pages
+from src.core import host_auth, log_once, models, tasks
 
-log = LazyStructlogLogger()
-router = APIRouter()
+log = log_once.LazyStructlogLogger()
+router = fastapi.APIRouter()
 
 # One round at a time holds the state file: the flag is set and read
 # synchronously on the event loop, so a second probe request that arrives while
@@ -32,16 +18,16 @@ router = APIRouter()
 _round_running = False
 
 _STATUS_LABELS = {
-    STATUS_OK: "Direct",
-    STATUS_NEEDS_OKTA: "Needs Okta",
-    STATUS_NEEDS_INTERACTIVE_AUTH: "Needs interactive auth",
-    STATUS_UNREACHABLE: "Unreachable",
+    host_auth.STATUS_OK: "Direct",
+    host_auth.STATUS_NEEDS_OKTA: "Needs Okta",
+    host_auth.STATUS_NEEDS_INTERACTIVE_AUTH: "Needs interactive auth",
+    host_auth.STATUS_UNREACHABLE: "Unreachable",
 }
 _STATUS_CLASSES = {
-    STATUS_OK: "ok",
-    STATUS_NEEDS_OKTA: "okta",
-    STATUS_NEEDS_INTERACTIVE_AUTH: "iact",
-    STATUS_UNREACHABLE: "down",
+    host_auth.STATUS_OK: "ok",
+    host_auth.STATUS_NEEDS_OKTA: "okta",
+    host_auth.STATUS_NEEDS_INTERACTIVE_AUTH: "iact",
+    host_auth.STATUS_UNREACHABLE: "down",
 }
 # A countdown under a day is highlighted, so the renewal lands at a moment the
 # operator chooses rather than in a pod restart.
@@ -52,7 +38,7 @@ def _local_timestamp(moment_iso: str | None, fmt: str) -> str | None:
   """Render a stored ISO timestamp in the server's own zone, or None when absent."""
   if moment_iso is None:
     return None
-  return datetime.fromisoformat(moment_iso).astimezone().strftime(fmt)
+  return datetime.datetime.fromisoformat(moment_iso).astimezone().strftime(fmt)
 
 
 def _format_remaining(seconds: float) -> str:
@@ -67,7 +53,7 @@ def _format_remaining(seconds: float) -> str:
   return f"{minutes} m"
 
 
-def _page_rows(state: dict, now: datetime) -> list[dict]:
+def _page_rows(state: dict, now: datetime.datetime) -> list[dict]:
   """One template row per state entry, with the deadline column's mode resolved.
 
   The deadline column counts only for a host that answers and carries a
@@ -96,8 +82,8 @@ def _page_rows(state: dict, now: datetime) -> list[dict]:
         "expires": None,
         "under_24h": False,
     }
-    if status == STATUS_OK:
-      estimate = derive_estimate(entry, now)
+    if status == host_auth.STATUS_OK:
+      estimate = host_auth.derive_estimate(entry, now)
       row["expires"] = _local_timestamp(estimate["estimated_expires_at"], "%Y-%m-%d %H:%M %Z")
       if baseline is None:
         row["deadline_kind"] = "no_baseline"
@@ -107,20 +93,20 @@ def _page_rows(state: dict, now: datetime) -> list[dict]:
         row["deadline_kind"] = "counting"
         row["remaining"] = _format_remaining(estimate["remaining_sec"])
         row["under_24h"] = estimate["remaining_sec"] < _AMBER_UNDER_SEC
-    elif status == STATUS_NEEDS_OKTA:
+    elif status == host_auth.STATUS_NEEDS_OKTA:
       row["deadline_kind"] = "pending_okta"
     rows.append(row)
   return rows
 
 
-def _summary(state: dict, now: datetime) -> dict:
+def _summary(state: dict, now: datetime.datetime) -> dict:
   """The page-top summary: the hosts held right now, then the soonest estimated expiry."""
-  blocked = [entry["alias"] for entry in state["hosts"] if entry["status"] == STATUS_NEEDS_OKTA]
+  blocked = [entry["alias"] for entry in state["hosts"] if entry["status"] == host_auth.STATUS_NEEDS_OKTA]
   soonest: tuple[float, str] | None = None
   for entry in state["hosts"]:
-    if entry["status"] != STATUS_OK:
+    if entry["status"] != host_auth.STATUS_OK:
       continue
-    remaining = derive_estimate(entry, now)["remaining_sec"]
+    remaining = host_auth.derive_estimate(entry, now)["remaining_sec"]
     if remaining is None or remaining <= 0:
       continue
     if soonest is None or remaining < soonest[0]:
@@ -132,12 +118,12 @@ def _summary(state: dict, now: datetime) -> dict:
   }
 
 
-@router.get("/host-auth", response_class=HTMLResponse)
-async def host_auth_page(request: Request) -> HTMLResponse:
+@router.get("/host-auth", response_class=responses.HTMLResponse)
+async def host_auth_page(request: fastapi.Request) -> responses.HTMLResponse:
   """Render the standing status page from the state file, server-side and page-JavaScript-free."""
-  state = load_state()
-  now = utc_now()
-  return _templates().TemplateResponse(
+  state = host_auth.load_state()
+  now = models.utc_now()
+  return pages._templates().TemplateResponse(
       request,
       "host_auth.html",
       context={
@@ -145,24 +131,24 @@ async def host_auth_page(request: Request) -> HTMLResponse:
           "hosts": _page_rows(state, now),
           "summary": _summary(state, now),
           "last_probe": _local_timestamp(state.get("probed_at"), "%Y-%m-%d %H:%M %Z"),
-          "interval_label": f"{PROBE_INTERVAL_SEC // 60} min",
-          "backoff_label": f"{BLOCKED_BACKOFF_SEC // 3600} h",
-          "ttl_label": f"{TRUST_CACHE_TTL_SEC // 86400} days",
+          "interval_label": f"{host_auth.PROBE_INTERVAL_SEC // 60} min",
+          "backoff_label": f"{host_auth.BLOCKED_BACKOFF_SEC // 3600} h",
+          "ttl_label": f"{host_auth.TRUST_CACHE_TTL_SEC // 86400} days",
       },
   )
 
 
 @router.get("/api/host-auth/status")
-async def host_auth_status() -> JSONResponse:
+async def host_auth_status() -> responses.JSONResponse:
   """The state file content plus each host's derived ``estimated_expires_at`` / ``remaining_sec``."""
-  state = load_state()
-  now = utc_now()
-  hosts = [{**entry, **derive_estimate(entry, now)} for entry in state["hosts"]]
-  return JSONResponse({**state, "hosts": hosts})
+  state = host_auth.load_state()
+  now = models.utc_now()
+  hosts = [{**entry, **host_auth.derive_estimate(entry, now)} for entry in state["hosts"]]
+  return responses.JSONResponse({**state, "hosts": hosts})
 
 
 @router.post("/api/host-auth/probe")
-async def host_auth_probe() -> RedirectResponse:
+async def host_auth_probe() -> responses.RedirectResponse:
   """Start a backoff-free probe round and return to the page.
 
   A round already in flight is reused: the redirect lands on a page that
@@ -171,17 +157,17 @@ async def host_auth_probe() -> RedirectResponse:
   """
   global _round_running
   if _round_running:
-    return RedirectResponse("/host-auth", status_code=303)
+    return responses.RedirectResponse("/host-auth", status_code=303)
   _round_running = True
-  create_logged_task(_manual_round(), name="host-auth-manual-round")
-  return RedirectResponse("/host-auth", status_code=303)
+  tasks.create_logged_task(_manual_round(), name="host-auth-manual-round")
+  return responses.RedirectResponse("/host-auth", status_code=303)
 
 
 async def _manual_round() -> None:
   """The manual probe round: force, one at a time, failures logged and absorbed."""
   global _round_running
   try:
-    await run_round(force=True)
+    await host_auth.run_round(force=True)
   except Exception:
     log.exception("host_auth_manual_round_failed")
   finally:
@@ -195,7 +181,7 @@ async def _poller_round() -> None:
     return
   _round_running = True
   try:
-    await run_round(force=False)
+    await host_auth.run_round(force=False)
   finally:
     _round_running = False
 
@@ -207,9 +193,9 @@ async def _poll_loop() -> None:
       await _poller_round()
     except Exception:
       log.exception("host_auth_poll_error")
-    await asyncio.sleep(PROBE_INTERVAL_SEC)
+    await asyncio.sleep(host_auth.PROBE_INTERVAL_SEC)
 
 
-_poller = SingleTaskPoller(_poll_loop, log, "host_auth_poller_started", "host_auth_poller_stopped")
+_poller = tasks.SingleTaskPoller(_poll_loop, log, "host_auth_poller_started", "host_auth_poller_stopped")
 start_poller = _poller.start
 stop_poller = _poller.stop

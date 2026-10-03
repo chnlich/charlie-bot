@@ -1524,7 +1524,7 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS
 # import resolve_binary`) get a ``*_RESOLVE_BINARY_PATCH_TARGET`` on their own module,
 # where monkeypatch.setattr lands the stand-in and the __init__ reads the helper at
 # call time and never probes PATH, while sibling backends binding the same helper keep
-# their own namespaces. codex_cli, gemini_cli and antigravity_cli instead read the helper
+# their own namespaces. codex, gemini_cli and antigravity_cli instead read the helper
 # through the base module at call time (`base.resolve_binary`, module-style import), so
 # their targets are the shared base attribute; a stand-in there reaches all three
 # backends' __init__ because the import-scope siblings read their own bindings. The backend start contract spawns through the

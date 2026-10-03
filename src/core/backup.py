@@ -1,16 +1,14 @@
 """Core backup logic for a CharlieBot profile's state directory."""
 
+import datetime
+import pathlib
 import tarfile
-from datetime import datetime
-from pathlib import Path
 
 from isal import igzip
 
-from src.core.config import CREDENTIALS_FILENAME, charliebot_home_dir
-from src.core.log_once import LazyStructlogLogger
-from src.core.threads import THREADS_DIR_NAME
+from src.core import config, log_once, threads
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # isal's fast tier: levels 1 and 2 price identically (isal-3 is the slow tier),
 # and level 1 keeps the same compresslevel the request path's gzip_level1 runs.
@@ -20,17 +18,17 @@ log = LazyStructlogLogger()
 _BACKUP_COMPRESS_LEVEL = 1
 
 
-def charliebot_dir() -> Path:
+def charliebot_dir() -> pathlib.Path:
   """The state directory being backed up: this profile's home."""
-  return charliebot_home_dir()
+  return config.charliebot_home_dir()
 
 
-def backup_dir() -> Path:
+def backup_dir() -> pathlib.Path:
   """Where this profile's archives are written, a sibling of its home.
 
   The default home yields ``~/.charliebot_backup``.
   """
-  home = charliebot_home_dir()
+  home = config.charliebot_home_dir()
   return home.with_name(home.name + '_backup')
 
 
@@ -46,27 +44,27 @@ _MONTHLY_THRESHOLD = 90
 
 def _should_exclude(arcname: str) -> bool:
   """Return True if the archive member (relative path) should be excluded."""
-  parts = Path(arcname).parts
+  parts = pathlib.Path(arcname).parts
   for part in parts:
     # CREDENTIALS_FILENAME is the profile's secrets file; it must never ride a
     # backup, which the retention policy keeps for up to 90 days.
-    if part in ('.git', '.claude', CREDENTIALS_FILENAME, '__pycache__') or part.endswith('.pyc'):
+    if part in ('.git', '.claude', config.CREDENTIALS_FILENAME, '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
-  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == THREADS_DIR_NAME
+  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == threads.THREADS_DIR_NAME
 
 
-def _parse_backup_date(name: str) -> datetime | None:
+def _parse_backup_date(name: str) -> datetime.datetime | None:
   """Parse datetime from a backup filename like charliebot-20260101-120000.tar.gz."""
   try:
     ts_part = name.removeprefix(_BACKUP_PREFIX).removesuffix(_BACKUP_SUFFIX)
-    return datetime.strptime(ts_part, _TIMESTAMP_FMT)
+    return datetime.datetime.strptime(ts_part, _TIMESTAMP_FMT)
   except (ValueError, AttributeError) as e:
     log.debug('backup_parse_date_failed', name=name, error=str(e))
     return None
 
 
-def create_backup() -> Path:
+def create_backup() -> pathlib.Path:
   """Create a compressed backup of this profile's state directory.
 
   Excludes: .git, .claude, credentials.yaml, sessions/*/threads, *.pyc, __pycache__.
@@ -78,10 +76,10 @@ def create_backup() -> Path:
   """
   target_dir = backup_dir()
   target_dir.mkdir(parents=True, exist_ok=True)
-  ts = datetime.now().strftime(_TIMESTAMP_FMT)
+  ts = datetime.datetime.now().strftime(_TIMESTAMP_FMT)
   archive_path = target_dir / f'{_BACKUP_PREFIX}{ts}{_BACKUP_SUFFIX}'
 
-  def _add_recursive(tar: tarfile.TarFile, path: Path, arcname: str) -> None:
+  def _add_recursive(tar: tarfile.TarFile, path: pathlib.Path, arcname: str) -> None:
     if _should_exclude(arcname):
       return
     try:
@@ -96,7 +94,7 @@ def create_backup() -> Path:
         log.warning('backup_skip_dir', path=str(path), error=str(e))
         return
       for child in children:
-        _add_recursive(tar, child, str(Path(arcname) / child.name))
+        _add_recursive(tar, child, str(pathlib.Path(arcname) / child.name))
 
   # The tar stream rides one isal IGzipFile — the state dir's gigabyte-scale
   # sessions corpus priced stdlib's level-9 stream at ~110 MB/s (the M112
@@ -128,7 +126,7 @@ def apply_retention() -> None:
   target_dir = backup_dir()
   if not target_dir.exists():
     return
-  now = datetime.now()
+  now = datetime.datetime.now()
   for backup_file in target_dir.glob(f'{_BACKUP_PREFIX}*{_BACKUP_SUFFIX}'):
     backup_date = _parse_backup_date(backup_file.name)
     if backup_date is None:

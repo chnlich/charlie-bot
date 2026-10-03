@@ -10,48 +10,48 @@ handler calls the same function, so the two cannot drift.
 import argparse
 import sys
 
-from src.cli.help_formatter import CliHelpFormatter
-from src.core.constants import MIN_IDLE_DAYS
+from src.cli import help_formatter
+from src.core import constants
 
 
 def _cmd_cool(args: argparse.Namespace) -> None:
   # The sweep and config stacks ride the one sweep command that needs them: a
   # deferral here keeps --help and parser errors off their import chains (the
   # src.cli.config deferral shape).
-  from src.core.config import get_config
-  from src.core.storage_cool import format_sweep_table, run_cool_sweep
+  from src.core import config, storage_cool
 
   try:
-    result = run_cool_sweep(
+    result = storage_cool.run_cool_sweep(
         dry_run=args.dry_run,
         min_idle_days=args.min_idle_days,
         session_id=args.session,
         vacuum=args.vacuum,
         force=args.force,
-        cfg=get_config(),
+        cfg=config.get_config(),
     )
   except ValueError as e:
     print(f"Error: {e}", file=sys.stderr)
     sys.exit(1)
-  print(format_sweep_table(result))
+  print(storage_cool.format_sweep_table(result))
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="CharlieBot storage reclamation", formatter_class=CliHelpFormatter)
+  parser = argparse.ArgumentParser(
+      description="CharlieBot storage reclamation", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
   cool = sub.add_parser(
       "cool",
       help="Delete transport logs and backend records of cold sessions",
-      formatter_class=CliHelpFormatter,
+      formatter_class=help_formatter.CliHelpFormatter,
       description="Delete the bytes no reader can reach again: cold sessions' raw transport files and backend "
       "conversation stores of cold or orphaned sessions.")
   cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")
   cool.add_argument(
       "--min-idle-days",
       type=int,
-      default=MIN_IDLE_DAYS,
-      help=f"Idle age (days) at which an archived session counts as cold (default: {MIN_IDLE_DAYS}).")
+      default=constants.MIN_IDLE_DAYS,
+      help=f"Idle age (days) at which an archived session counts as cold (default: {constants.MIN_IDLE_DAYS}).")
   cool.add_argument("--session", help="Limit the whole sweep to one session; the cold rule still applies.")
   cool.add_argument(
       "--vacuum",

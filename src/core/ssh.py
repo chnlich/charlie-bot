@@ -2,7 +2,7 @@
 
 import os
 
-from src.core.timeouts import SSH_CONNECT_TIMEOUT
+from src.core import timeouts
 
 # Connection reuse for the probe family. Every remote probe paid one full ssh
 # handshake (TCP + KEX + auth, ~0.85 s to this deployment's SLURM login host)
@@ -41,7 +41,7 @@ def ssh_cmd(host: str, *remote_argv: str) -> list[str]:
       "-o",
       "BatchMode=yes",
       "-o",
-      f"ConnectTimeout={SSH_CONNECT_TIMEOUT}",
+      f"ConnectTimeout={timeouts.SSH_CONNECT_TIMEOUT}",
       "-o",
       "ControlMaster=auto",
       "-o",

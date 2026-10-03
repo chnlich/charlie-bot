@@ -15,11 +15,9 @@ import tempfile
 import termios
 from typing import TYPE_CHECKING
 
-from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.log_once import LazyStructlogLogger
-from src.core.timeouts import PTY_WS_RECV_TIMEOUT
+from src.core import constants, log_once, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 PTY_INPUT = "pty_input"
 PTY_OUTPUT = "pty_output"
@@ -39,7 +37,7 @@ _PTY_CLIENT_TERM = "xterm-256color"
 # the tmux helpers); the WS-facing relay below is the only fastapi consumer, so its
 # imports stay inside that function and the WebSocket type rides TYPE_CHECKING.
 if TYPE_CHECKING:
-  from fastapi import WebSocket
+  import fastapi
 
 
 def _tmux_binary() -> str:
@@ -57,7 +55,7 @@ def tmux_session_name(session_id: str) -> str:
 
 def _tmux_client_env() -> dict[str, str]:
   env = {**os.environ}
-  env.pop(SESSION_ID_ENV_VAR, None)
+  env.pop(constants.SESSION_ID_ENV_VAR, None)
   return env
 
 
@@ -230,7 +228,7 @@ class PtyAttachment:
         os.waitpid(self.pid, os.WNOHANG)
 
 
-async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> None:
+async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: fastapi.WebSocket) -> None:
   """Forward bytes from the PTY to the WebSocket as base64 `pty_output` events."""
   loop = asyncio.get_running_loop()
   q: asyncio.Queue = asyncio.Queue()
@@ -276,13 +274,13 @@ async def _pump_pty_to_ws(attachment: PtyAttachment, websocket: WebSocket) -> No
     log.debug("tui_pty_exit_send_failed", session_id=attachment.session_id, error=str(e))
 
 
-async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pump_name: str) -> None:
+async def _run_pty_relay(websocket: fastapi.WebSocket, attachment: PtyAttachment, *, pump_name: str) -> None:
   """Run the bidirectional PTY↔WebSocket relay until the WebSocket drops.
 
   Starts the PTY→WS pump, forwards browser `pty_input`/`pty_resize` messages to
   the PTY, then on exit cancels the pump and closes the attachment.
   """
-  from fastapi import WebSocketDisconnect
+  import fastapi
 
   pump_task = asyncio.create_task(
       _pump_pty_to_ws(attachment, websocket),
@@ -291,7 +289,7 @@ async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pum
   try:
     while True:
       try:
-        raw = await asyncio.wait_for(websocket.receive_text(), timeout=PTY_WS_RECV_TIMEOUT)
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeouts.PTY_WS_RECV_TIMEOUT)
       except TimeoutError:
         try:
           await websocket.send_json({"type": "ping"})
@@ -299,7 +297,7 @@ async def _run_pty_relay(websocket: WebSocket, attachment: PtyAttachment, *, pum
           log.debug("tui_pty_ping_send_failed", session_id=attachment.session_id, error=str(e))
           break
         continue
-      except WebSocketDisconnect:
+      except fastapi.WebSocketDisconnect:
         break
       try:
         msg = json.loads(raw)

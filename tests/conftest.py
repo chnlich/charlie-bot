@@ -1461,10 +1461,10 @@ SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_t
 # mock and monkeypatch.setattr land the stand-ins on the src.api.chat module
 # attributes and send_message's fire-and-forget bootstrap, launch_prompt_dispatch's
 # slash-dispatch run, run_and_finalize's auto-name task, and cancel_master_agent
-# read them at call time. src/api/slash.py binds launch_prompt_dispatch at import
-# scope and src/api/sessions.py re-imports run_and_finalize at call time, so both
-# reach the same src.api.chat namespace attributes; src.core.tasks.create_logged_task
-# stays a separate route.
+# read them at call time. src/api/slash.py reads launch_prompt_dispatch off the
+# src.api.chat module at call time and src/api/sessions.py re-imports
+# run_and_finalize at call time, so both reach the same src.api.chat namespace
+# attributes; src.core.tasks.create_logged_task stays a separate route.
 CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
 CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
 CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"

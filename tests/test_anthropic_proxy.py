@@ -1,13 +1,9 @@
 import json
 
+import conftest
 import pytest
-from conftest import FakeChunkedResponse
 
-from src.api.anthropic_proxy import (
-    OpenAIChatStreamToAnthropic,
-    _iter_anthropic_sse,
-    anthropic_to_openai_chat_request,
-)
+from src.api import anthropic_proxy
 
 
 def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() -> None:
@@ -88,7 +84,7 @@ def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() ->
       "stream": True,
   }
 
-  converted = anthropic_to_openai_chat_request(payload, upstream_model="deepseek-ai/DeepSeek-V4-Pro")
+  converted = anthropic_proxy.anthropic_to_openai_chat_request(payload, upstream_model="deepseek-ai/DeepSeek-V4-Pro")
 
   assert converted["model"] == "deepseek-ai/DeepSeek-V4-Pro"
   assert converted["stream"] is True
@@ -154,7 +150,7 @@ def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() ->
 
 
 def test_stream_translator_emits_anthropic_text_and_tool_events() -> None:
-  translator = OpenAIChatStreamToAnthropic("deepseek-v4-pro")
+  translator = anthropic_proxy.OpenAIChatStreamToAnthropic("deepseek-v4-pro")
 
   events = translator.start_events()
   events += translator.events_for_chunk({
@@ -251,7 +247,9 @@ async def test_iter_anthropic_sse_translates_frame_with_raw_splitline_chars() ->
   cut_ls = raw.index(ls.encode("utf-8"))
   chunks = [raw[:cut_nel], raw[cut_nel:cut_ls], raw[cut_ls:]]
 
-  blobs = [blob async for blob in _iter_anthropic_sse(FakeChunkedResponse(chunks), "test-model")]
+  blobs = [
+      blob async for blob in anthropic_proxy._iter_anthropic_sse(conftest.FakeChunkedResponse(chunks), "test-model")
+  ]
 
   parsed = []
   for blob in blobs:

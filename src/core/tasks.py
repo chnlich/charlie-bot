@@ -6,9 +6,9 @@ import contextlib
 from collections.abc import Callable, Coroutine
 from typing import Any
 
-from src.core.log_once import LazyStructlogLogger
+from src.core import log_once
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Keep strong references to background tasks so they aren't garbage collected mid-execution.
 _background_tasks: set[asyncio.Task] = set()
@@ -61,7 +61,7 @@ class SingleTaskPoller:
   """
 
   def __init__(
-      self, loop: Callable[[], Coroutine[Any, Any, None]], log: LazyStructlogLogger, started_event: str,
+      self, loop: Callable[[], Coroutine[Any, Any, None]], log: log_once.LazyStructlogLogger, started_event: str,
       stopped_event: str) -> None:
     self._loop = loop
     self._log = log

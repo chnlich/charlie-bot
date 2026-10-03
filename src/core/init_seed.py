@@ -2,18 +2,11 @@
 
 import copy
 import os
+import pathlib
 import shutil
 import subprocess
-from pathlib import Path
 
-from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    _resolve_local_timezone,
-    _resolve_prompt_file,
-    get_config,
-)
-from src.core.yaml_utils import load_yaml, save_yaml
+from src.core import config, yaml_utils
 
 
 def _default_config_yaml() -> dict:
@@ -67,7 +60,7 @@ commands:
 
 async def init_charliebot_home() -> None:
   """Ensure ~/.charliebot/ directory structure exists and seed default files."""
-  cfg = get_config()
+  cfg = config.get_config()
 
   # Create all required directories
   dirs = [
@@ -88,7 +81,7 @@ async def init_charliebot_home() -> None:
     if template.exists():
       cfg.config_file.write_text(template.read_text(encoding="utf-8"), encoding="utf-8")
     else:
-      save_yaml(cfg.config_file, _default_config_yaml())
+      yaml_utils.save_yaml(cfg.config_file, _default_config_yaml())
 
   # Seed credentials.yaml from the committed template if missing. The file holds
   # this profile's secrets, so it is created owner-readable only (0600); the
@@ -100,13 +93,13 @@ async def init_charliebot_home() -> None:
     os.chmod(cfg.credentials_file, 0o600)
 
 
-def _seed_if_missing(path: Path, content: str) -> None:
+def _seed_if_missing(path: pathlib.Path, content: str) -> None:
   """Write content to path only if the file does not already exist."""
   if not path.exists():
     path.write_text(content, encoding="utf-8")
 
 
-def _seed_memory_scaffold(cfg: CharlieBotConfig) -> None:
+def _seed_memory_scaffold(cfg: config.CharlieBotConfig) -> None:
   """Seed the labeled-entry memory store at cfg.memory_dir (idempotent).
 
   Creates the directory, runs ``git init`` when it is not already a repo, seeds
@@ -124,7 +117,7 @@ def _seed_memory_scaffold(cfg: CharlieBotConfig) -> None:
   (memory_dir / "staging").mkdir(exist_ok=True)
 
 
-def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> list[dict]:
+def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = False) -> list[dict]:
   """Seed repo-owned default cron tasks into per-job host files by name.
 
   Reads ``configs/cron.default.yaml`` from the repo and the host
@@ -143,7 +136,7 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> 
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.core.yaml_utils.save_yaml` (the same writer ``src/api/cron.py``
   uses). Validates every default entry before writing: each must construct a
-  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
+  :class:`config.ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
   entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
   task-level pointer) and every ``prompt_file`` must resolve to an existing
   file. Fails loudly without writing if validation fails, and fails loudly
@@ -158,7 +151,7 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> 
   writes cron config — that is an invariant the tests assert directly.
   """
   repo_root = cfg.charlie_bot_repo
-  defaults_data = load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
+  defaults_data = yaml_utils.load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
   default_entries = list(defaults_data.get("scheduled_tasks", []))
 
   # Validate every default entry on a resolved copy before touching the host
@@ -168,12 +161,12 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> 
       raise ValueError(f"invalid default cron entry (not a mapping): {entry!r}")
     resolved = copy.deepcopy(entry)
     resolved.pop("name", None)
-    _resolve_prompt_file(resolved, repo_root)  # raises ValueError
+    config._resolve_prompt_file(resolved, repo_root)  # raises ValueError
     for step in resolved.get("steps") or []:
       if isinstance(step, dict):
-        _resolve_prompt_file(step, repo_root)  # raises ValueError
-    _resolve_local_timezone(resolved)
-    ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
+        config._resolve_prompt_file(step, repo_root)  # raises ValueError
+    config._resolve_local_timezone(resolved)
+    config.ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
 
   # A leftover legacy cron.yaml is a loud tripwire, never a silent fallback:
   # refuse to seed (and write nothing) until a human migrates and removes it.
@@ -200,6 +193,6 @@ def seed_default_cron_tasks(cfg: CharlieBotConfig, *, dry_run: bool = False) -> 
     body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
     # Persist the pointer unchanged: the pointed file owns the prompt body,
     # and this host file carries only its path.
-    save_yaml(path, body)
+    yaml_utils.save_yaml(path, body)
     report.append({"name": name, "status": "created"})
   return report

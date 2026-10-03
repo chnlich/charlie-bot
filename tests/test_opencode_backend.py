@@ -265,7 +265,7 @@ _WATCHDOG_TEST_TIMEOUT = 0.2  # seconds
 
 
 def _patch_watchdog_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.agents.backends.opencode.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
+  monkeypatch.setattr("src.core.timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
 
 
 class _FakeDelayedStreamResponse:

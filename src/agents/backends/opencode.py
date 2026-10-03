@@ -6,46 +6,22 @@ import asyncio
 import base64
 import json
 import os
+import pathlib
 import re
 import ssl
 from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from src.agents.backends.base import (
-    IMAGE_MIME_BY_EXT,
-    SKIP_PERMISSIONS_FLAG,
-    AgentBackend,
-    _tee_stream,
-    _write_chunk,
-    apply_proxy_env,
-    iter_ndjson_events,
-    make_compact_boundary_event,
-    make_error_event,
-    make_result_event,
-    make_text_event,
-    prepend_path_dir,
-    resolve_binary,
-)
+from src.agents.backends import base
 from src.core import event_types as ET
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.process import wait_or_kill_group
-from src.core.sse import iter_sse_lines
-from src.core.timeouts import (
-    OPENCODE_ABORT_TIMEOUT,
-    OPENCODE_HTTP_API_TIMEOUT,
-    OPENCODE_SERVER_START_TIMEOUT,
-    OPENCODE_SERVER_STOP_TIMEOUT,
-    OPENCODE_SSE_PROGRESS_TIMEOUT,
-    OPENCODE_STDOUT_DRAIN_TIMEOUT,
-)
+from src.core import log_once, process, sse, timeouts
 
 if TYPE_CHECKING:
   import httpx
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def __getattr__(name: str) -> Any:
@@ -106,23 +82,23 @@ _LOCK_RETRY_BACKOFF_SECONDS = 10.0
 # grows a branch or an ignore entry stops reaching them at all; one sighting
 # carries the whole signal because the set of mapped keys is code, fixed for
 # the process.
-_UNHANDLED_PART_TYPES = WarnOnceRegistry()
+_UNHANDLED_PART_TYPES = log_once.WarnOnceRegistry()
 
 # opencode emits todo.updated on every todo write, so an unmapped SSE event
 # type re-fires once per unhandled frame.
-_UNHANDLED_SSE_EVENT_TYPES = WarnOnceRegistry()
+_UNHANDLED_SSE_EVENT_TYPES = log_once.WarnOnceRegistry()
 
 # The install dir the opencode installer targets, USER_LOCAL_BIN's sibling for
-# this binary. resolve_binary's fallback dir and the child-PATH prepend both
+# this binary. base.resolve_binary's fallback dir and the child-PATH prepend both
 # point at it, and the two must stay the same dir: a binary the resolver finds
 # there must also be on the spawned CLI's PATH.
-OPENCODE_BIN_DIR = str(Path.home() / ".opencode" / "bin")
+OPENCODE_BIN_DIR = str(pathlib.Path.home() / ".opencode" / "bin")
 
 
 def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
   """One OpenCode file part per readable image attachment, in reference order.
 
-  The mime comes from the filename extension via ``IMAGE_MIME_BY_EXT``; the
+  The mime comes from the filename extension via ``base.IMAGE_MIME_BY_EXT``; the
   payload is the file's bytes as a ``data:`` URL. A non-image reference is
   skipped silently and keeps riding the task text's [Attached files] path
   list, and a missing or unreadable image file is skipped with one
@@ -131,12 +107,12 @@ def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
   parts: list[dict] = []
   for ref in uploaded_files or []:
     filename = str(ref.get("filename", ""))
-    mime = IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
+    mime = base.IMAGE_MIME_BY_EXT.get(filename.rsplit(".", 1)[-1].lower())
     if mime is None:
       continue
     path = str(ref.get("path", ""))
     try:
-      data = Path(path).read_bytes()
+      data = pathlib.Path(path).read_bytes()
     except OSError as e:
       log.warning("opencode_attachment_unreadable", path=path, filename=filename, error=str(e))
       continue
@@ -145,15 +121,15 @@ def _image_file_parts(uploaded_files: list[dict] | None) -> list[dict]:
 
 
 class OpenCodeSseSilenceError(RuntimeError):
-  """The SSE stream carried no session-id-bearing event within OPENCODE_SSE_PROGRESS_TIMEOUT."""
+  """The SSE stream carried no session-id-bearing event within timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT."""
 
 
-class OpenCodeBackend(AgentBackend):
+class OpenCodeBackend(base.AgentBackend):
   """Runs an `opencode serve` subprocess and translates SSE events to CC-compatible format."""
 
   def __init__(self, *, proxy_url: str | None = None, **kwargs: object) -> None:
     super().__init__(**kwargs)
-    self._opencode_bin = resolve_binary("opencode", OPENCODE_BIN_DIR)
+    self._opencode_bin = base.resolve_binary("opencode", OPENCODE_BIN_DIR)
     self._proxy_url = proxy_url
     # Injectable seam so lock-retry tests never sleep real seconds.
     self._sleep = asyncio.sleep
@@ -170,11 +146,11 @@ class OpenCodeBackend(AgentBackend):
 
   def _prepare_env(self, env: dict, *, opencode_config: dict | None = None) -> dict:
     oc_env = {**env}
-    prepend_path_dir(oc_env, OPENCODE_BIN_DIR)
+    base.prepend_path_dir(oc_env, OPENCODE_BIN_DIR)
     oc_env["OPENCODE_CONFIG_CONTENT"] = json.dumps(
         self._headless_config() if opencode_config is None else opencode_config)
     if self._proxy_url is not None:
-      apply_proxy_env(oc_env, self._proxy_url)
+      base.apply_proxy_env(oc_env, self._proxy_url)
     return oc_env
 
   def _headless_config(self) -> dict:
@@ -237,7 +213,7 @@ class OpenCodeBackend(AgentBackend):
 
         import httpx
 
-        async with httpx.AsyncClient(base_url=self._server_url, timeout=OPENCODE_HTTP_API_TIMEOUT,
+        async with httpx.AsyncClient(base_url=self._server_url, timeout=timeouts.OPENCODE_HTTP_API_TIMEOUT,
                                      verify=_SERVE_SSL_CONTEXT) as client:
           await self._check_health(client)
           self._model_limit = await self._fetch_model_limit(client)
@@ -266,7 +242,7 @@ class OpenCodeBackend(AgentBackend):
           self._failed = True
           log.exception("opencode_backend_failed", error=str(e))
           detail = str(e) or e.__class__.__name__
-          held_error = make_error_event(f"OpenCode backend failed: {detail}")
+          held_error = base.make_error_event(f"OpenCode backend failed: {detail}")
       finally:
         await self._cleanup_server()
 
@@ -298,7 +274,7 @@ class OpenCodeBackend(AgentBackend):
 
       if event_type == SSE_EVENT_PERMISSION_ASKED:
         self._failed = True
-        yield make_error_event(self._format_permission_error(properties))
+        yield base.make_error_event(self._format_permission_error(properties))
         return
 
       if properties.get("sessionID") != self._session_id:
@@ -371,13 +347,13 @@ class OpenCodeBackend(AgentBackend):
     self._last_step_tokens: dict | None = None
     self._failed = False
 
-  def _log_paths(self) -> tuple[Path | None, Path | None]:
+  def _log_paths(self) -> tuple[pathlib.Path | None, pathlib.Path | None]:
     if self._log_dir is None:
       return None, None
     self._log_dir.mkdir(parents=True, exist_ok=True)
     return self._log_dir / "stdout.log", self._log_dir / "stderr.log"
 
-  def _open_stdout_log(self, stdout_log_path: Path | None) -> int | None:
+  def _open_stdout_log(self, stdout_log_path: pathlib.Path | None) -> int | None:
     # O_APPEND, never O_TRUNC: the lock-retry attempts append to the one run
     # log the way the per-line "ab" opens they replace did.
     if stdout_log_path is None:
@@ -392,7 +368,7 @@ class OpenCodeBackend(AgentBackend):
   async def _read_server_url(self) -> str:
     assert self._proc is not None and self._proc.stdout is not None
     loop = asyncio.get_running_loop()
-    deadline = loop.time() + OPENCODE_SERVER_START_TIMEOUT
+    deadline = loop.time() + timeouts.OPENCODE_SERVER_START_TIMEOUT
     while True:
       remaining = deadline - loop.time()
       if remaining <= 0:
@@ -404,7 +380,7 @@ class OpenCodeBackend(AgentBackend):
       if not raw_line:
         raise RuntimeError("OpenCode serve exited before printing its server URL")
       if self._stdout_fd is not None:
-        await _write_chunk(self._stdout_fd, raw_line)
+        await base._write_chunk(self._stdout_fd, raw_line)
       line = raw_line.decode("utf-8", errors="replace").strip()
       match = _SERVER_URL_RE.search(line)
       if match:
@@ -412,7 +388,7 @@ class OpenCodeBackend(AgentBackend):
 
   async def _stream_stdout(self) -> None:
     assert self._proc is not None and self._proc.stdout is not None
-    await _tee_stream(self._proc.stdout.read, self._stdout_fd)
+    await base._tee_stream(self._proc.stdout.read, self._stdout_fd)
 
   async def _check_health(self, client: httpx.AsyncClient) -> None:
     response = await client.get("/global/health")
@@ -512,7 +488,7 @@ class OpenCodeBackend(AgentBackend):
     data_lines: list[bytes] = []
     # Byte-mode lines: orjson parses the wire's UTF-8 bytes natively, so the
     # per-line decode the default mode pays never runs on this hot funnel.
-    async for line in iter_sse_lines(
+    async for line in sse.iter_sse_lines(
         response, lines_as_bytes=True):
       if line == b"":
         if not data_lines:
@@ -534,7 +510,7 @@ class OpenCodeBackend(AgentBackend):
       yield orjson.loads(b"\n".join(data_lines))
 
   async def _with_sse_progress_watchdog(self, sse_events: AsyncIterator[dict]) -> AsyncIterator[dict]:
-    """Fail the turn when no session progress arrives within OPENCODE_SSE_PROGRESS_TIMEOUT.
+    """Fail the turn when no session progress arrives within timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT.
 
     Every upstream event is awaited under ``asyncio.wait_for`` with a monotonic
     deadline. An event carrying a session id (top-level ``properties.sessionID``
@@ -548,7 +524,7 @@ class OpenCodeBackend(AgentBackend):
     """
     loop = asyncio.get_running_loop()
     last_progress_at = loop.time()
-    deadline = last_progress_at + OPENCODE_SSE_PROGRESS_TIMEOUT
+    deadline = last_progress_at + timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT
     silent_heartbeats = 0
     events_iter = aiter(sse_events)
     while True:
@@ -570,7 +546,7 @@ class OpenCodeBackend(AgentBackend):
         silent_heartbeats += 1
       if self._event_carries_session_id(event):
         last_progress_at = loop.time()
-        deadline = last_progress_at + OPENCODE_SSE_PROGRESS_TIMEOUT
+        deadline = last_progress_at + timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT
         silent_heartbeats = 0
       yield event
 
@@ -594,7 +570,7 @@ class OpenCodeBackend(AgentBackend):
         if already_registered:
           return []
         pre_tokens = self._last_step_tokens["input"] if self._last_step_tokens is not None else None
-        return [make_compact_boundary_event("auto", pre_tokens)]
+        return [base.make_compact_boundary_event("auto", pre_tokens)]
       if info["role"] != "assistant":
         return []
       translated: list[dict] = []
@@ -617,7 +593,7 @@ class OpenCodeBackend(AgentBackend):
       return self._translate_part(part)
 
     if ev_type == SSE_EVENT_SESSION_ERROR:
-      return [make_error_event(self._format_session_error(ev))]
+      return [base.make_error_event(self._format_session_error(ev))]
 
     if ev_type == SSE_EVENT_SESSION_IDLE:
       if self._pending_parts:
@@ -639,7 +615,7 @@ class OpenCodeBackend(AgentBackend):
     part_type = part.get("type", "")
     if part_type == "text":
       delta = self._part_delta(part["id"], part["text"])
-      return [make_text_event(delta)] if delta else []
+      return [base.make_text_event(delta)] if delta else []
     if part_type == "reasoning":
       delta = self._part_delta(part["id"], part["text"])
       return [{"type": ET.THINKING, "content": delta}] if delta else []
@@ -727,7 +703,7 @@ class OpenCodeBackend(AgentBackend):
           "tokens": dict(self._last_step_tokens),
           "limit": dict(self._model_limit) if self._model_limit is not None else None,
       }
-    return make_result_event(
+    return base.make_result_event(
         input_tokens=self._usage_input,
         output_tokens=self._usage_output,
         cache_read=self._usage_cache_read,
@@ -752,14 +728,14 @@ class OpenCodeBackend(AgentBackend):
   async def _abort_session(self) -> None:
     if self._server_url is None or self._session_id is None:
       return
-    from src.core.http import get_http_client
+    from src.core import http
 
     try:
       # The shared client skips the per-call AsyncClient construction
       # (~260 us measured); _SERVER_URL_RE pins the serve URL to plain
       # http://localhost, so the singleton's default verify never engages here.
-      response = await get_http_client().post(
-          f"{self._server_url}/session/{self._session_id}/abort", timeout=OPENCODE_ABORT_TIMEOUT)
+      response = await http.get_http_client().post(
+          f"{self._server_url}/session/{self._session_id}/abort", timeout=timeouts.OPENCODE_ABORT_TIMEOUT)
       response.raise_for_status()
     except Exception as e:
       log.warning("opencode_abort_failed", session_id=self._session_id, error=str(e), exc_info=True)
@@ -768,7 +744,7 @@ class OpenCodeBackend(AgentBackend):
     if self._stdout_task is None:
       return
     try:
-      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=OPENCODE_STDOUT_DRAIN_TIMEOUT)
+      await asyncio.wait_for(asyncio.shield(self._stdout_task), timeout=timeouts.OPENCODE_STDOUT_DRAIN_TIMEOUT)
     except TimeoutError:
       self._stdout_task.cancel()
       try:
@@ -784,7 +760,8 @@ class OpenCodeBackend(AgentBackend):
     try:
       await self._abort_session()
       if self._proc is not None and self._proc.returncode is None:
-        await self._graceful_shutdown(OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
+        await self._graceful_shutdown(
+            timeouts.OPENCODE_SERVER_STOP_TIMEOUT, timeout_log_event="opencode_server_stop_timeout")
       await self._finish_stdout_task()
       self._close_stdout_log()
       if self._proc is not None:
@@ -818,7 +795,7 @@ class OpenCodeBackend(AgentBackend):
     cumulative logic applies to ``text``-type parts. The process group is killed
     on timeout.
     """
-    from src.core.message_aggregator import extract_text_from_message
+    from src.core import message_aggregator
 
     self._reset_run_state()
     framed = self._frame_system_prompt(system_prompt, prompt)
@@ -829,7 +806,7 @@ class OpenCodeBackend(AgentBackend):
         "json",
         "-m",
         self._model,
-        SKIP_PERMISSIONS_FLAG,
+        base.SKIP_PERMISSIONS_FLAG,
         "--",
         framed,
     ]
@@ -840,16 +817,16 @@ class OpenCodeBackend(AgentBackend):
     async def _collect() -> str:
       parts: list[str] = []
       assert proc.stdout is not None
-      async for event in iter_ndjson_events(proc.stdout):
+      async for event in base.iter_ndjson_events(proc.stdout):
         part = event.get("part")
         if not isinstance(part, dict):
           continue
         parts.extend(
-            extract_text_from_message(translated.get("message"))
+            message_aggregator.extract_text_from_message(translated.get("message"))
             for translated in self._translate_part(part)
             if translated.get("type") == ET.ASSISTANT)
       await proc.wait()
       return "".join(parts).strip()
 
     stderr_task = asyncio.create_task(proc.stderr.read())
-    return await wait_or_kill_group(_collect(), timeout, proc.pid, stderr_task)
+    return await process.wait_or_kill_group(_collect(), timeout, proc.pid, stderr_task)

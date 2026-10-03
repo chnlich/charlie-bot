@@ -12,7 +12,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from src.core.home import charliebot_home_dir, file_fingerprint
+from src.core import home
+from src.core.home import charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.yaml_utils import load_yaml
 
@@ -162,7 +163,7 @@ def load_credentials() -> Credentials:
 
 def _credentials_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``credentials.yaml``: :func:`src.core.home.file_fingerprint` on it."""
-  return file_fingerprint(CREDENTIALS_FILENAME)
+  return home.file_fingerprint(CREDENTIALS_FILENAME)
 
 
 _credentials_cache = _HotReloadCache(

@@ -17,6 +17,7 @@ from pydantic import (
     model_validator,
 )
 
+from src.core import home
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
 from src.core.credentials import (  # noqa: F401  (re-export: the established src.core.config import path)
@@ -36,7 +37,6 @@ from src.core.home import (  # noqa: F401  (re-export: the established src.core.
     charliebot_home_dir,
     default_charliebot_home,
     default_claude_dir,
-    file_fingerprint,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.yaml_utils import load_yaml
@@ -659,7 +659,7 @@ T = TypeVar("T")
 
 def _config_fingerprint() -> tuple[float, int]:
   """The reload cache key over ``config.yaml``: :func:`src.core.home.file_fingerprint` on it."""
-  return file_fingerprint(CONFIG_FILENAME)
+  return home.file_fingerprint(CONFIG_FILENAME)
 
 
 def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBotConfig) -> CharlieBotConfig:

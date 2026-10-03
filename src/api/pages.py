@@ -741,6 +741,25 @@ _USAGE_SLOT = {src: slot for slot, src in enumerate(_USAGE_SOURCES, 1)}
 _NOTE_SOURCE_LABELS = {USAGE_SOURCE_CHARLIE_BOT: "CharlieBot logs"}
 
 
+def preload_usage_tally_stack() -> None:
+  """Import the tally stack the usage page and ledger handlers first-import.
+
+  The imports mirror the lazy sets in ``_capture_ledger_rows``, ``_account_source``
+  and the scheduler's ledger handler; keep them in step. A long-lived server that
+  starts before a deploy keeps its in-memory modules while a request-time
+  first-import reads the newer files, and the mixed-version import raises inside
+  the request (the page 500s until restart). Loading here pins the stack to the
+  code the server started with. A failure only logs: the request path keeps its
+  own import as the loud fallback.
+  """
+  started = time.monotonic()
+  import sqlite3  # noqa: F401  -- the pin is the import; the names verify the shared set
+
+  from src.core.token_tally import backend_page_source, backend_registry, capture_local  # noqa: F401
+  from src.core.usage_ledger import UsageLedger, default_ledger_path  # noqa: F401
+  log.info("usage_tally_stack_preloaded", duration_ms=round((time.monotonic() - started) * 1000))
+
+
 def _capture_ledger_rows() -> tuple[list[LedgerRow], dict[str, str], dict[str, int], float, dict[str, object]]:
   """Capture this host's new usage into the ledger, then read the page rows from the ledger
   alone — so the numbers survive deletion of the logs they were parsed from — plus the

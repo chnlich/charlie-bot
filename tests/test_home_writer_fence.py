@@ -117,6 +117,25 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.mark.asyncio
+async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monkeypatch) -> None:
+  """Startup runs the tally-stack preload as its own background task, so the page's and the
+  ledger handler's request-time first-imports resolve against pinned modules instead of
+  whatever files a mid-flight deploy left under the started server."""
+  import asyncio
+
+  from fastapi import FastAPI
+
+  import src.api.pages as pages_module
+  server_module = lifespan_env
+  calls: list[int] = []
+  monkeypatch.setattr(pages_module, "preload_usage_tally_stack", lambda: calls.append(1))
+  app = FastAPI()
+  async with server_module.lifespan(app):
+    await asyncio.wait_for(app.state.usage_tally_warmup_task, timeout=10)
+  assert calls == [1]
+
+
+@pytest.mark.asyncio
 async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> None:
   from fastapi import FastAPI
   server_module = lifespan_env
@@ -172,6 +191,7 @@ def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
 _SHUTDOWN_TIMING_FIELDS = (
     "shutdown_ms",
     "speech_ms",
+    "usage_tally_ms",
     "slack_listener_ms",
     "slack_backfill_ms",
     "ext_usage_ms",

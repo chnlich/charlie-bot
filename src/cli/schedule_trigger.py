@@ -31,9 +31,9 @@ from __future__ import annotations
 import argparse
 import json
 
-from src.cli.common import add_session_arg, get_config, post_internal_api, resolve_session_id
-from src.cli.help_formatter import CliHelpFormatter
-from src.core.constants import MAX_TRIGGER_MESSAGE_CHARS, WatchKind
+from src.cli import common as cli_common
+from src.cli import help_formatter
+from src.core import constants
 
 # Exit code returned when trigger creation is rejected: remote-PID verify-on-create
 # or --message length validation. Mirrors argparse's usage-error exit code.
@@ -62,18 +62,18 @@ def _parse_watch_target(raw: str) -> dict:
   if ":" in raw:
     scheme, _, rest = raw.partition(":")
     if scheme == "slurm":
-      return {"kind": WatchKind.SLURM_JOB.value, "job_id": _positive_int(rest, raw, "slurm job id")}
+      return {"kind": constants.WatchKind.SLURM_JOB.value, "job_id": _positive_int(rest, raw, "slurm job id")}
     if not scheme:
       raise argparse.ArgumentTypeError(f"--watch host must be non-empty (got {raw!r})")
     sub_scheme, sep, sub_rest = rest.partition(":")
     if sep and sub_scheme == "slurm":
       return {
-          "kind": WatchKind.SLURM_JOB.value,
+          "kind": constants.WatchKind.SLURM_JOB.value,
           "host": scheme,
           "job_id": _positive_int(sub_rest, raw, "slurm job id"),
       }
-    return {"kind": WatchKind.REMOTE_PID.value, "host": scheme, "pid": _positive_int(rest, raw, "pid")}
-  return {"kind": WatchKind.LOCAL_PID.value, "pid": _positive_int(raw, raw, "pid")}
+    return {"kind": constants.WatchKind.REMOTE_PID.value, "host": scheme, "pid": _positive_int(rest, raw, "pid")}
+  return {"kind": constants.WatchKind.LOCAL_PID.value, "pid": _positive_int(raw, raw, "pid")}
 
 
 def _validate_message(value: str) -> str:
@@ -83,17 +83,18 @@ def _validate_message(value: str) -> str:
   only a short label naming which watch fired. This runs before any network
   call, so an over-limit message never reaches the internal API.
   """
-  if len(value) > MAX_TRIGGER_MESSAGE_CHARS:
+  if len(value) > constants.MAX_TRIGGER_MESSAGE_CHARS:
     raise argparse.ArgumentTypeError(
-        f"--message must be a short label at most {MAX_TRIGGER_MESSAGE_CHARS} characters "
+        f"--message must be a short label at most {constants.MAX_TRIGGER_MESSAGE_CHARS} characters "
         f"(got {len(value)})")
   return value
 
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-      description="Schedule a delayed trigger for a CharlieBot session", formatter_class=CliHelpFormatter)
-  add_session_arg(parser)
+      description="Schedule a delayed trigger for a CharlieBot session",
+      formatter_class=help_formatter.CliHelpFormatter)
+  cli_common.add_session_arg(parser)
   parser.add_argument(
       "--max-wait",
       required=True,
@@ -107,7 +108,7 @@ def _build_parser() -> argparse.ArgumentParser:
       type=_validate_message,
       help=(
           "Short label naming which watch fired, at most "
-          f"{MAX_TRIGGER_MESSAGE_CHARS} characters. The wake keeps the session's "
+          f"{constants.MAX_TRIGGER_MESSAGE_CHARS} characters. The wake keeps the session's "
           "full history; runbook steps and readback commands live in session "
           "artifacts."),
   )
@@ -154,7 +155,7 @@ def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] |
   can match; only "pending" proves the call landed. Among several pending
   matches, the newest by ``created_at`` wins.
   """
-  triggers_dir = get_config().sessions_dir / session_id / "triggers"
+  triggers_dir = cli_common.get_config().sessions_dir / session_id / "triggers"
   if not triggers_dir.is_dir():
     return None
   requested = list(watch_targets or [])
@@ -184,7 +185,7 @@ def _readback_trigger(session_id: str, message: str, watch_targets: list[dict] |
 def main() -> None:
   parser = _build_parser()
   args = parser.parse_args()
-  session_id = resolve_session_id(args.session)
+  session_id = cli_common.resolve_session_id(args.session)
 
   watch_targets: list[dict] | None = args.watch
 
@@ -196,7 +197,7 @@ def main() -> None:
   if watch_targets is not None:
     payload["watch_targets"] = watch_targets
 
-  result = post_internal_api(
+  result = cli_common.post_internal_api(
       "/api/internal/schedule-trigger",
       payload,
       readback=lambda: _readback_trigger(session_id, args.message, watch_targets),

@@ -7,19 +7,14 @@ The default codex home lives here for the same reason: token_tally imports this
 module, so a constant owned there could not be shared without an import cycle.
 """
 
+import pathlib
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
+from src.core import codex_pricing, config, constants, log_once, models, ndjson
 from src.core import event_types as ET
-from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.config import CharlieBotConfig
-from src.core.constants import BackendType
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import SessionMetadata
-from src.core.ndjson import iter_ndjson_events, iter_ndjson_events_from_end
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Codex rollout record-type wire names: session_meta opens a thread file,
 # turn_context carries the model in force, and event_msg wraps the token_count
@@ -45,14 +40,14 @@ def codex_token_count_payload(event: dict[str, Any]) -> dict[str, Any] | None:
   return payload
 
 
-def default_codex_home() -> Path:
+def default_codex_home() -> pathlib.Path:
   """The default codex home (``~/.codex``), read from HOME on every call.
 
   The rollout readers' corpus root; the cold-storage sweep re-derives it per call.
   A function rather than a constant so every reader honors a redirected HOME
   (tests isolate stores that way); the constant below is the import-time value.
   """
-  return Path.home() / ".codex"
+  return pathlib.Path.home() / ".codex"
 
 
 DEFAULT_CODEX_HOME = default_codex_home()
@@ -102,11 +97,12 @@ def _extract_codex_rollout_model_event(event: dict[str, Any]) -> str | None:
   return None
 
 
-def _extract_latest_codex_rollout_usage(path: Path) -> dict[str, Any] | None:
+def _extract_latest_codex_rollout_usage(path: pathlib.Path) -> dict[str, Any] | None:
   """Scan a native Codex rollout log backwards for latest token_count and model."""
   usage: dict[str, Any] | None = None
   model: str | None = None
-  for event in iter_ndjson_events_from_end(path, log_event="codex_rollout_parse_skip", log_fields={"path": str(path)}):
+  for event in ndjson.iter_ndjson_events_from_end(path, log_event="codex_rollout_parse_skip",
+                                                  log_fields={"path": str(path)}):
     if usage is None:
       usage = _extract_codex_rollout_usage_event(event)
     if model is None:
@@ -129,27 +125,27 @@ class CodexUsageResolver:
 
   def __init__(
       self,
-      cfg: CharlieBotConfig,
+      cfg: config.CharlieBotConfig,
       events_cache: dict[str, list[dict]],
-      chat_events_path_fn: Callable[[str], Path],
+      chat_events_path_fn: Callable[[str], pathlib.Path],
   ) -> None:
     self._cfg = cfg
     self._events_cache = events_cache
     self._chat_events_path_fn = chat_events_path_fn
-    self._codex_rollout_path_cache: dict[str, Path] = {}
+    self._codex_rollout_path_cache: dict[str, pathlib.Path] = {}
     self._codex_rollout_usage_cache: dict[str, tuple[int, int, dict | None]] = {}
 
   def is_codex_backend(self, backend_id: str) -> bool:
     option = self._cfg.get_backend_option(backend_id)
     if option is not None:
-      return option.type == BackendType.CODEX
+      return option.type == constants.BackendType.CODEX
     # A session pinned to a backend id since removed from config admits by prefix.
     return backend_id.startswith("codex")
 
   def resolve(
       self,
       session_id: str,
-      session_meta: SessionMetadata,
+      session_meta: models.SessionMetadata,
       events: list[dict],
   ) -> dict | None:
     """Resolve Codex-native usage and merge with base usage.
@@ -183,7 +179,7 @@ class CodexUsageResolver:
         ET.CONTEXT_FULL: native_usage[ET.CONTEXT_FULL],
         ET.CONTEXT_COMPACT_AT: context_compact_at,
         ET.RESULT_TOTAL_COST_USD:
-            (calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
+            (codex_pricing.calculate_codex_usage_cost_usd(model, total_token_usage) if total_token_usage else None),
         "model": model,
     }
     return merged_usage
@@ -217,7 +213,8 @@ class CodexUsageResolver:
       return None
 
     with open(path, encoding="utf-8") as f:
-      for event in iter_ndjson_events(f, log_event="translated_session_id_parse_skip", log_fields={"path": str(path)}):
+      for event in ndjson.iter_ndjson_events(f, log_event="translated_session_id_parse_skip",
+                                             log_fields={"path": str(path)}):
         session_id_value = event.get("session_id")
         if isinstance(session_id_value, str) and session_id_value:
           return session_id_value
@@ -236,7 +233,7 @@ class CodexUsageResolver:
       return live_session_id
     return self._read_translated_session_id(session_id)
 
-  def _find_codex_rollout_path(self, native_thread_id: str) -> Path | None:
+  def _find_codex_rollout_path(self, native_thread_id: str) -> pathlib.Path | None:
     cached_path = self._codex_rollout_path_cache.get(native_thread_id)
     if cached_path is not None and cached_path.exists():
       return cached_path

@@ -2,16 +2,10 @@
 
 import json
 
+import conftest
 import pytest
-from conftest import (
-    _ok_asgi_downstream,
-    asgi_downstream_called,
-    asgi_response,
-    run_through_asgi_middleware,
-    stub_credentials,
-)
 
-from src.api.auth import AuthMiddleware
+from src.api import auth
 
 
 def _scope(
@@ -35,16 +29,16 @@ def _scope(
   }
 
 
-def _middleware(key: str) -> AuthMiddleware:
+def _middleware(key: str) -> auth.AuthMiddleware:
   # The middleware reads the access key from get_credentials() (credentials.yaml,
   # section "charliebot", key "access_key"); the stub plants it in memory.
-  stub_credentials({"charliebot": {"access_key": key}})
-  return AuthMiddleware(app=_ok_asgi_downstream)
+  conftest.stub_credentials({"charliebot": {"access_key": key}})
+  return auth.AuthMiddleware(app=conftest._ok_asgi_downstream)
 
 
 def _response(sent: list[dict]) -> tuple[int, str, str]:
   """Reshape the shared flatten into (status, content-type, body), decoded."""
-  status, headers, body = asgi_response(sent)
+  status, headers, body = conftest.asgi_response(sent)
   return status, headers.get(b"content-type", b"").decode(), body.decode()
 
 
@@ -80,16 +74,17 @@ _PASS_THROUGH_ROWS = [
 async def test_request_reaches_downstream(
     key: str, method: str, path: str, headers: dict[str, str] | None, cookies: dict[str, str] | None) -> None:
   mw = _middleware(key=key)
-  sent = await run_through_asgi_middleware(mw, _scope(method=method, path=path, headers=headers, cookies=cookies))
+  sent = await conftest.run_through_asgi_middleware(
+      mw, _scope(method=method, path=path, headers=headers, cookies=cookies))
   status, _, _ = _response(sent)
   assert status == 200
-  assert asgi_downstream_called()
+  assert conftest.asgi_downstream_called()
 
 
 @pytest.mark.asyncio
 async def test_html_navigation_returns_login_page() -> None:
   mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(headers={"accept": "text/html"}))
+  sent = await conftest.run_through_asgi_middleware(mw, _scope(headers={"accept": "text/html"}))
   status, content_type, body = _response(sent)
   assert status == 401
   assert "text/html" in content_type
@@ -100,7 +95,7 @@ async def test_html_navigation_returns_login_page() -> None:
 @pytest.mark.asyncio
 async def test_api_request_returns_json_401() -> None:
   mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(headers={"accept": "application/json"}))
+  sent = await conftest.run_through_asgi_middleware(mw, _scope(headers={"accept": "application/json"}))
   status, content_type, body = _response(sent)
   assert status == 401
   assert content_type == "application/json"
@@ -113,7 +108,7 @@ async def test_host_state_readers_are_gated_without_a_credential(path: str) -> N
   # The file server and the trace/report viewers read the host filesystem, so they
   # sit behind the access key: no public-path or public-prefix admission anymore.
   mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "application/json"}))
+  sent = await conftest.run_through_asgi_middleware(mw, _scope(path=path, headers={"accept": "application/json"}))
   status, content_type, body = _response(sent)
   assert status == 401
   assert content_type == "application/json"
@@ -124,6 +119,7 @@ async def test_host_state_readers_are_gated_without_a_credential(path: str) -> N
 async def test_gated_route_still_requires_credential() -> None:
   # A representative gated route must remain 401 without a credential.
   mw = _middleware(key="secret")
-  sent = await run_through_asgi_middleware(mw, _scope(path="/api/sessions", headers={"accept": "application/json"}))
+  sent = await conftest.run_through_asgi_middleware(
+      mw, _scope(path="/api/sessions", headers={"accept": "application/json"}))
   status, _, _ = _response(sent)
   assert status == 401

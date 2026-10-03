@@ -1,22 +1,19 @@
 """Telegram notification support for CharlieBot."""
 
-from src.core.config import CharlieBotConfig, get_credentials
-from src.core.http import get_http_client
-from src.core.log_once import LazyStructlogLogger
-from src.core.timeouts import NOTIFICATION_TIMEOUT
+from src.core import config, http, log_once, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 
-async def send_telegram(message: str, cfg: CharlieBotConfig) -> None:
+async def send_telegram(message: str, cfg: config.CharlieBotConfig) -> None:
   """Send a message via the Telegram Bot API.
 
   Raises ValueError if the credentials file has no telegram bot_token, and
   RuntimeError if telegram.chat_id is not configured.
   """
-  bot_token = get_credentials().require("telegram", "bot_token")
+  bot_token = config.get_credentials().require("telegram", "bot_token")
   if not cfg.telegram.chat_id:
     raise RuntimeError("telegram.chat_id is not configured")
 
@@ -28,8 +25,8 @@ async def send_telegram(message: str, cfg: CharlieBotConfig) -> None:
       "parse_mode": "Markdown",
   }
 
-  client = get_http_client()
-  resp = await client.post(url, json=payload, timeout=NOTIFICATION_TIMEOUT)
+  client = http.get_http_client()
+  resp = await client.post(url, json=payload, timeout=timeouts.NOTIFICATION_TIMEOUT)
 
   if resp.status_code == 200:
     log.info("telegram_sent", chat_id=cfg.telegram.chat_id, length=len(truncated))

@@ -1,30 +1,20 @@
 """GeminiCliBackend — AgentBackend wrapping the `gemini` CLI in stream-json mode."""
 
-from src.agents.backends.base import (
-    USER_LOCAL_BIN,
-    AgentBackend,
-    make_error_event,
-    make_result_event,
-    make_text_event,
-    make_tool_result_event,
-    make_tool_use_event,
-    resolve_binary,
-    strip_google_api_keys,
-)
+from src.agents.backends import base
 from src.core import event_types as ET
-from src.core.log_once import LazyStructlogLogger
+from src.core import log_once
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
-class GeminiCliBackend(AgentBackend):
+class GeminiCliBackend(base.AgentBackend):
   """Runs a `gemini` CLI subprocess in stream-json mode and translates NDJSON events to CC-compatible format."""
 
   def __init__(self, *, model: str, **kwargs: object) -> None:
     if not model:
       raise ValueError("gemini backend requires a model")
     super().__init__(model=model, **kwargs)
-    self._gemini_bin = resolve_binary("gemini", USER_LOCAL_BIN)
+    self._gemini_bin = base.resolve_binary("gemini", base.USER_LOCAL_BIN)
     self._text_buffer = ""
 
   def _build_command(self, prompt: str) -> list[str]:
@@ -38,7 +28,7 @@ class GeminiCliBackend(AgentBackend):
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:
-    return strip_google_api_keys(env)
+    return base.strip_google_api_keys(env)
 
   def translate_event(self, ev: dict) -> list[dict]:
     """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""
@@ -46,7 +36,7 @@ class GeminiCliBackend(AgentBackend):
 
     def flush_buffer() -> list[dict]:
       if self._text_buffer:
-        msg = [make_text_event(self._text_buffer)]
+        msg = [base.make_text_event(self._text_buffer)]
         self._text_buffer = ""
         return msg
       return []
@@ -69,7 +59,7 @@ class GeminiCliBackend(AgentBackend):
     # --- tool_use ---
     if ev_type == "tool_use":
       events = flush_buffer()
-      events.append(make_tool_use_event(ev.get("tool_name", ""), ev.get("parameters", {})))
+      events.append(base.make_tool_use_event(ev.get("tool_name", ""), ev.get("parameters", {})))
       return events
 
     # --- tool_result ---
@@ -77,18 +67,18 @@ class GeminiCliBackend(AgentBackend):
       events = flush_buffer()
       status = ev.get("status", "")
       if status == "success":
-        events.append(make_tool_result_event(ev.get("tool_id", ""), ev.get("output", "")))
+        events.append(base.make_tool_result_event(ev.get("tool_id", ""), ev.get("output", "")))
       elif status == "error":
         error = ev.get("error", {})
         msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
-        events.append(make_tool_result_event(ev.get("tool_id", ""), msg))
+        events.append(base.make_tool_result_event(ev.get("tool_id", ""), msg))
       return events
 
     # --- error ---
     if ev_type == "error":
       events = flush_buffer()
       msg = ev.get("message", "")
-      events.append(make_error_event(msg))
+      events.append(base.make_error_event(msg))
       return events
 
     # --- result ---
@@ -96,7 +86,7 @@ class GeminiCliBackend(AgentBackend):
       events = flush_buffer()
       stats = ev.get("stats", {})
       events.append(
-          make_result_event(
+          base.make_result_event(
               input_tokens=stats.get("input_tokens", 0),
               output_tokens=stats.get("output_tokens", 0),
               cache_read=stats.get("cached", 0),

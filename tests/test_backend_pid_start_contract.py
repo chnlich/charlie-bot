@@ -32,6 +32,7 @@ import pytest
 from conftest import (
     ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
     BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
+    GEMINI_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_RESOLVE_BINARY_PATCH_TARGET,
     OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET,
     RUNS_READ_PID_STAT_PATCH_TARGET,
@@ -122,6 +123,8 @@ async def _drive_base_path(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
   module = sys.modules[cls.__module__]
   if "resolve_binary" in vars(module):  # some constructors resolve their CLI eagerly
     monkeypatch.setattr(f"{cls.__module__}.resolve_binary", lambda name, fallback: "/usr/bin/true")
+  elif cls is GeminiCliBackend:  # its eager resolve reads the helper through the base module
+    monkeypatch.setattr(GEMINI_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/true")
   observed: list[tuple[int, str | None]] = []
   backend: AgentBackend
 

@@ -23,17 +23,14 @@ the usage panel.
 
 from __future__ import annotations
 
+import datetime
 from collections.abc import Awaitable, Callable
-from datetime import datetime
 
 from src.agents import master_cc_state
-from src.core import claude_accounts, claude_compaction, claude_relay
+from src.core import claude_accounts, claude_compaction, claude_relay, config, log_once, models
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, ClaudeAccount, SessionMetadata
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def _persist(item: master_cc_state._WorkItem) -> Callable[[dict], Awaitable[None]]:
@@ -81,12 +78,12 @@ async def _compact_session_transcript(
 
 
 def choose_turn_account(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     model: str | None,
-    last_request_at: datetime | None,
-    now: datetime | None,
-) -> tuple[ClaudeAccount | None, bool]:
+    last_request_at: datetime.datetime | None,
+    now: datetime.datetime | None,
+) -> tuple[models.ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 
   The current account stays while the cache is warm, it is healthy, its newest
@@ -122,7 +119,7 @@ GUARD_REFUSED_NEWER_TRANSCRIPT = "guard_refused_newer_transcript"
 async def adopt_transcript_holder(
     item: master_cc_state._WorkItem,
     cc_session_id: str | None,
-    holder: ClaudeAccount,
+    holder: models.ClaudeAccount,
     previous_label: str | None,
     reason: str,
 ) -> None:
@@ -149,7 +146,7 @@ async def adopt_transcript_holder(
 
 
 async def _probe_reconcile_label(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     item: master_cc_state._WorkItem,
     cc_session_id: str | None,
 ) -> None:
@@ -181,15 +178,15 @@ async def _probe_reconcile_label(
 
 
 async def place_turn(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     item: master_cc_state._WorkItem,
-    option: BackendOption,
+    option: models.BackendOption,
     resume_id: str | None,
     cwd: str,
     context_tokens: int | None,
-    last_request_at: datetime | None,
-    now: datetime | None = None,
-) -> tuple[ClaudeAccount | None, str | None]:
+    last_request_at: datetime.datetime | None,
+    now: datetime.datetime | None = None,
+) -> tuple[models.ClaudeAccount | None, str | None]:
   """Pick the turn's account, move the transcript to it and compact on a cold cache.
 
   The account label is disk-true from the moment the move lands: the lineage
@@ -246,7 +243,7 @@ async def place_turn(
 # ---------------------------------------------------------------------------
 
 
-async def _report_login_required(item: master_cc_state._WorkItem, account: ClaudeAccount, reason: str) -> None:
+async def _report_login_required(item: master_cc_state._WorkItem, account: models.ClaudeAccount, reason: str) -> None:
   """Emit the login-required operator notice once.
 
   The log line keeps the chat event's type as its label, and the chat event
@@ -263,14 +260,14 @@ async def _report_login_required(item: master_cc_state._WorkItem, account: Claud
 
 async def report_login_failure(
     item: master_cc_state._WorkItem,
-    account: ClaudeAccount,
+    account: models.ClaudeAccount,
 ) -> None:
   """Mark *account* unhealthy for the cooldown and tell the operator (account-free in chat)."""
   claude_accounts.record_auth_failure(account.label, None)
   await _report_login_required(item, account, claude_relay.LOGIN_REASON_AUTH_FAILED)
 
 
-async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state._WorkItem) -> None:
+async def report_empty_credentials(cfg: config.CharlieBotConfig, item: master_cc_state._WorkItem) -> None:
   """One notice per account whose credential store has gone empty, until it recovers."""
   for account in claude_accounts.pool(cfg):
     present = claude_accounts.credentials_present(account)
@@ -279,14 +276,14 @@ async def report_empty_credentials(cfg: CharlieBotConfig, item: master_cc_state.
 
 
 async def prepare_relay(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     item: master_cc_state._WorkItem,
-    option: BackendOption,
+    option: models.BackendOption,
     cc_session_id: str | None,
-    current: ClaudeAccount,
+    current: models.ClaudeAccount,
     cwd: str,
     reason: str,
-) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
+) -> tuple[models.ClaudeAccount | None, str | None, models.ClaudeAccount | None]:
   """Move the turn to the next account and compact a large Fable context there.
 
   Returns ``(account, None, None)``, or ``(None, error, refused_holder)`` when

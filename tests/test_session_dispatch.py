@@ -402,7 +402,8 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   import src.api.chat as chat_api
   import src.api.internal as internal_api
   import src.api.sessions as sessions_api
-  from src.api.deps import get_config, get_run_store, get_session_manager, get_task_manager
+  from src.api.deps import get_run_store, get_session_manager, get_task_manager
+  from src.core import config
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
@@ -414,7 +415,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   app.include_router(internal_api.router, prefix="/api/internal")
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
-  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
@@ -498,7 +499,8 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   from fastapi.testclient import TestClient
 
   import src.api.sessions as sessions_api
-  from src.api.deps import get_config, get_run_store, get_session_manager, get_task_manager
+  from src.api.deps import get_run_store, get_session_manager, get_task_manager
+  from src.core import config
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
@@ -508,7 +510,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   app.include_router(sessions_api.router, prefix="/api/sessions")
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
-  app.dependency_overrides[get_config] = lambda: cfg
+  app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs

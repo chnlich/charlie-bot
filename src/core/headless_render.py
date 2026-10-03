@@ -10,28 +10,28 @@ raises ``ValueError`` loudly with the browser's stderr tail, and closes the rend
 
 import atexit
 import json
+import pathlib
 import shutil
 import subprocess
 import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import NoReturn
 
 from websockets.sync import client as _ws_client
 
-from src.core.timeouts import HEADLESS_LAUNCH_TIMEOUT, HEADLESS_RENDER_TIMEOUT, HEADLESS_TEARDOWN_WAIT
+from src.core import timeouts
 
 
 class _WarmRenderer:
   """One warm Chrome process serving page-height renders over the DevTools websocket."""
 
-  def __init__(self, chrome_bin: Path) -> None:
+  def __init__(self, chrome_bin: pathlib.Path) -> None:
     self._chrome_bin = chrome_bin
     self._proc = None
     self._ws = None
-    self._udd: Path | None = None
-    self._stderr_path: Path | None = None
+    self._udd: pathlib.Path | None = None
+    self._stderr_path: pathlib.Path | None = None
     self._session: str | None = None
     self._msg_id = 0
     self._pending: list[dict] = []
@@ -41,7 +41,7 @@ class _WarmRenderer:
       if self._proc is None or self._proc.poll() is not None or self._ws is None:
         self.close()
         self._launch()
-      self._deadline = time.monotonic() + HEADLESS_RENDER_TIMEOUT
+      self._deadline = time.monotonic() + timeouts.HEADLESS_RENDER_TIMEOUT
       return self._render_once(probe_uri)
     except Exception as e:
       tail = self._stderr_tail()
@@ -50,8 +50,8 @@ class _WarmRenderer:
         raise
       if isinstance(e, TimeoutError):
         raise ValueError(
-            f"headless renderer timed out after {HEADLESS_RENDER_TIMEOUT}s while measuring the plan page height{tail}"
-        ) from e
+            f"headless renderer timed out after {timeouts.HEADLESS_RENDER_TIMEOUT}s"
+            f" while measuring the plan page height{tail}") from e
       raise ValueError(f"headless renderer failed while measuring the plan page height: {e}{tail}") from e
 
   def _render_once(self, probe_uri: str) -> int:
@@ -70,9 +70,9 @@ class _WarmRenderer:
       time.sleep(0.005)
 
   def _launch(self) -> None:
-    self._udd = Path(tempfile.mkdtemp(prefix="headless-render-"))
+    self._udd = pathlib.Path(tempfile.mkdtemp(prefix="headless-render-"))
     self._stderr_path = self._udd / "stderr.log"
-    self._deadline = time.monotonic() + HEADLESS_LAUNCH_TIMEOUT
+    self._deadline = time.monotonic() + timeouts.HEADLESS_LAUNCH_TIMEOUT
     try:
       # Our own handle closes with the with-block; the child keeps its inherited fd.
       with self._stderr_path.open("wb") as stderr_log:
@@ -98,7 +98,7 @@ class _WarmRenderer:
       time.sleep(0.05)
     port, path = port_file.read_text().splitlines()[:2]
     try:
-      self._ws = _ws_client.connect(f"ws://127.0.0.1:{port}{path}", open_timeout=HEADLESS_LAUNCH_TIMEOUT)
+      self._ws = _ws_client.connect(f"ws://127.0.0.1:{port}{path}", open_timeout=timeouts.HEADLESS_LAUNCH_TIMEOUT)
     except Exception as e:
       self._launch_failed(str(e), cause=e)
     target_id = self._cmd("Target.createTarget", url="about:blank")["result"]["targetId"]
@@ -157,7 +157,7 @@ class _WarmRenderer:
       self._ws = None
     if self._proc is not None:
       self._proc.kill()
-      self._proc.wait(HEADLESS_TEARDOWN_WAIT)
+      self._proc.wait(timeouts.HEADLESS_TEARDOWN_WAIT)
       self._proc = None
     if self._udd is not None:
       shutil.rmtree(self._udd, ignore_errors=True)
@@ -171,7 +171,7 @@ _renderer: _WarmRenderer | None = None
 _module_lock = threading.Lock()
 
 
-def render_height(chrome_bin: Path, probe_uri: str) -> int:
+def render_height(chrome_bin: pathlib.Path, probe_uri: str) -> int:
   global _renderer
   with _module_lock:
     if _renderer is None or _renderer._chrome_bin != chrome_bin:

@@ -22,10 +22,8 @@ import shlex
 import subprocess
 import sys
 
-from src.cli.common import add_session_arg, resolve_session_id
-from src.cli.help_formatter import CliHelpFormatter
-from src.core.ssh import ssh_cmd
-from src.core.timeouts import SSH_LAUNCH_TIMEOUT
+from src.cli import common, help_formatter
+from src.core import ssh, timeouts
 
 
 def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
@@ -44,15 +42,15 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
 
   try:
     proc = subprocess.run(
-        ssh_cmd(host, "bash", "-c", shlex.quote(wrapper)),
+        ssh.ssh_cmd(host, "bash", "-c", shlex.quote(wrapper)),
         capture_output=True,
         text=True,
         check=False,
-        timeout=SSH_LAUNCH_TIMEOUT,
+        timeout=timeouts.SSH_LAUNCH_TIMEOUT,
     )
   except subprocess.TimeoutExpired as exc:
     stderr = exc.stderr or ""
-    print(f"ssh to {host} timed out after {SSH_LAUNCH_TIMEOUT}s: {stderr.strip()}", file=sys.stderr)
+    print(f"ssh to {host} timed out after {timeouts.SSH_LAUNCH_TIMEOUT}s: {stderr.strip()}", file=sys.stderr)
     sys.exit(2)
   if proc.returncode != 0:
     print(f"ssh to {host} failed (rc={proc.returncode}): {proc.stderr.strip()}", file=sys.stderr)
@@ -68,8 +66,9 @@ def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-      description="Launch a long-running command on a remote host via ssh+setsid", formatter_class=CliHelpFormatter)
-  add_session_arg(parser)
+      description="Launch a long-running command on a remote host via ssh+setsid",
+      formatter_class=help_formatter.CliHelpFormatter)
+  common.add_session_arg(parser)
   parser.add_argument("--host", required=True, help="Remote host (ssh target)")
   parser.add_argument("--cwd", required=True, help="Working directory on the remote host")
   parser.add_argument("--cmd", required=True, help="Command to execute on the remote host")
@@ -77,17 +76,16 @@ def main() -> None:
   # The model and config stacks ride the one launch that needs them: a
   # deferral here keeps --help and parser errors off their import chains (the
   # src.cli.config deferral shape).
-  from src.core.config import get_config
-  from src.core.models import utc_now
+  from src.core import config, models
 
-  session_id = resolve_session_id(args.session)
+  session_id = common.resolve_session_id(args.session)
 
-  started_at = utc_now()
+  started_at = models.utc_now()
   launch_id = f"{started_at:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
 
   remote_pid = _ssh_launch_remote(args.host, args.cwd, args.cmd, launch_id)
 
-  session_dir = get_config().sessions_dir / session_id
+  session_dir = config.get_config().sessions_dir / session_id
   if not session_dir.is_dir():
     print(f"session dir does not exist: {session_dir}", file=sys.stderr)
     sys.exit(4)

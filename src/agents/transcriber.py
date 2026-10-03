@@ -301,8 +301,8 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   segment decodes in one shot over the padded window the pipeline has always used
   (5 s of pause before the segment, 0.4 s tail after, the left edge clipped against
   the previous segment's right edge so windows never overlap), and the segment texts
-  join in window order — the windows fan out round-robin over the bundle's recognizer
-  pool, so decode order never reaches the transcript. No state survives the call.
+  join in window order — the windows go to whichever recognizer frees first, so
+  decode order never reaches the transcript. No state survives the call.
   """
   if len(pcm_bytes) % 2 != 0:
     raise ValueError("invalid PCM frame: byte length must be even")
@@ -313,10 +313,28 @@ def transcribe_pcm_offline(bundle: _SpeechModelBundle, pcm_bytes: bytes) -> str:
   windows = offline_decode_windows(vad, samples)
   texts: list[str] = [""] * len(windows)
   errors: list[BaseException] = []
+  # Claim order is the padded span's longest first: the span is the one pre-decode cost
+  # signal, and the worst corpus's per-window decode walls track it (0.245-0.303 s/s,
+  # rank-monotone) — longest-first claiming is the LPT order that keeps no recognizer
+  # idle while a long window waits. The static stride it replaces left the worst
+  # corpus's workers holding 10.87/10.75/6.56/1.35 s of decode while two of the four
+  # sat idle past the 80 % mark of the wall.
+  claim_order = sorted(range(len(windows)), key=lambda i: windows[i][3] - windows[i][2], reverse=True)
+  next_claim = 0
+  claim_lock = threading.Lock()
+
+  def _claim_window() -> int | None:
+    nonlocal next_claim
+    with claim_lock:
+      if next_claim >= len(claim_order):
+        return None
+      index = claim_order[next_claim]
+      next_claim += 1
+      return index
 
   def _decode_slice(worker: int) -> None:
     try:
-      for index in range(worker, len(windows), len(bundle.recognizers)):
+      while (index := _claim_window()) is not None:
         _start, _end, left, right = windows[index]
         texts[index] = _decode_samples(bundle, samples[left:right].astype(np.float32) / 32768.0, worker)
     except BaseException as exc:  # re-raised on the caller's thread below

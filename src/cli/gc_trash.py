@@ -14,13 +14,14 @@ import argparse
 import shutil
 import sys
 
-from src.cli.help_formatter import CliHelpFormatter
-from src.core.human_size import format_size
+from src.cli import help_formatter
+from src.core import human_size
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-      description="List or purge the CharlieBot worktree quarantine trash", formatter_class=CliHelpFormatter)
+      description="List or purge the CharlieBot worktree quarantine trash",
+      formatter_class=help_formatter.CliHelpFormatter)
   parser.add_argument(
       "--yes",
       action="store_true",
@@ -29,12 +30,11 @@ def main() -> None:
   # The trash-scan and config stacks ride the one purge that needs them: a
   # deferral here keeps --help and parser errors off their import chains (the
   # src.cli.config deferral shape).
-  from src.core.config import get_config
-  from src.core.worktree_trash import list_trash_entries, trash_dir
+  from src.core import config, worktree_trash
 
-  cfg = get_config()
-  trash_path = trash_dir(cfg.paths.worktree_dir)
-  entries = list_trash_entries(trash_path)
+  cfg = config.get_config()
+  trash_path = worktree_trash.trash_dir(cfg.paths.worktree_dir)
+  entries = worktree_trash.list_trash_entries(trash_path)
 
   if not entries:
     print(f"Quarantine trash is empty: {trash_path}")
@@ -42,8 +42,10 @@ def main() -> None:
 
   total = sum(entry.size_bytes for entry in entries)
   for entry in entries:
-    print(f"{entry.path}  age={entry.age_days:.1f}d  size={format_size(entry.size_bytes)}")
-  print(f"\n{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}, {format_size(total)} total in {trash_path}")
+    print(f"{entry.path}  age={entry.age_days:.1f}d  size={human_size.format_size(entry.size_bytes)}")
+  print(
+      f"\n{len(entries)} entr{'y' if len(entries) == 1 else 'ies'}, {human_size.format_size(total)} total in {trash_path}"
+  )
 
   if not args.yes:
     print("Dry run — nothing deleted. Re-run with --yes to hard-delete.")

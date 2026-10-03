@@ -10,12 +10,12 @@ them and passes collect=False.
 
 from __future__ import annotations
 
+import contextlib
 import gc
 from collections.abc import Iterator
-from contextlib import contextmanager
 
 
-@contextmanager
+@contextlib.contextmanager
 def gc_off(collect: bool) -> Iterator[None]:
   """Run the enclosed span with GC disabled, re-enable on every exit path."""
   gc.disable()

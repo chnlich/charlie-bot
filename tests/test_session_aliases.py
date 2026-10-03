@@ -25,13 +25,13 @@ def _write(
 def test_resolve_rereads_only_when_the_file_moves(tmp_path: Path, monkeypatch) -> None:
   store = SessionAliasStore(tmp_path)
   parses = []
-  real_load = sa.load_json_meta
+  real_load = sa.json_utils.load_json_meta
 
   def counting_load(path, event, **kwargs):
     parses.append(path.name)
     return real_load(path, event, **kwargs)
 
-  monkeypatch.setattr(sa, "load_json_meta", counting_load)
+  monkeypatch.setattr(sa.json_utils, "load_json_meta", counting_load)
   _write(tmp_path / "session_aliases.json", old_threads={"s1/r1": {"session_id": "s1", "run_id": "r1"}})
 
   assert store.resolve_thread("s1", "r1") == {"session_id": "s1", "run_id": "r1"}

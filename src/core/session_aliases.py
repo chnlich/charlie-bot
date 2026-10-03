@@ -10,13 +10,11 @@ lock; the file's shape (``old_session_ids``, ``old_threads``) is unchanged.
 
 import json
 import os
-from pathlib import Path
+import pathlib
 
-from src.core.json_utils import atomic_write_text, load_json_meta
-from src.core.log_once import LazyStructlogLogger
-from src.core.memo import StatSignatureMemo
+from src.core import json_utils, log_once, memo
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 ALIASES_FILE_NAME = "session_aliases.json"
 
@@ -39,9 +37,9 @@ class SessionAliasStore:
   caller (:meth:`_put`) writes from its own copy.
   """
 
-  def __init__(self, sessions_dir: Path) -> None:
+  def __init__(self, sessions_dir: pathlib.Path) -> None:
     self.path = sessions_dir / ALIASES_FILE_NAME
-    self._memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_ALIAS_MEMO_LIMIT)
+    self._memo: memo.StatSignatureMemo[str, dict] = memo.StatSignatureMemo(_ALIAS_MEMO_LIMIT)
 
   def _read(self) -> dict:
     try:
@@ -52,7 +50,7 @@ class SessionAliasStore:
     cached = self._memo.fresh(_ALIAS_MEMO_KEY, st)
     if cached is not None:
       return cached
-    raw = load_json_meta(self.path, "session_aliases_unreadable")
+    raw = json_utils.load_json_meta(self.path, "session_aliases_unreadable")
     if raw is None:
       # Missing (unlinked between the stat and the read) or malformed: the
       # per-call empty answer the resolvers have always seen, never memoized.
@@ -118,4 +116,4 @@ class SessionAliasStore:
 
   def _write(self, payload: dict) -> None:
     self.path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+    json_utils.atomic_write_text(self.path, json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))

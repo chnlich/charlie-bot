@@ -181,7 +181,7 @@ tracked or untracked, which `switch` would otherwise carry silently — exits be
 and a diverged checkout fails the `--ff-only` merge. The restore runs only on a clean tree, where
 it cannot discard a sibling's work; the branch keeps its commits.
 
-The whole-corpus scratch copies (the M35/M55/M70/M71 pair consumers and the M66/M84 builders) are removed by the block that finishes with them, on every exit path: the hourly cadence turns a skipped removal into one leaked copy per round, tmpfiles reaps /tmp only past 30 days, and the leak compounds on the root fs that holds every collector's corpus.
+The whole-corpus scratch copies (the M35/M55/M70/M71 pair consumers and the M66/M84 builders) are removed by the block that finishes with them, on every exit path: the hourly cadence turns a skipped removal into one leaked copy per round, tmpfiles reaps /tmp only past 30 days, and the leak compounds on the root fs that holds every collector's corpus. A single-block unit that builds its own home prints its ``export M<unit>_HOME=<path>`` line as the home is born: the sweep runner removes only exported scratch paths, so an unexported home leaks one copy per round (the 2026-10-03 history row is the 15-unit leak this rule closed).
 
 M1 — host load and serve CPU. The grep covers both process shapes the serving path runs: the
 server's own launcher chain (`scripts/start-server.sh` → `uv run python3 server.py` wrapper →
@@ -687,6 +687,7 @@ WRITES = 3000
 
 async def main():
     work = Path(tempfile.mkdtemp(prefix="m10-torn-read-"))
+    print(f"export M10_HOME={work}")
     # A session's default backend resolves from backends.options (empty by
     # default since the sectioned config), so the scratch config carries one.
     cfg = CharlieBotConfig(charliebot_home=work / "home",
@@ -835,7 +836,9 @@ from src.api.git import diff_files
 REPO = Path(os.path.expanduser("~/workspace/charlie-bot"))
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m14-home-")),
+home = Path(tempfile.mkdtemp(prefix="m14-home-"))
+print(f"export M14_HOME={home}")
+cfg = CharlieBotConfig(charliebot_home=home,
                        paths={"workspace_dirs": [os.path.expanduser("~/workspace")]})
 
 async def run_once():
@@ -901,6 +904,7 @@ WRITES = 3000
 
 async def setup():
     work = Path(tempfile.mkdtemp(prefix="m15-torn-read-"))
+    print(f"export M15_HOME={work}")
     # A session's default backend resolves from backends.options (empty by
     # default since the sectioned config), so the scratch config carries one.
     cfg = CharlieBotConfig(charliebot_home=work / "home",
@@ -976,6 +980,7 @@ from src.core.triggers import TriggerManager, _migrate_legacy_watch_pids
 WRITES = 3000
 
 work = Path(tempfile.mkdtemp(prefix="m16-torn-read-"))
+print(f"export M16_HOME={work}")
 cfg = CharlieBotConfig(charliebot_home=work / "home")
 sessions = SessionManager(cfg)
 triggers = TriggerManager(cfg, sessions)
@@ -2866,7 +2871,9 @@ from src.api.git import diff_files
 REPO = Path(os.path.expanduser("~/workspace/charlie-bot"))
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m41-home-")),
+home = Path(tempfile.mkdtemp(prefix="m41-home-"))
+print(f"export M41_HOME={home}")
+cfg = CharlieBotConfig(charliebot_home=home,
                        paths={"workspace_dirs": [os.path.expanduser("~/workspace")]})
 
 async def main():
@@ -2969,7 +2976,9 @@ from src.api.git import diff_files, diff_file
 REPO = Path(os.path.expanduser("~/workspace/charlie-bot"))
 BASE = subprocess.run(["git", "rev-list", "--max-parents=0", "HEAD"],
                       cwd=REPO, capture_output=True, text=True, check=True).stdout.splitlines()[0]
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m43-home-")),
+home = Path(tempfile.mkdtemp(prefix="m43-home-"))
+print(f"export M43_HOME={home}")
+cfg = CharlieBotConfig(charliebot_home=home,
                        paths={"workspace_dirs": [os.path.expanduser("~/workspace")]})
 
 async def main():
@@ -3259,6 +3268,7 @@ from src.core.sessions import SessionManager
 # Corpus shape: one fresh active session whose data/ holds no live chat file
 # (a scheduled-session creation carries no events until its first turn).
 work = Path(tempfile.mkdtemp(prefix="m48-search-scan-"))
+print(f"export M48_HOME={work}")
 # A session's default backend resolves from backends.options (empty by
 # default since the sectioned config), so the scratch config carries one.
 cfg = CharlieBotConfig(charliebot_home=work / "home",
@@ -3347,6 +3357,7 @@ sys.path.insert(0, os.path.expanduser("~/workspace/charlie-bot"))
 from src.api import ext_usage as ext_usage_mod
 
 work = Path(tempfile.mkdtemp(prefix="m50-cred-read-"))
+print(f"export M50_HOME={work}")
 creds = work / ".credentials.json"
 creds.write_text(json.dumps({"claudeAiOauth": {"accessToken": "", "refreshToken": "r"}}))
 
@@ -3551,6 +3562,7 @@ from src.core import config as core_config
 # a fragment there is rejected outright and can never move the fingerprint.
 # Scratch CHARLIEBOT_HOME; the live home is never read or written here.
 work = Path(tempfile.mkdtemp(prefix="m53-reload-"))
+print(f"export M53_HOME={work}")
 home = work / "home"
 (home / "config.d").mkdir(parents=True)
 (home / "config.yaml").write_text("", encoding="utf-8")
@@ -5692,7 +5704,9 @@ from src.api.git import list_branches, _refs_signature
 REPO = Path(os.path.expanduser("~/workspace/charlie-bot"))
 REFS = subprocess.run(["git", "for-each-ref"], cwd=REPO, capture_output=True, text=True,
                       check=True).stdout.count("\n")
-cfg = CharlieBotConfig(charliebot_home=Path(tempfile.mkdtemp(prefix="m79-home-")),
+home = Path(tempfile.mkdtemp(prefix="m79-home-"))
+print(f"export M79_HOME={home}")
+cfg = CharlieBotConfig(charliebot_home=home,
                        paths={"workspace_dirs": [os.path.expanduser("~/workspace")]})
 
 async def main():
@@ -5844,7 +5858,9 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 from src.agents import worker as worker_mod
 
 # Scratch worker log under /tmp; the live home is never touched.
-path = os.path.join(tempfile.mkdtemp(prefix="m82-append-"), "events.jsonl")
+work = tempfile.mkdtemp(prefix="m82-append-")
+print(f"export M82_HOME={work}")
+path = os.path.join(work, "events.jsonl")
 probe = {"type": "assistant", "message": {"content": "m82 probe " + "y" * 200}}
 
 append = worker_mod._append_event_line
@@ -6448,6 +6464,7 @@ class _StubBackend:
 
 async def main():
     work = tempfile.mkdtemp(prefix="m89-stderr-tee-")
+    print(f"export M89_HOME={work}")
     stub = _StubBackend()
     await AgentBackend._stream_stderr(stub, os.path.join(work, "stderr-warm.log"))  # warm, as a run's first stderr bytes; not timed
     times = []
@@ -6488,7 +6505,9 @@ from src.agents.backends.opencode import OpenCodeBackend
 CHUNKS = 400
 chunk = b"x" * 8192
 line = b"2026-09-11T04:00:00.000Z  INFO serve listening on 127.0.0.1:4099\n"
-path = os.path.join(tempfile.mkdtemp(prefix="m90-stdout-pump-"), "stdout.log")
+work = tempfile.mkdtemp(prefix="m90-stdout-pump-")
+print(f"export M90_HOME={work}")
+path = os.path.join(work, "stdout.log")
 
 class _StubStream:
     def __init__(self):
@@ -7203,6 +7222,7 @@ from pathlib import Path
 
 CHECKOUT = os.environ["CHECKOUT"]
 work = Path(tempfile.mkdtemp(prefix="m102-wrap-"))
+print(f"export M102_HOME={work}")
 fragment = work / "fragment.html"
 fragment.write_text("<section><h2>Probe</h2><p>latency-perf M102 wrap-wall probe paragraph.</p></section>", encoding="utf-8")
 output = work / "page.html"
@@ -7384,6 +7404,7 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 # uncredentialed request reads 401 before the file route; the scratch home pins
 # the empty key so the drive carries the credentialed view's served shape.
 home = tempfile.mkdtemp(prefix="m105-transport-home-", dir="/tmp")
+print(f"export M105_HOME={home}")
 Path(home, "credentials.yaml").write_text("charliebot:\n  access_key: ''\n", encoding="utf-8")
 os.environ["CHARLIEBOT_HOME"] = home
 import server  # the real app stack: the transport-gzip middleware over the file server
@@ -9667,6 +9688,7 @@ EOF
 | 2026-09-28 | this PR | M35 / M63 / M80 collectors repaired, the sweep's own machinery (no product-code change): the standing sweep read all 123 defined metrics but six collectors failed — M35 and M63 drove ``GET /api/sessions/{id}/view``, deleted by #2249 (404 / ``AttributeError: get_session_view``), and M7 changed-round, M7 warm-gate, M7 restart-cold and M80 imported ``collect_token_usage``/``_rows_sidecar_name``, retired by the ledger refactor (93d9277e) — so those six metrics read unmeasured. Repairs: M35 drops the view leg (the SPA switch loads through bootstrap since #2249); M63 retires per the M44 precedent (the /view handler was its only subject; the thread-row costs ride the standing M5 threads/list and M36 worker-list lines at the same worst corpus); M80 retargets the busy-turn shape at the page's capture-first path — scratch claude+codex corpus, cold capture into a scratch ``UsageLedger``, ~1 MB line-aligned appends to both files, timed changed-round capture, ledger-row digest across arms. After readings (verbatim collectors, main checkout at origin/main, load 0.2-0.5 one-minute): M35 events median 0.82/0.86/0.88 ms, max 1.41-1.59 ms, digest 0a5ce8209968, bootstrap median 1.08/1.10/1.13 ms, digest eff30ffa2fcf, identical across rounds (events line < 0.004 s); M80 changed-round capture wall 0.0438/0.0442/0.0454/0.0459 s over four rounds, records written {'Claude Code': 1184, 'Codex': 771} and rows digest 24b906fc5dd9 identical every round (line median < 0.30 s). Remainder for a later run: the three M7 sub-shapes still price the retired cache-document collect; their production shapes (corpus move between page loads, first load after a start, the row-memo gate advance) now live in the ledger capture and need their own retargeted harnesses | a collector that fails is a metric whose regression watch does not run; the M97 repair (2026-09-28) pinned the same rule |
 
 | Date | PR | Before → after | Note |
+| 2026-10-03 | this PR | Sweep scratch-leak repair, the sweep's own machinery (no product-code change): 15 collector blocks built their ``tempfile.mkdtemp`` homes without removing them and without exporting them, so the runner's exit-path sweep (exported paths only) never saw them — one leaked home per unit per round, measured 106 home dirs plus 83 one-off probe debris files standing at ~276 MB after seven hourly rounds (15 dirs/round compounding on the root fs that holds every collector's corpus). Every leaking block now prints its ``export M<unit>_HOME=<path>`` line as the home is born, and the doc's execution contract gains the rule. After: one full verification sweep (144 blocks, load 2.3-3.7 one-minute across the run) leaves zero homes behind — the runner log carries 15 ``swept leftover scratch`` lines, one per repaired unit, and ``ls -d /tmp/m<unit>-*`` answers empty for all 15 prefixes; the standing collectors' readings are untouched by the added prints (M7's standing page still 500s at the stale pre-restart server process, unchanged from this round's standing sweep) | the runner's ``_sweep_scratch`` already removed every exported scratch path whatever the exit path — the M70/M71 builder pair rode it since the 2026-09-29 single-homing; the fifteen single-block units predated the convention and leaked silently beside it |
 | 2026-09-29 | this PR | M130 token-usage opencode capture, introduced with its landing fix: the opencode signature probe's stat gate moved from process memory into the ledger's new ``capture_gates`` table (keyed (host, path), the same (size, mtime_ns) proof, written at probe time) — the probe aggregates the whole message table with no index to serve it, 73.7-81.1 ms warm and 5.13 s on its first disk-cold run against the live 5.7 GB db, and sat at the per-process shape once per process, so every server restart's first ``/token-usage`` load paid it; the live log carries the shape (11:04:25 ``GET /token-usage duration_ms=12810``, the first browser load 3.6 min after the 11:00:45 restart; the follow-up loads 582-965 ms — a db whose files moved re-probes and re-reads from the captured floor, unchanged semantics). Interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds of the new verbatim collector, live db read-only, scratch ledger seeded per round, load 6.4-11.5 one-minute: fresh-process capture median 75.42/73.70/76.30 → 0.13/0.16/0.17 ms (−99.8 %), maxima 75.63-77.05 → 0.14-0.22 ms, every paired round faster, bands disjoint; written 0 per timed round and db files byte-still True in every round both arms; ruff and yapf clean, the capture+ledger suites green plus three new tests (the gate round-trip through the ledger; the durable gate across a reopened ledger prices no probe connection; a pre-gate ledger file gains the table on its first open) | every server process re-scanned the whole opencode message table once at its first capture although the files' (size, mtime_ns) pairs prove the stored probe's aggregates still hold — the scan is disk-bound and sat directly on the page's first-load path after every restart |
 | 2026-09-28 | this PR | M8 absent-needle content scan, the ASCII query's window scan switched from decode+str.lower to a raw-byte translate fold: component attribution single-thread over the live active corpus (409 files, 299.6 MB) 0.750 → 0.261 s (2.9×, 400 → 1146 MB/s, verdicts identical); manager-level interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds per shape over the live home read-only at load 1.9-2.5 one-minute — cold-metadata arms 1022.4/1032.5/1017.4 → 480.5/483.2/479.5 ms (median-of-medians 1022.4 → 483.2, −53 %), warm-metadata arms (one untimed search warms the metadata caches, a second absent needle rides them — the served shape) 853.5/880.7/864.1 → 354.0/348.0/351.5 ms (median-of-medians 864.1 → 351.5, −59 %), min/max fully separated in both shapes, rows [] in every arm; the standing sweep's served reading this round was 0.381 s median on pre-fix code (line < 0.5 s) — the served after number arrives at the next round's sweep; boundary: an ASCII needle no longer matches U+212A/U+0130 (whose str.lower() contains an ASCII letter) — those two ride the decoded path beside non-ASCII needles, unchanged; 1092-passed suite (the 7 vfork/antigravity/frontend-js failures are the documented worktree-environmental set; 3 cron/review flakes under a concurrent A/B passed idle) plus one scan-level test (raw/decoded verdict parity over boundary carries, the rescan window, the boundary) | every fresh-needle search decoded the whole searchable corpus to str and lowercased each window before the substring test — the UTF-8 decode and the per-window str allocation were the scan's marginal cost at corpus scale; for an ASCII needle UTF-8 never encodes a non-ASCII codepoint below 0x80, so a 256-byte translate fold sees the same ASCII letters with no decode, and bytes.translate rides memchr-class speed |
 | 2026-09-28 | this PR | M128 introduced with its landing fix: the standing M120 corpus omits every run record the tree page's row derivation reads (its export block ignores ``data/runs``), so the served repeat request re-read all 841 run records per click — invisible to the M120 line (9.48 ms) while the served shape read 65 ms. The new collector copies the M120 corpus shape plus each run's metadata.json (355-366 task nodes, 841-871 records as the fleet churned; the record is the only run file the derivation reads), interleaved A/B, main checkout before vs branch worktree after back-to-back, arm order alternating, three rounds at load 1.9-3.5 one-minute: repeat-request median 61.01/66.30/65.43 → 3.36/3.30/3.42 ms, re-measured after the review round's memo-key repair 2.52/6.07/3.51 ms at 366 nodes (median-of-medians 65.43 → 3.51, −94.6 %, every paired round faster; maxima 62.91-78.86 → 3.01-6.72 ms — the 6.07/6.72 pair rode load 3.46 one-minute; first timed rounds 62.96-68.45 → 3.06-6.72 ms — the cold pass derives, the timed rounds ride the memo), body sha1 identical within each paired round (bec7fda252e2 ×6 in the first series, ef9af8c4f2b2 ×4 in the second; the between-series sha move is the corpus's own churn — 841 → 871 records between the series). Fix: ``activity_of`` memoizes per node on (records generation, live events identity, covered length, archived extent) — every record mutation funnels through one ``RunStore.write_record`` whose post-write generation bump is the whole staleness contract (the M56 fold's writer-funnel shape; the outside-funnel writer in session_dispatch rides the funnel now), and the covered length is in the key because the events cache takes an append in place: identity and archived extent survive a new fact, and a chat-only fact transition with no record write (a stop request on a queued run, a close/reopen) moves only the length — the identity-only key the first draft shipped served a stale waiting verdict through the reviewer's live repro (queued → request_stop → still waiting), the covered-length key + its regression test is the repair the review round landed; a runless node's cell rides the generation alone so the no-event-load guard keeps its one-stat shape, a verdict that consulted /proc is never stored (a process death moves it with no record write to bump the key, so that node re-derives until its runs settle — the sidebar probe's recheck_liveness contract, unchanged), and ``delete_permanently`` pops the cell next to its sibling memos. No-regression witnesses, interleaved rounds, digests/revision identical across arms: M120 invalidated-index 10.74/9.54 → 8.37/9.36 ms, M121 burst 4.57/4.40 → 4.07/4.19 ms, M56 /status 1.03 → 1.06 ms (digest 741ac0d15f79 identical), M126 reconcile 1.54 → 1.76 ms (both inside lines); three tests ride the finish-staleness test's family (a launch after a warm derivation moves the verdict; a stop request after a warm derivation moves the verdict through the covered length — the test fails against the identity-only key; a /proc-judged verdict is never stored, so a crashed run's death still shows) | every ``session_row`` derived the row's and each descendant's work state by re-reading every run record from disk — the live-home profile put 0.117 of 0.142 s in ``list_run_records_sync`` (804 record reads per request over 307 derivations) — so every tree click paid ~65 ms of repeat reads for records that move only at create/launch/finish; the memo turns the repeat into key checks |

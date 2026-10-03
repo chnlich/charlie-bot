@@ -83,6 +83,28 @@ def test_pretty_trace_splits_at_element_lines_and_every_chunk_parses(tmp_path: P
       _trace_events_or_raise(parsed, trace)
 
 
+def test_head_and_middle_chunks_parse_from_mapped_views_without_touching_the_file(tmp_path: Path) -> None:
+  # The head and middle shapes write the wrap brackets into the mapping's own
+  # pages; a write that reached the file would corrupt the trace for every
+  # later reader, and a bytes return would put the chunk-sized copy back into
+  # every concurrently parsing helper of the one-wave build.
+  trace = tmp_path / "trace.json"
+  _write_pretty_trace(trace, [_event(i) for i in range(120)], trailing={"traceName": "rank5.json"})
+  original = trace.read_bytes()
+  object_form, indent, starts = _split_of(trace)
+  bounds = [0, *starts, trace.stat().st_size]
+  import orjson
+
+  for index in range(len(bounds) - 1):
+    wrapped = direct_pass_child._chunk_parse_input(
+        trace, bounds[index], bounds[index + 1], index,
+        len(bounds) - 1, object_form, indent)
+    orjson.loads(wrapped)
+    if index < len(bounds) - 2:
+      assert isinstance(wrapped, memoryview)
+  assert trace.read_bytes() == original
+
+
 def test_chunked_build_artifact_is_the_original_bytes_gzipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   trace = tmp_path / "trace.json"
   _write_pretty_trace(trace, [_event(i) for i in range(120)])

@@ -8,26 +8,26 @@ the assertions live in one place.
 
 from typing import Any
 
+import conftest
 import pytest
-from conftest import CLI_BACKEND_RIGS, build_cli_backend
 
-from src.agents.backends.base import AgentBackend
-from src.agents.backends.charlie_code import CharlieCodeBackend
-from src.agents.backends.opencode import OpenCodeBackend
+from src.agents.backends import base, charlie_code, opencode
 
 # Each row is the backend's shared conftest rig prefixed by its class:
 # (backend class, resolve_binary patch target, fake binary, constructor defaults).
-BackendDescriptor = tuple[type[AgentBackend], str, str, dict[str, Any]]
+BackendDescriptor = tuple[type[base.AgentBackend], str, str, dict[str, Any]]
 
 _CLI_BACKENDS: list[pytest.param] = [
-    pytest.param((cls, *CLI_BACKEND_RIGS[cls]), id=rig_id)
-    for cls, rig_id in [(CharlieCodeBackend, "charlie-code"), (OpenCodeBackend, "opencode")]
+    pytest.param((cls, *conftest.CLI_BACKEND_RIGS[cls]), id=rig_id) for cls, rig_id in [
+        (charlie_code.CharlieCodeBackend, "charlie-code"),
+        (opencode.OpenCodeBackend, "opencode"),
+    ]
 ]
 
 
-def _build_backend(monkeypatch: pytest.MonkeyPatch, descriptor: BackendDescriptor, **kwargs: Any) -> AgentBackend:
+def _build_backend(monkeypatch: pytest.MonkeyPatch, descriptor: BackendDescriptor, **kwargs: Any) -> base.AgentBackend:
   backend_cls, patch_target, fake_binary, defaults = descriptor
-  return build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=defaults, **kwargs)
+  return conftest.build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=defaults, **kwargs)
 
 
 @pytest.mark.parametrize("descriptor", _CLI_BACKENDS)

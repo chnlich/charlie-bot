@@ -53,8 +53,14 @@ async def test_handle_stale_accepts_z_timestamp(
   commit_mock = AsyncMock()
 
   monkeypatch.setattr(BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, commit_mock)
+  # The stand-in mimics the datetime module surface _handle_stale reads: .datetime.now for the
+  # clock and .UTC for the tz argument passed at the same call.
   monkeypatch.setattr(
-      "src.core.backlog_loop.datetime", SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz)))
+      "src.core.backlog_loop.datetime",
+      SimpleNamespace(
+          datetime=SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz)),
+          UTC=UTC,
+      ))
 
   modified = await _handle_stale(items, backlog_path, cfg, tmp_path)
 

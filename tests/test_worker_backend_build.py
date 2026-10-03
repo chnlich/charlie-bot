@@ -27,11 +27,11 @@ from src.core.models import ThreadMetadata
 BINARY_RESOLVING_TYPES = ["opencode", "antigravity", "codex", "gemini", "charlie-code"]
 
 # Each binary-resolving backend reads resolve_binary through one module attribute:
-# three bind it at import scope (their own namespace), and gemini_cli and
-# antigravity_cli read the base module's attribute at call time (`base.resolve_binary`),
-# so hiding a binary means patching each reader's own attribute, not one shared name.
+# codex and charlie_code bind it at import scope (their own namespace), and gemini_cli,
+# antigravity_cli and opencode read the base module's attribute at call time
+# (`base.resolve_binary`), so hiding a binary means patching each reader's own
+# attribute, not one shared name.
 _RESOLVER_PATCH_TARGETS = [
-    "src.agents.backends.opencode.resolve_binary",
     "src.agents.backends.codex.resolve_binary",
     "src.agents.backends.base.resolve_binary",
     "src.agents.backends.charlie_code.resolve_binary",

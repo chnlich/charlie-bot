@@ -1,18 +1,12 @@
 """Tests for src/cli/improve.py and the /api/internal/improve endpoint."""
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    CONFIG_GET_CONFIG_PATCH_TARGET,
-    make_json_response,
-    make_sessions_dir_config,
-    patched_cli_post,
-)
 
-from src.cli.common import _SentButLostError
-from src.cli.improve import main
-from src.core.models import ImproveRequest
+from src.cli import common, improve
+from src.core import models
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
 _INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
@@ -20,7 +14,7 @@ _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.api.internal.resol
 _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
 
 
-def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: str) -> list[str]:
+def _improve_argv(session_id: str | None, repo: str, goal_file: pathlib.Path, *extra: str) -> list[str]:
   """sys.argv stand-in for improve main(): the session/repo/goal-file wiring every test shares."""
   argv = ["improve"]
   if session_id is not None:
@@ -29,19 +23,19 @@ def _improve_argv(session_id: str | None, repo: str, goal_file: Path, *extra: st
   return argv + list(extra)
 
 
-def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_posts_to_improve_endpoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads --goal-file and posts its content to /api/internal/improve."""
-  cfg = make_sessions_dir_config(tmp_path)
+  cfg = conftest.make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("optimize")
 
-  resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
+  resp_mock = conftest.make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3", "--iterations",
-                                           "2"), return_value=resp_mock) as post_mock:
-    main()
+  with conftest.patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--backend", "codex-o3",
+                                                    "--iterations", "2"), return_value=resp_mock) as post_mock:
+    improve.main()
 
   # Should have posted exactly once to the improve endpoint
   post_mock.assert_called_once()
@@ -57,9 +51,9 @@ def test_main_posts_to_improve_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
   assert "plan" not in payload
 
 
-def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_posts_plan_file_when_provided(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() reads optional --plan-file and includes it in the improve payload."""
-  cfg = make_sessions_dir_config(tmp_path)
+  cfg = conftest.make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"
@@ -67,30 +61,30 @@ def test_main_posts_plan_file_when_provided(tmp_path: Path, monkeypatch: pytest.
   plan_file = tmp_path / "plan.md"
   plan_file.write_text("1. largest lever")
 
-  resp_mock = make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
+  resp_mock = conftest.make_json_response({"status": "started", "session_id": "s1", "iterations": 2})
 
-  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file",
-                                           str(plan_file)), return_value=resp_mock) as post_mock:
-    main()
+  with conftest.patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file, "--iterations", "2", "--plan-file",
+                                                    str(plan_file)), return_value=resp_mock) as post_mock:
+    improve.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["goal"] == "optimize"
   assert payload["plan"] == "1. largest lever"
 
 
-def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_exits_on_request_error(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """main() exits with code 1 on request failure."""
-  cfg = make_sessions_dir_config(tmp_path)
+  cfg = conftest.make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
 
   goal_file = tmp_path / "goal.md"
   goal_file.write_text("fix")
 
-  with patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file),
-                        side_effect=_SentButLostError("conn error")), \
-       patch(CONFIG_GET_CONFIG_PATCH_TARGET, return_value=cfg):
+  with conftest.patched_cli_post(cfg, _improve_argv("s1", str(tmp_path), goal_file),
+                        side_effect=common._SentButLostError("conn error")), \
+       mock.patch(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, return_value=cfg):
     with pytest.raises(SystemExit) as exc_info:
-      main()
+      improve.main()
     assert exc_info.value.code == 1
 
 
@@ -102,42 +96,42 @@ def test_main_exits_on_request_error(tmp_path: Path, monkeypatch: pytest.MonkeyP
 @pytest.mark.asyncio
 async def test_improve_endpoint_returns_404_for_missing_session() -> None:
   """POST /api/internal/improve returns 404 when session doesn't exist."""
-  from fastapi import HTTPException
+  import fastapi
 
-  from src.api.internal import start_improve_loop
+  from src.api import internal
 
-  req = ImproveRequest(session_id="missing", repo_path="/tmp/repo", base_branch="main", iterations=1, goal="fix")
+  req = models.ImproveRequest(session_id="missing", repo_path="/tmp/repo", base_branch="main", iterations=1, goal="fix")
 
-  session_mgr = AsyncMock()
+  session_mgr = mock.AsyncMock()
   session_mgr.get_session.return_value = None
 
-  with pytest.raises(HTTPException) as exc_info:
-    await start_improve_loop(req, session_mgr=session_mgr)
+  with pytest.raises(fastapi.HTTPException) as exc_info:
+    await internal.start_improve_loop(req, session_mgr=session_mgr)
   assert exc_info.value.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   """POST /api/internal/improve returns 400 when backend resolution fails."""
-  from fastapi import HTTPException
+  import fastapi
 
-  from src.api.internal import start_improve_loop
+  from src.api import internal
 
-  req = ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
+  req = models.ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = MagicMock(profile=None)
+  session_mgr = mock.AsyncMock()
+  session_mgr.get_session.return_value = mock.MagicMock(profile=None)
 
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
     raise ValueError("requested backend 'missing' is not in backends.options")
 
-  with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=MagicMock()), \
-       patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
-       patch(
+  with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
+       mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
+       mock.patch(
            _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
-       pytest.raises(HTTPException) as exc_info:
-    await start_improve_loop(req, session_mgr=session_mgr, task_mgr=AsyncMock())
+       pytest.raises(fastapi.HTTPException) as exc_info:
+    await internal.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backends.options"
@@ -146,12 +140,12 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
 @pytest.mark.asyncio
 async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   """POST /api/internal/improve returns 409 when another loop is already running."""
-  from fastapi import HTTPException
+  import fastapi
 
-  from src.api.internal import start_improve_loop
-  from src.core.improve_command import ImproveLoopAlreadyRunningError
+  from src.api import internal
+  from src.core import improve_command
 
-  req = ImproveRequest(
+  req = models.ImproveRequest(
       session_id="s1",
       repo_path="/tmp/repo",
       base_branch="main",
@@ -160,17 +154,17 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
       goal="optimize",
   )
 
-  session_mgr = AsyncMock()
-  session_mgr.get_session.return_value = MagicMock(profile=None)
+  session_mgr = mock.AsyncMock()
+  session_mgr.get_session.return_value = mock.MagicMock(profile=None)
 
-  with patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=MagicMock()), \
-       patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
-       patch(_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
-       patch(
+  with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
+       mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
+       mock.patch(_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
+       mock.patch(
            _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
-           side_effect=ImproveLoopAlreadyRunningError(7)), \
-       pytest.raises(HTTPException) as exc_info:
-    await start_improve_loop(req, session_mgr=session_mgr, task_mgr=AsyncMock())
+           side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \
+       pytest.raises(fastapi.HTTPException) as exc_info:
+    await internal.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
 
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "Loop 7 is already running for this session. Use /stop-improve first."

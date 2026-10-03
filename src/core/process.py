@@ -1,22 +1,17 @@
 """Process management utilities."""
 
 import asyncio
+import dataclasses
 import os
+import pathlib
 import signal
 import time
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, TypeVar
 
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.tasks import cancel_and_wait
-from src.core.timeouts import (
-    KILL_ESCALATION_GRACE_SECONDS,
-    KILL_ESCALATION_POLL_SECONDS,
-)
+from src.core import log_once, tasks, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Named TypeVar instead of PEP 695 ``wait_or_kill_group[T]``: yapf's pinned
 # lib2to3 parser rejects PEP 695 type-parameter lists, and the inline form
@@ -48,9 +43,9 @@ async def kill_group_escalating(pid: int, is_alive: Callable[[], bool]) -> None:
   when it still returns True after the grace, so a stale probe never authorizes a kill.
   """
   kill_process_group(pid, signal.SIGTERM)
-  deadline = time.monotonic() + KILL_ESCALATION_GRACE_SECONDS
+  deadline = time.monotonic() + timeouts.KILL_ESCALATION_GRACE_SECONDS
   while is_alive() and time.monotonic() < deadline:
-    await asyncio.sleep(KILL_ESCALATION_POLL_SECONDS)
+    await asyncio.sleep(timeouts.KILL_ESCALATION_POLL_SECONDS)
   if is_alive():
     kill_process_group(pid, signal.SIGKILL)
 
@@ -69,7 +64,7 @@ async def wait_or_kill_group(
     kill_process_group(pid, signal.SIGKILL)
     raise
   finally:
-    await cancel_and_wait(stderr_task)
+    await tasks.cancel_and_wait(stderr_task)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +90,7 @@ SESSION_CGROUP_PREFIX = "charliebot-sess-"
 
 # Host-level degradation (missing delegation, read-only base) is a per-host
 # state, not a per-spawn event: one line per failure shape per process.
-_session_cgroup_degraded = WarnOnceRegistry()
+_session_cgroup_degraded = log_once.WarnOnceRegistry()
 
 
 def session_cgroup_name(session_id: str) -> str:
@@ -103,12 +98,12 @@ def session_cgroup_name(session_id: str) -> str:
   return f"{SESSION_CGROUP_PREFIX}{session_id[:8]}"
 
 
-def session_cgroup_path(session_id: str) -> Path:
+def session_cgroup_path(session_id: str) -> pathlib.Path:
   """Full cgroup directory path for *session_id* under the app.slice base."""
-  return Path(CGROUP_V2_APP_SLICE) / session_cgroup_name(session_id)
+  return pathlib.Path(CGROUP_V2_APP_SLICE) / session_cgroup_name(session_id)
 
 
-def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int) -> Path | None:
+def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int) -> pathlib.Path | None:
   """Create or refresh the session's memory-cap cgroup; None when the host cannot.
 
   Lazy per-session creation: the directory is made with the configured
@@ -135,7 +130,7 @@ def ensure_session_cgroup(session_id: str, memory_max_mb: int, swap_max_mb: int)
   return path
 
 
-def read_memory_events(cgroup_dir: Path) -> tuple[int, int] | None:
+def read_memory_events(cgroup_dir: pathlib.Path) -> tuple[int, int] | None:
   """``(max, oom_kill)`` counters from ``<cgroup_dir>/memory.events``, or None when unreadable.
 
   cgroup v2 kernel semantics (admin-guide/cgroup-v2): ``max`` counts the times
@@ -160,7 +155,7 @@ def read_memory_events(cgroup_dir: Path) -> tuple[int, int] | None:
   return counts["max"], counts["oom_kill"]
 
 
-def make_session_cgroup_preexec(cgroup_dir: Path | None) -> Callable[[], None] | None:
+def make_session_cgroup_preexec(cgroup_dir: pathlib.Path | None) -> Callable[[], None] | None:
   """preexec_fn moving the forked child into *cgroup_dir*, or None when cgroup control is off.
 
   Runs in the child between fork and exec: opens ``<cgroup>/cgroup.procs`` and
@@ -217,7 +212,7 @@ def compose_preexec(*preexecs: Callable[[], None] | None) -> Callable[[], None] 
   return _preexec
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class SessionCgroup:
   """One spawn's handle on the session memory-cap cgroup.
 
@@ -226,7 +221,7 @@ class SessionCgroup:
   exit attribution compares against.
   """
 
-  path: Path
+  path: pathlib.Path
   memory_max_mb: int
   events_before: tuple[int, int] | None
 
@@ -304,7 +299,7 @@ def sweep_stale_session_cgroups() -> int:
   run outliving the restart) is kept with a warning — its members must not be
   re-homed by force. Returns the removed count.
   """
-  base = Path(CGROUP_V2_APP_SLICE)
+  base = pathlib.Path(CGROUP_V2_APP_SLICE)
   try:
     entries = list(base.iterdir())
   except OSError as e:
@@ -335,7 +330,7 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, uncovered_b
   if memory_max_mb <= 0:
     log.info("session_cgroup_disabled", reason="server.session_memory_max_mb is 0")
     return
-  base = Path(CGROUP_V2_APP_SLICE)
+  base = pathlib.Path(CGROUP_V2_APP_SLICE)
   if not base.is_dir():
     log.info("session_cgroup_disabled", reason=f"{CGROUP_V2_APP_SLICE} not present on this host")
     return

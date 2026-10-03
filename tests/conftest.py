@@ -1541,10 +1541,11 @@ CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.charlie_code.res
 GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
 
 # Import-path patch target for the improve loop's commit step. src/core/backlog_loop.py binds
-# the name at import scope (`from src.core.git import git_add_commit_push`), so mock setattrs
-# the stand-in on the src.core.backlog_loop module attribute and the stale-item handler's
-# commit call reads it there.
-BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.core.backlog_loop.git_add_commit_push"
+# the git module at import scope (`from src.core import git`) and its stale-item handler reads
+# the commit function off that binding at call time, so mock setattrs the stand-in on the
+# src.core.backlog_loop.git module attribute -- the shared src.core.git module object, restored
+# by monkeypatch after the test.
+BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.core.backlog_loop.git.git_add_commit_push"
 
 # Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and

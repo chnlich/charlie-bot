@@ -1,13 +1,10 @@
 """Improvement-loop lifecycle — determines the next action from a backlog YAML."""
 
+import datetime
+import pathlib
 import re
-from datetime import UTC, datetime
-from pathlib import Path
 
-from src.core.config import ImprovementLoopConfig
-from src.core.git import git_add_commit_push
-from src.core.models import parse_utc_datetime
-from src.core.yaml_utils import load_yaml, save_yaml
+from src.core import config, git, models, yaml_utils
 
 _PRIORITY_ORDER = {'high': 0, 'medium': 1, 'low': 2}
 _BACKLOG_DESCRIPTION_RULE = (
@@ -16,18 +13,18 @@ _BACKLOG_DESCRIPTION_RULE = (
     'proofs, exhaustive line-by-line implementation plans, or benchmark speculation.')
 
 
-def _load_backlog(backlog_path: Path) -> list[dict]:
+def _load_backlog(backlog_path: pathlib.Path) -> list[dict]:
   """Load backlog items from YAML. Returns an empty list when the file is missing or empty."""
-  data = load_yaml(backlog_path, default=[])
+  data = yaml_utils.load_yaml(backlog_path, default=[])
   if not isinstance(data, list):
     raise ValueError(f"{backlog_path}: expected a YAML list of backlog items, got {type(data).__name__}")
   return data
 
 
-def _save_backlog(backlog_path: Path, items: list[dict]) -> None:
+def _save_backlog(backlog_path: pathlib.Path, items: list[dict]) -> None:
   """Write backlog items back to YAML (block style)."""
   backlog_path.parent.mkdir(parents=True, exist_ok=True)
-  save_yaml(backlog_path, items)
+  yaml_utils.save_yaml(backlog_path, items)
 
 
 def _next_id(items: list[dict], prefix: str) -> str:
@@ -69,7 +66,7 @@ def _extra_rules_text(extra_rules: list[str]) -> str:
   return ' '.join(extra_rules)
 
 
-def _prompt_header(cfg: ImprovementLoopConfig) -> list[str]:
+def _prompt_header(cfg: config.ImprovementLoopConfig) -> list[str]:
   """Role sentence plus the configured scan prompt, when any."""
   parts = [f'You are the {cfg.role}.']
   if cfg.scan_prompt:
@@ -77,7 +74,7 @@ def _prompt_header(cfg: ImprovementLoopConfig) -> list[str]:
   return parts
 
 
-def _join_prompt(parts: list[str], cfg: ImprovementLoopConfig) -> str:
+def _join_prompt(parts: list[str], cfg: config.ImprovementLoopConfig) -> str:
   """Append extra_rules when set and join; the shared tail of every loop prompt."""
   extra = _extra_rules_text(cfg.extra_rules)
   if extra:
@@ -85,7 +82,7 @@ def _join_prompt(parts: list[str], cfg: ImprovementLoopConfig) -> str:
   return ' '.join(parts)
 
 
-def _append_backlog_rules(parts: list[str], cfg: ImprovementLoopConfig) -> str:
+def _append_backlog_rules(parts: list[str], cfg: config.ImprovementLoopConfig) -> str:
   """Append the description/language/commit rules shared by the generate and scan prompts."""
   parts.append(_BACKLOG_DESCRIPTION_RULE)
   parts.append(_language_rule(cfg.language))
@@ -93,7 +90,7 @@ def _append_backlog_rules(parts: list[str], cfg: ImprovementLoopConfig) -> str:
   return _join_prompt(parts, cfg)
 
 
-def _check_revision(items: list[dict], backlog_path: Path) -> str | None:
+def _check_revision(items: list[dict], backlog_path: pathlib.Path) -> str | None:
   """Step 0: address revision feedback."""
   for item in items:
     if item.get('status') == 'revision_requested' and item.get('revision_feedback'):
@@ -108,9 +105,10 @@ def _check_revision(items: list[dict], backlog_path: Path) -> str | None:
   return None
 
 
-async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementLoopConfig, repo_path: Path) -> bool:
+async def _handle_stale(
+    items: list[dict], backlog_path: pathlib.Path, cfg: config.ImprovementLoopConfig, repo_path: pathlib.Path) -> bool:
   """Step 1: reset stale in_progress items. Returns True if any were reset."""
-  now = datetime.now(UTC)
+  now = datetime.datetime.now(datetime.UTC)
   modified = False
   for item in items:
     if item.get('status') != 'in_progress':
@@ -121,15 +119,15 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
       continue
     if isinstance(timestamp, str):
       try:
-        started_dt = parse_utc_datetime(timestamp)
+        started_dt = models.parse_utc_datetime(timestamp)
       except ValueError:
         continue
-    elif isinstance(timestamp, datetime):
+    elif isinstance(timestamp, datetime.datetime):
       started_dt = timestamp
     else:
       continue
     if started_dt.tzinfo is None:
-      started_dt = started_dt.replace(tzinfo=UTC)
+      started_dt = started_dt.replace(tzinfo=datetime.UTC)
     elapsed_hours = (now - started_dt).total_seconds() / 3600
     if elapsed_hours > cfg.stale_timeout_hours:
       item['status'] = 'failed'
@@ -141,12 +139,12 @@ async def _handle_stale(items: list[dict], backlog_path: Path, cfg: ImprovementL
 
   _save_backlog(backlog_path, items)
 
-  await git_add_commit_push(
+  await git.git_add_commit_push(
       repo_path, [str(backlog_path)], f'loop: reset stale in_progress items in {backlog_path.name}')
   return True
 
 
-def _build_implement_prompt(item: dict, cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
+def _build_implement_prompt(item: dict, cfg: config.ImprovementLoopConfig, backlog_path: pathlib.Path) -> str:
   """Step 2: build prompt for implementing an approved item."""
   parts = [
       f'You are the {cfg.role}.',
@@ -168,7 +166,7 @@ def _build_implement_prompt(item: dict, cfg: ImprovementLoopConfig, backlog_path
   return _join_prompt(parts, cfg)
 
 
-def _build_generate_prompt(items: list[dict], cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
+def _build_generate_prompt(items: list[dict], cfg: config.ImprovementLoopConfig, backlog_path: pathlib.Path) -> str:
   """Step 3: build prompt for generating one new idea."""
   next_id = _next_id(items, cfg.id_prefix)
   id_format = f'{cfg.id_prefix}-NNN' if cfg.id_prefix else 'NNN (zero-padded)'
@@ -182,7 +180,7 @@ def _build_generate_prompt(items: list[dict], cfg: ImprovementLoopConfig, backlo
   return _append_backlog_rules(parts, cfg)
 
 
-def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
+def _build_scan_prompt(cfg: config.ImprovementLoopConfig, backlog_path: pathlib.Path) -> str:
   """Step 4: build fallback scan prompt."""
   parts = _prompt_header(cfg)
   parts.append(
@@ -191,8 +189,8 @@ def _build_scan_prompt(cfg: ImprovementLoopConfig, backlog_path: Path) -> str:
   return _append_backlog_rules(parts, cfg)
 
 
-async def determine_action(backlog_path: Path, loop_cfg: ImprovementLoopConfig,
-                           repo_path: Path) -> tuple[str, str | None]:
+async def determine_action(backlog_path: pathlib.Path, loop_cfg: config.ImprovementLoopConfig,
+                           repo_path: pathlib.Path) -> tuple[str, str | None]:
   """Determine the next improvement-loop action.
 
   Returns (action_type, prompt_text). action_type is one of:

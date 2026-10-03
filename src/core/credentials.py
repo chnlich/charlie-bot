@@ -8,12 +8,12 @@ config.py re-exports the public names, so every established import path keeps
 working; new CLI-side readers import from here.
 """
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, TypeVar
 
-from src.core.home import _resolve_home, charliebot_home_dir
+from src.core import home
+from src.core.home import charliebot_home_dir
 from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.core.yaml_utils import load_yaml
 
@@ -98,27 +98,6 @@ class _HotReloadCache(Generic[T]):
     return self.value
 
 
-def _file_fingerprint(name: str) -> tuple[float, int]:
-  """The ``(mtime, size)`` reload cache key over one file in the profile home.
-
-  Size comes from the same stat call and costs nothing extra; it catches
-  mtime-preserving writes (``cp -p``, ``touch -r``, two writes inside one second
-  on a coarse-resolution filesystem) that an mtime-only key would miss silently.
-  A content change that preserves both mtime and size is deliberately not
-  covered. A missing file stats to a sentinel rather than raising.
-
-  This is the per-request path (the auth middleware's ``get_config``), so the
-  stat stays on raw strings and ``os`` calls: per-call ``Path`` allocation and
-  ``resolve`` measured ~130 µs of the ~150 µs middleware floor on the live
-  corpus, against ~10 µs of unavoidable fresh stats.
-  """
-  try:
-    st = os.stat(os.path.join(_resolve_home()[1], name))
-  except OSError:
-    return (0.0, 0)
-  return (st.st_mtime, st.st_size)
-
-
 class Credentials:
   """One profile's ``credentials.yaml``: ``section -> key -> scalar`` secret values.
 
@@ -183,8 +162,8 @@ def load_credentials() -> Credentials:
 
 
 def _credentials_fingerprint() -> tuple[float, int]:
-  """The reload cache key over ``credentials.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint(CREDENTIALS_FILENAME)
+  """The reload cache key over ``credentials.yaml``: :func:`src.core.home.file_fingerprint` on it."""
+  return home.file_fingerprint(CREDENTIALS_FILENAME)
 
 
 _credentials_cache = _HotReloadCache(

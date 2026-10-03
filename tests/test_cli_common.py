@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,3 +154,27 @@ def test_post_internal_api_bearer_header(access_key: str, expect_header: bool) -
     assert headers["Authorization"] == "Bearer secret"
   else:
     assert "Authorization" not in headers
+
+
+def test_port_cache_hit_keeps_the_yaml_stack_out_of_the_verb_process(tmp_path: Path) -> None:
+  """A fresh process serving the base-url port cache reads its fingerprints and the cached
+  port without importing the credentials module: the cache hit path is every internal-API
+  verb's wall, and the credentials import drags PyYAML in for a stat-only read."""
+  repo_root = str(Path(__file__).resolve().parents[1])
+  home = tmp_path / "home"
+  (home / "cache").mkdir(parents=True)
+  code = "\n".join(
+      [
+          "import json, sys",
+          f"sys.path.insert(0, {repo_root!r})",
+          f"import os; os.environ['CHARLIEBOT_HOME'] = {str(home)!r}",
+          "from src.core import home",
+          "from src.cli import common",
+          "doc = {'fingerprint': [list(home.file_fingerprint('config.yaml')), list(common._config_module_fingerprint())], 'port': 49999}",
+          f"(home_doc := {str(home / 'cache' / 'cli_base_url.json')!r}) and open(home_doc, 'w').write(json.dumps(doc))",
+          "assert common._cached_server_port() == 49999",
+          "assert 'src.core.credentials' not in sys.modules, 'port cache hit pulled the credentials module'",
+          "assert 'yaml' not in sys.modules, 'port cache hit pulled PyYAML'",
+      ])
+  proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+  assert proc.returncode == 0, proc.stderr

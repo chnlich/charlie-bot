@@ -11,17 +11,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Sequence
 
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend
-from src.core.config import CharlieBotConfig
+from src.agents.transcription import base
+from src.core import config
 
 
-class LocalTranscriptionBackend(TranscriptionBackend):
+class LocalTranscriptionBackend(base.TranscriptionBackend):
   """The on-device engine. No partials: one final after the whole clip decodes."""
 
   id = "local"
   live_partials = False
 
-  def __init__(self, cfg: CharlieBotConfig, hotwords: str = "") -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, hotwords: str = "") -> None:
     self._cfg = cfg
     # Empty in production: the resident bundle follows voice.engine. The replay
     # script's local-hotwords variant passes sherpa hotwords, which builds a
@@ -39,7 +39,7 @@ class LocalTranscriptionBackend(TranscriptionBackend):
       *,
       vocabulary: Sequence[str],
       languages: Sequence[str],
-  ) -> AsyncIterator[TranscriptEvent]:
+  ) -> AsyncIterator[base.TranscriptEvent]:
     """Drain ``audio`` and decode the whole recording in one pass.
 
     ``vocabulary`` is ignored: the local engine's word biasing is sherpa's
@@ -55,7 +55,7 @@ class LocalTranscriptionBackend(TranscriptionBackend):
     else:
       bundle = await asyncio.to_thread(transcriber.get_transcription_bundle, self._cfg)
       text = await asyncio.to_thread(transcriber.transcribe_pcm_offline, bundle, bytes(pcm))
-    yield TranscriptEvent(kind="final", text=text)
+    yield base.TranscriptEvent(kind="final", text=text)
 
   def _decode_with_hotwords(self, pcm: bytes) -> str:
     """Decode on a dedicated sherpa bundle carrying the hotwords, built once."""

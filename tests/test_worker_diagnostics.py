@@ -2,20 +2,22 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from collections.abc import AsyncIterator
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, WORKER_BUILD_BACKEND_PATCH_TARGET, WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends import base
+
+# The tests bind a local `worker`: `from src.agents import worker` would turn
+# the `worker.Worker(...)` calls below into an UnboundLocalError.
 from src.agents.worker import Worker
-from src.core.config import CharlieBotConfig
-from src.core.models import ThreadMetadata
+from src.core import config, models
 
 
-class _FakeBackend(AgentBackend):
+class _FakeBackend(base.AgentBackend):
   """In-process fake backend that pre-populates hang_diagnostics and skips subprocess work."""
 
   def __init__(self, *, exit_code: int = 0, hang_diagnostics: dict | None = None, **kwargs: object) -> None:
@@ -39,11 +41,11 @@ class _FakeBackend(AgentBackend):
 
 
 @pytest.mark.asyncio
-async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) -> None:
-  thread = ThreadMetadata(session_id="sess-1", description="test")
+async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: pathlib.Path) -> None:
+  thread = models.ThreadMetadata(session_id="sess-1", description="test")
   events_log = tmp_path / "events.jsonl"
   fake_diag = {"captured_at": "2026-05-03T00:00:00+00:00", "pid": 12345, "process_tree": "fake-tree"}
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
 
   worker = Worker(
       thread_metadata=thread,
@@ -56,9 +58,9 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) ->
   fake_backend = _FakeBackend(exit_code=143, hang_diagnostics=fake_diag)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
-      patch(WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
-      patch(WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as mock_broadcast,
+      mock.patch(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
+      mock.patch(conftest.WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
   ):
     exit_code = await worker.run()
 
@@ -81,10 +83,10 @@ async def test_worker_writes_hang_diagnostics_and_emits_event(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: Path) -> None:
-  thread = ThreadMetadata(session_id="sess-1", description="test")
+async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: pathlib.Path) -> None:
+  thread = models.ThreadMetadata(session_id="sess-1", description="test")
   events_log = tmp_path / "events.jsonl"
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "cb-home")
 
   worker = Worker(
       thread_metadata=thread,
@@ -97,9 +99,9 @@ async def test_worker_no_hang_diagnostics_does_not_write_file(tmp_path: Path) ->
   fake_backend = _FakeBackend(exit_code=0, hang_diagnostics=None)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
-      patch(WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch(conftest.WORKER_BUILD_BACKEND_PATCH_TARGET, return_value=fake_backend),
+      mock.patch(conftest.WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET, return_value=fake_backend),
   ):
     exit_code = await worker.run()
 

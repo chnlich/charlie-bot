@@ -2,13 +2,11 @@
 
 import hmac
 import json
-from http.cookies import CookieError, SimpleCookie
+from http import cookies
 
-from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette import types
 
-from src.core.config import configured_access_key
-from src.core.constants import AUTH_STATUS_PATH
-from src.core.run_token import RunTokenError, bearer_from_authorization, verify_run_token
+from src.core import config, constants, run_token
 
 
 def _credential_matches(candidate: str, key: str) -> bool:
@@ -30,7 +28,7 @@ def _credential_accepted(bearer: str, cookie: str, key: str) -> bool:
 # check the login page's submit reads. Everything else that touches host state — the
 # file server and the /perfetto, /perfetto/merged and /ncu viewers included — sits
 # behind the access key; charliebot_pub is the only unauthenticated read surface.
-_PUBLIC_PATHS = frozenset({"/", AUTH_STATUS_PATH})
+_PUBLIC_PATHS = frozenset({"/", constants.AUTH_STATUS_PATH})
 _PUBLIC_PREFIXES = ("/static/",)
 
 # Self-contained HTML login page served to unauthenticated browser navigations.
@@ -91,7 +89,7 @@ _LOGIN_PAGE = """<!doctype html>
 </html>"""
 
 
-def _header_value(scope: Scope, name: bytes) -> str:
+def _header_value(scope: types.Scope, name: bytes) -> str:
   """First value of header *name* from the raw ASGI scope, or "" (starlette Headers.get parity)."""
   for header_name, value in scope["headers"]:
     if header_name == name:
@@ -99,18 +97,18 @@ def _header_value(scope: Scope, name: bytes) -> str:
   return ""
 
 
-def _bearer_from_scope(scope: Scope) -> str:
-  return bearer_from_authorization(_header_value(scope, b"authorization"))
+def _bearer_from_scope(scope: types.Scope) -> str:
+  return run_token.bearer_from_authorization(_header_value(scope, b"authorization"))
 
 
-def _cookie_key_from_scope(scope: Scope) -> str:
+def _cookie_key_from_scope(scope: types.Scope) -> str:
   raw = b";".join(value for name, value in scope["headers"] if name == b"cookie")
   if not raw:
     return ""
-  jar = SimpleCookie()
+  jar = cookies.SimpleCookie()
   try:
     jar.load(raw.decode("latin-1"))
-  except CookieError:
+  except cookies.CookieError:
     return ""
   morsel = jar.get(_ACCESS_KEY_COOKIE)
   return morsel.value if morsel else ""
@@ -127,13 +125,13 @@ def _scope_bearer_is_run_token(bearer: str, key: str) -> bool:
   if not bearer or not key:
     return False
   try:
-    verify_run_token(bearer, key)
-  except RunTokenError:
+    run_token.verify_run_token(bearer, key)
+  except run_token.RunTokenError:
     return False
   return True
 
 
-def _scope_has_access_key(scope: Scope, key: str) -> bool:
+def _scope_has_access_key(scope: types.Scope, key: str) -> bool:
   bearer = _bearer_from_scope(scope)
   if bearer:
     if key and _credential_matches(bearer, key):
@@ -160,7 +158,7 @@ _HTML_401_HEADERS = [
 ]
 
 
-async def _send_unauthorized(send: Send, html: bool) -> None:
+async def _send_unauthorized(send: types.Send, html: bool) -> None:
   if html:
     body, headers = _LOGIN_PAGE_BYTES, _HTML_401_HEADERS
   else:
@@ -183,14 +181,14 @@ class AuthMiddleware:
   are the M3 middleware-floor overhead this form removes.
   """
 
-  def __init__(self, app: ASGIApp) -> None:
+  def __init__(self, app: types.ASGIApp) -> None:
     self.app = app
 
-  async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+  async def __call__(self, scope: types.Scope, receive: types.Receive, send: types.Send) -> None:
     if scope["type"] != "http":
       await self.app(scope, receive, send)
       return
-    key = configured_access_key()
+    key = config.configured_access_key()
     path = scope["path"]
 
     # Let public paths through without auth.

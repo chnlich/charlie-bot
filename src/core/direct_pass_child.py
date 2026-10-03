@@ -7,6 +7,7 @@ parent imports the exit classes and the argv builder at server-import time. The 
 build wall, so `_validate` fans it out; the fan-out's contract is `_split_chunks`'s.
 """
 
+import mmap
 import subprocess
 import sys
 from pathlib import Path
@@ -115,8 +116,8 @@ def _split_chunks(path: Path, size: int, min_chunk_bytes: int) -> tuple[bool, by
 
 
 def _chunk_parse_input(
-    path: Path, start: int, end: int, index: int, count: int, object_form: bool, indent: bytes) -> bytes:
-  """The chunk's bytes as one standalone JSON document for orjson.
+    path: Path, start: int, end: int, index: int, count: int, object_form: bool, indent: bytes) -> bytes | memoryview:
+  """The chunk as one standalone JSON document for orjson.
 
   Every chunk ends right before the next element's newline, so its bytes end
   with a trailing ``,``, which every shape drops. The head re-closes what the
@@ -126,35 +127,58 @@ def _chunk_parse_input(
   A rule finding bytes other than the expected ones means the anchor rules
   mis-fired: the ValueError this raises (or the parse error it produces) sends
   the build to the whole-file fallback, never to a wrong verdict.
+
+  The head and middle shapes answer a memoryview over a private ``ACCESS_COPY``
+  mapping — the wrap brackets are written into copied pages, never the file —
+  because the parse input is the one chunk-sized copy each helper holds and the
+  parse wave spawns every chunk at once (eight copies crossed this host's 12 GiB
+  session cgroup on the 1.42 GB worst corpus). The tail keeps the bytes path:
+  its document stitches a synthetic prefix to a moved suffix.
   """
-  with path.open("rb") as f:
-    f.seek(start)
-    core = f.read(end - start).rstrip(_WS)
-  # A non-tail chunk's last byte is the next element's separator comma;
-  # requiring it sends a missing comma at a split point to the whole-file
-  # rejection instead of erasing it into a silent acceptance.
-  if index < count - 1 and not core.endswith(b","):
-    raise ValueError("chunk does not end with the element separator")
-  if core.endswith(b","):
-    core = core[:-1]
-  if index == 0:
-    return core + (b"]}" if object_form else b"]")
-  if index == count - 1 and object_form:
-    close_at = core.rfind(b"\n" + indent + b"}")
-    if close_at < 0:
-      raise ValueError("tail chunk carries no element close")
-    elements_end = close_at + len(indent) + 2
-    suffix = core[elements_end:].lstrip(_WS)
-    if not suffix.startswith(b"]"):
-      raise ValueError("tail chunk does not close the events array")
-    return b'{"traceEvents":[' + core[:elements_end] + suffix
   if index == count - 1:
+    with path.open("rb") as f:
+      f.seek(start)
+      core = f.read(end - start).rstrip(_WS)
+    if core.endswith(b","):
+      core = core[:-1]
+    if object_form:
+      close_at = core.rfind(b"\n" + indent + b"}")
+      if close_at < 0:
+        raise ValueError("tail chunk carries no element close")
+      elements_end = close_at + len(indent) + 2
+      suffix = core[elements_end:].lstrip(_WS)
+      if not suffix.startswith(b"]"):
+        raise ValueError("tail chunk does not close the events array")
+      return b'{"traceEvents":[' + core[:elements_end] + suffix
     if not core.rstrip(_WS).endswith(b"]"):
       raise ValueError("tail chunk does not close the events array")
     core = core.rstrip(_WS)[:-1].rstrip(_WS)
     if core.endswith(b","):
       core = core[:-1]
-  return b"[" + core + b"]"
+    return b"[" + core + b"]"
+  # A non-tail chunk's last byte is the next element's separator comma;
+  # requiring it sends a missing comma at a split point to the whole-file
+  # rejection instead of erasing it into a silent acceptance.
+  first = start - 1 if index > 0 else 0
+  map_off = first // mmap.ALLOCATIONGRANULARITY * mmap.ALLOCATIONGRANULARITY
+  with path.open("rb") as f:
+    mapped = mmap.mmap(f.fileno(), end + 1 - map_off, offset=map_off, access=mmap.ACCESS_COPY)
+  view = memoryview(mapped)
+  if index > 0:
+    mapped[first - map_off] = ord("[")
+  low = start - map_off
+  comma_at = end - 1 - map_off
+  while comma_at >= low and mapped[comma_at] in _WS:
+    comma_at -= 1
+  if comma_at < low or mapped[comma_at] != ord(","):
+    raise ValueError("chunk does not end with the element separator")
+  mapped[comma_at] = ord("]")
+  if index == 0:
+    if object_form:
+      mapped[comma_at + 1] = ord("}")
+      return view[:comma_at + 2]
+    return view[:comma_at + 1]
+  return view[first - map_off:comma_at + 1]
 
 
 def _validate_chunk_main(argv: list[str]) -> int:

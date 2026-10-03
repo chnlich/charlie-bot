@@ -19,15 +19,9 @@ import os.path
 from collections.abc import Sequence
 
 from src.cli import common as cli_common
-from src.cli.common import (
-    add_session_arg,
-    get_api,
-    post_internal_api,
-    resolve_session_id,
-)
-from src.cli.help_formatter import CliHelpFormatter
-from src.core.constants import PLAN_AMEND_TRIGGERS, PLAN_CLOSE_MODES
-from src.core.plans import require_plan
+from src.cli import help_formatter
+from src.core import constants
+from src.core import plans as core_plans
 
 _PLAN_REMINDER = (
     "A read-only verify delegation runs, and its adequacy findings are reported alongside "
@@ -62,7 +56,7 @@ def _readback_plan(session_id: str, verb: str, args: argparse.Namespace) -> dict
   Returns the verb's response shape on a definite match, else None (the caller
   then reports outcome_unknown).
   """
-  listing = get_api(f"/api/sessions/{session_id}/plans")
+  listing = cli_common.get_api(f"/api/sessions/{session_id}/plans")
   plans = listing.get("plans", [])
 
   if verb == "present":
@@ -125,7 +119,10 @@ def _add_amend(parser: argparse.ArgumentParser) -> None:
       help="One line saying why this version differs from its predecessor; rides on the version record")
   _add_plan_arg(parser)
   parser.add_argument(
-      "--trigger", choices=PLAN_AMEND_TRIGGERS, default="feedback", help="Revision trigger (default feedback)")
+      "--trigger",
+      choices=constants.PLAN_AMEND_TRIGGERS,
+      default="feedback",
+      help="Revision trigger (default feedback)")
   _build_base_args(parser)
 
 
@@ -135,7 +132,7 @@ def _add_approve(parser: argparse.ArgumentParser) -> None:
 
 def _add_close(parser: argparse.ArgumentParser) -> None:
   parser.add_argument("--plan", type=int, required=True, help="Target plan id")
-  parser.add_argument("--as", dest="close_as", required=True, choices=PLAN_CLOSE_MODES)
+  parser.add_argument("--as", dest="close_as", required=True, choices=constants.PLAN_CLOSE_MODES)
 
 
 def _add_diff(parser: argparse.ArgumentParser) -> None:
@@ -144,27 +141,40 @@ def _add_diff(parser: argparse.ArgumentParser) -> None:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-  parent = argparse.ArgumentParser(add_help=False, formatter_class=CliHelpFormatter)
-  add_session_arg(parent)
+  parent = argparse.ArgumentParser(add_help=False, formatter_class=help_formatter.CliHelpFormatter)
+  cli_common.add_session_arg(parent)
   parser = argparse.ArgumentParser(
-      prog="charliebot plan", description="Plan registry verbs", formatter_class=CliHelpFormatter)
+      prog="charliebot plan", description="Plan registry verbs", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
   _add_present(
-      sub.add_parser("present", parents=[parent], help="Register a new plan lineage", formatter_class=CliHelpFormatter))
+      sub.add_parser(
+          "present",
+          parents=[parent],
+          help="Register a new plan lineage",
+          formatter_class=help_formatter.CliHelpFormatter))
   _add_amend(
       sub.add_parser(
-          "amend", parents=[parent], help="Append the next version to a plan lineage",
-          formatter_class=CliHelpFormatter))
-  _add_approve(sub.add_parser("approve", parents=[parent], help="Record a takeoff", formatter_class=CliHelpFormatter))
+          "amend",
+          parents=[parent],
+          help="Append the next version to a plan lineage",
+          formatter_class=help_formatter.CliHelpFormatter))
+  _add_approve(
+      sub.add_parser(
+          "approve", parents=[parent], help="Record a takeoff", formatter_class=help_formatter.CliHelpFormatter))
   _add_close(
-      sub.add_parser("close", parents=[parent], help="Terminate a plan lineage", formatter_class=CliHelpFormatter))
+      sub.add_parser(
+          "close", parents=[parent], help="Terminate a plan lineage", formatter_class=help_formatter.CliHelpFormatter))
   _add_diff(
       sub.add_parser(
           "diff",
           parents=[parent],
           help="Print the local diff of one version against its predecessor",
-          formatter_class=CliHelpFormatter))
-  sub.add_parser("list", parents=[parent], help="Print the session's plan registry", formatter_class=CliHelpFormatter)
+          formatter_class=help_formatter.CliHelpFormatter))
+  sub.add_parser(
+      "list",
+      parents=[parent],
+      help="Print the session's plan registry",
+      formatter_class=help_formatter.CliHelpFormatter)
   return parser
 
 
@@ -203,7 +213,7 @@ def _resolve_diff_plan(plans: list[dict], args: argparse.Namespace) -> tuple[dic
   diff against its predecessor and defaults to the latest; version 1 has no predecessor.
   """
   if args.plan is not None:
-    plan = require_plan(plans, args.plan)
+    plan = core_plans.require_plan(plans, args.plan)
   else:
     if not plans:
       raise ValueError("session has no plans; nothing to diff")
@@ -239,7 +249,7 @@ def _build_diff(session_id: str, args: argparse.Namespace) -> dict:
   # invocation (dataclasses/inspect ride back with pydantic either way).
   from src.core import plan_diff
 
-  listing = get_api(f"/api/sessions/{session_id}/plans")
+  listing = cli_common.get_api(f"/api/sessions/{session_id}/plans")
   plan, from_version, to_version = _resolve_diff_plan(listing.get("plans", []), args)
   old_html = _read_version_file(session_id, from_version)
   new_html = _read_version_file(session_id, to_version)
@@ -255,10 +265,10 @@ def _build_diff(session_id: str, args: argparse.Namespace) -> dict:
 def main(argv: Sequence[str] | None = None) -> None:
   parser = _build_parser()
   args = parser.parse_args(argv if argv is not None else None)
-  session_id = resolve_session_id(args.session)
+  session_id = cli_common.resolve_session_id(args.session)
 
   if args.verb == "list":
-    result = get_api(f"/api/sessions/{session_id}/plans")
+    result = cli_common.get_api(f"/api/sessions/{session_id}/plans")
   elif args.verb == "diff":
     try:
       result = _build_diff(session_id, args)
@@ -266,7 +276,7 @@ def main(argv: Sequence[str] | None = None) -> None:
       cli_common.exit_error(str(e))
   else:
     payload = _build_payload(args.verb, session_id, args)
-    result = post_internal_api(
+    result = cli_common.post_internal_api(
         f"/api/internal/plan/{args.verb}",
         payload,
         readback=lambda: _readback_plan(session_id, args.verb, args),

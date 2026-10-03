@@ -10,12 +10,14 @@ from conftest import OPUS_BACKEND_ID, backend_option, fresh_state_fixture
 from src.agents.backends.base import make_context_reading_event
 from src.agents.backends.claude_code import (
     _DECLARED_WINDOW_WARNINGS_SEEN,
+    headless_claude_declared_window,
+)
+from src.agents.backends.claude_launch import (
     AUTO_COMPACT_WINDOW_ENV,
     AUTOCOMPACT_PCT_OVERRIDE_ENV,
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
     MAX_CONTEXT_TOKENS_ENV,
-    headless_claude_declared_window,
 )
 from src.core import codex_usage
 from src.core.config import CharlieBotConfig

@@ -9,18 +9,17 @@ from synchronous contexts, and there is no check-then-act window between
 setting and clearing.
 """
 
-from datetime import UTC, datetime
+import datetime
 
-from src.core.log_once import LazyStructlogLogger
-from src.core.sidebar_state import mark_sidebar_dirty
+from src.core import log_once, sidebar_state
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # session_id -> busy interval start (a continuous run+queued stretch).
-_busy_since: dict[str, datetime] = {}
+_busy_since: dict[str, datetime.datetime] = {}
 
 
-def mark_busy(session_id: str, since: datetime | None = None) -> tuple[datetime, bool]:
+def mark_busy(session_id: str, since: datetime.datetime | None = None) -> tuple[datetime.datetime, bool]:
   """Record the busy interval start for *session_id*.
 
   setdefault semantics: an already-busy session keeps its existing interval
@@ -36,10 +35,10 @@ def mark_busy(session_id: str, since: datetime | None = None) -> tuple[datetime,
   existing = _busy_since.get(session_id)
   if existing is not None:
     return existing, False
-  started_at = since if since is not None else datetime.now(UTC)
+  started_at = since if since is not None else datetime.datetime.now(datetime.UTC)
   _busy_since[session_id] = started_at
   # busy flips the sidebar's has_running_tasks (bool(thinking_since) or running).
-  mark_sidebar_dirty(session_id)
+  sidebar_state.mark_sidebar_dirty(session_id)
   log.debug("thinking_state_busy", session=session_id, busy_since=started_at.isoformat())
   return started_at, True
 
@@ -49,11 +48,11 @@ def clear_busy(session_id: str) -> None:
   started_at = _busy_since.pop(session_id, None)
   if started_at is not None:
     # The busy -> idle flip changes the sidebar's has_running_tasks.
-    mark_sidebar_dirty(session_id)
+    sidebar_state.mark_sidebar_dirty(session_id)
     log.debug("thinking_state_idle", session=session_id, busy_since=started_at.isoformat())
 
 
-def busy_since(session_id: str) -> datetime | None:
+def busy_since(session_id: str) -> datetime.datetime | None:
   """Current busy interval start for *session_id*, or None."""
   return _busy_since.get(session_id)
 
@@ -78,7 +77,7 @@ _run_busy: dict[str, str] = {}
 _run_backends: dict[str, str] = {}
 
 
-def mark_run_busy(session_id: str, run_id: str, *, since: datetime | None) -> None:
+def mark_run_busy(session_id: str, run_id: str, *, since: datetime.datetime | None) -> None:
   """Open a worker node's busy interval at its Run's recorded start."""
   _run_busy[session_id] = run_id
   mark_busy(session_id, since=since)

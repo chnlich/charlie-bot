@@ -744,7 +744,7 @@ _NOTE_SOURCE_LABELS = {USAGE_SOURCE_CHARLIE_BOT: "CharlieBot logs"}
 def preload_usage_tally_stack() -> None:
   """Import the tally stack the usage page and ledger handlers first-import.
 
-  The imports mirror the lazy sets in ``_capture_ledger_rows``, ``_account_source``
+  The modules mirror the lazy sets in ``_capture_ledger_rows``, ``_account_source``
   and the scheduler's ledger handler; keep them in step. A long-lived server that
   starts before a deploy keeps its in-memory modules while a request-time
   first-import reads the newer files, and the mixed-version import raises inside
@@ -753,10 +753,9 @@ def preload_usage_tally_stack() -> None:
   own import as the loud fallback.
   """
   started = time.monotonic()
-  import sqlite3  # noqa: F401  -- the pin is the import; the names verify the shared set
+  import sqlite3  # noqa: F401  -- the pin is the import itself
 
-  from src.core.token_tally import backend_page_source, backend_registry, capture_local  # noqa: F401
-  from src.core.usage_ledger import UsageLedger, default_ledger_path  # noqa: F401
+  from src.core import token_tally, usage_ledger  # noqa: F401
   log.info("usage_tally_stack_preloaded", duration_ms=round((time.monotonic() - started) * 1000))
 
 

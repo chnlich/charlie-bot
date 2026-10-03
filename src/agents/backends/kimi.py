@@ -1,11 +1,11 @@
 """KimiBackend — Claude Code against Kimi's Anthropic-compatible endpoint."""
 
-from src.agents.backends.claude_code import AnthropicEndpointBackend
+from src.agents.backends import claude_code
 
 _MOONSHOT_BASE_URL = "https://api.moonshot.cn/anthropic"
 
 
-class KimiBackend(AnthropicEndpointBackend):
+class KimiBackend(claude_code.AnthropicEndpointBackend):
   """Runs Claude Code CLI against Kimi's Anthropic-compatible endpoint.
 
   The Moonshot base URL routes every API call to api.moonshot.cn instead of

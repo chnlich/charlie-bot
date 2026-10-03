@@ -12,15 +12,15 @@ import asyncio
 from collections.abc import Callable, Iterator
 from typing import Any
 
-from fastapi.dependencies.models import Dependant
-from fastapi.routing import APIRoute
+from fastapi import routing
+from fastapi.dependencies import models
 
 import server
-from src.api.deps import get_config_on_loop
-from src.core.config import get_config
+from src.api import deps
+from src.core import config
 
 
-def _dependency_calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
+def _dependency_calls(dependant: models.Dependant) -> Iterator[Callable[..., Any]]:
   yield dependant.call
   for sub in dependant.dependencies:
     yield from _dependency_calls(sub)
@@ -28,8 +28,8 @@ def _dependency_calls(dependant: Dependant) -> Iterator[Callable[..., Any]]:
 
 def test_no_route_depends_on_sync_get_config() -> None:
   offenders = [
-      f"{sorted(route.methods)} {route.path}" for route in server.app.routes if isinstance(route, APIRoute)
-      for call in _dependency_calls(route.dependant) if call is get_config
+      f"{sorted(route.methods)} {route.path}" for route in server.app.routes if isinstance(route, routing.APIRoute)
+      for call in _dependency_calls(route.dependant) if call is config.get_config
   ]
   assert offenders == [], (
       "routes resolving config through the sync dependency (threadpool hop per "
@@ -39,4 +39,4 @@ def test_no_route_depends_on_sync_get_config() -> None:
 def test_on_loop_dependency_is_the_async_form() -> None:
   # The guard above is only as good as the wrapper it points at: the on-loop
   # dependency must stay a coroutine, or FastAPI is back on the threadpool.
-  assert asyncio.iscoroutinefunction(get_config_on_loop)
+  assert asyncio.iscoroutinefunction(deps.get_config_on_loop)

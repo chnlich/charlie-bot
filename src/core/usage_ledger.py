@@ -878,28 +878,51 @@ class UsageLedger:
                             rec.cache_read, rec.in_unsplit, rec.output):
             rewrote = True
         staged.append((rec, ts))
-      # The links batch ahead of the rows, deduped: a transcript's records share one
-      # session, so the per-record loop re-ran the same OR IGNORE pair once per record
-      # (1.2k no-op executes per moved file measured). The dedupe is exact -- OR IGNORE
-      # fires the link triggers only on an actual insert, so the duplicates the batch
-      # skips never fired anything -- and the count/retire trigger pair is linear in
-      # each row's own contribution (a fallback row counted before a later native link
-      # is retired by exactly the subtract the batched order never owes), so the batch
-      # lands every kind mix on the per-record order's end state.
-      native_pairs = dict.fromkeys(
-          (session, rec.source) for rec, _ts in staged if rec.kind == RecordKind.NATIVE for session in rec.sessions)
-      fallback_pairs = dict.fromkeys(
-          (rec.record_id, session) for rec, _ts in staged if rec.kind != RecordKind.NATIVE for session in rec.sessions)
-      if native_pairs:
-        self._conn.executemany(_NATIVE_SESSION_LINK_SQL, native_pairs)
-      if fallback_pairs:
-        self._conn.executemany(_FALLBACK_SESSION_LINK_SQL, fallback_pairs)
-      self._conn.executemany(
-          _UPSERT_USAGE_SQL, [
-              (
+      # One kind per record list is the producers' only shape (a transcript file's
+      # records share one session; a run file carries one record), and it is the shape
+      # the batch serves: the links go in first, deduped -- a single-kind list's records
+      # re-ran the same OR IGNORE pair once per record (1.2k no-op executes per moved
+      # file measured). The dedupe is exact because OR IGNORE fires the link triggers
+      # only on an actual insert, so the duplicates the batch skips never fired
+      # anything; and with no kind mix the count and retirement checks read the same
+      # session-table state per row the per-record order reached.
+      # A mixed-kind list keeps the per-record order: a counted fallback record that
+      # gains a session inside this batch must have that link visible to the native
+      # link's retirement scan, which fires when the native link inserts -- links-first
+      # strands the count on the aggregate (the first-session guard of
+      # usage_agg_after_fallback_session refuses the subtract the retire trigger owes).
+      if len({rec.kind for rec, _ts in staged}) <= 1:
+        native_pairs = dict.fromkeys(
+            (session, rec.source) for rec, _ts in staged if rec.kind == RecordKind.NATIVE for session in rec.sessions)
+        fallback_pairs = dict.fromkeys(
+            (rec.record_id, session) for rec, _ts in staged if rec.kind != RecordKind.NATIVE
+            for session in rec.sessions)
+        if native_pairs:
+          self._conn.executemany(_NATIVE_SESSION_LINK_SQL, native_pairs)
+        if fallback_pairs:
+          self._conn.executemany(_FALLBACK_SESSION_LINK_SQL, fallback_pairs)
+        self._conn.executemany(
+            _UPSERT_USAGE_SQL, [
+                (
+                    rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
+                    rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at)
+                for rec, ts in staged
+            ])
+      else:
+        for rec, ts in staged:
+          # The sessions register before the usage row: the aggregate's insert trigger
+          # counts a fallback row only while none of its sessions is native, and that
+          # check reads this record's own registrations.
+          if rec.kind == RecordKind.NATIVE:
+            for session in rec.sessions:
+              self._conn.execute(_NATIVE_SESSION_LINK_SQL, (session, rec.source))
+          else:
+            for session in rec.sessions:
+              self._conn.execute(_FALLBACK_SESSION_LINK_SQL, (rec.record_id, session))
+          self._conn.execute(
+              _UPSERT_USAGE_SQL, (
                   rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
-                  rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at) for rec, ts in staged
-          ])
+                  rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at))
       if rewrote:
         # A value rewrite invalidates every aggregate built before it in any process,
         # and a superseding delete can pair N deletes with N inserts the fold's

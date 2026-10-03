@@ -13,39 +13,35 @@ test_charlie_code_backend.py.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import CLI_BACKEND_RIGS, build_cli_backend
 
-from src.agents.backends.base import AgentBackend
-from src.agents.backends.charlie_code import CharlieCodeBackend
-from src.agents.backends.claude_code import ClaudeCodeBackend
-from src.agents.backends.codex import CodexBackend
-from src.agents.backends.opencode import OpenCodeBackend
+from src.agents.backends import base, charlie_code, claude_code, codex, opencode
 
 # (backend class, ctor kwargs, resolve_binary patch target or None, fake binary,
 # instructions file name). Each CLI row is the backend's shared conftest rig
 # (CLI_BACKEND_RIGS); claude_code takes its CLI binary through the cli_binary
 # kwarg and resolves nothing, so it needs no patch target.
-_INSTRUCTIONS_BACKENDS = [(ClaudeCodeBackend, {}, None, "claude", "CLAUDE.md")]
-for _cls in (CharlieCodeBackend, CodexBackend, OpenCodeBackend):
-  _patch_target, _fake_binary, _defaults = CLI_BACKEND_RIGS[_cls]
+_INSTRUCTIONS_BACKENDS = [(claude_code.ClaudeCodeBackend, {}, None, "claude", "CLAUDE.md")]
+for _cls in (charlie_code.CharlieCodeBackend, codex.CodexBackend, opencode.OpenCodeBackend):
+  _patch_target, _fake_binary, _defaults = conftest.CLI_BACKEND_RIGS[_cls]
   _INSTRUCTIONS_BACKENDS.append((_cls, _defaults, _patch_target, _fake_binary, "AGENTS.md"))
 _INSTRUCTIONS_BACKEND_IDS = [case[0].__name__ for case in _INSTRUCTIONS_BACKENDS]
 
 
 def _build_backend(
-    backend_cls: type[AgentBackend],
+    backend_cls: type[base.AgentBackend],
     ctor_kwargs: dict,
     patch_target: str | None,
     fake_binary: str,
     monkeypatch: pytest.MonkeyPatch,
     **kwargs: object,
-) -> AgentBackend:
+) -> base.AgentBackend:
   if patch_target is None:
     return backend_cls(**ctor_kwargs, **kwargs)
-  return build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=ctor_kwargs, **kwargs)
+  return conftest.build_cli_backend(monkeypatch, backend_cls, patch_target, fake_binary, defaults=ctor_kwargs, **kwargs)
 
 
 @pytest.mark.parametrize(
@@ -54,13 +50,13 @@ def _build_backend(
     ids=_INSTRUCTIONS_BACKEND_IDS,
 )
 def test_prepare_cwd_writes_instructions_file_when_provided(
-    backend_cls: type[AgentBackend],
+    backend_cls: type[base.AgentBackend],
     ctor_kwargs: dict,
     patch_target: str | None,
     fake_binary: str,
     filename: str,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   content = f"# {backend_cls.__name__} instructions\nBuild stuff."
   backend = _build_backend(
@@ -79,13 +75,13 @@ def test_prepare_cwd_writes_instructions_file_when_provided(
     ids=_INSTRUCTIONS_BACKEND_IDS,
 )
 def test_prepare_cwd_skips_instructions_file_when_unset(
-    backend_cls: type[AgentBackend],
+    backend_cls: type[base.AgentBackend],
     ctor_kwargs: dict,
     patch_target: str | None,
     fake_binary: str,
     filename: str,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   backend = _build_backend(backend_cls, ctor_kwargs, patch_target, fake_binary, monkeypatch)
 
@@ -95,11 +91,11 @@ def test_prepare_cwd_skips_instructions_file_when_unset(
 
 
 def test_opencode_prepare_cwd_writes_agents_md_even_when_config_exists(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """AGENTS.md must be written even when opencode.json already exists (resumed sessions)."""
-  patch_target, fake_binary, defaults = CLI_BACKEND_RIGS[OpenCodeBackend]
+  patch_target, fake_binary, defaults = conftest.CLI_BACKEND_RIGS[opencode.OpenCodeBackend]
   backend = _build_backend(
-      OpenCodeBackend, defaults, patch_target, fake_binary, monkeypatch, instructions_content="# Instructions")
+      opencode.OpenCodeBackend, defaults, patch_target, fake_binary, monkeypatch, instructions_content="# Instructions")
   config_dir = tmp_path / ".opencode"
   config_dir.mkdir()
   (config_dir / "opencode.json").write_text("{}", encoding="utf-8")

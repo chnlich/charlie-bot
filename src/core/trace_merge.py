@@ -17,7 +17,12 @@ from typing import BinaryIO
 
 import orjson
 
-from src.core.direct_pass_child import _MIN_CHUNK_BYTES, _chunk_parse_input, _split_chunks
+from src.core.direct_pass_child import (
+    _MAX_CHUNKS,
+    _MIN_CHUNK_BYTES,
+    _chunk_parse_input,
+    _split_chunks,
+)
 from src.core.gc_control import gc_off
 from src.core.log_once import LazyStructlogLogger
 
@@ -62,7 +67,11 @@ _MERGE_MEMBER_RSS_FACTOR = 8
 # completes without waiting and the compress overlaps the GIL-bound walk.
 _MERGE_PIPE_BYTES = 1 << 20
 
-# Chunk helpers parse one trace's chunks concurrently; the wave keeps one wave's parse peak beside the held trees.
+# A member build's chunk helpers parse in waves of this size: the member wave budgets several
+# members' builds against the cgroup's free bytes, and each member's held chunk trees sit beside
+# its parse peak, so the wave caps what one member adds to it. The single-trace build holds every
+# chunk's tree at its id-map barrier regardless of wave shape (each helper keeps its tree from
+# parse to build), so a wave there only lengthens the parse wall; it spawns every chunk at once.
 _MERGE_CHUNK_WAVE = 4
 
 
@@ -412,9 +421,12 @@ class _ChunkHelperError(RuntimeError):
 
 
 def _merge_chunked_build(
-    path: Path, file_index: int, id_base: int, slim: bool, assemble: Callable[[list[Path], int, int, int],
-                                                                              bool | int]) -> bool | int | None:
+    path: Path, file_index: int, id_base: int, slim: bool, assemble: Callable[[list[Path], int, int, int], bool | int],
+    parse_wave: int) -> bool | int | None:
   """Run the chunk helpers over *path* and hand their fragments to *assemble*.
+
+  *parse_wave* is the spawn wave: how many chunk helpers parse concurrently before the
+  parent reads the next wave's reports.
 
   Each helper parses once, holds its tree, reports its chunk's labels and first-sight tid/flow forms,
   and waits for the parent's id maps; the maps match the sequential walk's allocation order from
@@ -438,9 +450,9 @@ def _merge_chunked_build(
     member_dir = Path(tempfile.mkdtemp(prefix="merge-chunks-"))
     fragments = [member_dir / f"{index}.jsonl" for index in range(count)]
     reports = []
-    for wave_start in range(0, count, _MERGE_CHUNK_WAVE):
+    for wave_start in range(0, count, parse_wave):
       wave_at = len(helpers)
-      for index in range(wave_start, min(wave_start + _MERGE_CHUNK_WAVE, count)):
+      for index in range(wave_start, min(wave_start + parse_wave, count)):
         spec = [
             str(path), 0 if index == 0 else ends[index - 1], ends[index], index, count, object_form,
             indent.decode(), slim, index == count - 1,
@@ -514,7 +526,7 @@ def _merge_single_trace_chunked(path: Path, out_path: Path, slim: bool) -> bool:
       output.write(b"]}")
     return True
 
-  return _merge_chunked_build(path, 0, 1, slim, assemble) is True
+  return _merge_chunked_build(path, 0, 1, slim, assemble, parse_wave=_MAX_CHUNKS) is True
 
 
 def _merge_chunk_main(argv: list[str]) -> int:
@@ -600,7 +612,7 @@ def _build_member_chunked(
         any_emitted = True
     return emitted
 
-  built = _merge_chunked_build(path, file_index, id_start, slim, assemble)
+  built = _merge_chunked_build(path, file_index, id_start, slim, assemble, parse_wave=_MERGE_CHUNK_WAVE)
   return built if isinstance(built, int) else None
 
 

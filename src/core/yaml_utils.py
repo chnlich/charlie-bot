@@ -1,6 +1,6 @@
 """Shared YAML load/save helpers for consistent encoding and serialization."""
 
-from pathlib import Path
+import pathlib
 from typing import Any
 
 import yaml
@@ -19,14 +19,14 @@ def load_yaml_text(raw: str, *, default: Any) -> Any:
   return data if data is not None else default
 
 
-def load_yaml(path: Path, *, default: Any) -> Any:
+def load_yaml(path: pathlib.Path, *, default: Any) -> Any:
   """Read a YAML file with consistent UTF-8 encoding. Returns *default* if the file is missing or empty."""
   if not path.exists():
     return default
   return load_yaml_text(path.read_text(encoding="utf-8"), default=default)
 
 
-def save_yaml(path: Path, data: Any) -> None:
+def save_yaml(path: pathlib.Path, data: Any) -> None:
   """Write data to a YAML file with consistent UTF-8 encoding and formatting."""
   path.write_text(
       yaml.dump(data, Dumper=_SAFE_DUMPER, allow_unicode=True, default_flow_style=False, sort_keys=False),

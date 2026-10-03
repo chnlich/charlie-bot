@@ -276,6 +276,11 @@ _AGG_TRIGGER_SQLS = {
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
 # from another file or host): the latest capture wins on every non-key column but ts,
 # which record_file keeps at the earlier non-empty value.
+# The session links ride every record_file write; the deduped batch and the
+# mixed-order loop below spell them once.
+_NATIVE_SESSION_LINK_SQL = "INSERT OR IGNORE INTO native_sessions (session, source) VALUES (?, ?)"
+_FALLBACK_SESSION_LINK_SQL = "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)"
+
 _UPSERT_USAGE_SQL = """
 INSERT INTO usage (record_id, kind, source, model, account, host, ts,
                    in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at)
@@ -853,6 +858,9 @@ class UsageLedger:
         self._conn.execute(
             "DELETE FROM fallback_sessions WHERE record_id >= ? AND record_id < ?", (supersede_prefix, upper))
       rewrote = deleted > 0
+      # The ts-keep and rewrite-witness verdicts read only the fetched existing rows,
+      # so they resolve before any statement runs.
+      staged: list[tuple[UsageRecord, str]] = []
       for rec in records:
         ts = rec.ts
         old_values = existing.get(rec.record_id)
@@ -869,21 +877,29 @@ class UsageLedger:
           if old_values != (rec.kind.value, rec.source, rec.model, rec.account, ts, rec.in_fresh, rec.cache_write,
                             rec.cache_read, rec.in_unsplit, rec.output):
             rewrote = True
-        # The sessions register before the usage row: the aggregate's insert trigger
-        # counts a fallback row only while none of its sessions is native, and that
-        # check reads this record's own registrations.
-        if rec.kind == RecordKind.NATIVE:
-          for session in rec.sessions:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO native_sessions (session, source) VALUES (?, ?)", (session, rec.source))
-        else:
-          for session in rec.sessions:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
-        self._conn.execute(
-            _UPSERT_USAGE_SQL, (
-                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
-                rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at))
+        staged.append((rec, ts))
+      # The links batch ahead of the rows, deduped: a transcript's records share one
+      # session, so the per-record loop re-ran the same OR IGNORE pair once per record
+      # (1.2k no-op executes per moved file measured). The dedupe is exact -- OR IGNORE
+      # fires the link triggers only on an actual insert, so the duplicates the batch
+      # skips never fired anything -- and the count/retire trigger pair is linear in
+      # each row's own contribution (a fallback row counted before a later native link
+      # is retired by exactly the subtract the batched order never owes), so the batch
+      # lands every kind mix on the per-record order's end state.
+      native_pairs = dict.fromkeys(
+          (session, rec.source) for rec, _ts in staged if rec.kind == RecordKind.NATIVE for session in rec.sessions)
+      fallback_pairs = dict.fromkeys(
+          (rec.record_id, session) for rec, _ts in staged if rec.kind != RecordKind.NATIVE for session in rec.sessions)
+      if native_pairs:
+        self._conn.executemany(_NATIVE_SESSION_LINK_SQL, native_pairs)
+      if fallback_pairs:
+        self._conn.executemany(_FALLBACK_SESSION_LINK_SQL, fallback_pairs)
+      self._conn.executemany(
+          _UPSERT_USAGE_SQL, [
+              (
+                  rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
+                  rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at) for rec, ts in staged
+          ])
       if rewrote:
         # A value rewrite invalidates every aggregate built before it in any process,
         # and a superseding delete can pair N deletes with N inserts the fold's

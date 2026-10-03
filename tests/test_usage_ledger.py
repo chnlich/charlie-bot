@@ -140,6 +140,37 @@ def test_reupserted_native_keeps_first_session_registered(tmp_path):
   assert models == {"model-a"}
 
 
+def test_one_file_many_records_share_one_session_link(tmp_path):
+  """A transcript file's records all register the same (session, source) pair: the
+  batched links land one native_sessions row while every record still counts once."""
+  recs = [_record(f"rec-{i}", RecordKind.NATIVE, sessions=("sess-a",)) for i in range(50)]
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", recs) == 50
+    links = ledger._conn.execute("SELECT session, source FROM native_sessions").fetchall()
+    usage_count = ledger._conn.execute("SELECT count(*) FROM usage").fetchone()[0]
+    rows = ledger.model_rows()
+  assert [(row["session"], row["source"]) for row in links] == [("sess-a", SOURCE)]
+  assert usage_count == 50
+  assert rows[0].calls == 50
+
+
+def test_mixed_kind_file_sharing_one_session_keeps_the_fallback_excluded(tmp_path):
+  """One file carrying a fallback record and a native record for the same session nets
+  the fallback excluded: its usage row and link persist, the aggregate counts only the
+  native record -- the same end state the per-record write order reached by counting
+  the fallback and retiring it at the later native link."""
+  fb = _record("rec-fb", RecordKind.FALLBACK, sessions=("sess-a",), model="model-fb", ts=TS_B)
+  native = _record("rec-native", RecordKind.NATIVE, sessions=("sess-a",), model="model-native")
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    ledger.record_file(HOST, "/logs/m.jsonl", "sig-m", [fb, native])
+    models = {row.model for row in ledger.model_rows()}
+    usage_ids = {row[0] for row in ledger._conn.execute("SELECT record_id FROM usage")}
+    fb_links = ledger._conn.execute("SELECT count(*) FROM fallback_sessions WHERE record_id = 'rec-fb'").fetchone()[0]
+  assert models == {"model-native"}
+  assert usage_ids == {"rec-fb", "rec-native"}
+  assert fb_links == 1
+
+
 def test_rewrite_identical_records_leaves_rows_unchanged(tmp_path):
   recs = [
       _record("rec-1", RecordKind.NATIVE, sessions=("sess-a",)),

@@ -21,17 +21,16 @@ import glob
 import io
 import math
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
-from pathlib import Path
-from types import ModuleType
+import types
 from typing import Any
 
-from src.core.log_once import LazyStructlogLogger
-from src.core.timeouts import SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT
+from src.core import log_once, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 class NcuParseError(Exception):
@@ -144,20 +143,20 @@ def _discover_ncu_python_dir() -> str | None:
   """
   ncu = shutil.which("ncu")
   if ncu:
-    for parent in Path(ncu).resolve().parents:
+    for parent in pathlib.Path(ncu).resolve().parents:
       candidate = parent / "extras" / "python"
       if (candidate / "ncu_report.py").is_file():
         return str(candidate)
 
   globbed = sorted(glob.glob("/opt/nvidia/nsight-compute/*/extras/python"))
   for candidate in reversed(globbed):
-    if (Path(candidate) / "ncu_report.py").is_file():
+    if (pathlib.Path(candidate) / "ncu_report.py").is_file():
       return candidate
 
   return None
 
 
-def _load_ncu_report_module() -> ModuleType | None:
+def _load_ncu_report_module() -> types.ModuleType | None:
   """Import and memoize the ncu_report module, or None if unavailable."""
   global _ncu_report_module, _ncu_import_attempted
   if _ncu_import_attempted:
@@ -468,7 +467,7 @@ def _action_to_dict(action: Any, idx: int) -> dict:
   }
 
 
-def _parse_with_module(module: ModuleType, abspath: str) -> dict:
+def _parse_with_module(module: types.ModuleType, abspath: str) -> dict:
   """Parse a report using the ncu_report module."""
   try:
     ctx = module.load_report(abspath)
@@ -573,7 +572,8 @@ def _run_ncu_csv_import(abspath: str) -> subprocess.CompletedProcess[str]:
   NcuParseError, and each caller translates the failures its own way.
   """
   cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
-  return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+  return subprocess.run(
+      cmd, capture_output=True, text=True, check=False, timeout=timeouts.SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
 
 
 def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:

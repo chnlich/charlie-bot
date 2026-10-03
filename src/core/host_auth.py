@@ -9,18 +9,14 @@ this module's state file under the CharlieBot home directory.
 """
 
 import asyncio
+import datetime
 import json
+import pathlib
 import re
-from datetime import datetime, timedelta
-from pathlib import Path
 
-from src.core.home import charliebot_home_dir
-from src.core.json_utils import write_json_atomically
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now
-from src.core.ssh import ssh_cmd
+from src.core import home, json_utils, log_once, models, ssh
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The standing probe period. A host currently held is probed at 12x this period:
 # every held probe fires a device-verification request on the identity provider
@@ -65,9 +61,9 @@ _URL_MARKER = "http"
 _NON_LITERAL_PATTERN = re.compile(r"[*?!]")
 
 
-def default_state_path() -> Path:
+def default_state_path() -> pathlib.Path:
   """This profile's state file, under the CharlieBot home directory."""
-  return charliebot_home_dir() / STATE_FILENAME
+  return home.charliebot_home_dir() / STATE_FILENAME
 
 
 def empty_state() -> dict:
@@ -81,7 +77,7 @@ def empty_state() -> dict:
   }
 
 
-def load_state(state_path: Path | None = None) -> dict:
+def load_state(state_path: pathlib.Path | None = None) -> dict:
   """Read the state file; an unreadable or corrupt file is logged and answered with empty state."""
   path = state_path if state_path is not None else default_state_path()
   if not path.exists():
@@ -96,11 +92,11 @@ def load_state(state_path: Path | None = None) -> dict:
   return state
 
 
-def save_state(state: dict, state_path: Path) -> None:
+def save_state(state: dict, state_path: pathlib.Path) -> None:
   """Publish the state through a temporary file and an atomic rename."""
   state_path.parent.mkdir(parents=True, exist_ok=True)
   try:
-    write_json_atomically(state_path, state, indent=2, newline=True)
+    json_utils.write_json_atomically(state_path, state, indent=2, newline=True)
   except OSError as e:
     log.error("host_auth_state_write_failed", path=str(state_path), error=str(e))
     raise
@@ -150,7 +146,7 @@ async def probe_host(alias: str) -> tuple[int | None, str]:
   remote side split their lines across both.
   """
   proc = await asyncio.create_subprocess_exec(
-      *ssh_cmd(alias, "true"),
+      *ssh.ssh_cmd(alias, "true"),
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
   )
@@ -166,7 +162,7 @@ async def probe_host(alias: str) -> tuple[int | None, str]:
   return returncode, (stdout_b + stderr_b).decode("utf-8", errors="replace")
 
 
-def host_due(entry: dict | None, now: datetime) -> bool:
+def host_due(entry: dict | None, now: datetime.datetime) -> bool:
   """True when this host's probe backoff has elapsed.
 
   A host currently held waits 12x the standing period -- every held probe fires
@@ -177,11 +173,11 @@ def host_due(entry: dict | None, now: datetime) -> bool:
   if entry is None or entry.get("last_probe_at") is None:
     return True
   period = BLOCKED_BACKOFF_SEC if entry.get("status") == STATUS_NEEDS_OKTA else PROBE_INTERVAL_SEC
-  last = datetime.fromisoformat(entry["last_probe_at"])
+  last = datetime.datetime.fromisoformat(entry["last_probe_at"])
   return (now - last).total_seconds() >= period
 
 
-def apply_probe_result(entry: dict, *, status: str, detail: str, probed_at: datetime) -> None:
+def apply_probe_result(entry: dict, *, status: str, detail: str, probed_at: datetime.datetime) -> None:
   """Fold one probe result into *entry* under the one-transition baseline rule.
 
   The baseline moves on exactly one transition -- the probe after a held probe
@@ -203,7 +199,7 @@ def apply_probe_result(entry: dict, *, status: str, detail: str, probed_at: date
     entry["enrolled_observed_at"] = probed
 
 
-def derive_estimate(entry: dict, now: datetime) -> dict:
+def derive_estimate(entry: dict, now: datetime.datetime) -> dict:
   """The per-host estimate derivation, computed at read time and never persisted.
 
   ``estimated_expires_at`` is the renewal baseline plus the trust-cache
@@ -217,7 +213,7 @@ def derive_estimate(entry: dict, now: datetime) -> dict:
   baseline = entry.get("enrolled_observed_at")
   if baseline is None:
     return {"estimated_expires_at": None, "remaining_sec": None}
-  expires = datetime.fromisoformat(baseline) + timedelta(seconds=TRUST_CACHE_TTL_SEC)
+  expires = datetime.datetime.fromisoformat(baseline) + datetime.timedelta(seconds=TRUST_CACHE_TTL_SEC)
   return {
       "estimated_expires_at": expires.isoformat(),
       "remaining_sec": (expires - now).total_seconds(),
@@ -230,7 +226,7 @@ def _unquote(value: str) -> str:
   return value
 
 
-def parse_ssh_config_hosts(path: Path) -> list[tuple[str, str]]:
+def parse_ssh_config_hosts(path: pathlib.Path) -> list[tuple[str, str]]:
   """``(alias, hostname)`` for every collectable Host block in the ssh config.
 
   A block is collected only when its ``Host`` line names exactly one alias with
@@ -312,8 +308,8 @@ def _merge_hosts(state: dict, host_list: list[tuple[str, str]]) -> dict[str, dic
 async def run_round(
     *,
     force: bool = False,
-    state_path: Path | None = None,
-    ssh_config_path: Path | None = None,
+    state_path: pathlib.Path | None = None,
+    ssh_config_path: pathlib.Path | None = None,
 ) -> dict:
   """Probe every host whose backoff has elapsed (all of them when *force*), then publish the state.
 
@@ -326,10 +322,10 @@ async def run_round(
   # This is the only caller that can omit either path, so both resolve here,
   # once; the helpers take them required.
   path = state_path if state_path is not None else default_state_path()
-  config_path = ssh_config_path if ssh_config_path is not None else Path.home() / ".ssh" / "config"
+  config_path = ssh_config_path if ssh_config_path is not None else pathlib.Path.home() / ".ssh" / "config"
   state = load_state(path)
   host_list = parse_ssh_config_hosts(config_path)
-  now = utc_now()
+  now = models.utc_now()
   entries = {entry["alias"]: entry for entry in state["hosts"]}
   due = [alias for alias, _ in host_list if force or host_due(entries.get(alias), now)]
   if not due:
@@ -342,7 +338,7 @@ async def run_round(
   save_state(state, path)
   try:
     results = await asyncio.gather(*(probe_host(alias) for alias in due))
-    moment = utc_now()
+    moment = models.utc_now()
     merged = _merge_hosts(state, host_list)
     for alias, (returncode, output) in zip(due, results, strict=True):
       apply_probe_result(

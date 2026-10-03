@@ -26,14 +26,16 @@ from src.core.models import ThreadMetadata
 # other four never do and therefore never raise FileNotFoundError on build.
 BINARY_RESOLVING_TYPES = ["opencode", "antigravity", "codex", "gemini", "charlie-code"]
 
-# Each binary-resolving backend imports resolve_binary into its own module
-# namespace, so hiding a binary means patching every module, not base.
-_RESOLVER_MODULES = [
-    "src.agents.backends.opencode",
-    "src.agents.backends.antigravity_cli",
-    "src.agents.backends.codex",
-    "src.agents.backends.gemini_cli",
-    "src.agents.backends.charlie_code",
+# Each binary-resolving backend reads resolve_binary through one module attribute:
+# four bind it at import scope (their own namespace), and gemini_cli reads the base
+# module's attribute at call time (`base.resolve_binary`), so hiding a binary means
+# patching each reader's own attribute, not one shared name.
+_RESOLVER_PATCH_TARGETS = [
+    "src.agents.backends.opencode.resolve_binary",
+    "src.agents.backends.antigravity_cli.resolve_binary",
+    "src.agents.backends.codex.resolve_binary",
+    "src.agents.backends.base.resolve_binary",
+    "src.agents.backends.charlie_code.resolve_binary",
 ]
 
 
@@ -43,8 +45,8 @@ def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:
   def _missing(name: str, fallback_dir: str) -> str:
     raise FileNotFoundError(f"{name} binary not found on PATH or at {Path(fallback_dir) / name}")
 
-  for module in _RESOLVER_MODULES:
-    monkeypatch.setattr(f"{module}.resolve_binary", _missing)
+  for target in _RESOLVER_PATCH_TARGETS:
+    monkeypatch.setattr(target, _missing)
 
 
 # Sections the registry reads secrets from: cc-kimi resolves its api_key under

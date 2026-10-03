@@ -20,26 +20,17 @@ completes.
 import argparse
 import json
 
-from src.cli.common import (
-    add_session_arg,
-    find_local_task_child,
-    find_local_thread,
-    post_internal_api,
-    read_required_text_file,
-    resolve_session_id,
-    validate_repo_path,
-)
-from src.cli.help_formatter import CliRawDescriptionHelpFormatter
+from src.cli import common, help_formatter
 
 
 def _read_goal_file(goal_file: str) -> str:
   """Read the goal file, exiting non-zero on a missing or empty file."""
-  return read_required_text_file("--goal-file", goal_file)
+  return common.read_required_text_file("--goal-file", goal_file)
 
 
 def _read_plan_file(plan_file: str) -> str:
   """Read the optional plan file when provided, exiting non-zero if invalid."""
-  return read_required_text_file("--plan-file", plan_file)
+  return common.read_required_text_file("--plan-file", plan_file)
 
 
 IMPROVE_EPILOG = """\
@@ -60,9 +51,9 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Run an iterative improvement loop via CharlieBot workers",
       epilog=IMPROVE_EPILOG,
-      formatter_class=CliRawDescriptionHelpFormatter,
+      formatter_class=help_formatter.CliRawDescriptionHelpFormatter,
   )
-  add_session_arg(parser)
+  common.add_session_arg(parser)
   parser.add_argument("--repo", required=True, help="Path to the git repo workers should operate on")
   parser.add_argument("--iterations", type=int, default=3, help="Number of iterations to run")
   parser.add_argument(
@@ -90,8 +81,8 @@ def main() -> None:
       default=False,
       help="Merge work_branch into base_branch after all iterations complete")
   args = parser.parse_args()
-  validate_repo_path(parser, args.repo)
-  session_id = resolve_session_id(args.session)
+  common.validate_repo_path(parser, args.repo)
+  session_id = common.resolve_session_id(args.session)
   goal = _read_goal_file(args.goal_file)
   plan = _read_plan_file(args.plan_file) if args.plan_file is not None else None
 
@@ -116,12 +107,9 @@ def main() -> None:
     # The improve-sequence and config stacks ride the one readback that needs
     # them: a deferral here keeps --help and parser errors off their import
     # chains (the src.cli.config deferral shape).
-    from src.core.config import get_config
-    from src.core.improve_sequence import improve_child_request_id
-    from src.core.models import SessionMetadata
-    from src.core.threads import METADATA_NAME
+    from src.core import config, improve_sequence, models, threads
 
-    cfg = get_config()
+    cfg = config.get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"
     if not loops_dir.is_dir():
       return None
@@ -149,18 +137,18 @@ def main() -> None:
     # The v2 sequence's one worker child binds by its stable request id; its
     # presence (and only the matching parent's) proves the v2 admission.
     try:
-      meta = SessionMetadata.model_validate_json(
-          (cfg.sessions_dir / session_id / METADATA_NAME).read_text(encoding="utf-8"))
+      meta = models.SessionMetadata.model_validate_json(
+          (cfg.sessions_dir / session_id / threads.METADATA_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
       meta = None
     if meta is not None and meta.profile is not None:
-      child = find_local_task_child(
-          session_id, description=goal, task_type=None, request_id=improve_child_request_id(loop_id))
+      child = common.find_local_task_child(
+          session_id, description=goal, task_type=None, request_id=improve_sequence.improve_child_request_id(loop_id))
       if child is None:
         return None
       response["child_session_id"] = child["session_id"]
       return response
-    thread = find_local_thread(
+    thread = common.find_local_thread(
         session_id,
         description=f"Goal: {goal}",
         task_type="implement",
@@ -170,7 +158,7 @@ def main() -> None:
       return None
     return response
 
-  result = post_internal_api("/api/internal/improve", payload, readback=_readback)
+  result = common.post_internal_api("/api/internal/improve", payload, readback=_readback)
   print(json.dumps(result, indent=2))
 
 

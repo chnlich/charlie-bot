@@ -2348,9 +2348,9 @@ sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
 from server import _CharlieBotGZipMiddleware
 import src.api.deps as deps
-from src.api.deps import get_config, get_session_manager, get_thread_manager
+from src.api.deps import get_session_manager, get_thread_manager
 from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_config
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -4084,9 +4084,9 @@ from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
 from server import _CharlieBotGZipMiddleware
-from src.api.deps import get_thread_manager, get_config
+from src.api.deps import get_thread_manager
 from src.api.threads import router as threads_router
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_config
 from src.core.threads import ThreadManager
 
 # Worst detail-poll corpus: the thread whose metadata.json carries the most
@@ -4640,9 +4640,9 @@ from pathlib import Path
 sys.path.insert(0, os.environ["CHECKOUT"])
 from fastapi import FastAPI
 from server import _CharlieBotGZipMiddleware
-from src.api.deps import get_config, get_config_on_loop, get_thread_manager, get_trigger_manager
+from src.api.deps import get_config_on_loop, get_thread_manager, get_trigger_manager
 from src.api.threads import router as threads_router
-from src.core.config import CharlieBotConfig
+from src.core.config import CharlieBotConfig, get_config
 from src.core.sessions import SessionManager
 from src.core.threads import ThreadManager
 from src.core.triggers import TriggerManager
@@ -10191,3 +10191,4 @@ the round's verbatim collector tripped its 0.003 s line through a collector bug 
 | 2026-10-03 | this PR | M8's healthy line recalibrated onto the memo era (docs-only calibration round, no product-code change): the served median has priced the per-file proven-absent memo's hit since the memo reached the instance — 0.006 s in both of today's rounds (the 2026-09-28 sweep's 0.381 s median is the stale pre-memo server process that row itself names) — while the < 0.5 s median line was calibrated against the pre-memo scan-era served median (0.24-0.31 s, the 2026-08-30 seed), so a scan regression to it would now pass unseen behind 6 ms memo hits. The line now prices both sub-readings the collector prints: median < max(0.020 s, active chat files × 0.0000080 s) (the memo-hit serve is the M72-class stat walk — 6 ms over 1025 active files, 5.9 µs/file, against M72's 3.7-4.5 µs/entry) and max < max(0.75 s, searchable corpus MB ÷ 500) (the served fresh scan reads 0.587-0.615 s over the 508.6 MB corpus, 826-866 MB/s, three fresh-needle requests at load 0.27 one-minute; the standing collector's maxima read 0.521 s in the sweep and 0.332 s on the quiet re-run — the max scales with the churn since the prior round, so the line prices the full re-scan the worst round pays). The collector gains the corpus census line the two scaled terms read (the timings ride verbatim). Scan-floor witness for why no code fix travels with this round: the ASCII path's translate fold is 56 % of the scan wall (1.6 GB live read: read 232 ms, fold +749 ms, find +351 ms) and the alternatives measured slower — bytes.lower 1389 MB/s, numpy folds 432-691 MB/s, re IGNORECASE 169 MB/s against the fold's 1629 MB/s — so the scan sits at the pure-Python floor | the memo changed what the collector's median measures without the line moving; the watch's teeth follow the served shape |
 | 2026-10-03 | this PR | M21 sidebar 10th-poll sweep median 25.5/24.8/25.7 → 12.6/11.6/13.1 ms (three interleaved rounds of the verbatim collector, main checkout before vs branch worktree after, arm order alternating, 1031 active sessions, load 1.44-3.45 one-minute), median-of-medians 25.5 → 12.6 ms (−51 %), every paired round faster; probe-signature digest identical across arms (779e19b095a8); scandir witness 1031/sweep before → 0 after. The standing sweep tripped first: median 24.0-25.4 ms over two rounds at 1029-1031 sessions against the max(0.005 s, sessions × 0.000020 s) = 20.6 ms line — 23-25 µs/session, the pre-memo walk band, against the memo-era 11.8-13.3 µs/session the line was set ~1.5x over. Mechanism: the sweep's threads dir-listing memo capped at 1024 entries while the active-session corpus crossed it (653-654 sessions at the 2026-09-30 landing, 846 on 2026-10-02, 1031 today) — a sequential full-corpus walk over an LRU smaller than its working set evicts every entry before its next read, so the memo served 0 hits and every session paid the scandir+is_dir+join phase again; the two walk memos (threads, triggers) rise to 4096, whose entries are per-session name lists — 61 thread files corpus-wide — so the memory bound stays trivial. Healthy line unchanged: the after band reads 11.2-13.1 µs/session, back inside the line's 20 µs/session pricing with the corpus at 1031 | the memo's cap priced the landing-day corpus, not the growth the sweep walks every 10th poll; past 1024 sessions the self-heal sweep silently reverted to the pre-memo shape the same memo was landed to remove |
 | 2026-10-03 | this PR | M137 memory-CLI dispatch floor, introduced with its landing fix: `src/cli/memory.py` imported the store stack (`src.core.memory`) and the token stack (`src.core.run_token`) at module level, so `charliebot memory --help` and every parser-error exit paid their ~10 ms import chain (the marginals measure run_token +7.4 ms, core.memory +5.7 ms, sharing the log_once chain) for machinery only the query and lint verbs read — add and proposal never touched them, and the module that lent `src/cli/config.py`'s deferral comment its name still carried the one eager chain the pattern removes. The stacks now ride the verb bodies. Interleaved A/B, three rounds of the verbatim M137 collector, main checkout (at origin/main, preflight-pinned) before vs this branch's worktree after back-to-back, arm order alternating, one warm pass per arm, load 0.58-0.62 one-minute: medians 41/40/41 → 30/31/31 ms, median-of-medians 41 → 31 ms (−24%), every paired round faster, maxima 41-43 → 31-32 ms | the dispatcher's lazy per-verb import is what makes the module wall the verb's own floor: whatever a verb module imports eagerly, every --help and parser-error exit pays, and the M125 family band (29-46 ms) priced the memory verb at its top on exactly this chain |
+| 2026-10-03 | this PR | M35/M59/M68 standing collectors failed against the preflight-pinned checkout — every block's app-wiring import died on `ImportError: cannot import name 'get_config' from 'src.api.deps'` (M35 block 2, M59 block 1, M68 block 1), the sweep marked the three units failed, and the round reports their metrics unmeasured. The `deps.get_config` re-export disappeared with #2605's module-import conversion: its four test sites moved with that PR, and the three heredoc collectors — which no test imports — kept the old path. The factory import now reads from `src.core.config` (deps carries the Depends forms only; the override keys stay the same objects they always keyed), and the repaired collectors re-run green against the same pinned checkout: M35 events page median 0.99 ms, max 1.56 ms (bootstrap 1.19 ms); M59 full-row median 0.54 ms, attach-mode 0.41 ms; M68 marked rebuild median 1.02 ms, max 1.26 ms — all inside their lines | the doc is the collectors' single home and no test executes a heredoc body, so a product refactor that moves a re-exported name breaks the regression watch silently — the sweep's failed-unit list is the only tripwire, and every round between the merge and this repair reports the three metrics unmeasured |

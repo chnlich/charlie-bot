@@ -6,7 +6,6 @@ import pytest
 
 from src.api import responses
 from src.core import streaming
-from src.core.streaming import StreamingManager
 
 WINDOW = 0.05
 
@@ -29,14 +28,14 @@ class _Socket:
 
 
 @pytest.fixture
-def manager(monkeypatch: pytest.MonkeyPatch) -> StreamingManager:
+def manager(monkeypatch: pytest.MonkeyPatch) -> streaming.StreamingManager:
   monkeypatch.setattr(streaming, "_STREAM_COALESCE_INTERVAL", WINDOW)
-  return StreamingManager()
+  return streaming.StreamingManager()
 
 
 @pytest.mark.asyncio
 async def test_serialize_once_per_fan_out_over_subscribers(
-    manager: StreamingManager, monkeypatch: pytest.MonkeyPatch) -> None:
+    manager: streaming.StreamingManager, monkeypatch: pytest.MonkeyPatch) -> None:
   render_calls = 0
   real_render = responses.fast_json_bytes
 
@@ -54,7 +53,7 @@ async def test_serialize_once_per_fan_out_over_subscribers(
 
 
 @pytest.mark.asyncio
-async def test_wire_render_non_str_key_raises(manager: StreamingManager) -> None:
+async def test_wire_render_non_str_key_raises(manager: streaming.StreamingManager) -> None:
   # A non-str dict key raises at the fan-out instead of the stdlib's silent
   # str coercion, so a malformed frame surfaces at its producer.
   ws = _Socket()

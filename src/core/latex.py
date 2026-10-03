@@ -1,30 +1,27 @@
 """LaTeX project configuration and compilation."""
 
 import asyncio
+import pathlib
 import signal
-from pathlib import Path
 
-from src.core.git import _git_proc_bytes
-from src.core.log_once import LazyStructlogLogger
-from src.core.process import kill_process_group
-from src.core.timeouts import LATEX_COMPILE_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
+from src.core import git, log_once, process, timeouts
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Single source of truth — change here when adding more projects.
 LATEX_PROJECT = {
-    'project_dir': Path('~/workspace/latex-project').expanduser(),
-    'tex_file': Path('doc/report.tex'),
-    'pdf_file': Path('doc/report.pdf'),
+    'project_dir': pathlib.Path('~/workspace/latex-project').expanduser(),
+    'tex_file': pathlib.Path('doc/report.tex'),
+    'pdf_file': pathlib.Path('doc/report.pdf'),
     'build_cmd': 'make pdf',
 }
 
 
-def get_tex_path() -> Path:
+def get_tex_path() -> pathlib.Path:
   return LATEX_PROJECT['project_dir'] / LATEX_PROJECT['tex_file']
 
 
-def get_pdf_path() -> Path:
+def get_pdf_path() -> pathlib.Path:
   return LATEX_PROJECT['project_dir'] / LATEX_PROJECT['pdf_file']
 
 
@@ -95,7 +92,8 @@ async def _git_rev_parse(project_dir: str, *args: str) -> str | None:
   mistaking an unreadable repo for a failed ref.
   """
   try:
-    proc, stdout, _ = await _git_proc_bytes(project_dir, 'rev-parse', *args, timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
+    proc, stdout, _ = await git._git_proc_bytes(
+        project_dir, 'rev-parse', *args, timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC)
   except TimeoutError:
     log.warning('get_git_info_timeout', cmd='rev-parse ' + ' '.join(args))
     raise
@@ -114,7 +112,7 @@ async def get_git_info() -> dict | None:
     branch = await _git_rev_parse(project_dir, '--abbrev-ref', 'HEAD')
     if branch is None:
       branch = 'unknown'
-    return {'repo_name': Path(repo_path).name, 'repo_path': repo_path, 'branch': branch}
+    return {'repo_name': pathlib.Path(repo_path).name, 'repo_path': repo_path, 'branch': branch}
   except TimeoutError:
     return None
   except Exception as e:
@@ -135,7 +133,7 @@ async def compile_latex() -> dict:
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=LATEX_COMPILE_TIMEOUT)
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeouts.LATEX_COMPILE_TIMEOUT)
     output = stdout.decode('utf-8', errors='replace')
     ok = proc.returncode == 0
     if not ok:
@@ -144,9 +142,9 @@ async def compile_latex() -> dict:
       log.info('latex_compile_done')
     return {'ok': ok, 'log': output}
   except TimeoutError:
-    kill_process_group(proc.pid, signal.SIGKILL)
+    process.kill_process_group(proc.pid, signal.SIGKILL)
     log.warning('latex_compile_timeout')
-    return {'ok': False, 'log': f'Compilation timed out after {LATEX_COMPILE_TIMEOUT}s'}
+    return {'ok': False, 'log': f'Compilation timed out after {timeouts.LATEX_COMPILE_TIMEOUT}s'}
   except Exception as e:
     log.warning('latex_compile_error', error=str(e))
     return {'ok': False, 'log': str(e)}

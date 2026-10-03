@@ -3,7 +3,7 @@
 ``config.yaml`` holds the whole sectioned mapping and the loader is its only
 reader: it resolves the profile home, rejects unknown and retired keys, and
 reloads on file change. Opening a file by path skips all of that, so ``get``
-resolves through :func:`get_config`:
+resolves through :func:`config.get_config`:
 
   charliebot config get <key>
 
@@ -16,16 +16,18 @@ import argparse
 import json
 import sys
 
-from src.cli.help_formatter import CliHelpFormatter
+from src.cli import help_formatter
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-      description="Read a CharlieBot config key through the loader", formatter_class=CliHelpFormatter)
+      description="Read a CharlieBot config key through the loader", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
   p_get = sub.add_parser(
-      "get", help="Print a config key's value to stdout (nothing else)", formatter_class=CliHelpFormatter)
+      "get",
+      help="Print a config key's value to stdout (nothing else)",
+      formatter_class=help_formatter.CliHelpFormatter)
   p_get.add_argument("key", help="Top-level CharlieBotConfig field name")
 
   args = parser.parse_args()
@@ -38,20 +40,20 @@ def _cmd_get(key: str) -> None:
   # here keeps --help and parser errors off the pydantic model build (the
   # src.cli.memory deferral shape); `get` pays the build either way, so its
   # wall is not this deferral's subject.
-  from pydantic import BaseModel
+  import pydantic
 
-  from src.core.config import CharlieBotConfig, get_config
+  from src.core import config
 
-  if key not in CharlieBotConfig.model_fields:
+  if key not in config.CharlieBotConfig.model_fields:
     print(f"error: unknown config key: {key} (not a CharlieBotConfig field)", file=sys.stderr)
     sys.exit(2)
-  value = getattr(get_config(), key)
+  value = getattr(config.get_config(), key)
   # An unset (None) credential must fail rather than print "None" into a
   # caller's variable.
   if value is None:
     print(f"error: config key {key} is unset", file=sys.stderr)
     sys.exit(1)
-  if isinstance(value, (BaseModel, list, dict)):
+  if isinstance(value, (pydantic.BaseModel, list, dict)):
     print(json.dumps(value, default=lambda o: o.model_dump()))
   else:
     print(value)

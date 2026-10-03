@@ -3,11 +3,10 @@
 Stdlib-only by contract: the claude-sub worker binary imports this module on
 every launch (the M108 floor, docs/perf_baseline.md), so nothing here may
 reach the backend ABC, the config model stack, or pydantic. Consumers read
-these names from three homes: base (src.agents.backends.base) re-exports the
-two permission flags for its established import path, claude_code
-(src.agents.backends.claude_code) imports the env vocabulary in-file and is
-the path session_usage, claude_compaction, and the session-usage tests read
-it through, and every other reader imports from here.
+these names from two homes: base (src.agents.backends.base) re-exports the
+two permission flags for its established import path, and every other reader
+-- claude_code (src.agents.backends.claude_code), session_usage,
+claude_compaction, the session-usage tests included -- imports from here.
 """
 
 import os

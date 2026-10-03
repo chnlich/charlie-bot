@@ -44,10 +44,10 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from src.agents.backends.claude_code import (
+from src.agents.backends.claude_code import headless_claude_declared_window
+from src.agents.backends.claude_launch import (
     CLAUDE_COMPACT_CONTEXT_RESERVE,
     CLAUDE_COMPACT_OUTPUT_RESERVE,
-    headless_claude_declared_window,
 )
 from src.core import event_types as ET
 from src.core.codex_usage import CodexUsageResolver

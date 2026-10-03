@@ -48,9 +48,8 @@ from src.agents.backends.claude_code import (
     BASE_COMMAND,
     HEADLESS_DISALLOWED_TOOLS,
     claude_supervisor_env,
-    headless_claude_env,
 )
-from src.agents.backends.claude_launch import DISABLE_CONNECTOR_SETTINGS
+from src.agents.backends.claude_launch import DISABLE_CONNECTOR_SETTINGS, headless_claude_env
 from src.core import claude_accounts
 from src.core import event_types as ET
 from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config

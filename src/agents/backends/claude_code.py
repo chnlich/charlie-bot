@@ -2,29 +2,16 @@
 
 import asyncio
 import json
+import pathlib
 import re
 import signal
 from collections.abc import Mapping
-from pathlib import Path
 
-from src.agents.backends.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG, AgentBackend
-from src.agents.backends.claude_launch import (
-    AUTO_COMPACT_WINDOW_ENV,
-    AUTOCOMPACT_PCT_OVERRIDE_ENV,
-    CLAUDE_COMPACT_CONTEXT_RESERVE,
-    CLAUDE_COMPACT_OUTPUT_RESERVE,
-    DISABLE_CONNECTOR_SETTINGS,
-    HEADLESS_CLAUDE_DEFAULT_ENV,
-    MAX_CONTEXT_TOKENS_ENV,
-    headless_claude_env,
-)
+from src.agents.backends import base, claude_launch
+from src.core import constants, home, log_once, process
 from src.core import event_types as ET
-from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.process import kill_process_group
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Disable Claude Code tools that are unsafe in CharlieBot headless one-shot mode.
 # Besides scheduling/monitoring (scheduling tools are no-ops in -p mode, and Monitor
@@ -42,8 +29,8 @@ BASE_COMMAND: list[str] = [
     "--output-format",
     "stream-json",
     "--verbose",
-    SKIP_PERMISSIONS_FLAG,
-    DISALLOWED_TOOLS_FLAG,
+    base.SKIP_PERMISSIONS_FLAG,
+    base.DISALLOWED_TOOLS_FLAG,
     HEADLESS_DISALLOWED_TOOLS,
 ]
 
@@ -55,7 +42,7 @@ SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
 # of each reported shape is the whole alarm and every repeat re-fires it.
-_DECLARED_WINDOW_WARNINGS_SEEN = WarnOnceRegistry()
+_DECLARED_WINDOW_WARNINGS_SEEN = log_once.WarnOnceRegistry()
 
 
 def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> None:
@@ -87,7 +74,7 @@ def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """
   out = dict(env)
   out.pop("CLAUDECODE", None)
-  out.pop(SESSION_ID_ENV_VAR, None)
+  out.pop(constants.SESSION_ID_ENV_VAR, None)
   out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
   return out
 
@@ -131,12 +118,12 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
     window and ``compact_point`` is ``None`` (the caller then reports no compaction
     line); one ``log.warning`` per process names the responsible variable.
   """
-  env = headless_claude_env()
+  env = claude_launch.headless_claude_env()
   raw_window = env.get(
-      AUTO_COMPACT_WINDOW_ENV,
-      HEADLESS_CLAUDE_DEFAULT_ENV[AUTO_COMPACT_WINDOW_ENV],
+      claude_launch.AUTO_COMPACT_WINDOW_ENV,
+      claude_launch.HEADLESS_CLAUDE_DEFAULT_ENV[claude_launch.AUTO_COMPACT_WINDOW_ENV],
   )
-  default_window = int(HEADLESS_CLAUDE_DEFAULT_ENV[AUTO_COMPACT_WINDOW_ENV])
+  default_window = int(claude_launch.HEADLESS_CLAUDE_DEFAULT_ENV[claude_launch.AUTO_COMPACT_WINDOW_ENV])
 
   try:
     window = int(raw_window)
@@ -145,12 +132,12 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
   except (ValueError, TypeError):
     _warn_declared_window_once(
         "claude_declared_window_unparseable_window",
-        variable=AUTO_COMPACT_WINDOW_ENV,
+        variable=claude_launch.AUTO_COMPACT_WINDOW_ENV,
         window=raw_window,
     )
     window = default_window
 
-  for override_name in (AUTOCOMPACT_PCT_OVERRIDE_ENV, MAX_CONTEXT_TOKENS_ENV):
+  for override_name in (claude_launch.AUTOCOMPACT_PCT_OVERRIDE_ENV, claude_launch.MAX_CONTEXT_TOKENS_ENV):
     if override_name in env:
       _warn_declared_window_once(
           "claude_declared_window_degraded",
@@ -160,7 +147,7 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
       )
       return window, None
 
-  return window, window - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+  return window, window - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
 
 
 # The CLI's synthetic assistant events (errors, injected notices) carry this
@@ -233,7 +220,7 @@ def out_of_family_served_models(events: list[dict], configured_model: str | None
   return served
 
 
-class ClaudeCodeBackend(AgentBackend):
+class ClaudeCodeBackend(base.AgentBackend):
   """Runs a Claude Code CLI subprocess and streams NDJSON events as dicts."""
 
   def __init__(
@@ -249,12 +236,12 @@ class ClaudeCodeBackend(AgentBackend):
     super().__init__(model=model, **kwargs)
     self._effort = effort
     self._fast_mode = fast_mode
-    self._claude_config_dir = str(Path(claude_config_dir).expanduser()) if claude_config_dir else None
+    self._claude_config_dir = str(pathlib.Path(claude_config_dir).expanduser()) if claude_config_dir else None
     self._cmd: list[str] = list(BASE_COMMAND)
     if cli_binary:
       self._cmd[0] = cli_binary
       if cli_binary == "claude-sub":
-        self._cmd += [DISALLOWED_TOOLS_FLAG, SUBSCRIPTION_DISALLOWED_TOOLS]
+        self._cmd += [base.DISALLOWED_TOOLS_FLAG, SUBSCRIPTION_DISALLOWED_TOOLS]
     if claude_session_id:
       self._cmd += ["--session-id", claude_session_id]
     if self._model:
@@ -264,7 +251,7 @@ class ClaudeCodeBackend(AgentBackend):
     # One merged --settings object, the connector key always on it: the CLI's
     # handling of repeated --settings flags is not a contract, so the argv
     # never carries more than one.
-    settings = {**DISABLE_CONNECTOR_SETTINGS}
+    settings = {**claude_launch.DISABLE_CONNECTOR_SETTINGS}
     if self._fast_mode:
       settings["fastMode"] = True
     self._cmd += ["--settings", json.dumps(settings, separators=(",", ":"))]
@@ -275,9 +262,9 @@ class ClaudeCodeBackend(AgentBackend):
   _INSTRUCTIONS_TARGET: tuple[str, str] = ("CLAUDE.md", "claude_code_wrote_claude_md")
 
   def _prepare_env(self, env: dict) -> dict:
-    out = {**env, **headless_claude_env()}
+    out = {**env, **claude_launch.headless_claude_env()}
     if self._claude_config_dir:
-      out[CLAUDE_CONFIG_DIR_ENV_VAR] = self._claude_config_dir
+      out[home.CLAUDE_CONFIG_DIR_ENV_VAR] = self._claude_config_dir
     return out
 
   def _build_command(self, prompt: str) -> list[str]:
@@ -302,7 +289,7 @@ class ClaudeCodeBackend(AgentBackend):
         self._model,
         "--system-prompt",
         system_prompt,
-        DISALLOWED_TOOLS_FLAG,
+        base.DISALLOWED_TOOLS_FLAG,
         "Bash,Read,Write,Edit,Glob,Grep,Agent",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
@@ -313,7 +300,7 @@ class ClaudeCodeBackend(AgentBackend):
     try:
       stdout, stderr = await asyncio.wait_for(proc.communicate(input=prompt.encode()), timeout=timeout)
     except TimeoutError:
-      kill_process_group(proc.pid, signal.SIGKILL)
+      process.kill_process_group(proc.pid, signal.SIGKILL)
       raise
     if proc.returncode != 0:
       raise RuntimeError(f"claude CLI failed (exit {proc.returncode}): {stderr.decode().strip()}")

@@ -17,16 +17,15 @@ from pydantic import (
     model_validator,
 )
 
+from src.core import home
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
 from src.core.credentials import (  # noqa: F401  (re-export: the established src.core.config import path)
     CREDENTIALS_FILENAME,
     Credentials,
     _credentials_cache,
-    # Not facade surface: nothing reaches these two through src.core.config — their call sites
-    # go through src.core.credentials, and the two serve this module's own
-    # _config_fingerprint and _config_cache.
-    _file_fingerprint,
+    # Not facade surface: nothing reaches this name through src.core.config — its call
+    # sites go through src.core.credentials, and it serves this module's own _config_cache.
     _HotReloadCache,
     configured_access_key,
     get_credentials,
@@ -659,8 +658,8 @@ T = TypeVar("T")
 
 
 def _config_fingerprint() -> tuple[float, int]:
-  """The reload cache key over ``config.yaml``: :func:`_file_fingerprint` on it."""
-  return _file_fingerprint(CONFIG_FILENAME)
+  """The reload cache key over ``config.yaml``: :func:`src.core.home.file_fingerprint` on it."""
+  return home.file_fingerprint(CONFIG_FILENAME)
 
 
 def _install_config_snapshot(current: CharlieBotConfig | None, fresh: CharlieBotConfig) -> CharlieBotConfig:

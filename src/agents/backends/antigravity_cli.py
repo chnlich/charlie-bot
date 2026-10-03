@@ -3,22 +3,11 @@
 import asyncio
 import json
 import os
+import pathlib
 import re
 from collections.abc import AsyncIterator
-from pathlib import Path
 
-from src.agents.backends.base import (
-    SKIP_PERMISSIONS_FLAG,
-    USER_LOCAL_BIN,
-    AgentBackend,
-    _tee_stream,
-    make_error_event,
-    make_result_event,
-    make_text_event,
-    prepend_path_dir,
-    resolve_binary,
-    strip_google_api_keys,
-)
+from src.agents.backends import base
 from src.core import event_types as ET
 
 _SYSTEM_MESSAGE_BLOCK_RE = re.compile(r"<SYSTEM_MESSAGE>.*?</SYSTEM_MESSAGE>\s*", re.DOTALL)
@@ -32,14 +21,14 @@ class AgentGuardError(ValueError):
   """Raised to fail the round loudly when the agy envelope violates the resume contract."""
 
 
-class AntigravityCliBackend(AgentBackend):
+class AntigravityCliBackend(base.AgentBackend):
   """Runs `agy --print` and translates the JSON envelope into CC events."""
 
   def __init__(self, *, model: str | None = None, print_timeout: str | None = None, **kwargs: object) -> None:
     super().__init__(model=model, **kwargs)
     # agy --print turn budget: explicit config wins, otherwise the 1h default.
     self._print_timeout = print_timeout if print_timeout is not None else "1h"
-    self._agy_bin = resolve_binary("agy", USER_LOCAL_BIN)
+    self._agy_bin = base.resolve_binary("agy", base.USER_LOCAL_BIN)
 
   def _build_command(self, prompt: str) -> list[str]:
     effective_prompt = self._effective_prompt(prompt)
@@ -48,7 +37,7 @@ class AntigravityCliBackend(AgentBackend):
         f"--print={effective_prompt}",
         "--print-timeout",
         self._print_timeout,
-        SKIP_PERMISSIONS_FLAG,
+        base.SKIP_PERMISSIONS_FLAG,
         "--output-format",
         "json",
     ]
@@ -58,8 +47,8 @@ class AntigravityCliBackend(AgentBackend):
     return cmd
 
   def _prepare_env(self, env: dict) -> dict:
-    antigravity_env = strip_google_api_keys(env)
-    prepend_path_dir(antigravity_env, USER_LOCAL_BIN)
+    antigravity_env = base.strip_google_api_keys(env)
+    base.prepend_path_dir(antigravity_env, base.USER_LOCAL_BIN)
     return antigravity_env
 
   def _parse_envelope(self, stdout_text: str) -> dict | None:
@@ -98,14 +87,14 @@ class AntigravityCliBackend(AgentBackend):
       # O_TRUNC keeps the "wb" open it replaces: each run's log starts empty
       # for its tail -f readers.
       stdout_fd = os.open(str(self._log_dir / "stdout.log"), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
-      stderr_log_path: Path | None = self._log_dir / "stderr.log"
+      stderr_log_path: pathlib.Path | None = self._log_dir / "stderr.log"
     else:
       stderr_log_path = None
 
     self._stderr_task = asyncio.create_task(self._stream_stderr(stderr_log_path))
 
     try:
-      await _tee_stream(self._proc.stdout.read, stdout_fd, stdout_bytes.extend)
+      await base._tee_stream(self._proc.stdout.read, stdout_fd, stdout_bytes.extend)
     finally:
       if stdout_fd is not None:
         os.close(stdout_fd)
@@ -125,29 +114,29 @@ class AntigravityCliBackend(AgentBackend):
             f"timer/daemon wait keeping the process alive past its turn. agy error: {envelope_error}")
       else:
         message = stdout_text or f"Antigravity CLI exited with code {self.exit_code}"
-      yield make_error_event(message)
+      yield base.make_error_event(message)
       return
 
     # exit 0: the JSON envelope is the only machine-readable source of the
     # conversation id and usage, so a non-envelope stdout is a contract breach.
     envelope = self._parse_envelope(stdout_text)
     if envelope is None:
-      yield make_error_event(f"agy exited 0 with non-envelope stdout: {stdout_text[:200]}")
+      yield base.make_error_event(f"agy exited 0 with non-envelope stdout: {stdout_text[:200]}")
       raise AgentGuardError(f"antigravity envelope guard: non-json stdout (exit 0): {stdout_text[:200]}")
 
     status = envelope.get("status")
     if status != "SUCCESS":
       message = envelope.get("error") or envelope.get("response") or f"Antigravity status {status}"
-      yield make_error_event(str(message))
+      yield base.make_error_event(str(message))
       return
 
     conversation_id = envelope.get("conversation_id")
     if not conversation_id:
-      yield make_error_event("agy SUCCESS envelope missing conversation_id")
+      yield base.make_error_event("agy SUCCESS envelope missing conversation_id")
       raise AgentGuardError("antigravity envelope guard: SUCCESS envelope missing conversation_id")
 
     if self._resume_session_id and conversation_id != self._resume_session_id:
-      yield make_error_event(
+      yield base.make_error_event(
           f"agy resume envelope id {conversation_id} does not match anchor {self._resume_session_id}")
       raise AgentGuardError(
           f"antigravity envelope guard: resume envelope id {conversation_id} does not match "
@@ -157,9 +146,9 @@ class AntigravityCliBackend(AgentBackend):
     # the chat persist is the run-start marker, the worker projection skips it
     # (ET.SESSION_ATTACHED), then assistant text, then usage.
     yield {"type": ET.SESSION_ATTACHED, "session_id": conversation_id}
-    yield make_text_event(_strip_platform_notifications(envelope.get("response", "")))
+    yield base.make_text_event(_strip_platform_notifications(envelope.get("response", "")))
     usage = envelope.get("usage", {}) or {}
-    yield make_result_event(
+    yield base.make_result_event(
         input_tokens=usage.get("input_tokens", 0),
         output_tokens=usage.get("output_tokens", 0) + usage.get("thinking_tokens", 0),
         cache_read=usage.get("cache_read_tokens", 0),

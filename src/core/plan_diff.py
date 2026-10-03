@@ -8,13 +8,13 @@ stored only in ``data-del`` attributes; it never becomes a document text node.
 
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import html as _html
+import html.parser
+import itertools
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass, field
-from html.parser import HTMLParser
-from itertools import chain
 
 _IGNORED_TAGS = frozenset({"head", "style", "script", "template", "noscript", "title"})
 # HTML's void elements cannot hold content, so a DOM builder over html.parser must not push
@@ -43,7 +43,7 @@ _CLASS_RE = re.compile(r"(?<![\w:-])class\s*=\s*(?P<quote>[\"'])(?P<value>[^\"']
 _UNQUOTED_CLASS_RE = re.compile(r"(?<![\w:-])class\s*=\s*(?P<value>[^\s>]+)", re.IGNORECASE)
 
 
-@dataclass
+@dataclasses.dataclass
 class _TextPart:
   start: int
   end: int
@@ -63,7 +63,7 @@ class _TextPart:
     return (self.start, self.end)
 
 
-@dataclass(eq=False)
+@dataclasses.dataclass(eq=False)
 class _Node:
   tag: str
   attrs: dict[str, str | None]
@@ -72,11 +72,11 @@ class _Node:
   start_end: int | None = None
   end: int | None = None
   end_end: int | None = None
-  children: list[_Node | _TextPart] = field(default_factory=list)
-  text_parts: list[_TextPart] = field(default_factory=list)
+  children: list[_Node | _TextPart] = dataclasses.field(default_factory=list)
+  text_parts: list[_TextPart] = dataclasses.field(default_factory=list)
 
 
-@dataclass
+@dataclasses.dataclass
 class _Anchor:
   start: int | None = None
   start_end: int | None = None
@@ -84,7 +84,7 @@ class _Anchor:
   end_end: int | None = None
 
 
-class _OffsetParser(HTMLParser):
+class _OffsetParser(html.parser.HTMLParser):
   """HTMLParser over ``source`` whose ``_offset()`` answers a source offset.
 
   Callers rely on ``convert_charrefs=False``: ``getpos()`` must keep addressing
@@ -235,7 +235,7 @@ def _parse_anchors(source: str) -> tuple[_Anchor | None, _Anchor | None]:
   return parser.head, parser.body
 
 
-@dataclass
+@dataclasses.dataclass
 class _Leaf:
   element: _Node
   parts: list[_TextPart]
@@ -246,7 +246,7 @@ class _Leaf:
     return "".join(part.text for part in self.parts)
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class _Token:
   value: str
   logical_start: int
@@ -255,7 +255,7 @@ class _Token:
   raw_end: int
 
 
-@dataclass
+@dataclasses.dataclass
 class _LeafChange:
   old: _Leaf | None
   new: _Leaf | None
@@ -613,7 +613,7 @@ def _ghost_parent(root: _Node, leaves: list[_Leaf], index: int, old: _Leaf) -> _
   candidates = ([root] if root.tag == wanted.tag else []) + list(_descendant_nodes(root))
   # Scan order is load-bearing: leaves at/after the cut come first, then earlier leaves
   # backward, and the first tagged ancestor found in that order becomes the ghost's parent.
-  for scan_index in chain(range(index, len(leaves)), range(min(index - 1, len(leaves) - 1), -1, -1)):
+  for scan_index in itertools.chain(range(index, len(leaves)), range(min(index - 1, len(leaves) - 1), -1, -1)):
     current = leaves[scan_index].element.parent
     while current is not None:
       if current.tag == wanted.tag:

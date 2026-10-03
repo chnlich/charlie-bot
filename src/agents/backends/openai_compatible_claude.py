@@ -1,9 +1,9 @@
 """OpenAICompatibleClaudeBackend — Claude Code via CharlieBot's Anthropic proxy."""
 
-from src.agents.backends.claude_code import AnthropicEndpointBackend
+from src.agents.backends import claude_code
 
 
-class OpenAICompatibleClaudeBackend(AnthropicEndpointBackend):
+class OpenAICompatibleClaudeBackend(claude_code.AnthropicEndpointBackend):
   """Runs Claude Code against CharlieBot's Anthropic-to-OpenAI-compatible proxy.
 
   The upstream OpenAI-compatible endpoint is resolved per backend id by the

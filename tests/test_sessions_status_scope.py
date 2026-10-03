@@ -219,10 +219,14 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   row.has_unread = True  # a caller mutation must never reach the shared cache
   assert (await session_mgr.list_sessions(**flags))[0].has_unread is False
 
-  # The row copy's fast path must stay dump- and field-set-equal to the
-  # pydantic copy it replaces: a SessionMetadata config change (extra="allow",
-  # private attrs) would otherwise take the new state out of the copy
-  # silently and corrupt every listing row.
+  # The fast copy bakes in SessionMetadata's model config: the None extra and
+  # private writes hold only while unknown keys are ignored and the model
+  # carries no private attrs. The value arm below cannot catch that config
+  # change on its own — pydantic keeps empty extra dicts and private attrs
+  # out of both model_dump() and __pydantic_fields_set__ — so the two config
+  # facts are asserted directly and the config change fails here.
+  assert SessionMetadata.model_config.get("extra") != "allow"
+  assert not SessionMetadata.__private_attributes__
   update = {
       "thinking_since": thinking_state.busy_since(session.id),
       "run_backend": None,

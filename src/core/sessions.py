@@ -300,9 +300,10 @@ def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionM
   SessionMetadata runs the default model config — unknown keys ignored, no
   private attrs, no computed fields — so a row's ancillary state is
   ``__pydantic_fields_set__`` alone and the copy reduces to the field dict
-  plus that set. The listing row test pins the result dump- and field-set-
-  equal to ``model_copy(update=...)``; a model-config change (extra="allow",
-  private attrs) must extend the copy with the new state in the same change.
+  plus that set. The listing row test asserts those config facts directly
+  and pins the result dump- and field-set-equal to
+  ``model_copy(update=...)``; a config change that adds extra or private
+  state must extend the copy with that state in the same change.
   """
   row = SessionMetadata.__new__(SessionMetadata)
   object.__setattr__(row, "__dict__", {**meta.__dict__, **update})

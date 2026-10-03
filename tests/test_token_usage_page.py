@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -419,3 +421,22 @@ async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
   assert json.loads(leg) == [CC, CODEX, OC, CLC]
   assert "CharlieBot logs: 5 records written this load" in body
   assert "charlie-bot" not in body
+
+
+def test_preload_pins_the_tally_stack_in_a_fresh_process() -> None:
+  """The preload imports the lazy tally set into a fresh interpreter, and importing the
+  pages module alone stays tally-free (the M99 import floor's contract)."""
+  repo_root = str(Path(__file__).resolve().parents[1])
+  code = "\n".join(
+      [
+          "import sys",
+          f"sys.path.insert(0, {repo_root!r})",
+          "from src.api import pages",
+          "assert 'src.core.token_tally' not in sys.modules, 'pages import pulled the tally stack'",
+          "assert 'src.core.usage_ledger' not in sys.modules, 'pages import pulled the ledger stack'",
+          "pages.preload_usage_tally_stack()",
+          "assert 'src.core.token_tally' in sys.modules",
+          "assert 'src.core.usage_ledger' in sys.modules",
+      ])
+  proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+  assert proc.returncode == 0, proc.stderr

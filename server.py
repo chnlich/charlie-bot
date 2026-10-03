@@ -421,6 +421,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.speech_model_task = create_logged_task(
         asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
 
+    # The tally stack loads here, not on the request path: a request-time
+    # first-import reads whatever files a mid-flight deploy left under a server
+    # whose in-memory modules are the started code, and the mixed-version import
+    # 500s the usage page (and the ledger cron handler) until restart. Same
+    # thread pattern as speech provisioning: the M99 import floor stays.
+    app.state.usage_tally_warmup_task = create_logged_task(
+        asyncio.to_thread(pages.preload_usage_tally_stack), name="usage-tally-warmup")
+
     # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
     # BEFORE any door that can start a competing process: a new chat input, a
     # cron fire, or a recovered trigger must not launch while a recorded live
@@ -498,6 +506,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     speech_model_task = getattr(app.state, "speech_model_task", None)
     await timed_step("speech_ms", lambda: cancel_and_wait(speech_model_task))
+    await timed_step("usage_tally_ms", lambda: cancel_and_wait(getattr(app.state, "usage_tally_warmup_task", None)))
     await timed_step("slack_listener_ms", lambda: cancel_and_wait(getattr(app.state, "slack_listener_task", None)))
     await timed_step("slack_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "slack_backfill_task", None)))
     await timed_step("discord_listener_ms", lambda: cancel_and_wait(getattr(app.state, "discord_listener_task", None)))

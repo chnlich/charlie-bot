@@ -97,7 +97,13 @@ def _iter_thread_meta_stats(threads_dir: Path, log_event: str) -> Iterator[tuple
 # content witness; only the scandir+is_dir+join phase rides the memo, the phase
 # the sidebar's 10th-poll sweep repeats for every active session. The mode
 # rides the key so a permission change misses into the scandir's own error.
-_THREAD_WALK_DIR_MEMO_LIMIT = 1024
+# The cap must hold every active session's entry: the sweep walks the whole
+# corpus in one pass in a stable order, and an LRU smaller than that corpus
+# evicts each entry before its next read — every session then pays the
+# scandir phase again, per sweep (1029-1031 active sessions at the
+# 2026-10-03 reading, where a 1024 cap put the sweep back at its pre-memo
+# wall and a 4096 cap at the memo-hit one).
+_THREAD_WALK_DIR_MEMO_LIMIT = 4096
 _thread_walk_dirs: StatSignatureMemo[tuple[str, int],
                                      list[tuple[str, str]]] = StatSignatureMemo(_THREAD_WALK_DIR_MEMO_LIMIT)
 

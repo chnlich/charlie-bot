@@ -368,7 +368,10 @@ _trigger_state_verdicts: BoundedMemo[str, tuple[tuple[int, int], int,
 # phase the sidebar's 10th-poll sweep repeats for every active session. The
 # mode rides the key so a permission change misses into the scandir's own
 # error. Served lists are shared across calls — consumers treat them read-only.
-_TRIGGER_WALK_MEMO_LIMIT = 1024
+# Like the threads walk memo, the cap must hold every active session's entry:
+# the sweep walks the whole corpus in one pass, and an LRU under that corpus
+# thrashes (each session re-scandirs per sweep).
+_TRIGGER_WALK_MEMO_LIMIT = 4096
 _trigger_walk_pairs: StatSignatureMemo[tuple[str, int],
                                        list[tuple[str, os.stat_result]]] = StatSignatureMemo(_TRIGGER_WALK_MEMO_LIMIT)
 

@@ -5,21 +5,18 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import TYPE_CHECKING, Any
 
+import fastapi
 import orjson
-from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi import responses
 
-from src.api.deps import bad_request, get_config_on_loop
+from src.api import deps
+from src.core import config, constants, http, sse
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, get_credentials
-from src.core.constants import BackendType
-from src.core.http import get_http_client
-from src.core.sse import iter_sse_lines
 
 if TYPE_CHECKING:
   import httpx
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
 def _join_openai_chat_url(base_url: str) -> str:
@@ -453,7 +450,7 @@ async def _iter_anthropic_sse(upstream: httpx.Response, model: str) -> AsyncIter
     for event, data in translator.start_events():
       yield _sse_event(event, data)
 
-    async for line in iter_sse_lines(upstream, lines_as_bytes=True):
+    async for line in sse.iter_sse_lines(upstream, lines_as_bytes=True):
       if not line.startswith(b"data:"):
         continue
       raw = line[len(b"data:"):].strip()
@@ -475,7 +472,7 @@ def _upstream_headers(credential: str | None, backend_id: str) -> dict[str, str]
   """Build upstream request headers for a backend.
 
   Without a credential the bare headers are returned. With a credential the
-  Bearer token comes from the credentials file (``get_credentials().require``
+  Bearer token comes from the credentials file (``config.get_credentials().require``
   on the credential's ``api_key`` entry); a missing key raises the loader's
   ``ValueError``.
   """
@@ -483,33 +480,33 @@ def _upstream_headers(credential: str | None, backend_id: str) -> dict[str, str]
   headers = {"Content-Type": "application/json"}
   if not credential:
     return headers
-  headers["Authorization"] = f"Bearer {get_credentials().require(credential, 'api_key')}"
+  headers["Authorization"] = f"Bearer {config.get_credentials().require(credential, 'api_key')}"
   return headers
 
 
-async def _upstream_error(response: httpx.Response) -> HTTPException:
+async def _upstream_error(response: httpx.Response) -> fastapi.HTTPException:
   body = (await response.aread()).decode("utf-8", errors="replace")
   await response.aclose()
-  return HTTPException(status_code=response.status_code, detail=body)
+  return fastapi.HTTPException(status_code=response.status_code, detail=body)
 
 
 @router.post("/openai-compatible/{backend_id}/v1/messages")
 async def openai_compatible_messages(
     backend_id: str,
-    request: Request,
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> Response:
+    request: fastapi.Request,
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+) -> responses.Response:
   """Serve Anthropic Messages API requests through a per-backend OpenAI-compatible endpoint."""
   option = cfg.get_backend_option(backend_id)
   if option is None:
-    raise HTTPException(status_code=404, detail=f"unknown backend id: {backend_id}")
-  if option.type != BackendType.CC_OPENAI_COMPATIBLE:
-    raise HTTPException(
+    raise fastapi.HTTPException(status_code=404, detail=f"unknown backend id: {backend_id}")
+  if option.type != constants.BackendType.CC_OPENAI_COMPATIBLE:
+    raise fastapi.HTTPException(
         status_code=400, detail=f"backend '{backend_id}' is not type 'cc-openai-compatible' (got '{option.type}')")
   if not option.api_base:
-    raise HTTPException(status_code=400, detail=f"backend '{backend_id}' missing api_base")
+    raise fastapi.HTTPException(status_code=400, detail=f"backend '{backend_id}' missing api_base")
   if not option.model:
-    raise HTTPException(status_code=400, detail=f"backend '{backend_id}' missing model")
+    raise fastapi.HTTPException(status_code=400, detail=f"backend '{backend_id}' missing model")
 
   try:
     anthropic_payload = await request.json()
@@ -517,9 +514,9 @@ async def openai_compatible_messages(
     upstream_url = _join_openai_chat_url(option.api_base)
     headers = _upstream_headers(option.credential, backend_id)
   except ValueError as e:
-    raise bad_request(e) from e
+    raise deps.bad_request(e) from e
 
-  client = get_http_client()
+  client = http.get_http_client()
   model = openai_payload["model"]
 
   if openai_payload["stream"]:
@@ -533,7 +530,7 @@ async def openai_compatible_messages(
     upstream = await client.send(upstream_request, stream=True)
     if upstream.status_code >= 400:
       raise await _upstream_error(upstream)
-    return StreamingResponse(_iter_anthropic_sse(upstream, model), media_type="text/event-stream")
+    return responses.StreamingResponse(_iter_anthropic_sse(upstream, model), media_type="text/event-stream")
 
   upstream = await client.post(upstream_url, json=openai_payload, headers=headers, timeout=None)
   if upstream.status_code >= 400:
@@ -541,5 +538,5 @@ async def openai_compatible_messages(
   try:
     data = openai_chat_response_to_anthropic(upstream.json(), model)
   except ValueError as e:
-    raise HTTPException(status_code=502, detail=str(e)) from e
-  return JSONResponse(data)
+    raise fastapi.HTTPException(status_code=502, detail=str(e)) from e
+  return responses.JSONResponse(data)

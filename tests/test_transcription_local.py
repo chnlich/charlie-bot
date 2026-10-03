@@ -165,6 +165,8 @@ def test_concurrent_offline_decodes_never_share_a_recognizer(monkeypatch: pytest
 def test_failing_window_fails_the_whole_call(monkeypatch: pytest.MonkeyPatch, pool_windows) -> None:
   """A window's decode error propagates; the transcript is never silently short."""
   pool_windows(3)
-  bundle = _stub_bundle([_StubRecognizer("inst0", {}, fail_on=2), _StubRecognizer("inst1", {})])
+  # Both instances fail on w2: the claim order is timing-dependent, so the failing
+  # window's recognizer is not pinned and the propagation assert must not ride it.
+  bundle = _stub_bundle([_StubRecognizer("inst0", {}, fail_on=2), _StubRecognizer("inst1", {}, fail_on=2)])
   with pytest.raises(ValueError, match="window w2 decode failed"):
     transcriber.transcribe_pcm_offline(bundle, _pcm_for_windows(3))

@@ -1,35 +1,32 @@
 """Backlog API routes — read/write project backlog.yaml and history.yaml."""
 
 import asyncio
-from datetime import UTC, datetime
-from pathlib import Path
+import datetime
+import pathlib
 
-from fastapi import APIRouter
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+import fastapi
+import pydantic
+from fastapi import responses
 
-from src.core.git import git_add_commit_push
-from src.core.log_once import LazyStructlogLogger
-from src.core.tasks import create_logged_task
-from src.core.yaml_utils import load_yaml, save_yaml
+from src.core import git, log_once, tasks, yaml_utils
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-def _repo_path(repo: str | None) -> Path | None:
+def _repo_path(repo: str | None) -> pathlib.Path | None:
   """Resolve the backlog repo for *repo*, or None when config.yaml configures none."""
   if repo:
-    return Path(repo).expanduser()
-  from src.core.config import get_config
-  cfg = get_config()
+    return pathlib.Path(repo).expanduser()
+  from src.core import config
+  cfg = config.get_config()
   if cfg.ui.backlog_repos:
-    return Path(cfg.ui.backlog_repos[0].path)
+    return pathlib.Path(cfg.ui.backlog_repos[0].path)
   return None
 
 
-def _backlog_store(repo_path: Path) -> tuple[list[Path], bool] | None:
+def _backlog_store(repo_path: pathlib.Path) -> tuple[list[pathlib.Path], bool] | None:
   """The yaml files making up the backlog store, plus whether that store is per-module.
 
   Returns (files in read order, per_module); None when the repo has neither the
@@ -44,7 +41,7 @@ def _backlog_store(repo_path: Path) -> tuple[list[Path], bool] | None:
   return ([fallback], False) if fallback.exists() else None
 
 
-def _load_all_items(repo_path: Path) -> list[dict]:
+def _load_all_items(repo_path: pathlib.Path) -> list[dict]:
   """Load items from the backlog store, tagging each item's `_source`."""
   store = _backlog_store(repo_path)
   if store is None:
@@ -52,7 +49,7 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   files, per_module = store
   items: list[dict] = []
   for yaml_file in files:
-    for item in load_yaml(yaml_file, default=[]):
+    for item in yaml_utils.load_yaml(yaml_file, default=[]):
       if per_module:
         item['_source'] = yaml_file.stem
       else:
@@ -61,7 +58,8 @@ def _load_all_items(repo_path: Path) -> list[dict]:
   return items
 
 
-def _find_item_file(repo_path: Path, item_id: str, source: str | None) -> tuple[Path | None, list | None]:
+def _find_item_file(repo_path: pathlib.Path, item_id: str,
+                    source: str | None) -> tuple[pathlib.Path | None, list | None]:
   """Return (yaml_path, items) for the store file containing item_id, or (None, None).
 
   In a per-module store, a given *source* (e.g. 'alpha-lab-backtest') restricts
@@ -76,54 +74,54 @@ def _find_item_file(repo_path: Path, item_id: str, source: str | None) -> tuple[
   if per_module and source:
     files = [f for f in files if f.stem == source]
   for yaml_file in files:
-    items = load_yaml(yaml_file, default=[])
+    items = yaml_utils.load_yaml(yaml_file, default=[])
     if any(str(i.get('id')) == item_id for i in items):
       return yaml_file, items
   return None, None
 
 
 @router.get('/repos')
-async def get_repos() -> JSONResponse:
+async def get_repos() -> responses.JSONResponse:
   """Return configured backlog repos [{label, path}]."""
-  from src.core.config import get_config
-  cfg = get_config()
-  return JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.ui.backlog_repos])
+  from src.core import config
+  cfg = config.get_config()
+  return responses.JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.ui.backlog_repos])
 
 
 @router.get('')
-async def get_backlog(repo: str | None = None) -> JSONResponse:
+async def get_backlog(repo: str | None = None) -> responses.JSONResponse:
   """Return backlog items from backlog/backlogs/*.yaml or fallback backlog/backlog.yaml."""
   repo_path = _repo_path(repo)
   if repo_path is None:
     # The panel opens on every host: an unconfigured backlog is the empty state
     # /repos already reports, so reads return [] rather than 500.
-    return JSONResponse(content=[])
+    return responses.JSONResponse(content=[])
   items = await asyncio.to_thread(_load_all_items, repo_path)
-  return JSONResponse(content=items)
+  return responses.JSONResponse(content=items)
 
 
 @router.get('/history')
-async def get_history(repo: str | None = None) -> JSONResponse:
+async def get_history(repo: str | None = None) -> responses.JSONResponse:
   """Return history entries from {repo}/backlog/history-*.yaml files, sorted by timestamp descending."""
   repo_path = _repo_path(repo)
   if repo_path is None:
-    return JSONResponse(content=[])
+    return responses.JSONResponse(content=[])
   loop_dir = repo_path / 'backlog'
   files = sorted(loop_dir.glob('history-*.yaml'))
   if not files:
-    return JSONResponse(content=[], status_code=200)
+    return responses.JSONResponse(content=[], status_code=200)
 
   def _load() -> list[dict]:
     items: list[dict] = []
     for f in files:
-      items.extend(load_yaml(f, default=[]))
+      items.extend(yaml_utils.load_yaml(f, default=[]))
     items.sort(key=lambda e: e.get('timestamp', ''), reverse=True)
     return items
 
-  return JSONResponse(content=await asyncio.to_thread(_load))
+  return responses.JSONResponse(content=await asyncio.to_thread(_load))
 
 
-class BacklogPatch(BaseModel):
+class BacklogPatch(pydantic.BaseModel):
   status: str | None = None
   priority: str | None = None
   rejected_reason: str | None = None
@@ -134,7 +132,7 @@ class BacklogPatch(BaseModel):
 def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
   """Mutate *item* to reflect transition to *patch.status* (timestamps, reasons, counters)."""
   item['status'] = patch.status
-  now = datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%S')
+  now = datetime.datetime.now(datetime.UTC).strftime('%Y-%m-%dT%H:%M:%S')
   if patch.status == 'rejected':
     item['rejected_at'] = now
     if patch.rejected_reason:
@@ -170,7 +168,7 @@ def _apply_status_transition(item: dict, patch: BacklogPatch) -> None:
 
 @router.patch('/{item_id}')
 async def patch_backlog(
-    item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None) -> JSONResponse:
+    item_id: str, patch: BacklogPatch, repo: str | None = None, source: str | None = None) -> responses.JSONResponse:
   """Update status/priority of a backlog item, then git commit+push."""
   repo_path = _repo_path(repo)
   if repo_path is None:
@@ -179,7 +177,7 @@ async def patch_backlog(
     raise ValueError('ui.backlog_repos not configured in config.yaml')
   yaml_path, items = await asyncio.to_thread(_find_item_file, repo_path, item_id, source)
   if yaml_path is None:
-    return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
+    return responses.JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
 
   updated = None
   for item in items:
@@ -192,14 +190,15 @@ async def patch_backlog(
       break
 
   if updated is None:
-    return JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
+    return responses.JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)
 
-  await asyncio.to_thread(save_yaml, yaml_path, items)
+  await asyncio.to_thread(yaml_utils.save_yaml, yaml_path, items)
   log.info('backlog_updated', item_id=item_id, file=str(yaml_path), **patch.model_dump(exclude_none=True))
 
   git_rel = str(yaml_path.relative_to(repo_path))
   status_label = patch.status or 'updated'
-  create_logged_task(git_add_commit_push(repo_path, [git_rel], f'backlog: update {item_id} status to {status_label}'))
+  tasks.create_logged_task(
+      git.git_add_commit_push(repo_path, [git_rel], f'backlog: update {item_id} status to {status_label}'))
 
   resp = {k: v for k, v in updated.items() if k != '_source'}
-  return JSONResponse(content=resp)
+  return responses.JSONResponse(content=resp)

@@ -32,7 +32,7 @@ def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
   The wrap verb resolves the home off the env (src.core.home), not the config —
   the M98 seam shape; the module-level name is the patch target.
   """
-  monkeypatch.setattr("src.cli.artifact.charliebot_home_dir", lambda: vendored_katex.parents[2])
+  monkeypatch.setattr("src.cli.artifact.home.charliebot_home_dir", lambda: vendored_katex.parents[2])
   return vendored_katex
 
 

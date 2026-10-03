@@ -16,25 +16,28 @@ error.
 """
 
 import argparse
+import pathlib
 import sys
 from collections.abc import Sequence
-from pathlib import Path
 
 from src.cli import common as cli_common
-from src.cli.help_formatter import CliHelpFormatter
-from src.core import artifact_wrap
-from src.core.constants import ARTIFACT_GENRES
-from src.core.home import charliebot_home_dir
+from src.cli import help_formatter
+from src.core import artifact_wrap, constants, home
 
 
 def _build_parser() -> argparse.ArgumentParser:
   parser = argparse.ArgumentParser(
-      prog="charliebot artifact", description="Artifact checks (local files only)", formatter_class=CliHelpFormatter)
+      prog="charliebot artifact",
+      description="Artifact checks (local files only)",
+      formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="verb", required=True)
   check = sub.add_parser(
-      "check", help="Run a genre's assertions (and cold-read probe) on a local file", formatter_class=CliHelpFormatter)
+      "check",
+      help="Run a genre's assertions (and cold-read probe) on a local file",
+      formatter_class=help_formatter.CliHelpFormatter)
   check.add_argument("file", help="Artifact path as an ordinary filesystem path (absolute or cwd-relative)")
-  check.add_argument("--genre", required=True, choices=ARTIFACT_GENRES, help="Genre the page claims to follow")
+  check.add_argument(
+      "--genre", required=True, choices=constants.ARTIFACT_GENRES, help="Genre the page claims to follow")
   check.add_argument(
       "--trigger",
       default=None,
@@ -42,9 +45,11 @@ def _build_parser() -> argparse.ArgumentParser:
       "unless --assertions-only is given")
   check.add_argument(
       "--assertions-only", action="store_true", help="Run the assertions alone, skipping the cold-read probe")
-  wrap = sub.add_parser("wrap", help="Assemble a genre page from a content fragment", formatter_class=CliHelpFormatter)
+  wrap = sub.add_parser(
+      "wrap", help="Assemble a genre page from a content fragment", formatter_class=help_formatter.CliHelpFormatter)
   wrap.add_argument("fragment", help="Content fragment path: the page's <body> content")
-  wrap.add_argument("--genre", required=True, choices=ARTIFACT_GENRES, help="Genre whose template shells the page")
+  wrap.add_argument(
+      "--genre", required=True, choices=constants.ARTIFACT_GENRES, help="Genre whose template shells the page")
   wrap.add_argument("--output", required=True, help="Assembled page path (the artifacts path to write)")
   wrap.add_argument(
       "--math",
@@ -61,7 +66,7 @@ def _run_check(args: argparse.Namespace) -> int:
 
   if args.trigger is None and not args.assertions_only:
     cli_common.exit_usage_error(f"--genre {args.genre} requires --trigger unless --assertions-only is given")
-  artifact = Path(args.file).resolve()
+  artifact = pathlib.Path(args.file).resolve()
   if not artifact.is_file():
     cli_common.exit_error(f"artifact not found: {args.file}")
   cfg = cli_common.get_config()
@@ -92,7 +97,7 @@ def _run_check(args: argparse.Namespace) -> int:
 
 
 def _run_wrap(args: argparse.Namespace) -> int:
-  fragment = Path(args.fragment).resolve()
+  fragment = pathlib.Path(args.fragment).resolve()
   if not fragment.is_file():
     cli_common.exit_usage_error(f"fragment not found: {args.fragment}")
   math = args.math if args.math is not None else args.genre == "explain"
@@ -100,9 +105,9 @@ def _run_wrap(args: argparse.Namespace) -> int:
     written = artifact_wrap.wrap_fragment(
         genre=args.genre,
         fragment=fragment,
-        output=Path(args.output).resolve(),
+        output=pathlib.Path(args.output).resolve(),
         math=math,
-        vendor_path=artifact_wrap.vendor_katex_path(charliebot_home_dir()),
+        vendor_path=artifact_wrap.vendor_katex_path(home.charliebot_home_dir()),
     )
   except (RuntimeError, ValueError) as e:
     cli_common.exit_error(str(e))

@@ -5,29 +5,16 @@ import json
 import os
 from typing import ClassVar
 
-from src.agents.backends.base import (
-    USER_LOCAL_BIN,
-    AgentBackend,
-    iter_ndjson_events,
-    make_error_event,
-    make_result_event,
-    make_text_event,
-    make_tool_result_event,
-    make_tool_use_event,
-    prepend_path_dir,
-    resolve_binary,
-)
+from src.agents.backends import base
+from src.core import codex_pricing, log_once, process
 from src.core import event_types as ET
-from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.log_once import LazyStructlogLogger
-from src.core.process import wait_or_kill_group
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
 
 
-class CodexBackend(AgentBackend):
+class CodexBackend(base.AgentBackend):
   """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
 
   def __init__(
@@ -40,7 +27,7 @@ class CodexBackend(AgentBackend):
     if not model:
       raise ValueError("codex backend requires a model (set model on its backends.options entry in config.yaml)")
     super().__init__(model=model, **kwargs)
-    self._codex_bin = resolve_binary("codex", USER_LOCAL_BIN)
+    self._codex_bin = base.resolve_binary("codex", base.USER_LOCAL_BIN)
     self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
     self._model_auto_compact_token_limit = model_auto_compact_token_limit
     # Track accumulated text per item_id for delta computation
@@ -92,7 +79,7 @@ class CodexBackend(AgentBackend):
 
   def _prepare_env(self, env: dict) -> dict:
     codex_env = {**env}
-    prepend_path_dir(codex_env, USER_LOCAL_BIN)
+    base.prepend_path_dir(codex_env, base.USER_LOCAL_BIN)
     return codex_env
 
   async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
@@ -104,7 +91,7 @@ class CodexBackend(AgentBackend):
     timeout. Structured backend failures are raised instead of being mistaken for
     non-JSON assistant text.
     """
-    from src.core.message_aggregator import extract_text_from_message
+    from src.core import message_aggregator
 
     framed = self._frame_system_prompt(system_prompt, prompt)
     cmd = [*self._exec_command_head(), "--", framed]
@@ -127,7 +114,7 @@ class CodexBackend(AgentBackend):
       parts: list[str] = []
       structured_error: str | None = None
       assert proc.stdout is not None
-      async for ev in iter_ndjson_events(proc.stdout):
+      async for ev in base.iter_ndjson_events(proc.stdout):
         for translated in self.translate_event(ev):
           translated_type = translated.get("type")
           if translated_type == ET.ERROR:
@@ -136,7 +123,7 @@ class CodexBackend(AgentBackend):
               structured_error = str(message).strip()
             continue
           if translated_type == ET.ASSISTANT and ev.get("item", {}).get("type") == "agent_message":
-            parts.append(extract_text_from_message(translated.get("message")))
+            parts.append(message_aggregator.extract_text_from_message(translated.get("message")))
       wait_result = await proc.wait()
       returncode = proc.returncode if isinstance(proc.returncode, int) else wait_result
       return "".join(parts).strip(), structured_error, returncode
@@ -148,7 +135,8 @@ class CodexBackend(AgentBackend):
       stderr = await stderr_task
       return text, structured_error, returncode, stderr
 
-    text, structured_error, returncode, stderr = await wait_or_kill_group(_run(), timeout, proc.pid, stderr_task)
+    text, structured_error, returncode, stderr = await process.wait_or_kill_group(
+        _run(), timeout, proc.pid, stderr_task)
     if structured_error:
       raise RuntimeError(f"Codex one-shot failed: {structured_error}")
 
@@ -176,9 +164,9 @@ class CodexBackend(AgentBackend):
     # --- turn.completed ---
     if ev_type == "turn.completed":
       usage = ev.get("usage", {})
-      cost = calculate_codex_usage_cost_usd(self._model, usage)
+      cost = codex_pricing.calculate_codex_usage_cost_usd(self._model, usage)
       return [
-          make_result_event(
+          base.make_result_event(
               input_tokens=usage.get("input_tokens", 0),
               output_tokens=usage.get("output_tokens", 0),
               cache_read=usage.get("cached_input_tokens", 0),
@@ -194,7 +182,7 @@ class CodexBackend(AgentBackend):
         msg = ev.get("message")
       if not msg:
         msg = f"Codex {ev_type} with no message. Full event: {json.dumps(ev, default=str)}"
-      return [make_error_event(msg)]
+      return [base.make_error_event(msg)]
 
     # --- item.started / item.updated / item.completed ---
     if ev_type in ("item.started", "item.updated", "item.completed"):
@@ -251,7 +239,7 @@ class CodexBackend(AgentBackend):
     self._last_agent_text[item_id] = full_text
     if not delta:
       return []
-    return [make_text_event(delta)]
+    return [base.make_text_event(delta)]
 
   def _handle_reasoning(self, ev: dict) -> list[dict]:
     item = ev.get("item", {})
@@ -281,12 +269,12 @@ class CodexBackend(AgentBackend):
       return []
     tool, payload_field, stringify_output = spec
     if ev.get("type") == "item.started":
-      return [make_tool_use_event(tool, {payload_field: item.get(payload_field, "")})]
+      return [base.make_tool_use_event(tool, {payload_field: item.get(payload_field, "")})]
     if ev.get("type") == "item.completed":
       output = item.get("aggregated_output")
       if output is None:
         output = item.get("output", "")
-      return [make_tool_result_event(tool, str(output) if stringify_output else output)]
+      return [base.make_tool_result_event(tool, str(output) if stringify_output else output)]
     return []
 
   def _handle_file_change(self, ev: dict) -> list[dict]:
@@ -319,10 +307,10 @@ class CodexBackend(AgentBackend):
         except json.JSONDecodeError:
           log.warning("codex_malformed_tool_args", raw_arguments=arguments)
           arguments = {"raw": arguments}
-      return [make_tool_use_event(tool_name, arguments)]
+      return [base.make_tool_use_event(tool_name, arguments)]
     if ev.get("type") == "item.completed":
       output = item.get("result", item.get("error", ""))
-      return [make_tool_result_event(tool_name, str(output))]
+      return [base.make_tool_result_event(tool_name, str(output))]
     return []
 
   def _handle_todo_list(self, ev: dict) -> list[dict]:
@@ -352,7 +340,7 @@ class CodexBackend(AgentBackend):
       if previous == text:
         return []
       self._last_todo_text[item_id] = text
-    return [make_text_event(text)]
+    return [base.make_text_event(text)]
 
   def _extract_todo_label(self, todo: dict) -> str:
     """Return the first non-empty todo label across old and current Codex schemas."""
@@ -377,4 +365,4 @@ class CodexBackend(AgentBackend):
     if item.get("type") != ET.ERROR:
       return []
     msg = item.get("message") or f"Codex item error with no message. Full event: {json.dumps(ev, default=str)}"
-    return [make_error_event(msg)]
+    return [base.make_error_event(msg)]

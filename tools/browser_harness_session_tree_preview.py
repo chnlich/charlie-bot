@@ -613,48 +613,46 @@ async def run_harness(args: argparse.Namespace) -> None:
         raise SystemExit(f"{len(failed)} scenario(s) failed: {[s['name'] for s in failed]}")
 
 
-async def drive_browser(debug_port: int, base: str,
-                        access_key: str, results: Results, home: Path) -> None:
-    deadline = time.monotonic() + 20
-    ws_url = None
-    while time.monotonic() < deadline and ws_url is None:
-        try:
-            with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json/version", timeout=5) as resp:
-                ws_url = json.loads(resp.read().decode())["webSocketDebuggerUrl"]
-        except (OSError, KeyError):
-            await asyncio.sleep(0.2)
-    if ws_url is None:
-        raise SystemExit("chrome devtools endpoint did not come up")
-    cdp = await connect_cdp(ws_url)
-    sid, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid)
+async def drive_browser(debug_port: int, base: str, access_key: str, results: Results, home: Path) -> None:
+  deadline = time.monotonic() + 20
+  ws_url = None
+  while time.monotonic() < deadline and ws_url is None:
+    try:
+      with urllib.request.urlopen(f"http://127.0.0.1:{debug_port}/json/version", timeout=5) as resp:
+        ws_url = json.loads(resp.read().decode())["webSocketDebuggerUrl"]
+    except (OSError, KeyError):
+      await asyncio.sleep(0.2)
+  if ws_url is None:
+    raise SystemExit("chrome devtools endpoint did not come up")
+  cdp = await connect_cdp(ws_url)
+  sid, _target_id = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid)
 
-    # --- S1: first login over the real auth overlay, then the empty state ---
-    # `/` is a public path by design: the index loads unauthenticated and the
-    # SPA's auth overlay is the real first-login surface.
-    await cdp.send("Page.navigate", {"url": base}, session_id=sid)
-    await wait_for(cdp, sid,
-                   "document.getElementById('auth-overlay')"
-                   " && document.getElementById('auth-overlay').style.display !== 'none'",
-                   timeout=15, label="login overlay")
-    login_shot = await screenshot(cdp, sid, results, "s01a-login-overlay")
-    await evaluate(cdp, sid,
-                   f"document.getElementById('auth-key-input').value = {json.dumps(access_key)};"
-                   "submitAccessKey();")
-    await wait_for(cdp, sid, "!!document.getElementById('preview-indicator')", timeout=20,
-                   label="main page after login")
-    indicator = await evaluate(cdp, sid, "document.getElementById('preview-indicator').textContent")
-    tasks_first = await evaluate(cdp, sid, "currentFilter === 'tasks'")
-    new_session_label = await evaluate(
-        cdp, sid,
-        "[...document.querySelectorAll('button span')].some(s => s.textContent.trim() === 'New Session')")
-    empty_tree = await evaluate(
-        cdp, sid,
-        "(() => { const t = document.getElementById('session-list');"
-        " return t ? /No task trees yet|Use .New [Ss]ession/i.test(t.textContent) : false; })()")
-    overlay_gone = await evaluate(cdp, sid,
-                                  "document.getElementById('auth-overlay').style.display === 'none'")
-    toolbar = await evaluate(cdp, sid, """
+  # --- S1: first login over the real auth overlay, then the empty state ---
+  # `/` is a public path by design: the index loads unauthenticated and the
+  # SPA's auth overlay is the real first-login surface.
+  await cdp.send("Page.navigate", {"url": base}, session_id=sid)
+  await wait_for(
+      cdp,
+      sid, "document.getElementById('auth-overlay')"
+      " && document.getElementById('auth-overlay').style.display !== 'none'",
+      timeout=15,
+      label="login overlay")
+  login_shot = await screenshot(cdp, sid, results, "s01a-login-overlay")
+  await evaluate(
+      cdp, sid, f"document.getElementById('auth-key-input').value = {json.dumps(access_key)};"
+      "submitAccessKey();")
+  await wait_for(cdp, sid, "!!document.getElementById('preview-indicator')", timeout=20, label="main page after login")
+  indicator = await evaluate(cdp, sid, "document.getElementById('preview-indicator').textContent")
+  tasks_first = await evaluate(cdp, sid, "currentFilter === 'tasks'")
+  new_session_label = await evaluate(
+      cdp, sid, "[...document.querySelectorAll('button span')].some(s => s.textContent.trim() === 'New Session')")
+  empty_tree = await evaluate(
+      cdp, sid, "(() => { const t = document.getElementById('session-list');"
+      " return t ? /No task trees yet|Use .New [Ss]ession/i.test(t.textContent) : false; })()")
+  overlay_gone = await evaluate(cdp, sid, "document.getElementById('auth-overlay').style.display === 'none'")
+  toolbar = await evaluate(
+      cdp, sid, """
         (() => {
           const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
           const sel = document.getElementById('new-session-backend');
@@ -672,487 +670,546 @@ async def drive_browser(debug_port: int, base: str,
                   buttonSpanClipped: span.scrollWidth > span.clientWidth + 0.5,
                   optionTexts: labels, labelWidths};
         })()""")
-    toolbar_ok = (toolbar.get("present") and len(toolbar.get("options", [])) >= 1
-                  and toolbar.get("oneRow") and not toolbar.get("buttonSpanClipped", True)
-                  and all(toolbar.get("optionTexts", [])) and toolbar.get("selectWidth", 0) >= 140)
-    ok = (indicator == "Preview — isolated trial instance" and tasks_first and new_session_label
-          and empty_tree and overlay_gone and toolbar_ok)
-    results.record("s01-first-login-empty-state", ok,
-                   f"indicator={indicator!r} tasks-first={tasks_first} new-session-label={new_session_label} "
-                   f"empty-tree={empty_tree} overlay-gone={overlay_gone} toolbar={toolbar}",
-                   await screenshot(cdp, sid, results, "s01b-empty-preview") + "," + login_shot)
-    # The unauthenticated first load logs one expected 401 from the sidebar's
-    # initial fetch (the shipped app's pre-login behavior); the no-console-error
-    # contract covers the authenticated flow from here on.
-    cdp.console_errors = []
-    await evaluate(cdp, sid, "window.__errs = [];")
-    BACKEND_LABELS.update(await evaluate(cdp, sid,
-        "(() => { const sel = document.getElementById('new-session-backend');"
-        " const m = {}; for (const o of sel.options) m[o.value] = o.textContent.trim(); return m; })()"))
-    log(f"  model dropdown entries: {list(BACKEND_LABELS)}")
+  toolbar_ok = (
+      toolbar.get("present") and len(toolbar.get("options", [])) >= 1 and toolbar.get("oneRow") and
+      not toolbar.get("buttonSpanClipped", True) and all(toolbar.get("optionTexts", [])) and
+      toolbar.get("selectWidth", 0) >= 140)
+  ok = (
+      indicator == "Preview — isolated trial instance" and tasks_first and new_session_label and empty_tree and
+      overlay_gone and toolbar_ok)
+  results.record(
+      "s01-first-login-empty-state", ok,
+      f"indicator={indicator!r} tasks-first={tasks_first} new-session-label={new_session_label} "
+      f"empty-tree={empty_tree} overlay-gone={overlay_gone} toolbar={toolbar}",
+      await screenshot(cdp, sid, results, "s01b-empty-preview") + "," + login_shot)
+  # The unauthenticated first load logs one expected 401 from the sidebar's
+  # initial fetch (the shipped app's pre-login behavior); the no-console-error
+  # contract covers the authenticated flow from here on.
+  cdp.console_errors = []
+  await evaluate(cdp, sid, "window.__errs = [];")
+  BACKEND_LABELS.update(
+      await evaluate(
+          cdp, sid, "(() => { const sel = document.getElementById('new-session-backend');"
+          " const m = {}; for (const o of sel.options) m[o.value] = o.textContent.trim(); return m; })()"))
+  log(f"  model dropdown entries: {list(BACKEND_LABELS)}")
 
-    # --- S2: the user-facing New Session control creates the root in one click ---
-    # A real click of the welcome screen's New Session button (never a direct
-    # helper call): no creation form may appear, Chat must open with the
-    # composer holding the cursor, the dropdown's selected model rides the
-    # create, and the first typed message must be admitted through the normal
-    # durable input path. The sidebar's control takes the same path (S6b/S6c
-    # click it from an existing session).
-    await click_button_by_text(cdp, sid, "New Session", "main")
-    await wait_for(cdp, sid, "typeof SESSION_ID !== 'undefined' && SESSION_ID", timeout=20,
-                   label="new root task selected")
-    root_id = await evaluate(cdp, sid, "SESSION_ID")
-    await wait_for(cdp, sid,
-                   "(() => { const m = document.getElementById('task-child-modal');"
-                   " const f = ['task-child-name', 'task-child-goal', 'task-child-profile',"
-                   " 'task-child-backend'].map((id) => document.getElementById(id));"
-                   " return !m && f.every((x) => !x); })()",
-                   timeout=8, label="no creation form fields")
-    composer_ready = await wait_for(
-        cdp, sid,
-        "!document.getElementById('tab-chat').classList.contains('hidden')"
-        " && document.activeElement === document.getElementById('msg-input')"
-        " && document.getElementById('msg-input').value === ''",
-        timeout=10, label="chat open with a cursor-ready empty composer")
-    await wait_for(cdp, sid,
-                   f"!!document.getElementById('tree-node-{root_id}')", timeout=15,
-                   label="root row in tree")
-    panel_open = await evaluate(cdp, sid,
-                                "!document.getElementById('btn-task').classList.contains('hidden')")
-    create_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
-    create_body = json.loads(create_posts[-1]["body"]) if create_posts else {}
-    selected_default = await evaluate(cdp, sid, "document.getElementById('new-session-backend').value")
-    create_ok = (create_body.get("profile") == "manager" and create_body.get("task_parent_id") is None
-                 and (create_body.get("task") or {}).get("goal") == "" and bool(create_body.get("request_id"))
-                 and create_body.get("backend") == selected_default)
-    badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
-    badge_ok = badge_label == (BACKEND_LABELS.get(selected_default) or selected_default)
-    results.record("s02-one-click-root-create",
-                   bool(root_id and composer_ready and panel_open and create_ok and badge_ok),
-                   f"root={root_id[:8]} composer-ready={composer_ready} "
-                   f"task-panel-open={panel_open} create-body-ok={create_ok} "
-                   f"selected={selected_default} badge={badge_label!r} create-posts={len(create_posts)}",
-                   await screenshot(cdp, sid, results, "s02-one-click-root-chat"))
-    # A welcome-screen create lands through a full page load; re-mark the
-    # authenticated flow as the no-console-error baseline from here.
-    cdp.console_errors = []
-    await evaluate(cdp, sid, "window.__errs = [];")
+  # --- S2: the user-facing New Session control creates the root in one click ---
+  # A real click of the welcome screen's New Session button (never a direct
+  # helper call): no creation form may appear, Chat must open with the
+  # composer holding the cursor, the dropdown's selected model rides the
+  # create, and the first typed message must be admitted through the normal
+  # durable input path. The sidebar's control takes the same path (S6b/S6c
+  # click it from an existing session).
+  await click_button_by_text(cdp, sid, "New Session", "main")
+  await wait_for(
+      cdp, sid, "typeof SESSION_ID !== 'undefined' && SESSION_ID", timeout=20, label="new root task selected")
+  root_id = await evaluate(cdp, sid, "SESSION_ID")
+  await wait_for(
+      cdp,
+      sid, "(() => { const m = document.getElementById('task-child-modal');"
+      " const f = ['task-child-name', 'task-child-goal', 'task-child-profile',"
+      " 'task-child-backend'].map((id) => document.getElementById(id));"
+      " return !m && f.every((x) => !x); })()",
+      timeout=8,
+      label="no creation form fields")
+  composer_ready = await wait_for(
+      cdp,
+      sid, "!document.getElementById('tab-chat').classList.contains('hidden')"
+      " && document.activeElement === document.getElementById('msg-input')"
+      " && document.getElementById('msg-input').value === ''",
+      timeout=10,
+      label="chat open with a cursor-ready empty composer")
+  await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{root_id}')", timeout=15, label="root row in tree")
+  panel_open = await evaluate(cdp, sid, "!document.getElementById('btn-task').classList.contains('hidden')")
+  create_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+  create_body = json.loads(create_posts[-1]["body"]) if create_posts else {}
+  selected_default = await evaluate(cdp, sid, "document.getElementById('new-session-backend').value")
+  create_ok = (
+      create_body.get("profile") == "manager" and create_body.get("task_parent_id") is None and
+      (create_body.get("task") or {}).get("goal") == "" and bool(create_body.get("request_id")) and
+      create_body.get("backend") == selected_default)
+  badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
+  badge_ok = badge_label == (BACKEND_LABELS.get(selected_default) or selected_default)
+  results.record(
+      "s02-one-click-root-create", bool(root_id and composer_ready and panel_open and create_ok and
+                                        badge_ok), f"root={root_id[:8]} composer-ready={composer_ready} "
+      f"task-panel-open={panel_open} create-body-ok={create_ok} "
+      f"selected={selected_default} badge={badge_label!r} create-posts={len(create_posts)}", await
+      screenshot(cdp, sid, results, "s02-one-click-root-chat"))
+  # A welcome-screen create lands through a full page load; re-mark the
+  # authenticated flow as the no-console-error baseline from here.
+  cdp.console_errors = []
+  await evaluate(cdp, sid, "window.__errs = [];")
 
-    # --- S2b: the first message on the empty-goal root (durable admission) ---
-    first_message = "Take off. Reply with exactly: TRIAL-OK, then stop. Do not create subtasks."
-    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
-    await evaluate(cdp, sid,
-                   "const inp = document.getElementById('msg-input');"
-                   f"inp.value = {json.dumps(first_message)};"
-                   "inp.dispatchEvent(new Event('input'));")
-    await click(cdp, sid, "#send-btn")
-    await wait_for(cdp, sid,
-                   f"document.getElementById('tab-chat').textContent.includes({json.dumps(first_message)})",
-                   timeout=15, label="first message rendered")
-    # The admitted input through the normal API: the durable events page must
-    # carry the user's message (bounded poll — admission is synchronous, the
-    # read projection may lag one invalidation behind the send).
-    admitted = False
-    events_status = None
-    admit_deadline = time.monotonic() + 15
-    while time.monotonic() < admit_deadline:
-        events_status, page = api_request(base, access_key, "GET",
-                                          f"/api/sessions/{root_id}/events?before=999999&limit=40", timeout=20.0)
-        admitted = events_status == 200 and any(
-            m.get("role") == "user" and first_message in str(m.get("content", ""))
-            for m in ((page or {}).get("messages") or []))
-        if admitted:
-            break
-        await asyncio.sleep(0.5)
-    results.record("s02b-first-message-admitted-empty-goal", bool(admitted),
-                   f"events-page={events_status} user-message-admitted={admitted}",
-                   await screenshot(cdp, sid, results, "s02b-first-message"))
+  # --- S2b: the first message on the empty-goal root (durable admission) ---
+  first_message = "Take off. Reply with exactly: TRIAL-OK, then stop. Do not create subtasks."
+  await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
+  await evaluate(
+      cdp, sid, "const inp = document.getElementById('msg-input');"
+      f"inp.value = {json.dumps(first_message)};"
+      "inp.dispatchEvent(new Event('input'));")
+  await click(cdp, sid, "#send-btn")
+  await wait_for(
+      cdp,
+      sid,
+      f"document.getElementById('tab-chat').textContent.includes({json.dumps(first_message)})",
+      timeout=15,
+      label="first message rendered")
+  # The admitted input through the normal API: the durable events page must
+  # carry the user's message (bounded poll — admission is synchronous, the
+  # read projection may lag one invalidation behind the send).
+  admitted = False
+  events_status = None
+  admit_deadline = time.monotonic() + 15
+  while time.monotonic() < admit_deadline:
+    events_status, page = api_request(
+        base, access_key, "GET", f"/api/sessions/{root_id}/events?before=999999&limit=40", timeout=20.0)
+    admitted = events_status == 200 and any(
+        m.get("role") == "user" and first_message in str(m.get("content", ""))
+        for m in ((page or {}).get("messages") or []))
+    if admitted:
+      break
+    await asyncio.sleep(0.5)
+  results.record(
+      "s02b-first-message-admitted-empty-goal", bool(admitted),
+      f"events-page={events_status} user-message-admitted={admitted}", await
+      screenshot(cdp, sid, results, "s02b-first-message"))
 
-    # --- S2c: the manager turn spins its own tree row live -----------------
-    # The dispatched manager_turn Run is real: the row must move queued/idle ->
-    # running through the tree's WebSocket updates alone (no reload, no other
-    # input). Every distinct state label seen on the way is reported.
-    row_states: list[str] = []
+  # --- S2c: the manager turn spins its own tree row live -----------------
+  # The dispatched manager_turn Run is real: the row must move queued/idle ->
+  # running through the tree's WebSocket updates alone (no reload, no other
+  # input). Every distinct state label seen on the way is reported.
+  row_states: list[str] = []
+  try:
+    await wait_row_activity(
+        cdp, sid, root_id, {"spinner": True}, 120, "root row spinner during the manager turn", row_states)
+    during_shot = await screenshot(cdp, sid, results, "s02c-running-row-desktop")
+    results.record(
+        "s02c-manager-turn-row-spinner",
+        ok=True,
+        detail=f"root row spinner visible without reload; observed label sequence: "
+        f"{[t[:28] for t in row_states]}",
+        screenshot=during_shot)
+  except TimeoutError as exc:
+    results.record(
+        "s02c-manager-turn-row-spinner",
+        ok=False,
+        detail=str(exc)[:300],
+        screenshot=await screenshot(cdp, sid, results, "s02c-fail"))
+  # --- S3: child manager under the root ----------------------------------
+  await open_task_tab(cdp, sid, "task")
+  await wait_for(cdp, sid, "!!document.getElementById('task-action-child')", timeout=10, label="New subtask action")
+  await click(cdp, sid, "#task-action-child")
+  await wait_for(cdp, sid, "!!document.getElementById('task-child-modal')", timeout=10, label="child modal")
+  await evaluate(
+      cdp, sid, "document.getElementById('task-child-profile').value = 'manager';"
+      "document.getElementById('task-child-name').value = 'Feature alpha';"
+      "document.getElementById('task-child-goal').value = 'Deliver feature alpha';")
+  await click_button_by_text(cdp, sid, "Create subtask", "#task-child-modal")
+  await wait_for(
+      cdp,
+      sid,
+      "typeof SESSION_ID !== 'undefined' && SESSION_ID !== " + json.dumps(root_id),
+      timeout=15,
+      label="child manager selected")
+  child_id = await evaluate(cdp, sid, "SESSION_ID")
+  await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(root_id)})")
+  await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{child_id}')", timeout=15, label="child row visible")
+  results.record(
+      "s03-create-child-manager",
+      ok=True,
+      detail=f"child={child_id[:8]} under root",
+      screenshot=await screenshot(cdp, sid, results, "s03-child-manager"))
+
+  # --- S4: worker under the child manager --------------------------------
+  await click(cdp, sid, "#task-action-child")
+  await wait_for(cdp, sid, "!!document.getElementById('task-child-modal')", timeout=10, label="worker modal")
+  await evaluate(
+      cdp, sid, "document.getElementById('task-child-profile').value = 'worker';"
+      "document.getElementById('task-child-name').value = 'Worker one';"
+      "document.getElementById('task-child-goal').value = 'Execute a small trial step';")
+  await click_button_by_text(cdp, sid, "Create subtask", "#task-child-modal")
+  await wait_for(
+      cdp,
+      sid,
+      f"typeof SESSION_ID !== 'undefined' && SESSION_ID !== {json.dumps(child_id)}",
+      timeout=15,
+      label="worker selected")
+  worker_id = await evaluate(cdp, sid, "SESSION_ID")
+  await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(child_id)})")
+  await wait_for(
+      cdp, sid, f"!!document.getElementById('tree-node-{worker_id}')", timeout=15, label="worker row visible")
+  results.record(
+      "s04-create-worker",
+      ok=True,
+      detail=f"worker={worker_id[:8]} under child",
+      screenshot=await screenshot(cdp, sid, results, "s04-worker-created"))
+
+  # --- S5: goal editing on the Task tab ----------------------------------
+  await open_task_tab(cdp, sid, "task")
+  await wait_for(cdp, sid, "!!document.getElementById('task-goal-input')", timeout=10, label="goal editor")
+  await evaluate(cdp, sid, "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';")
+  await click(cdp, sid, "#task-save-btn")
+  await wait_for(
+      cdp,
+      sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+      ".then(r => r.json()).then(d => (d.task && d.task.goal || '').includes('(edited)'))",
+      timeout=15,
+      label="goal persisted")
+  results.record(
+      "s05-edit-goal",
+      ok=True,
+      detail="goal edited and persisted through the Task tab",
+      screenshot=await screenshot(cdp, sid, results, "s05-goal-edited"))
+
+  # --- S6: node switching preserves the unsaved draft --------------------
+  await evaluate(
+      cdp, sid, "document.getElementById('task-goal-input').value = 'unsaved draft text';"
+      "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
+  # The editor persists the unsaved draft on a 300ms debounce; a real user
+  # switching nodes always takes longer than that.
+  await asyncio.sleep(0.7)
+  await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
+  await wait_for(
+      cdp,
+      sid,
+      f"SESSION_ID === {json.dumps(child_id)} && !!document.getElementById('task-goal-input')",
+      timeout=15,
+      label="switched to child")
+  await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+  await wait_for(
+      cdp,
+      sid,
+      "SESSION_ID === " + json.dumps(worker_id) +
+      " && (document.getElementById('task-goal-input').value === 'unsaved draft text'"
+      " || document.getElementById('task-goal-input').value === "
+      "'Execute a small trial step (edited)')",
+      timeout=15,
+      label="worker editor rendered with its own value")
+  draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
+  ok = draft_back == "unsaved draft text"
+  await evaluate(
+      cdp, sid, "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';"
+      "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
+  results.record(
+      "s06-draft-preservation", ok, f"draft after switching away and back: {draft_back!r}", await
+      screenshot(cdp, sid, results, "s06-draft-preserved"))
+
+  # --- S6b: New Task from a non-Chat tab keeps the drafts and opens Chat ---
+  # The Task tab is displaying; the operator has an unsaved message draft and
+  # an unsaved task-edit draft on this node. One click of the user-facing
+  # control creates a root, lands in Chat with the cursor ready, and both
+  # drafts survive the switch.
+  posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
+  await evaluate(
+      cdp, sid, "(() => { const inp = document.getElementById('msg-input');"
+      "inp.value = 'worker message draft';"
+      "inp.dispatchEvent(new Event('input'));"
+      "const goal = document.getElementById('task-goal-input');"
+      "goal.value = 'unsaved before create';"
+      "goal.dispatchEvent(new Event('input')); })()")
+  await asyncio.sleep(0.7)  # the editor's draft persistence window
+  await click_button_by_text(cdp, sid, "New Session", "#sidebar")
+  await wait_for(
+      cdp,
+      sid,
+      "typeof SESSION_ID !== 'undefined' && SESSION_ID !== " + json.dumps(worker_id),
+      timeout=20,
+      label="new root selected from a non-Chat tab")
+  fresh_root_id = await evaluate(cdp, sid, "SESSION_ID")
+  fresh_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+  create_delta = len(fresh_posts) - posts_before
+  composer_ready = await wait_for(
+      cdp,
+      sid, "!document.getElementById('tab-chat').classList.contains('hidden')"
+      " && document.activeElement === document.getElementById('msg-input')"
+      " && document.getElementById('msg-input').value === ''",
+      timeout=10,
+      label="chat open with a cursor-ready composer from a non-Chat tab")
+  await wait_for(
+      cdp, sid, f"!!document.getElementById('tree-node-{fresh_root_id}')", timeout=15, label="new root row in tree")
+  # Both drafts come back with the worker. The wait is value-based: a stale
+  # editor from the previous node stays in the DOM until this node's own
+  # render replaces it, so element existence alone would read the wrong node.
+  await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+  await open_task_tab(cdp, sid, "task")
+  await wait_for(
+      cdp,
+      sid,
+      "SESSION_ID === " + json.dumps(worker_id) +
+      " && (document.getElementById('task-goal-input')?.value === 'unsaved before create'"
+      " || document.getElementById('task-goal-input')?.value === "
+      "'Execute a small trial step (edited)')",
+      timeout=15,
+      label="worker task editor with its own value")
+  goal_draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
+  composer_back = await evaluate(cdp, sid, "document.getElementById('msg-input').value")
+  await evaluate(
+      cdp, sid, "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';"
+      "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
+  results.record(
+      "s06b-new-task-from-non-chat-tab",
+      bool(
+          fresh_root_id and create_delta == 1 and composer_ready and goal_draft_back == "unsaved before create" and
+          composer_back == "worker message draft"), f"root={fresh_root_id[:8]} create-posts={create_delta} "
+      f"composer-ready={composer_ready} goal-draft={goal_draft_back!r} "
+      f"composer-draft={composer_back!r}", await screenshot(cdp, sid, results, "s06b-new-task-from-task-tab"))
+
+  # --- S6c: one pending create action absorbs rapid clicks -----------------
+  # Two synchronous clicks of the real control in one JS tick: the second
+  # lands while the first create-and-open is in flight.
+  posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
+  await evaluate(
+      cdp, sid, "(() => { const btn = [...document.querySelectorAll('#sidebar button')]"
+      ".find(b => b.textContent.trim() === 'New Session');"
+      " if (!btn) throw new Error('missing New Session button'); btn.click(); btn.click(); })()")
+  await wait_for(
+      cdp,
+      sid,
+      "typeof SESSION_ID !== 'undefined' && SESSION_ID !== " + json.dumps(worker_id),
+      timeout=20,
+      label="one new task from the double click")
+  rapid_root_id = await evaluate(cdp, sid, "SESSION_ID")
+  rapid_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+  rapid_delta = len(rapid_posts) - posts_before
+  rapid_ready = await wait_for(
+      cdp,
+      sid,
+      "document.activeElement === document.getElementById('msg-input')",
+      timeout=10,
+      label="composer focused after the double click")
+  await wait_for(
+      cdp, sid, f"!!document.getElementById('tree-node-{rapid_root_id}')", timeout=15, label="rapid root row in tree")
+  results.record(
+      "s06c-rapid-clicks-one-create",
+      bool(rapid_root_id and rapid_delta == 1 and rapid_ready and rapid_root_id != fresh_root_id),
+      f"root={rapid_root_id[:8]} create-posts={rapid_delta} composer-ready={rapid_ready}", await
+      screenshot(cdp, sid, results, "s06c-rapid-clicks"))
+
+  # --- S7: local + subtree rules in the Context tab ----------------------
+  await open_task_tab(cdp, sid, "task-context")
+  await wait_for(cdp, sid, "!!document.getElementById('task-rule-editor')", timeout=15, label="rule editor")
+  await evaluate(
+      cdp, sid, "document.getElementById('task-rule-editor').value = 'Trial rule: keep replies short.';"
+      "document.getElementById('task-rule-editor').dispatchEvent(new Event('input'));")
+  await click_button_by_text(cdp, sid, "Save this-task rule", "#tab-task-context")
+  await wait_for(
+      cdp,
+      sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+      ".then(r => r.json()).then(d => !!(d.prompt_rules && d.prompt_rules.node &&"
+      " (d.prompt_rules.node.text || '').includes('keep replies short')))",
+      timeout=15,
+      label="local rule persisted")
+  # Subtree rule lives on the child manager; the editor switches scope there.
+  await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
+  await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(child_id), timeout=15, label="child selected")
+  await wait_for(cdp, sid, "!!document.getElementById('task-rule-editor')", timeout=15, label="rule editor on child")
+  has_scope_radio = await evaluate(
+      cdp, sid, "!!document.querySelector('#tab-task-context input[name=\"task-rule-scope\"][value=\"subtree\"]')")
+  if has_scope_radio:
+    await evaluate(
+        cdp, sid, "const radio = document.querySelector("
+        "'#tab-task-context input[name=\"task-rule-scope\"][value=\"subtree\"]');"
+        "radio.checked = true; radio.dispatchEvent(new Event('change'));")
+    await wait_for(
+        cdp,
+        sid,
+        "document.getElementById('task-rule-editor').placeholder.includes('descendant')",
+        timeout=10,
+        label="subtree scope active")
+    await evaluate(
+        cdp, sid, "document.getElementById('task-rule-editor').value = "
+        "'Subtree rule: workers report with one summary line.';"
+        "document.getElementById('task-rule-editor').dispatchEvent(new Event('input'));")
+    await click_button_by_text(cdp, sid, "Save subtree rule", "#tab-task-context")
+    await wait_for(
+        cdp,
+        sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+        ".then(r => r.json()).then(d => !!(d.prompt_rules && d.prompt_rules.subtree &&"
+        " (d.prompt_rules.subtree.text || '').includes('one summary line')))",
+        timeout=15,
+        label="subtree rule persisted")
+  results.record(
+      "s07-rules-editing",
+      ok=True,
+      detail=f"local rule on worker, subtree rule on child (scope radio={has_scope_radio})",
+      screenshot=await screenshot(cdp, sid, results, "s07-rules"))
+
+  # --- S8: the real GLM manager turn from the first message --------------
+  # S2b's first message already rode the normal durable input path on the
+  # empty-goal root; the dispatched manager_turn Run is this scenario's
+  # real-CLC evidence (one real turn, no second send).
+  await evaluate(cdp, sid, f"switchSession({json.dumps(root_id)})")
+  await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(root_id), timeout=15, label="root selected")
+  log("  waiting for the real GLM manager turn (bounded)")
+  run_wait_deadline = time.monotonic() + 180
+  run = None
+  while time.monotonic() < run_wait_deadline:
+    status, page = api_request(base, access_key, "GET", f"/api/sessions/{root_id}/runs?limit=5", timeout=20.0)
+    runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
+    terminal = [
+        r for r in runs
+        if r.get("kind") == "manager_turn" and r.get("state") in ("success", "failed", "stopped", "interrupted")
+    ]
+    if terminal:
+      run = terminal[0]
+      break
+    await asyncio.sleep(2)
+  if run is None:
+    results.record(
+        "s08-real-glm-manager-turn",
+        ok=False,
+        detail="no terminal manager_turn run within 180s (provider/network failure is an "
+        "explicit failed live check)",
+        screenshot=await screenshot(cdp, sid, results, "s08-fail"))
+  else:
+    native_dir = home / "clc-sessions"
+    native_entries = sorted(p.name for p in native_dir.iterdir())
+    detail = (
+        f"run={run['id'][:8]} state={run.get('state')} "
+        f"native={run.get('native_session_id')} "
+        f"native-dir-entries={len(native_entries)}")
+    results.record(
+        "s08-real-glm-manager-turn",
+        run.get("state") == "success" and bool(native_entries), detail, await
+        screenshot(cdp, sid, results, "s08-glm-run"))
+    # Success must clear the row's spinner through the same live path: an
+    # open task whose Run finished reads idle, never perpetually running.
     try:
-        await wait_row_activity(cdp, sid, root_id, {"spinner": True}, 120,
-                                "root row spinner during the manager turn", row_states)
-        during_shot = await screenshot(cdp, sid, results, "s02c-running-row-desktop")
-        results.record("s02c-manager-turn-row-spinner", ok=True,
-                       detail=f"root row spinner visible without reload; observed label sequence: "
-                       f"{[t[:28] for t in row_states]}",
-                       screenshot=during_shot)
+      after = await wait_row_activity(
+          cdp, sid, root_id, {
+              "spinner": False,
+              "gear": False
+          }, 30, "root row cleared after the manager turn")
+      results.record(
+          "s08b-manager-turn-row-cleared", "idle" in after.get("label", ""),
+          f"spinner cleared; row label reads: {after.get('label', '')[:60]!r}", await
+          screenshot(cdp, sid, results, "s08b-row-idle"))
     except TimeoutError as exc:
-        results.record("s02c-manager-turn-row-spinner", ok=False, detail=str(exc)[:300],
-                       screenshot=await screenshot(cdp, sid, results, "s02c-fail"))
-    # --- S3: child manager under the root ----------------------------------
-    await open_task_tab(cdp, sid, "task")
-    await wait_for(cdp, sid, "!!document.getElementById('task-action-child')", timeout=10,
-                   label="New subtask action")
-    await click(cdp, sid, "#task-action-child")
-    await wait_for(cdp, sid, "!!document.getElementById('task-child-modal')", timeout=10,
-                   label="child modal")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-child-profile').value = 'manager';"
-                   "document.getElementById('task-child-name').value = 'Feature alpha';"
-                   "document.getElementById('task-child-goal').value = 'Deliver feature alpha';")
-    await click_button_by_text(cdp, sid, "Create subtask", "#task-child-modal")
-    await wait_for(cdp, sid,
-                   "typeof SESSION_ID !== 'undefined' && SESSION_ID !== " + json.dumps(root_id),
-                   timeout=15, label="child manager selected")
-    child_id = await evaluate(cdp, sid, "SESSION_ID")
-    await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(root_id)})")
-    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{child_id}')", timeout=15,
-                   label="child row visible")
-    results.record("s03-create-child-manager", ok=True, detail=f"child={child_id[:8]} under root",
-                   screenshot=await screenshot(cdp, sid, results, "s03-child-manager"))
+      results.record(
+          "s08b-manager-turn-row-cleared",
+          ok=False,
+          detail=str(exc)[:300],
+          screenshot=await screenshot(cdp, sid, results, "s08b-fail"))
+    # --- S9: Run history and stored Context on the launched run --------
+    await open_task_tab(cdp, sid, "runs")
+    # The panel renders after its own fetch; an immediate textContent read
+    # races that fetch and would report a false empty history.
+    run_visible = await wait_for(
+        cdp,
+        sid,
+        f"document.getElementById('tab-runs').textContent.includes({json.dumps(run['id'][:8])})",
+        timeout=10,
+        label="run row in the runs panel")
+    status, ctx = api_request(
+        base, access_key, "GET", f"/api/sessions/{root_id}/runs/{run['id']}/context", timeout=20.0)
+    has_snapshot = status == 200 and bool((ctx or {}).get("snapshot"))
+    results.record(
+        "s09-run-history-and-context", bool(run_visible and has_snapshot),
+        f"runs-panel={bool(run_visible)} context-snapshot={has_snapshot}", await
+        screenshot(cdp, sid, results, "s09-runs-context"))
+    # The stored snapshot is the same assembly the prompt preview showed.
+    status, preview = api_request(
+        base, access_key, "GET", f"/api/sessions/{root_id}/effective-prompt?kind=manager_turn", timeout=20.0)
+    preview_hash = (preview or {}).get("prompt_hash")
+    stored_hash = ((ctx or {}).get("snapshot") or {}).get("prompt_hash")
+    results.record(
+        "s09b-prompt-preview-matches-stored-context", bool(preview_hash and preview_hash == stored_hash),
+        f"preview={str(preview_hash)[:16]} stored={str(stored_hash)[:16]}", None)
 
-    # --- S4: worker under the child manager --------------------------------
-    await click(cdp, sid, "#task-action-child")
-    await wait_for(cdp, sid, "!!document.getElementById('task-child-modal')", timeout=10,
-                   label="worker modal")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-child-profile').value = 'worker';"
-                   "document.getElementById('task-child-name').value = 'Worker one';"
-                   "document.getElementById('task-child-goal').value = 'Execute a small trial step';")
-    await click_button_by_text(cdp, sid, "Create subtask", "#task-child-modal")
-    await wait_for(cdp, sid,
-                   f"typeof SESSION_ID !== 'undefined' && SESSION_ID !== {json.dumps(child_id)}",
-                   timeout=15, label="worker selected")
-    worker_id = await evaluate(cdp, sid, "SESSION_ID")
-    await evaluate(cdp, sid, f"Sidebar.SessionTree.ensureExpanded({json.dumps(child_id)})")
-    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{worker_id}')", timeout=15,
-                   label="worker row visible")
-    results.record("s04-create-worker", ok=True, detail=f"worker={worker_id[:8]} under child",
-                   screenshot=await screenshot(cdp, sid, results, "s04-worker-created"))
+  # --- S10: completion, refusal, reopen, move on the worker ---------------
+  await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+  await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(worker_id), timeout=15, label="worker selected again")
+  await open_task_tab(cdp, sid, "task")
+  await wait_for(cdp, sid, "!!document.getElementById('task-action-complete')", timeout=10, label="complete action")
+  await click(cdp, sid, "#task-action-complete")
+  await wait_for(cdp, sid, "!!document.getElementById('task-complete-modal')", timeout=10, label="complete modal")
+  await evaluate(
+      cdp, sid, "document.getElementById('task-complete-summary').value = 'Trial step done.';"
+      "document.getElementById('task-complete-refs').value = 'manual trial evidence';"
+      "document.getElementById('task-complete-refs').dispatchEvent(new Event('input'));")
+  await click_button_by_text(cdp, sid, "Complete task", "#task-complete-modal")
+  await wait_for(
+      cdp,
+      sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+      ".then(r => r.json()).then(d => d.task_state === 'completed')",
+      timeout=15,
+      label="worker completed")
+  shot = await screenshot(cdp, sid, results, "s10a-worker-completed")
+  await wait_for(cdp, sid, "!!document.getElementById('task-action-reopen')", timeout=10, label="reopen action")
+  await click(cdp, sid, "#task-action-reopen")
+  await wait_for(cdp, sid, "!!document.getElementById('task-reason-modal')", timeout=10, label="reopen reason modal")
+  await evaluate(
+      cdp, sid, "const ta = document.querySelector('#task-reason-modal textarea');"
+      "if (ta) { ta.value = 'Trial reopen'; ta.dispatchEvent(new Event('input')); }")
+  await click_button_by_text(cdp, sid, "Reopen task", "#task-reason-modal")
+  await wait_for(
+      cdp,
+      sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+      ".then(r => r.json()).then(d => d.task_state === 'open')",
+      timeout=15,
+      label="worker reopened")
+  await wait_for(cdp, sid, "!!document.getElementById('task-action-move')", timeout=10, label="move action")
+  await click(cdp, sid, "#task-action-move")
+  await wait_for(cdp, sid, "!!document.getElementById('task-move-modal')", timeout=10, label="move chooser")
+  chooser_ok = await evaluate(
+      cdp, sid, "!!document.getElementById('task-move-list') &&"
+      "!document.getElementById('task-move-list').textContent.includes('Failed to load')")
+  await click_button_by_text(cdp, sid, "Cancel", "#task-move-modal")
+  results.record(
+      "s10-completion-refusal-reopen-move", bool(chooser_ok),
+      f"complete/reopen applied; move chooser loaded={chooser_ok}", await
+      screenshot(cdp, sid, results, "s10b-controls"))
 
-    # --- S5: goal editing on the Task tab ----------------------------------
-    await open_task_tab(cdp, sid, "task")
-    await wait_for(cdp, sid, "!!document.getElementById('task-goal-input')", timeout=10,
-                   label="goal editor")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';")
-    await click(cdp, sid, "#task-save-btn")
-    await wait_for(cdp, sid,
-                   "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                   ".then(r => r.json()).then(d => (d.task && d.task.goal || '').includes('(edited)'))",
-                   timeout=15, label="goal persisted")
-    results.record("s05-edit-goal", ok=True, detail="goal edited and persisted through the Task tab",
-                   screenshot=await screenshot(cdp, sid, results, "s05-goal-edited"))
+  # --- S11: reload preserves the trial state and the selected node --------
+  # The reload lands on the just-created one-click root (the requirement's
+  # "new node appears in the task tree and remains selected after refresh").
+  # A deep link to a node the user had expanded collapses that node by design
+  # (revealNode: selecting a node does not force-open it), so the previously
+  # expanded root is not the reload target; its subtree rows must still
+  # survive the reload.
+  await cdp.send("Page.navigate", {"url": f"{base}/?session={rapid_root_id}"}, session_id=sid)
+  await wait_for(cdp, sid, "!!document.getElementById('preview-indicator')", timeout=20, label="reloaded main page")
+  await wait_for(
+      cdp, sid, f"!!document.getElementById('tree-node-{root_id}')", timeout=20, label="root row after reload")
+  still_there = await evaluate(
+      cdp, sid, f"[{json.dumps(root_id)}, {json.dumps(child_id)}, {json.dumps(worker_id)}]"
+      ".every(id => { const el = document.getElementById('tree-node-' + id);"
+      " if (el) return true; return false; })")
+  reloaded_session = await evaluate(cdp, sid, "SESSION_ID")
+  selected = await evaluate(
+      cdp, sid, f"(() => {{ const row = document.getElementById('tree-node-{rapid_root_id}');"
+      " return !!row && row.firstElementChild.classList.contains('bg-blue-600/20'); })()")
+  missing = await evaluate(
+      cdp, sid, f"[{json.dumps(rapid_root_id)}, {json.dumps(root_id)}, {json.dumps(child_id)}, {json.dumps(worker_id)}]"
+      ".filter(id => !document.getElementById('tree-node-' + id))")
+  results.record(
+      "s11-reload-persistence", bool(still_there and reloaded_session == rapid_root_id and selected and not missing),
+      f"reloaded-session={str(reloaded_session)[:8]} expected={rapid_root_id[:8]} "
+      f"missing-rows={missing} created-node-selected-after-reload={selected}", await
+      screenshot(cdp, sid, results, "s11-after-reload"))
 
-
-    # --- S6: node switching preserves the unsaved draft --------------------
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-goal-input').value = 'unsaved draft text';"
-                   "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
-    # The editor persists the unsaved draft on a 300ms debounce; a real user
-    # switching nodes always takes longer than that.
-    await asyncio.sleep(0.7)
-    await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
-    await wait_for(cdp, sid,
-                   f"SESSION_ID === {json.dumps(child_id)} && !!document.getElementById('task-goal-input')",
-                   timeout=15, label="switched to child")
-    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
-    await wait_for(cdp, sid,
-                   "SESSION_ID === " + json.dumps(worker_id)
-                   + " && (document.getElementById('task-goal-input').value === 'unsaved draft text'"
-                   " || document.getElementById('task-goal-input').value === "
-                   "'Execute a small trial step (edited)')",
-                   timeout=15, label="worker editor rendered with its own value")
-    draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
-    ok = draft_back == "unsaved draft text"
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';"
-                   "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
-    results.record("s06-draft-preservation", ok,
-                   f"draft after switching away and back: {draft_back!r}",
-                   await screenshot(cdp, sid, results, "s06-draft-preserved"))
-
-    # --- S6b: New Task from a non-Chat tab keeps the drafts and opens Chat ---
-    # The Task tab is displaying; the operator has an unsaved message draft and
-    # an unsaved task-edit draft on this node. One click of the user-facing
-    # control creates a root, lands in Chat with the cursor ready, and both
-    # drafts survive the switch.
-    posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
-    await evaluate(cdp, sid,
-                   "(() => { const inp = document.getElementById('msg-input');"
-                   "inp.value = 'worker message draft';"
-                   "inp.dispatchEvent(new Event('input'));"
-                   "const goal = document.getElementById('task-goal-input');"
-                   "goal.value = 'unsaved before create';"
-                   "goal.dispatchEvent(new Event('input')); })()")
-    await asyncio.sleep(0.7)  # the editor's draft persistence window
-    await click_button_by_text(cdp, sid, "New Session", "#sidebar")
-    await wait_for(cdp, sid,
-                   "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
-                   + json.dumps(worker_id),
-                   timeout=20, label="new root selected from a non-Chat tab")
-    fresh_root_id = await evaluate(cdp, sid, "SESSION_ID")
-    fresh_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
-    create_delta = len(fresh_posts) - posts_before
-    composer_ready = await wait_for(
-        cdp, sid,
-        "!document.getElementById('tab-chat').classList.contains('hidden')"
-        " && document.activeElement === document.getElementById('msg-input')"
-        " && document.getElementById('msg-input').value === ''",
-        timeout=10, label="chat open with a cursor-ready composer from a non-Chat tab")
-    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{fresh_root_id}')", timeout=15,
-                   label="new root row in tree")
-    # Both drafts come back with the worker. The wait is value-based: a stale
-    # editor from the previous node stays in the DOM until this node's own
-    # render replaces it, so element existence alone would read the wrong node.
-    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
-    await open_task_tab(cdp, sid, "task")
-    await wait_for(cdp, sid,
-                   "SESSION_ID === " + json.dumps(worker_id)
-                   + " && (document.getElementById('task-goal-input')?.value === 'unsaved before create'"
-                   " || document.getElementById('task-goal-input')?.value === "
-                   "'Execute a small trial step (edited)')", timeout=15,
-                   label="worker task editor with its own value")
-    goal_draft_back = await evaluate(cdp, sid, "document.getElementById('task-goal-input').value")
-    composer_back = await evaluate(cdp, sid, "document.getElementById('msg-input').value")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-goal-input').value = 'Execute a small trial step (edited)';"
-                   "document.getElementById('task-goal-input').dispatchEvent(new Event('input'));")
-    results.record("s06b-new-task-from-non-chat-tab",
-                   bool(fresh_root_id and create_delta == 1 and composer_ready
-                        and goal_draft_back == "unsaved before create"
-                        and composer_back == "worker message draft"),
-                   f"root={fresh_root_id[:8]} create-posts={create_delta} "
-                   f"composer-ready={composer_ready} goal-draft={goal_draft_back!r} "
-                   f"composer-draft={composer_back!r}",
-                   await screenshot(cdp, sid, results, "s06b-new-task-from-task-tab"))
-
-    # --- S6c: one pending create action absorbs rapid clicks -----------------
-    # Two synchronous clicks of the real control in one JS tick: the second
-    # lands while the first create-and-open is in flight.
-    posts_before = len([m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")])
-    await evaluate(cdp, sid,
-                   "(() => { const btn = [...document.querySelectorAll('#sidebar button')]"
-                   ".find(b => b.textContent.trim() === 'New Session');"
-                   " if (!btn) throw new Error('missing New Session button'); btn.click(); btn.click(); })()")
-    await wait_for(cdp, sid,
-                   "typeof SESSION_ID !== 'undefined' && SESSION_ID !== "
-                   + json.dumps(worker_id),
-                   timeout=20, label="one new task from the double click")
-    rapid_root_id = await evaluate(cdp, sid, "SESSION_ID")
-    rapid_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
-    rapid_delta = len(rapid_posts) - posts_before
-    rapid_ready = await wait_for(
-        cdp, sid,
-        "document.activeElement === document.getElementById('msg-input')",
-        timeout=10, label="composer focused after the double click")
-    await wait_for(cdp, sid, f"!!document.getElementById('tree-node-{rapid_root_id}')", timeout=15,
-                   label="rapid root row in tree")
-    results.record("s06c-rapid-clicks-one-create",
-                   bool(rapid_root_id and rapid_delta == 1 and rapid_ready
-                        and rapid_root_id != fresh_root_id),
-                   f"root={rapid_root_id[:8]} create-posts={rapid_delta} composer-ready={rapid_ready}",
-                   await screenshot(cdp, sid, results, "s06c-rapid-clicks"))
-
-    # --- S7: local + subtree rules in the Context tab ----------------------
-    await open_task_tab(cdp, sid, "task-context")
-    await wait_for(cdp, sid, "!!document.getElementById('task-rule-editor')", timeout=15,
-                   label="rule editor")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-rule-editor').value = 'Trial rule: keep replies short.';"
-                   "document.getElementById('task-rule-editor').dispatchEvent(new Event('input'));")
-    await click_button_by_text(cdp, sid, "Save this-task rule", "#tab-task-context")
-    await wait_for(cdp, sid,
-                   "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                   ".then(r => r.json()).then(d => !!(d.prompt_rules && d.prompt_rules.node &&"
-                   " (d.prompt_rules.node.text || '').includes('keep replies short')))",
-                   timeout=15, label="local rule persisted")
-    # Subtree rule lives on the child manager; the editor switches scope there.
-    await evaluate(cdp, sid, f"switchSession({json.dumps(child_id)})")
-    await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(child_id), timeout=15, label="child selected")
-    await wait_for(cdp, sid, "!!document.getElementById('task-rule-editor')", timeout=15,
-                   label="rule editor on child")
-    has_scope_radio = await evaluate(
-        cdp, sid,
-        "!!document.querySelector('#tab-task-context input[name=\"task-rule-scope\"][value=\"subtree\"]')")
-    if has_scope_radio:
-        await evaluate(cdp, sid,
-                       "const radio = document.querySelector("
-                       "'#tab-task-context input[name=\"task-rule-scope\"][value=\"subtree\"]');"
-                       "radio.checked = true; radio.dispatchEvent(new Event('change'));")
-        await wait_for(cdp, sid,
-                       "document.getElementById('task-rule-editor').placeholder.includes('descendant')",
-                       timeout=10, label="subtree scope active")
-        await evaluate(cdp, sid,
-                       "document.getElementById('task-rule-editor').value = "
-                       "'Subtree rule: workers report with one summary line.';"
-                       "document.getElementById('task-rule-editor').dispatchEvent(new Event('input'));")
-        await click_button_by_text(cdp, sid, "Save subtree rule", "#tab-task-context")
-        await wait_for(cdp, sid,
-                       "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                       ".then(r => r.json()).then(d => !!(d.prompt_rules && d.prompt_rules.subtree &&"
-                       " (d.prompt_rules.subtree.text || '').includes('one summary line')))",
-                       timeout=15, label="subtree rule persisted")
-    results.record("s07-rules-editing", ok=True,
-                   detail=f"local rule on worker, subtree rule on child (scope radio={has_scope_radio})",
-                   screenshot=await screenshot(cdp, sid, results, "s07-rules"))
-
-    # --- S8: the real GLM manager turn from the first message --------------
-    # S2b's first message already rode the normal durable input path on the
-    # empty-goal root; the dispatched manager_turn Run is this scenario's
-    # real-CLC evidence (one real turn, no second send).
-    await evaluate(cdp, sid, f"switchSession({json.dumps(root_id)})")
-    await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(root_id), timeout=15, label="root selected")
-    log("  waiting for the real GLM manager turn (bounded)")
-    run_wait_deadline = time.monotonic() + 180
-    run = None
-    while time.monotonic() < run_wait_deadline:
-        status, page = api_request(base, access_key, "GET", f"/api/sessions/{root_id}/runs?limit=5", timeout=20.0)
-        runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
-        terminal = [r for r in runs if r.get("kind") == "manager_turn" and r.get("state") in
-                    ("success", "failed", "stopped", "interrupted")]
-        if terminal:
-            run = terminal[0]
-            break
-        await asyncio.sleep(2)
-    if run is None:
-        results.record("s08-real-glm-manager-turn", ok=False,
-                       detail="no terminal manager_turn run within 180s (provider/network failure is an "
-                       "explicit failed live check)", screenshot=await screenshot(cdp, sid, results, "s08-fail"))
-    else:
-        native_dir = home / "clc-sessions"
-        native_entries = sorted(p.name for p in native_dir.iterdir())
-        detail = (f"run={run['id'][:8]} state={run.get('state')} "
-                  f"native={run.get('native_session_id')} "
-                  f"native-dir-entries={len(native_entries)}")
-        results.record("s08-real-glm-manager-turn",
-                       run.get("state") == "success" and bool(native_entries), detail,
-                       await screenshot(cdp, sid, results, "s08-glm-run"))
-        # Success must clear the row's spinner through the same live path: an
-        # open task whose Run finished reads idle, never perpetually running.
-        try:
-            after = await wait_row_activity(cdp, sid, root_id,
-                                            {"spinner": False, "gear": False}, 30,
-                                            "root row cleared after the manager turn")
-            results.record("s08b-manager-turn-row-cleared",
-                           "idle" in after.get("label", ""),
-                           f"spinner cleared; row label reads: {after.get('label', '')[:60]!r}",
-                           await screenshot(cdp, sid, results, "s08b-row-idle"))
-        except TimeoutError as exc:
-            results.record("s08b-manager-turn-row-cleared", ok=False, detail=str(exc)[:300],
-                           screenshot=await screenshot(cdp, sid, results, "s08b-fail"))
-        # --- S9: Run history and stored Context on the launched run --------
-        await open_task_tab(cdp, sid, "runs")
-        # The panel renders after its own fetch; an immediate textContent read
-        # races that fetch and would report a false empty history.
-        run_visible = await wait_for(
-            cdp, sid, f"document.getElementById('tab-runs').textContent.includes({json.dumps(run['id'][:8])})",
-            timeout=10, label="run row in the runs panel")
-        status, ctx = api_request(base, access_key, "GET",
-                                  f"/api/sessions/{root_id}/runs/{run['id']}/context", timeout=20.0)
-        has_snapshot = status == 200 and bool((ctx or {}).get("snapshot"))
-        results.record("s09-run-history-and-context", bool(run_visible and has_snapshot),
-                       f"runs-panel={bool(run_visible)} context-snapshot={has_snapshot}",
-                       await screenshot(cdp, sid, results, "s09-runs-context"))
-        # The stored snapshot is the same assembly the prompt preview showed.
-        status, preview = api_request(base, access_key, "GET",
-                                      f"/api/sessions/{root_id}/effective-prompt?kind=manager_turn", timeout=20.0)
-        preview_hash = (preview or {}).get("prompt_hash")
-        stored_hash = ((ctx or {}).get("snapshot") or {}).get("prompt_hash")
-        results.record("s09b-prompt-preview-matches-stored-context",
-                       bool(preview_hash and preview_hash == stored_hash),
-                       f"preview={str(preview_hash)[:16]} stored={str(stored_hash)[:16]}", None)
-
-    # --- S10: completion, refusal, reopen, move on the worker ---------------
-    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
-    await wait_for(cdp, sid, "SESSION_ID === " + json.dumps(worker_id), timeout=15,
-                   label="worker selected again")
-    await open_task_tab(cdp, sid, "task")
-    await wait_for(cdp, sid, "!!document.getElementById('task-action-complete')", timeout=10,
-                   label="complete action")
-    await click(cdp, sid, "#task-action-complete")
-    await wait_for(cdp, sid, "!!document.getElementById('task-complete-modal')", timeout=10,
-                   label="complete modal")
-    await evaluate(cdp, sid,
-                   "document.getElementById('task-complete-summary').value = 'Trial step done.';"
-                   "document.getElementById('task-complete-refs').value = 'manual trial evidence';"
-                   "document.getElementById('task-complete-refs').dispatchEvent(new Event('input'));")
-    await click_button_by_text(cdp, sid, "Complete task", "#task-complete-modal")
-    await wait_for(cdp, sid,
-                   "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                   ".then(r => r.json()).then(d => d.task_state === 'completed')", timeout=15,
-                   label="worker completed")
-    shot = await screenshot(cdp, sid, results, "s10a-worker-completed")
-    await wait_for(cdp, sid, "!!document.getElementById('task-action-reopen')", timeout=10,
-                   label="reopen action")
-    await click(cdp, sid, "#task-action-reopen")
-    await wait_for(cdp, sid, "!!document.getElementById('task-reason-modal')", timeout=10,
-                   label="reopen reason modal")
-    await evaluate(cdp, sid,
-                   "const ta = document.querySelector('#task-reason-modal textarea');"
-                   "if (ta) { ta.value = 'Trial reopen'; ta.dispatchEvent(new Event('input')); }")
-    await click_button_by_text(cdp, sid, "Reopen task", "#task-reason-modal")
-    await wait_for(cdp, sid,
-                   "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                   ".then(r => r.json()).then(d => d.task_state === 'open')", timeout=15,
-                   label="worker reopened")
-    await wait_for(cdp, sid, "!!document.getElementById('task-action-move')", timeout=10,
-                   label="move action")
-    await click(cdp, sid, "#task-action-move")
-    await wait_for(cdp, sid, "!!document.getElementById('task-move-modal')", timeout=10,
-                   label="move chooser")
-    chooser_ok = await evaluate(
-        cdp, sid, "!!document.getElementById('task-move-list') &&"
-                  "!document.getElementById('task-move-list').textContent.includes('Failed to load')")
-    await click_button_by_text(cdp, sid, "Cancel", "#task-move-modal")
-    results.record("s10-completion-refusal-reopen-move",
-                   bool(chooser_ok),
-                   f"complete/reopen applied; move chooser loaded={chooser_ok}",
-                   await screenshot(cdp, sid, results, "s10b-controls"))
-
-    # --- S11: reload preserves the trial state and the selected node --------
-    # The reload lands on the just-created one-click root (the requirement's
-    # "new node appears in the task tree and remains selected after refresh").
-    # A deep link to a node the user had expanded collapses that node by design
-    # (revealNode: selecting a node does not force-open it), so the previously
-    # expanded root is not the reload target; its subtree rows must still
-    # survive the reload.
-    await cdp.send("Page.navigate", {"url": f"{base}/?session={rapid_root_id}"}, session_id=sid)
-    await wait_for(cdp, sid, "!!document.getElementById('preview-indicator')", timeout=20,
-                   label="reloaded main page")
-    await wait_for(cdp, sid,
-                   f"!!document.getElementById('tree-node-{root_id}')", timeout=20,
-                   label="root row after reload")
-    still_there = await evaluate(
-        cdp, sid,
-        f"[{json.dumps(root_id)}, {json.dumps(child_id)}, {json.dumps(worker_id)}]"
-        ".every(id => { const el = document.getElementById('tree-node-' + id);"
-        " if (el) return true; return false; })")
-    reloaded_session = await evaluate(cdp, sid, "SESSION_ID")
-    selected = await evaluate(
-        cdp, sid,
-        f"(() => {{ const row = document.getElementById('tree-node-{rapid_root_id}');"
-        " return !!row && row.firstElementChild.classList.contains('bg-blue-600/20'); })()")
-    missing = await evaluate(
-        cdp, sid,
-        f"[{json.dumps(rapid_root_id)}, {json.dumps(root_id)}, {json.dumps(child_id)}, {json.dumps(worker_id)}]"
-        ".filter(id => !document.getElementById('tree-node-' + id))")
-    results.record("s11-reload-persistence",
-                   bool(still_there and reloaded_session == rapid_root_id and selected and not missing),
-                   f"reloaded-session={str(reloaded_session)[:8]} expected={rapid_root_id[:8]} "
-                   f"missing-rows={missing} created-node-selected-after-reload={selected}",
-                   await screenshot(cdp, sid, results, "s11-after-reload"))
-
-    # --- S12: narrow viewport ----------------------------------------------
-    await cdp.send("Emulation.setDeviceMetricsOverride",
-                   {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
-                   session_id=sid)
-    await asyncio.sleep(0.6)
-    await screenshot(cdp, sid, results, "s12a-narrow-viewport")
-    await evaluate(cdp, sid, "toggleMobileSidebar()")
-    await asyncio.sleep(0.4)
-    narrow_ok = await evaluate(cdp, sid,
-                               "(() => { const list = document.getElementById('session-list');"
-                               " if (!list) return false; const r = list.getBoundingClientRect();"
-                               " return r.width > 100 && r.width <= window.innerWidth + 2; })()")
-    # The creation toolbar keeps the button and the dropdown in one row when the
-    # narrow sidebar is open.
-    narrow_toolbar = await evaluate(cdp, sid, """
+  # --- S12: narrow viewport ----------------------------------------------
+  await cdp.send(
+      "Emulation.setDeviceMetricsOverride", {
+          "width": 390,
+          "height": 844,
+          "deviceScaleFactor": 2,
+          "mobile": True
+      },
+      session_id=sid)
+  await asyncio.sleep(0.6)
+  await screenshot(cdp, sid, results, "s12a-narrow-viewport")
+  await evaluate(cdp, sid, "toggleMobileSidebar()")
+  await asyncio.sleep(0.4)
+  narrow_ok = await evaluate(
+      cdp, sid, "(() => { const list = document.getElementById('session-list');"
+      " if (!list) return false; const r = list.getBoundingClientRect();"
+      " return r.width > 100 && r.width <= window.innerWidth + 2; })()")
+  # The creation toolbar keeps the button and the dropdown in one row when the
+  # narrow sidebar is open.
+  narrow_toolbar = await evaluate(
+      cdp, sid, """
         (() => {
           const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
           const sel = document.getElementById('new-session-backend');
@@ -1160,22 +1217,27 @@ async def drive_browser(debug_port: int, base: str,
           const b = btn.getBoundingClientRect(), s = sel.getBoundingClientRect();
           return Math.abs(b.top - s.top) < 4 && b.bottom <= s.bottom + 4;
         })()""")
-    await screenshot(cdp, sid, results, "s12b-narrow-sidebar")
-    await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
-    results.record("s12-narrow-viewport", bool(narrow_ok and narrow_toolbar),
-                   f"task tree renders inside a 390px viewport; toolbar one-row={narrow_toolbar}",
-                   None)
+  await screenshot(cdp, sid, results, "s12b-narrow-sidebar")
+  await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
+  results.record(
+      "s12-narrow-viewport", bool(narrow_ok and narrow_toolbar),
+      f"task tree renders inside a 390px viewport; toolbar one-row={narrow_toolbar}", None)
 
-    # --- S14: delegated-work activity on real Run paths ---------------------
-    # Real work turns run on the open worker. Observed live through the tree's
-    # WebSocket updates: a running node spins its own row, its running
-    # ancestors show the delegated gear, and a real stop clears the cues.
-    # Nothing paints a fake running row.
-    await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
-    await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(worker_id)}", timeout=15,
-                   label="worker selected for the activity scenario")
+  # --- S14: delegated-work activity on real Run paths ---------------------
+  # Real work turns run on the open worker. Observed live through the tree's
+  # WebSocket updates: a running node spins its own row, its running
+  # ancestors show the delegated gear, and a real stop clears the cues.
+  # Nothing paints a fake running row.
+  await evaluate(cdp, sid, f"switchSession({json.dumps(worker_id)})")
+  await wait_for(
+      cdp,
+      sid,
+      f"SESSION_ID === {json.dumps(worker_id)}",
+      timeout=15,
+      label="worker selected for the activity scenario")
 
-    toolbar_intact = await evaluate(cdp, sid, """
+  toolbar_intact = await evaluate(
+      cdp, sid, """
         (() => {
           const btn = [...document.querySelectorAll('#sidebar button')].find(b => b.textContent.trim() === 'New Session');
           const sel = document.getElementById('new-session-backend');
@@ -1184,42 +1246,47 @@ async def drive_browser(debug_port: int, base: str,
           return Math.abs(b.top - s.top) < 4 && sel.options.length >= 1;
         })()""")
 
-    # The worker's own real turn: one bounded first message through the
-    # composer. The reply asks for real generated text so the Run stays
-    # inspectable; the stop below preempts it before it can finish.
-    # The generated text keeps the real Run alive long enough to hold the
-    # temporal motion windows below (explicitly labeled prolongation through
-    # the real Run owner; the stop below still preempts it).
-    worker_message = ("Trial activity step. Write a 60-word story about a lighthouse, then a second "
-                      "60-word paragraph about the sea, then a third 60-word paragraph about the sky, "
-                      "then reply with exactly WORK-OK on the last line. Do not create subtasks.")
-    await open_task_tab(cdp, sid, "chat")
-    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="worker composer")
-    await evaluate(cdp, sid,
-                   "(() => { const inp = document.getElementById('msg-input');"
-                   f"inp.value = {json.dumps(worker_message)};"
-                   "inp.dispatchEvent(new Event('input')); })()")
-    await click(cdp, sid, "#send-btn")
-    await wait_for(cdp, sid,
-                   f"document.getElementById('tab-chat').textContent.includes({json.dumps(worker_message)})",
-                   timeout=15, label="worker message rendered")
+  # The worker's own real turn: one bounded first message through the
+  # composer. The reply asks for real generated text so the Run stays
+  # inspectable; the stop below preempts it before it can finish.
+  # The generated text keeps the real Run alive long enough to hold the
+  # temporal motion windows below (explicitly labeled prolongation through
+  # the real Run owner; the stop below still preempts it).
+  worker_message = (
+      "Trial activity step. Write a 60-word story about a lighthouse, then a second "
+      "60-word paragraph about the sea, then a third 60-word paragraph about the sky, "
+      "then reply with exactly WORK-OK on the last line. Do not create subtasks.")
+  await open_task_tab(cdp, sid, "chat")
+  await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="worker composer")
+  await evaluate(
+      cdp, sid, "(() => { const inp = document.getElementById('msg-input');"
+      f"inp.value = {json.dumps(worker_message)};"
+      "inp.dispatchEvent(new Event('input')); })()")
+  await click(cdp, sid, "#send-btn")
+  await wait_for(
+      cdp,
+      sid,
+      f"document.getElementById('tab-chat').textContent.includes({json.dumps(worker_message)})",
+      timeout=15,
+      label="worker message rendered")
 
-    # The worker's row must move to a live spinner on its own; the manager
-    # ancestors (child, root) show the delegated gear while a descendant runs.
-    worker_states: list[str] = []
-    active_run_id = None
-    try:
-        await wait_row_activity(cdp, sid, worker_id, {"spinner": True}, 120,
-                                "worker row spinner during its work Run", worker_states)
-        root_during = await tree_row_activity(cdp, sid, root_id)
-        child_during = await tree_row_activity(cdp, sid, child_id)
-        # Pin the exact Run this visible spinner belongs to (never a fake row).
-        status, runs_page = api_request(base, access_key, "GET",
-                                        f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
-        runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
-        if runs and runs[0].get("state") in ("running", "queued"):
-            active_run_id = runs[0]["id"]
-        geometry = await evaluate(cdp, sid, f"""
+  # The worker's row must move to a live spinner on its own; the manager
+  # ancestors (child, root) show the delegated gear while a descendant runs.
+  worker_states: list[str] = []
+  active_run_id = None
+  try:
+    await wait_row_activity(
+        cdp, sid, worker_id, {"spinner": True}, 120, "worker row spinner during its work Run", worker_states)
+    root_during = await tree_row_activity(cdp, sid, root_id)
+    child_during = await tree_row_activity(cdp, sid, child_id)
+    # Pin the exact Run this visible spinner belongs to (never a fake row).
+    status, runs_page = api_request(
+        base, access_key, "GET", f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
+    runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
+    if runs and runs[0].get("state") in ("running", "queued"):
+      active_run_id = runs[0]["id"]
+    geometry = await evaluate(
+        cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{worker_id}');
               if (!row) return null;
@@ -1236,57 +1303,61 @@ async def drive_browser(debug_port: int, base: str,
                 spinnerAnimation: getComputedStyle(spin).animationName,
               }};
             }})()""")
-        geo_ok = bool(geometry) and (geometry.get("spinnerInRow") and geometry.get("spinnerLeftOfName")
-                                     and geometry.get("nameWidthFloor")
-                                     and "spin" in str(geometry.get("spinnerAnimation")))
-        results.record("s14b-worker-run-activity-cues",
-                       bool(active_run_id and root_during.get("gear") and toolbar_intact),
-                       f"worker spinner live; root delegated gear={root_during.get('gear')} "
-                       f"toolbar-intact={toolbar_intact} child state={child_during} "
-                       f"active run={str(active_run_id)[:8]} "
-                       f"run-state-at-check={runs[0].get('state') if runs else 'none'} "
-                       f"worker labels={[t[:20] for t in worker_states]}",
-                       await screenshot(cdp, sid, results, "s14b-during-desktop"))
-        results.record("s14c-activity-geometry", geo_ok,
-                       f"spinner inside the row, adjacent to a readable name, animated: {geometry}",
-                       None)
-    except TimeoutError as exc:
-        results.record("s14b-worker-run-activity-cues", ok=False, detail=str(exc)[:300],
-                       screenshot=await screenshot(cdp, sid, results, "s14b-fail"))
-        results.record("s14c-activity-geometry", ok=False, detail="skipped: no running row observed", screenshot=None)
+    geo_ok = bool(geometry) and (
+        geometry.get("spinnerInRow") and geometry.get("spinnerLeftOfName") and geometry.get("nameWidthFloor") and
+        "spin" in str(geometry.get("spinnerAnimation")))
+    results.record(
+        "s14b-worker-run-activity-cues", bool(active_run_id and root_during.get("gear") and toolbar_intact),
+        f"worker spinner live; root delegated gear={root_during.get('gear')} "
+        f"toolbar-intact={toolbar_intact} child state={child_during} "
+        f"active run={str(active_run_id)[:8]} "
+        f"run-state-at-check={runs[0].get('state') if runs else 'none'} "
+        f"worker labels={[t[:20] for t in worker_states]}", await screenshot(cdp, sid, results, "s14b-during-desktop"))
+    results.record(
+        "s14c-activity-geometry", geo_ok, f"spinner inside the row, adjacent to a readable name, animated: {geometry}",
+        None)
+  except TimeoutError as exc:
+    results.record(
+        "s14b-worker-run-activity-cues",
+        ok=False,
+        detail=str(exc)[:300],
+        screenshot=await screenshot(cdp, sid, results, "s14b-fail"))
+    results.record("s14c-activity-geometry", ok=False, detail="skipped: no running row observed", screenshot=None)
 
-    # --- Temporal motion proof on the live cues (the user-restored animation) ---
-    # The worker row's spinner and the root row's delegated gear are genuinely
-    # visible on a real Run here (never a painted fake row). Each window is
-    # verdict-checked by motion_timeline_verdict; see that helper for what
-    # counts as continuous motion versus constant restarts. The unemulated and
-    # reduced-motion windows ride the worker Run (both complete well inside
-    # even the shortest observed turn); the reload and narrow windows plus the
-    # stop then ride a fresh bounded CHILD-MANAGER turn, because the worker
-    # Run's lifetime is the model's own and its task auto-completes on success
-    # (the documented pre-existing quirk), which removes the row
-    # mid-scenario. Managers never auto-complete, so the row stays
-    # observable. Same real Run owners, same
-    # visual structure: the node's own spinner plus the root's delegated gear.
-    spin_el = f"spinner-{worker_id}"
-    gear_el = f"worker-indicator-{root_id}"
-    run_label = f"run {str(active_run_id)[:8]}" if active_run_id else "run already terminal"
+  # --- Temporal motion proof on the live cues (the user-restored animation) ---
+  # The worker row's spinner and the root row's delegated gear are genuinely
+  # visible on a real Run here (never a painted fake row). Each window is
+  # verdict-checked by motion_timeline_verdict; see that helper for what
+  # counts as continuous motion versus constant restarts. The unemulated and
+  # reduced-motion windows ride the worker Run (both complete well inside
+  # even the shortest observed turn); the reload and narrow windows plus the
+  # stop then ride a fresh bounded CHILD-MANAGER turn, because the worker
+  # Run's lifetime is the model's own and its task auto-completes on success
+  # (the documented pre-existing quirk), which removes the row
+  # mid-scenario. Managers never auto-complete, so the row stays
+  # observable. Same real Run owners, same
+  # visual structure: the node's own spinner plus the root's delegated gear.
+  spin_el = f"spinner-{worker_id}"
+  gear_el = f"worker-indicator-{root_id}"
+  run_label = f"run {str(active_run_id)[:8]}" if active_run_id else "run already terminal"
 
-    async def motion_pass(min_span: float, intervals: list[float] | None = None,
-                          readiness: float = 15.0) -> dict[str, tuple[bool, str]]:
-        await wait_motion_live(cdp, sid, spin_el, gear_el, timeout=readiness)
-        samples = await sample_motion_timeline(cdp, sid, spin_el, gear_el, intervals or MOTION_INTERVALS_S)
-        return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
+  async def motion_pass(min_span: float,
+                        intervals: list[float] | None = None,
+                        readiness: float = 15.0) -> dict[str, tuple[bool, str]]:
+    await wait_motion_live(cdp, sid, spin_el, gear_el, timeout=readiness)
+    samples = await sample_motion_timeline(cdp, sid, spin_el, gear_el, intervals or MOTION_INTERVALS_S)
+    return {kind: motion_timeline_verdict(samples, kind, min_span) for kind in ("spinner", "gear")}
 
-    async def active_run_of(session_id: str) -> str | None:
-        _status, page = api_request(base, access_key, "GET",
-                                   f"/api/sessions/{session_id}/runs?order=desc&limit=1", timeout=20.0)
-        items = (page.get("items") or []) if isinstance(page, dict) else []
-        return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
+  async def active_run_of(session_id: str) -> str | None:
+    _status, page = api_request(
+        base, access_key, "GET", f"/api/sessions/{session_id}/runs?order=desc&limit=1", timeout=20.0)
+    items = (page.get("items") or []) if isinstance(page, dict) else []
+    return items[0]["id"] if items and items[0].get("state") in ("running", "queued") else None
 
-    try:
-        desktop_verdicts = await motion_pass(2.1)
-        frame_rect = await evaluate(cdp, sid, f"""
+  try:
+    desktop_verdicts = await motion_pass(2.1)
+    frame_rect = await evaluate(
+        cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{worker_id}');
               if (!row) return null;
@@ -1295,29 +1366,33 @@ async def drive_browser(debug_port: int, base: str,
               return {{x: Math.max(0, r.x), y: Math.max(0, r.y),
                       width: Math.min(r.width, 340), height: r.height}};
             }})()""")
-        frame_names: list[str] = []
-        if frame_rect:
-            for i in range(6):
-                shot = await cdp.send("Page.captureScreenshot",
-                                      {"format": "png", "clip": dict(frame_rect, scale=3)},
-                                      session_id=sid)
-                fname = f"s14g-motion-frame-{i}.png"
-                (results.evidence_dir / fname).write_bytes(base64.b64decode(shot["data"]))
-                frame_names.append(fname)
-                await asyncio.sleep(0.13)
-        results.record(
-            "s14g-motion-timeline-desktop",
-            all(ok for ok, _ in desktop_verdicts.values()),
-            f"{run_label}: " + "; ".join(detail for _, detail in desktop_verdicts.values())
-            + f"; frames={frame_names}",
-            await screenshot(cdp, sid, results, "s14g-motion-desktop"))
+    frame_names: list[str] = []
+    if frame_rect:
+      for i in range(6):
+        shot = await cdp.send(
+            "Page.captureScreenshot", {
+                "format": "png",
+                "clip": dict(frame_rect, scale=3)
+            }, session_id=sid)
+        fname = f"s14g-motion-frame-{i}.png"
+        (results.evidence_dir / fname).write_bytes(base64.b64decode(shot["data"]))
+        frame_names.append(fname)
+        await asyncio.sleep(0.13)
+    results.record(
+        "s14g-motion-timeline-desktop", all(ok for ok, _ in desktop_verdicts.values()),
+        f"{run_label}: " + "; ".join(detail for _, detail in desktop_verdicts.values()) + f"; frames={frame_names}",
+        await screenshot(cdp, sid, results, "s14g-motion-desktop"))
 
-        await cdp.send("Emulation.setEmulatedMedia",
-                       {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]},
-                       session_id=sid)
-        await asyncio.sleep(0.3)
-        reduced_verdicts = await motion_pass(2.1)
-        reduced_scoped = await evaluate(cdp, sid, f"""
+    await cdp.send(
+        "Emulation.setEmulatedMedia", {"features": [{
+            "name": "prefers-reduced-motion",
+            "value": "reduce"
+        }]},
+        session_id=sid)
+    await asyncio.sleep(0.3)
+    reduced_verdicts = await motion_pass(2.1)
+    reduced_scoped = await evaluate(
+        cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{worker_id}');
               if (!row) return null;
@@ -1328,109 +1403,118 @@ async def drive_browser(debug_port: int, base: str,
               return {{unreadDot: dot ? getComputedStyle(dot).animationName : null,
                        badgeDot: badge ? getComputedStyle(badge).animationName : null}};
             }})()""")
-        await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
-        reduced_ok = (all(ok for ok, _ in reduced_verdicts.values())
-                      and bool(reduced_scoped)
-                      and reduced_scoped.get("unreadDot") == "none"
-                      and reduced_scoped.get("badgeDot") == "none")
-        results.record(
-            "s14h-motion-timeline-reduced-motion", reduced_ok,
-            f"{run_label} under prefers-reduced-motion: reduce: "
-            + "; ".join(detail for _, detail in reduced_verdicts.values())
-            + f"; pulse cues under reduce: {reduced_scoped}",
-            await screenshot(cdp, sid, results, "s14h-motion-reduced"))
-    except (TimeoutError, RuntimeError) as exc:
-        results.record("s14g-motion-timeline-desktop", ok=False, detail=f"{run_label}: {str(exc)[:280]}", screenshot=None)
-        results.record("s14h-motion-timeline-reduced-motion", ok=False,
-                       detail="skipped: the desktop window failed", screenshot=None)
+    await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
+    reduced_ok = (
+        all(ok for ok, _ in reduced_verdicts.values()) and bool(reduced_scoped) and
+        reduced_scoped.get("unreadDot") == "none" and reduced_scoped.get("badgeDot") == "none")
+    results.record(
+        "s14h-motion-timeline-reduced-motion", reduced_ok, f"{run_label} under prefers-reduced-motion: reduce: " +
+        "; ".join(detail for _, detail in reduced_verdicts.values()) + f"; pulse cues under reduce: {reduced_scoped}",
+        await screenshot(cdp, sid, results, "s14h-motion-reduced"))
+  except (TimeoutError, RuntimeError) as exc:
+    results.record("s14g-motion-timeline-desktop", ok=False, detail=f"{run_label}: {str(exc)[:280]}", screenshot=None)
+    results.record(
+        "s14h-motion-timeline-reduced-motion", ok=False, detail="skipped: the desktop window failed", screenshot=None)
 
-    # --- Late live windows and the stop ride the child manager's runs ---------
-    # The worker Run's lifetime is the model's own (observed ~17-45s for a
-    # bounded turn) and its task auto-completes on run success, removing the
-    # row. A manager never auto-completes, so the child manager's runs carry
-    # the remaining windows and the stop. A message admitted while the node's
-    # current run has not settled stays durable and pending; the dispatch
-    # launches it the moment the node settles (the predecessor's terminal fact
-    # lands only after its finish chain), so every send is followed by a
-    # bounded wait for the live spinner instead of an idle-node gate. The
-    # reload window stays at DESKTOP width: a reload at the narrow width
-    # reboots the page with the mobile drawer closed, and the closed drawer is
-    # display:none - the whole tree, cues and animation instances included,
-    # disappears and would fake a dead row.
-    spin_el = f"spinner-{child_id}"
-    gear_el = f"worker-indicator-{root_id}"
+  # --- Late live windows and the stop ride the child manager's runs ---------
+  # The worker Run's lifetime is the model's own (observed ~17-45s for a
+  # bounded turn) and its task auto-completes on run success, removing the
+  # row. A manager never auto-completes, so the child manager's runs carry
+  # the remaining windows and the stop. A message admitted while the node's
+  # current run has not settled stays durable and pending; the dispatch
+  # launches it the moment the node settles (the predecessor's terminal fact
+  # lands only after its finish chain), so every send is followed by a
+  # bounded wait for the live spinner instead of an idle-node gate. The
+  # reload window stays at DESKTOP width: a reload at the narrow width
+  # reboots the page with the mobile drawer closed, and the closed drawer is
+  # display:none - the whole tree, cues and animation instances included,
+  # disappears and would fake a dead row.
+  spin_el = f"spinner-{child_id}"
+  gear_el = f"worker-indicator-{root_id}"
 
-    async def send_child_message(message: str, label: str) -> tuple[bool, str]:
-        """Send one bounded child-manager turn through the same admission and
+  async def send_child_message(message: str, label: str) -> tuple[bool, str]:
+    """Send one bounded child-manager turn through the same admission and
         dispatch route the composer posts to, and return the server's launch
         decision (launch flag + reason) so the scenario evidence shows WHY a
         run did or did not launch instead of leaving a silent idle row."""
-        status, body = api_request(base, access_key, "POST", f"/api/chat/{child_id}/message",
-                                   {"content": message}, timeout=20.0)
-        decision = body if isinstance(body, dict) else {}
-        launched = status == 202 and bool(decision.get("launch"))
-        reason = str(decision.get("reason") or ("launched " + str(decision.get("run_id", ""))[:8]
-                                               if launched else f"HTTP {status}"))
-        log(f"  {label} child message: HTTP {status}, launch={decision.get('launch')}, reason={reason}")
-        return launched, f"send={status} launch={decision.get('launch')} reason={reason[:80]}"
+    status, body = api_request(
+        base, access_key, "POST", f"/api/chat/{child_id}/message", {"content": message}, timeout=20.0)
+    decision = body if isinstance(body, dict) else {}
+    launched = status == 202 and bool(decision.get("launch"))
+    reason = str(
+        decision.get("reason") or ("launched " + str(decision.get("run_id", ""))[:8] if launched else f"HTTP {status}"))
+    log(f"  {label} child message: HTTP {status}, launch={decision.get('launch')}, reason={reason}")
+    return launched, f"send={status} launch={decision.get('launch')} reason={reason[:80]}"
 
-    async def wait_child_spinner(timeout: float, label: str) -> None:
-        await wait_row_activity(cdp, sid, child_id, {"spinner": True}, timeout, label)
+  async def wait_child_spinner(timeout: float, label: str) -> None:
+    await wait_row_activity(cdp, sid, child_id, {"spinner": True}, timeout, label)
 
-    async def pin_child_run(narrow_send: str) -> str:
-        child_run = await active_run_of(child_id)
-        return f"child run {str(child_run)[:8]}" if child_run else f"child turn ({narrow_send})"
+  async def pin_child_run(narrow_send: str) -> str:
+    child_run = await active_run_of(child_id)
+    return f"child run {str(child_run)[:8]}" if child_run else f"child turn ({narrow_send})"
 
-    # Reload window (desktop): the message's run launches when the node
-    # settles; the reload lands while it is live and the post-reload wait
-    # re-locks onto it.
-    reload_send = ""
-    late_label = "child turn"
-    try:
-        _launched, reload_send = await send_child_message(
-            "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
-            "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
-        await wait_child_spinner(240, "reload-window child turn live")
-        late_label = await pin_child_run(reload_send)
-        await cdp.send("Page.reload", {}, session_id=sid)
-        await wait_for(cdp, sid,
-                       f"!!document.getElementById('tree-node-{child_id}')"
-                       f" && !document.getElementById('spinner-{child_id}')"
-                       ".classList.contains('hidden')",
-                       timeout=90, label="live spinner re-rendered after reload")
-        reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S, readiness=30.0)
-        results.record(
-            "s14i-motion-timeline-after-reload",
-            all(ok for ok, _ in reload_verdicts.values()),
-            f"{late_label} ({reload_send}) across an ordinary mid-run reload: "
-            + "; ".join(detail for _, detail in reload_verdicts.values()),
-            await screenshot(cdp, sid, results, "s14i-motion-after-reload"))
-    except (TimeoutError, RuntimeError) as exc:
-        results.record("s14i-motion-timeline-after-reload", ok=False,
-                       detail=f"{late_label} ({reload_send}): {str(exc)[:280]}", screenshot=None)
+  # Reload window (desktop): the message's run launches when the node
+  # settles; the reload lands while it is live and the post-reload wait
+  # re-locks onto it.
+  reload_send = ""
+  late_label = "child turn"
+  try:
+    _launched, reload_send = await send_child_message(
+        "Trial reload step. Write a 60-word story about a storm, then reply with exactly "
+        "RELOAD-OK on the last line. Do not create subtasks.", "reload-window")
+    await wait_child_spinner(240, "reload-window child turn live")
+    late_label = await pin_child_run(reload_send)
+    await cdp.send("Page.reload", {}, session_id=sid)
+    await wait_for(
+        cdp,
+        sid, f"!!document.getElementById('tree-node-{child_id}')"
+        f" && !document.getElementById('spinner-{child_id}')"
+        ".classList.contains('hidden')",
+        timeout=90,
+        label="live spinner re-rendered after reload")
+    reload_verdicts = await motion_pass(1.2, RELOAD_INTERVALS_S, readiness=30.0)
+    results.record(
+        "s14i-motion-timeline-after-reload", all(ok for ok, _ in reload_verdicts.values()),
+        f"{late_label} ({reload_send}) across an ordinary mid-run reload: " +
+        "; ".join(detail for _, detail in reload_verdicts.values()), await
+        screenshot(cdp, sid, results, "s14i-motion-after-reload"))
+  except (TimeoutError, RuntimeError) as exc:
+    results.record(
+        "s14i-motion-timeline-after-reload",
+        ok=False,
+        detail=f"{late_label} ({reload_send}): {str(exc)[:280]}",
+        screenshot=None)
 
-    # Narrow viewport: the same live cues at 390px, names still readable. The
-    # drawer is opened here and NO reload follows, so the tree stays rendered
-    # for the narrow window and the stop below.
-    await cdp.send("Emulation.setDeviceMetricsOverride",
-                   {"width": 390, "height": 844, "deviceScaleFactor": 2, "mobile": True},
-                   session_id=sid)
-    await asyncio.sleep(0.6)
-    # The drawer may have been left open by S12: open it only when closed, so
-    # the scenario asserts the sidebar state it needs instead of a toggle parity.
-    await evaluate(cdp, sid,
-                   "(() => { const sb = document.getElementById('sidebar');"
-                   " if (sb && !sb.classList.contains('open')) toggleMobileSidebar(); })()")
-    await asyncio.sleep(0.4)
-    narrow_child = await tree_row_activity_tolerant(cdp, sid, child_id)
-    narrow_root = await tree_row_activity_tolerant(cdp, sid, root_id)
-    if narrow_child is None:
-        results.record("s14d-narrow-during-activity", ok=False,
-                       detail="the child row left the open tree before the narrow check; not "
-                       "painted as a pass",
-                       screenshot=await screenshot(cdp, sid, results, "s14d-child-row-gone"))
-    else:
-        narrow_readability = await evaluate(cdp, sid, f"""
+  # Narrow viewport: the same live cues at 390px, names still readable. The
+  # drawer is opened here and NO reload follows, so the tree stays rendered
+  # for the narrow window and the stop below.
+  await cdp.send(
+      "Emulation.setDeviceMetricsOverride", {
+          "width": 390,
+          "height": 844,
+          "deviceScaleFactor": 2,
+          "mobile": True
+      },
+      session_id=sid)
+  await asyncio.sleep(0.6)
+  # The drawer may have been left open by S12: open it only when closed, so
+  # the scenario asserts the sidebar state it needs instead of a toggle parity.
+  await evaluate(
+      cdp, sid, "(() => { const sb = document.getElementById('sidebar');"
+      " if (sb && !sb.classList.contains('open')) toggleMobileSidebar(); })()")
+  await asyncio.sleep(0.4)
+  narrow_child = await tree_row_activity_tolerant(cdp, sid, child_id)
+  narrow_root = await tree_row_activity_tolerant(cdp, sid, root_id)
+  if narrow_child is None:
+    results.record(
+        "s14d-narrow-during-activity",
+        ok=False,
+        detail="the child row left the open tree before the narrow check; not "
+        "painted as a pass",
+        screenshot=await screenshot(cdp, sid, results, "s14d-child-row-gone"))
+  else:
+    narrow_readability = await evaluate(
+        cdp, sid, f"""
             (() => {{
               const row = document.getElementById('tree-node-{child_id}');
               const inner = row.firstElementChild;
@@ -1439,185 +1523,206 @@ async def drive_browser(debug_port: int, base: str,
               return {{rowWidth: r.width, nameWidth: n.width,
                        nameVisible: n.width > 60 && n.left >= r.left && n.right <= r.right + 1}};
             }})()""")
-        results.record("s14d-narrow-during-activity",
-                       bool(narrow_child.get("spinner") and narrow_readability.get("nameVisible")),
-                       f"narrow during: child spinner={narrow_child.get('spinner')} "
-                       f"root gear={None if narrow_root is None else narrow_root.get('gear')} "
-                       f"readability={narrow_readability}",
-                       await screenshot(cdp, sid, results, "s14d-during-narrow"))
+    results.record(
+        "s14d-narrow-during-activity", bool(narrow_child.get("spinner") and narrow_readability.get("nameVisible")),
+        f"narrow during: child spinner={narrow_child.get('spinner')} "
+        f"root gear={None if narrow_root is None else narrow_root.get('gear')} "
+        f"readability={narrow_readability}", await screenshot(cdp, sid, results, "s14d-during-narrow"))
 
-    # The same live cues keep their timeline at the narrow viewport too. The
-    # still-live reload turn is tried first; a borrowed turn can finish inside
-    # the window (observed: it died 1.4s in), so one retry rides a fresh
-    # bounded message through the same pending dispatch. Exactly one s14j
-    # record is produced, carrying every attempt's detail.
-    narrow_send = ""
-    narrow_details: list[str] = []
-    narrow_recorded = False
-    for narrow_attempt in ("still-live", "fresh"):
-        try:
-            if narrow_attempt == "still-live":
-                try:
-                    await wait_child_spinner(30, "live child spinner for the narrow window")
-                    narrow_send = "rode the still-live reload turn"
-                except TimeoutError:
-                    continue
-            else:
-                _launched, narrow_send = await send_child_message(
-                    "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
-                    "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
-                await wait_child_spinner(240, "narrow-window child turn live")
-            late_label = await pin_child_run(narrow_send)
-            narrow_verdicts = await motion_pass(2.1)
-            narrow_ok = all(ok for ok, _ in narrow_verdicts.values())
-            narrow_details.append(f"{late_label} ({narrow_send}) at 390px: "
-                                  + "; ".join(detail for _, detail in narrow_verdicts.values()))
-            results.record("s14j-motion-timeline-narrow", narrow_ok,
-                           " | ".join(narrow_details)[:700],
-                           await screenshot(cdp, sid, results, "s14j-motion-narrow"))
-            narrow_recorded = True
-            if narrow_ok:
-                break
-        except (TimeoutError, RuntimeError) as exc:
-            narrow_details.append(f"attempt {narrow_attempt} ({narrow_send}): {str(exc)[:220]}")
-    if not narrow_recorded:
-        results.record("s14j-motion-timeline-narrow", ok=False,
-                       detail=" | ".join(narrow_details)[:700],
-                       screenshot=await screenshot(cdp, sid, results, "s14j-motion-narrow"))
-
-    # The real stop: durable request, signal, observed exit -> interrupted, on
-    # the child manager's own bounded turn. The stop message rides the same
-    # durable-pending dispatch (the 240s spinner wait covers the predecessor's
-    # finish chain), and the fresh live run is then stopped mid-flight.
-    stop_target = None
-    stop_stage = "stop message"
-    stop_send = ""
+  # The same live cues keep their timeline at the narrow viewport too. The
+  # still-live reload turn is tried first; a borrowed turn can finish inside
+  # the window (observed: it died 1.4s in), so one retry rides a fresh
+  # bounded message through the same pending dispatch. Exactly one s14j
+  # record is produced, carrying every attempt's detail.
+  narrow_send = ""
+  narrow_details: list[str] = []
+  narrow_recorded = False
+  for narrow_attempt in ("still-live", "fresh"):
     try:
-        _launched, stop_send = await send_child_message(
-            "Trial stop step. Reply with exactly STOP-OK on the last line. "
-            "Do not create subtasks.", "stop-window")
-        await wait_child_spinner(240, "stop-window child turn live")
-        late_label = await pin_child_run(stop_send)
-        stop_stage = "stop request"
-        stop_target = await active_run_of(child_id)
-        if stop_target is None:
-            results.record("s14e-stop-clears-activity", ok=False,
-                           detail=f"no active child run remained to stop ({stop_send}); stop clearing "
-                           "not evidenced this round", screenshot=None)
-        else:
-            status, cancel = api_request(base, access_key, "POST",
-                                         f"/api/sessions/{child_id}/runs/{stop_target}/cancel",
-                                         {"request_id": "trial-stop-" + stop_target[:8]}, timeout=20.0)
-            stop_stage = "cleared-row observation"
-            after = await wait_row_activity(cdp, sid, child_id,
-                                            {"spinner": False, "gear": False}, 60,
-                                            "row cleared after the stop")
-            # The interrupted run's terminal fact settles the row with no
-            # activity cue: the cleared state above is the observed truth, and
-            # the row's label rides the tree refresh whenever it lands.
-            label = after.get("label", "")
-            root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
-            _w_status, w_page = api_request(base, access_key, "GET",
-                                           f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
-            w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
-            worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
-            results.record("s14e-stop-clears-activity",
-                           bool(cancel.get("stop_requested")),
-                           f"stopped child run {stop_target[:8]} ({stop_send}): cancel={dict(cancel)} "
-                           f"row label={label[:40]!r} "
-                           f"root gear after={None if root_after is None else root_after.get('gear')}; "
-                           f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
-                           f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}",
-                           await screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
+      if narrow_attempt == "still-live":
+        try:
+          await wait_child_spinner(30, "live child spinner for the narrow window")
+          narrow_send = "rode the still-live reload turn"
+        except TimeoutError:
+          continue
+      else:
+        _launched, narrow_send = await send_child_message(
+            "Trial narrow step. Write a 40-word note about a harbor, then reply with exactly "
+            "NARROW-OK on the last line. Do not create subtasks.", "narrow-window")
+        await wait_child_spinner(240, "narrow-window child turn live")
+      late_label = await pin_child_run(narrow_send)
+      narrow_verdicts = await motion_pass(2.1)
+      narrow_ok = all(ok for ok, _ in narrow_verdicts.values())
+      narrow_details.append(
+          f"{late_label} ({narrow_send}) at 390px: " + "; ".join(detail for _, detail in narrow_verdicts.values()))
+      results.record(
+          "s14j-motion-timeline-narrow", narrow_ok, " | ".join(narrow_details)[:700], await
+          screenshot(cdp, sid, results, "s14j-motion-narrow"))
+      narrow_recorded = True
+      if narrow_ok:
+        break
     except (TimeoutError, RuntimeError) as exc:
-        # The child's last runs ride in the detail: a lingering run record
-        # (pid set, no terminal fact) or a refused launch must be visible in
-        # the evidence, not guessed at.
-        _s, runs_page = api_request(base, access_key, "GET",
-                                    f"/api/sessions/{child_id}/runs?order=desc&limit=5", timeout=20.0)
-        runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
-        run_summary = "; ".join(f"{r.get('id', '')[:8]}={r.get('state')}/pid={r.get('pid')}"
-                                for r in runs[:5])
-        results.record("s14e-stop-clears-activity", ok=False,
-                       detail=f"stop stage {stop_stage} ({stop_send}): {str(exc)[:220]}; "
-                       f"child runs last5: {run_summary}",
-                       screenshot=await screenshot(cdp, sid, results, "s14e-fail"))
-    await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
-    await asyncio.sleep(0.4)
-    results.record("s14f-desktop-after-stop",
-                   ok=True, detail="cleared device override; final desktop state recorded",
-                   screenshot=await screenshot(cdp, sid, results, "s14f-after-desktop"))
+      narrow_details.append(f"attempt {narrow_attempt} ({narrow_send}): {str(exc)[:220]}")
+  if not narrow_recorded:
+    results.record(
+        "s14j-motion-timeline-narrow",
+        ok=False,
+        detail=" | ".join(narrow_details)[:700],
+        screenshot=await screenshot(cdp, sid, results, "s14j-motion-narrow"))
 
-    # --- S15: unread-reply feedback on the real writer path -----------------
-    # The unread writer is the real summary delivery
-    # (SessionManager.mark_unread when the manager turn's output lands). The two
-    # pristine roots from S6b/S6c (no history, no pending automation, root rows
-    # always rendered) each get one real bounded manager turn: the row spins
-    # while the run is live, shows the familiar unread dot once the summary
-    # lands on the idle row, clears in BOTH clients when the task is opened
-    # (the mark-read broadcast) while the other root stays unread. Manager
-    # turns never auto-complete their task and the second client deep-links to
-    # the neutral worker (a full page load marks the deep-linked session read
-    # through the SSR bootstrap), so neither unread root is ever opened by the
-    # rig. No model catalog is re-validated here.
-    async def screenshot_tolerant(cdp_session: str, name: str) -> str | None:
-        try:
-            return await screenshot(cdp, cdp_session, results, name)
-        except Exception as exc:  # a dead tab must not mask the scenario's own failure
-            log(f"screenshot {name} failed: {exc!r}")
-            return None
+  # The real stop: durable request, signal, observed exit -> interrupted, on
+  # the child manager's own bounded turn. The stop message rides the same
+  # durable-pending dispatch (the 240s spinner wait covers the predecessor's
+  # finish chain), and the fresh live run is then stopped mid-flight.
+  stop_target = None
+  stop_stage = "stop message"
+  stop_send = ""
+  try:
+    _launched, stop_send = await send_child_message(
+        "Trial stop step. Reply with exactly STOP-OK on the last line. "
+        "Do not create subtasks.", "stop-window")
+    await wait_child_spinner(240, "stop-window child turn live")
+    late_label = await pin_child_run(stop_send)
+    stop_stage = "stop request"
+    stop_target = await active_run_of(child_id)
+    if stop_target is None:
+      results.record(
+          "s14e-stop-clears-activity",
+          ok=False,
+          detail=f"no active child run remained to stop ({stop_send}); stop clearing "
+          "not evidenced this round",
+          screenshot=None)
+    else:
+      status, cancel = api_request(
+          base,
+          access_key,
+          "POST",
+          f"/api/sessions/{child_id}/runs/{stop_target}/cancel", {"request_id": "trial-stop-" + stop_target[:8]},
+          timeout=20.0)
+      stop_stage = "cleared-row observation"
+      after = await wait_row_activity(
+          cdp, sid, child_id, {
+              "spinner": False,
+              "gear": False
+          }, 60, "row cleared after the stop")
+      # The interrupted run's terminal fact settles the row with no
+      # activity cue: the cleared state above is the observed truth, and
+      # the row's label rides the tree refresh whenever it lands.
+      label = after.get("label", "")
+      root_after = await tree_row_activity_tolerant(cdp, sid, root_id)
+      _w_status, w_page = api_request(
+          base, access_key, "GET", f"/api/sessions/{worker_id}/runs?order=desc&limit=1", timeout=20.0)
+      w_runs = (w_page.get("items") or []) if isinstance(w_page, dict) else []
+      worker_row_after = await tree_row_activity_tolerant(cdp, sid, worker_id)
+      results.record(
+          "s14e-stop-clears-activity", bool(cancel.get("stop_requested")),
+          f"stopped child run {stop_target[:8]} ({stop_send}): cancel={dict(cancel)} "
+          f"row label={label[:40]!r} "
+          f"root gear after={None if root_after is None else root_after.get('gear')}; "
+          f"worker run now={w_runs[0].get('state') if w_runs else 'none'}, "
+          f"worker row={'gone (auto-completed on its own success)' if worker_row_after is None else 'rendered'}", await
+          screenshot(cdp, sid, results, "s14e-after-stop-narrow"))
+  except (TimeoutError, RuntimeError) as exc:
+    # The child's last runs ride in the detail: a lingering run record
+    # (pid set, no terminal fact) or a refused launch must be visible in
+    # the evidence, not guessed at.
+    _s, runs_page = api_request(
+        base, access_key, "GET", f"/api/sessions/{child_id}/runs?order=desc&limit=5", timeout=20.0)
+    runs = (runs_page.get("items") or []) if isinstance(runs_page, dict) else []
+    run_summary = "; ".join(f"{r.get('id', '')[:8]}={r.get('state')}/pid={r.get('pid')}" for r in runs[:5])
+    results.record(
+        "s14e-stop-clears-activity",
+        ok=False,
+        detail=f"stop stage {stop_stage} ({stop_send}): {str(exc)[:220]}; "
+        f"child runs last5: {run_summary}",
+        screenshot=await screenshot(cdp, sid, results, "s14e-fail"))
+  await cdp.send("Emulation.clearDeviceMetricsOverride", session_id=sid)
+  await asyncio.sleep(0.4)
+  results.record(
+      "s14f-desktop-after-stop",
+      ok=True,
+      detail="cleared device override; final desktop state recorded",
+      screenshot=await screenshot(cdp, sid, results, "s14f-after-desktop"))
 
-    await wait_for(cdp, sid,
-                   f"!!document.getElementById('tree-node-{fresh_root_id}')"
-                   f" && !!document.getElementById('tree-node-{rapid_root_id}')", timeout=15,
-                   label="both trial root rows rendered")
-    one_before = await tree_row_activity(cdp, sid, fresh_root_id)
-    two_before = await tree_row_activity(cdp, sid, rapid_root_id)
-    results.record("s15a-before-unread",
-                   bool(one_before.get("unread") is False and two_before.get("unread") is False),
-                   f"before any reply both dots are hidden: root6b unread={one_before.get('unread')} "
-                   f"({one_before.get('label', '')[:24]!r}), root6c unread={two_before.get('unread')} "
-                   f"({two_before.get('label', '')[:24]!r})",
-                   await screenshot(cdp, sid, results, "s15a-before-unread"))
-
-    trial_message = ("Trial unread step. Reply with exactly UNREAD-OK, then stop. "
-                     "Do not create subtasks. Do not complete or close the task.")
-
-    async def send_manager_turn(node_id: str) -> None:
-        await evaluate(cdp, sid, f"switchSession({json.dumps(node_id)})")
-        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(node_id)}", timeout=15,
-                       label="trial root selected for its turn")
-        await open_task_tab(cdp, sid, "chat")
-        await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
-        await evaluate(cdp, sid,
-                       "(() => { const inp = document.getElementById('msg-input');"
-                       f"inp.value = {json.dumps(trial_message)};"
-                       "inp.dispatchEvent(new Event('input')); })()")
-        await click(cdp, sid, "#send-btn")
-
-    await send_manager_turn(fresh_root_id)
-
-    # The row spins live; its own dot stays hidden behind the activity.
+  # --- S15: unread-reply feedback on the real writer path -----------------
+  # The unread writer is the real summary delivery
+  # (SessionManager.mark_unread when the manager turn's output lands). The two
+  # pristine roots from S6b/S6c (no history, no pending automation, root rows
+  # always rendered) each get one real bounded manager turn: the row spins
+  # while the run is live, shows the familiar unread dot once the summary
+  # lands on the idle row, clears in BOTH clients when the task is opened
+  # (the mark-read broadcast) while the other root stays unread. Manager
+  # turns never auto-complete their task and the second client deep-links to
+  # the neutral worker (a full page load marks the deep-linked session read
+  # through the SSR bootstrap), so neither unread root is ever opened by the
+  # rig. No model catalog is re-validated here.
+  async def screenshot_tolerant(cdp_session: str, name: str) -> str | None:
     try:
-        await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": True, "unread": False}, 120,
-                                "trial root spinner during its manager turn")
-        results.record("s15b-spinner-hides-unread",
-                       ok=True,
-                       detail="the trial row spins live; the dot stays hidden while work runs",
-                       screenshot=await screenshot(cdp, sid, results, "s15b-during-spinner"))
-    except TimeoutError as exc:
-        results.record("s15b-spinner-hides-unread", ok=False, detail=str(exc)[:300],
-                       screenshot=await screenshot_tolerant(sid, "s15b-fail"))
+      return await screenshot(cdp, cdp_session, results, name)
+    except Exception as exc:  # a dead tab must not mask the scenario's own failure
+      log(f"screenshot {name} failed: {exc!r}")
+      return None
 
-    # Reduced-motion scope after the user's icon-motion correction: with the
-    # OS preference emulated the running badge pulse and the unread dot pulse
-    # stop, while the spinner and the delegated gear keep their original
-    # rotation (the temporal motion proof under reduce lives in S14 on
-    # genuinely visible cues; this row-level read pins the computed cascade on
-    # a second real run). The badge pulse only exists while the row runs, so
-    # its unemulated value is accepted as pulse-or-idle (the label decides),
-    # never as a silent skip.
-    probe_template = """
+  await wait_for(
+      cdp,
+      sid, f"!!document.getElementById('tree-node-{fresh_root_id}')"
+      f" && !!document.getElementById('tree-node-{rapid_root_id}')",
+      timeout=15,
+      label="both trial root rows rendered")
+  one_before = await tree_row_activity(cdp, sid, fresh_root_id)
+  two_before = await tree_row_activity(cdp, sid, rapid_root_id)
+  results.record(
+      "s15a-before-unread", bool(one_before.get("unread") is False and two_before.get("unread") is False),
+      f"before any reply both dots are hidden: root6b unread={one_before.get('unread')} "
+      f"({one_before.get('label', '')[:24]!r}), root6c unread={two_before.get('unread')} "
+      f"({two_before.get('label', '')[:24]!r})", await screenshot(cdp, sid, results, "s15a-before-unread"))
+
+  trial_message = (
+      "Trial unread step. Reply with exactly UNREAD-OK, then stop. "
+      "Do not create subtasks. Do not complete or close the task.")
+
+  async def send_manager_turn(node_id: str) -> None:
+    await evaluate(cdp, sid, f"switchSession({json.dumps(node_id)})")
+    await wait_for(
+        cdp, sid, f"SESSION_ID === {json.dumps(node_id)}", timeout=15, label="trial root selected for its turn")
+    await open_task_tab(cdp, sid, "chat")
+    await wait_for(cdp, sid, "!!document.getElementById('msg-input')", timeout=10, label="composer")
+    await evaluate(
+        cdp, sid, "(() => { const inp = document.getElementById('msg-input');"
+        f"inp.value = {json.dumps(trial_message)};"
+        "inp.dispatchEvent(new Event('input')); })()")
+    await click(cdp, sid, "#send-btn")
+
+  await send_manager_turn(fresh_root_id)
+
+  # The row spins live; its own dot stays hidden behind the activity.
+  try:
+    await wait_row_activity(
+        cdp, sid, fresh_root_id, {
+            "spinner": True,
+            "unread": False
+        }, 120, "trial root spinner during its manager turn")
+    results.record(
+        "s15b-spinner-hides-unread",
+        ok=True,
+        detail="the trial row spins live; the dot stays hidden while work runs",
+        screenshot=await screenshot(cdp, sid, results, "s15b-during-spinner"))
+  except TimeoutError as exc:
+    results.record(
+        "s15b-spinner-hides-unread",
+        ok=False,
+        detail=str(exc)[:300],
+        screenshot=await screenshot_tolerant(sid, "s15b-fail"))
+
+  # Reduced-motion scope after the user's icon-motion correction: with the
+  # OS preference emulated the running badge pulse and the unread dot pulse
+  # stop, while the spinner and the delegated gear keep their original
+  # rotation (the temporal motion proof under reduce lives in S14 on
+  # genuinely visible cues; this row-level read pins the computed cascade on
+  # a second real run). The badge pulse only exists while the row runs, so
+  # its unemulated value is accepted as pulse-or-idle (the label decides),
+  # never as a silent skip.
+  probe_template = """
         (() => {
           const out = {};
           const anim = (rowId, selector) => {
@@ -1639,232 +1744,266 @@ async def drive_browser(debug_port: int, base: str,
           return out;
         })()
     """
-    animation_probe = await evaluate(cdp, sid, probe_template
-                                     .replace("__SPIN__", fresh_root_id)
-                                     .replace("__UNREAD__", rapid_root_id)
-                                     .replace("__GEAR__", rapid_root_id))
-    badge_live = (animation_probe or {}).get("badgeDot") == "pulse" or (
-        "idle" in str((animation_probe or {}).get("spinLabel", "")))
-    results.record("s15b2-motion-present-unemulated",
-                   bool(animation_probe) and animation_probe.get("spinner") == "spin"
-                   and animation_probe.get("unreadDot") == "pulse-dot"
-                   and animation_probe.get("gear") == "spin" and badge_live,
-                   f"computed animations without emulation: {animation_probe}", None)
-    await cdp.send("Emulation.setEmulatedMedia",
-                   {"features": [{"name": "prefers-reduced-motion", "value": "reduce"}]}, session_id=sid)
-    await asyncio.sleep(0.3)
-    reduced = await evaluate(cdp, sid, probe_template
-                             .replace("__SPIN__", fresh_root_id)
-                             .replace("__UNREAD__", rapid_root_id)
-                             .replace("__GEAR__", rapid_root_id))
-    await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
-    reduced_ok = (bool(reduced) and reduced.get("spinner") == "spin" and reduced.get("gear") == "spin"
-                  and reduced.get("unreadDot") == "none" and reduced.get("badgeDot") == "none")
-    results.record("s15h-reduced-motion-spinners-keep-motion-pulses-stop",
-                   reduced_ok,
-                   f"computed animations under prefers-reduced-motion: reduce -> {reduced}",
-                   await screenshot_tolerant(sid, "s15h-reduced-motion"))
+  animation_probe = await evaluate(
+      cdp, sid,
+      probe_template.replace("__SPIN__", fresh_root_id).replace("__UNREAD__",
+                                                                rapid_root_id).replace("__GEAR__", rapid_root_id))
+  badge_live = (animation_probe or
+                {}).get("badgeDot") == "pulse" or ("idle" in str((animation_probe or {}).get("spinLabel", "")))
+  results.record(
+      "s15b2-motion-present-unemulated",
+      bool(animation_probe) and animation_probe.get("spinner") == "spin" and
+      animation_probe.get("unreadDot") == "pulse-dot" and animation_probe.get("gear") == "spin" and badge_live,
+      f"computed animations without emulation: {animation_probe}", None)
+  await cdp.send(
+      "Emulation.setEmulatedMedia", {"features": [{
+          "name": "prefers-reduced-motion",
+          "value": "reduce"
+      }]},
+      session_id=sid)
+  await asyncio.sleep(0.3)
+  reduced = await evaluate(
+      cdp, sid,
+      probe_template.replace("__SPIN__", fresh_root_id).replace("__UNREAD__",
+                                                                rapid_root_id).replace("__GEAR__", rapid_root_id))
+  await cdp.send("Emulation.setEmulatedMedia", {"features": []}, session_id=sid)
+  reduced_ok = (
+      bool(reduced) and reduced.get("spinner") == "spin" and reduced.get("gear") == "spin" and
+      reduced.get("unreadDot") == "none" and reduced.get("badgeDot") == "none")
+  results.record(
+      "s15h-reduced-motion-spinners-keep-motion-pulses-stop", reduced_ok,
+      f"computed animations under prefers-reduced-motion: reduce -> {reduced}", await
+      screenshot_tolerant(sid, "s15h-reduced-motion"))
 
-    async def wait_terminal_run(node_id: str, bound: float = 240.0) -> dict | None:
-        deadline = time.monotonic() + bound
-        while time.monotonic() < deadline:
-            _status, page = api_request(base, access_key, "GET",
-                                       f"/api/sessions/{node_id}/runs?order=desc&limit=1", timeout=20.0)
-            runs = (page.get("items") or []) if isinstance(page, dict) else []
-            if runs and runs[0].get("state") in ("success", "failed", "stopped", "interrupted"):
-                return runs[0]
-            await asyncio.sleep(2)
-        return None
+  async def wait_terminal_run(node_id: str, bound: float = 240.0) -> dict | None:
+    deadline = time.monotonic() + bound
+    while time.monotonic() < deadline:
+      _status, page = api_request(
+          base, access_key, "GET", f"/api/sessions/{node_id}/runs?order=desc&limit=1", timeout=20.0)
+      runs = (page.get("items") or []) if isinstance(page, dict) else []
+      if runs and runs[0].get("state") in ("success", "failed", "stopped", "interrupted"):
+        return runs[0]
+      await asyncio.sleep(2)
+    return None
 
-    one_run = await wait_terminal_run(fresh_root_id)
-    try:
-        await wait_row_activity(cdp, sid, fresh_root_id, {"spinner": False, "unread": True}, 90,
-                                "trial root idle with its unread dot after the summary landed")
-        one_state = await tree_row_activity(cdp, sid, fresh_root_id)
-        # Terminal transition of the activity cue: the spinner is gone and the
-        # unread dot is the row's live pulse again.
-        dot_anim = await evaluate(cdp, sid,
-                                  f"(() => {{ const d = document.getElementById('unread-{fresh_root_id}');"
-                                  " return d ? getComputedStyle(d).animationName : null; })()")
-        results.record("s15c-unread-dot-after-turn",
-                       bool(one_run and one_run.get("state") == "success"
-                            and "idle" in one_state.get("label", "") and dot_anim == "pulse-dot"),
-                       f"turn run {str(one_run and one_run.get('id'))[:8]} "
-                       f"({one_run and one_run.get('state')}): the summary writer marked the "
-                       f"session unread and the idle row shows the dot ({one_state.get('label', '')[:32]!r}, "
-                       f"dot animation {dot_anim!r})",
-                       await screenshot(cdp, sid, results, "s15c-unread"))
-    except TimeoutError as exc:
-        results.record("s15c-unread-dot-after-turn", ok=False,
-                       detail=f"{str(exc)[:240]}; run terminal: {one_run and one_run.get('state')}",
-                       screenshot=await screenshot_tolerant(sid, "s15c-fail"))
+  one_run = await wait_terminal_run(fresh_root_id)
+  try:
+    await wait_row_activity(
+        cdp, sid, fresh_root_id, {
+            "spinner": False,
+            "unread": True
+        }, 90, "trial root idle with its unread dot after the summary landed")
+    one_state = await tree_row_activity(cdp, sid, fresh_root_id)
+    # Terminal transition of the activity cue: the spinner is gone and the
+    # unread dot is the row's live pulse again.
+    dot_anim = await evaluate(
+        cdp, sid, f"(() => {{ const d = document.getElementById('unread-{fresh_root_id}');"
+        " return d ? getComputedStyle(d).animationName : null; })()")
+    results.record(
+        "s15c-unread-dot-after-turn",
+        bool(
+            one_run and one_run.get("state") == "success" and "idle" in one_state.get("label", "") and
+            dot_anim == "pulse-dot"), f"turn run {str(one_run and one_run.get('id'))[:8]} "
+        f"({one_run and one_run.get('state')}): the summary writer marked the "
+        f"session unread and the idle row shows the dot ({one_state.get('label', '')[:32]!r}, "
+        f"dot animation {dot_anim!r})", await screenshot(cdp, sid, results, "s15c-unread"))
+  except TimeoutError as exc:
+    results.record(
+        "s15c-unread-dot-after-turn",
+        ok=False,
+        detail=f"{str(exc)[:240]}; run terminal: {one_run and one_run.get('state')}",
+        screenshot=await screenshot_tolerant(sid, "s15c-fail"))
 
-    # The second trial root gets its own real reply: two unread tasks at once.
-    await send_manager_turn(rapid_root_id)
-    two_run = await wait_terminal_run(rapid_root_id)
-    try:
-        await wait_row_activity(cdp, sid, rapid_root_id, {"spinner": False, "unread": True}, 90,
-                                "second trial root idle with its unread dot")
-        await wait_row_activity(cdp, sid, fresh_root_id, {"unread": True}, 20,
-                                "the first root's dot is still visible")
-        results.record("s15d-two-unread-tasks",
-                       bool(two_run and two_run.get("state") == "success"),
-                       f"second turn run {str(two_run and two_run.get('id'))[:8]} "
-                       f"({two_run and two_run.get('state')}): two idle rows, two unread dots",
-                       await screenshot(cdp, sid, results, "s15d-two-unread"))
-    except TimeoutError as exc:
-        results.record("s15d-two-unread-tasks", ok=False,
-                       detail=f"{str(exc)[:240]}; run terminal: {two_run and two_run.get('state')}",
-                       screenshot=await screenshot_tolerant(sid, "s15d-fail"))
+  # The second trial root gets its own real reply: two unread tasks at once.
+  await send_manager_turn(rapid_root_id)
+  two_run = await wait_terminal_run(rapid_root_id)
+  try:
+    await wait_row_activity(
+        cdp, sid, rapid_root_id, {
+            "spinner": False,
+            "unread": True
+        }, 90, "second trial root idle with its unread dot")
+    await wait_row_activity(cdp, sid, fresh_root_id, {"unread": True}, 20, "the first root's dot is still visible")
+    results.record(
+        "s15d-two-unread-tasks", bool(two_run and two_run.get("state") == "success"),
+        f"second turn run {str(two_run and two_run.get('id'))[:8]} "
+        f"({two_run and two_run.get('state')}): two idle rows, two unread dots", await
+        screenshot(cdp, sid, results, "s15d-two-unread"))
+  except TimeoutError as exc:
+    results.record(
+        "s15d-two-unread-tasks",
+        ok=False,
+        detail=f"{str(exc)[:240]}; run terminal: {two_run and two_run.get('state')}",
+        screenshot=await screenshot_tolerant(sid, "s15d-fail"))
 
-    # Second client: a real second tab on the same profile (its own WebSocket).
-    # It deep-links to the neutral worker: the deep link marks THAT session
-    # read (the SSR bootstrap's mark-read), never the two unread roots.
-    target2 = await cdp.send("Target.createTarget", {"url": f"{base}/?session={worker_id}"})
-    attached2 = await cdp.send("Target.attachToTarget", {"targetId": target2["targetId"], "flatten": True})
-    sid2 = attached2["sessionId"]
-    await cdp.send("Page.enable", session_id=sid2)
-    await cdp.send("Runtime.enable", session_id=sid2)
-    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid2)
-    try:
-        await wait_for(cdp, sid2, "!!document.getElementById('preview-indicator')", timeout=25,
-                       label="second client logged in")
-        await wait_for(cdp, sid2,
-                       f"!!document.getElementById('tree-node-{fresh_root_id}')"
-                       f" && !!document.getElementById('tree-node-{rapid_root_id}')", timeout=20,
-                       label="second client renders both trial rows")
-        two_one = await tree_row_activity(cdp, sid2, fresh_root_id)
-        two_two = await tree_row_activity(cdp, sid2, rapid_root_id)
-        results.record("s15e-second-client-unread",
-                       bool(two_one.get("unread") and two_two.get("unread")),
-                       f"second client rows: root6b unread={two_one.get('unread')} "
-                       f"({two_one.get('label', '')[:24]!r}), root6c unread={two_two.get('unread')} "
-                       f"({two_two.get('label', '')[:24]!r})",
-                       await screenshot(cdp, sid2, results, "s15e-second-client-unread"))
-    except (TimeoutError, AssertionError) as exc:
-        results.record("s15e-second-client-unread", ok=False, detail=str(exc)[:300],
-                       screenshot=await screenshot_tolerant(sid2, "s15e-fail"))
+  # Second client: a real second tab on the same profile (its own WebSocket).
+  # It deep-links to the neutral worker: the deep link marks THAT session
+  # read (the SSR bootstrap's mark-read), never the two unread roots.
+  target2 = await cdp.send("Target.createTarget", {"url": f"{base}/?session={worker_id}"})
+  attached2 = await cdp.send("Target.attachToTarget", {"targetId": target2["targetId"], "flatten": True})
+  sid2 = attached2["sessionId"]
+  await cdp.send("Page.enable", session_id=sid2)
+  await cdp.send("Runtime.enable", session_id=sid2)
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": GUARD_SOURCE}, session_id=sid2)
+  try:
+    await wait_for(
+        cdp, sid2, "!!document.getElementById('preview-indicator')", timeout=25, label="second client logged in")
+    await wait_for(
+        cdp,
+        sid2, f"!!document.getElementById('tree-node-{fresh_root_id}')"
+        f" && !!document.getElementById('tree-node-{rapid_root_id}')",
+        timeout=20,
+        label="second client renders both trial rows")
+    two_one = await tree_row_activity(cdp, sid2, fresh_root_id)
+    two_two = await tree_row_activity(cdp, sid2, rapid_root_id)
+    results.record(
+        "s15e-second-client-unread", bool(two_one.get("unread") and two_two.get("unread")),
+        f"second client rows: root6b unread={two_one.get('unread')} "
+        f"({two_one.get('label', '')[:24]!r}), root6c unread={two_two.get('unread')} "
+        f"({two_two.get('label', '')[:24]!r})", await screenshot(cdp, sid2, results, "s15e-second-client-unread"))
+  except (TimeoutError, AssertionError) as exc:
+    results.record(
+        "s15e-second-client-unread",
+        ok=False,
+        detail=str(exc)[:300],
+        screenshot=await screenshot_tolerant(sid2, "s15e-fail"))
 
-    # Opening one trial root clears exactly its dot everywhere; the other
-    # root's dot survives (another task remaining unread).
-    try:
-        await evaluate(cdp, sid, f"switchSession({json.dumps(fresh_root_id)})")
-        await wait_for(cdp, sid, f"SESSION_ID === {json.dumps(fresh_root_id)}", timeout=15,
-                       label="first client opened the first trial root")
-        await wait_row_activity(cdp, sid, fresh_root_id, {"unread": False}, 20,
-                                "opened task's dot cleared in the first client")
-        await wait_row_activity(cdp, sid2, fresh_root_id, {"unread": False}, 20,
-                                "opened task's dot cleared in the second client (read broadcast)")
-        await wait_row_activity(cdp, sid2, rapid_root_id, {"unread": True}, 20,
-                                "the other root remains unread in the second client")
-        results.record("s15f-open-clears-one-keeps-other",
-                       ok=True,
-                       detail="opening the first trial root cleared its dot in both clients; "
-                       "the second root remains unread",
-                       screenshot=await screenshot(cdp, sid2, results, "s15f-opened-read"))
-    except TimeoutError as exc:
-        results.record("s15f-open-clears-one-keeps-other", ok=False, detail=str(exc)[:300],
-                       screenshot=await screenshot_tolerant(sid, "s15f-fail"))
-    finally:
-        tab2_errs = await evaluate(cdp, sid2, "window.__errs || []")
-        cdp.console_errors = list(cdp.console_errors or []) + [f"tab2: {e}" for e in (tab2_errs or [])]
-        await cdp.send("Target.closeTarget", {"targetId": target2["targetId"]})
+  # Opening one trial root clears exactly its dot everywhere; the other
+  # root's dot survives (another task remaining unread).
+  try:
+    await evaluate(cdp, sid, f"switchSession({json.dumps(fresh_root_id)})")
+    await wait_for(
+        cdp,
+        sid,
+        f"SESSION_ID === {json.dumps(fresh_root_id)}",
+        timeout=15,
+        label="first client opened the first trial root")
+    await wait_row_activity(
+        cdp, sid, fresh_root_id, {"unread": False}, 20, "opened task's dot cleared in the first client")
+    await wait_row_activity(
+        cdp, sid2, fresh_root_id, {"unread": False}, 20,
+        "opened task's dot cleared in the second client (read broadcast)")
+    await wait_row_activity(
+        cdp, sid2, rapid_root_id, {"unread": True}, 20, "the other root remains unread in the second client")
+    results.record(
+        "s15f-open-clears-one-keeps-other",
+        ok=True,
+        detail="opening the first trial root cleared its dot in both clients; "
+        "the second root remains unread",
+        screenshot=await screenshot(cdp, sid2, results, "s15f-opened-read"))
+  except TimeoutError as exc:
+    results.record(
+        "s15f-open-clears-one-keeps-other",
+        ok=False,
+        detail=str(exc)[:300],
+        screenshot=await screenshot_tolerant(sid, "s15f-fail"))
+  finally:
+    tab2_errs = await evaluate(cdp, sid2, "window.__errs || []")
+    cdp.console_errors = list(cdp.console_errors or []) + [f"tab2: {e}" for e in (tab2_errs or [])]
+    await cdp.send("Target.closeTarget", {"targetId": target2["targetId"]})
 
-    # --- S13: every selected model is a real choice with a real Run ---------
-    # For each non-default dropdown entry: a real selection change, a real New
-    # Session click, the create carrying that backend, the node metadata and
-    # the header badge agreeing, and one bounded first message whose
-    # manager_turn Run records the same backend and a native session inside the
-    # preview home. Provider/network failures are recorded, never retried
-    # forever and never scripted into a pass.
-    for model_id, model_label in BACKEND_LABELS.items():
-        if model_id == selected_default:
-            continue
-        previous_session_id = await evaluate(cdp, sid, "SESSION_ID")
-        await evaluate(cdp, sid,
-                       "(() => { const sel = document.getElementById('new-session-backend');"
-                       f" sel.value = {json.dumps(model_id)};"
-                       " sel.dispatchEvent(new Event('change')); })()")
-        await click_button_by_text(cdp, sid, "New Session", "#sidebar")
-        # The create-and-open switches asynchronously: wait until the view actually
-        # moved off the previous node before reading anything about the new one.
-        await wait_for(cdp, sid,
-                       f"typeof SESSION_ID !== 'undefined' && SESSION_ID && SESSION_ID !== {json.dumps(previous_session_id)}",
-                       timeout=20, label=f"root switched for {model_id}")
-        model_root_id = await evaluate(cdp, sid, "SESSION_ID")
-        model_posts = [m for m in cdp.mutations
-                       if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
-        model_body = json.loads(model_posts[-1]["body"]) if model_posts else {}
-        meta = await evaluate(cdp, sid,
-                              "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
-                              ".then(r => r.json())")
-        badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
-        selection_ok = (model_body.get("backend") == model_id
-                        and (meta or {}).get("backend") == model_id
-                        and badge_label == model_label)
-        results.record(f"s13-select-{model_id}",
-                       bool(model_root_id and selection_ok),
-                       f"root={str(model_root_id)[:8]} create-backend={model_body.get('backend')!r} "
-                       f"metadata-backend={(meta or {}).get('backend')!r} badge={badge_label!r}",
-                       await screenshot(cdp, sid, results, f"s13-select-{model_id}"))
-        # One bounded first message on the model's own root.
-        message = (f"Model check for {model_id}. Reply with exactly: MODEL-OK, then stop. "
-                   "Do not create subtasks.")
-        await wait_for(cdp, sid,
-                       f"SESSION_ID === {json.dumps(model_root_id)} && !!document.getElementById('msg-input')",
-                       timeout=15, label=f"composer on {model_id}")
-        await evaluate(cdp, sid,
-                       "(() => { const inp = document.getElementById('msg-input');"
-                       f"inp.value = {json.dumps(message)};"
-                       "inp.dispatchEvent(new Event('input')); })()")
-        await click(cdp, sid, "#send-btn")
-        await wait_for(cdp, sid,
-                       f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
-                       timeout=15, label=f"first message rendered on {model_id}")
-        log(f"  waiting for the real {model_label} manager turn (bounded)")
-        run_deadline = time.monotonic() + 180
-        model_run = None
-        while time.monotonic() < run_deadline:
-            status, page = api_request(base, access_key,
-                                       "GET", f"/api/sessions/{model_root_id}/runs?limit=5", timeout=20.0)
-            runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
-            terminal = [r for r in runs if r.get("kind") == "manager_turn" and r.get("state") in
-                        ("success", "failed", "stopped", "interrupted")]
-            if terminal:
-                model_run = terminal[0]
-                break
-            await asyncio.sleep(2)
-        native_entries = sorted(p.name for p in (home / "clc-sessions").iterdir())
-        if model_run is None:
-            results.record(f"s13-live-{model_id}", ok=False,
-                           detail="no terminal manager_turn run within 180s (provider/network failure "
-                           "is an explicit failed live check)",
-                           screenshot=await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
-        else:
-            # Same live-claim bar as the default model's s08: only a successful
-            # turn with the selected backend and a native session inside the
-            # preview home passes; a failed terminal run is a failed check.
-            run_ok = (model_run.get("state") == "success"
-                      and model_run.get("backend") == model_id
-                      and bool(model_run.get("native_session_id"))
-                      and len(native_entries) > 0)
-            results.record(f"s13-live-{model_id}", run_ok,
-                           f"run={model_run['id'][:8]} state={model_run.get('state')} "
-                           f"backend={model_run.get('backend')!r} "
-                           f"native={model_run.get('native_session_id')} "
-                           f"native-dir-entries={len(native_entries)}",
-                           await screenshot(cdp, sid, results, f"s13-live-{model_id}"))
+  # --- S13: every selected model is a real choice with a real Run ---------
+  # For each non-default dropdown entry: a real selection change, a real New
+  # Session click, the create carrying that backend, the node metadata and
+  # the header badge agreeing, and one bounded first message whose
+  # manager_turn Run records the same backend and a native session inside the
+  # preview home. Provider/network failures are recorded, never retried
+  # forever and never scripted into a pass.
+  for model_id, model_label in BACKEND_LABELS.items():
+    if model_id == selected_default:
+      continue
+    previous_session_id = await evaluate(cdp, sid, "SESSION_ID")
+    await evaluate(
+        cdp, sid, "(() => { const sel = document.getElementById('new-session-backend');"
+        f" sel.value = {json.dumps(model_id)};"
+        " sel.dispatchEvent(new Event('change')); })()")
+    await click_button_by_text(cdp, sid, "New Session", "#sidebar")
+    # The create-and-open switches asynchronously: wait until the view actually
+    # moved off the previous node before reading anything about the new one.
+    await wait_for(
+        cdp,
+        sid,
+        f"typeof SESSION_ID !== 'undefined' && SESSION_ID && SESSION_ID !== {json.dumps(previous_session_id)}",
+        timeout=20,
+        label=f"root switched for {model_id}")
+    model_root_id = await evaluate(cdp, sid, "SESSION_ID")
+    model_posts = [m for m in cdp.mutations if m["method"] == "POST" and m["url"].endswith("/api/sessions/")]
+    model_body = json.loads(model_posts[-1]["body"]) if model_posts else {}
+    meta = await evaluate(cdp, sid, "fetch('/api/sessions/' + SESSION_ID, {cache: 'no-store'})"
+                          ".then(r => r.json())")
+    badge_label = await evaluate(cdp, sid, "document.getElementById('backend-badge').textContent")
+    selection_ok = (
+        model_body.get("backend") == model_id and (meta or {}).get("backend") == model_id and
+        badge_label == model_label)
+    results.record(
+        f"s13-select-{model_id}", bool(model_root_id and selection_ok),
+        f"root={str(model_root_id)[:8]} create-backend={model_body.get('backend')!r} "
+        f"metadata-backend={(meta or {}).get('backend')!r} badge={badge_label!r}", await
+        screenshot(cdp, sid, results, f"s13-select-{model_id}"))
+    # One bounded first message on the model's own root.
+    message = (f"Model check for {model_id}. Reply with exactly: MODEL-OK, then stop. "
+               "Do not create subtasks.")
+    await wait_for(
+        cdp,
+        sid,
+        f"SESSION_ID === {json.dumps(model_root_id)} && !!document.getElementById('msg-input')",
+        timeout=15,
+        label=f"composer on {model_id}")
+    await evaluate(
+        cdp, sid, "(() => { const inp = document.getElementById('msg-input');"
+        f"inp.value = {json.dumps(message)};"
+        "inp.dispatchEvent(new Event('input')); })()")
+    await click(cdp, sid, "#send-btn")
+    await wait_for(
+        cdp,
+        sid,
+        f"document.getElementById('tab-chat').textContent.includes({json.dumps(message)})",
+        timeout=15,
+        label=f"first message rendered on {model_id}")
+    log(f"  waiting for the real {model_label} manager turn (bounded)")
+    run_deadline = time.monotonic() + 180
+    model_run = None
+    while time.monotonic() < run_deadline:
+      status, page = api_request(base, access_key, "GET", f"/api/sessions/{model_root_id}/runs?limit=5", timeout=20.0)
+      runs = (page.get("items") or []) if isinstance(page, dict) else (page or [])
+      terminal = [
+          r for r in runs
+          if r.get("kind") == "manager_turn" and r.get("state") in ("success", "failed", "stopped", "interrupted")
+      ]
+      if terminal:
+        model_run = terminal[0]
+        break
+      await asyncio.sleep(2)
+    native_entries = sorted(p.name for p in (home / "clc-sessions").iterdir())
+    if model_run is None:
+      results.record(
+          f"s13-live-{model_id}",
+          ok=False,
+          detail="no terminal manager_turn run within 180s (provider/network failure "
+          "is an explicit failed live check)",
+          screenshot=await screenshot(cdp, sid, results, f"s13-fail-{model_id}"))
+    else:
+      # Same live-claim bar as the default model's s08: only a successful
+      # turn with the selected backend and a native session inside the
+      # preview home passes; a failed terminal run is a failed check.
+      run_ok = (
+          model_run.get("state") == "success" and model_run.get("backend") == model_id and
+          bool(model_run.get("native_session_id")) and len(native_entries) > 0)
+      results.record(
+          f"s13-live-{model_id}", run_ok, f"run={model_run['id'][:8]} state={model_run.get('state')} "
+          f"backend={model_run.get('backend')!r} "
+          f"native={model_run.get('native_session_id')} "
+          f"native-dir-entries={len(native_entries)}", await screenshot(cdp, sid, results, f"s13-live-{model_id}"))
 
-    # --- console errors -----------------------------------------------------
-    errs = await evaluate(cdp, sid, "window.__errs || []")
-    errs = list(errs or [])
-    errs += cdp.console_errors
-    results.console_errors = errs
-    results.record("no-console-errors", not errs,
-                   f"{len(errs)} console errors across all scenarios"
-                   + (": " + "; ".join(errs[:5]) if errs else ""),
-                   None)
-    del shot
+  # --- console errors -----------------------------------------------------
+  errs = await evaluate(cdp, sid, "window.__errs || []")
+  errs = list(errs or [])
+  errs += cdp.console_errors
+  results.console_errors = errs
+  results.record(
+      "no-console-errors", not errs,
+      f"{len(errs)} console errors across all scenarios" + (": " + "; ".join(errs[:5]) if errs else ""), None)
+  del shot
 
 
 def main() -> None:

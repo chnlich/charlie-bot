@@ -263,281 +263,294 @@ async def icon_dump(cdp: CDP, page_id: str, sid: str) -> str:
 
 
 async def run_harness(args: argparse.Namespace) -> None:
-    chrome = resolve_chrome(args.chrome, fail)
+  chrome = resolve_chrome(args.chrome, fail)
 
-    evidence_dir = Path(args.evidence_dir)
-    commit = open_evidence_dir(evidence_dir)
-    shots = Shots(evidence_dir)
-    checks: list[dict] = []
+  evidence_dir = Path(args.evidence_dir)
+  commit = open_evidence_dir(evidence_dir)
+  shots = Shots(evidence_dir)
+  checks: list[dict] = []
 
-    record = make_record(checks)
+  record = make_record(checks)
 
-    # Isolation preflight: the production homes are recorded read-only here, never written.
-    for home in PRODUCTION_HOMES:
-        if home.exists():
-            record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
+  # Isolation preflight: the production homes are recorded read-only here, never written.
+  for home in PRODUCTION_HOMES:
+    if home.exists():
+      record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
 
-    tmp_path = trial_home_root("charliebot-sidebar-status-", keep=args.keep)
-    for var in INHERITED_IDENTITY_ENV_VARS:
-        os.environ.pop(var, None)
+  tmp_path = trial_home_root("charliebot-sidebar-status-", keep=args.keep)
+  for var in INHERITED_IDENTITY_ENV_VARS:
+    os.environ.pop(var, None)
 
-    # An independent instance's sentinel home: nothing outside the trial changes.
-    independent = tmp_path / "independent-service"
-    (independent / "state").mkdir(parents=True)
-    (independent / "state" / "independent_sentinel.json").write_text('{"independent": true}')
-    independent_before = {
-        str(p.relative_to(independent)): p.read_bytes()
-        for p in sorted(independent.rglob("*")) if p.is_file()
-    }
+  # An independent instance's sentinel home: nothing outside the trial changes.
+  independent = tmp_path / "independent-service"
+  (independent / "state").mkdir(parents=True)
+  (independent / "state" / "independent_sentinel.json").write_text('{"independent": true}')
+  independent_before = {
+      str(p.relative_to(independent)): p.read_bytes() for p in sorted(independent.rglob("*")) if p.is_file()
+  }
 
-    source = tmp_path / "source-home"
-    build_source_home(source, [args.backend])
-    home = tmp_path / "preview-home"
-    port = pick_trial_port(args.port)
-    invocation = preview_invocation(home, port, args.backend, [])
-    env = preview_instance_env(source)
-    server_console = tmp_path / "server-console.log"
-    log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
-    with open(server_console, "w", encoding="utf-8") as server_log_file:
-        proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env,
-                                stdout=server_log_file, stderr=subprocess.STDOUT)
-        chrome_proc = None
-        try:
-            preview_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
-            base = preview_record["url"]
-            if f"127.0.0.1:{PRODUCTION_PORT}" in base:
-                fail("the preview URL names the production port")
-            log(f"preview ready: {base} (sha {preview_record['source_sha'][:12]})")
-            access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
+  source = tmp_path / "source-home"
+  build_source_home(source, [args.backend])
+  home = tmp_path / "preview-home"
+  port = pick_trial_port(args.port)
+  invocation = preview_invocation(home, port, args.backend, [])
+  env = preview_instance_env(source)
+  server_console = tmp_path / "server-console.log"
+  log(f"starting preview instance on 127.0.0.1:{port} (home {home})")
+  with open(server_console, "w", encoding="utf-8") as server_log_file:
+    proc = subprocess.Popen(invocation, cwd=str(REPO_ROOT), env=env, stdout=server_log_file, stderr=subprocess.STDOUT)
+    chrome_proc = None
+    try:
+      preview_record = await wait_preview_ready(proc, home, server_console, fail, 120.0)
+      base = preview_record["url"]
+      if f"127.0.0.1:{PRODUCTION_PORT}" in base:
+        fail("the preview URL names the production port")
+      log(f"preview ready: {base} (sha {preview_record['source_sha'][:12]})")
+      access_key = (home / "credentials.yaml").read_text().split("access_key: ")[1].split("\n")[0]
 
-            # ---- real Chrome over CDP -----------------------------------
-            cdp, page_id, chrome_proc = await open_authenticated_page(
-                chrome, tmp_path / "chrome-profile", port=port, access_key=access_key,
-                domains=("Page", "Runtime", "Network"), fail=fail)
-            # ---- scenario A: a real ~60 s worker Run shows as running -----
-            log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
-            slow_repo = build_slow_repo(home)
-            # The trial manager must stay open and listed through the whole
-            # trial (the isolation postflight still reads its Run records). A
-            # manager is instructed to request completion once its own
-            # conditions hold, and a root task archives itself on that success
-            # — so a completable one-line goal ("Sleep then report the
-            # marker") lets the report-consuming turn legitimately close the
-            # task and drop the row mid-trial. The goal therefore declares the
-            # standing condition that keeps its completion conditions from
-            # holding during the trial.
-            manager_a = await create_manager(
-                base, access_key, "Slow trial program",
-                "## Goal\n\nSleep then report the marker\n\nThis trial task stays open after "
-                "the marker is reported: its completion conditions never hold during the "
-                "trial, so never request its completion or closure.\n",
-                "sidebar-status-root-a")
+      # ---- real Chrome over CDP -----------------------------------
+      cdp, page_id, chrome_proc = await open_authenticated_page(
+          chrome,
+          tmp_path / "chrome-profile",
+          port=port,
+          access_key=access_key,
+          domains=("Page", "Runtime", "Network"),
+          fail=fail)
+      # ---- scenario A: a real ~60 s worker Run shows as running -----
+      log("scenario A: the running state (spinner on the worker, gear on the collapsed parent)")
+      slow_repo = build_slow_repo(home)
+      # The trial manager must stay open and listed through the whole
+      # trial (the isolation postflight still reads its Run records). A
+      # manager is instructed to request completion once its own
+      # conditions hold, and a root task archives itself on that success
+      # — so a completable one-line goal ("Sleep then report the
+      # marker") lets the report-consuming turn legitimately close the
+      # task and drop the row mid-trial. The goal therefore declares the
+      # standing condition that keeps its completion conditions from
+      # holding during the trial.
+      manager_a = await create_manager(
+          base, access_key, "Slow trial program",
+          "## Goal\n\nSleep then report the marker\n\nThis trial task stays open after "
+          "the marker is reported: its completion conditions never hold during the "
+          "trial, so never request its completion or closure.\n", "sidebar-status-root-a")
 
-            # The page is opened on the manager's URL: with a session id the
-            # app connects its websocket, and the tree re-fetches on the
-            # delegation broadcasts the rest of the trial rides.
-            await cdp.send("Page.navigate", {"url": f"{base}/?session={manager_a}"},
-                           session_id=page_id)
-            deadline = time.monotonic() + 30
-            while time.monotonic() < deadline:
-                if await evaluate(cdp, page_id, f"!!document.getElementById('session-{manager_a}')"):
-                    break
-                if time.monotonic() > deadline - 0.1:
-                    fail("sidebar never rendered the trial manager's row")
-                await asyncio.sleep(0.5)
-            log("browser attached; the manager's row is rendered")
+      # The page is opened on the manager's URL: with a session id the
+      # app connects its websocket, and the tree re-fetches on the
+      # delegation broadcasts the rest of the trial rides.
+      await cdp.send("Page.navigate", {"url": f"{base}/?session={manager_a}"}, session_id=page_id)
+      deadline = time.monotonic() + 30
+      while time.monotonic() < deadline:
+        if await evaluate(cdp, page_id, f"!!document.getElementById('session-{manager_a}')"):
+          break
+        if time.monotonic() > deadline - 0.1:
+          fail("sidebar never rendered the trial manager's row")
+        await asyncio.sleep(0.5)
+      log("browser attached; the manager's row is rendered")
 
-            results: dict = {"tested_commit": commit, "invocation": invocation,
-                             "preview_record": preview_record, "backend": args.backend}
+      results: dict = {
+          "tested_commit": commit,
+          "invocation": invocation,
+          "preview_record": preview_record,
+          "backend": args.backend
+      }
 
-            await takeoff(base, access_key, manager_a, "sidebar-status-takeoff-a")
-            worker_a, run_a = await delegate(
-                base, access_key, manager_a,
-                "## Goal\n\nRun `bash slow_report.sh` in the repository root. The script sleeps "
-                f"about {SLOW_RUN_SECONDS} seconds and then writes the marker line into report.txt. "
-                "Wait until the script has finished, then reply with the exact contents of report.txt.\n",
-                slow_repo, "script-run", "sidebar-status-worker-a")
+      await takeoff(base, access_key, manager_a, "sidebar-status-takeoff-a")
+      worker_a, run_a = await delegate(
+          base, access_key, manager_a, "## Goal\n\nRun `bash slow_report.sh` in the repository root. The script sleeps "
+          f"about {SLOW_RUN_SECONDS} seconds and then writes the marker line into report.txt. "
+          "Wait until the script has finished, then reply with the exact contents of report.txt.\n", slow_repo,
+          "script-run", "sidebar-status-worker-a")
 
-            status, detail = request(base, access_key, "GET", f"/api/sessions/{worker_a}")
-            name = detail.get("name") if status == 200 else None
-            record("worker name is the goal's first content line", status == 200 and name is not None
-                   and name.startswith("Run `bash slow_report.sh`")
-                   and "## Goal" not in name, f"name={name!r}")
-            # Wait for the rows to render (the tree re-fetches on the
-            # delegation broadcast), for the names, and for the Run to be live.
-            deadline = time.monotonic() + 60
-            while time.monotonic() < deadline:
-                rows = await evaluate(cdp, page_id, """
+      status, detail = request(base, access_key, "GET", f"/api/sessions/{worker_a}")
+      name = detail.get("name") if status == 200 else None
+      record(
+          "worker name is the goal's first content line", status == 200 and name is not None and
+          name.startswith("Run `bash slow_report.sh`") and "## Goal" not in name, f"name={name!r}")
+      # Wait for the rows to render (the tree re-fetches on the
+      # delegation broadcast), for the names, and for the Run to be live.
+      deadline = time.monotonic() + 60
+      while time.monotonic() < deadline:
+        rows = await evaluate(
+            cdp, page_id, """
                     [...document.querySelectorAll('#session-list a[id^=session-]')]
                         .map(el => el.id)
                 """)
-                if rows and f"session-{manager_a}" in rows and f"session-{worker_a}" in rows:
-                    break
-                await asyncio.sleep(1.0)
-            else:
-                fail(f"sidebar never rendered the trial rows: {rows}")
-            row_names = await evaluate(cdp, page_id, """
+        if rows and f"session-{manager_a}" in rows and f"session-{worker_a}" in rows:
+          break
+        await asyncio.sleep(1.0)
+      else:
+        fail(f"sidebar never rendered the trial rows: {rows}")
+      row_names = await evaluate(
+          cdp, page_id, """
                 [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
             """)
-            record("rows carry goal-derived names, never '## Goal'",
-                   any("Slow trial program" in (n or "") for n in (row_names or []))
-                   and any("Run `bash slow_report.sh`" in (n or "") for n in (row_names or []))
-                   and all("## Goal" not in (n or "") for n in (row_names or [])),
-                   f"rows={row_names}")
+      record(
+          "rows carry goal-derived names, never '## Goal'",
+          any("Slow trial program" in (n or "") for n in (row_names or [])) and
+          any("Run `bash slow_report.sh`" in (n or "") for n in (row_names or [])) and
+          all("## Goal" not in (n or "") for n in (row_names or [])), f"rows={row_names}")
 
-            # First paint carries work state: the list response the sidebar
-            # paints from (GET /api/sessions/) carries the task-tree rows' work
-            # verdicts, the same derivation the /status payload serves, so the
-            # icons need no poll.
-            def _list_rows() -> dict:
-                status, body = request(base, access_key, "GET", "/api/sessions/")
-                if status != 200:
-                    fail(f"list fetch failed: {status}")
-                return {row.get("id"): row for row in body}
+      # First paint carries work state: the list response the sidebar
+      # paints from (GET /api/sessions/) carries the task-tree rows' work
+      # verdicts, the same derivation the /status payload serves, so the
+      # icons need no poll.
+      def _list_rows() -> dict:
+        status, body = request(base, access_key, "GET", "/api/sessions/")
+        if status != 200:
+          fail(f"list fetch failed: {status}")
+        return {row.get("id"): row for row in body}
 
-            list_rows = _list_rows()
-            trial_ids = [manager_a, worker_a]
-            record("the list response carries work_state for the trial's task-tree rows",
-                   all(list_rows.get(sid, {}).get("work_state") for sid in trial_ids),
-                   json.dumps({sid: list_rows.get(sid, {}).get("work_state") for sid in trial_ids}))
-            status, scoped = request(base, access_key, "GET",
-                                     "/api/sessions/status?ids=" + ",".join(trial_ids))
-            if status != 200:
-                fail(f"status fetch failed: {status}")
-            record("the list rows' work_state matches the status payload's derivation",
-                   all(list_rows[sid].get("work_state") == scoped.get(sid, {}).get("work_state")
-                       for sid in trial_ids),
-                   json.dumps({sid: [list_rows[sid].get("work_state"), scoped.get(sid, {}).get("work_state")]
-                               for sid in trial_ids}))
-            titles_a = await worker_facing_titles(cdp, page_id)
-            record("no worker-facing title starts with '## ' (manager view)",
-                   bool(titles_a) and all(not (t or "").startswith("## ") for t in titles_a),
-                   f"titles={titles_a}")
+      list_rows = _list_rows()
+      trial_ids = [manager_a, worker_a]
+      record(
+          "the list response carries work_state for the trial's task-tree rows",
+          all(list_rows.get(sid, {}).get("work_state") for sid in trial_ids),
+          json.dumps({sid: list_rows.get(sid, {}).get("work_state") for sid in trial_ids}))
+      status, scoped = request(base, access_key, "GET", "/api/sessions/status?ids=" + ",".join(trial_ids))
+      if status != 200:
+        fail(f"status fetch failed: {status}")
+      record(
+          "the list rows' work_state matches the status payload's derivation",
+          all(list_rows[sid].get("work_state") == scoped.get(sid, {}).get("work_state") for sid in trial_ids),
+          json.dumps(
+              {sid: [list_rows[sid].get("work_state"),
+                     scoped.get(sid, {}).get("work_state")] for sid in trial_ids}))
+      titles_a = await worker_facing_titles(cdp, page_id)
+      record(
+          "no worker-facing title starts with '## ' (manager view)",
+          bool(titles_a) and all(not (t or "").startswith("## ") for t in titles_a), f"titles={titles_a}")
 
-            def running_payload(st: dict) -> bool:
-                return bool(st) and st.get("has_running_tasks") is True and st.get("work_state") == "running"
+      def running_payload(st: dict) -> bool:
+        return bool(st) and st.get("has_running_tasks") is True and st.get("work_state") == "running"
 
-            ids_a = [manager_a, worker_a]
-            # The real backend's launch prep (context build, worktree) takes
-            # on the order of a minute; the queued phase before it is the
-            # waiting verdict, and the launch flips the row to running.
-            payload = await wait_status(base, access_key, ids_a, worker_a, running_payload,
-                                        "worker running", timeout=300)
-            record("status: worker has_running_tasks + work_state=running while live",
-                   payload.get("has_running_tasks") is True and payload.get("work_state") == "running",
-                   json.dumps(payload, default=str))
-            parent_payload = await wait_status(
-                base, access_key, ids_a, manager_a,
-                lambda st: bool(st) and st.get("has_running_tasks") is False and st.get("work_state") == "idle",
-                "manager idle", timeout=30)
-            record("status: collapsed parent's own payload stays idle (its own Runs)",
-                   parent_payload.get("has_running_tasks") is False
-                   and parent_payload.get("work_state") == "idle",
-                   json.dumps(parent_payload, default=str))
-            await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "waiting-indicator", "subtree-unread"],
-                               "running worker row")
-            await assert_icons(cdp, page_id, manager_a, "worker-indicator",
-                               ["spinner", "waiting-indicator", "unread", "subtree-unread"],
-                               "collapsed manager row")
-            shot = await screenshot(cdp, page_id, shots, "running_state")
-            results["running_screenshot"] = shot
-            record("DOM: worker row spinner, collapsed manager gear", ok=True,
-                   detail=f"{worker_a}/spinner + {manager_a}/gear")
+      ids_a = [manager_a, worker_a]
+      # The real backend's launch prep (context build, worktree) takes
+      # on the order of a minute; the queued phase before it is the
+      # waiting verdict, and the launch flips the row to running.
+      payload = await wait_status(base, access_key, ids_a, worker_a, running_payload, "worker running", timeout=300)
+      record(
+          "status: worker has_running_tasks + work_state=running while live",
+          payload.get("has_running_tasks") is True and payload.get("work_state") == "running",
+          json.dumps(payload, default=str))
+      parent_payload = await wait_status(
+          base,
+          access_key,
+          ids_a,
+          manager_a,
+          lambda st: bool(st) and st.get("has_running_tasks") is False and st.get("work_state") == "idle",
+          "manager idle",
+          timeout=30)
+      record(
+          "status: collapsed parent's own payload stays idle (its own Runs)",
+          parent_payload.get("has_running_tasks") is False and parent_payload.get("work_state") == "idle",
+          json.dumps(parent_payload, default=str))
+      await assert_icons(
+          cdp, page_id, worker_a, "spinner", ["worker-indicator", "waiting-indicator", "subtree-unread"],
+          "running worker row")
+      await assert_icons(
+          cdp, page_id, manager_a, "worker-indicator", ["spinner", "waiting-indicator", "unread", "subtree-unread"],
+          "collapsed manager row")
+      shot = await screenshot(cdp, page_id, shots, "running_state")
+      results["running_screenshot"] = shot
+      record(
+          "DOM: worker row spinner, collapsed manager gear", ok=True, detail=f"{worker_a}/spinner + {manager_a}/gear")
 
-            # Expanded manager keeps its gear: a parent row's icon reads facts
-            # only, never the expansion state.
-            await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
-            await assert_icons(cdp, page_id, manager_a, "worker-indicator",
-                               ["spinner", "waiting-indicator", "unread", "subtree-unread"],
-                               "expanded manager row keeps the gear for its running worker")
-            await assert_icons(cdp, page_id, worker_a, "spinner",
-                               ["worker-indicator", "waiting-indicator", "subtree-unread"],
-                               "running worker row (expanded parent)")
-            shot = await screenshot(cdp, page_id, shots, "running_expanded")
-            results["running_expanded_screenshot"] = shot
-            record("DOM: expanded manager keeps its gear", ok=True, detail=manager_a)
-            await evaluate(
-                cdp, page_id,
-                f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
+      # Expanded manager keeps its gear: a parent row's icon reads facts
+      # only, never the expansion state.
+      await evaluate(cdp, page_id, f"Sidebar.expandTreeNode('{manager_a}')")
+      await assert_icons(
+          cdp, page_id, manager_a, "worker-indicator", ["spinner", "waiting-indicator", "unread", "subtree-unread"],
+          "expanded manager row keeps the gear for its running worker")
+      await assert_icons(
+          cdp, page_id, worker_a, "spinner", ["worker-indicator", "waiting-indicator", "subtree-unread"],
+          "running worker row (expanded parent)")
+      shot = await screenshot(cdp, page_id, shots, "running_expanded")
+      results["running_expanded_screenshot"] = shot
+      record("DOM: expanded manager keeps its gear", ok=True, detail=manager_a)
+      await evaluate(cdp, page_id, f"if (Sidebar.isTreeNodeExpanded('{manager_a}')) toggleTreeNode('{manager_a}')")
 
-            run_row, outcome = await wait_run_terminal(base, access_key, worker_a, run_a, "slow work run")
-            record("slow run reached terminal success", outcome == "success", f"outcome={outcome}")
-            if outcome != "success":
-                raw = run_row.get("raw_log_ref") or ""
-                tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
-                fail(f"slow run outcome={outcome}; raw tail:\n{tail}")
-            payload = await wait_status(
-                base, access_key, ids_a, worker_a,
-                lambda st: bool(st) and st.get("has_running_tasks") is False
-                and st.get("work_state") in (None, "idle"),
-                "worker cleared", timeout=60)
-            record("status after finish: worker's activity cleared",
-                   payload.get("has_running_tasks") is False, json.dumps(payload, default=str))
-            # The parent's report-consuming turn is its own thinking state,
-            # which outranks every stand-in; the collapsed row's cleared icons
-            # are only assertable once that turn has settled.
-            await wait_status(
-                base, access_key, ids_a, manager_a,
-                lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
-                "manager A idle after consuming the report", timeout=180)
-            await assert_icons(cdp, page_id, manager_a, None,
-                               ["spinner", "worker-indicator", "waiting-indicator", "subtree-unread"],
-                               "collapsed manager row after finish (no activity icon)")
-            record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
-            shot = await screenshot(cdp, page_id, shots, "after_finish")
-            results["after_finish_screenshot"] = shot
+      run_row, outcome = await wait_run_terminal(base, access_key, worker_a, run_a, "slow work run")
+      record("slow run reached terminal success", outcome == "success", f"outcome={outcome}")
+      if outcome != "success":
+        raw = run_row.get("raw_log_ref") or ""
+        tail = Path(raw).read_text(errors="replace")[-1500:] if raw and Path(raw).is_file() else ""
+        fail(f"slow run outcome={outcome}; raw tail:\n{tail}")
+      payload = await wait_status(
+          base,
+          access_key,
+          ids_a,
+          worker_a,
+          lambda st: bool(st) and st.get("has_running_tasks") is False and st.get("work_state") in (None, "idle"),
+          "worker cleared",
+          timeout=60)
+      record(
+          "status after finish: worker's activity cleared",
+          payload.get("has_running_tasks") is False, json.dumps(payload, default=str))
+      # The parent's report-consuming turn is its own thinking state,
+      # which outranks every stand-in; the collapsed row's cleared icons
+      # are only assertable once that turn has settled.
+      await wait_status(
+          base,
+          access_key,
+          ids_a,
+          manager_a,
+          lambda st: bool(st) and st.get("work_state") == "idle" and not st.get("thinking_since"),
+          "manager A idle after consuming the report",
+          timeout=180)
+      await assert_icons(
+          cdp, page_id, manager_a, None, ["spinner", "worker-indicator", "waiting-indicator", "subtree-unread"],
+          "collapsed manager row after finish (no activity icon)")
+      record("DOM after finish: collapsed manager's gear cleared", ok=True, detail=manager_a)
+      shot = await screenshot(cdp, page_id, shots, "after_finish")
+      results["after_finish_screenshot"] = shot
 
-            # ---- isolation postflight ------------------------------------
-            # The host store also carries the harness's own session logs (this
-            # trial may run inside a CharlieBot session), so the check is the
-            # trial's own ids — the Run records' native_session_id values, the
-            # way live_preview_task_tree.py collects them — matched as whole
-            # ids (one whole path component each). A directory-name substring
-            # sweep would drag the preview's second-resolution run-timestamp
-            # dirs (20260925T213047Z) into the check, and two production
-            # sessions starting in the same second are common (7 of 470 on
-            # 09-25), so that shape produced false "leaked" verdicts.
-            native_after = snapshot_native_storage()
-            trial_native_ids: set[str] = set()
-            for sid in {manager_a, worker_a}:
-                status, page = request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
-                if status != 200:
-                    fail(f"runs fetch of {sid} failed: {status}")
-                for row in page.get("items", []):
-                    native = row.get("native_session_id")
-                    if native:
-                        trial_native_ids.add(str(native))
-            if not trial_native_ids:
-                fail("no Run record carried a native_session_id; nothing to isolate")
-            host_components = {component
-                               for path in native_after
-                               for component in Path(path).parts}
-            leaked_ids = sorted(nid for nid in trial_native_ids if nid in host_components)
-            record("the trial's native session ids never reached the host's store",
-                   not leaked_ids,
-                   f"checked={len(trial_native_ids)} {sorted(trial_native_ids)[:3]}... "
-                   f"host_files={len(native_after)} leaked={leaked_ids[:3]}")
-            independent_after = {
-                str(p.relative_to(independent)): p.read_bytes()
-                for p in sorted(independent.rglob("*")) if p.is_file()
-            }
-            record("the independent instance's files stayed untouched",
-                   independent_after == independent_before, "sentinel home byte-identical")
-            record("the preview home lives inside the trial's temp directory",
-                   str(home).startswith(str(tmp_path)) and home.name == "preview-home", str(home))
-            record("the trial port is not the production port", port != PRODUCTION_PORT,
-                   f"port={port}")
+      # ---- isolation postflight ------------------------------------
+      # The host store also carries the harness's own session logs (this
+      # trial may run inside a CharlieBot session), so the check is the
+      # trial's own ids — the Run records' native_session_id values, the
+      # way live_preview_task_tree.py collects them — matched as whole
+      # ids (one whole path component each). A directory-name substring
+      # sweep would drag the preview's second-resolution run-timestamp
+      # dirs (20260925T213047Z) into the check, and two production
+      # sessions starting in the same second are common (7 of 470 on
+      # 09-25), so that shape produced false "leaked" verdicts.
+      native_after = snapshot_native_storage()
+      trial_native_ids: set[str] = set()
+      for sid in {manager_a, worker_a}:
+        status, page = request(base, access_key, "GET", f"/api/sessions/{sid}/runs?limit=100")
+        if status != 200:
+          fail(f"runs fetch of {sid} failed: {status}")
+        for row in page.get("items", []):
+          native = row.get("native_session_id")
+          if native:
+            trial_native_ids.add(str(native))
+      if not trial_native_ids:
+        fail("no Run record carried a native_session_id; nothing to isolate")
+      host_components = {component for path in native_after for component in Path(path).parts}
+      leaked_ids = sorted(nid for nid in trial_native_ids if nid in host_components)
+      record(
+          "the trial's native session ids never reached the host's store", not leaked_ids,
+          f"checked={len(trial_native_ids)} {sorted(trial_native_ids)[:3]}... "
+          f"host_files={len(native_after)} leaked={leaked_ids[:3]}")
+      independent_after = {
+          str(p.relative_to(independent)): p.read_bytes() for p in sorted(independent.rglob("*")) if p.is_file()
+      }
+      record(
+          "the independent instance's files stayed untouched", independent_after == independent_before,
+          "sentinel home byte-identical")
+      record(
+          "the preview home lives inside the trial's temp directory",
+          str(home).startswith(str(tmp_path)) and home.name == "preview-home", str(home))
+      record("the trial port is not the production port", port != PRODUCTION_PORT, f"port={port}")
 
-            results["checks"] = checks
-            (evidence_dir / "sidebar_status_results.json").write_text(
-                json.dumps(results, indent=2), encoding="utf-8")
-            log(f"results written to {evidence_dir / 'sidebar_status_results.json'}")
-            log("SIDEBAR STATUS LIVE HARNESS PASSED")
-        finally:
-            stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
-            stop_child(proc, grace_s=60, kill_reap_s=30)
-            log("server console tail:\n" + server_console.read_text()[-800:])
+      results["checks"] = checks
+      (evidence_dir / "sidebar_status_results.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+      log(f"results written to {evidence_dir / 'sidebar_status_results.json'}")
+      log("SIDEBAR STATUS LIVE HARNESS PASSED")
+    finally:
+      stop_child(chrome_proc, grace_s=5, kill_reap_s=5)
+      stop_child(proc, grace_s=60, kill_reap_s=30)
+      log("server console tail:\n" + server_console.read_text()[-800:])
 
 
 def main() -> None:

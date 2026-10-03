@@ -3,42 +3,36 @@
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+import fastapi
+import pydantic
+from fastapi import responses
 
-from src.api.chat import launch_prompt_dispatch
-from src.api.deps import get_config_on_loop, get_session_manager, require_session
-from src.api.message_utils import build_user_event
+from src.api import chat, deps, message_utils
+from src.core import config, deferred, log_once, message_events, models, sessions
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, get_scheduled_tasks
-from src.core.deferred import deferred_import_loader, deferred_module_getattr
-from src.core.log_once import LazyStructlogLogger
-from src.core.message_events import serialize_uploaded_files
-from src.core.models import SessionMetadata, UploadedFileRef
-from src.core.sessions import SessionManager
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
-_load_dispatch_slash_command = deferred_import_loader("dispatch_slash_command", "src.core.slash_commands")
+_load_dispatch_slash_command = deferred.deferred_import_loader("dispatch_slash_command", "src.core.slash_commands")
 
 
 def __getattr__(name: str) -> Any:
   # The "src.api.slash.dispatch_slash_command" patch target resolves through
   # this hook; the loader's globals-first read keeps a landed stand-in winning.
-  return deferred_module_getattr(name, __name__, globals(), "dispatch_slash_command", _load_dispatch_slash_command)
+  return deferred.deferred_module_getattr(
+      name, __name__, globals(), "dispatch_slash_command", _load_dispatch_slash_command)
 
 
 async def _persist_command_message(
-    session_mgr: SessionManager,
+    session_mgr: sessions.SessionManager,
     session_id: str,
     display_text: str,
     uploaded_files: list[dict],
 ) -> None:
   """Record the invoked command as the session's user chat event, before the command's response."""
-  await session_mgr.persist_and_broadcast(session_id, build_user_event(display_text, uploaded_files))
+  await session_mgr.persist_and_broadcast(session_id, message_utils.build_user_event(display_text, uploaded_files))
 
 
 # ---------------------------------------------------------------------------
@@ -83,9 +77,9 @@ _STOP_IMPROVE_ENTRY = {
 
 async def _build_command_list() -> list[dict]:
   """Return the full command list: YAML commands + built-ins."""
-  from src.core.slash_commands import load_slash_commands
+  from src.core import slash_commands
 
-  cmds = await asyncio.to_thread(load_slash_commands)
+  cmds = await asyncio.to_thread(slash_commands.load_slash_commands)
   result = [
       {
           'name': c.name,
@@ -103,16 +97,16 @@ async def _build_command_list() -> list[dict]:
 
 async def _handle_run_command(
     args_text: str,
-    request: Request,
+    request: fastapi.Request,
     session_id: str,
-    session_mgr: SessionManager,
+    session_mgr: sessions.SessionManager,
     display_text: str,
     uploaded_files: list[dict],
-) -> dict | JSONResponse:
+) -> dict | responses.JSONResponse:
   """Execute the built-in /run scheduled-task trigger command."""
   task_name = args_text
   if not task_name:
-    names = [t.name for t in get_scheduled_tasks() if t.enabled]
+    names = [t.name for t in config.get_scheduled_tasks() if t.enabled]
     if not names:
       return {'error': 'No scheduled tasks configured'}
     return {'error': f'Usage: /run <task-name>. Available: {", ".join(names)}'}
@@ -125,7 +119,7 @@ async def _handle_run_command(
     log.debug("slash_command_value_error", error=str(e))
     return {'error': str(e)}
   await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
-  return JSONResponse(
+  return responses.JSONResponse(
       status_code=202,
       content={
           'type': ET.TASK_TRIGGERED,
@@ -136,10 +130,10 @@ async def _handle_run_command(
   )
 
 
-class SlashExecuteRequest(BaseModel):
+class SlashExecuteRequest(pydantic.BaseModel):
   command: str
   args: str = ''
-  uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
+  uploaded_files: list[models.UploadedFileRef] = pydantic.Field(default_factory=list)
 
 
 @router.get('/commands')
@@ -150,19 +144,19 @@ async def list_commands() -> list[dict]:
 
 @router.post('/{session_id}/execute', response_model=None)
 async def execute_command(
-    request: Request,
+    request: fastapi.Request,
     session_id: str,
     req: SlashExecuteRequest,
-    meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> dict | JSONResponse:
+    meta: models.SessionMetadata = fastapi.Depends(deps.require_session),
+    session_mgr: sessions.SessionManager = fastapi.Depends(deps.get_session_manager),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
+) -> dict | responses.JSONResponse:
   """Execute a slash command for a session."""
-  from src.core.slash_commands import SlashDispatchKind
+  from src.core import slash_commands
 
   name = req.command.lstrip('/')
   args_text = req.args.strip()
-  uploaded_files = serialize_uploaded_files(req.uploaded_files)
+  uploaded_files = message_events.serialize_uploaded_files(req.uploaded_files)
   display_text = f"/{name}" + (f" {args_text}" if args_text else "")
 
   # Built-in /help
@@ -172,8 +166,9 @@ async def execute_command(
 
   # Built-in /stop-improve
   if name == 'stop-improve':
-    from src.core.improve_command import stop_improve_loop
-    stopped = await stop_improve_loop(session_id, cfg)
+    from src.core import improve_command
+
+    stopped = await improve_command.stop_improve_loop(session_id, cfg)
     if stopped:
       await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
       return {'type': ET.IMPROVE_STOPPED, 'message': 'Improve loop will stop after current iteration'}
@@ -187,13 +182,13 @@ async def execute_command(
   dispatch_slash_command = _load_dispatch_slash_command(globals())
   dispatch = await dispatch_slash_command(name, req.args, session_dir=str(cfg.sessions_dir / session_id))
 
-  if dispatch.kind == SlashDispatchKind.NOT_FOUND:
+  if dispatch.kind == slash_commands.SlashDispatchKind.NOT_FOUND:
     return {'error': f'Unknown command: /{name}'}
 
-  if dispatch.kind == SlashDispatchKind.ERROR:
+  if dispatch.kind == slash_commands.SlashDispatchKind.ERROR:
     return {'error': dispatch.error}
 
-  if dispatch.kind == SlashDispatchKind.SHELL_RESULT:
+  if dispatch.kind == slash_commands.SlashDispatchKind.SHELL_RESULT:
     result = dispatch.shell_result
     await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
     return {
@@ -204,9 +199,9 @@ async def execute_command(
         'exit_code': result['exit_code'],
     }
 
-  if dispatch.kind == SlashDispatchKind.PROMPT:
+  if dispatch.kind == slash_commands.SlashDispatchKind.PROMPT:
     await _persist_command_message(session_mgr, session_id, display_text, uploaded_files)
-    launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, display_text, uploaded_files)
-    return JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
+    chat.launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, display_text, uploaded_files)
+    return responses.JSONResponse(status_code=202, content={'type': ET.PROMPT_DISPATCHED, 'command': name})
 
   return {'error': f'Unexpected dispatch result for /{name}'}

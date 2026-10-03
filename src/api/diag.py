@@ -2,29 +2,29 @@
 
 from typing import Literal
 
-from fastapi import APIRouter
-from pydantic import BaseModel, ConfigDict, Field
+import fastapi
+import pydantic
 
-from src.core.log_once import LazyStructlogLogger
+from src.core import log_once
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 MAX_ERROR_CHARS = 300
 
 
-class SwitchEventRequest(BaseModel):
+class SwitchEventRequest(pydantic.BaseModel):
   """One session-switch telemetry point; unknown fields mean a stale client, reject them."""
 
-  model_config = ConfigDict(extra='forbid')
+  model_config = pydantic.ConfigDict(extra='forbid')
 
   phase: Literal['started', 'completed', 'superseded', 'failed', 'render_error']
   from_session: str | None
   to_session: str
   generation: int
   winner_generation: int | None
-  elapsed_ms: int | None = Field(default=None, ge=0)
+  elapsed_ms: int | None = pydantic.Field(default=None, ge=0)
   error: str | None
   client_ts: str
 

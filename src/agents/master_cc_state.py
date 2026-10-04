@@ -2,18 +2,12 @@
 
 import asyncio
 import dataclasses
+import datetime
+import zoneinfo
 from collections.abc import Awaitable, Callable
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
-from src.agents.backends.base import AgentBackend
-from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
-from src.core.models import (
-    BackendOption,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
-)
+from src.agents.backends import base
+from src.core import config, models
 
 # Per-session FIFO queue for serializing run_message calls.
 _session_queues: dict[str, asyncio.Queue] = {}
@@ -22,7 +16,7 @@ _session_queues: dict[str, asyncio.Queue] = {}
 _session_consumers: dict[str, asyncio.Task] = {}
 
 # Per-session running backend reference for external cancellation.
-_active_procs: dict[str, AgentBackend] = {}
+_active_procs: dict[str, base.AgentBackend] = {}
 
 
 @dataclasses.dataclass
@@ -47,13 +41,13 @@ class TaskRunBinding:
 @dataclasses.dataclass
 class _WorkItem:
   """All arguments needed to execute a single CC run, plus a future for the result."""
-  cfg: CharlieBotConfig
-  session_meta: SessionMetadata
+  cfg: config.CharlieBotConfig
+  session_meta: models.SessionMetadata
   user_content: str
-  callbacks: SessionCallbacks
+  callbacks: models.SessionCallbacks
   is_voice: bool
   auto_trigger: bool
-  backend_option: BackendOption | None
+  backend_option: models.BackendOption | None
   extra_claude_flags: list[str] | None
   should_check_tex: bool
   future: asyncio.Future
@@ -75,13 +69,14 @@ class _WorkItem:
   # time a merged batch's header stamps each part with. The default_factory
   # stamps construction (direct-seeded items); _enqueue_work_item re-stamps so
   # the value is the enqueue moment.
-  received_at: datetime = dataclasses.field(default_factory=lambda: datetime.now(ZoneInfo(HOUSE_TIMEZONE)))
+  received_at: datetime.datetime = dataclasses.field(
+      default_factory=lambda: datetime.datetime.now(zoneinfo.ZoneInfo(config.HOUSE_TIMEZONE)))
   # Structured attachment refs from the user message, handed to backend.run;
   # the opencode backend turns image refs into prompt file parts.
   uploaded_files: list[dict] | None = None
   # Set for re-attach items enqueued by startup reconcile: follow a recorded
   # live turn's raw log instead of spawning a new process.
-  resume_record: MasterRunRecord | None = None
+  resume_record: models.MasterRunRecord | None = None
   resume_is_alive: Callable[[], bool] | None = None
   # Prebuilt managed instructions (the v2 task snapshot's joined text). When
   # set, the turn delivers exactly these bytes through the backend's

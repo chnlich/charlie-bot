@@ -1705,7 +1705,8 @@ class TaskExecutionAdapter:
         has returned.
         """
     from src.agents.master_cc import enqueue_master_resume
-    from src.agents.master_cc_state import MasterRunRecord, TaskRunBinding
+    from src.agents.master_cc_state import TaskRunBinding
+    from src.core.models import MasterRunRecord
 
     transport_dir = self._tree.runs.run_dir(meta.id, run.id)
     record = MasterRunRecord(

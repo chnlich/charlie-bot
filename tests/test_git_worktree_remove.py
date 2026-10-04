@@ -1,6 +1,6 @@
 """Tests for safe git worktree cleanup."""
 
-from pathlib import Path
+import pathlib
 from typing import Any
 
 import pytest
@@ -31,7 +31,7 @@ def _patch_git_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> None:
   monkeypatch.setattr(git_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
 
-async def _remove_worktree(tmp_path: Path, wt_path: Path, expected_residue_name: str) -> bool:
+async def _remove_worktree(tmp_path: pathlib.Path, wt_path: pathlib.Path, expected_residue_name: str) -> bool:
   """The suite's standard remove call: the fake repo path, the shared thread id, and the worktrees parent."""
   return await git_module.git_worktree_remove(
       str(tmp_path / "repo"),
@@ -44,7 +44,7 @@ async def _remove_worktree(tmp_path: Path, wt_path: Path, expected_residue_name:
 
 @pytest.mark.asyncio
 async def test_git_worktree_remove_does_not_delete_residue_after_git_failure(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   worktree_parent = tmp_path / "worktrees"
@@ -68,7 +68,7 @@ async def test_git_worktree_remove_does_not_delete_residue_after_git_failure(
 
 
 @pytest.mark.asyncio
-async def test_git_worktree_remove_refuses_path_outside_allowed_parent(tmp_path: Path) -> None:
+async def test_git_worktree_remove_refuses_path_outside_allowed_parent(tmp_path: pathlib.Path) -> None:
   wt_path = tmp_path / "other" / "charliebot-task-elsewhere"
   wt_path.mkdir(parents=True)
 
@@ -79,7 +79,7 @@ async def test_git_worktree_remove_refuses_path_outside_allowed_parent(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_git_worktree_remove_refuses_repo_root(tmp_path: Path) -> None:
+async def test_git_worktree_remove_refuses_repo_root(tmp_path: pathlib.Path) -> None:
   worktree_parent = tmp_path / "worktrees"
   repo_path = worktree_parent / "charliebot-task-repo-root"
   repo_path.mkdir(parents=True)
@@ -97,7 +97,7 @@ async def test_git_worktree_remove_refuses_repo_root(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_git_worktree_remove_refuses_symlink_target(tmp_path: Path) -> None:
+async def test_git_worktree_remove_refuses_symlink_target(tmp_path: pathlib.Path) -> None:
   worktree_parent = tmp_path / "worktrees"
   real_target = tmp_path / "real-target"
   real_target.mkdir()

@@ -2,33 +2,26 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    make_sound_round,
-    make_work_item,
-    mock_session_callbacks,
-    run_session_consumer,
-    stub_credentials,
-)
 
+from src.core import config, models
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, get_credentials
-from src.core.models import SessionMetadata
 
 
 def test_config_without_slack_keys_yields_defaults() -> None:
-  cfg = CharlieBotConfig.model_validate({})
+  cfg = config.CharlieBotConfig.model_validate({})
   assert cfg.slack.allowed_user_ids == []
 
 
 def test_slack_tokens_come_from_credentials() -> None:
-  stub_credentials({"slack": {
+  conftest.stub_credentials({"slack": {
       "bot_token": "test-bot-token",
       "app_token": "test-app-token",
   }})
-  creds = get_credentials()
+  creds = config.get_credentials()
   assert creds.get("slack", "bot_token") == "test-bot-token"
   assert creds.get("slack", "app_token") == "test-app-token"
 
@@ -36,17 +29,17 @@ def test_slack_tokens_come_from_credentials() -> None:
 async def _run_one_round(user_event_id: str | None) -> dict:
   """Run one synthetic work item through _session_consumer; return its MASTER_DONE payload."""
   session_id = f"slack-plumbing-{user_event_id or 'none'}"
-  callbacks = mock_session_callbacks()
-  item = make_work_item(
-      MagicMock(),
-      SessionMetadata(id=session_id, name="t"),
+  callbacks = conftest.mock_session_callbacks()
+  item = conftest.make_work_item(
+      mock.MagicMock(),
+      models.SessionMetadata(id=session_id, name="t"),
       None,
       user_content="hi",
       callbacks=callbacks,
       user_event_id=user_event_id,
   )
 
-  await run_session_consumer(session_id, [item], make_sound_round("cc-1"))
+  await conftest.run_session_consumer(session_id, [item], conftest.make_sound_round("cc-1"))
 
   done_events = [
       call.args[1]

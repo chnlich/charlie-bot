@@ -20,7 +20,10 @@ relocates the state directory alone: Claude Code transcripts live under the logi
 the real `claude` CLI resumes as the live master's own conversation, and the second master turn that
 results runs outside the server and acts on the host. A probe that exercises the master launch path
 points `CLAUDE_CONFIG_DIR` at a scratch login directory or stubs the master wake, and its stubs
-cover every path that reaches the login store. The live instance gets read-only observation only:
+cover every path that reaches the login store. Every claude CLI this run starts outside the sweep
+runner, a hand-run collector included, carries a scratch `CLAUDE_CONFIG_DIR`, because the default
+login directory belongs to a live account whose single-use refresh token a short-lived CLI can spend
+without writing the replacement back. The live instance gets read-only observation only:
 GET requests, log reads, and metrics; a POST stays off the live server even when the expected
 answer is a rejection. The run never edits `~/.charliebot`, never restarts the server, and never
 touches CI.

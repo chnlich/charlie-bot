@@ -1,4 +1,5 @@
 import io
+import os
 import shutil
 import subprocess
 import sys
@@ -196,7 +197,7 @@ async def test_validate_hook_plugin_pair_cache_skips_the_second_pass(
   monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
   calls: list[list[str]] = []
 
-  async def fake_capture(*args: str) -> tuple[int, str, str]:
+  async def fake_capture(*args: str, env_overrides: dict[str, str]) -> tuple[int, str, str]:
     calls.append(list(args))
     return 0, "", ""
 
@@ -228,7 +229,7 @@ async def test_validate_hook_plugin_failure_writes_no_cache(
   monkeypatch.setattr(shutil, "which", lambda name: str(fake_binary))
   calls: list[list[str]] = []
 
-  async def failing_capture(*args: str) -> tuple[int, str, str]:
+  async def failing_capture(*args: str, env_overrides: dict[str, str]) -> tuple[int, str, str]:
     calls.append(list(args))
     return 1, "", "schema rejected"
 
@@ -239,6 +240,56 @@ async def test_validate_hook_plugin_failure_writes_no_cache(
     await claude_sub._validate_hook_plugin(plugin_dir)
   assert len(calls) == 1
   assert not (tmp_path / "home" / "claude-sub-sessions" / "plugin-validate-cache.json").exists()
+
+
+def _install_recording_claude(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, rc: int) -> Path:
+  """Put a fake ``claude`` first on PATH; it records its CLAUDE_CONFIG_DIR and that dir's entry count."""
+  bin_dir = tmp_path / "bin"
+  bin_dir.mkdir()
+  record = tmp_path / "claude-config-record.txt"
+  script = bin_dir / "claude"
+  script.write_text(
+      "\n".join(
+          [
+              "#!/bin/sh",
+              'echo "$CLAUDE_CONFIG_DIR" > "$FAKE_CLAUDE_RECORD"',
+              'ls -A "$CLAUDE_CONFIG_DIR" | wc -l >> "$FAKE_CLAUDE_RECORD"',
+              f"exit {rc}",
+              "",
+          ]),
+      encoding="utf-8",
+  )
+  script.chmod(0o755)
+  monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+  monkeypatch.setenv("FAKE_CLAUDE_RECORD", str(record))
+  return record
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rc", [0, 1])
+async def test_validate_hook_plugin_runs_the_cli_on_a_scratch_login_dir(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    rc: int,
+) -> None:
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path / "home"))
+  login = tmp_path / "login"
+  login.mkdir()
+  (login / ".credentials.json").write_text("{}", encoding="utf-8")
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(login))
+  record = _install_recording_claude(monkeypatch, tmp_path, rc)
+  plugin_dir = _write_launch_plugin(tmp_path / "launch")
+
+  if rc == 0:
+    await claude_sub._validate_hook_plugin(plugin_dir)
+  else:
+    with pytest.raises(claude_sub.ClaudeSubError, match="validation failed"):
+      await claude_sub._validate_hook_plugin(plugin_dir)
+
+  config_dir, entries = record.read_text(encoding="utf-8").split()
+  assert Path(config_dir) not in (login, Path.home() / ".claude")
+  assert entries == "0", "the CLI starts on an empty login directory"
+  assert not Path(config_dir).exists(), "the scratch login directory is removed on every exit path"
 
 
 def _hook_helper_path() -> Path:

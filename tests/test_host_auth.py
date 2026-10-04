@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import datetime
 import json
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+import pathlib
 from typing import Any
 
 import pytest
@@ -13,7 +13,7 @@ from src.api import host_auth as api
 from src.core import host_auth as core
 
 
-def _iso(moment: datetime) -> str:
+def _iso(moment: datetime.datetime) -> str:
   return moment.isoformat()
 
 
@@ -73,46 +73,50 @@ def test_classification_reads_output_before_the_return_code(returncode: int, out
 
 def test_baseline_moves_on_the_held_to_direct_transition_and_not_on_a_repeat() -> None:
   adjacent = _entry("login-a", "login-a.example.internal", status=core.STATUS_NEEDS_OKTA)
-  moment = datetime(2026, 9, 15, 8, 5, tzinfo=UTC)
+  moment = datetime.datetime(2026, 9, 15, 8, 5, tzinfo=datetime.UTC)
   core.apply_probe_result(adjacent, status=core.STATUS_OK, detail="exit 0", probed_at=moment)
   assert adjacent["enrolled_observed_at"] == _iso(moment)
-  repeat = moment + timedelta(minutes=30)
+  repeat = moment + datetime.timedelta(minutes=30)
   core.apply_probe_result(adjacent, status=core.STATUS_OK, detail="exit 0", probed_at=repeat)
   assert adjacent["enrolled_observed_at"] == _iso(moment)
 
 
 def test_held_host_backs_off_twelve_times_the_standing_period() -> None:
   assert core.BLOCKED_BACKOFF_SEC == 21600
-  now = datetime.now(UTC)
+  now = datetime.datetime.now(datetime.UTC)
   held = _entry(
       "login-a",
       "login-a.example.internal",
       status=core.STATUS_NEEDS_OKTA,
-      last_probe_at=_iso(now - timedelta(seconds=1800)))
+      last_probe_at=_iso(now - datetime.timedelta(seconds=1800)))
   direct = _entry(
-      "login-b", "login-b.example.internal", status=core.STATUS_OK, last_probe_at=_iso(now - timedelta(seconds=1800)))
+      "login-b",
+      "login-b.example.internal",
+      status=core.STATUS_OK,
+      last_probe_at=_iso(now - datetime.timedelta(seconds=1800)))
   assert not core.host_due(held, now)
-  assert core.host_due(held, now + timedelta(seconds=21600))
+  assert core.host_due(held, now + datetime.timedelta(seconds=21600))
   assert core.host_due(direct, now)
   assert core.host_due(None, now)
   assert core.host_due(_entry("login-c", "login-c.example.internal"), now)
 
 
 @pytest.mark.asyncio
-async def test_round_probes_due_hosts_and_publishes_the_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_round_probes_due_hosts_and_publishes_the_state(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   config = tmp_path / "ssh_config"
   config.write_text(
       "Host login-a\n  HostName login-a.example.internal\n\nHost gpu-box-1\n  HostName gpu-box-1.example.internal\n",
       encoding="utf-8")
   state_path = tmp_path / "state.json"
-  now = datetime.now(UTC)
+  now = datetime.datetime.now(datetime.UTC)
   seed = core.empty_state()
   seed["hosts"] = [
       _entry(
           "login-a",
           "login-a.example.internal",
           status=core.STATUS_NEEDS_OKTA,
-          last_probe_at=_iso(now - timedelta(minutes=1)))
+          last_probe_at=_iso(now - datetime.timedelta(minutes=1)))
   ]
   state_path.write_text(json.dumps(seed), encoding="utf-8")
 

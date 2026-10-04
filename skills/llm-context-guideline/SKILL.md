@@ -39,7 +39,7 @@ Style section in prompts/master.md.
 Admission is judged at curation time, with evidence, over staged candidates. The store admits three
 kinds of entry, and only these:
 
-1. A ruling or preference the user stated.
+1. A ruling or preference the user stated, when a capable model does not follow it by default.
 2. A mechanism or fact whose rediscovery would cost a real investigation and that still reads
    true a month from now.
 3. A host, cluster, or account level pointer that cannot be guessed and has no owning document.
@@ -137,8 +137,8 @@ quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
 Said once, in Chinese, lines 120 columns or fewer; code, paths, identifiers, and commands stay
 verbatim. Entry prose follows the Writing Style section of prompts/master.md, its "Text a model
 reads" subsection included. Apply the
-admission test line by line as well as entry by entry, and keep the lines that change a future
-action.
+admission test line by line as well as entry by entry. Keep each line whose removal changes what a
+capable model does.
 Brevity is part of the admission bar: lead with the action and keep the mechanism the action
 is unintelligible without; session reports and run dirs hold the receipts, verification notes,
 and secondary effects. Hold a

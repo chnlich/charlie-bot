@@ -16,7 +16,6 @@ import sys
 import time
 import uuid
 from enum import StrEnum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.agents.backends.claude_launch import (
@@ -26,30 +25,27 @@ from src.agents.backends.claude_launch import (
     build_claude_argv,
     headless_claude_env,
 )
-from src.cli.claude_sub_bridge import (
-    HOOK_EVENTS,
-    HookBridge,
-    HookTurnState,
-    PromptDelivery,
-)
 from src.core import event_types as ET
-from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, CREDENTIALS_FILE, charliebot_home_dir, default_claude_dir
-from src.core.json_utils import write_json_atomically
 from src.core.timeouts import (
     CLAUDE_SUB_CONFIRMATION_TIMEOUT,
     CLAUDE_SUB_TERMINATE_TIMEOUT,
     CLAUDE_SUB_TURN_TIMEOUT,
 )
 
-# The pty/tui helpers and asyncio ride their call sites, not this import block:
-# the M108 launch floor (docs/perf_baseline.md) is the wall from process start to
-# the argv parse, and the argv-parse probe reaches none of them. Same rule as the
+# The pty/tui helpers, asyncio, pathlib, the home stack, the hook bridge, and
+# the atomic-json writer ride their call sites, not this import block: the M108
+# launch floor (docs/perf_baseline.md) is the wall from process start to the
+# argv parse, and the argv-parse probe reaches none of them. src.core.home
+# carries pathlib's import chain, so the two defer together. Same rule as the
 # src.core.process import inside _terminate_foreground, and as shutil/tempfile
 # (tempfile's own module imports shutil, so the two defer together) — the three
 # module-scope value classes below stay plain classes because the dataclasses
 # import they replaced pulls inspect (~7 ms measured, -X importtime).
 if TYPE_CHECKING:
   import asyncio
+  from pathlib import Path
+
+  from src.cli.claude_sub_bridge import HookBridge
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
 _TARGET_CLAUDE_VERSION = (2, 1, 211)
@@ -143,6 +139,8 @@ class PaneInfo:
 
   @property
   def is_claude(self) -> bool:
+    from pathlib import Path
+
     command = Path(self.command).name.lower()
     return command in {"claude", "claude-code"} or "claude" in command
 
@@ -277,6 +275,8 @@ async def _pane_info(session_id: str) -> PaneInfo:
 
 def _session_marker_dir() -> Path:
   """This profile's claude-sub marker directory. Resolved per call, never at import."""
+  from src.core.home import charliebot_home_dir
+
   return charliebot_home_dir() / "claude-sub-sessions"
 
 
@@ -303,11 +303,17 @@ def _read_marker(session_id: str) -> SessionMarkerState | None:
 def _write_marker(session_id: str, state: SessionMarkerState) -> None:
   path = _marker_path(session_id)
   path.parent.mkdir(parents=True, exist_ok=True)
+  from src.core.json_utils import write_json_atomically
+
   write_json_atomically(path, {"state": state.value}, newline=True)
 
 
 def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
   """Return the active Claude global, user-settings, credentials, and remote paths."""
+  from pathlib import Path
+
+  from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, CREDENTIALS_FILE, default_claude_dir
+
   configured_root = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
   if configured_root:
     root = Path(configured_root).expanduser()
@@ -328,6 +334,8 @@ def _session_config_dir(session_id: str) -> Path:
 
 
 def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:
+  from src.core.json_utils import write_json_atomically
+
   write_json_atomically(path, value, newline=True, private=True)
 
 
@@ -389,6 +397,8 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
     _copy_session_file(settings_source, config_dir / "settings.json", "user Claude settings")
   if remote_source.is_file() and not (config_dir / "remote-settings.json").exists():
     _copy_session_file(remote_source, config_dir / "remote-settings.json", "Claude remote settings")
+  from src.core.home import CREDENTIALS_FILE
+
   credentials_target = config_dir / CREDENTIALS_FILE
   if not credentials_target.exists():
     if not credentials_source.is_file():
@@ -559,7 +569,11 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
       ) + "\n",
       encoding="utf-8",
   )
+  from pathlib import Path
+
   helper = Path(__file__).with_name("claude_sub_hook.py").resolve()
+  from src.cli.claude_sub_bridge import HOOK_EVENTS
+
   hooks: dict[str, list[dict[str, Any]]] = {}
   for event_name in HOOK_EVENTS:
     gate = event_name in {"UserPromptSubmit", "PreToolUse", "PermissionRequest"}
@@ -617,6 +631,8 @@ def _plugin_validate_key(plugin_dir: Path) -> str | None:
   if binary is None:
     return None
   try:
+    from pathlib import Path
+
     resolved = Path(binary).resolve()
     stat = resolved.stat()
     plugin_bytes = (plugin_dir / ".claude-plugin" / "plugin.json").read_bytes()
@@ -649,6 +665,8 @@ def _read_validate_cache() -> str | None:
 
 
 def _write_validate_cache(key: str) -> None:
+  from src.core.json_utils import write_json_atomically
+
   path = _plugin_validate_cache_path()
   try:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -701,6 +719,8 @@ async def _respawn_claude(
   for key, value in headless_claude_env().items():
     tmux_args.extend(["-e", f"{key}={value}"])
   if config_dir is not None:
+    from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
+
     tmux_args.extend(["-e", f"{CLAUDE_CONFIG_DIR_ENV_VAR}={config_dir}"])
   tmux_args.extend(
       build_claude_argv(
@@ -792,6 +812,8 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
 
   validate_prompt(args.prompt)
   session_id = args.resume or args.session_id or str(uuid.uuid4())
+  from pathlib import Path
+
   cwd = Path.cwd().resolve()
   requested_resume = args.resume is not None
   resume = await _prepare_tmux_session(session_id, cwd, requested_resume)
@@ -802,6 +824,8 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   with tempfile.TemporaryDirectory(prefix=f"claude-sub-{session_id[:8]}-") as temporary_dir:
     temporary_root = Path(temporary_dir)
     socket_path = temporary_root / "bridge.sock"
+    from src.cli.claude_sub_bridge import HookBridge, HookTurnState, PromptDelivery
+
     state = HookTurnState(
         expected_session_id=session_id,
         expected_cwd=str(cwd),

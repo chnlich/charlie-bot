@@ -10,7 +10,7 @@ from src.core import models
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
 _INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
-_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = ("src.api.internal.resolve_requested_subagent_backend_model")
+_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.core.spawner_backends.resolve_requested_subagent_backend_model"
 _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
 
 
@@ -128,7 +128,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
        mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        mock.patch(
-           _INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
+           _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
        pytest.raises(fastapi.HTTPException) as exc_info:
     await internal.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
@@ -159,7 +159,7 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
 
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
        mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
-       mock.patch(_INTERNAL_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
+       mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        mock.patch(
            _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \

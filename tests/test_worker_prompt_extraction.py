@@ -1,5 +1,5 @@
 """prompts/worker.md loader and builder contracts: fresh read on every
-_build_worker_prompt call (see spawner.load_worker_prompt_sections), split on
+_build_worker_prompt call (see spawner.spawner_prompt.load_worker_prompt_sections), split on
 `<!-- section: <id> -->` marker lines, injected with `{{token}}` sequential
 str.replace substitution, fail-loud loader semantics (no caching, no
 embedded-text fallback), section assembly order, and reviewer-prompt sourcing
@@ -37,7 +37,7 @@ def test_missing_worker_prompt_file_raises_with_path_and_cause(tmp_path: Path) -
   missing_path = tmp_path / "prompts" / "worker.md"
 
   with pytest.raises(FileNotFoundError, match="predates the worker-prompt extraction commit") as exc_info:
-    spawner.load_worker_prompt_sections(cfg)
+    spawner.spawner_prompt.load_worker_prompt_sections(cfg)
   assert str(missing_path) in str(exc_info.value)
 
 

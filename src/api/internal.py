@@ -17,6 +17,7 @@ from src.api.deps import (
 from src.api.deps import require_caller as require_caller_dep
 from src.api.message_utils import build_agent_message_event
 from src.core import event_types as ET
+from src.core import spawner_backends
 from src.core.config import CharlieBotConfig, get_config
 from src.core.improve_command import (
     ImproveLoopAlreadyRunningError,
@@ -48,10 +49,6 @@ from src.core.models import (
 )
 from src.core.plans import PlanRegistryManager
 from src.core.sessions import SessionManager
-from src.core.spawner import (
-    resolve_requested_subagent_backend_model,
-    select_verify_backend,
-)
 from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
@@ -123,9 +120,10 @@ async def _authorize_spawn_request(
   cfg = get_config()
   try:
     if isinstance(req, DelegateRequest) and req.task_type == TaskType.VERIFY and req.backend is None:
-      resolved_backend, resolved_model, _ = await select_verify_backend(req.session_id, cfg, session_mgr, [])
+      resolved_backend, resolved_model, _ = await spawner_backends.select_verify_backend(
+          req.session_id, cfg, session_mgr, [])
     else:
-      resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+      resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
           req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
     raise bad_request(e) from e
@@ -340,7 +338,7 @@ async def _start_improve_sequence(
   # order): an unknown requested backend must fail the request, never leak a
   # "running" loop state or the active lock in this live process.
   try:
-    resolved_backend, resolved_model = await resolve_requested_subagent_backend_model(
+    resolved_backend, resolved_model = await spawner_backends.resolve_requested_subagent_backend_model(
         req.session_id, cfg, session_mgr, requested_backend=req.backend)
   except ValueError as e:
     raise bad_request(e) from e

@@ -9,7 +9,7 @@ as the successful path keys its cache.
 """
 
 import os
-from pathlib import Path
+import pathlib
 
 import pytest
 
@@ -54,7 +54,7 @@ def _seed_good_config() -> None:
 _UTIME_TICK = [0]
 
 
-def _write_broken(home: Path, key: str) -> None:
+def _write_broken(home: pathlib.Path, key: str) -> None:
   """config.yaml declaring a key the model does not declare — the observed
   burst's error shape (unknown config key(s) ...). Each write takes a distinct
   forced mtime: same-size rewrites land inside one float-mtime tick otherwise,
@@ -67,7 +67,7 @@ def _write_broken(home: Path, key: str) -> None:
 
 
 def test_broken_steady_state_parses_once_and_warns_once(
-    profile_home: Path, reload_log: list[dict], counted_loads: list[int]) -> None:
+    profile_home: pathlib.Path, reload_log: list[dict], counted_loads: list[int]) -> None:
   """With the corpus broken and unchanged, 60 calls pay one parse and one line."""
   _seed_good_config()
   _write_broken(profile_home, "unknown_m53_key")
@@ -80,7 +80,7 @@ def test_broken_steady_state_parses_once_and_warns_once(
   assert [r["event"] for r in reload_log] == ["config_reload_failed"]
 
 
-def test_startup_with_broken_config_still_raises(profile_home: Path, reload_log: list[dict]) -> None:
+def test_startup_with_broken_config_still_raises(profile_home: pathlib.Path, reload_log: list[dict]) -> None:
   """No cached config means nothing to fall back to: the raise survives."""
   _write_broken(profile_home, "unknown_m53_key")
   core_config._config_cache.reset()

@@ -13,20 +13,19 @@ deployment name.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import FakeBackend, backend_option, make_work_item
 
 from src.agents import master_cc
 from src.agents.backends import registry
 from src.core import config as core_config
 from src.core import event_types as ET
-from src.core.message_aggregator import MessageAggregator
-from src.core.models import SessionMetadata
+from src.core import message_aggregator, models
 
 
-def _wake_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
+def _wake_cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
   """A config whose ``charlie_bot_repo`` points at a synthetic tmp repo dir."""
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
@@ -36,13 +35,13 @@ def _wake_cfg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> core_config.Ch
   (home / "memory" / "topics").write_text("profile resident\n", encoding="utf-8")
   cfg = core_config.CharlieBotConfig(
       charliebot_home=home,
-      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="unused/model")]},
+      backends={"options": [conftest.backend_option(id="fake", label="Fake", type="codex", model="unused/model")]},
   )
   monkeypatch.setattr(core_config.CharlieBotConfig, "charlie_bot_repo", property(lambda self: repo))
   return cfg
 
 
-def _overlay_dir(cfg: core_config.CharlieBotConfig) -> Path:
+def _overlay_dir(cfg: core_config.CharlieBotConfig) -> pathlib.Path:
   return cfg.charlie_bot_repo / "prompts" / "model_overlays"
 
 
@@ -50,7 +49,7 @@ def _rendered_overlay_alert(event: dict) -> list[dict]:
   """Feed a persisted event through the aggregator; return visible message deltas."""
   return [
       delta["message"]
-      for delta in MessageAggregator().feed(event)
+      for delta in message_aggregator.MessageAggregator().feed(event)
       if delta.get("type") == "message" and delta.get("message", {}).get("role") == "system"
   ]
 
@@ -65,7 +64,7 @@ def _rendered_overlay_alert(event: dict) -> list[dict]:
     ],
 )
 async def test_wake_path_overlay_four_states(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     prompt_overlay: str | None,
     file_exists: bool,
@@ -79,13 +78,14 @@ async def test_wake_path_overlay_four_states(
     overlay_dir.mkdir(parents=True, exist_ok=True)
     (overlay_dir / "synthetic_overlay.md").write_text("OVERLAY BODY", encoding="utf-8")
 
-  option = backend_option(id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay=prompt_overlay)
+  option = conftest.backend_option(
+      id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay=prompt_overlay)
   captured: dict[str, object] = {}
   monkeypatch.setattr(
       registry, "build_backend",
-      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or FakeBackend())
+      lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or conftest.FakeBackend())
 
-  item = make_work_item(cfg, SessionMetadata(id="s", name="S", backend="fake"), option)
+  item = conftest.make_work_item(cfg, models.SessionMetadata(id="s", name="S", backend="fake"), option)
   cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert cc_session_id is None

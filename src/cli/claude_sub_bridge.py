@@ -16,10 +16,11 @@ from typing import TYPE_CHECKING, Any
 
 from src.core import event_types as ET
 
-# asyncio rides the methods that use it, not this import block: the bridge is
-# src.cli.claude_sub's module-level import, and the M108 launch floor
-# (docs/perf_baseline.md) is the wall from process start to the argv parse the
-# bridge never reaches. The TYPE_CHECKING import covers the lazy method hints.
+# asyncio rides the methods that use it, not this import block: the bridge's
+# importers defer it to their own call sites (claude_sub's M108 launch floor,
+# docs/perf_baseline.md, is the wall from process start to the argv parse the
+# bridge never reaches), so importing this module must not pull asyncio either.
+# The TYPE_CHECKING import covers the lazy method hints.
 if TYPE_CHECKING:
   import asyncio
 

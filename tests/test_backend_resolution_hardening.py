@@ -2,33 +2,20 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from pathlib import Path
-from unittest.mock import patch
+import datetime
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    TRIGGERS_GET_CONFIG_PATCH_TARGET,
-    FakeBackend,
-    backend_option,
-    make_home_config,
-    make_work_item,
-    patch_instructions_content,
-    patch_trigger_mocks,
-)
 
 from src.agents import master_cc
 from src.core import config as core_config
 from src.core import event_types as ET
-from src.core import models
-from src.core.models import CreateSessionRequest, PendingTrigger
-from src.core.sessions import SessionManager
-from src.core.spawner import _resolve_session_default_backend_model
-from src.core.triggers import TriggerManager
+from src.core import models, sessions, spawner, triggers
 
 
-def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
+def _write_transcript(config_dir: pathlib.Path, cc_session_id: str) -> None:
   project = config_dir / "projects" / "-home-user--charliebot-sessions-session-id"
   project.mkdir(parents=True, exist_ok=True)
   (project / f"{cc_session_id}.jsonl").write_text("{}\n", encoding="utf-8")
@@ -37,7 +24,7 @@ def _write_transcript(config_dir: Path, cc_session_id: str) -> None:
 # --------------------------------------------------------------- config reload
 
 
-def _reload_rig(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def _reload_rig(home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Default home (the ``path_home`` fixture's) carrying config.yaml (port 1111); returns the config path.
 
   Both reload tests assert default-home resolution under the fixture's patched
@@ -55,14 +42,15 @@ def _reload_rig(home: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   return cfg_path
 
 
-def _write_port_2222(cfg_path: Path) -> None:
+def _write_port_2222(cfg_path: pathlib.Path) -> None:
   import os
 
   cfg_path.write_text("server:\n  port: 2222\n", encoding="utf-8")
   os.utime(cfg_path, (0, 0))  # force a different mtime
 
 
-def test_get_config_refreshes_in_place_keeping_identity(path_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_config_refreshes_in_place_keeping_identity(
+    path_home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A reload must update the existing instance so earlier holders see new values."""
   cfg_path = _reload_rig(path_home, monkeypatch)
 
@@ -81,27 +69,27 @@ def test_get_config_refreshes_in_place_keeping_identity(path_home: Path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: Path) -> None:
+async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: pathlib.Path) -> None:
   """A backend added after the manager was constructed must reach trigger_master."""
-  stale = make_home_config(tmp_path)
-  session_mgr = SessionManager(stale)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Trigger"))
-  trigger_mgr = TriggerManager(stale, session_mgr)
-  trigger = PendingTrigger(
+  stale = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(stale)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger"))
+  trigger_mgr = triggers.TriggerManager(stale, session_mgr)
+  trigger = models.PendingTrigger(
       id="trigger-1",
       session_id=session.id,
-      fire_at=datetime.now(UTC),
+      fire_at=datetime.datetime.now(datetime.UTC),
       message="wake",
   )
   await trigger_mgr._save_trigger(trigger)
 
   current = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
-      backends={"options": [backend_option(id="added-later", label="New", type="cc-claude", model="m")]},
+      backends={"options": [conftest.backend_option(id="added-later", label="New", type="cc-claude", model="m")]},
   )
   with (
-      patch_trigger_mocks() as mock_master,
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=current),
+      conftest.patch_trigger_mocks() as mock_master,
+      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=current),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
@@ -125,7 +113,7 @@ _REFUSAL_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("session_backend, error_fragments", _REFUSAL_ROWS)
 async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     session_backend: str,
     error_fragments: tuple[str, str],
@@ -135,14 +123,14 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
   error naming the cause."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
+      backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend=session_backend)
   spawned: list[object] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or FakeBackend())
-  patch_instructions_content(monkeypatch)
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or conftest.FakeBackend())
+  conftest.patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, None)
+  item = conftest.make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
 
   assert not spawned
@@ -156,16 +144,16 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
 
 def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
   cfg = core_config.CharlieBotConfig(
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
+      backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
   session_meta = models.SessionMetadata(id="s", name="S", backend="deleted-id")
   with pytest.raises(ValueError, match="refusing to substitute"):
-    _resolve_session_default_backend_model(cfg, session_meta)
+    spawner._resolve_session_default_backend_model(cfg, session_meta)
 
 
 # ------------------------------------------------------------ resume guarding
 
 
-def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: Path) -> None:
+def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: pathlib.Path) -> None:
   cfg_dir = tmp_path / ".claude-ext-1"
   _write_transcript(cfg_dir, "conv-1")
   nested = cfg_dir / "projects" / "-slug" / "parent-uuid" / "subagents"
@@ -191,7 +179,7 @@ _TRANSCRIPT_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize("transcript_in_configured_dir", _TRANSCRIPT_ROWS)
 async def test_run_cc_resume_gate_by_transcript_location(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     transcript_in_configured_dir: bool,
 ) -> None:
@@ -207,14 +195,15 @@ async def test_run_cc_resume_gate_by_transcript_location(
 
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
+      backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
   session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or FakeBackend())
-  patch_instructions_content(monkeypatch)
+  monkeypatch.setattr(
+      conftest.BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or conftest.FakeBackend())
+  conftest.patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, session_meta, cfg.backends.options[0])
+  item = conftest.make_work_item(cfg, session_meta, cfg.backends.options[0])
   _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
 
   assert exit_code == 0 and error_msg is None

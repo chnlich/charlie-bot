@@ -11,9 +11,9 @@ of the stdlib's silent str coercion.
 
 import json
 
-from fastapi.responses import JSONResponse
+from fastapi import responses
 
-from src.api.responses import FastJsonResponse
+from src.api import responses as responses_api
 
 _CJK_PAYLOAD = {
     "messages": [{
@@ -26,13 +26,13 @@ _CJK_PAYLOAD = {
 
 
 def test_parsed_content_matches_the_starlette_render() -> None:
-  fast = FastJsonResponse(_CJK_PAYLOAD)
-  slow = JSONResponse(_CJK_PAYLOAD)
+  fast = responses_api.FastJsonResponse(_CJK_PAYLOAD)
+  slow = responses.JSONResponse(_CJK_PAYLOAD)
   assert json.loads(bytes(fast.body)) == json.loads(bytes(slow.body))
 
 
 def test_nan_renders_as_null_not_invalid_json() -> None:
-  body = bytes(FastJsonResponse({"a": float("nan"), "b": float("inf")}).body)
+  body = bytes(responses_api.FastJsonResponse({"a": float("nan"), "b": float("inf")}).body)
   # orjson's boundary: NaN/Infinity render as null — valid JSON on the wire,
   # the same boundary the stream funnels accepted at their orjson swap.
   assert json.loads(body) == {"a": None, "b": None}
@@ -40,7 +40,7 @@ def test_nan_renders_as_null_not_invalid_json() -> None:
 
 def test_non_str_dict_key_raises_instead_of_silent_coercion() -> None:
   try:
-    FastJsonResponse({1: "a"})
+    responses_api.FastJsonResponse({1: "a"})
   except TypeError:
     pass
   else:

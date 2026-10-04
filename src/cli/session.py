@@ -5,6 +5,7 @@
   charliebot session tree [--root ID] [--include-archived] [--limit N] [--cursor C]
   charliebot session retry ID --run RUN_ID [--request-id ID]
   charliebot session send <target-id> (--message T | --file P)
+  charliebot session dialog [--session ID]
 
 ``create`` builds session metadata only (no first message); with ``--parent``
 it becomes the v2 task create: the task-file carries the ``task`` object
@@ -32,6 +33,13 @@ exact input ids, idempotent replay; later arrivals keep blocking closure.
 ``send`` relays a message into the target session as an ``agent_message``
 event (never a ``user`` event), so it neither mints nor revokes a takeoff
 authorization window. The caller session resolves per ``resolve_session_id``.
+
+``dialog`` prints one session's chat-visible messages as plain text, oldest
+first, for piping into ``rg`` — the post-compaction search path the master
+rules point at. It is read-only: it walks the same events pages the chat UI
+does, starting from the bootstrap cursor, so an archived session (whose older
+weeks live in ``data/archives/``) prints its complete history too. Tool
+outputs and thinking stay out; each tool call renders one ``$`` line.
 
 Authentication: with CHARLIEBOT_RUN_TOKEN set (an agent running inside a Run)
 every request carries that token and nothing else — a rejection surfaces the
@@ -134,6 +142,10 @@ def _build_parser() -> argparse.ArgumentParser:
   source.add_argument("--message", default=None, help="Message text")
   source.add_argument("--file", default=None, help="Read the message text from this file")
   add_session_arg(send)
+
+  dialog = sub.add_parser(
+      "dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
+  add_session_arg(dialog)
   return parser
 
 
@@ -237,6 +249,62 @@ def _cmd_send(args: argparse.Namespace) -> None:
   print(json.dumps(result, indent=2))
 
 
+_DIALOG_PAGE_LIMIT = 200  # the events endpoint's clamp; the fewest requests a full history admits
+
+
+def _tool_input_first_line(tool: dict) -> str:
+  """One tool call's natural one-line form: Bash carries its command, every other
+  tool a compact JSON rendering of the input; only the first line survives."""
+  input_val = tool.get("input")
+  if isinstance(input_val, dict):
+    if tool.get("name") in ("Bash", "bash") and isinstance(input_val.get("command"), str):
+      rendered = input_val["command"]
+    else:
+      rendered = json.dumps(input_val, ensure_ascii=False)
+  elif isinstance(input_val, str):
+    rendered = input_val
+  else:
+    rendered = ""
+  return rendered.split("\n", 1)[0]
+
+
+def _format_message_block(msg: dict) -> str | None:
+  """One block per chat message with a body or at least one tool call; None when
+  the message has neither (a turn divider prints nothing)."""
+  content = msg.get("content")
+  body = content if isinstance(content, str) else "" if content is None else json.dumps(content, ensure_ascii=False)
+  tools = msg.get("tools") or []
+  if not body and not tools:
+    return None
+  lines = [f"## {msg.get('role')} · {msg.get('timestamp') or ''} · event {msg.get('event_index')}"]
+  if body:
+    lines.append(body)
+  lines.extend(f"$ {tool.get('name')} {_tool_input_first_line(tool)}" for tool in tools)
+  return "\n".join(lines)
+
+
+def _cmd_dialog(args: argparse.Namespace) -> None:
+  session_id = resolve_session_id(args.session)
+  # The bootstrap payload is the newest page the chat UI opens with; its
+  # oldest_message_ordinal is the cursor backward paging starts from, in the
+  # events endpoint's own cursor space (message ordinals for an ordinary
+  # session, legacy event indices for an archived one).
+  boot = get_api(f"/api/sessions/{session_id}/bootstrap")
+  pages: list[list[dict]] = [boot["messages"]]
+  cursor = boot["oldest_message_ordinal"]
+  has_more = boot["has_more"]
+  while has_more:
+    page = get_api(f"/api/sessions/{session_id}/events", {"before": cursor, "limit": _DIALOG_PAGE_LIMIT})
+    pages.append(page["messages"])
+    cursor = page["next_before"]
+    has_more = page["has_more"]
+  blocks = [
+      block for page in reversed(pages) for msg in page if (block := _format_message_block(msg)) is not None
+  ]
+  if blocks:
+    print("\n\n".join(blocks))
+
+
 def main() -> None:
   parser = _build_parser()
   args = parser.parse_args()
@@ -256,6 +324,8 @@ def main() -> None:
     _cmd_reopen(args)
   elif args.session_command == "send":
     _cmd_send(args)
+  elif args.session_command == "dialog":
+    _cmd_dialog(args)
   else:
     parser.error(f"unknown session command: {args.session_command}")
 

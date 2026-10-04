@@ -1705,10 +1705,11 @@ class TaskExecutionAdapter:
         has returned.
         """
     from src.agents.master_cc import enqueue_master_resume
-    from src.agents.master_cc_state import MasterRunRecord, TaskRunBinding
+    from src.agents.master_cc_state import TaskRunBinding
+    from src.core import models
 
     transport_dir = self._tree.runs.run_dir(meta.id, run.id)
-    record = MasterRunRecord(
+    record = models.MasterRunRecord(
         pid=run.pid,
         pid_start=run.pid_start,
         started_at=run.started_at,

@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from conftest import (
+    PUBLISH_BASE_URL,
     THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET,
     THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     make_home_config,
@@ -30,6 +31,8 @@ from src.core.thread_entry import (
     ThreadReplyError,
     accept_summon,
     ack_messages,
+    application_route_links,
+    assert_no_file_server_links,
     backfill_followed_threads,
     chunk_text,
     consume_mention,
@@ -42,7 +45,6 @@ from src.core.thread_entry import (
     nudged,
     operator_only_note,
     replied,
-    rewrite_file_links,
     unread_after,
 )
 
@@ -233,33 +235,44 @@ def test_chunk_text_respects_the_limit_and_keeps_the_content() -> None:
   assert chunk_text("x" * 25, 10) == ["x" * 10, "x" * 10, "x" * 5]
 
 
-def test_rewrite_file_links_swaps_each_link_through_the_swap(tmp_path) -> None:
+def test_no_file_server_links_refuses_the_first_link_and_names_the_publish_command() -> None:
+  link = "http://localhost:18498/absolute_filepath/home/u/caf%C3%A9/page.html"
+  later = "https://charliebot.example/absolute_filepath/home/u/other.html"
+
+  with pytest.raises(ThreadReplyError) as excinfo:
+    assert_no_file_server_links(f"see {link} or {later}")
+
+  assert excinfo.value.status == 422
+  # The first link is named with its query and fragment as written, and the
+  # command carries the path the link names, percent-decoded.
+  assert link in excinfo.value.detail
+  assert "charliebot publish /home/u/café/page.html" in excinfo.value.detail
+
+
+def test_no_file_server_links_refuses_a_portless_link_the_same_way() -> None:
+  link = "https://charliebot.example/absolute_filepath/home/u/page.html"
+
+  with pytest.raises(ThreadReplyError) as excinfo:
+    assert_no_file_server_links(f"see {link}")
+
+  assert excinfo.value.status == 422
+  assert link in excinfo.value.detail
+  assert "charliebot publish /home/u/page.html" in excinfo.value.detail
+
+
+def test_no_file_server_links_passes_a_published_url_and_names_route_links(tmp_path) -> None:
   cfg = make_home_config(tmp_path)
-  page = tmp_path / "page.html"
-  page.write_text("<p>hi</p>", encoding="utf-8")
-  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
+  published = f"{PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html"
   route_url = f"http://127.0.0.1:{cfg.server.port}/diff"
-  text = f"see {file_url}?q=1#frag and open {route_url}"
+  text = f"open {published} and {route_url}"
 
-  out, routes = rewrite_file_links(text, cfg, swap=lambda p: f"published:{p.name}")
+  assert assert_no_file_server_links(text) is None
 
-  assert out == f"see published:page.html?q=1#frag and open {route_url}"
+  routes = application_route_links(text, cfg)
   assert routes == [route_url]
   note = operator_only_note(routes)
   assert note is not None and route_url in note
   assert operator_only_note([]) is None
-
-
-def test_rewrite_file_links_refuses_when_the_linked_file_is_gone(tmp_path) -> None:
-  cfg = make_home_config(tmp_path)
-  gone = tmp_path / "gone.html"
-  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{gone}"
-
-  with pytest.raises(ThreadReplyError) as excinfo:
-    rewrite_file_links(file_url, cfg, swap=lambda p: "never")
-
-  assert excinfo.value.status == 422
-  assert file_url in str(excinfo.value.detail)
 
 
 # ---------------------------------------------------------------------------

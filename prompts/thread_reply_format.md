@@ -22,8 +22,9 @@ follows the same language.
 The reply reaches the thread through the reply command named on the summon prompt's platform line, run from the
 session directory with `--file <path>`: the command posts the file's text to the summoning thread and prints a readback
 with the character count. A round that answers a summon posts exactly one reply this way; everything addressed to the
-operator stays in the session, since nothing else is posted. A page the reply links reaches the thread's readers in the
-form the platform line states, produced by the reply path itself from the file-server URL you wrote.
+operator stays in the session, since nothing else is posted. A page the reply links is one you publish first: run
+`charliebot publish <page>` and write the URL it prints into the reply. The reply path posts your text as written, so a
+CharlieBot file-server link refuses the whole reply.
 
 Every sentence of the reply speaks to the thread and answers the summoner.
 

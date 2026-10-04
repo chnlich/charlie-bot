@@ -41,9 +41,10 @@ serves the publish directory publicly, so anyone holding a link opens it, and a 
 guessed from the page name. Publishing refuses unless `<publish.dir>/index.html` exists: without
 it the host's static server would list the directory, and that listing would expose every link.
 
-The Slack and Discord reply paths publish every file-server URL of an outbound reply through this
-lane on their own and swap in the published URLs; a publish refusal refuses the whole reply. The
-server-port links above serve the operator's own review in the browser and the chat embeds.
+Reader links come only from `charliebot publish`: the Slack and Discord reply paths post the
+reply text as written — they never rewrite links — and a reply that still contains a file-server
+URL is refused with a 422 naming the link and the publish command that fixes it. The server-port
+links above serve the operator's own review in the browser and the chat embeds.
 
 ## Behavior
 

@@ -572,8 +572,8 @@ async def slack_reply(
   ``slack_origin`` names the thread, the running round's input names the summon
   the reply answers, and the readback (chars, chunks, over_budget, answers) is
   what the CLI prints. Refusals map SlackReplyError's status (404 unknown
-  session, 409 no Slack thread, 422 blank text, 502 Slack rejected the post
-  after retries); nothing is persisted on a refusal. Freshness is gated first:
+  session, 409 no Slack thread, 422 blank text or a file-server link, 502 Slack
+  rejected the post after retries); nothing is persisted on a refusal. Freshness is gated first:
   eligible thread messages above the session's watermark refuse with a 412
   ``stale_thread`` payload naming each unseen message, before any chunk posts.
   """
@@ -625,8 +625,8 @@ async def discord_reply(
   ``discord_origin`` names the thread, and the readback (posted, text, chars,
   chunks, over_budget, answers) is what the CLI prints. Refusals map
   ThreadReplyError's status (404 unknown session, 409 no Discord thread, 422
-  blank text, 502 Discord rejected the post after retries); nothing is
-  persisted on a refusal. Freshness is gated first: eligible thread messages
+  blank text or a file-server link, 502 Discord rejected the post after
+  retries); nothing is persisted on a refusal. Freshness is gated first: eligible thread messages
   above the session's watermark refuse with a 412 ``stale_thread`` payload
   naming each unseen message, before any chunk posts.
   """

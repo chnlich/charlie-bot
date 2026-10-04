@@ -6,17 +6,18 @@
 
 ``reply`` posts the file's text to the thread the session was summoned from,
 through the internal discord/reply endpoint, and prints the server's readback as
-one JSON line: ``posted``, ``text`` (what actually went out), ``operator_only_note``
+one JSON line: ``posted``, ``text`` (what actually went out — the text posts
+exactly as written), ``operator_only_note``
 (one line naming the application-route links that stay as written and reach the
 operator alone, null when there are none), ``chars``, ``chunks``, ``over_budget``
 (past the 500-character reply budget) and ``answers`` (the summon event id the
-reply answers, or null for a round no summon started). Every file-server page the
-text links is published first and its URL swapped for the published one, as on
-Slack. A refusal (unread eligible thread messages → the 412 ``stale_thread``
+reply answers, or null for a round no summon started). A refusal (unread
+eligible thread messages → the 412 ``stale_thread``
 payload — run ``charliebot discord read`` first; no Discord thread → 409; blank
-text, a linked file gone, or a publish preflight failure → 422; Discord rejected
-the post → 502) exits non-zero with a JSON error on stderr and persists nothing —
-no chunk of the reply posts.
+text or a CharlieBot file-server link → 422 naming the link and the
+``charliebot publish`` command that produces the URL to write instead; Discord
+rejected the post → 502) exits non-zero with a JSON error on stderr and persists
+nothing — no chunk of the reply posts.
 
 ``read`` posts the session, an optional Discord link and the page size to the
 internal discord/read endpoint and prints the readback JSON: ``messages`` (each

@@ -23,10 +23,13 @@ hooks the same point the Slack one does.
 
 The master posts to its session's thread itself, through ``charliebot discord
 reply`` -> the ``post_reply`` wrapper, and reads the outcome back in the same
-call; before any chunk posts, the reply path publishes every file-server page
-the text links and swaps in its published URL — thread readers may not reach
-this server, but a published URL opens from any device, so every reader gets
-the page. The posted text is persisted as a ``discord_reply`` event
+call; the text posts as written, and a reply that still links a CharlieBot
+file-server URL — the password-protected file browser — is refused with 422
+naming the link and the ``charliebot publish`` command that produces the URL to
+write instead: thread readers may not reach this server, so every page link in
+a reply must be the published URL the round obtained by running
+``charliebot publish``. The posted text is persisted as a ``discord_reply``
+event
 whose ``answers`` names the summon the running round was answering (None for a
 round no summon started). ``deliver_done`` hangs off the round's terminal
 ``master_done`` event (called from ``SessionManager.persist_and_broadcast``),
@@ -449,7 +452,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
-  on a lazily-built Discord adapter; the rewrite, chunking, refusals, reply
+  on a lazily-built Discord adapter; the link check, chunking, refusals, reply
   event, and readback live there.
   """
   return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, session_mgr)

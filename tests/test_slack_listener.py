@@ -154,7 +154,8 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
   expected_platform_line = (
       f"Platform: Slack. Reply command: `{_REPLY_COMMAND} --file <path>`. "
       "Per-message limit: 40000 characters. "
-      "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
+      "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints "
+      "into the reply; a CharlieBot file-server link refuses the reply.")
   assert f"\n{expected_platform_line}\n" in content
 
 

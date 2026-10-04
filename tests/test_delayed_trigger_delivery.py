@@ -1,48 +1,41 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import enum
-from datetime import UTC, datetime
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BROADCAST_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
-    TRIGGERS_GET_CONFIG_PATCH_TARGET,
-    make_home_config,
-)
 
-from src.api.message_utils import events_to_messages
+from src.api import message_utils
 from src.core import event_types as ET
-from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
-from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager
+from src.core import models, sessions, triggers
 
 VOICE_KEY = "is_voice"
 
 
 @pytest.mark.asyncio
-async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Path) -> None:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Delayed trigger"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = PendingTrigger(
+async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: pathlib.Path) -> None:
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Delayed trigger"))
+  trigger_mgr = triggers.TriggerManager(cfg, session_mgr)
+  trigger = models.PendingTrigger(
       id="trigger-1",
       session_id=session.id,
-      fire_at=datetime.now(UTC),
+      fire_at=datetime.datetime.now(datetime.UTC),
       message="Check PID 12345",
   )
   await trigger_mgr._save_trigger(trigger)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger_master,
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as mock_broadcast,
+      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger_master,
       # The wake path re-reads the config instead of using the snapshot captured at
       # construction, so the fresh read is what must reach trigger_master.
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
@@ -59,7 +52,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
       "id": events[0]["id"],
       "timestamp": events[0]["timestamp"],
   }
-  messages = events_to_messages(events)
+  messages = message_utils.events_to_messages(events)
   assert messages == [expected_message]
 
   channel, broadcast_event = mock_broadcast.await_args.args
@@ -83,7 +76,7 @@ async def test_delayed_trigger_persists_user_event_and_wakes_master(tmp_path: Pa
   assert mock_trigger_master.call_args.kwargs["user_event_id"] == events[0]["id"]
 
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored_trigger.status == TriggerStatus.FIRED
+  assert stored_trigger.status == models.TriggerStatus.FIRED
   assert stored_trigger.fired_at is not None
   # Pure-delay triggers (no watch targets) converge on the 'timeout' reason.
   assert stored_trigger.fire_reason == "timeout"
@@ -98,15 +91,15 @@ class _Invalidation(enum.Enum):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("invalidation", list(_Invalidation))
 async def test_invalid_session_trigger_is_cancelled_without_waking_master(
-    tmp_path: Path, invalidation: _Invalidation) -> None:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Invalid session trigger"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = PendingTrigger(
+    tmp_path: pathlib.Path, invalidation: _Invalidation) -> None:
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Invalid session trigger"))
+  trigger_mgr = triggers.TriggerManager(cfg, session_mgr)
+  trigger = models.PendingTrigger(
       id="invalid-session-trigger",
       session_id=session.id,
-      fire_at=datetime.now(UTC),
+      fire_at=datetime.datetime.now(datetime.UTC),
       message="must not wake",
   )
   await trigger_mgr._save_trigger(trigger)
@@ -123,9 +116,9 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
     raise AssertionError(f"unhandled invalidation: {invalidation}")
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock_broadcast,
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger_master,
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as mock_broadcast,
+      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger_master,
+      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
@@ -133,28 +126,28 @@ async def test_invalid_session_trigger_is_cancelled_without_waking_master(
   mock_broadcast.assert_not_awaited()
   mock_trigger_master.assert_not_awaited()
   stored_trigger = await trigger_mgr._load_trigger(session.id, trigger.id)
-  assert stored_trigger.status == TriggerStatus.CANCELLED
+  assert stored_trigger.status == models.TriggerStatus.CANCELLED
 
 
 @pytest.mark.asyncio
-async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: Path) -> None:
+async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: pathlib.Path) -> None:
   """FIRED on delivery: at the instant the wake's work item is enqueued, the
   record on disk already says fired and the pending-triggers tray no longer
   lists it."""
-  from fastapi import FastAPI
-  from fastapi.testclient import TestClient
+  import fastapi
+  from fastapi import testclient
 
-  from src.api.deps import get_session_manager, get_trigger_manager
-  from src.api.sessions import router as sessions_router
+  from src.api import deps
+  from src.api import sessions as sessions_api
 
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Fired on delivery"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  trigger = PendingTrigger(
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Fired on delivery"))
+  trigger_mgr = triggers.TriggerManager(cfg, session_mgr)
+  trigger = models.PendingTrigger(
       id="trigger-fired-on-delivery",
       session_id=session.id,
-      fire_at=datetime.now(UTC),
+      fire_at=datetime.datetime.now(datetime.UTC),
       message="wake now",
   )
   await trigger_mgr._save_trigger(trigger)
@@ -169,9 +162,9 @@ async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: Path
     observed["tray"] = await trigger_mgr.list_triggers(sid)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=fake_trigger_master),
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=fake_trigger_master),
+      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
     # The wake enqueue is a fire-and-forget task; wait it out to its checkpoint.
@@ -179,15 +172,15 @@ async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: Path
       while "status" not in observed:
         await asyncio.sleep(0.01)
 
-  assert observed["status"] == TriggerStatus.FIRED
+  assert observed["status"] == models.TriggerStatus.FIRED
   # The wake's event id is what the enqueued turn answers.
   wake_events = [e for e in session_mgr.load_chat_events_sync(session.id) if e["type"] == ET.SCHEDULED_TRIGGER]
   assert observed["input_event_id"] == wake_events[0]["id"]
   # The tray endpoint lists pending only: the just-delivered record is out.
-  app = FastAPI()
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
-  tray = TestClient(app).get(f"/api/sessions/{session.id}/pending-triggers")
+  app = fastapi.FastAPI()
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.dependency_overrides[deps.get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[deps.get_trigger_manager] = lambda: trigger_mgr
+  tray = testclient.TestClient(app).get(f"/api/sessions/{session.id}/pending-triggers")
   assert tray.status_code == 200
   assert [row["id"] for row in tray.json()] == []

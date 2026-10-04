@@ -1,31 +1,31 @@
 """Property tests for the spec-conformant SSE line splitter (src/core/sse.py)."""
 
+import conftest
 import pytest
-from conftest import FakeChunkedResponse
 
-from src.core.sse import iter_sse_lines, split_sse_lines
+from src.core import sse
 
 
 async def _drain_lines(chunks: list[bytes]) -> list[str]:
-  return [line async for line in iter_sse_lines(FakeChunkedResponse(chunks))]
+  return [line async for line in sse.iter_sse_lines(conftest.FakeChunkedResponse(chunks))]
 
 
 def test_trailing_cr_is_held_until_next_chunk_or_final() -> None:
-  assert split_sse_lines("data: x\r", final=False) == ([], "data: x\r")
-  assert split_sse_lines("data: x\r" + "\n", final=False) == (["data: x"], "")
+  assert sse.split_sse_lines("data: x\r", final=False) == ([], "data: x\r")
+  assert sse.split_sse_lines("data: x\r" + "\n", final=False) == (["data: x"], "")
 
 
 def test_crlf_straddling_two_chunks_yields_one_line() -> None:
-  lines, held = split_sse_lines("data: x\r", final=False)
+  lines, held = sse.split_sse_lines("data: x\r", final=False)
   assert not lines
   assert held == "data: x\r"
-  lines, remainder = split_sse_lines(held + "\ndata: y\n", final=False)
+  lines, remainder = sse.split_sse_lines(held + "\ndata: y\n", final=False)
   assert lines == ["data: x", "data: y"]
   assert remainder == ""
 
 
 def test_final_flush_emits_unterminated_tail_line() -> None:
-  lines, remainder = split_sse_lines("data: tail", final=True)
+  lines, remainder = sse.split_sse_lines("data: tail", final=True)
   assert lines == ["data: tail"]
   assert remainder == ""
 
@@ -54,7 +54,7 @@ async def test_large_frame_spanning_many_chunks_frames_like_one_buffer() -> None
 
 
 async def _drain_lines_bytes(chunks: list[bytes]) -> list[bytes]:
-  return [line async for line in iter_sse_lines(FakeChunkedResponse(chunks), lines_as_bytes=True)]
+  return [line async for line in sse.iter_sse_lines(conftest.FakeChunkedResponse(chunks), lines_as_bytes=True)]
 
 
 @pytest.mark.asyncio

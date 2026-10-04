@@ -188,6 +188,53 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
   assert mgr._search_match_memo.get("needle") is not None  # the clean round stores
 
 
+@pytest.mark.asyncio
+async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn_derive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  import src.core.sessions as sessions_module
+
+  # One active chat file per session, the population just past the pre-4096
+  # file cap (260 sessions over the 256-entry cap): a cap under the
+  # candidate population evicts roots the corpus outgrew, and the next
+  # churn derive re-reads every evicted file from byte 0 instead of the
+  # appended tail alone.
+  mgr = make_session_mgr(tmp_path)
+  carriers = [await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(260)]
+  for meta in carriers:
+    await mgr.save_chat_event(meta.id, user_event("filler line\n"))
+
+  needle = "zzq9neverpresentneedle"
+  first, _ = await mgr.search_sessions_readonly(
+      needle, include_running_status=False, include_pending_trigger_status=False)
+  assert first == []
+  assert len(list(mgr._search_miss_memo.items())) == len(carriers)
+
+  appended = carriers[0]
+  await mgr.save_chat_event(appended.id, user_event("churn append\n"))
+
+  scans: list[tuple[str, int]] = []
+  real_scan = sessions_module._scan_content_for_hit
+
+  def spy(path, session_id, query_lower, start):
+    scans.append((session_id, start))
+    return real_scan(path, session_id, query_lower, start)
+
+  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", spy)
+  rows, _ = await mgr.search_sessions_readonly(
+      needle, include_running_status=False, include_pending_trigger_status=False)
+  assert rows == []
+  # The churn derive re-proves the appended file on its tail alone; every
+  # unmoved file's stored root still answers without a read.
+  assert len(scans) == 1
+  assert scans[0][0] == appended.id
+  assert scans[0][1] > 0
+
+  ride, _ = await mgr.search_sessions_readonly(
+      needle, include_running_status=False, include_pending_trigger_status=False)
+  assert ride == []
+  assert len(scans) == 1  # the derived rows serve the repeat without a read
+
+
 def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.core.sessions as sessions_module
 

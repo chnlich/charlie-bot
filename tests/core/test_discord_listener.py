@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,7 +13,6 @@ from conftest import (
     DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
     PUBLISH_BASE_URL,
     ROOT,
-    deploy_publish_lane,
     fake_backends,
     mention_seam,
     shut_down_trigger_tasks,
@@ -22,7 +20,7 @@ from conftest import (
 )
 
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, PublishConfig
+from src.core.config import CharlieBotConfig
 from src.core.discord_client import BASE_URL, DiscordClient, snowflake_key
 from src.core.discord_listener import (
     _DM_NOTICE,
@@ -485,14 +483,11 @@ async def _discord_session(session_mgr: SessionManager) -> SessionMetadata:
 
 
 @pytest.mark.asyncio
-async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tmp_path: Path) -> None:
+async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: Path) -> None:
+  """A reply whose page link is the published URL goes out exactly as written."""
   cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
-  cfg = cfg.model_copy(
-      update={"publish": PublishConfig(dir=deploy_publish_lane(tmp_path), public_base_url=PUBLISH_BASE_URL)})
   sid = (await _discord_session(session_mgr)).id
-  page = tmp_path / "page.html"
-  page.write_text("<p>hi</p>", encoding="utf-8")
-  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
+  text = f"see {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
   requests: list[httpx.Request] = []
 
   def handler(request: httpx.Request) -> httpx.Response:
@@ -503,37 +498,67 @@ async def test_post_reply_posts_the_published_url_as_json_and_uploads_no_file(tm
   # whether the post went out as JSON or as a multipart upload.
   client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)
+    readback = await post_reply(sid, text, cfg, session_mgr)
 
   assert len(requests) == 1
   request = requests[0]
   assert (request.method, str(request.url)) == ("POST", f"{BASE_URL}/channels/{_THREAD}/messages")
   assert request.headers["content-type"] == "application/json"
-  body = json.loads(request.content)
-  match = re.fullmatch(
-      re.escape(f"see {PUBLISH_BASE_URL}/") + r"([A-Za-z0-9_-]{22})" + re.escape("/page.html for details"),
-      body["content"])
-  assert match is not None, body["content"]
-  assert (cfg.publish.dir / match.group(1) / "page.html").read_text(encoding="utf-8") == "<p>hi</p>"
-  assert readback["text"] == body["content"]
+  assert json.loads(request.content)["content"] == text
+  assert readback["text"] == text
+  assert readback["operator_only_note"] is None
 
 
 @pytest.mark.asyncio
-async def test_post_reply_refuses_422_and_posts_nothing_without_the_publish_lane(tmp_path: Path) -> None:
+async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_path: Path) -> None:
+  """A server-port application-route link posts as written and rides the operator-alone note."""
+  cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
+  sid = (await _discord_session(session_mgr)).id
+  route_url = f"http://127.0.0.1:{cfg.server.port}/diff"
+  text = f"open {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html and {route_url}"
+  requests: list[httpx.Request] = []
+
+  def handler(request: httpx.Request) -> httpx.Response:
+    requests.append(request)
+    return httpx.Response(200, json={"id": "0"})
+
+  client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
+  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    readback = await post_reply(sid, text, cfg, session_mgr)
+
+  assert json.loads(requests[0].content)["content"] == text
+  assert readback["operator_only_note"] is not None and route_url in readback["operator_only_note"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "link_template, named_path",
+    [
+        # This server's port: the shape the old rewrite matched.
+        ("http://localhost:{port}/absolute_filepath/home/u/artifacts/page.html", "/home/u/artifacts/page.html"),
+        # Portless: the shape the rewrite silently let through to the password page.
+        ("https://charliebot.example/absolute_filepath/home/u/artifacts/page.html", "/home/u/artifacts/page.html"),
+        # Percent-encoded: the command names the decoded path.
+        (
+            "https://charliebot.example/absolute_filepath/home/u/caf%C3%A9/page.html?q=1#frag",
+            "/home/u/café/page.html",
+        ),
+    ])
+async def test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link(
+    tmp_path: Path, link_template: str, named_path: str) -> None:
   cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
   sid = (await _discord_session(session_mgr)).id
-  page = tmp_path / "page.html"
-  page.write_text("<p>hi</p>", encoding="utf-8")
-  file_url = f"http://127.0.0.1:{cfg.server.port}/absolute_filepath{page}"
+  link = link_template.format(port=cfg.server.port)
 
   with (
       patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(ThreadReplyError) as excinfo,
   ):
-    await post_reply(sid, f"see {file_url} for details", cfg, session_mgr)
+    await post_reply(sid, f"see {link} for details", cfg, session_mgr)
 
   assert excinfo.value.status == 422
-  assert "publish.dir" in excinfo.value.detail
+  assert link in excinfo.value.detail
+  assert f"charliebot publish {named_path}" in excinfo.value.detail
   assert client.posts == []
   assert not [ev for ev in session_mgr.load_chat_events_sync(sid) if ev.get("type") == ET.DISCORD_REPLY]
 

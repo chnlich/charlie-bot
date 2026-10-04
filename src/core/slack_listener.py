@@ -18,9 +18,11 @@ follow, the reconnect backfill, and the round side (``post_reply``,
 server endpoint, the session manager, and the tests import. The master posts
 to its session's thread itself, through ``charliebot slack reply`` ->
 ``POST /api/internal/slack/reply`` -> the ``post_reply`` wrapper, and reads the
-outcome back in the same call; before any chunk posts, the reply path publishes
-every file-server artifact the text links and swaps the URLs to the published
-ones. The posted text is persisted as a ``slack_reply`` event whose ``answers``
+outcome back in the same call; the text posts as written, and a reply that
+still links a CharlieBot file-server URL — the password-protected file browser
+— is refused with 422 naming the link and the ``charliebot publish`` command
+that produces the URL to write instead. The posted text is persisted as a
+``slack_reply`` event whose ``answers``
 names the summon the running round was answering (None for a round no summon
 started). ``deliver_done`` hangs off the round's terminal ``master_done`` event
 (called from ``SessionManager.persist_and_broadcast``), not off a waiting
@@ -493,7 +495,7 @@ async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_
   """Post *text* to the session's Slack thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
-  on the Slack adapter; the rewrite, chunking, refusals, reply event, and
+  on the Slack adapter; the link check, chunking, refusals, reply event, and
   readback live there.
   """
   return await thread_entry.post_reply(SlackThreadAdapter(), session_id, text, cfg, session_mgr)

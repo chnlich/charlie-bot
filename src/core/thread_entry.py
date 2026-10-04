@@ -12,7 +12,8 @@ consumption (``consume_mention``), the group assignment (``ensure_group``),
 the follow triggers (``arm_follow_trigger``), the thread-message follow
 (``follow_message``), the unread readback (``unread_messages``), and the
 reconnect backfill (``backfill_followed_threads``) — and the round side: the
-reply path (``post_reply``), the freshness gate (``assert_thread_fresh``), the
+reply path (``post_reply``) with its file-server-link gate
+(``assert_no_file_server_links``), the freshness gate (``assert_thread_fresh``), the
 ack (``ack_messages``), the round-end audit (``deliver_done`` over
 ``audit_round``), and the lost-summon backfill (``backfill_lost_summons``).
 The follow side wakes its session whatever the session's stored status: an
@@ -51,7 +52,6 @@ from src.core.models import (
     TriggerStatus,
     utc_now,
 )
-from src.core.publish import PublishError, publish_artifact
 from src.core.sessions import SessionManager
 from src.core.tasks import create_logged_task
 from src.core.triggers import ArchivedSessionError, TriggerManager
@@ -526,12 +526,12 @@ async def post_reply(
     adapter: ThreadAdapter, session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
   """Post *text* to the session's thread and return the readback the CLI prints.
 
-  Before any chunk posts, the file links in the text are rewritten through
-  ``publish_swap`` (``rewrite_file_links``), so the thread receives published
-  links its readers can open; the refusal paths there — a linked file gone, a
-  publish preflight failure — raise ``ThreadReplyError`` and leave the thread
-  untouched. Refusals raise ``ThreadReplyError``: 404 unknown session, 409 no
-  platform thread, 422 blank text, 422 a rewrite refusal, 502 when a chunk
+  The text posts exactly as written — nothing in it is rewritten. Before any
+  chunk posts, ``assert_no_file_server_links`` refuses the whole reply with 422
+  when the text still links a CharlieBot file-server URL: the round publishes
+  the page with ``charliebot publish`` and writes the printed URL into the
+  reply instead. Refusals raise ``ThreadReplyError``: 404 unknown session, 409 no
+  platform thread, 422 blank text, 422 a file-server link, 502 when a chunk
   exhausted its retries (nothing is persisted then, so the caller can retry).
   The endpoint runs ``assert_thread_fresh`` first, so a stale thread (412)
   never reaches this function. On success the platform's reply event records
@@ -545,7 +545,8 @@ async def post_reply(
   if not text.strip():
     raise ThreadReplyError(422, "Reply text is empty")
 
-  text, operator_only_links = await asyncio.to_thread(rewrite_file_links, text, cfg, publish_swap(cfg))
+  assert_no_file_server_links(text)
+  operator_only_links = application_route_links(text, cfg)
 
   # lazy: mirrors the backfill import's agents-package guard
   from src.agents import master_cc_state
@@ -1160,82 +1161,72 @@ async def backfill_followed_threads(
   return armed
 
 
-# The file-service URL prefixes: the mounted mounts with the trailing slash the
-# rewrite gate matches on.
-_FILE_URL_PREFIXES = tuple(mount + "/" for mount in FILE_SERVER_MOUNTS)
-
-# The file-server URL shapes the reply path rewrites: scheme, any host, this
-# server's port, one of the file-service prefixes, then the absolute filesystem
-# path, with the query string and fragment carried onto the published URL unchanged.
-_FILE_SERVER_URL_RE = re.compile(
-    r"https?://(?P<host>\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)/(?P<prefix>" +
-    "|".join(mount.lstrip("/") for mount in FILE_SERVER_MOUNTS) +
-    r")(?P<fs_path>/[^\s?#]*)(?P<query>\?[^\s#]*)?(?P<fragment>#[^\s]*)?")
-
-# Any URL naming a port, for the application-route naming: the matches whose port is
-# this server's and whose path is not a file-service prefix reach the operator alone.
-_SERVER_PORT_URL_RE = re.compile(
-    r"https?://(?:\[[^\]\s]+\]|[^/\s:]+):(?P<port>\d+)(?P<path>/[^\s?#]*)?"
+# Any URL reply text can carry: scheme, authority (host, optional port), path,
+# query string, fragment. The reply-path link check reads the path (the
+# file-server mount segment), the operator-only naming reads the port.
+# Parentheses stay outside the URL so a markdown link's closing paren does too.
+_URL_RE = re.compile(
+    r"[a-zA-Z][a-zA-Z0-9+.\-]*://"
+    r"(?:\[[^\]\s]+\]|[^/\s:()]+)"
+    r"(?::(?P<port>\d+))?"
+    r"(?P<path>/[^\s?#()]*)?"
     r"(?:\?[^\s#]*)?(?:#[^\s]*)?")
 
 
-def rewrite_file_links(text: str, cfg: CharlieBotConfig, swap: Callable[[Path], str]) -> tuple[str, list[str]]:
-  """Rewrite every file-server artifact URL the reply links through *swap*.
+def _file_server_named_path(url_path: str) -> str | None:
+  """The filesystem path a file-server URL path names, percent-decoded; None when it names none.
 
-  A URL on this server's port under the canonical ``/absolute_filepath/`` prefix names an
-  artifact file. Each existing target goes through *swap* — the text that
-  replaces the URL before its query string and fragment are re-attached — so
-  the reply carries links its readers can open. A match whose target file is
-  gone raises ``ThreadReplyError`` naming the link — nothing of this reply
-  posts — and a refusal raised by *swap* itself (for example an unconfigured
-  publish lane, whose error text names the missing key) propagates the same
-  way. Application-route URLs on the same port (``/diff``, ``/perfetto``,
-  ...) are not static files, so they stay as written and come back named for
-  the readback's operator-alone line.
+  The file server serves ``<mount>/<absolute path without its leading slash>``
+  (``FILE_SERVER_MOUNTS``), whatever the scheme, host, or port in front, so the
+  tail after the mount segment is the path ``charliebot publish`` takes.
   """
-  routes: list[str] = []
-  for m in _SERVER_PORT_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server.port:
-      continue
-    if (m.group("path") or "").startswith(_FILE_URL_PREFIXES):
-      continue
-    routes.append(m.group(0))
-
-  out: list[str] = []
-  cursor = 0
-  for m in _FILE_SERVER_URL_RE.finditer(text):
-    if int(m.group("port")) != cfg.server.port:
-      continue
-    fs_path = Path(unquote(m.group("fs_path")))
-    if not fs_path.is_file():
-      raise ThreadReplyError(422, f"reply links a file-server URL whose file is gone: {m.group(0)}")
-    out.append(text[cursor:m.start()])
-    out.append(swap(fs_path) + (m.group("query") or "") + (m.group("fragment") or ""))
-    cursor = m.end()
-  out.append(text[cursor:])
-  return "".join(out), list(dict.fromkeys(routes))
+  for mount in FILE_SERVER_MOUNTS:
+    marker = mount + "/"
+    at = url_path.find(marker)
+    if at != -1:
+      return "/" + unquote(url_path[at + len(marker):])
+  return None
 
 
-# The page-delivery sentence every platform's summon-prompt line carries: every
-# platform's reply goes through post_reply, whose rewrite runs publish_swap.
+def assert_no_file_server_links(text: str) -> None:
+  """Refuse the reply when *text* still links a CharlieBot file-server URL.
+
+  The reply path posts the text as written, so a file-server link — the
+  password-protected file browser, on any host or port — would reach the
+  thread's readers as an unlock page. The first link in the text raises
+  ``ThreadReplyError`` (422) naming the link and the ``charliebot publish``
+  command whose printed URL replaces it; nothing posts.
+  """
+  for m in _URL_RE.finditer(text):
+    named = _file_server_named_path(m.group("path") or "")
+    if named is None:
+      continue
+    raise ThreadReplyError(
+        422, f"reply links a CharlieBot file-server URL, which opens only behind the access key: {m.group(0)}. "
+        f"Publish the page with `charliebot publish {named}` and write the URL the command prints into the reply")
+
+
+def application_route_links(text: str, cfg: CharlieBotConfig) -> list[str]:
+  """The application-route URLs on this server's port that the reply names for the operator.
+
+  ``/diff``, ``/perfetto`` and the server's other pages are not static files:
+  they stay as written (the operator's devices reach them, a thread reader's do
+  not), and the readback's operator-alone line names each once, in
+  first-appearance order.
+  """
+  routes = [
+      m.group(0)
+      for m in _URL_RE.finditer(text)
+      if m.group("port") is not None and int(m.group("port")) == cfg.server.port
+  ]
+  return list(dict.fromkeys(routes))
+
+
+# The page-delivery sentence every platform's summon-prompt line carries: the
+# reply path posts the text as written and refuses a file-server link.
 LINKED_PAGES_LINE = (
-    "Linked pages: the reply path publishes each linked file-server page and swaps in its published URL.")
-
-
-def publish_swap(cfg: CharlieBotConfig) -> Callable[[Path], str]:
-  """The swap ``post_reply`` hands ``rewrite_file_links``: publish the file, return its published URL.
-
-  A ``PublishError`` (publish lane unconfigured or not deployed) refuses the
-  whole reply with 422; its text names the missing key or file.
-  """
-
-  def swap(fs_path: Path) -> str:
-    try:
-      return publish_artifact(fs_path, cfg).url
-    except PublishError as e:
-      raise ThreadReplyError(422, str(e)) from e
-
-  return swap
+    "Linked pages: publish each page with `charliebot publish <path>` and write the URL it prints "
+    "into the reply; a CharlieBot file-server link refuses the reply.")
 
 
 def operator_only_note(links: list[str]) -> str | None:

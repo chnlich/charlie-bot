@@ -16,7 +16,6 @@ from conftest import (
     THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     FakeSlackClient,
     build_slack_cfg,
-    deploy_publish_lane,
     make_task_spawner,
     stub_credentials,
 )
@@ -25,7 +24,7 @@ from structlog.testing import capture_logs
 from src.agents import master_cc_state
 from src.agents.backends.base import make_text_event
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, PublishConfig
+from src.core.config import CharlieBotConfig
 from src.core.message_aggregator import MessageAggregator
 from src.core.models import (
     CreateSessionRequest,
@@ -264,39 +263,38 @@ async def test_reply_to_an_unknown_session_is_404_without_slack_credentials(tmp_
 
 
 # ---------------------------------------------------------------------------
-# Reply: the publish-lane rewrite before any chunk posts
+# Reply: the file-server-link check before any chunk posts
 # ---------------------------------------------------------------------------
-
-_PUB_BASE = PUBLISH_BASE_URL
-_FILE_HOST = "https://agent.example.test:18498"
-
-
-def _pub_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """The slack rig's cfg with the publish lane deployed under tmp_path."""
-  lane = deploy_publish_lane(tmp_path)
-  return build_slack_cfg(tmp_path).model_copy(update={"publish": PublishConfig(dir=lane, public_base_url=_PUB_BASE)})
-
-
-def _rig_with_publish_lane(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
-  """The slack rig with the publish lane deployed: the rewrite tests' shared fixture."""
-  cfg = _pub_cfg(tmp_path)
-  return cfg, SessionManager(cfg), FakeSlackClient()
 
 
 @pytest.mark.asyncio
-async def test_reply_refuses_as_a_whole_when_the_linked_file_is_gone(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig_with_publish_lane(tmp_path)
-  gone = tmp_path / "artifacts" / "gone.html"
+async def test_reply_refuses_as_a_whole_when_it_still_links_the_file_server(tmp_path: Path) -> None:
+  """A portless CharlieBot file-server link refuses the reply with the publish command that fixes it."""
+  cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
+  link = "https://charliebot.example/absolute_filepath/home/u/artifacts/page.html"
 
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
-    await post_reply(sid, f"details: {_FILE_HOST}/absolute_filepath/{gone}", cfg, session_mgr)
+    await post_reply(sid, f"details: {link}", cfg, session_mgr)
 
   assert excinfo.value.status == 422
-  assert f"{_FILE_HOST}/absolute_filepath/{gone}" in excinfo.value.detail
+  assert link in excinfo.value.detail
+  assert "charliebot publish /home/u/artifacts/page.html" in excinfo.value.detail
   assert not client.posts
   assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
-  assert list(cfg.publish.dir.iterdir()) == [cfg.publish.dir / "index.html"]  # nothing was published
+
+
+@pytest.mark.asyncio
+async def test_reply_with_a_published_url_posts_the_text_as_written(tmp_path: Path) -> None:
+  cfg, session_mgr, client = _rig(tmp_path)
+  sid = await _slack_session(session_mgr)
+  text = f"see {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
+
+  with _listener_seam(client):
+    result = await post_reply(sid, text, cfg, session_mgr)
+
+  assert result["text"] == text
+  assert client.posts == [{"channel": _CHANNEL, "text": text, "thread_ts": _THREAD}]
 
 
 # ---------------------------------------------------------------------------

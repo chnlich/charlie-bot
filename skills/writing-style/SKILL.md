@@ -2,8 +2,8 @@
 name: writing-style
 description: Genre style packs for code, READMEs, commits and PRs,
   bug reports, article shares, and coordination messages. Load the matching
-  genre file at its writing moment. General prose rules live in the master
-  prompt's Writing Style section.
+  genre file at its writing moment. General prose rules, the rules for text
+  a model reads included, live in the master prompt's Writing Style section.
 version: 2.2.0
 ---
 

@@ -33,9 +33,14 @@ b. Distill to category-level conclusions:
    bullet. Retain the essential mechanism while pruning background narratives, incident
    timelines, and intermediate deductions.
 
-c. Apply the skill's "Phrasing for model context" rule:
-   Check every line the PR adds or rewrites against that rule, so each rule sentence states the
-   action to take or the standing reality and each example shows the practice itself.
+c. Apply the "Text a model reads" subsection of the master prompt's Writing Style section.
+   Check every line that the PR adds or rewrites against that subsection:
+   - Plain words and the established terms of the field name things.
+   - Each concept has one name, the name that the existing entries use.
+   - Each sentence holds one fact or one instruction.
+   - Each instruction is imperative and starts with its condition.
+   - Each sentence uses the active voice and stays within its length limit.
+   Rewrite each line that falls short.
 
 Record every substantive condensation, routing restoration, disposition reversal, and phrasing
 rewrite as a row in your report with its reason.

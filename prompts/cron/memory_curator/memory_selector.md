@@ -1,9 +1,9 @@
 Memory curation.
 
 Read `~/workspace/charlie-bot/skills/llm-context-guideline/SKILL.md` first.
-Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` before writing or
-editing any entry prose, check every added or rewritten line against it, and apply the skill's
-"Phrasing for model context" rule to every line the day's draft adds.
+Read the Writing Style section of `~/workspace/charlie-bot/prompts/master.md` next, its "Text a
+model reads" subsection included. Before you write or edit entry prose, check every added or
+rewritten line against that section. Name each concept as the existing entries name it.
 
 Step 1: open the day's PR worktree.
 Run `charliebot memory proposal open` and read the worktree path from the `worktree` line of its
@@ -31,7 +31,7 @@ candidate, first test it against the admission whitelist and home routing in the
 llm-context-guideline skill (retaining durable mechanisms and routing execution artifacts,
 procedures, or discoverable facts to their canonical homes), and write the proof lines it
 requires. Draft each bullet at the category level as a standing reality, bounded to one to
-three lines, with every line following the skill's "Phrasing for model context" rule.
+three lines, with every line following the "Text a model reads" subsection.
 For each passing candidate, decide and finalize its `topic`, `scope`, `audience`, and `title`;
 the default action is a merge:
 - **revise (merge)**: fold the candidate into the existing entry whose theme covers it,

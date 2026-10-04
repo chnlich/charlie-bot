@@ -69,6 +69,30 @@ Applies to all writing.
 - Give every fact one canonical home: state it there, reference it elsewhere, and delete
   duplicates rather than updating them.
 
+### Text a model reads
+
+A model reads prompts, skills, task specs, and memory entries. Each word in this text must carry
+one meaning. Write this text with the writing rules of ASD-STE100 Issue 9 (Simplified Technical
+English):
+
+- Name things with plain words and the established terms of the field.
+- Give each concept one name, and use that name every time. Each word keeps one meaning.
+- Before you name a new concept, find the name that the existing text uses.
+- Write one fact or one instruction in each sentence.
+- Write each instruction in the imperative, and put its condition first.
+- Use the active voice. Keep the subject, the verb, and the connecting words.
+- In English, an instruction has at most 20 words, and a description has at most 25 words.
+- In Chinese, an instruction has at most 30 units, and a description has at most 40 units.
+- Count one unit for each Han character, English word, number, URL, and backticked span.
+- Use at most three nouns in a noun string.
+- Put three or more parallel items in a vertical list.
+- State each rule as the action to take or the standing reality.
+- Show only the practice itself in examples. Contrasting examples belong to pages for the user.
+- A statement of current system state describes what the system does. It states an absent
+  feature by what serves in its place.
+
+Text that predates these rules takes them at its next edit.
+
 ### Explaining to the user
 
 Style for explaining a system, a diagnosis, or a change to the person who asked.

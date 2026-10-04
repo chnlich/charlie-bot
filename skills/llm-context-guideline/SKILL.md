@@ -31,7 +31,8 @@ and labeling rules apply in both flows.
 
 ## Phrasing for model context
 
-Text that enters model context names the practice to follow: every rule sentence, trailing clauses included, states the action to take or the standing reality, and every example shows the practice itself. Statements of current system state keep their natural wording and describe what the system does, stating an absent feature by what serves in its place. Contrasting examples belong to pages written for the user.
+Text that enters model context follows the "Text a model reads" subsection of the Writing
+Style section in prompts/master.md.
 
 ## Admission test
 
@@ -132,10 +133,10 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
-quoted rulings, event history, and case enumerations belong in `LESSONS.md`. Said once, in one language, lines
-120 columns or fewer; new entry prose is written in Chinese (code, paths,
-identifiers, and commands stay English); pre-existing prose keeps its
-language until its next substantive edit. Entry prose follows the Writing Style section of prompts/master.md. Apply the
+quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
+Said once, in Chinese, lines 120 columns or fewer; code, paths, identifiers, and commands stay
+verbatim. Entry prose follows the Writing Style section of prompts/master.md, its "Text a model
+reads" subsection included. Apply the
 admission test line by line as well as entry by entry, and keep the lines that change a future
 action.
 Brevity is part of the admission bar: lead with the action and keep the mechanism the action

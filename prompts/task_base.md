@@ -17,6 +17,9 @@ The codebase has a single user. Apply these principles:
   SLURM job, `setsid nohup`) and is waited for in bounded chunks, one call each, a chunk ending when the job ends
   or its bound expires (`timeout <bound> tail --pid=<pid> -f <log>` locally, a `timeout`-bounded `sacct` loop
   for a SLURM job); the report records the job's identifier. A task spec may hand the watch to the master instead.
+- **Text a model reads**: before you write text for a model, read the "Text a model reads"
+  subsection of `~/workspace/charlie-bot/prompts/master.md`. This text includes prompts, skills,
+  task specs, memory entries, and `CLAUDE.md` and `AGENTS.md` files.
 
 <!-- section: skills_discovery -->
 ## Skills Discovery

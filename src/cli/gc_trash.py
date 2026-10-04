@@ -11,7 +11,6 @@ to run) and never escalated automatically.
 """
 
 import argparse
-import shutil
 import sys
 
 from src.cli import help_formatter
@@ -50,6 +49,11 @@ def main() -> None:
   if not args.yes:
     print("Dry run — nothing deleted. Re-run with --yes to hard-delete.")
     return
+
+  # shutil rides the one purge that deletes: its module body pulls the
+  # archive backends (bz2, lzma, zstd), and --help plus the dry-run read
+  # them for nothing.
+  import shutil
 
   failed = False
   for entry in entries:

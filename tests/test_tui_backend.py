@@ -1,7 +1,7 @@
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import make_fake_run_tmux
 
 from src.agents.backends import pty_common, tui
 
@@ -29,28 +29,28 @@ def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
 
 def _patch_tmux_env(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> tuple[Path, Path, list[tuple[str, ...]]]:
+    tmp_path: pathlib.Path,
+) -> tuple[pathlib.Path, pathlib.Path, list[tuple[str, ...]]]:
   """Redirect CLAUDE_CONFIG_DIR into tmp_path and tmux calls into fakes; return (config_dir, working_dir, tmux calls).
 
   ensure_tmux_session's tmux calls flow through pty_common globals (the has-session
   probe via tmux_session_exists, the spawn via _start_tmux_session); an unpatched
   pty_common global would reach the real tmux binary. Request the ``path_home``
-  fixture alongside this rig when the code under test resolves ``Path.home()``.
+  fixture alongside this rig when the code under test resolves ``pathlib.Path.home()``.
   """
   config_dir = tmp_path / "claude-config"
   working_dir = tmp_path / "session"
   calls: list[tuple[str, ...]] = []
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
-  monkeypatch.setattr(pty_common, "_run_tmux", make_fake_run_tmux(calls))
+  monkeypatch.setattr(pty_common, "_run_tmux", conftest.make_fake_run_tmux(calls))
   return config_dir, working_dir, calls
 
 
 @pytest.mark.asyncio
 async def test_ensure_tmux_session_injects_new_session_env(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    path_home: Path,
+    tmp_path: pathlib.Path,
+    path_home: pathlib.Path,
 ) -> None:
   _, working_dir, calls = _patch_tmux_env(monkeypatch, tmp_path)
 

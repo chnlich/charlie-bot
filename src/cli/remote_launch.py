@@ -17,16 +17,20 @@ Exit codes:
 
 import argparse
 import json
-import secrets
 import shlex
-import subprocess
 import sys
 
 from src.cli import common, help_formatter
-from src.core import ssh, timeouts
+from src.core import timeouts
 
 
 def _ssh_launch_remote(host: str, cwd: str, cmd: str, launch_id: str) -> int:
+  # The ssh driver and its subprocess ride the one launch that shells out;
+  # --help and parser errors read neither.
+  import subprocess
+
+  from src.core import ssh
+
   remote_dir = f"/tmp/charliebot_runs/{launch_id}"
   remote_log = f"{remote_dir}/log"
   remote_sentinel = f"{remote_dir}/sentinel"
@@ -81,6 +85,10 @@ def main() -> None:
   session_id = common.resolve_session_id(args.session)
 
   started_at = models.utc_now()
+  # secrets rides the one launch that mints an id; --help and parser errors
+  # read it for nothing.
+  import secrets
+
   launch_id = f"{started_at:%Y%m%dT%H%M%S}-{secrets.token_hex(3)}"
 
   remote_pid = _ssh_launch_remote(args.host, args.cwd, args.cmd, launch_id)

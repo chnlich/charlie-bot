@@ -22,21 +22,18 @@ import re
 import sys
 import time
 from collections.abc import Callable
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, NoReturn
 
 if TYPE_CHECKING:
   import io
   import socket
   import urllib.parse
+  from pathlib import Path
 
   from src.core.config import CharlieBotConfig
   from src.core.credentials import Credentials
 
-from src.core import home
 from src.core.constants import CALLER_SESSION_HEADER, SESSION_ID_ENV_VAR
-from src.core.home import charliebot_home_dir
-from src.core.run_token import load_run_token
 from src.core.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
@@ -357,8 +354,16 @@ def _config_module_fingerprint() -> tuple[float, int]:
 
 def _cached_server_port() -> int | None:
   """Return the cached server port, or None when the document is absent, stale, or unreadable."""
+  # The home stack (src.core.home -> pathlib, ~5 ms) rides the request paths
+  # that resolve it: a deferral here keeps --help and parser errors off its
+  # import chain (the src.cli.config deferral shape).
+  from src.core import home
+  from src.core.home import charliebot_home_dir
+
   fingerprint = [list(home.file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
   try:
+    from pathlib import Path
+
     doc = json.loads((Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH).read_text(encoding="utf-8"))
   except (OSError, ValueError):
     return None
@@ -370,6 +375,10 @@ def _cached_server_port() -> int | None:
 
 def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
+  from pathlib import Path
+
+  from src.core import home
+  from src.core.home import charliebot_home_dir
   from src.core.json_utils import write_json_atomically
 
   doc = {"fingerprint": [home.file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
@@ -399,6 +408,8 @@ def _sessions_dir() -> Path:
   carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
   (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
 
+  from src.core.home import charliebot_home_dir
+
   return (charliebot_home_dir() / "sessions").resolve()
 
 
@@ -424,6 +435,10 @@ def internal_api_auth_headers() -> dict[str, str]:
   operator caller identities only (an agent's session comes from its verified
   token, never the header).
   """
+  # run_token's module body pulls the hashlib chain (~6 ms of the M92 CLI
+  # floor); only the token-bearing request reads it.
+  from src.core.run_token import load_run_token
+
   run_token = load_run_token()
   if run_token:
     return _with_caller_session({"Authorization": f"Bearer {run_token}"})
@@ -459,6 +474,8 @@ def exit_error(message: str) -> NoReturn:
 
 def read_required_text_file(flag_name: str, file_path: str) -> str:
   """Read a required text file, exiting non-zero on a missing or empty file."""
+  from pathlib import Path
+
   path = Path(file_path)
   if not path.is_file():
     exit_usage_error(f"{flag_name} not found: {file_path}")
@@ -486,6 +503,8 @@ def validate_repo_path(parser: argparse.ArgumentParser, value: str) -> None:
   """
   if not value.startswith("/"):
     parser.error(f"--repo must be an absolute path (starting with '/'), got: {value!r}")
+  from pathlib import Path
+
   if not Path(value).is_dir():
     parser.error(f"--repo does not exist: {value!r}")
 
@@ -518,6 +537,8 @@ def validate_task_spec_markdown(content: str) -> None:
       continue
     if stripped.startswith("- /"):
       source_path = stripped[2:].strip()
+      from pathlib import Path
+
       if not Path(source_path).exists():
         exit_usage_error(f"task spec source file not found: {source_path}")
       continue
@@ -863,6 +884,8 @@ def resolve_session_id(arg_session: str | None) -> str:
   This docstring is the single home for the CLI caller-contract summary; the
   CLI module headers point here instead of restating it.
   """
+  from pathlib import Path
+
   cwd = Path.cwd().resolve()
   sessions_dir = _sessions_dir()
   cwd_session = cwd.name if cwd.parent == sessions_dir else None

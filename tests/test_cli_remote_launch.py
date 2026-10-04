@@ -19,11 +19,12 @@ from src.cli.remote_launch import main
 from src.core.constants import SESSION_ID_ENV_VAR
 
 # Import-path patch target for remote_launch's subprocess seam. subprocess.run is reached
-# through main's module-scope `import subprocess`, so its stand-in lands on the
-# src.cli.remote_launch module attribute. The config and sessions-root routes
-# (CONFIG_GET_CONFIG_PATCH_TARGET and CLI_COMMON_SESSIONS_DIR_PATCH_TARGET in conftest)
-# carry their deferred-import mechanism at their definition.
-_SUBPROCESS_RUN_PATCH_TARGET = "src.cli.remote_launch.subprocess.run"
+# through the launch path's function-local `import subprocess`, which resolves the same
+# shared subprocess module, so its stand-in lands on that module's run attribute. The
+# config and sessions-root routes (CONFIG_GET_CONFIG_PATCH_TARGET and
+# CLI_COMMON_SESSIONS_DIR_PATCH_TARGET in conftest) carry their deferred-import mechanism
+# at their definition.
+_SUBPROCESS_RUN_PATCH_TARGET = "subprocess.run"
 
 
 def _has_ssh_localhost() -> bool:

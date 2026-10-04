@@ -6,14 +6,26 @@ pydantic, config, or any other server stack.
 """
 
 from enum import StrEnum
-from pathlib import Path
 
 # Checkout root (where pyproject.toml lives): this file sits at src/core/, so
 # parents[2] is the root; moving this file breaks the depth. Buildinfo's git
 # calls, the artifact template reads, the /static mount, and the pages layer's
 # git-version cwd, static-tree digest, and Jinja templates directory derive
-# from it.
-REPO_ROOT = Path(__file__).resolve().parents[2]
+# from it. Built on first access, not at import: this module loads on every
+# ``charliebot`` verb (the M92 CLI import floor), and pathlib's import chain
+# (~5 ms) prices every verb's parser build while only the REPO_ROOT readers
+# (the server pages, the artifact writers, the config re-export) touch it.
+
+
+def __getattr__(name: str):
+  if name == "REPO_ROOT":
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    globals()["REPO_ROOT"] = root
+    return root
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Cross-process session-identity wire name: the server writes the master's
 # session id into every spawned process env (master_cc_run._build_master_env),

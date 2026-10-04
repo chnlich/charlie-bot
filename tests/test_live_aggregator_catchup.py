@@ -11,22 +11,20 @@ re-checked at every slice boundary) discards the unfinished init and reruns.
 from __future__ import annotations
 
 import asyncio
+import pathlib
 from collections.abc import Iterator
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import BROADCAST_PATCH_TARGET, assistant_text_event, fake_backends
 
+from src.core import config, models
 from src.core import event_types as ET
 from src.core import sessions as sessions_module
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
 
 
-async def _seed_session(mgr: SessionManager) -> str:
-  session = await mgr.create_session(CreateSessionRequest(name="catchup"))
+async def _seed_session(mgr: sessions_module.SessionManager) -> str:
+  session = await mgr.create_session(models.CreateSessionRequest(name="catchup"))
   await mgr.save_chat_event(
       session.id, {
           "type": ET.USER,
@@ -38,35 +36,41 @@ async def _seed_session(mgr: SessionManager) -> str:
           },
           "timestamp": "2026-09-07T00:00:00Z",
       })
-  await mgr.save_chat_event(session.id, {**assistant_text_event("seed answer"), "timestamp": "2026-09-07T00:00:01Z"})
+  await mgr.save_chat_event(
+      session.id, {
+          **conftest.assistant_text_event("seed answer"), "timestamp": "2026-09-07T00:00:01Z"
+      })
   return session.id
 
 
 @pytest.mark.asyncio
-async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  mgr = SessionManager(cfg)
+async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: pathlib.Path) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
+  mgr = sessions_module.SessionManager(cfg)
   sid = await _seed_session(mgr)
 
   aggregator = await mgr._get_or_init_aggregator(sid)
   assert aggregator.emit_stream_deltas is True
   assert mgr._aggregators[sid] is aggregator
 
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as broadcast:
-    await mgr.persist_and_broadcast(sid, {**assistant_text_event("live tail"), "timestamp": "2026-09-07T00:00:02Z"})
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast:
+    await mgr.persist_and_broadcast(
+        sid, {
+            **conftest.assistant_text_event("live tail"), "timestamp": "2026-09-07T00:00:02Z"
+        })
 
   delta_types = [call.args[1]["type"] for call in broadcast.await_args_list]
   assert "stream" in delta_types
 
 
 @pytest.mark.asyncio
-async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  mgr = SessionManager(cfg)
+async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
+  mgr = sessions_module.SessionManager(cfg)
   sid = await _seed_session(mgr)
 
   inits = 0
-  original = SessionManager._init_live_aggregator
+  original = sessions_module.SessionManager._init_live_aggregator
 
   async def counting_init(self, session_id: str, epoch: int) -> sessions_module.MessageAggregator | None:
     nonlocal inits
@@ -74,8 +78,8 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
     return await original(self, session_id, epoch)
 
   with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch.object(SessionManager, "_init_live_aggregator", counting_init),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch.object(sessions_module.SessionManager, "_init_live_aggregator", counting_init),
   ):
     first, second = await asyncio.gather(
         mgr._get_or_init_aggregator(sid),
@@ -87,9 +91,9 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_drop_mid_feed_discards_and_reruns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  mgr = SessionManager(cfg)
+async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
+  mgr = sessions_module.SessionManager(cfg)
   sid = await _seed_session(mgr)
 
   real_aggregator = sessions_module.MessageAggregator

@@ -1,12 +1,12 @@
+import conftest
 import pytest
-from conftest import assistant_text_event, build_cli_backend_rig
 
-from src.agents.backends.gemini_cli import GeminiCliBackend
+from src.agents.backends import gemini_cli
 from src.core import event_types as ET
 
 
-def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> GeminiCliBackend:
-  return build_cli_backend_rig(monkeypatch, GeminiCliBackend, **kwargs)
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> gemini_cli.GeminiCliBackend:
+  return conftest.build_cli_backend_rig(monkeypatch, gemini_cli.GeminiCliBackend, **kwargs)
 
 
 def test_build_command_wraps_instructions_and_resume(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,7 +85,7 @@ def test_translate_event_mappings(monkeypatch: pytest.MonkeyPatch) -> None:
       "type": "message",
       "role": "assistant",
       "content": "hello"
-  }) == [assistant_text_event("hello")]
+  }) == [conftest.assistant_text_event("hello")]
   assert backend.translate_event({
       "type": "tool_use",
       "tool_name": "Bash",

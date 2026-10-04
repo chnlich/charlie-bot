@@ -147,7 +147,7 @@ def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
       backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
   session_meta = models.SessionMetadata(id="s", name="S", backend="deleted-id")
   with pytest.raises(ValueError, match="refusing to substitute"):
-    spawner._resolve_session_default_backend_model(cfg, session_meta)
+    spawner.spawner_backends._resolve_session_default_backend_model(cfg, session_meta)
 
 
 # ------------------------------------------------------------ resume guarding

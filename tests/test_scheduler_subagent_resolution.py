@@ -31,7 +31,8 @@ async def test_session_default_returns_configured_backend() -> None:
   session = models.SessionMetadata(name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
 
-  backend, model = await spawner.resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=None)
+  backend, model = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
+      session.id, cfg, mgr, requested_backend=None)
 
   assert backend == "claude-opus-4.7"
   assert model == "claude-opus-4-7"
@@ -85,4 +86,5 @@ async def test_unresolvable_backend_resolution_raises(
   mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match=match):
-    await spawner.resolve_requested_subagent_backend_model(session.id, cfg, mgr, requested_backend=requested_backend)
+    await spawner.spawner_backends.resolve_requested_subagent_backend_model(
+        session.id, cfg, mgr, requested_backend=requested_backend)

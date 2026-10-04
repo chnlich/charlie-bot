@@ -2915,11 +2915,12 @@ def build_worker_prompt(
     is_continuation: bool = False,
     keep_worktree: bool = False,
 ) -> str:
-  """spawner._build_worker_prompt with the arguments the prompt-content tests share: /tmp/repo
+  """spawner.spawner_prompt._build_worker_prompt with the arguments the prompt-content tests
+  share: /tmp/repo
   as the repo, charliebot/task-xyz branched off main, a one-field SessionMetadata, no
   start_point. The keyword fields are the knobs the prompt tests vary; a test needing any
   other field (repo_path, branch_name, wt_path, session_meta, start_point) builds its own."""
-  return spawner._build_worker_prompt(
+  return spawner.spawner_prompt._build_worker_prompt(
       description=description,
       repo_path=Path("/tmp/repo"),
       base_branch="main",

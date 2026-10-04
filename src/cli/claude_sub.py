@@ -43,9 +43,9 @@ from src.core.timeouts import (
 # import they replaced pulls inspect (~7 ms measured, -X importtime).
 if TYPE_CHECKING:
   import asyncio
-  from pathlib import Path
+  import pathlib
 
-  from src.cli.claude_sub_bridge import HookBridge
+  from src.cli import claude_sub_bridge
 
 _MIN_CLAUDE_VERSION = (2, 1, 210)
 _TARGET_CLAUDE_VERSION = (2, 1, 211)
@@ -139,9 +139,9 @@ class PaneInfo:
 
   @property
   def is_claude(self) -> bool:
-    from pathlib import Path
+    import pathlib
 
-    command = Path(self.command).name.lower()
+    command = pathlib.Path(self.command).name.lower()
     return command in {"claude", "claude-code"} or "claude" in command
 
 
@@ -273,14 +273,14 @@ async def _pane_info(session_id: str) -> PaneInfo:
   return PaneInfo(pid=pid, cwd=fields[1], command=fields[2], dead=fields[3] == "1")
 
 
-def _session_marker_dir() -> Path:
+def _session_marker_dir() -> pathlib.Path:
   """This profile's claude-sub marker directory. Resolved per call, never at import."""
-  from src.core.home import charliebot_home_dir
+  from src.core import home
 
-  return charliebot_home_dir() / "claude-sub-sessions"
+  return home.charliebot_home_dir() / "claude-sub-sessions"
 
 
-def _marker_path(session_id: str) -> Path:
+def _marker_path(session_id: str) -> pathlib.Path:
   return _session_marker_dir() / f"{session_id}.json"
 
 
@@ -303,43 +303,43 @@ def _read_marker(session_id: str) -> SessionMarkerState | None:
 def _write_marker(session_id: str, state: SessionMarkerState) -> None:
   path = _marker_path(session_id)
   path.parent.mkdir(parents=True, exist_ok=True)
-  from src.core.json_utils import write_json_atomically
+  from src.core import json_utils
 
-  write_json_atomically(path, {"state": state.value}, newline=True)
+  json_utils.write_json_atomically(path, {"state": state.value}, newline=True)
 
 
-def _claude_user_config_paths() -> tuple[Path, Path, Path, Path]:
+def _claude_user_config_paths() -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
   """Return the active Claude global, user-settings, credentials, and remote paths."""
-  from pathlib import Path
+  import pathlib
 
-  from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, CREDENTIALS_FILE, default_claude_dir
+  from src.core import home
 
-  configured_root = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
+  configured_root = os.environ.get(home.CLAUDE_CONFIG_DIR_ENV_VAR)
   if configured_root:
-    root = Path(configured_root).expanduser()
+    root = pathlib.Path(configured_root).expanduser()
     settings_root = root
   else:
-    root = Path.home()
-    settings_root = default_claude_dir()
+    root = pathlib.Path.home()
+    settings_root = home.default_claude_dir()
   return (
       root / ".claude.json",
       settings_root / "settings.json",
-      settings_root / CREDENTIALS_FILE,
+      settings_root / home.CREDENTIALS_FILE,
       settings_root / "remote-settings.json",
   )
 
 
-def _session_config_dir(session_id: str) -> Path:
+def _session_config_dir(session_id: str) -> pathlib.Path:
   return _session_marker_dir() / _SESSION_CONFIG_DIR_NAME / session_id
 
 
-def _write_json_atomically(path: Path, value: dict[str, Any]) -> None:
-  from src.core.json_utils import write_json_atomically
+def _write_json_atomically(path: pathlib.Path, value: dict[str, Any]) -> None:
+  from src.core import json_utils
 
-  write_json_atomically(path, value, newline=True, private=True)
+  json_utils.write_json_atomically(path, value, newline=True, private=True)
 
 
-def _read_json_object(path: Path, description: str) -> dict[str, Any]:
+def _read_json_object(path: pathlib.Path, description: str) -> dict[str, Any]:
   try:
     value = json.loads(path.read_text(encoding="utf-8"))
   except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
@@ -349,7 +349,7 @@ def _read_json_object(path: Path, description: str) -> dict[str, Any]:
   return value
 
 
-def _copy_session_file(source: Path, target: Path, description: str) -> None:
+def _copy_session_file(source: pathlib.Path, target: pathlib.Path, description: str) -> None:
   import shutil
 
   try:
@@ -359,7 +359,7 @@ def _copy_session_file(source: Path, target: Path, description: str) -> None:
   os.chmod(target, 0o600)
 
 
-def _prepare_session_config(session_id: str, cwd: Path) -> Path:
+def _prepare_session_config(session_id: str, cwd: pathlib.Path) -> pathlib.Path:
   """Create the persistent per-session Claude config overlay without touching user files."""
   config_dir = _session_config_dir(session_id)
   try:
@@ -397,9 +397,9 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
     _copy_session_file(settings_source, config_dir / "settings.json", "user Claude settings")
   if remote_source.is_file() and not (config_dir / "remote-settings.json").exists():
     _copy_session_file(remote_source, config_dir / "remote-settings.json", "Claude remote settings")
-  from src.core.home import CREDENTIALS_FILE
+  from src.core import home
 
-  credentials_target = config_dir / CREDENTIALS_FILE
+  credentials_target = config_dir / home.CREDENTIALS_FILE
   if not credentials_target.exists():
     if not credentials_source.is_file():
       raise ClaudeSubError(f"Claude subscription credentials are missing: {credentials_source}")
@@ -412,7 +412,7 @@ def _prepare_session_config(session_id: str, cwd: Path) -> Path:
   return config_dir
 
 
-async def _create_tmux_host(session_id: str, cwd: Path) -> None:
+async def _create_tmux_host(session_id: str, cwd: pathlib.Path) -> None:
   from src.agents.backends.pty_common import tmux_session_name
 
   name = tmux_session_name(session_id)
@@ -434,7 +434,7 @@ async def _create_tmux_host(session_id: str, cwd: Path) -> None:
   await _tmux_checked("set-window-option", "-t", name, "remain-on-exit", "on")
 
 
-async def _prepare_tmux_session(session_id: str, cwd: Path, requested_resume: bool) -> bool:
+async def _prepare_tmux_session(session_id: str, cwd: pathlib.Path, requested_resume: bool) -> bool:
   """Validate the marker/pane binding and return whether Claude must be resumed."""
   from src.agents.backends.pty_common import tmux_session_exists
 
@@ -550,7 +550,7 @@ async def _check_cli_capabilities() -> None:
     raise ClaudeSubError(f"Claude Code lacks required claude-sub capabilities: {missing_text}")
 
 
-def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
+def _write_hook_plugin(root: pathlib.Path, bridge: claude_sub_bridge.HookBridge) -> pathlib.Path:
   plugin_dir = root / "plugin"
   hooks_dir = plugin_dir / "hooks"
   hooks_dir.mkdir(parents=True, exist_ok=True)
@@ -569,13 +569,13 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
       ) + "\n",
       encoding="utf-8",
   )
-  from pathlib import Path
+  import pathlib
 
-  helper = Path(__file__).with_name("claude_sub_hook.py").resolve()
-  from src.cli.claude_sub_bridge import HOOK_EVENTS
+  from src.cli import claude_sub_bridge
 
+  helper = pathlib.Path(__file__).with_name("claude_sub_hook.py").resolve()
   hooks: dict[str, list[dict[str, Any]]] = {}
-  for event_name in HOOK_EVENTS:
+  for event_name in claude_sub_bridge.HOOK_EVENTS:
     gate = event_name in {"UserPromptSubmit", "PreToolUse", "PermissionRequest"}
     # -S skips site for the helper process: the helper is machine-invoked once per
     # hook event and imports nothing from site-packages, while site's editable
@@ -612,11 +612,11 @@ def _write_hook_plugin(root: Path, bridge: HookBridge) -> Path:
 _PLUGIN_VALIDATE_CACHE_FILENAME = "plugin-validate-cache.json"
 
 
-def _plugin_validate_cache_path() -> Path:
+def _plugin_validate_cache_path() -> pathlib.Path:
   return _session_marker_dir() / _PLUGIN_VALIDATE_CACHE_FILENAME
 
 
-def _plugin_validate_key(plugin_dir: Path) -> str | None:
+def _plugin_validate_key(plugin_dir: pathlib.Path) -> str | None:
   """The plugin-validation pass's identity: written plugin bytes plus the claude binary's own identity.
 
   The bridge socket path and token are the only per-launch values the written
@@ -631,9 +631,9 @@ def _plugin_validate_key(plugin_dir: Path) -> str | None:
   if binary is None:
     return None
   try:
-    from pathlib import Path
+    import pathlib
 
-    resolved = Path(binary).resolve()
+    resolved = pathlib.Path(binary).resolve()
     stat = resolved.stat()
     plugin_bytes = (plugin_dir / ".claude-plugin" / "plugin.json").read_bytes()
     hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text(encoding="utf-8"))
@@ -665,19 +665,19 @@ def _read_validate_cache() -> str | None:
 
 
 def _write_validate_cache(key: str) -> None:
-  from src.core.json_utils import write_json_atomically
+  from src.core import json_utils
 
   path = _plugin_validate_cache_path()
   try:
     path.parent.mkdir(parents=True, exist_ok=True)
-    write_json_atomically(path, {"key": key}, newline=True)
+    json_utils.write_json_atomically(path, {"key": key}, newline=True)
   except OSError:
     # The cache is an accelerator only: a failed write costs the next launch its
     # validate (the pre-cache behavior) and never weakens the guard.
     pass
 
 
-async def _validate_hook_plugin(plugin_dir: Path) -> None:
+async def _validate_hook_plugin(plugin_dir: pathlib.Path) -> None:
   """Strict-validate the written plugin through the claude CLI before the turn's launch.
 
   The guard fails a launch whose plugin this claude rejects before Claude starts —
@@ -702,9 +702,9 @@ async def _respawn_claude(
     args: ClaudeSubArgs,
     session_id: str,
     resume: bool,
-    plugin_dir: Path,
-    cwd: Path,
-    config_dir: Path | None,
+    plugin_dir: pathlib.Path,
+    cwd: pathlib.Path,
+    config_dir: pathlib.Path | None,
 ) -> None:
   from src.agents.backends.pty_common import tmux_session_name
 
@@ -719,9 +719,9 @@ async def _respawn_claude(
   for key, value in headless_claude_env().items():
     tmux_args.extend(["-e", f"{key}={value}"])
   if config_dir is not None:
-    from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR
+    from src.core import home
 
-    tmux_args.extend(["-e", f"{CLAUDE_CONFIG_DIR_ENV_VAR}={config_dir}"])
+    tmux_args.extend(["-e", f"{home.CLAUDE_CONFIG_DIR_ENV_VAR}={config_dir}"])
   tmux_args.extend(
       build_claude_argv(
           session_id,
@@ -812,9 +812,9 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
 
   validate_prompt(args.prompt)
   session_id = args.resume or args.session_id or str(uuid.uuid4())
-  from pathlib import Path
+  import pathlib
 
-  cwd = Path.cwd().resolve()
+  cwd = pathlib.Path.cwd().resolve()
   requested_resume = args.resume is not None
   resume = await _prepare_tmux_session(session_id, cwd, requested_resume)
   config_dir = _prepare_session_config(session_id, cwd)
@@ -822,18 +822,18 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
   import tempfile
 
   with tempfile.TemporaryDirectory(prefix=f"claude-sub-{session_id[:8]}-") as temporary_dir:
-    temporary_root = Path(temporary_dir)
+    temporary_root = pathlib.Path(temporary_dir)
     socket_path = temporary_root / "bridge.sock"
-    from src.cli.claude_sub_bridge import HookBridge, HookTurnState, PromptDelivery
+    from src.cli import claude_sub_bridge
 
-    state = HookTurnState(
+    state = claude_sub_bridge.HookTurnState(
         expected_session_id=session_id,
         expected_cwd=str(cwd),
         expected_prompt=args.prompt,
         model=args.model or "",
         expected_source="resume" if resume else "startup",
     )
-    bridge = HookBridge(socket_path, uuid.uuid4().hex, state)
+    bridge = claude_sub_bridge.HookBridge(socket_path, uuid.uuid4().hex, state)
     await bridge.start()
     launch_attempted = False
     terminated = False
@@ -860,7 +860,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
           _emit(bridge.events.get_nowait())
 
         if bridge.failure is not None:
-          if state.delivery != PromptDelivery.ACKNOWLEDGED:
+          if state.delivery != claude_sub_bridge.PromptDelivery.ACKNOWLEDGED:
             await _terminate_foreground(session_id)
             terminated = True
             raise UnknownPromptDeliveryError(_unknown_delivery_message(str(bridge.failure)))
@@ -868,13 +868,13 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
           terminated = True
           raise ClaudeSubError(str(bridge.failure))
 
-        if state.delivery == PromptDelivery.ACKNOWLEDGED and state.stop_seen and state.idle_seen:
+        if state.delivery == claude_sub_bridge.PromptDelivery.ACKNOWLEDGED and state.stop_seen and state.idle_seen:
           _emit(_result_event(session_id, state.stop_candidate or "", int((time.monotonic() - turn_start) * 1000)))
           completed = True
           return
 
         now = time.monotonic()
-        if state.delivery != PromptDelivery.ACKNOWLEDGED and now >= confirmation_deadline:
+        if state.delivery != claude_sub_bridge.PromptDelivery.ACKNOWLEDGED and now >= confirmation_deadline:
           await _terminate_foreground(session_id)
           terminated = True
           raise UnknownPromptDeliveryError(_unknown_delivery_message("submission confirmation timeout"))
@@ -886,7 +886,7 @@ async def _stream_turn(args: ClaudeSubArgs, stop_event: asyncio.Event) -> None:
           last_process_probe = now
           info = await _pane_info(session_id)
           if info.dead:
-            if state.delivery != PromptDelivery.ACKNOWLEDGED:
+            if state.delivery != claude_sub_bridge.PromptDelivery.ACKNOWLEDGED:
               raise UnknownPromptDeliveryError(
                   _unknown_delivery_message("Claude foreground process exited before submission confirmation"))
             raise ClaudeSubError("Claude foreground process exited before hook-confirmed completion")

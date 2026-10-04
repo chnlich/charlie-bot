@@ -42,6 +42,7 @@ whenever the one-time backfill has run, and prices the table directly before tha
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -645,6 +646,10 @@ class UsageLedger:
     else:
       self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
     self._conn.commit()
+    # The open capture batch's SAVEPOINT name; None outside one. record_file and
+    # record_gate release their per-file savepoint into this batch instead of
+    # committing, so the capture's writes land in one fsync (see batch()).
+    self._batch_savepoint: str | None = None
 
   def _upgrade_schema(self) -> None:
     """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
@@ -757,6 +762,27 @@ class UsageLedger:
   def close(self) -> None:
     self._conn.close()
 
+  @contextlib.contextmanager
+  def batch(self):
+    """Group the capture's record writes into one commit; exit commits, exceptions included.
+
+    Each record_* call keeps its own SAVEPOINT, so a failed file rolls back alone
+    exactly as its standalone transaction did, and the files that recorded before
+    the failure stay durable — the exit commits them, because a failed capture's
+    partial progress is durable today. The generation bumps once per commit, so a
+    batch of N files counts as one write for the rows memo.
+    """
+    savepoint = "usage_capture_batch"
+    self._conn.execute(f"SAVEPOINT {savepoint}")
+    self._batch_savepoint = savepoint
+    try:
+      yield
+    finally:
+      self._batch_savepoint = None
+      self._conn.execute(f"RELEASE {savepoint}")  # the outermost savepoint's release commits
+      self._conn.commit()
+      UsageLedger._write_generation += 1
+
   def set_lock_wait(self, seconds: float) -> None:
     """Rebind this connection's busy-handler ceiling to *seconds*.
 
@@ -791,7 +817,8 @@ class UsageLedger:
 
   def record_gate(self, host: str, path: str, main: tuple[int, int], wal: tuple[int, int] | None, sig: str) -> None:
     """Store one probe's gate: the file-state pairs it ran under and the signature it computed."""
-    with self._conn:
+    self._conn.execute("SAVEPOINT record_gate")
+    try:
       self._conn.execute(
           """INSERT INTO capture_gates (host, path, main_size, main_mtime_ns, wal_size, wal_mtime_ns, sig)
              VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -800,7 +827,14 @@ class UsageLedger:
                wal_size = excluded.wal_size, wal_mtime_ns = excluded.wal_mtime_ns,
                sig = excluded.sig""",
           (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
-    UsageLedger._write_generation += 1
+    except BaseException:
+      self._conn.execute("ROLLBACK TO record_gate")
+      self._conn.execute("RELEASE record_gate")
+      raise
+    self._conn.execute("RELEASE record_gate")
+    if self._batch_savepoint is None:
+      self._conn.commit()
+      UsageLedger._write_generation += 1
 
   def record_file(
       self, host: str, path: str, sig: str, records: Sequence[UsageRecord], supersede_prefix: str | None = None) -> int:
@@ -839,7 +873,11 @@ class UsageLedger:
           f"SELECT record_id, kind, source, model, account, ts, in_fresh, cache_write, cache_read,"
           f" in_unsplit, output FROM usage WHERE record_id IN ({marks})", chunk):
         existing[row["record_id"]] = tuple(row)[1:]
-    with self._conn:
+    # The savepoint keeps the file's own atomicity; standalone it commits on release,
+    # inside ledger.batch() it joins the capture's one commit (batch() documents the
+    # durability contract).
+    self._conn.execute("SAVEPOINT record_file")
+    try:
       deleted = 0
       if supersede_prefix is not None:
         # A primary-key range: the upper bound is the prefix with its last character
@@ -893,7 +931,14 @@ class UsageLedger:
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
-    UsageLedger._write_generation += 1
+    except BaseException:
+      self._conn.execute("ROLLBACK TO record_file")
+      self._conn.execute("RELEASE record_file")
+      raise
+    self._conn.execute("RELEASE record_file")
+    if self._batch_savepoint is None:
+      self._conn.commit()
+      UsageLedger._write_generation += 1
     return len(records)
 
   def model_rows(self) -> list[LedgerRow]:

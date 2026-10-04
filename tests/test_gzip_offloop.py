@@ -3,12 +3,12 @@ import gzip
 from collections.abc import AsyncIterator, Callable
 from typing import Any
 
-from conftest import make_http_scope
-from fastapi import FastAPI
-from fastapi.responses import StreamingResponse
-from starlette.middleware.gzip import GZipMiddleware
-from starlette.responses import Response
-from starlette.types import Message
+import conftest
+import fastapi
+from fastapi import responses
+from starlette import responses as responses_starlette
+from starlette import types
+from starlette.middleware import gzip as gzip_middleware
 
 import server
 
@@ -24,8 +24,8 @@ def _strip_mtime(wire: bytes) -> bytes:
   return wire[:4] + b"\x00\x00\x00\x00" + wire[8:]
 
 
-def _build(handler: Any, middleware: Any) -> FastAPI:
-  app = FastAPI()
+def _build(handler: Any, middleware: Any) -> fastapi.FastAPI:
+  app = fastapi.FastAPI()
   app.get("/big")(handler)
   # Level 3 is the responder's non-default ceiling: the mounted compresslevel
   # must be an ISA-L level (0-3) since the responder's file is an IGzipFile,
@@ -34,28 +34,28 @@ def _build(handler: Any, middleware: Any) -> FastAPI:
   return app
 
 
-def _sliced_stream(media_type: str) -> Callable[[], StreamingResponse]:
+def _sliced_stream(media_type: str) -> Callable[[], responses.StreamingResponse]:
   """A handler streaming BODY in 100 KB slices. Each call builds a fresh
   response and generator: the same handler is driven through two middlewares,
   and a second drive over an exhausted generator would read an empty body."""
 
-  def stream() -> StreamingResponse:
+  def stream() -> responses.StreamingResponse:
 
     async def chunks() -> AsyncIterator[bytes]:
       for i in range(0, len(BODY), 100_000):
         yield BODY[i:i + 100_000]
 
-    return StreamingResponse(chunks(), media_type=media_type)
+    return responses.StreamingResponse(chunks(), media_type=media_type)
 
   return stream
 
 
-def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
+def _drive(app: fastapi.FastAPI) -> tuple[dict[str, str], bytes]:
   headers: dict[str, str] = {}
   body = b""
   done = asyncio.Event()
 
-  async def send(message: Message) -> None:
+  async def send(message: types.Message) -> None:
     nonlocal body
     if message["type"] == "http.response.start":
       headers.update({k.decode(): v.decode() for k, v in message["headers"]})
@@ -66,7 +66,7 @@ def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
 
   sent = False
 
-  async def receive() -> Message:
+  async def receive() -> types.Message:
     # StreamingResponse parks a listener on receive() until http.disconnect; a
     # real server blocks there until the client goes away, so the stream wins
     # the race. Unblock only once the final body chunk has passed the send side.
@@ -77,18 +77,18 @@ def _drive(app: FastAPI) -> tuple[dict[str, str], bytes]:
     await done.wait()
     return {"type": "http.disconnect"}
 
-  scope = make_http_scope("/big", headers=[(b"host", b"t"), (b"accept-encoding", b"gzip")])
+  scope = conftest.make_http_scope("/big", headers=[(b"host", b"t"), (b"accept-encoding", b"gzip")])
   asyncio.run(app(scope, receive, send))
   return headers, body
 
 
 def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
 
-  def handler() -> Response:
-    return Response(content=BODY, media_type="application/json")
+  def handler() -> responses_starlette.Response:
+    return responses_starlette.Response(content=BODY, media_type="application/json")
 
   headers, body = _drive(_build(handler, server._CharlieBotGZipMiddleware))
-  _, baseline_body = _drive(_build(handler, GZipMiddleware))
+  _, baseline_body = _drive(_build(handler, gzip_middleware.GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
   # The responder deflates with ISA-L and the stock middleware with zlib, so
@@ -105,7 +105,7 @@ def test_streaming_body_compresses_per_chunk() -> None:
   stream = _sliced_stream("application/json")
 
   headers, body = _drive(_build(stream, server._CharlieBotGZipMiddleware))
-  _, baseline_body = _drive(_build(stream, GZipMiddleware))
+  _, baseline_body = _drive(_build(stream, gzip_middleware.GZipMiddleware))
 
   assert headers["content-encoding"] == "gzip"
   # Same deflator split as the whole-body test above: the streamed chunks'
@@ -116,8 +116,8 @@ def test_streaming_body_compresses_per_chunk() -> None:
 
 def test_already_compressed_media_types_ride_identity() -> None:
 
-  def page() -> Response:
-    return Response(content=BODY, media_type="image/png")
+  def page() -> responses_starlette.Response:
+    return responses_starlette.Response(content=BODY, media_type="image/png")
 
   headers, body = _drive(_build(page, server._CharlieBotGZipMiddleware))
   assert "content-encoding" not in headers

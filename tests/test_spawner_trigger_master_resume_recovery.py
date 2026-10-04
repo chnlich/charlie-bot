@@ -1,30 +1,24 @@
 """Tests for trigger-master resume recovery behavior."""
 
-from pathlib import Path
-from unittest.mock import Mock
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    CODEX_BACKEND_OPTION,
-    MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET,
-    OPUS_BACKEND_OPTION,
-)
 
+from src.core import config, master_trigger, models
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.master_trigger import trigger_master
-from src.core.models import BackendOption, MasterRunRecord, SessionCallbacks, SessionMetadata
 
 _LOG_PATCH_TARGET = "src.core.master_trigger.log"
 
 
-def _build_cfg() -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-test"),
+def _build_cfg() -> config.CharlieBotConfig:
+  return config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-test"),
       paths={"worktree_dir": "/tmp/worktrees"},
       backends={"options": [
-          OPUS_BACKEND_OPTION,
-          CODEX_BACKEND_OPTION,
+          conftest.OPUS_BACKEND_OPTION,
+          conftest.CODEX_BACKEND_OPTION,
       ]},
   )
 
@@ -32,18 +26,18 @@ def _build_cfg() -> CharlieBotConfig:
 class FakeSessionManager:
   """Minimal session manager test double for trigger-master tests."""
 
-  def __init__(self, meta: SessionMetadata | None) -> None:
+  def __init__(self, meta: models.SessionMetadata | None) -> None:
     self._meta = meta
-    self.saved_metas: list[SessionMetadata] = []
+    self.saved_metas: list[models.SessionMetadata] = []
     self.persisted_cc_session_ids: list[str] = []
 
-  async def get_session(self, session_id: str) -> SessionMetadata | None:
+  async def get_session(self, session_id: str) -> models.SessionMetadata | None:
     return self._meta
 
-  async def resolve_successor_chain(self, session_id: str) -> SessionMetadata | None:
+  async def resolve_successor_chain(self, session_id: str) -> models.SessionMetadata | None:
     return self._meta
 
-  async def save_metadata(self, meta: SessionMetadata) -> None:
+  async def save_metadata(self, meta: models.SessionMetadata) -> None:
     self._meta = meta
     self.saved_metas.append(meta.model_copy(deep=True))
 
@@ -68,12 +62,12 @@ class FakeSessionManager:
   async def mark_unread(self, session_id: str) -> None:
     return None
 
-  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
+  async def persist_master_run(self, session_id: str, record: models.MasterRunRecord | None) -> None:
     if self._meta is not None:
       self._meta.master_run = record
 
-  def callbacks(self) -> SessionCallbacks:
-    return SessionCallbacks(
+  def callbacks(self) -> models.SessionCallbacks:
+    return models.SessionCallbacks(
         persist_and_broadcast=self.persist_and_broadcast,
         update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
@@ -94,10 +88,10 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
   """
   cfg = _build_cfg()
   session_id = "session-1"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="stale-id", backend="codex-o3")
+  meta = models.SessionMetadata(id=session_id, name="Test Session", cc_session_id="stale-id", backend="codex-o3")
   session_mgr = FakeSessionManager(meta)
   call_resume_ids: list[str | None] = []
-  call_backend_options: list[BackendOption] = []
+  call_backend_options: list[models.BackendOption] = []
   call_flags: list[tuple[bool, bool]] = []
 
   async def fake_run_message(*args: object, **kwargs: object) -> str | None:
@@ -108,11 +102,11 @@ async def test_stale_resume_id_retries_once_without_resume_and_does_not_persist(
       raise RuntimeError("Codex --resume failed: conversation not found")
     return "fresh-id"
 
-  mock_log = Mock()
-  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  mock_log = mock.Mock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
-  await trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
+  await master_trigger.trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
 
   assert call_resume_ids == ["stale-id", None]
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3", "codex-o3"]
@@ -133,10 +127,10 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
   """Non-resume failures should not retry and should remain hard failures."""
   cfg = _build_cfg()
   session_id = "session-2"
-  meta = SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
+  meta = models.SessionMetadata(id=session_id, name="Test Session", cc_session_id="valid-id", backend="codex-o3")
   session_mgr = FakeSessionManager(meta)
   call_count = 0
-  call_backend_options: list[BackendOption] = []
+  call_backend_options: list[models.BackendOption] = []
 
   async def fake_run_message(*args: object, **kwargs: object) -> str | None:
     nonlocal call_count
@@ -144,11 +138,11 @@ async def test_non_recoverable_error_does_not_retry_and_failure_is_preserved(mon
     call_backend_options.append(kwargs["backend_option"])
     raise RuntimeError("backend crashed unexpectedly")
 
-  mock_log = Mock()
-  monkeypatch.setattr(MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
+  mock_log = mock.Mock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET, fake_run_message)
   monkeypatch.setattr(_LOG_PATCH_TARGET, mock_log)
 
-  await trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
+  await master_trigger.trigger_master(session_id, "worker summary", cfg, session_mgr, ET.CHILD_REPORT)
 
   assert call_count == 1
   assert [backend_option.id for backend_option in call_backend_options] == ["codex-o3"]

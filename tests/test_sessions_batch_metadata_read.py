@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import make_session_mgr as _make_session_mgr
 
-from src.core.models import SessionMetadata, SessionStatus
-from src.core.sessions import SessionManager
+from src.core import models, sessions
 
 
-def _write_metadata(mgr: SessionManager, meta: SessionMetadata, raw: str | None = None) -> Path:
+def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:
   path = mgr._metadata_path(meta.id)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(meta.model_dump_json() if raw is None else raw, encoding="utf-8")
@@ -19,20 +18,20 @@ def _write_metadata(mgr: SessionManager, meta: SessionMetadata, raw: str | None 
 
 
 @pytest.mark.asyncio
-async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp_path: Path,) -> None:
-  mgr = _make_session_mgr(tmp_path)
-  active = SessionMetadata(name="active")
-  archived = SessionMetadata(name="archived", status=SessionStatus.ARCHIVED)
-  legacy = SessionMetadata(name="legacy", round_ratings={"9": "thumbs_up"})
-  corrupt = SessionMetadata(name="corrupt")
+async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp_path: pathlib.Path,) -> None:
+  mgr = conftest.make_session_mgr(tmp_path)
+  active = models.SessionMetadata(name="active")
+  archived = models.SessionMetadata(name="archived", status=models.SessionStatus.ARCHIVED)
+  legacy = models.SessionMetadata(name="legacy", round_ratings={"9": "thumbs_up"})
+  corrupt = models.SessionMetadata(name="corrupt")
   _write_metadata(mgr, active)
   _write_metadata(mgr, archived)
   _write_metadata(mgr, legacy)
   _write_metadata(mgr, corrupt, "{corrupt")
 
   batch_result = await mgr._load_session_metas()
-  sequential_mgr = SessionManager(mgr._cfg)
-  sequential_result: list[SessionMetadata] = []
+  sequential_mgr = sessions.SessionManager(mgr._cfg)
+  sequential_result: list[models.SessionMetadata] = []
   for session_dir in mgr._cfg.sessions_dir.iterdir():
     if not session_dir.is_dir():
       continue

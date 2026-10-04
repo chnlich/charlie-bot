@@ -136,8 +136,15 @@ _PROJECTION_LRU_LIMIT = 64
 # whole corpus, ~155 MB on the seed host, per search). Chat files mutate only
 # by append between atomic archive rewrites (inode swap), so a same-inode file
 # that grew kept its old bytes: a query some stored needle prefixes re-proves
-# absence by scanning the appended tail alone.
-_SEARCH_MISS_MEMO_LIMIT = 256
+# absence by scanning the appended tail alone. The cap must cover the active
+# chat-file population the derive walks, not a sample of it: a derive under
+# churn re-reads every candidate without a current root from byte 0 (the
+# appended tail alone otherwise), so a cap under the population turns every
+# metadata write or append between requests into a near-full corpus scan.
+# ~1090 active chat files at the 2026-10-04 re-pricing; the entry is one path
+# string plus at most _SEARCH_MISS_ROOTS_PER_FILE needle->signature records,
+# so the cap bounds memo memory at a few MB.
+_SEARCH_MISS_MEMO_LIMIT = 4096
 # Roots kept per file, LRU: needle families beyond the cap degrade to a scan
 # for the evicted family only, the same cost the one-slot form paid for every
 # non-dominant family.
@@ -146,8 +153,10 @@ _SEARCH_MISS_ROOTS_PER_FILE = 8
 # query family per file, the file map LRU-bounded. A stored needle's hit
 # answers its substrings without a read (the miss side answers superstrings),
 # because the hit's bytes sit in the prefix the scan read and same-inode
-# growth only appends past it.
-_SEARCH_HIT_MEMO_LIMIT = 256
+# growth only appends past it. The file cap prices the same population the
+# miss side's cap prices: an evicted hit root re-reads the file from byte 0
+# on the next derive.
+_SEARCH_HIT_MEMO_LIMIT = 4096
 _SEARCH_HIT_ROOTS_PER_FILE = 8
 # LRU cap on the per-query match-result memo: lowered query -> the derived rows
 # plus the freshness ground it was derived from. A correction keystroke re-fires

@@ -22,6 +22,11 @@ After a resume from a mid-turn kill, read back the state of every action the kil
 PRs, external sends) before continuing: the resume keeps the turn's input and drops the turn's partial output, so the
 resumed model reports having run none of it.
 
+## Session History
+
+The full session history stays in `data/chat_events.jsonl` across compactions. Search it before
+acting whenever a detail is missing from context: `charliebot session dialog | rg -i -C3 '<term>'`.
+
 ## Intent First
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres).

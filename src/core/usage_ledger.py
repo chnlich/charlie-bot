@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import contextlib
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -763,14 +763,16 @@ class UsageLedger:
     self._conn.close()
 
   @contextlib.contextmanager
-  def batch(self):
+  def batch(self) -> Iterator[None]:
     """Group the capture's record writes into one commit; exit commits, exceptions included.
 
     Each record_* call keeps its own SAVEPOINT, so a failed file rolls back alone
     exactly as its standalone transaction did, and the files that recorded before
     the failure stay durable — the exit commits them, because a failed capture's
     partial progress is durable today. The generation bumps once per commit, so a
-    batch of N files counts as one write for the rows memo.
+    batch of N files counts as one write for the rows memo. The batch holds the write
+    transaction open, so nothing inside it may run the schema's BEGIN IMMEDIATE paths
+    (the aggregate backfill, the trigger refresh) — the capture's body only records.
     """
     savepoint = "usage_capture_batch"
     self._conn.execute(f"SAVEPOINT {savepoint}")

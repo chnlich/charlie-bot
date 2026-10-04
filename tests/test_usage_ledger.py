@@ -1232,11 +1232,15 @@ def test_failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own(tmp_pa
   # reaches the usage upsert after the record's session registrations inserted, the
   # failure point the per-file savepoint exists for.
   bad = dataclasses.replace(_record("rec-bad", RecordKind.NATIVE, sessions=("sess-bad",)), in_fresh=object())
-  with UsageLedger(path) as ledger, pytest.raises(sqlite3.ProgrammingError), ledger.batch():
+  with UsageLedger(path) as ledger, ledger.batch():
     ledger.record_file(HOST, "/logs/good.jsonl", "sig-good", [good])
-    ledger.record_file(HOST, "/logs/bad.jsonl", "sig-bad", [bad])
+    with pytest.raises(sqlite3.ProgrammingError):
+      ledger.record_file(HOST, "/logs/bad.jsonl", "sig-bad", [bad])
+    # Mid-batch, the failed file's statements are rolled back while the good file's
+    # are pending on the batch transaction — the state the batch exit commits. The
+    # row-count assert waits for the reopen: a read inside the batch can run the
+    # aggregate backfill, whose BEGIN IMMEDIATE cannot nest.
     assert ledger.captured_sigs(HOST) == {"/logs/good.jsonl": "sig-good"}
-    assert [row.calls for row in ledger.model_rows()] == [1]
   with UsageLedger(path) as reopened:
     assert reopened.captured_sigs(HOST) == {"/logs/good.jsonl": "sig-good"}
 

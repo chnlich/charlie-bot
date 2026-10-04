@@ -1655,15 +1655,20 @@ def capture_usage(
   notes: list[str] = []
   cache = TallyCache.load(cache_path, notes) if cache_path is not None else None
   captured = ledger.captured_sigs(host)
-  written = capture_jsonl_sources(ledger, host, claude_homes, codex_homes, cache, captured)
-  if opencode_db is not None:
-    written[USAGE_SOURCE_OPENCODE] = capture_opencode(ledger, host, opencode_db)
-  if sessions_dir is not None:
-    written[USAGE_SOURCE_CHARLIE_BOT] = (
-        capture_charliebot(ledger, host, sessions_dir, cache, captured) +
-        capture_runs(ledger, host, sessions_dir, captured))
-  if cache is not None:
-    cache.save(cache_path)
+  # One commit for the whole capture: every record_* call prices a full fsync pair
+  # (rollback journal at synchronous=FULL, 8.7 ms measured per commit), and a moved
+  # corpus re-records one file per moved source — a cold corpus, thousands. The
+  # ledger's batch() keeps each file's own atomicity inside the single commit.
+  with ledger.batch():
+    written = capture_jsonl_sources(ledger, host, claude_homes, codex_homes, cache, captured)
+    if opencode_db is not None:
+      written[USAGE_SOURCE_OPENCODE] = capture_opencode(ledger, host, opencode_db)
+    if sessions_dir is not None:
+      written[USAGE_SOURCE_CHARLIE_BOT] = (
+          capture_charliebot(ledger, host, sessions_dir, cache, captured) +
+          capture_runs(ledger, host, sessions_dir, captured))
+    if cache is not None:
+      cache.save(cache_path)
   return written
 
 

@@ -68,6 +68,15 @@ CURSOR_NAME = "agent.raw.cursor"
 DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"
 
+# The sessions-tree directory holding a session's thread directories. The
+# creation skeleton lays it down and every scanner (sidebar probe, storage-cool
+# scan, boot recovery) walks it by name, so all sides must agree on this name.
+THREADS_DIR_NAME = "threads"
+
+# The chat event log inside a thread's data directory. token_tally's corpus
+# walk joins the same relative suffix by string, so the names move together.
+EVENTS_LOG_NAME = "events.jsonl"
+
 # The per-session metadata filename (threads.py's node records, the task tree's
 # files; threads re-exports it): defined in src.core.run_identity, whose
 # run-scoped CLI path reads session metadata without this module's model stack.

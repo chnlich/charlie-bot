@@ -12,19 +12,10 @@ from src.core.json_utils import write_model_json_atomically
 from src.core.log_once import LazyStructlogLogger
 from src.core.memo import StatSignatureMemo
 from src.core.models import ThreadMetadata
-from src.core.runs import DATA_DIR_NAME, METADATA_NAME
+from src.core.runs import DATA_DIR_NAME, EVENTS_LOG_NAME, METADATA_NAME, THREADS_DIR_NAME
 from src.core.sidebar_state import mark_sidebar_dirty
 
 log = LazyStructlogLogger()
-
-# The sessions-tree directory holding a session's thread directories. The
-# creation skeleton lays it down and every scanner (sidebar probe, storage-cool
-# scan, boot recovery) walks it by name, so all sides must agree on this name.
-THREADS_DIR_NAME = "threads"
-
-# The chat event log inside a thread's data directory. token_tally's corpus
-# walk joins the same relative suffix by string, so the names move together.
-EVENTS_LOG_NAME = "events.jsonl"
 
 # Backstop cap on ThreadManager's parse memo: each walk drops the entries for
 # files it did not see, so the resident set tracks the walked thread files and

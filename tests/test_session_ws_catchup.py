@@ -1,15 +1,15 @@
 from __future__ import annotations
 
+import conftest
 import pytest
-from conftest import FakeWebSocket, assistant_text_event, scheduled_trigger_event, user_event
 
-from server import _CatchupWalk, _replay_aggregated_catchup
+import server
 
 VOICE_KEY = "is_voice"
 
 
 def _assistant_event(text: str, ts: str) -> dict:
-  return {**assistant_text_event(text), "timestamp": ts}
+  return {**conftest.assistant_text_event(text), "timestamp": ts}
 
 
 def _master_done_event(thinking_seconds: int, ts: str) -> dict:
@@ -19,13 +19,13 @@ def _master_done_event(thinking_seconds: int, ts: str) -> dict:
 @pytest.mark.asyncio
 async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> None:
   events = [
-      user_event("hi", "t0"),
+      conftest.user_event("hi", "t0"),
       _assistant_event("Hello", "t1"),
       _master_done_event(2, "t2"),
-      user_event("again", "t3"),
+      conftest.user_event("again", "t3"),
   ]
-  ws = FakeWebSocket()
-  sent_count = await _replay_aggregated_catchup(ws, events, cursor=2, session_id="s")
+  ws = conftest.FakeWebSocket()
+  sent_count = await server._replay_aggregated_catchup(ws, events, cursor=2, session_id="s")
   assert sent_count == len(ws.sent)
 
   types = [p["type"] for p in ws.sent]
@@ -46,11 +46,11 @@ async def test_replay_skips_pre_cursor_deltas_and_drops_raw_assistant_user() -> 
 @pytest.mark.asyncio
 async def test_replay_with_cursor_at_end_sends_nothing() -> None:
   events = [
-      user_event("hi", "t0"),
+      conftest.user_event("hi", "t0"),
       _assistant_event("ok", "t1"),
   ]
-  ws = FakeWebSocket()
-  sent = await _replay_aggregated_catchup(ws, events, cursor=len(events), session_id="s")
+  ws = conftest.FakeWebSocket()
+  sent = await server._replay_aggregated_catchup(ws, events, cursor=len(events), session_id="s")
   # Pending draft is shown by SSR via pending_draft; catchup sends nothing.
   assert sent == 0
   assert ws.sent == []
@@ -59,12 +59,12 @@ async def test_replay_with_cursor_at_end_sends_nothing() -> None:
 @pytest.mark.asyncio
 async def test_replay_uses_global_cursor_after_archive_offset() -> None:
   events = [
-      user_event("old-live", "t0"),
-      user_event("missed", "t1"),
+      conftest.user_event("old-live", "t0"),
+      conftest.user_event("missed", "t1"),
   ]
-  ws = FakeWebSocket()
+  ws = conftest.FakeWebSocket()
 
-  sent = await _replay_aggregated_catchup(ws, events, cursor=6, session_id="s", event_index_offset=5)
+  sent = await server._replay_aggregated_catchup(ws, events, cursor=6, session_id="s", event_index_offset=5)
 
   expected_message = {
       "role": "user",
@@ -84,18 +84,18 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
 
 def _mixed_replay_corpus() -> list[dict]:
   return [
-      user_event("hi", "t0"),
+      conftest.user_event("hi", "t0"),
       _assistant_event("A", "t1"),
       _assistant_event("B", "t2"),
       _master_done_event(1, "t3"),
-      scheduled_trigger_event("fire", "t4"),
-      user_event("tail", "t5"),
+      conftest.scheduled_trigger_event("fire", "t4"),
+      conftest.user_event("tail", "t5"),
   ]
 
 
 def _unsliced_catchup_frames(events: list[dict], cursor: int) -> list[dict]:
   """Parity oracle: the production walk fed the whole corpus in one slice."""
-  walk = _CatchupWalk(cursor)
+  walk = server._CatchupWalk(cursor)
   walk.feed_slice(events, 0, len(events))
   return walk.finish()
 
@@ -103,7 +103,7 @@ def _unsliced_catchup_frames(events: list[dict], cursor: int) -> list[dict]:
 @pytest.mark.asyncio
 async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
 
-  class FailingWebSocket(FakeWebSocket):
+  class FailingWebSocket(conftest.FakeWebSocket):
 
     async def send_text(self, text: str) -> None:
       if len(self.sent) == 1:
@@ -112,7 +112,7 @@ async def test_replay_stops_at_first_send_failure_with_match_count() -> None:
 
   events = _mixed_replay_corpus()
   ws = FailingWebSocket()
-  sent = await _replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
+  sent = await server._replay_aggregated_catchup(ws, events, cursor=0, session_id="s")
   total = len(_unsliced_catchup_frames(events, 0))
   # 1 frame landed, the second send failed, the remaining total - 2 frames
   # were never attempted.

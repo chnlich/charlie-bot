@@ -7,7 +7,7 @@ escapes, and every reader JSON-parses the log per line.
 
 import json
 
-from src.agents.worker import _event_line
+from src.agents import worker
 
 
 def test_event_line_round_trips_the_event() -> None:
@@ -24,4 +24,4 @@ def test_event_line_round_trips_the_event() -> None:
       },
       "timestamp": "2026-09-11T00:00:00+00:00",
   }
-  assert json.loads(_event_line(event)) == event
+  assert json.loads(worker._event_line(event)) == event

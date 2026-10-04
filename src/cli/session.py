@@ -143,8 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
   source.add_argument("--file", default=None, help="Read the message text from this file")
   add_session_arg(send)
 
-  dialog = sub.add_parser(
-      "dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
+  dialog = sub.add_parser("dialog", help="Print one session's chat messages as plain text, oldest first (for rg)")
   add_session_arg(dialog)
   return parser
 
@@ -298,9 +297,7 @@ def _cmd_dialog(args: argparse.Namespace) -> None:
     pages.append(page["messages"])
     cursor = page["next_before"]
     has_more = page["has_more"]
-  blocks = [
-      block for page in reversed(pages) for msg in page if (block := _format_message_block(msg)) is not None
-  ]
+  blocks = [block for page in reversed(pages) for msg in page if (block := _format_message_block(msg)) is not None]
   if blocks:
     print("\n\n".join(blocks))
 

@@ -45,25 +45,26 @@ def test_dialog_formats_blocks_and_skips_empty_messages(
   """One block per message with a body or a tool call; tool output and thinking never print."""
   assistant = {
       **_msg("assistant", "Running the check now.", "2026-07-10T08:00:02Z", 3),
-      "tools": [
-          {
-              "name": "Bash",
-              "input": {
-                  "command": "pytest -q\necho done"
+      "tools":
+          [
+              {
+                  "name": "Bash",
+                  "input": {
+                      "command": "pytest -q\necho done"
+                  },
+                  "output": "SECRET TOOL OUTPUT",
+                  "is_error": False,
               },
-              "output": "SECRET TOOL OUTPUT",
-              "is_error": False,
-          },
-          {
-              "name": "Read",
-              "input": {
-                  "file_path": "/tmp/a.py",
-                  "limit": 5
+              {
+                  "name": "Read",
+                  "input": {
+                      "file_path": "/tmp/a.py",
+                      "limit": 5
+                  },
+                  "output": "",
+                  "is_error": False,
               },
-              "output": "",
-              "is_error": False,
-          },
-      ],
+          ],
       "thinking": "SECRET THINKING",
   }
   messages = [
@@ -76,11 +77,14 @@ def test_dialog_formats_blocks_and_skips_empty_messages(
           7,
           child_session_id="child-1",
           outcome="completed"),
-      {"role": "separator", "event_index": 8},
+      {
+          "role": "separator",
+          "event_index": 8
+      },
   ]
   cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
-  with patched_cli_gets(cfg, ["session", "dialog"], [_bootstrap(messages, oldest=0, has_more=False, event_count=9)]
-                       ) as get_mock:
+  with patched_cli_gets(cfg, ["session", "dialog"],
+                        [_bootstrap(messages, oldest=0, has_more=False, event_count=9)]) as get_mock:
     session.main()
 
   assert get_mock.call_count == 1
@@ -145,8 +149,8 @@ def test_dialog_ordinary_session_prints_history_without_events_call(
       _msg("user", "the whole ask", "2026-07-10T08:00:00Z", 0),
       _msg("assistant", "the whole answer", "2026-07-10T08:00:01Z", 1),
   ]
-  with patched_cli_gets(cfg, ["session", "dialog"], [_bootstrap(messages, oldest=0, has_more=False, event_count=2)]
-                       ) as get_mock:
+  with patched_cli_gets(cfg, ["session", "dialog"],
+                        [_bootstrap(messages, oldest=0, has_more=False, event_count=2)]) as get_mock:
     session.main()
 
   assert get_mock.call_count == 1

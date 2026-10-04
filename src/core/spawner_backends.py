@@ -1,25 +1,16 @@
 """Spawn-time backend+model resolution — explicit requests, session defaults, verify selection."""
 
-from src.core import review
-from src.core.config import CharlieBotConfig, require_backend_option
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import (
-    BackendOption,
-    SessionMetadata,
-    backend_type_allows_missing_model,
-    option_default_model,
-)
-from src.core.sessions import SessionManager
+from src.core import config, log_once, models, review, sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
-def resolve_backend_option(cfg: CharlieBotConfig, backend_id: str, model: str | None) -> BackendOption:
+def resolve_backend_option(cfg: config.CharlieBotConfig, backend_id: str, model: str | None) -> models.BackendOption:
   """Resolve a runtime backend option from explicit backend/model values."""
   if not backend_id:
     raise ValueError("resolved backend is required")
-  option = require_backend_option(cfg, backend_id, subject="resolved ")
-  if backend_type_allows_missing_model(option.type):
+  option = config.require_backend_option(cfg, backend_id, subject="resolved ")
+  if models.backend_type_allows_missing_model(option.type):
     resolved_model = None
   elif not model:
     raise ValueError("resolved model is required")
@@ -46,8 +37,8 @@ EMPTY_BACKENDS_OPTIONS_REFUSAL = "session backend resolution requires a configur
 
 
 def _resolve_session_default_backend_model(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from a session's default.
 
@@ -70,10 +61,10 @@ def _resolve_session_default_backend_model(
       raise ValueError(
           f"session backend {unknown_backend_pin_refusal(session_meta.backend, cfg.backends.options[0].id)}")
     option = cfg.backends.options[0]
-  return option.id, option_default_model(option, subject="session backend ")
+  return option.id, models.option_default_model(option, subject="session backend ")
 
 
-async def _require_session(session_mgr: SessionManager, session_id: str) -> SessionMetadata:
+async def _require_session(session_mgr: sessions.SessionManager, session_id: str) -> models.SessionMetadata:
   """Fetch the session's metadata; raise ValueError when the session doesn't exist."""
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
@@ -83,8 +74,8 @@ async def _require_session(session_mgr: SessionManager, session_id: str) -> Sess
 
 async def resolve_requested_subagent_backend_model(
     session_id: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    cfg: config.CharlieBotConfig,
+    session_mgr: sessions.SessionManager,
     requested_backend: str | None,
 ) -> tuple[str, str | None]:
   """Resolve backend+model from an explicit configured backend or the session default.
@@ -97,15 +88,15 @@ async def resolve_requested_subagent_backend_model(
   if requested_backend is not None:
     if not requested_backend:
       raise ValueError("requested backend is required")
-    option = require_backend_option(cfg, requested_backend, subject="requested ")
-    return option.id, option_default_model(option, subject="requested backend ")
+    option = config.require_backend_option(cfg, requested_backend, subject="requested ")
+    return option.id, models.option_default_model(option, subject="requested backend ")
   return _resolve_session_default_backend_model(cfg, session_meta)
 
 
 async def select_verify_backend(
     session_id: str,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    cfg: config.CharlieBotConfig,
+    session_mgr: sessions.SessionManager,
     tried_backends: list[str],
 ) -> tuple[str, str | None, list[str]] | None:
   """Select a VERIFY task's checking backend when none was requested.

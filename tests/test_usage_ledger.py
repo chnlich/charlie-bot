@@ -8,6 +8,7 @@ than a hard-coded total.
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 import time
 from pathlib import Path
@@ -1199,3 +1200,59 @@ def test_open_swaps_pre_fix_trigger_bodies_and_reprices_the_aggregate(tmp_path):
     after, triggers_again = _snapshot(ledger._conn), _trigger_sqls(ledger._conn)
   assert before == after
   assert triggers == triggers_again
+
+
+def test_batch_lands_every_recorded_file_with_one_generation_bump(tmp_path):
+  """Inside a batch the per-file savepoints release into the batch's transaction: every
+  recorded file's records and signature survive a fresh open, and the whole capture counts
+  as one write for the rows memo (one generation bump, not one per file)."""
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    generation_before = UsageLedger._write_generation
+    with ledger.batch():
+      ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [_record("rec-a", RecordKind.NATIVE, sessions=("sess-a",))])
+      ledger.record_gate(HOST, "/data/db.sqlite", (10, 20), None, "sig-gate")
+      ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [_record("rec-b", RecordKind.FALLBACK, sessions=("sess-b",))])
+    assert UsageLedger._write_generation == generation_before + 1
+    assert ledger.captured_sigs(HOST) == {"/logs/a.jsonl": "sig-a", "/logs/b.jsonl": "sig-b"}
+    assert ledger.captured_gate(HOST, "/data/db.sqlite") == (((10, 20), None), "sig-gate")
+  with UsageLedger(path) as reopened:
+    assert reopened.captured_sigs(HOST) == {"/logs/a.jsonl": "sig-a", "/logs/b.jsonl": "sig-b"}
+    # Both records share one (source, model, day) group, so the page rows aggregate them.
+    assert [row.calls for row in reopened.model_rows()] == [2]
+
+
+def test_failed_file_inside_a_batch_keeps_earlier_files_and_drops_its_own(tmp_path):
+  """A record_file failure inside a batch rolls back to its own savepoint and re-raises;
+  the files recorded before it stay durable (the batch exit commits them) and the failed
+  file records nothing, so the next capture re-parses it."""
+  path = tmp_path / "ledger.sqlite3"
+  good = _record("rec-good", RecordKind.NATIVE, sessions=("sess-good",))
+  # The failure lands inside the savepoint's statement stream: the unbindable field
+  # reaches the usage upsert after the record's session registrations inserted, the
+  # failure point the per-file savepoint exists for.
+  bad = dataclasses.replace(_record("rec-bad", RecordKind.NATIVE, sessions=("sess-bad",)), in_fresh=object())
+  with UsageLedger(path) as ledger, ledger.batch():
+    ledger.record_file(HOST, "/logs/good.jsonl", "sig-good", [good])
+    with pytest.raises(sqlite3.ProgrammingError):
+      ledger.record_file(HOST, "/logs/bad.jsonl", "sig-bad", [bad])
+    # Mid-batch, the failed file's statements are rolled back while the good file's
+    # are pending on the batch transaction — the state the batch exit commits. The
+    # row-count assert waits for the reopen: a read inside the batch can run the
+    # aggregate backfill, whose BEGIN IMMEDIATE cannot nest.
+    assert ledger.captured_sigs(HOST) == {"/logs/good.jsonl": "sig-good"}
+  with UsageLedger(path) as reopened:
+    assert reopened.captured_sigs(HOST) == {"/logs/good.jsonl": "sig-good"}
+
+
+def test_standalone_record_file_still_commits_per_call(tmp_path):
+  """Outside a batch every record_file call commits on return: a reopen sees the file
+  without any batch scope, and the generation bumps once per call."""
+  path = tmp_path / "ledger.sqlite3"
+  with UsageLedger(path) as ledger:
+    generation_before = UsageLedger._write_generation
+    ledger.record_file(HOST, "/logs/a.jsonl", "sig-a", [_record("rec-a", RecordKind.NATIVE, sessions=("sess-a",))])
+    ledger.record_file(HOST, "/logs/b.jsonl", "sig-b", [_record("rec-b", RecordKind.NATIVE, sessions=("sess-b",))])
+    assert UsageLedger._write_generation == generation_before + 2
+  with UsageLedger(path) as reopened:
+    assert reopened.captured_sigs(HOST) == {"/logs/a.jsonl": "sig-a", "/logs/b.jsonl": "sig-b"}

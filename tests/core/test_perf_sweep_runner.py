@@ -78,6 +78,45 @@ def test_runner_marks_failed_unit_and_still_sweeps(tmp_path: Path, capsys: pytes
   assert not list(Path("/tmp").glob("perf-sweep-test-*")), "a failed unit's scratch is swept all the same"
 
 
+def test_runner_pins_one_scratch_login_dir_for_every_block(
+    tmp_path: Path,
+    capsys: pytest.Capsys,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+  login = tmp_path / "login"
+  login.mkdir()
+  monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(login))
+  doc = tmp_path / "perf_baseline.md"
+  doc.write_text(
+      _fake_doc('echo "consumer-config=$CLAUDE_CONFIG_DIR"; exit 7').replace(
+          "echo preflight-ok", 'echo "preflight-config=$CLAUDE_CONFIG_DIR"'))
+  assert tools.perf_sweep.SweepRunner(doc, None).run() == 1
+  out = capsys.readouterr().out
+  seen = [
+      line.split("=", 1)[1] for line in out.splitlines() if line.startswith(("preflight-config=", "consumer-config="))
+  ]
+  assert len(seen) == 2 and seen[0] == seen[1], "the preflight and every unit block share one login directory"
+  config_dir = Path(seen[0])
+  assert config_dir != login
+  assert config_dir.name.startswith("perf-sweep-claude-config-")
+  assert not config_dir.exists(), "a run with a failed unit still removes the scratch login directory"
+
+
+def test_export_of_the_pinned_login_dir_fails_the_unit(tmp_path: Path, capsys: pytest.Capsys) -> None:
+  login = tmp_path / "login"
+  login.mkdir()
+  doc = tmp_path / "perf_baseline.md"
+  lines = _fake_doc('echo "consumer-config=$CLAUDE_CONFIG_DIR"').splitlines()
+  lines.insert(lines.index('echo "export T_HOME=$d"') + 1, f'echo "export CLAUDE_CONFIG_DIR={login}"')
+  doc.write_text("\n".join(lines) + "\n")
+  assert tools.perf_sweep.SweepRunner(doc, None).run() == 1
+  out = capsys.readouterr().out
+  assert "FAILED units: M99" in out
+  consumer = [line.split("=", 1)[1] for line in out.splitlines() if line.startswith("consumer-config=")]
+  assert len(consumer) == 1 and Path(consumer[0]).name.startswith("perf-sweep-claude-config-"), "the pin survives"
+  assert login.is_dir(), "a rejected export is never swept as scratch"
+
+
 def test_unparseable_export_line_fails_the_unit_not_the_sweep(tmp_path: Path, capsys: pytest.Capsys) -> None:
   """The export lines are corpus-derived, so one the parser cannot split is that unit's failure."""
   doc = tmp_path / "perf_baseline.md"

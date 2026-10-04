@@ -163,10 +163,14 @@ The blocks' execution contract homes in the sweep runner, `tools/perf_sweep.py`:
 preflight, then every unit below verbatim in doc order, carrying one block's `export K=v` stdout
 lines into the same unit's later blocks (the M35/M55/M70/M71/M120 builder→consumer pairs;
 M112's two blocks are order-coupled on the builder's fixed corpus path, no env),
-bounding each block at 600 s, and removing every exported scratch path still on disk when the run
-ends — whatever the exit path. `--from <index|label>` re-runs a tail after a mid-sweep kill. A
-harness that runs the blocks without that contract tears the pairs: the consumer fails on the
-builder's missing env and the scratch copy leaks (priced in the 2026-09-29 history row).
+bounding each block at 600 s, pinning `CLAUDE_CONFIG_DIR` at one scratch login directory for every
+block (a short-lived claude CLI on a real login can spend that login's single-use OAuth refresh
+token without writing the replacement back; a block that exports the variable fails its unit), and
+removing every exported scratch path still on disk when the run ends — whatever the exit path. A
+block run by hand outside the runner takes the same scratch `CLAUDE_CONFIG_DIR` from whoever runs
+it. `--from <index|label>` re-runs a tail after a mid-sweep kill. A harness that runs the blocks
+without that contract tears the pairs: the consumer fails on the builder's missing env and the
+scratch copy leaks (priced in the 2026-09-29 history row).
 
 Preflight — pin the default checkout at `origin/main` before the first in-process collector:
 

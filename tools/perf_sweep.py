@@ -5,8 +5,9 @@ The doc is the single home of the collector commands; this script adds only the
 execution contract every round re-implemented ad hoc (three consecutive rounds
 left their own extraction harnesses in /tmp): units run in doc order, one block's
 ``export K=v`` stdout lines feed the same unit's later blocks (the builder→consumer
-pairs), each block is bounded at 600 s, and every exported scratch path still on
-disk when the run ends is removed — whatever the exit path. Callers rely on: exit
+pairs), each block is bounded at 600 s, every block runs on one scratch
+``CLAUDE_CONFIG_DIR``, and every exported scratch path still on disk when the run
+ends is removed — whatever the exit path. Callers rely on: exit
 status 0 only when every executed block exited 0, the per-block ``rc=`` lines in
 the output, and the preflight stopping the sweep on failure (the doc's own rule).
 """
@@ -20,6 +21,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -32,6 +34,9 @@ DEFAULT_DOC = ROOT / "docs" / "perf_baseline.md"
 # load-bearing.
 UNIT_HEADING = re.compile(r"^M\d+(?: [a-z][a-z0-9-]*)* — ")
 BLOCK_TIMEOUT_S = 600
+# Claude Code's login-directory env var (src.core.home.CLAUDE_CONFIG_DIR_ENV_VAR),
+# spelled here because this runner imports nothing from the code under test.
+CLAUDE_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 
 
 def parse_collectors(doc: Path) -> tuple[list[str], list[tuple[str, list[str]]]]:
@@ -74,7 +79,10 @@ class SweepRunner:
 
   Blocks run with the checkout as cwd (the ``$PWD``-defaulting blocks read the
   checkout under test) and the invoking environment passed through, so a
-  caller's ``CHECKOUT`` reaches the blocks unchanged. A unit's builder block
+  caller's ``CHECKOUT`` reaches the blocks unchanged; ``CLAUDE_CONFIG_DIR`` alone
+  is replaced by one empty scratch directory per run, removed on every exit path,
+  so a collector's claude CLI starts on no real login; a block exporting that
+  variable fails its unit. A unit's builder block
   exports its consumer's inputs on stdout; the exported absolute paths are the
   builder's scratch homes, which live only for their consumer — the exit-path
   sweep removes any that survive.
@@ -90,10 +98,15 @@ class SweepRunner:
     preamble, units = parse_collectors(self._doc)
     blocks_total = len(preamble) + sum(len(blocks) for _, blocks in units)
     print(f"perf-sweep: {blocks_total} blocks over {len(units)} units from {self._doc}", flush=True)
+    # A claude CLI started on a real login refreshes an expired OAuth token at boot;
+    # the refresh token is single-use, so a short-lived CLI that exits before writing
+    # the rotated pair back leaves that login's credentials dead on disk.
+    claude_config = tempfile.mkdtemp(prefix="perf-sweep-claude-config-")
+    block_env = {**os.environ, CLAUDE_CONFIG_DIR_ENV: claude_config}
     status = 0
     try:
       for index, body in enumerate(preamble):
-        rc, _, _ = self._run_block("preflight", index, len(preamble), body, dict(os.environ))
+        rc, _, _ = self._run_block("preflight", index, len(preamble), body, dict(block_env))
         if rc != 0:
           print("perf-sweep: preflight failed — the sweep stops, the round reports its metrics unmeasured", flush=True)
           return 1
@@ -104,18 +117,21 @@ class SweepRunner:
         if not blocks:
           print(f"=== {label}: no blocks (retired collector's note), skipped", flush=True)
           continue
-        if not self._run_unit(label, blocks):
+        if not self._run_unit(label, blocks, block_env):
           continue
         status = 1
     finally:
-      self._sweep_scratch()
+      try:
+        self._sweep_scratch()
+      finally:
+        shutil.rmtree(claude_config)
       if self._failed:
         print(f"perf-sweep: FAILED units: {', '.join(self._failed)}", flush=True)
     return status
 
-  def _run_unit(self, label: str, blocks: list[str]) -> bool:
-    """Run one unit's blocks in order; the builder's exports feed the consumer's env."""
-    unit_env = dict(os.environ)
+  def _run_unit(self, label: str, blocks: list[str], block_env: dict[str, str]) -> bool:
+    """Run one unit's blocks in order on a copy of *block_env*; the builder's exports feed the consumer's env."""
+    unit_env = dict(block_env)
     failed = False
     for index, body in enumerate(blocks):
       rc, _, _ = self._run_block(label, index, len(blocks), body, unit_env)
@@ -158,6 +174,10 @@ class SweepRunner:
         key, sep, value = token.partition("=")
         if not sep or not key:
           raise ValueError(f"unparseable export line: {line!r}")
+        # The pin holds for every block, and an exported absolute path is swept as
+        # scratch at exit, so an accepted export could delete a real login directory.
+        if key == CLAUDE_CONFIG_DIR_ENV:
+          raise ValueError(f"export of the pinned {CLAUDE_CONFIG_DIR_ENV}: {line!r}")
         env[key] = value
         if value.startswith("/"):
           self._scratch.append(value)

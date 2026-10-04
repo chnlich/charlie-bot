@@ -502,7 +502,8 @@ def _session_settings(args: ClaudeSubArgs) -> str:
   return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
 
 
-async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
+async def _run_cli_capture(*args: str, env_overrides: dict[str, str]) -> tuple[int, str, str]:
+  """Run one CLI to completion: the inherited client env with *env_overrides* applied, output captured."""
   import asyncio
   import shutil
 
@@ -517,7 +518,10 @@ async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
       stdin=asyncio.subprocess.DEVNULL,
       stdout=asyncio.subprocess.PIPE,
       stderr=asyncio.subprocess.PIPE,
-      env=_tmux_client_env(),
+      env={
+          **_tmux_client_env(),
+          **env_overrides
+      },
   )
   stdout, stderr = await proc.communicate()
   return (
@@ -528,7 +532,7 @@ async def _run_cli_capture(*args: str) -> tuple[int, str, str]:
 
 
 async def _check_cli_capabilities() -> None:
-  rc, stdout, stderr = await _run_cli_capture("claude", "--version")
+  rc, stdout, stderr = await _run_cli_capture("claude", "--version", env_overrides={})
   if rc != 0:
     raise ClaudeSubError(f"Claude Code version check failed (rc={rc}): {stderr.strip()}")
   match = _VERSION_RE.search(stdout)
@@ -541,7 +545,8 @@ async def _check_cli_capabilities() -> None:
         f"{'.'.join(str(part) for part in _MIN_CLAUDE_VERSION)} "
         f"(target {'.'.join(str(part) for part in _TARGET_CLAUDE_VERSION)})")
 
-  rc, stdout, stderr = await _run_cli_capture("claude", "--help", "--", "claude-sub-leading-dash-probe")
+  rc, stdout, stderr = await _run_cli_capture(
+      "claude", "--help", "--", "claude-sub-leading-dash-probe", env_overrides={})
   if rc != 0:
     raise ClaudeSubError(f"Claude Code capability check failed (rc={rc}): {stderr.strip()}")
   missing = [marker for marker in _CAPABILITY_MARKERS if marker not in stdout]
@@ -683,14 +688,30 @@ async def _validate_hook_plugin(plugin_dir: pathlib.Path) -> None:
   The guard fails a launch whose plugin this claude rejects before Claude starts —
   the hooks carry prompt delivery, and a rejected plugin surfaces as UNKNOWN
   delivery after the confirmation timeout. Validate reads only the plugin tree and
-  its own binary (a scratch ``CLAUDE_CONFIG_DIR``/``HOME`` validates identically), so
-  the pass is a fact about the (plugin bytes, claude binary) pair and rides the pair
-  cache in the state home; deploys and claude updates change the key and revalidate.
+  its own binary, so the pass is a fact about the (plugin bytes, claude binary) pair
+  and rides the pair cache in the state home; deploys and claude updates change the
+  key and revalidate. The CLI runs on an empty scratch ``CLAUDE_CONFIG_DIR``, removed
+  after the call, and so never starts on a real login.
   """
+  import tempfile
+
+  from src.core import home
+
   key = _plugin_validate_key(plugin_dir)
   if key is not None and _read_validate_cache() == key:
     return
-  rc, stdout, stderr = await _run_cli_capture("claude", "plugin", "validate", "--strict", str(plugin_dir))
+  # A claude CLI started on a real login refreshes an expired OAuth token at boot.
+  # The refresh token is single-use, and a CLI that exits before writing the rotated
+  # pair back leaves a dead token on disk; Claude Code 2.1.287 then empties the
+  # login's credentials at the next refresh (invalid_grant).
+  with tempfile.TemporaryDirectory(prefix="claude-sub-validate-config-") as scratch_config:
+    rc, stdout, stderr = await _run_cli_capture(
+        "claude",
+        "plugin",
+        "validate",
+        "--strict",
+        str(plugin_dir),
+        env_overrides={home.CLAUDE_CONFIG_DIR_ENV_VAR: scratch_config})
   if rc != 0:
     detail = stderr.strip() or stdout.strip()
     raise ClaudeSubError(f"Claude Code hook capability/plugin validation failed (rc={rc}): {detail}")

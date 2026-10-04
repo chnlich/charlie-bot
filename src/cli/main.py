@@ -7,9 +7,9 @@ entrypoints remain owned by their individual modules.
 """
 
 import importlib
+import os.path
 import sys
 from collections.abc import Sequence
-from pathlib import Path
 
 _COMMANDS = {
     "artifact": "src.cli.artifact",
@@ -41,7 +41,7 @@ def _print_help(prog: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> None:
   """Dispatch to a subcommand's existing main() without duplicating its parser."""
-  prog = Path(sys.argv[0]).name if argv is None and sys.argv else "charliebot"
+  prog = os.path.basename(sys.argv[0]) if argv is None and sys.argv else "charliebot"
   args = list(sys.argv[1:] if argv is None else argv)
 
   if not args or args[0] in {"-h", "--help"}:

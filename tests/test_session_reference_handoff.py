@@ -3,33 +3,26 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    OPUS_BACKEND_ID,
-    make_parent,
-    user_event,
-)
-from conftest import append_events as _append_events
 
+from src.core import config, models, sessions
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
 
 
-def _read_events(path: Path) -> list[dict]:
+def _read_events(path: pathlib.Path) -> list[dict]:
   return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
-def _parent_side_files(cfg: CharlieBotConfig) -> list[Path]:
+def _parent_side_files(cfg: config.CharlieBotConfig) -> list[pathlib.Path]:
   """Every parent_*.jsonl side file under the sessions dir; the child-log contract allows none."""
   return sorted(cfg.sessions_dir.glob("*/data/parent_*.jsonl"))
 
 
-def _assert_child_log_is_parent_prefix_plus_marker(mgr: SessionManager, parent_id: str, child_id: str,
-                                                   end: int) -> list[dict]:
+def _assert_child_log_is_parent_prefix_plus_marker(
+    mgr: sessions.SessionManager, parent_id: str, child_id: str, end: int) -> list[dict]:
   """The child log holds the parent's events [0, end) then exactly one clone_start marker.
 
   The parent side drops any in-memory event_index stamp (persist_and_broadcast
@@ -50,12 +43,12 @@ def _assert_child_log_is_parent_prefix_plus_marker(mgr: SessionManager, parent_i
 
 
 @pytest.mark.asyncio
-async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await make_parent(mgr)
+async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log(tmp_path: pathlib.Path) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = sessions.SessionManager(cfg)
+  parent = await conftest.make_parent(mgr)
   # A third event past the fork point proves the copied prefix truncates there.
-  _append_events(mgr.get_chat_events_path(parent), [user_event("e2")])
+  conftest.append_events(mgr.get_chat_events_path(parent), [conftest.user_event("e2")])
 
   child = await mgr.fork_session(parent, event_index=1)
 
@@ -64,12 +57,12 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
 
 
 @pytest.mark.asyncio
-async def test_fork_session_rejects_corrupt_parent_line(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
+async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = sessions.SessionManager(cfg)
+  parent = await mgr.create_session(models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
-  _append_events(events_path, [user_event("ok")])
+  conftest.append_events(events_path, [conftest.user_event("ok")])
   with open(events_path, "a", encoding="utf-8") as f:
     f.write("{truncated\n")
 
@@ -82,20 +75,20 @@ async def test_fork_session_rejects_corrupt_parent_line(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(tmp_path: Path) -> None:
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = SessionManager(cfg)
-  parent = await mgr.create_session(CreateSessionRequest(name="Parent"), backend=OPUS_BACKEND_ID)
+async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(tmp_path: pathlib.Path) -> None:
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
+  mgr = sessions.SessionManager(cfg)
+  parent = await mgr.create_session(models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.get_chat_events_path(parent.id)
-  _append_events(events_path, [user_event("ok")])
+  conftest.append_events(events_path, [conftest.user_event("ok")])
   # A non-ASCII but valid line rides the decode branch (the isascii() proof
   # answers only for ASCII corpora); the copy keeps its raw bytes.
-  non_ascii = json.dumps(user_event("中文"), ensure_ascii=False)
+  non_ascii = json.dumps(conftest.user_event("中文"), ensure_ascii=False)
   with open(events_path, "a", encoding="utf-8") as f:
     f.write(non_ascii + "\n")
 
   child = await mgr.fork_session(parent.id)
-  expected_prefix = (json.dumps(user_event("ok")) + "\n" + non_ascii + "\n").encode("utf-8")
+  expected_prefix = (json.dumps(conftest.user_event("ok")) + "\n" + non_ascii + "\n").encode("utf-8")
   child_raw = mgr.get_chat_events_path(child.id).read_bytes()
   assert child_raw.startswith(expected_prefix)
   marker_lines = child_raw[len(expected_prefix):].decode("utf-8").splitlines()
@@ -103,8 +96,8 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
 
   # Undecodable bytes raise at fork time, and the failed fork writes no child
   # chat log.
-  other = await mgr.create_session(CreateSessionRequest(name="Other"), backend=OPUS_BACKEND_ID)
-  _append_events(mgr.get_chat_events_path(other.id), [user_event("ok")])
+  other = await mgr.create_session(models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
+  conftest.append_events(mgr.get_chat_events_path(other.id), [conftest.user_event("ok")])
   with open(mgr.get_chat_events_path(other.id), "ab") as f:
     f.write(b"\xff\xfe\n")
   chat_logs_before = set(cfg.sessions_dir.glob("*/data/chat_events.jsonl"))

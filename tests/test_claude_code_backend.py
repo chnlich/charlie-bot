@@ -1,21 +1,15 @@
 import os
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import backend_option
 
-from src.agents.backends.claude_code import (
-    BASE_COMMAND,
-    ClaudeCodeBackend,
-    claude_supervisor_env,
-)
-from src.agents.backends.registry import build_backend
-from src.core.config import CharlieBotConfig
-from src.core.models import ClaudeAccount
+from src.agents.backends import claude_code, registry
+from src.core import config, models
 
 
 def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:
-  backend = ClaudeCodeBackend()
+  backend = claude_code.ClaudeCodeBackend()
 
   prompt = "hello world"
   cmd = backend._build_command(prompt)
@@ -25,8 +19,8 @@ def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:
 
 
 def test_base_command_disallows_headless_unsafe_tools() -> None:
-  disallowed_index = BASE_COMMAND.index("--disallowed-tools")
-  disallowed_tools = set(BASE_COMMAND[disallowed_index + 1].split(","))
+  disallowed_index = claude_code.BASE_COMMAND.index("--disallowed-tools")
+  disallowed_tools = set(claude_code.BASE_COMMAND[disallowed_index + 1].split(","))
   required_tools = {
       "Monitor",
       "ScheduleWakeup",
@@ -57,7 +51,7 @@ def _disallowed_tool_values(cmd: list[str]) -> set[str]:
 
 
 def test_subscription_backend_disallows_interactive_menu_tools() -> None:
-  backend = ClaudeCodeBackend(model="claude-opus-4-8", cli_binary="claude-sub")
+  backend = claude_code.ClaudeCodeBackend(model="claude-opus-4-8", cli_binary="claude-sub")
 
   tools = _disallowed_tool_values(backend._build_command("hi"))
 
@@ -66,7 +60,7 @@ def test_subscription_backend_disallows_interactive_menu_tools() -> None:
 
 
 def test_api_backend_does_not_disallow_interactive_menu_tools() -> None:
-  backend = ClaudeCodeBackend(model="claude-opus-4-8")
+  backend = claude_code.ClaudeCodeBackend(model="claude-opus-4-8")
 
   tools = _disallowed_tool_values(backend._build_command("hi"))
 
@@ -78,7 +72,7 @@ def test_api_backend_does_not_disallow_interactive_menu_tools() -> None:
 def test_claude_supervisor_env_does_not_mutate_input() -> None:
   source = {"CLAUDECODE": "1"}
 
-  claude_supervisor_env(source)
+  claude_code.claude_supervisor_env(source)
 
   assert source == {"CLAUDECODE": "1"}
 
@@ -87,10 +81,10 @@ def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytes
   """A cc-claude entry's login dir rides the pool account (ClaudeAccount.config_dir);
   the backend expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
   monkeypatch.setenv("HOME", "/home/test-user")
-  option = backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
-  account = ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
+  option = conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
+  account = models.ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
 
-  backend = build_backend(option, CharlieBotConfig(), claude_account=account)
+  backend = registry.build_backend(option, config.CharlieBotConfig(), claude_account=account)
 
   env = backend._prepare_env({})
 
@@ -99,7 +93,7 @@ def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytes
 
 
 @pytest.mark.asyncio
-async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: Path) -> None:
+async def test_large_prompt_is_sent_on_stdin_not_argv(tmp_path: pathlib.Path) -> None:
   capture_path = tmp_path / "captured-prompt.txt"
   stub = tmp_path / "claude-stub"
   stub.write_text(
@@ -118,7 +112,7 @@ print(json.dumps({"type": "result", "result": "", "usage": {}}), flush=True)
   stub.chmod(0o755)
 
   prompt = "x" * (140 * 1024)
-  backend = ClaudeCodeBackend(cli_binary=str(stub))
+  backend = claude_code.ClaudeCodeBackend(cli_binary=str(stub))
 
   env = {**os.environ, "PROMPT_CAPTURE_PATH": str(capture_path)}
   events = [event async for event in backend.run(prompt, str(tmp_path), env)]

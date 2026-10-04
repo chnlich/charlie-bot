@@ -4,9 +4,9 @@ pure-Python safe pair, and the load/save behaviors every caller relies on."""
 import pytest
 import yaml
 
-from src.core.yaml_utils import load_yaml_text
+from src.core import yaml_utils
 
 
 def test_malformed_document_raises_yaml_error() -> None:
   with pytest.raises(yaml.YAMLError):
-    load_yaml_text("a: [1, 2\nb: {c", default={})
+    yaml_utils.load_yaml_text("a: [1, 2\nb: {c", default={})

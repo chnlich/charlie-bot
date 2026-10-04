@@ -2,14 +2,14 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import pathlib
 
 import pytest
 
-from src.agents.backends.base import AgentBackend
+from src.agents.backends import base
 
 
-class _ScriptedBackend(AgentBackend):
+class _ScriptedBackend(base.AgentBackend):
   """Minimal AgentBackend that runs an arbitrary bash -c script as the subprocess."""
 
   def __init__(self, script: str, **kwargs: object) -> None:
@@ -20,12 +20,12 @@ class _ScriptedBackend(AgentBackend):
     return ["bash", "-c", self._script]
 
 
-async def _consume(backend: AgentBackend, cwd: Path) -> list[dict]:
+async def _consume(backend: base.AgentBackend, cwd: pathlib.Path) -> list[dict]:
   return [evt async for evt in backend.run("ignored prompt", str(cwd), {"PATH": "/usr/bin:/bin"})]
 
 
 @pytest.mark.asyncio
-async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: Path) -> None:
+async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: pathlib.Path) -> None:
   """Subprocess emits NDJSON including a result event then exits cleanly."""
   log_dir = tmp_path / "logs"
   payload_lines = [
@@ -52,10 +52,10 @@ async def test_normal_completion_writes_raw_log_no_diagnostics(tmp_path: Path) -
 @pytest.mark.asyncio
 @pytest.mark.integration  # a real hung subprocess; the hang deadline is injected, not real
 async def test_subprocess_hang_after_result_captures_diagnostics(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Subprocess writes result then hangs without closing stdout — diagnostics captured + SIGTERM."""
-  monkeypatch.setattr(AgentBackend, "_POST_RESULT_TIMEOUT", 0.25)
-  monkeypatch.setattr(AgentBackend, "_CLEANUP_TIMEOUT", 0.25)
+  monkeypatch.setattr(base.AgentBackend, "_POST_RESULT_TIMEOUT", 0.25)
+  monkeypatch.setattr(base.AgentBackend, "_CLEANUP_TIMEOUT", 0.25)
 
   log_dir = tmp_path / "logs"
   result_line = '{"type": "result", "result": "", "usage": {}}'
@@ -78,17 +78,15 @@ async def test_subprocess_hang_after_result_captures_diagnostics(
 
 
 @pytest.mark.asyncio
-async def test_write_chunk_lands_every_byte_in_order(tmp_path: Path) -> None:
+async def test_write_chunk_lands_every_byte_in_order(tmp_path: pathlib.Path) -> None:
   """The per-chunk write-all contract shared by the stderr tee and the stdout
   pumps: a short write keeps going, chunk order holds."""
-  from src.agents.backends.base import _write_chunk
-
   path = tmp_path / "chunk.log"
   fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o666)
   try:
     chunks = [bytes([i % 256]) * (8192 + i) for i in range(9)]
     for chunk in chunks:
-      await _write_chunk(fd, chunk)
+      await base._write_chunk(fd, chunk)
   finally:
     os.close(fd)
   assert path.read_bytes() == b"".join(chunks)

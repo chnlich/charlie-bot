@@ -37,17 +37,17 @@ def _build_cfg() -> CharlieBotConfig:
 
 def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   cfg = _build_cfg()
-  opt = spawner.resolve_backend_option(cfg, OPUS_BACKEND_ID, "claude-opus-4-6")
+  opt = spawner.spawner_backends.resolve_backend_option(cfg, OPUS_BACKEND_ID, "claude-opus-4-6")
   assert opt.id == OPUS_BACKEND_ID
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
   assert opt.cli_binary == "claude-sub"
 
   with pytest.raises(ValueError, match=r"is not in backends.options"):
-    spawner.resolve_backend_option(cfg, "missing", "o3")
+    spawner.spawner_backends.resolve_backend_option(cfg, "missing", "o3")
 
   with pytest.raises(ValueError, match="model is required"):
-    spawner.resolve_backend_option(cfg, "codex-o3", "")
+    spawner.spawner_backends.resolve_backend_option(cfg, "codex-o3", "")
 
 
 def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
@@ -57,7 +57,7 @@ def test_resolve_backend_option_allows_antigravity_missing_model() -> None:
       backends={"options": [AGY_BACKEND_OPTION,]},
   )
 
-  opt = spawner.resolve_backend_option(cfg, "agy", None)
+  opt = spawner.spawner_backends.resolve_backend_option(cfg, "agy", None)
 
   assert opt.id == "agy"
   assert opt.model is None
@@ -97,7 +97,7 @@ def test_resolve_backend_option_rejects_missing_model_for_model_required_backend
   )
 
   with pytest.raises(ValueError, match="model is required"):
-    spawner.resolve_backend_option(cfg, backend_type, None)
+    spawner.spawner_backends.resolve_backend_option(cfg, backend_type, None)
 
 
 def test_build_worker_prompt_makes_iteration_reports_advisory() -> None:

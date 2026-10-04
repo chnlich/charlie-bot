@@ -18,6 +18,7 @@ from fastapi import HTTPException
 
 from src.api import internal
 from src.core import event_types as ET
+from src.core import spawner_backends
 from src.core.config import CharlieBotConfig
 from src.core.models import (
     DelegateRequest,
@@ -118,7 +119,7 @@ def _patch_resolve_rig(monkeypatch: pytest.MonkeyPatch) -> object:
     return "codex-o3", "o3"
 
   monkeypatch.setattr(internal, "get_config", lambda: cfg)
-  monkeypatch.setattr(internal, "resolve_requested_subagent_backend_model", fake_resolve)
+  monkeypatch.setattr(spawner_backends, "resolve_requested_subagent_backend_model", fake_resolve)
   return cfg
 
 
@@ -320,7 +321,7 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
 
   monkeypatch.setattr(internal, "check_takeoff_gate", fake_takeoff_gate)
   monkeypatch.setattr(
-      internal, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
+      spawner_backends, "resolve_requested_subagent_backend_model", fake_resolve_requested_subagent_backend_model)
   monkeypatch.setattr(internal, "get_config", lambda: object())
 
   with pytest.raises(HTTPException) as exc_info:

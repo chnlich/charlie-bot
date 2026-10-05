@@ -48,6 +48,11 @@ class CcClaudeBackend(BackendBase):
   effort: str | None = None
   fast_mode: bool = False  # cc-claude only: enable Claude Code fast mode via --settings '{"fastMode":true}'
   cli_binary: str | None = None
+  # cc-claude only: the named account pool (a key of accounts.claude_pools) this
+  # entry draws its login from; selection and the rate-limit relay stay inside
+  # that pool. Cross-field checks against accounts.claude_pools live on
+  # CharlieBotConfig (they cross two sections); None = no pools are defined.
+  account_pool: str | None = None
 
 
 class CcKimiBackend(BackendBase):

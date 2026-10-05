@@ -20,7 +20,7 @@ from conftest import (
 )
 
 from src.agents import master_cc_state
-from src.core import claude_accounts
+from src.core import claude_accounts, claude_relay
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.models import SessionMetadata
@@ -31,21 +31,28 @@ SONNET = "claude-sonnet-5"
 _fresh_pool_state = fresh_state_fixture(claude_accounts.reset_for_tests)
 
 
-def _options() -> list:
+def _options(pool_name: str | None = None) -> list:
+  extra = {} if pool_name is None else {"account_pool": pool_name}
   return [
-      backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
-      backend_option(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET),
+      backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL, **extra),
+      backend_option(id="claude-sonnet-5", label="Sonnet", type="cc-claude", model=SONNET, **extra),
       backend_option(id="codex-o3", label="Codex", type="codex", model="o3"),
   ]
 
 
-def _pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
+def _pool_cfg(
+    tmp_path: Path,
+    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+    pools: dict[str, list[str]] | None = None,
+) -> CharlieBotConfig:
+  options = _options(pool_name=next(iter(pools), None) if pools else None)
   return pool_cfg(
       tmp_path,
-      _options(),
+      options,
       home=tmp_path / "home",
       worktree_dir=tmp_path / "worktrees",
       labels=labels,
+      claude_pools=pools,
   )
 
 
@@ -114,6 +121,77 @@ def test_select_skips_excluded_rejected_and_unhealthy_accounts(tmp_path: Path) -
   assert claude_accounts.select(cfg, FABLE_MODEL, exclude={"main"}, now=NOW) is None
   assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "main"
   assert claude_accounts.earliest_reset(cfg, now=NOW) == NOW + timedelta(hours=1)
+
+
+# ---------------------------------------------------------------------------
+# Named pools
+# ---------------------------------------------------------------------------
+
+
+def test_select_considers_only_the_named_pools_accounts(tmp_path: Path) -> None:
+  """The pool bounds the candidates: an outside account with more headroom is not chosen,
+  and with no pool named every account still contends."""
+  cfg = _pool_cfg(tmp_path, pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
+  # ext-1 sits on a full window, main on half: across all accounts ext-1 wins.
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.50, 0.10), now=NOW)
+
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW).label == "ext-1"
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW, account_pool="alpha").label == "main"
+
+
+def test_a_label_in_two_pools_loads_and_selects_from_either(tmp_path: Path) -> None:
+  """One label may sit in several pools; each pool selects among its own members alone."""
+  cfg = _pool_cfg(tmp_path, pools={"alpha": ["main", "ext-1"], "beta": ["ext-1", "ext-2"]})
+  # ext-1 is the shared label; both its pool-mates sit on a full window, so each
+  # pool's only live account is the one the other pool does not hold.
+  claude_accounts.observe_rate_limit(
+      "main", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
+  claude_accounts.observe_rate_limit(
+      "ext-2", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=2)).timestamp()), now=NOW)
+
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW, account_pool="alpha").label == "ext-1"
+  assert claude_accounts.select(cfg, FABLE_MODEL, now=NOW, account_pool="beta").label == "ext-1"
+
+
+def test_relay_stays_inside_the_pool_and_names_it_when_exhausted(tmp_path: Path) -> None:
+  """move_to_next_account picks the next account inside the pool only; a healthy account in
+  another pool stays unused, and exhaustion names the pool and its earliest reset."""
+  cfg = _pool_cfg(tmp_path, pools={"alpha": ["main", "ext-1"], "beta": ["ext-2"]})
+  make_transcript(tmp_path / "claude-main", "uuid-1")
+  current = claude_accounts.account_by_label(cfg, "main")
+  claude_accounts.observe_rate_limit("main", _event("allowed", 0.80, 0.10), now=NOW)
+
+  nxt, error, refused = claude_relay.move_to_next_account(
+      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+
+  assert (nxt.label, error, refused) == ("ext-1", None, None)
+
+  claude_accounts.observe_rate_limit(
+      "ext-1", _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
+
+  nxt, error, refused = claude_relay.move_to_next_account(
+      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+
+  assert (nxt, refused) == (None, None)
+  assert error is not None
+  assert claude_relay.POOL_EXHAUSTED_PHRASE in error
+  assert "'alpha'" in error
+  assert "21:00 UTC" in error, "the reset time is the exhausted pool's own"
+
+
+def test_relay_exhaustion_without_pools_keeps_the_unnamed_message(tmp_path: Path) -> None:
+  cfg = _pool_cfg(tmp_path)
+  make_transcript(tmp_path / "claude-main", "uuid-1")
+  current = claude_accounts.account_by_label(cfg, "main")
+  for label in ("ext-1", "ext-2"):
+    claude_accounts.observe_rate_limit(
+        label, _event("rejected", 1.0, 0.10, (NOW + timedelta(hours=1)).timestamp()), now=NOW)
+
+  nxt, error, _refused = claude_relay.move_to_next_account(cfg, FABLE_MODEL, current, "uuid-1", now=NOW)
+
+  assert nxt is None
+  assert error == claude_relay.pool_exhausted_message(cfg, NOW)
+  assert claude_relay.POOL_EXHAUSTED_PHRASE in error and "UTC" in error
 
 
 # ---------------------------------------------------------------------------

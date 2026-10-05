@@ -129,6 +129,90 @@ def test_require_backends_rejects_empty_list() -> None:
   assert "config.example.yaml" in message
 
 
+# ---------------------------------------------------------------------------
+# Claude account pools (accounts.claude_pools x backends.options.account_pool)
+# ---------------------------------------------------------------------------
+
+
+def _pooled_config(pools: dict[str, list[str]], *options: dict) -> CharlieBotConfig:
+  """A config with accounts.claude entries a-e and the given pools and raw backend options."""
+  accounts = [{"label": label, "config_dir": f"/tmp/claude-{label}"} for label in "abcde"]
+  return CharlieBotConfig(accounts={"claude": accounts, "claude_pools": pools}, backends={"options": list(options)})
+
+
+def _cc_claude(option_id: str, **extra: str) -> dict:
+  return {"id": option_id, "label": option_id, "type": "cc-claude", "model": "m", **extra}
+
+
+CC = "cc-claude"
+
+
+def test_claude_pools_load_with_shared_labels_and_bound_options() -> None:
+  """A label may sit in two pools; every cc-claude option names its pool; non-claude options
+  carry no pool field."""
+  cfg = _pooled_config(
+      {
+          "alpha": ["a", "b"],
+          "beta": ["b", "c"]
+      },
+      _cc_claude("claude-a", account_pool="alpha"),
+      _cc_claude("claude-b", account_pool="beta"),
+      {
+          "id": "codex-x",
+          "label": "x",
+          "type": "codex",
+          "model": "m"
+      },
+  )
+  assert cfg.accounts.claude_pools == {"alpha": ["a", "b"], "beta": ["b", "c"]}
+  assert [option.account_pool for option in cfg.backends.options[:2]] == ["alpha", "beta"]
+
+
+@pytest.mark.parametrize(
+    "pools, options, fragment",
+    [
+        # A pool names a label accounts.claude does not list.
+        ({
+            "alpha": ["a", "ghost"]
+        }, [_cc_claude("claude-a", account_pool="alpha")], "accounts.claude_pools['alpha']"),
+        # A pool lists no account.
+        ({
+            "alpha": []
+        }, [_cc_claude("claude-a", account_pool="alpha")], "accounts.claude_pools['alpha']"),
+        # An option names a pool the table does not define.
+        ({
+            "alpha": ["a"]
+        }, [_cc_claude("claude-lost", account_pool="beta")], "backend 'claude-lost'"),
+        # An option sets a pool while no pools are defined.
+        ({}, [_cc_claude("claude-orphan", account_pool="alpha")], "backend 'claude-orphan'"),
+        # Pools are defined but an option names none.
+        ({
+            "alpha": ["a"]
+        }, [_cc_claude("claude-bare")], "backend 'claude-bare'"),
+    ],
+)
+def test_claude_pool_config_errors_name_the_offending_pool_or_option(
+    pools: dict[str, list[str]], options: list[dict], fragment: str) -> None:
+  with pytest.raises(ValueError) as excinfo:
+    _pooled_config(pools, *options)
+  assert fragment in str(excinfo.value)
+
+
+def test_account_pool_on_a_non_cc_claude_option_is_rejected() -> None:
+  """Only the cc-claude option type carries account_pool: another type naming it fails the
+  option model's unknown-field refusal, before the cross-section validator runs."""
+  with pytest.raises(ValueError) as excinfo:
+    _pooled_config({}, {"id": "codex-x", "label": "x", "type": "codex", "model": "m", "account_pool": "alpha"})
+  assert "account_pool" in str(excinfo.value)
+
+
+def test_empty_claude_pools_keep_the_unpooled_schema() -> None:
+  """No pools, no account_pool fields: the config loads exactly as before pools existed."""
+  cfg = _pooled_config({}, _cc_claude("claude-a"))
+  assert cfg.accounts.claude_pools == {}
+  assert cfg.get_backend_option("claude-a").account_pool is None
+
+
 def _family_backends(tmp_path: Path, preference: list[str], *ids: str) -> CharlieBotConfig:
   """A config at *tmp_path* whose options carry *ids* (cc-claude) and the given preference."""
   options = [backend_option(id=backend_id, label=backend_id, type="cc-claude", model="m") for backend_id in ids]

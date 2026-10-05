@@ -21,6 +21,12 @@ A backend entry is *pooled* when it is a cc-claude entry and ``accounts.claude``
 is non-empty. A cc-claude entry has no login field of its own: with a non-empty
 ``accounts.claude`` every cc-claude entry is pooled, and with an empty one every
 cc-claude entry uses the default login directory.
+
+``accounts.claude_pools`` may split the logins into any number of named pools
+(pool name -> account labels); each cc-claude entry names its pool in
+``account_pool`` and both selection and the relay stay inside that pool. The
+pool names come from configuration alone, and with no pools defined every
+selection reads all of ``accounts.claude``.
 """
 
 from __future__ import annotations
@@ -38,7 +44,7 @@ from typing import TYPE_CHECKING, Any
 from src.core.constants import BackendType
 from src.core.home import CREDENTIALS_FILE
 from src.core.log_once import LazyStructlogLogger
-from src.core.models import BackendOption, ClaudeAccount
+from src.core.models import BackendOption, CcClaudeBackend, ClaudeAccount
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
 # model stack must stay out of the claude-sub worker binary's import.
@@ -156,6 +162,31 @@ def is_pooled(option: BackendOption, cfg: CharlieBotConfig) -> bool:
   at all.
   """
   return option.type == BackendType.CC_CLAUDE and bool(cfg.accounts.claude)
+
+
+def option_pool(option: BackendOption) -> str | None:
+  """The named pool *option* draws its login from; None when the option type carries no pool."""
+  return option.account_pool if isinstance(option, CcClaudeBackend) else None
+
+
+def pool_accounts(cfg: CharlieBotConfig, name: str | None) -> list[ClaudeAccount]:
+  """The accounts of pool *name*, or every configured account when *name* is None.
+
+  A named pool holds the accounts its ``claude_pools`` labels list; a name
+  ``claude_pools`` does not define is a config error the CharlieBotConfig
+  validator refuses at load, so a KeyError here means a caller bypassed it.
+  """
+  if name is None:
+    return pool(cfg)
+  members = set(cfg.accounts.claude_pools[name])
+  return [account for account in pool(cfg) if account.label in members]
+
+
+def in_pool(cfg: CharlieBotConfig, label: str, name: str | None) -> bool:
+  """Whether *label* is one of pool *name*'s accounts; every label is when *name* is None."""
+  if name is None:
+    return True
+  return label in cfg.accounts.claude_pools[name]
 
 
 def account_by_label(cfg: CharlieBotConfig, label: str | None) -> ClaudeAccount | None:
@@ -436,6 +467,7 @@ def select(
     exclude: Iterable[str] = (),
     busy_accounts: AbstractSet[str] | None = None,
     now: datetime | None = None,
+    account_pool: str | None = None,
 ) -> ClaudeAccount | None:
   """The healthy account with the most headroom for *model*, ranked statelessly.
 
@@ -443,7 +475,8 @@ def select(
   quota about to lapse is spent before it lapses -- and scores closer than
   ``_SCORE_TIE`` break by least-recent event activity (a never-active account
   sorts first), so turns spread over the pool with no cursor state to restore
-  after a restart.
+  after a restart. Only pool *account_pool*'s accounts contend; None considers
+  every configured account.
 
   *busy_accounts* names accounts another running session holds: an idle account
   wins outright, and only when every healthy account is busy does the choice
@@ -456,7 +489,7 @@ def select(
   moment = now_or(now)
   excluded = set(exclude)
   available: list[tuple[ClaudeAccount, float]] = []
-  for account in pool(cfg):
+  for account in pool_accounts(cfg, account_pool):
     if account.label in excluded or not healthy(account, moment):
       continue
     if (hr := headroom(account.label, model, moment)) > 0.0:
@@ -508,12 +541,14 @@ def _reset_bonus(label: str, model: str | None, moment: datetime, headroom_left:
   return _RESET_BONUS_SCALE * (1.0 - ttr / _RESET_BONUS_HORIZON)
 
 
-def earliest_reset(cfg: CharlieBotConfig, now: datetime | None) -> datetime | None:
-  """The nearest rejection reset among pool accounts, for the pool-exhausted error."""
+def earliest_reset(cfg: CharlieBotConfig, now: datetime | None, account_pool: str | None = None) -> datetime | None:
+  """The nearest rejection reset among pool *account_pool*'s accounts, for the pool-exhausted error."""
   moment = now_or(now)
   resets = [
-      reading.rejected_until for account in pool(cfg) if (reading := _event_readings.get(account.label)) is not None and
-      reading.rejected_until is not None and reading.rejected_until > moment
+      reading.rejected_until
+      for account in pool_accounts(cfg, account_pool)
+      if (reading := _event_readings.get(account.label)) is not None and reading.rejected_until is not None and
+      reading.rejected_until > moment
   ]
   return min(resets) if resets else None
 

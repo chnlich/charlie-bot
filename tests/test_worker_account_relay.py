@@ -118,6 +118,54 @@ async def test_worker_raises_pool_exhausted_when_no_account_is_left(
 
 
 @pytest.mark.asyncio
+async def test_worker_relay_stays_inside_the_option_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The relay picks the next account inside the option's pool: a healthy account in another
+  pool, with more headroom than every pool member, stays unused."""
+  cfg = fable_pool_cfg(
+      tmp_path, labels=("main", "ext-1", "ext-2"), claude_pools={
+          "alpha": ["main", "ext-1"],
+          "beta": ["ext-2"]
+      })
+  source_transcript = make_transcript(tmp_path / "claude-main", CC_ID)
+  # ext-1 sits at half a window; untouched ext-2 (beta) has the most headroom of all.
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.50)["rate_limit_info"])
+  first = ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)
+  second = ScriptedRelayBackend([assistant_text_event("done"), _result()], exit_code=0)
+  builds = _install_backends(monkeypatch, [first, second])
+  worker = _worker(tmp_path, cfg, "main")
+
+  exit_code = await worker.run()
+
+  assert exit_code == 0
+  assert builds[1]["kwargs"]["claude_account"].config_dir == str(tmp_path / "claude-ext-1")
+  assert (tmp_path / "claude-ext-1" / "projects" / source_transcript.parent.name / f"{CC_ID}.jsonl").exists()
+  assert claude_accounts.transcript_path(tmp_path / "claude-ext-2", CC_ID) is None
+
+
+@pytest.mark.asyncio
+async def test_worker_pool_exhaustion_names_the_option_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """With every account of the option's pool rejected, the worker ends loudly naming the pool
+  and its earliest reset; the other pool's healthy accounts stay unused."""
+  cfg = fable_pool_cfg(
+      tmp_path, labels=("main", "ext-1", "ext-2"), claude_pools={
+          "alpha": ["main"],
+          "beta": ["ext-1", "ext-2"]
+      })
+  make_transcript(tmp_path / "claude-main", CC_ID)
+  _install_backends(monkeypatch, [ScriptedRelayBackend([rate_limit_event("rejected", 1.0)], exit_code=1)])
+  worker = _worker(tmp_path, cfg, "main")
+
+  with pytest.raises(claude_relay.PoolExhaustedError) as excinfo:
+    await worker.run()
+
+  message = str(excinfo.value)
+  assert claude_relay.POOL_EXHAUSTED_PHRASE in message
+  assert "'alpha'" in message and "earliest reset" in message and "UTC" in message
+  assert claude_accounts.transcript_path(tmp_path / "claude-ext-1", CC_ID) is None
+  assert claude_accounts.transcript_path(tmp_path / "claude-ext-2", CC_ID) is None
+
+
+@pytest.mark.asyncio
 async def test_worker_stops_after_the_relay_limit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = fable_pool_cfg(tmp_path, labels=("main", "a", "b", "c"))
   make_transcript(tmp_path / "claude-main", CC_ID)

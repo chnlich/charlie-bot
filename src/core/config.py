@@ -17,7 +17,7 @@ from pydantic import (
     model_validator,
 )
 
-from src.core import home
+from src.core import constants, home
 from src.core.backend_models import BackendOption, ClaudeAccount, ClaudeCompactionConfig
 from src.core.constants import REPO_ROOT
 from src.core.credentials import (  # noqa: F401  (re-export: the established src.core.config import path)
@@ -322,7 +322,8 @@ class BackendsConfig(BaseModel):
   # `label`. Session, thread and Run metadata, cron tasks and `preference` store
   # the id, so a version bump edits exactly those two fields of one entry and
   # every stored reference stays valid. The usage tally classifies a retired id
-  # (off config, still in old records) by its prefix. require_backends refuses a
+  # (off config, still in old records) by its prefix. An option bound to an
+  # account pool may end its id with `-<pool name>`. require_backends refuses a
   # startup whose preference or cron tasks name an id missing from `options`.
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:
@@ -344,11 +345,18 @@ class AccountsConfig(BaseModel):
 
   model_config = ConfigDict(extra='forbid')
 
-  # Claude account pool: the subscription logins (each a CLAUDE_CONFIG_DIR) a
-  # cc-claude entry without claude_config_dir draws from (src/core/claude_accounts.py).
-  # Empty = no pool: every cc-claude entry resolves its login exactly as it did
-  # before the pool existed.
+  # The Claude subscription logins (each label names one CLAUDE_CONFIG_DIR);
+  # accounts.claude lists every login, and claude_pools groups them into the
+  # named pools cc-claude entries draw from (src/core/claude_accounts.py).
   claude: list[ClaudeAccount] = []
+
+  # Named account pools: each key is a pool name, its value the account labels
+  # (from `claude` above) the pool holds. One label may sit in several pools.
+  # Empty = no pools: every cc-claude entry draws from all of `claude`, exactly
+  # as before pools existed. Cross-field checks against the backends options
+  # (each cc-claude entry's `account_pool`) run in CharlieBotConfig's validator,
+  # which sees both sections.
+  claude_pools: dict[str, list[str]] = {}
 
   # Token floors for the Sonnet compaction the pool runs on Fable sessions.
   claude_compaction: ClaudeCompactionConfig = ClaudeCompactionConfig()
@@ -537,6 +545,43 @@ class CharlieBotConfig(BaseModel):
   discord: DiscordConfig = Field(default_factory=DiscordConfig)
   publish: PublishConfig = Field(default_factory=PublishConfig)
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+
+  @model_validator(mode='after')
+  def _validate_claude_pools(self) -> CharlieBotConfig:
+    """Gate the Claude account pools across the ``accounts`` and ``backends`` sections.
+
+    The pool table and the cc-claude options that name a pool live in different
+    sections, so neither section's own model can check the pairing; a config
+    that fails here is refused at load, and a failed hot reload keeps the
+    previous config. Every error names the pool or the option id it concerns.
+    """
+    labels = {account.label for account in self.accounts.claude}
+    for pool_name, pool_labels in self.accounts.claude_pools.items():
+      unknown = [label for label in pool_labels if label not in labels]
+      if unknown:
+        raise ValueError(
+            f"accounts.claude_pools['{pool_name}'] names accounts missing from accounts.claude: "
+            f"{', '.join(unknown)}")
+      if not pool_labels:
+        raise ValueError(f"accounts.claude_pools['{pool_name}'] lists no account")
+    for option in self.backends.options:
+      if option.type != constants.BackendType.CC_CLAUDE:
+        continue
+      if not self.accounts.claude_pools:
+        if option.account_pool is not None:
+          raise ValueError(
+              f"backend '{option.id}' sets account_pool '{option.account_pool}' but "
+              "accounts.claude_pools defines no pools")
+        continue
+      if option.account_pool is None:
+        raise ValueError(
+            f"backend '{option.id}' (cc-claude) names no account_pool; defined pools: "
+            f"{', '.join(self.accounts.claude_pools)}")
+      if option.account_pool not in self.accounts.claude_pools:
+        raise ValueError(
+            f"backend '{option.id}' names undefined account_pool '{option.account_pool}'; defined pools: "
+            f"{', '.join(self.accounts.claude_pools)}")
+    return self
 
   @classmethod
   def model_construct(cls, _fields_set: set[str] | None = None, **values: object) -> CharlieBotConfig:

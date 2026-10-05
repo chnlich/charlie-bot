@@ -1826,7 +1826,7 @@ async def unarchive_session(
     return JSONResponse({"restored": restored["restored"]})
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
-  return JSONResponse(await session_mgr.unarchive_session(session_id))
+  return require_found(await session_mgr.unarchive_session(session_id))
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)

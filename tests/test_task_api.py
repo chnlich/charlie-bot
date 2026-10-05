@@ -226,8 +226,7 @@ async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
     assert renamed.status_code == 200 and renamed.json()["name"] == "Renamed"
 
     patched = client.patch(
-        f"/api/sessions/{ids['worker']}",
-        json={
+        f"/api/sessions/{ids['worker']}", json={
             "task": {
                 "goal": "ship the tree",
                 "acceptance": ["tests pass"]

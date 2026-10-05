@@ -133,11 +133,18 @@ def cmd_snapshot(out: Path) -> None:
       continue  # a legacy session is not a task node
     session_id = str(meta.get("id") or session_dir.name)
     task_parents[session_id] = meta.get("task_parent_id")
-    events = _read_jsonl(session_dir / "data" / "chat_events.jsonl")
+    # The fold's last-lifecycle-fact rule needs chronological order. The
+    # rotation moves events older than its cutoff into
+    # data/archives/chat_events.<iso-year>-W<week>.jsonl (the zero-padded
+    # year-week name sorts chronologically — the order ChatEventStore's
+    # archive reads use), so the segments hold the OLDER history: read them
+    # first, then the live file.
+    events: list[dict] = []
     archives = session_dir / "data" / "archives"
     if archives.is_dir():
       for segment in sorted(archives.glob("*.jsonl")):
         events.extend(_read_jsonl(segment))
+    events.extend(_read_jsonl(session_dir / "data" / "chat_events.jsonl"))
     state = _fold_task_state(events)
     hidden = meta.get("presentation") == "hidden"
     legacy_archived = meta.get("status") == "archived"

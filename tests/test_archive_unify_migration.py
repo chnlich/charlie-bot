@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -99,6 +100,36 @@ async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
   assert doc["kind"] == migration.SNAPSHOT_KIND
   assert set(doc["migrate"]) == {mid.id}
   assert doc["task_parents"] == {root.id: None, mid.id: root.id, closed.id: root.id}
+
+
+@pytest.mark.asyncio
+async def test_snapshot_folds_segments_before_the_live_file(
+    script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """A close fact the rotation moved into a weekly segment and a reopen fact
+  in the live file fold chronologically: the reopen (the last lifecycle fact)
+  wins, so the hidden node reads open and the snapshot lists it."""
+  cfg, session_mgr, tree = script_env
+  node = await create_task(tree, parent=None, request_id="seg")
+  await tree.archive_subtree(node.id, caller=OPERATOR)  # the close fact, live file
+  # The real segment writer: the rotation moves the closed-period events into
+  # data/archives/chat_events.<iso-year>-W<week>.jsonl.
+  await session_mgr.recycle_scheduled_session(node.id, datetime.now(UTC) + timedelta(seconds=1))
+  segments = sorted((cfg.sessions_dir / node.id / "data" / "archives").glob("chat_events.*.jsonl"))
+  assert segments, "the rotation wrote no segment"
+  segment_types = [
+      e["type"] for f in segments for e in (json.loads(line) for line in f.read_text().splitlines() if line)
+  ]
+  assert "task_closed" in segment_types and "task_reopened" not in segment_types
+  await tree.completion.restore_chain(node.id, request_id="r-1", reason="sidebar unarchive")  # reopen, live file
+  assert tree.task_state(node.id) == "open"
+  hide_like_the_old_server(cfg, node.id)
+
+  out = tmp_path / "snapshot.json"
+  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
+  migration.cmd_snapshot(out)
+
+  doc = json.loads(out.read_text())
+  assert node.id in doc["migrate"]
 
 
 @pytest.mark.asyncio

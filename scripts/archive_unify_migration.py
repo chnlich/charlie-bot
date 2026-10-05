@@ -230,7 +230,9 @@ def _walk_task_nodes(base: str, key: str) -> list[dict]:
         return out
 
   seen: set[str] = set()
-  queue = [row["id"] for row in fetch(None)]
+  roots = fetch(None)
+  rows.extend(roots)
+  queue = [row["id"] for row in roots]
   while queue:
     node_id = queue.pop(0)
     if node_id in seen:

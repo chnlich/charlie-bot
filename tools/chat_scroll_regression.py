@@ -66,22 +66,22 @@ import time  # noqa: E402
 import urllib.request  # noqa: E402
 
 from tools.browser_harness_session_tree import (  # noqa: E402
-    DESKTOP_CAPTURE_FLAGS,
-    CDP,
-    connect_cdp,
-    devtools_ws_url,
-    evaluate,
-    fail,
-    launch_chrome,
-    log,
-    mint_access_key,
-    open_cdp_page,
-    open_evidence_dir,
-    pick_free_port,
-    resolve_chrome,
-    stop_child,
-    wait_for,
-    write_credentials_yaml,
+  CDP,
+  DESKTOP_CAPTURE_FLAGS,
+  connect_cdp,
+  devtools_ws_url,
+  evaluate,
+  fail,
+  launch_chrome,
+  log,
+  mint_access_key,
+  open_cdp_page,
+  open_evidence_dir,
+  pick_free_port,
+  resolve_chrome,
+  stop_child,
+  wait_for,
+  write_credentials_yaml,
 )
 
 ANCHOR_TOLERANCE_PX = 2.0
@@ -589,7 +589,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   # before the prepend lands: the wheel's own travel is the user's reading
   # move, and the assertion holds the engine to the place the wheel produced.
   await ev(cdp, cs, "window.__delayNextMs = 1500")
-  await ev(cdp, cs, "window.__stubPages = [" + json.dumps(page_payload(page1, True)) + "]")
+  await ev(cdp, cs, "window.__stubPages = [" + json.dumps(page_payload(page1, has_more=True)) + "]")
   # Park the reader 450px from the top (no trigger above 80px), then cross the
   # trigger with real wheel gestures.
   await scroll_write(cdp, cs, 450)
@@ -681,7 +681,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await ev(cdp, cs,
            "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
   await ev(cdp, cs, "window.__failNextStatus = 500")
-  await ev(cdp, cs, "window.__stubPages = [" + json.dumps(page_payload(page2, False)) + "]")
+  await ev(cdp, cs, "window.__stubPages = [" + json.dumps(page_payload(page2, has_more=False)) + "]")
   await scroll_write(cdp, cs, 450)
   await wheel_until_trigger(cdp, cs)
   # The failed fetch changed nothing, so the reader's post-gesture place is
@@ -768,7 +768,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
     # The parked place sits in the live tail's flat segment: no turn row
     # exists to follow across depths. Pre-fix engines park readers there by
     # never unpinning; the depth walk would measure nothing real.
-    sc.check(False, f"anchor {anchor['id']} has no turn row to follow across depths")
+    sc.check(cond=False, message=f"anchor {anchor['id']} has no turn row to follow across depths")
     sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": None})
     await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_outline"))
     return
@@ -847,6 +847,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   restored = await snap(cdp, cs)
   ay_restored = await anchor_y(cdp, cs, anchor["id"])
   sc.check(resized["viewport"] < before["viewport"] - 100, "the viewport actually shrank")
+  sc.check(restored["viewport"] == before["viewport"], "the viewport returned to its size")
   sc.check(pos_holds(ay_before, ay_resized), "anchor holds across the shrink")
   sc.check(pos_holds(ay_before, ay_restored), "anchor holds across the restore")
   sc.data.update({"ay_before": ay_before, "ay_resized": ay_resized, "ay_restored": ay_restored})
@@ -931,6 +932,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
   # Isolated server: the real app, lifespan disabled, this checkout's files.
   import uvicorn
+
   from server import app as server_app
   server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port,
                                  log_level="error", lifespan="off")
@@ -1038,7 +1040,7 @@ def main() -> None:
     asyncio.run(run_harness(args))
   except SystemExit:
     raise
-  except Exception as exc:  # noqa: BLE001 — the harness's own failure exit
+  except Exception as exc:
     fail(repr(exc))
 
 

@@ -64,7 +64,7 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
     self.end_headers()
     self.wfile.write(payload)
 
-  def log_message(self, format: str, *args: object) -> None:
+  def log_message(self, format: str, *args: object) -> None:  # noqa: A002  stdlib signature mirror
     del format, args  # the tests read the recorded requests, not the console
 
 

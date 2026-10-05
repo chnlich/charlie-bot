@@ -143,7 +143,7 @@ async def test_the_selected_backend_decodes_after_the_recording_is_on_disk(
 
   response, logs = await _post(BACKEND_ID)
 
-  assert response.body == f'{{"text":"{REMOTE_TEXT}"}}'.encode("utf-8")
+  assert response.body == f'{{"text":"{REMOTE_TEXT}"}}'.encode()
   (call,) = remote.calls
   assert call["pcm"] == b"\x00\x00" * 160  # the whole upload's PCM, one chunk
   assert call["vocabulary"] == ["CharlieBot"]  # the config's hints ride along
@@ -201,7 +201,7 @@ async def test_live_unknown_local_and_absent_ids_keep_the_local_path(
 
   response, logs = await _post(backend)
 
-  assert response.body == f'{{"text":"{LOCAL_TEXT}"}}'.encode("utf-8")
+  assert response.body == f'{{"text":"{LOCAL_TEXT}"}}'.encode()
   assert remote.calls == []
   transcribed = [entry for entry in logs if entry["event"] == "voice_transcribed"]
   assert transcribed[0]["backend"] == "local"

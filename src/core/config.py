@@ -391,6 +391,11 @@ class VoiceConfig(BaseModel):
   # format; empty lets every backend auto-detect.
   languages: list[str] = []
 
+  # aigw gateway root URL for the 'gemini-aigw' backend, which sends the whole
+  # recording through the gateway's /gemini pass-through to Gemini 3.5 Transcribe.
+  # Empty leaves that backend unavailable. Credential: credentials.yaml aigw.api_key.
+  aigw_base_url: str = ''
+
   @model_validator(mode='after')
   def _default_backend_is_registered(self) -> VoiceConfig:
     """A default_backend typo must fail at startup: validate against the registry's ids.

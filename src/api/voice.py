@@ -7,12 +7,17 @@ the copy it already received: sessions/{id}/voice/, a 16 kHz mono PCM16 WAV
 plus a .txt carrying the final text. The final is pushed only once that pair is
 on disk, so a browser that receives it ends the recording with no upload. The
 full-upload endpoint (POST /api/voice/{session_id}) is the fallback — no final
-inside the browser's 2 s budget, a relay failure, or the local backend — and it
-persists the recording BEFORE decoding it, so a decode failure or an abandoned
-request never loses the audio. The confirm probe (POST
-/api/voice/{session_id}/confirm) decodes the opening clip and persists nothing.
-The relay never falls back: its failures hand the recording to the upload
-endpoint.
+inside the browser's 2 s budget, a relay failure, or a non-live backend — and
+it persists the recording BEFORE decoding it, so a decode failure or an
+abandoned request never loses the audio. Its form's backend field dispatches: a
+registered non-live backend other than the local one decodes the upload itself
+(persist first, then that backend's transcribe over the whole recording), while
+an absent field, an unknown id, a live backend id, or the local id keeps the
+local decode behind the speech-bundle readiness gate (503) — an unavailable
+non-live selection is an error, never a local fallback. The confirm probe (POST
+/api/voice/{session_id}/confirm) decodes the opening clip through the local
+model and persists nothing. The relay never falls back: its failures hand the
+recording to the upload endpoint.
 """
 
 from __future__ import annotations
@@ -86,18 +91,23 @@ async def upload_voice_recording(
     backend: str | None = Form(None),
     devices: str | None = Form(None),
 ) -> FastJsonResponse:
-  """The fallback path: persist the recording, decode it offline, return the text.
+  """The fallback path: persist the recording, decode it, return the text.
 
   Multipart form: ``audio`` is the WAV (same validation and size cap as the raw
   body ever enforced), ``backend`` names the backend the browser selected, and
-  ``devices`` is the recording's device object as JSON. The voice_transcribed
-  log line records ``backend`` — the local backend's id, the producer of the
-  persisted text — and ``selected_backend``, the form's ``backend`` exactly as
-  sent, None when absent.
+  ``devices`` is the recording's device object as JSON. A registered non-live
+  backend other than the local one decodes the recording itself; every other
+  value keeps the local decode. The voice_transcribed log line records
+  ``backend`` — the id of the backend that produced the persisted text — and
+  ``selected_backend``, the form's ``backend`` exactly as sent, None when
+  absent.
   """
   try:
     device_info = _devices_form_field(devices)
     pcm_bytes = _wav_body_to_pcm(await audio.read(), _full_max_samples())
+    cloud_backend = _selected_cloud_backend(backend)
+    if cloud_backend is not None:
+      return await _upload_via_cloud_backend(session_id, cloud_backend, backend, pcm_bytes, device_info)
     # The bundle comes first so models-not-ready (503) persists nothing — the client
     # keeps its buffer and retries, and no orphan wav piles up per retry.
     bundle = await _speech_bundle()
@@ -121,6 +131,75 @@ async def upload_voice_recording(
 
 def _error_response(exc: _VoiceRequestError) -> FastJsonResponse:
   return FastJsonResponse({"error": exc.message}, status_code=exc.status_code)
+
+
+def _selected_cloud_backend(backend_id: str | None) -> TranscriptionBackend | None:
+  """The registered non-live backend the form's backend field selects; None for the local path.
+
+  An absent field, an unknown id, a live backend (the relay owns those), and the
+  local backend itself all keep today's local decode. A selected non-live backend
+  that is unavailable raises instead — the selection never falls back to the
+  local model, the same no-fallback contract the relay follows.
+  """
+  from src.agents.transcription import registry
+  from src.agents.transcription.local import LocalTranscriptionBackend
+
+  if not backend_id or backend_id == LocalTranscriptionBackend.id:
+    return None
+  if backend_id not in registry.backend_ids():
+    return None
+  candidate = registry.build_transcription_backend(backend_id, get_config())
+  if candidate.live_partials:
+    return None
+  reason = candidate.unavailable_reason()
+  if reason is not None:
+    raise _VoiceRequestError(400, f"{backend_id} is unavailable: {reason}")
+  return candidate
+
+
+async def _upload_via_cloud_backend(
+    session_id: str,
+    cloud_backend: TranscriptionBackend,
+    selected_backend: str | None,
+    pcm_bytes: bytes,
+    devices: dict | None,
+) -> FastJsonResponse:
+  """Decode the upload with the selected non-live cloud backend; the recording persists first.
+
+  The WAV lands on disk before the backend runs, so a transcription failure
+  leaves the recording for the browser's retry — the same persist-before-decode
+  order the local path follows.
+  """
+  cfg = get_config()
+  audio_path = await asyncio.to_thread(_persist_voice_audio, cfg, session_id, pcm_bytes)
+  try:
+    text = await _transcribe_with_cloud_backend(session_id, cloud_backend, pcm_bytes, cfg)
+  except _VoiceRequestError as exc:
+    # A transcription failure (500) leaves the wav on disk: the recording
+    # survives every later failure.
+    return _error_response(exc)
+  await asyncio.to_thread(_write_voice_transcript, audio_path, text)
+  _log_voice_transcribed(session_id, audio_path, pcm_bytes, text, cloud_backend.id, selected_backend, devices)
+  return FastJsonResponse({"text": text})
+
+
+async def _transcribe_with_cloud_backend(
+    session_id: str, cloud_backend: TranscriptionBackend, pcm_bytes: bytes, cfg: CharlieBotConfig) -> str:
+  """One whole-clip pass through the cloud backend's transcribe; any failure maps to 500."""
+
+  async def whole_clip() -> AsyncIterator[bytes]:
+    yield pcm_bytes
+
+  text = ""
+  try:
+    async for event in cloud_backend.transcribe(whole_clip(), vocabulary=cfg.voice.vocabulary,
+                                                languages=cfg.voice.languages):
+      if event.kind == "final":
+        text = event.text
+  except Exception as exc:
+    log.exception("voice_cloud_transcribe_failed", session_id=session_id, backend=cloud_backend.id)
+    raise _VoiceRequestError(500, f"voice transcription failed: {exc}") from exc
+  return text
 
 
 def _devices_form_field(raw: str | None) -> dict | None:

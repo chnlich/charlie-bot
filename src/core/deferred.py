@@ -9,8 +9,8 @@ globals-first loader the master-turn chain's consumers build theirs from
 lives here too.
 """
 
+import importlib
 from collections.abc import Callable
-from importlib import import_module
 from typing import Any
 
 
@@ -49,7 +49,7 @@ def deferred_import_loader(attr: str, module_path: str) -> Callable[[dict[str, A
     bound = namespace.get(attr)
     if bound is not None:
       return bound
-    value = getattr(import_module(module_path), attr)
+    value = getattr(importlib.import_module(module_path), attr)
     namespace[attr] = value
     return value
 

@@ -9,6 +9,7 @@ from fastapi import testclient
 
 from src.api import files as files_api
 from src.api import pages as pages_api
+from src.core import config
 
 SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asset_version()}></script>"
 
@@ -17,13 +18,14 @@ SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asse
 def sessions_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Point the configured sessions root at a test value.
 
-  files.py imports ``get_config`` by name, so the patch lands on the module. A
+  files.py reaches ``get_config`` through the config module, so the patch lands
+  there. A
   real app carries the auth middleware, which owns the credential gate; these
   tests cover the file server alone, where the tray injection no longer reads
   the request at all — no credential is stubbed or sent unless a test wants to
   pin that the router ignores it.
   """
-  monkeypatch.setattr(files_api, "get_config", lambda: types.SimpleNamespace(sessions_dir=tmp_path))
+  monkeypatch.setattr(config, "get_config", lambda: types.SimpleNamespace(sessions_dir=tmp_path))
   return tmp_path
 
 

@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import uuid
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -71,7 +72,6 @@ from src.core.models import (
     PatchSessionTaskRequest,
     RateRoundRequest,
     RenameGroupRequest,
-    ReopenTaskRequest,
     RetryRunRequest,
     RunCancelResponse,
     RunKind,
@@ -92,7 +92,7 @@ from src.core.models import (
 from src.core.plans import PlanRegistryManager
 from src.core.run_token import CallerIdentity
 from src.core.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
-from src.core.scheduled_sessions import cron_subtree_roots, write_cron_key
+from src.core.scheduled_sessions import cron_subtree_roots
 from src.core.sessions import (
     ELONE_BOOTSTRAP_OPENER,
     FORK_BOOTSTRAP_OPENER,
@@ -104,6 +104,7 @@ from src.core.takeoff_gate import DelegationBlockedError
 from src.core.task_sessions import (
     AGENT_CREATE_SCOPE_REFUSAL,
     TASK_CREATE_REQUEST_ID_REQUIRED,
+    TaskArchivedError,
     TaskConflictError,
     TaskForbiddenError,
     TaskInvalidError,
@@ -1090,6 +1091,10 @@ class PendingTaskInputsResponse(BaseModel):
 
 def _task_http_error(e: Exception) -> HTTPException:
   """Translate one task-tree domain error into its planned HTTP shape."""
+  if isinstance(e, TaskArchivedError):
+    # The archived refusal's sentence is the whole detail: the sender reads
+    # exactly "task <id> is archived".
+    return HTTPException(status_code=409, detail=str(e))
   if isinstance(e, (TaskInvalidError,)):
     return HTTPException(status_code=400, detail=str(e))
   if isinstance(e, (TaskNotFoundError, RunNotFoundError)):
@@ -1386,7 +1391,7 @@ async def get_session_events_page(
     projection = await get_message_projection_fast(session_mgr, session_id)
     if projection is not None:
       # The chat UI re-fetches a page whenever it re-enters the viewport or the
-      # session is reopened, and the published projection is immutable, so a
+      # session is revisited, and the published projection is immutable, so a
       # repeat page serves its rendered body from the projection's own cache;
       # every advance publishes a new projection whose cache starts empty.
       body = projection.cached_page_body(before, limit)
@@ -1729,32 +1734,33 @@ async def get_session(
   return SessionDetailResponse.model_validate(detail)
 
 
-@router.delete("/{session_id}", response_model=SessionMetadata)
+@router.delete("/{session_id}")
 async def archive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> SessionMetadata:
-  """Legacy archive entry: a user collapse, never a lifecycle write.
+) -> Response:
+  """The user's archive: on a task node the single end state, on a legacy
+  session the stored-status archive.
 
-  On a v2 task this becomes the explicit presentation=hidden preference — the
-  closed/open fact is untouched, so archiving can never silently reopen or
-  close a task — and requires operator scope. Archiving a task-bound node
-  also stops its task: the single-key write flips only ``enabled`` in the
-  task's cron yaml (the binding itself stays — re-enabling the task
-  re-arms the same node).
+  A task node's archive ends its whole subtree: every open node gets one
+  ``task_closed`` fact with outcome ``archived`` (operator scope required; an
+  unfinished run anywhere in the subtree refuses with 409 before anything is
+  written). The response names the ids this call archived — an already
+  archived node returns an empty list. A session without a profile keeps the
+  legacy path: the empty-session delete, else the stored
+  ``status: archived`` write.
   """
   if meta.profile is not None:
     if not caller.is_operator:
       raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
-    archived = require_found(await task_mgr.set_presentation(session_id, "hidden"))
-    from src.core.cron_sequence import bound_task_name
-    bound_task = bound_task_name(session_id)
-    if bound_task is not None:
-      await asyncio.to_thread(write_cron_key, bound_task, "enabled", value=False)
-    return archived
+    try:
+      archived = await task_mgr.archive_subtree(session_id, caller=caller)
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+      raise _task_http_error(e) from e
+    return JSONResponse({"archived": archived})
   event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
   if event_count == 0:
     await session_mgr.delete_session_permanently(session_id)
@@ -1793,23 +1799,34 @@ async def delete_session_permanently(
   return Response(status_code=204)
 
 
-@router.post("/{session_id}/unarchive", response_model=SessionMetadata)
+@router.post("/{session_id}/unarchive")
 async def unarchive_session(
     session_id: str,
     meta: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
-) -> SessionMetadata:
-  """Legacy unarchive entry: on a v2 task this clears the explicit hidden
-  preference (presentation=shown) without ever reopening a closed task."""
+) -> Response:
+  """Restore an archived node.
+
+  On a task node this is the end state's only exit: the target and every
+  archived ancestor restore (one ``task_reopened`` fact each, topmost first;
+  siblings and descendants untouched; no round starts), operator scope
+  required, and the response names the restored ids. A session without a
+  profile keeps the legacy stored-status restore.
+  """
   if meta.profile is not None:
     if not caller.is_operator:
       raise HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
-    return require_found(await task_mgr.set_presentation(session_id, "shown"))
+    try:
+      restored = await task_mgr.completion.restore_task(
+          session_id, request_id=str(uuid.uuid4()), reason="sidebar unarchive", caller=caller)
+    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+      raise _task_http_error(e) from e
+    return JSONResponse({"restored": restored["restored"]})
   if meta.status != SessionStatus.ARCHIVED:
     raise HTTPException(status_code=409, detail="Session is not archived")
-  return await session_mgr.unarchive_session(session_id)
+  return JSONResponse(await session_mgr.unarchive_session(session_id))
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)
@@ -2256,24 +2273,6 @@ async def cancel_session_task(
   """
   try:
     await task_mgr.completion.cancel_task(session_id, request_id=req.request_id, reason=req.reason, caller=caller)
-  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
-    raise _task_http_error(e) from e
-  return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))
-
-
-@router.post("/{session_id}/reopen", response_model=SessionDetailResponse)
-async def reopen_session_task(
-    session_id: str,
-    req: ReopenTaskRequest,
-    _meta: SessionMetadata = Depends(require_session),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-    caller: CallerIdentity = Depends(require_caller),
-) -> SessionDetailResponse:
-  """Explicit operator reopen: references the closed event, refuses closed
-  ancestors with their list, and preserves history and authorization."""
-  try:
-    await task_mgr.completion.reopen_task(
-        session_id, request_id=req.request_id, reason=req.reason, caller=caller, closed_event_id=req.closed_event_id)
   except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
   return SessionDetailResponse.model_validate(await _completed_session_detail(task_mgr, session_id))

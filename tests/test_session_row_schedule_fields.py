@@ -194,16 +194,17 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   root.group = "Alpha"
   await session_mgr.save_metadata(root)
-  # A derived-archived intermediate (presentation hidden): it is itself an
-  # archived row, and the walk climbs past it to the active root.
+  # An archived intermediate (its own close fact): it is itself an archived
+  # row, and the walk climbs past it to the active root.
   hidden = await create_task(
-      tree, parent=root.id, request_id="mid-1", profile="manager", name="Synthetic hidden middle")
-  await tree.set_presentation(hidden.id, "hidden")
+      tree, parent=root.id, request_id="mid-1", profile="manager", name="Synthetic archived middle")
   delivered = await create_task(
       tree, parent=hidden.id, request_id="leaf-1", profile="worker", name="Synthetic delivered")
   await tree.runs.register_run(RunRecord(id="run-1", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-1", outcome="success")
-  assert tree.task_state(delivered.id) == "completed"  # archived by derivation
+  assert tree.task_state(delivered.id) == "completed"  # an end state of its own
+  from conftest import OPERATOR
+  await tree.archive_subtree(hidden.id, caller=OPERATOR)  # delivered is not open; it stays completed
 
   # A stored-archived legacy child directly under the active root.
   legacy_child = await session_mgr.create_session(

@@ -88,26 +88,31 @@ async def test_failed_worker_stays_in_the_active_list(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_hiding_a_parent_archives_its_open_subtree_and_restores_it(tmp_path: Path) -> None:
+async def test_archiving_a_parent_archives_its_open_subtree_and_restore_brings_it_back(tmp_path: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create(tree, parent=None, request_id="root")
   worker = await create(tree, parent=root.id, request_id="w1", profile="worker")
   assert await active_ids(session_mgr) == {root.id, worker.id}
   assert await archived_by_id(session_mgr) == {}
 
-  await tree.set_presentation(root.id, "hidden")
+  from conftest import OPERATOR
+  assert await tree.archive_subtree(root.id, caller=OPERATOR) == [root.id, worker.id]
 
   assert await active_ids(session_mgr) == set()
   archived = await archived_by_id(session_mgr)
   assert set(archived) == {root.id, worker.id}
   assert archived[root.id].status == SessionStatus.ARCHIVED
-  # Derived, never stored: the child's metadata on disk still says active/auto.
+  # Derived, never stored: the child's metadata on disk still says active,
+  # and no status write ever happened (the close facts are the archive).
   stored = orjson.loads((cfg.sessions_dir / worker.id / "metadata.json").read_bytes())
-  assert stored["status"] == "active" and stored["presentation"] == "auto"
+  assert stored["status"] == "active" and "presentation" not in stored
 
-  await tree.set_presentation(root.id, "auto")
+  restored = await tree.completion.restore_chain(worker.id, request_id="sidebar-1", reason="sidebar unarchive")
+  assert restored == [root.id, worker.id]  # the whole archived chain, topmost first
   assert await active_ids(session_mgr) == {root.id, worker.id}
   assert await archived_by_id(session_mgr) == {}
-  await tree.set_presentation(root.id, "shown")
-  assert await active_ids(session_mgr) == {root.id, worker.id}
-  assert await archived_by_id(session_mgr) == {}
+  # The restore moved only the chain's nodes: facts, not status writes.
+  for sid in (root.id, worker.id):
+    assert tree.task_state(sid) == "open"
+    stored = orjson.loads((cfg.sessions_dir / sid / "metadata.json").read_bytes())
+    assert stored["status"] == "active"

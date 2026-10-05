@@ -2,6 +2,7 @@
 
 import asyncio
 import copy
+import uuid
 from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -152,6 +153,28 @@ async def _ensure_backend_update_session(
   return await session_mgr.switch_backend(node.id, backend)
 
 
+async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: ScheduledTaskConfig) -> None:
+  """The enable's session effect on a bound archived task node: the node restores.
+
+  Enabling a task re-arms its node, and an archived node fires nothing, so the
+  editor's enable restores the bound node's archived chain (the named source
+  is the cron enable itself). A disabled or unbound task restores nothing; an
+  open node restores nothing (the chain walk finds no archived member).
+  """
+  if req.enabled is not True or not cand_model.session_id:
+    return
+  from src.api.deps import task_manager
+
+  tree = task_manager()
+  meta = await tree.load_meta(cand_model.session_id)
+  if meta is None or meta.profile is None:
+    return  # a missing or legacy binding keeps the legacy status mechanics
+  if tree.task_state(meta.id) == "open":
+    return
+  restored = await tree.completion.restore_chain(meta.id, request_id=str(uuid.uuid4()), reason="cron enable")
+  log.info("cron_enable_restored_node", task=name, session=meta.id, restored=restored)
+
+
 async def _scheduled_node_busy(session_mgr: SessionManager, node: SessionMetadata) -> bool:
   """Whether the bound node's own work is in flight.
 
@@ -298,6 +321,7 @@ async def apply_task_yaml_update(
     # The 409 lands before any yaml write: the file keeps its current backend
     # when the node's switch cannot happen now.
     raise HTTPException(status_code=409, detail=str(e)) from e
+  await _restore_enabled_task_node(name, req, cand_model)
   await asyncio.to_thread(_write_cron_yaml, name, candidate)
   log.debug('cron_task_updated', name=name)
   return candidate, rotated

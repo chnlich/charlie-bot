@@ -85,11 +85,32 @@ async function removeSessionRowInline(sessionId) {
 async function archiveSession(id) {
   try {
     const res = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-    if (!res.ok) throw new Error(`Archive failed: ${res.status}`);
+    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
     await removeSessionRowInline(id);
   } catch (err) {
     console.error('Archive failed:', err);
+    showToast(err.message, true);
   }
+}
+
+// The server's refusal sentence for the row's user: a 409 archive refusal
+// carries its blockers (the nodes holding an unfinished run) beside the
+// message; any other refusal body keeps whatever detail it carries.
+async function archiveRefusalDetail(res) {
+  let detail = `Archive failed: ${res.status}`;
+  try {
+    const body = await res.json();
+    const d = body && body.detail;
+    if (typeof d === 'string') {
+      detail = d;
+    } else if (d && typeof d === 'object') {
+      detail = d.message || detail;
+      if (Array.isArray(d.blockers) && d.blockers.length) detail += '\n' + d.blockers.join('\n');
+    }
+  } catch (err) {
+    // A bodyless refusal keeps the status line.
+  }
+  return detail;
 }
 
 async function deleteSessionPermanently(sessionId) {

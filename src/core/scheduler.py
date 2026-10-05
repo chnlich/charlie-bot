@@ -249,8 +249,10 @@ class Scheduler:
     # Step 1 — create or reattach the node. The request id derives from the
     # task name alone, so a crash replays into the same node, and a task
     # deleted and re-created under the same name reattaches to its original
-    # one. A replayed node the user archived is unarchived: the task must not
-    # fire into a hidden node.
+    # one. A replayed node the user archived comes back: the task must fire
+    # into an open node, so the archived chain restores with the auto-bind as
+    # its named source (a legacy stored-status archive keeps its legacy
+    # restore).
     node = await tree.create_task(
         request_id=f"{_AUTO_BIND_REQUEST_PREFIX}{task_cfg.name}",
         task_parent_id=None,
@@ -266,8 +268,12 @@ class Scheduler:
       if unarchived is None:
         raise RuntimeError(f"scheduled task '{task_cfg.name}' node {node.id} vanished during unarchive")
       node = unarchived
-    if node.presentation == "hidden":
-      node = await tree.set_presentation(node.id, "shown")
+    if tree.task_state(node.id) != "open":
+      restored = await tree.completion.restore_chain(
+          node.id, request_id=f"{_AUTO_BIND_REQUEST_PREFIX}{task_cfg.name}:restore", reason="cron auto-bind")
+      if not restored:
+        raise RuntimeError(f"scheduled task '{task_cfg.name}' node {node.id} stayed archived during auto-bind")
+      node = await tree.load_task_meta(node.id)
     # Step 2 — copy the newest active cron session's scheduler bookkeeping
     # onto the node, so the next fire is computed from the true last
     # occurrence: no catch-up, no missed fire at the migration moment.

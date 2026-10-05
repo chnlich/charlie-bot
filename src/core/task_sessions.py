@@ -50,6 +50,7 @@ from src.core.control_events import (
     ControlEventSink,
     build_control_event,
     sha256_hex,
+    stable_close_event_id,
     stable_task_id,
 )
 from src.core.event_types import is_real_user_message
@@ -92,6 +93,9 @@ _TREE_INDEX_TTL_SECONDS = 2.0
 # never spin on a corrupted relation.
 _ANCESTOR_HOP_LIMIT = 1000
 
+# The restore chain walks the same relation; it shares the bound.
+_RESTORE_CHAIN_HOP_LIMIT = _ANCESTOR_HOP_LIMIT
+
 # The create route (src/api/sessions.py) reproduces these two refusals
 # verbatim as its client-visible details — the first in the v2 pre-check, the
 # second in the legacy-shape guard; the wording lives beside the raises that
@@ -118,6 +122,19 @@ class TaskConflictError(Exception):
   def __init__(self, blockers: list[str]) -> None:
     self.blockers = blockers
     super().__init__("; ".join(blockers))
+
+
+class TaskArchivedError(TaskConflictError):
+  """The target task node is archived — it accepts no machine input (API: 409).
+
+  The refusal sentence is the API's whole 409 detail (the sender reads exactly
+  ``task <id> is archived``), not the blockers-dict shape a plain
+  TaskConflictError maps to.
+  """
+
+  def __init__(self, session_id: str) -> None:
+    self.session_id = session_id
+    super().__init__([f"task {session_id} is archived"])
 
 
 def require_operator(caller: object, message: str) -> None:
@@ -161,9 +178,13 @@ class _TaskFacts:
   input_candidates: list[dict] = field(default_factory=list)
   # Old pending input ids the task_imported boundary explicitly admits.
   imported_pending_ids: frozenset[str] = frozenset()
-  # Absolute history position of the creation (or import) boundary; None
-  # before either fact exists.
+  # Absolute history position of the latest input boundary fact (creation,
+  # import, close, or reopen); None before either fact exists.
   boundary_index: int | None = None
+  # Whether inputs are admitted after the current boundary: True from
+  # creation/import/reopen, False from a close (a closed node admits nothing;
+  # arrivals during closure are history only).
+  boundary_open: bool = True
   close_events: list[dict] = field(default_factory=list)
   close_requests: list[dict] = field(default_factory=list)
   # (child_session_id, child_event_id) pairs this session's log has received.
@@ -213,8 +234,21 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
     elif etype == ET.TASK_CLOSED:
       facts.task_state = str(event.get("outcome") or "completed")
       facts.close_events.append(event)
+      # The close is an input boundary that closes the boundary: every
+      # unhandled candidate and every arrival while the node stays closed is
+      # history only. A reopen below opens a fresh boundary, so nothing before
+      # it returns to candidacy.
+      facts.input_candidates = []
+      facts.imported_pending_ids = frozenset()
+      facts.boundary_index = absolute
+      facts.boundary_open = False
     elif etype == ET.TASK_REOPENED:
       facts.task_state = "open"
+      # The reopen opens a fresh input boundary: post-reopen inputs are
+      # candidates; close-time candidates and closed-period arrivals stay
+      # history.
+      facts.boundary_index = absolute
+      facts.boundary_open = True
     elif etype == ET.TASK_CLOSE_REQUESTED:
       facts.close_requests.append(event)
     elif etype == ET.RUN_FINISHED:
@@ -236,8 +270,9 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       child_event_id = event.get("child_event_id")
       if isinstance(child_session_id, str) and isinstance(child_event_id, str):
         facts.delivered_reports.add((child_session_id, child_event_id))
-    if _admits_input_type(event) and (facts.boundary_index is None or absolute > facts.boundary_index or
-                                      (event_id is not None and event_id in facts.imported_pending_ids)):
+    if _admits_input_type(event) and facts.boundary_open and (
+        facts.boundary_index is None or absolute > facts.boundary_index or
+        (event_id is not None and event_id in facts.imported_pending_ids)):
       facts.input_candidates.append(event)
   return facts
 
@@ -560,7 +595,7 @@ class TaskTreeManager:
     for sid, meta in task_nodes:
       facts = self._pass_facts(pass_facts, sid)
       structural.append(
-          f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.presentation}|{meta.status.value}"
+          f"{sid}|{meta.task_parent_id or ''}|{meta.profile}|{meta.status.value}"
           f"|{facts.task_state}|{self._archived_of_pass(index, meta, memo, pass_facts)}")
     # The placeholder revision above is an input only to the shared-memo pass,
     # which never reads it; the real one lands before the index is published.
@@ -824,37 +859,26 @@ class TaskTreeManager:
   def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
     """One node's OWN archive value from a pre-folded fact set (no inheritance).
 
-    The subtree-inheritance fold around it lives in archived_of; the parent
-    receipt lookup rides the caller's pass cache like every other facts read.
+    The subtree-inheritance fold around it lives in archived_of. One rule per
+    shape: a task node is archived exactly when its task state is not open —
+    the close fact is the archive, and a completed child counts at once (no
+    wait for the parent receipt). A session without a profile keeps the legacy
+    stored-status check. The cache argument stays in the signature because the
+    subtree pass hands one shared cache to every node's read.
     """
-    if meta.presentation == "hidden":
-      return True
-    if meta.presentation == "shown":
-      return False
-    if meta.status == SessionStatus.ARCHIVED:
-      return True  # a legacy archived preference stays an archive preference
-    if facts.task_state != "completed":
-      # Failed, blocked, cancelled, and open tasks stay visible; cancelled ones
-      # until the user explicitly hides them.
-      return False
-    completed = [c for c in facts.close_events if c.get("outcome") == "completed"]
-    if not completed:
-      return False
-    close = completed[-1]
-    recipient = close.get("report_to")
-    if not recipient:
-      return True  # a root task archives immediately on its own success
-    parent_facts = self._pass_facts(cache, str(recipient))
-    return (meta.id, str(close.get("id"))) in parent_facts.delivered_reports
+    if meta.profile is None:
+      return meta.status == SessionStatus.ARCHIVED
+    return facts.task_state != "open"
 
   async def derived_archived_ids(self) -> set[str]:
-    """Task nodes the effective archive hides while their stored status stays active.
+    """Task nodes the effective archive lists while their stored status stays active.
 
-    The read-time overlay the SessionManager listings apply (plan 2 v3
-    Trade-off 1: a worker archives after delivery by derivation, never by a
-    status write). Reads the cached index; a node already archived by status
-    needs no overlay and is left out. Subtree inheritance rides the same call:
-    one shared memo keeps the pass linear in node count.
+    The read-time overlay the SessionManager listings apply: a task node whose
+    state is not open (the close fact is the archive), and any node inherited
+    under one, list as archived with no status write. Reads the cached index;
+    a node already archived by status needs no overlay and is left out.
+    Subtree inheritance rides the same call: one shared memo keeps the pass
+    linear in node count.
     """
     index = await self._get_index()
     memo: dict[str, bool] = {}
@@ -867,16 +891,15 @@ class TaskTreeManager:
   def archived_of(self, index: _TreeIndex, meta: SessionMetadata, memo: dict[str, bool] | None = None) -> bool:
     """Archive visibility with subtree inheritance (the effective archive's single owner).
 
-    effective(n) is False when n.presentation == "shown" — an explicit
-    keep-visible also breaks inheritance for n's own subtree; otherwise it is
-    the node's own facts-based value or its parent's inherited one:
-    presentation=auto archives a successful task once its parent receipt is on
-    disk (a root immediately on success); hidden is an explicit user collapse;
-    a stored ARCHIVED status stays an archive preference. Every descendant
-    reads its parent's effective value, so archiving an ancestor — a legacy
-    profile=None parent's stored status among them — archives the subtree at
-    read time with no descendant metadata write. Reopened nodes are open
-    again, so they unarchive. A shared *memo* makes a pass over many nodes
+    effective(n) is the node's own facts-based value or its parent's inherited
+    one: a task node is archived exactly when its task state is not open (the
+    close fact is the archive — completed and cancelled included), and a
+    session without a profile is archived exactly when its stored status is
+    ARCHIVED. Every descendant reads its parent's effective value, so an
+    archived ancestor — a legacy profile=None parent's stored status among
+    them — archives the subtree at read time with no descendant metadata
+    write. A restored node is open again, so it unarchives. A shared *memo*
+    makes a pass over many nodes
     linear in node count (each chain resolves through already-computed
     ancestors); a relation cycle surfaces through the hop guard as
     TaskConflictError, never silently.
@@ -894,11 +917,14 @@ class TaskTreeManager:
       self, index: _TreeIndex, session_id: str, memo: dict[str, bool], pass_facts: dict[str, _TaskFacts]) -> bool:
     """One node's effective archive value with inheritance, memoized per pass.
 
-    Walks up the task-parent chain to the first memoized node, an explicit
-    shown, or a root, then folds the effective values back down; every node
-    the walk touches lands in the memo, so a whole-listing pass never
-    recomputes one. The fold reads facts through *pass_facts*, and an
-    inherited True settles the subtree without any node's own facts read.
+    Walks up the task-parent chain to the first memoized node or a root, then
+    folds the effective values back down; every node the walk touches lands in
+    the memo, so a whole-listing pass never recomputes one. The fold reads
+    facts through *pass_facts*, and an inherited True settles the subtree
+    without any node's own facts read. Inheritance never overrides a node's
+    own open state into visibility: an archived ancestor archives the subtree
+    (and the invariant forbids the reverse shape — an open node under an
+    archived ancestor).
     """
     chain: list[tuple[str, SessionMetadata]] = []
     seen: set[str] = set()
@@ -914,8 +940,8 @@ class TaskTreeManager:
       seen.add(current)
       meta = self._index_meta(index, current)
       chain.append((current, meta))
-      if meta.presentation == "shown" or meta.task_parent_id is None:
-        inherited = False  # shown breaks inheritance here; a root inherits nothing
+      if meta.task_parent_id is None:
+        inherited = False  # a root inherits nothing
         break
       current = meta.task_parent_id
     for sid, node in reversed(chain):
@@ -1389,8 +1415,6 @@ class TaskTreeManager:
         raise TaskConflictError(sorted(set(blockers)))
       if "name" in fs and req.name is not None:
         meta.name = req.name
-      if "presentation" in fs and req.presentation is not None:
-        meta.presentation = req.presentation
       if "profile" in fs and req.profile is not None:
         meta.profile = req.profile
       if "task" in fs:
@@ -1405,24 +1429,6 @@ class TaskTreeManager:
       await self._save_meta(meta)
       await self.events.notify_tree_changed(
           session_id, ET.PROMPT_CHANGED if fs & {"subtree_prompt", "node_prompt"} else "task_updated")
-      return meta
-
-  async def set_presentation(self, session_id: str, presentation: str) -> SessionMetadata:
-    """The legacy archive/unarchive entries' v2 form: one explicit preference.
-
-    This is a display preference only — the task's open/closed facts are
-    untouched, so collapsing can never silently close a task and uncollapsing
-    can never silently reopen one.
-    """
-    if presentation not in ("auto", "shown", "hidden"):
-      raise TaskInvalidError(f"presentation must be auto, shown, or hidden (got {presentation!r})")
-    async with self.control_lock:
-      await self._get_index()
-      meta = await self.load_task_meta(session_id)
-      if meta.presentation != presentation:
-        meta.presentation = presentation  # type: ignore[assignment]
-        await self._save_meta(meta)
-        await self.events.notify_tree_changed(session_id, "presentation_updated")
       return meta
 
   def _children_count(self, session_id: str) -> int:
@@ -1561,13 +1567,12 @@ class TaskTreeManager:
     children = self._children_of(index, parent_id or None)
     rows_all = [self.session_row(index, sid) for sid in children]
     if not include_archived:
-      # A hidden/archived row stays navigable while running work lives at or
-      # below it: dropping it would sever the path to that work in a partial
-      # client tree. The row's OWN work state counts — under inheritance a
-      # running leaf below a retained archived parent is itself archived, and
-      # only its own state keeps it (and with it the parent's child page)
-      # visible. Stored presentation is unchanged — the row still reports
-      # archived=true.
+      # An archived row stays navigable while running work lives at or below
+      # it: dropping it would sever the path to that work in a partial client
+      # tree. The row's OWN work state counts — under inheritance a running
+      # leaf below a retained archived parent is itself archived, and only its
+      # own state keeps it (and with it the parent's child page) visible. The
+      # row still reports archived=true.
       rows_all = [
           r for r in rows_all
           if not r.archived or r.work_state == "running" or self._has_running_work_descendant(index, r.id)
@@ -1673,6 +1678,80 @@ class TaskTreeManager:
       self._outcomes_memo.pop(session_id, None)
       self._activity_memo.pop(session_id, None)
     return result
+
+  # ------------------------------------------------------------------
+  # Archive: the user's single end state, cascading down the subtree
+  # ------------------------------------------------------------------
+
+  async def archive_subtree(self, session_id: str, *, caller: object) -> list[str]:
+    """Archive *session_id*'s whole subtree: one archived close fact per open node.
+
+    Operator scope only. The control lock holds for the whole operation: the
+    subtree is collected and every unfinished run is refused before anything
+    is written, so a refused call leaves zero facts and a passed call leaves
+    no window between the facts. Each open node's fact carries outcome
+    "archived", actor "user", and an empty report_to — an archive reports to
+    nobody; each descendant's fact also names the node the user archived in
+    ``archived_with``. Completed and cancelled nodes are left unchanged. The
+    bound cron task of every archived node is disabled (the single-key
+    ``enabled`` write; the binding stays). Returns the ids this call archived,
+    in parent-before-child order; an already-archived target returns [].
+    """
+    from src.core.cron_sequence import bound_task_name
+    from src.core.scheduled_sessions import write_cron_key
+
+    require_operator(caller, "archiving a task requires operator credentials")
+    tree = self
+    async with tree.control_lock:
+      index = await tree._get_index(force=True)
+      tree._index_meta(index, session_id)
+      if tree.task_state(session_id) != "open":
+        return []  # the target is already archived; the invariant empties its subtree too
+      subtree = [session_id, *tree._descendants(index, session_id)]
+      # Refuse before writing: every node in the subtree must be free of an
+      # unfinished run (terminal facts settle a run; queued and unresolved
+      # ones block like any structural change).
+      blocked: list[str] = []
+      host_boot = tree._host_boot_time()
+      for sid in subtree:
+        for run in tree.runs.list_run_records_sync(sid):
+          blocker = tree.runs.run_blocker(run, tree.runs.load_events_sync(sid), host_boot)
+          if blocker is not None:
+            blocked.append(f"{sid}: {blocker}")
+      if blocked:
+        raise TaskConflictError(sorted(blocked))
+      request_id = f"archive-{uuid.uuid4()}"
+      archived: list[str] = []
+      # Parent before child: the fold reads each node's own facts, so the
+      # order is convention, but it keeps every intermediate state valid.
+      for sid in subtree:
+        if tree.task_state(sid) != "open":
+          continue
+        event = build_control_event(
+            ET.TASK_CLOSED,
+            actor=ACTOR_USER,
+            source_session_id=sid,
+            event_id=stable_close_event_id(sid, request_id),
+            request_id=request_id,
+            outcome="archived",
+            summary="archived by the user" if sid == session_id else "",
+            result_refs=[],
+            run_ids=[],
+            report_to=None,
+            **({
+                "archived_with": session_id
+            } if sid != session_id else {}),
+        )
+        await tree.events.append(sid, event)
+        archived.append(sid)
+      tree._invalidate_index()
+      # The archived nodes' bound cron tasks stop firing (the same single-key
+      # disable the archive entry has always written; the binding stays).
+      for sid in archived:
+        bound = bound_task_name(sid)
+        if bound is not None:
+          await asyncio.to_thread(write_cron_key, bound, "enabled", value=False)
+      return archived
 
 
 # ---------------------------------------------------------------------------

@@ -772,19 +772,29 @@ class TaskCompletionManager:
 
         A server-minted scheduled input (actor system, never a user event, so
         it opens or closes no authorization window) under a stable id per
-        request: recovery replays of the same request admit nothing new.
+        request: recovery replays of the same request admit nothing new. The
+        notice targets open nodes only.
         """
+    from src.core.task_sessions import TaskArchivedError
+
     tree = self._tree
     lines = "\n".join(f"- {b}" for b in blockers)
-    await tree.dispatch.admit_input(
-        session_id,
-        event_type=ET.SCHEDULED_TRIGGER,
-        content=(
-            f"Closure request {request_id} did not close this task. Blockers:\n{lines}\n"
-            "Resolve them, then send a new closure request."),
-        actor=ACTOR_SYSTEM,
-        input_id=stable_close_blocked_notice_id(session_id, request_id),
-    )
+    try:
+      await tree.dispatch.admit_input(
+          session_id,
+          event_type=ET.SCHEDULED_TRIGGER,
+          content=(
+              f"Closure request {request_id} did not close this task. Blockers:\n{lines}\n"
+              "Resolve them, then send a new closure request."),
+          actor=ACTOR_SYSTEM,
+          input_id=stable_close_blocked_notice_id(session_id, request_id),
+      )
+    except TaskArchivedError as e:
+      # The notice targets open nodes only: the node archived between the
+      # caller's open check and this admission, and an archived node keeps no
+      # pending inputs — the notice has nowhere to land.
+      log.info("close_blocked_notice_skipped_archived", session_id=session_id, error=str(e))
+      return
     await tree.dispatch.dispatch_pending(session_id)
 
   async def evaluate_automatic_completion(
@@ -1080,71 +1090,102 @@ class TaskCompletionManager:
             error=str(exc))
     return {"session_id": session_id, "closed_event_id": close_event["id"]}
 
-  async def reopen_task(
+  async def restore_task(
       self,
       session_id: str,
       *,
       request_id: str,
       reason: str,
       caller: object,
-      closed_event_id: str | None = None,
   ) -> dict:
-    """Explicit operator reopen of one closed task.
+    """Operator restore of one archived task plus its archived ancestor chain.
 
-        References the relevant closed event (the latest close by default),
-        refuses closed ancestors with their list, preserves history and
-        authorization, and does not reactivate earlier already-handled
-        history. Duplicate operation ids — including retries after later
-        close/reopen events — replay the original outcome.
-        """
-    from src.core.task_sessions import (
-        TaskConflictError,
-        TaskInvalidError,
-        require_operator,
-    )
+    The chain writes from the topmost archived ancestor down to the target —
+    the invariant (every ancestor of an open task is open) leaves no other
+    admissible order. Siblings and descendants stay archived, no round starts,
+    and each fact's reason names the restore's source. A duplicate request id
+    restores nothing twice (per-node replay check); a target that is already
+    open restores nothing and returns an empty list.
+    """
+    from src.core.task_sessions import TaskInvalidError, require_operator
 
-    require_operator(caller, "task reopen requires operator credentials")
+    require_operator(caller, "task restore requires operator credentials")
     if not request_id:
-      raise TaskInvalidError("request_id is required for reopen")
+      raise TaskInvalidError("request_id is required for restore")
+    restored = await self.restore_chain(session_id, request_id=request_id, reason=reason)
+    return {"session_id": session_id, "restored": restored}
+
+  async def restore_chain(self, session_id: str, *, request_id: str, reason: str) -> list[str]:
+    """The restore entry for callers that bring their own authorization (the
+    scheduler's auto-bind and cron-enable restores): takes the control lock,
+    writes the chain's facts, and announces them after the lock releases."""
+    async with self._tree.control_lock:
+      restored, announcements = await self.restore_chain_locked(session_id, request_id=request_id, reason=reason)
+    for node_id, event, epoch in announcements:
+      await self._tree.sessions.announce_appended_event(node_id, event, epoch=epoch)
+    return restored
+
+  async def restore_chain_locked(self, session_id: str, *, request_id: str,
+                                 reason: str) -> tuple[list[str], list[tuple[str, dict, int]]]:
+    """The restore's core, for callers already holding the control lock.
+
+    Writes one ``task_reopened`` fact per archived node from the topmost
+    archived ancestor down to *session_id*. Returns the restored ids in that
+    order plus the (node, event, epoch) triples the caller announces after
+    releasing the lock. A replayed request id skips its already-restored
+    nodes, so a crash between facts replays into the same single set.
+    """
+    from src.core.task_sessions import _RESTORE_CHAIN_HOP_LIMIT, TaskConflictError, TaskNotFoundError
+
     tree = self._tree
-    events = tree.fact_history(session_id)
-    for event in events:
-      if event.get("type") == ET.TASK_REOPENED and event.get("request_id") == request_id:
-        return {"session_id": session_id, "reopened_event_id": event.get("id")}
-    # The live-announce epoch is taken before the append, like the close
-    # paths: the fact lands under the lock, the notification follows it.
-    child_epoch = await tree.sessions.prime_aggregator(session_id)
-    async with tree.control_lock:
-      index = await tree._get_index()
-      meta = tree._index_meta(index, session_id)
-      facts = tree.facts_of(session_id)
-      if closed_event_id is not None:
-        close = next((c for c in facts.close_events if c.get("id") == closed_event_id), None)
-        if close is None:
-          raise TaskInvalidError(f"event {closed_event_id} is not a close fact of task {session_id}")
-      else:
-        if not facts.close_events:
-          raise TaskInvalidError(f"task {session_id} is not closed")
-        close = facts.close_events[-1]
-      replay = self._replay_close_request(session_id, request_id)
-      if replay is not None and replay[0] == 200:
-        # A close landed while this reopen waited on the lock.
-        raise TaskConflictError([f"task {session_id} was closed again during the reopen; use a fresh request"])
-      for event in tree.fact_history(session_id):
-        if event.get("type") == ET.TASK_REOPENED and event.get("request_id") == request_id:
-          return {"session_id": session_id, "reopened_event_id": event.get("id")}
-      await tree._require_open_ancestry_from_index(index, session_id)
-      _ = meta
+    index = await tree._get_index()
+    if index.metas.get(session_id) is None:
+      raise TaskNotFoundError(f"task {session_id} not found")
+    # The archived chain above the target, nearest first; the target joins
+    # when it is itself archived. The walk stops at the first open node.
+    chain: list[str] = []
+    current = session_id
+    seen: set[str] = set()
+    while True:
+      meta = tree._index_meta(index, current)
+      if tree.task_state(current) == "open":
+        break
+      chain.append(current)
+      if meta.task_parent_id is None or meta.task_parent_id in seen:
+        break
+      seen.add(current)
+      current = meta.task_parent_id
+      if len(chain) > _RESTORE_CHAIN_HOP_LIMIT:
+        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {_RESTORE_CHAIN_HOP_LIMIT} hops"])
+    if not chain:
+      return [], []
+    restored: list[str] = []
+    announcements: list[tuple[str, dict, int]] = []
+    for node_id in reversed(chain):  # topmost first
+      history = tree.fact_history(node_id)
+      lifecycle = [e for e in history if e.get("type") in (ET.TASK_CLOSED, ET.TASK_REOPENED)]
+      if lifecycle and lifecycle[-1].get("type") == ET.TASK_REOPENED and \
+          lifecycle[-1].get("request_id") == request_id:
+        restored.append(node_id)  # this request already restored the node
+        continue
+      closes = [e for e in history if e.get("type") == ET.TASK_CLOSED]
+      last_close = closes[-1] if closes else None
+      # The fact's identity scopes to the close it ends, so a replayed request
+      # that meets a NEWER close writes a fresh fact instead of colliding with
+      # the one its earlier pass already landed.
+      event_scope = request_id if last_close is None else f"{request_id}:{last_close.get('id')}"
       reopen_event = build_control_event(
           ET.TASK_REOPENED,
           actor=ACTOR_USER,
-          source_session_id=session_id,
-          event_id=stable_reopen_event_id(session_id, request_id),
+          source_session_id=node_id,
+          event_id=stable_reopen_event_id(node_id, event_scope),
           request_id=request_id,
-          closed_event_id=str(close.get("id")),
+          closed_event_id=str(last_close.get("id")) if last_close is not None else None,
           reason=reason,
       )
-      await tree.events.append(session_id, reopen_event)
-      tree._invalidate_index()
-    await tree.sessions.announce_appended_event(session_id, reopen_event, epoch=child_epoch)
-    return {"session_id": session_id, "reopened_event_id": reopen_event["id"]}
+      epoch = await tree.sessions.prime_aggregator(node_id)
+      await tree.events.append(node_id, reopen_event)
+      restored.append(node_id)
+      announcements.append((node_id, reopen_event, epoch))
+    tree._invalidate_index()
+    return restored, announcements

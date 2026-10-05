@@ -410,7 +410,7 @@ async def cancel_task_node(tree: TaskTreeManager, session_id: str, request_id: s
 
 
 async def reopen_task_node(tree: TaskTreeManager, session_id: str, request_id: str) -> None:
-  await tree.completion.reopen_task(session_id, request_id=request_id, reason="precondition cleared", caller=OPERATOR)
+  await tree.completion.restore_task(session_id, request_id=request_id, reason="precondition cleared", caller=OPERATOR)
 
 
 def blocked_reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:

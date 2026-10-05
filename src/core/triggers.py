@@ -467,9 +467,10 @@ class TriggerManager:
   ) -> PendingTrigger:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
-    Raises ``ArchivedSessionError`` when the target session's succession chain
+    Raises ``ArchivedSessionError`` when the target must not be woken — a task
+    node whose state is not open, or a legacy session's succession chain that
     ends archived with no successor (the single rejection funnel for both
-    callers: the internal API and the Slack thread-follow re-arm), and
+    callers: the internal API and the Slack thread-follow re-arm) — and
     ``PendingTriggerLimitError`` when a ``schedule-trigger`` registration would
     push the session past MAX_PENDING_TRIGGERS pending records.
 
@@ -489,10 +490,13 @@ class TriggerManager:
     kinds = {t.kind for t in targets}
 
     # Single rejection funnel for both callers (the internal API and the Slack
-    # thread-follow re-arm): a target archived without a successor is the user's
-    # explicit "no more wakes" signal and must not gain a new wake.
-    if await self._is_dormant_target(session_id):
-      raise ArchivedSessionError(f"session {session_id} is archived with no successor; trigger rejected")
+    # thread-follow re-arm): a dormant target — an archived task node, or a
+    # legacy chain end archived with no successor — is the user's explicit
+    # "no more wakes" signal and must not gain a new wake. The reason names
+    # which dormancy answered.
+    dormancy = await self._dormancy_reason(session_id)
+    if dormancy is not None:
+      raise ArchivedSessionError(f"session {session_id} is archived ({dormancy}); trigger rejected")
 
     if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
       raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
@@ -694,30 +698,47 @@ class TriggerManager:
     task = create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
     self._tasks[trigger.id] = task
 
-  async def _is_dormant_target(self, session_id: str) -> bool:
+  async def _dormancy_reason(self, session_id: str) -> str | None:
     """The one dormancy judgment for every reader in this module — create-time
-    rejection, the wait watchdog, and the fire-time backstop: resolve *session_id*'s
-    succession chain and answer whether the chain end is ARCHIVED with no successor,
-    the user's explicit "no more wakes" signal. A chain end that has a successor
-    (elone) is never dormant; a missing chain end is not a dormancy answer and
-    reads False (the fire-time path reports it as metadata_unavailable instead).
+    rejection, the wait watchdog, and the fire-time backstop. A task node is
+    dormant exactly when its task state is not open: the close fact is the
+    user's "no more wakes" signal for the whole archived subtree. A session
+    without a profile keeps the legacy check — the succession chain's end is
+    ARCHIVED with no successor. Returns the cancel reason when the target must
+    not be woken, None otherwise; a missing chain end is not a dormancy answer
+    and reads None (the fire-time path reports it as metadata_unavailable
+    instead).
     """
+    task_mgr = self._task_tree_provider()
+    meta = await task_mgr.load_meta(session_id)
+    if meta is not None and meta.profile is not None:
+      if task_mgr.task_state(session_id) != "open":
+        return "target task is archived"
+      return None
     resolved_tail = await self._session_mgr.resolve_successor_chain(session_id)
     if resolved_tail is None:
-      return False
-    return resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None
+      return None
+    if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
+      return "archived"
+    return None
 
-  async def _watch_dormancy(self, trigger: PendingTrigger) -> None:
+  async def _is_dormant_target(self, session_id: str) -> bool:
+    """The dormancy predicate over :meth:`_dormancy_reason` (create-time rejection)."""
+    return await self._dormancy_reason(session_id) is not None
+
+  async def _watch_dormancy(self, trigger: PendingTrigger) -> str:
     """Watchdog racer: poll the dormancy predicate every ``_DORMANCY_CHECK_SECONDS``.
 
     Returns — and so wins the race against the delivery wait — once the target
-    has gone dormant; it never fires anything itself. The winner's handling
-    lives in ``_wait_and_fire``.
+    has gone dormant, carrying the dormancy reason the winner cancels with; it
+    never fires anything itself. The winner's handling lives in
+    ``_wait_and_fire``.
     """
     while True:
       await asyncio.sleep(_DORMANCY_CHECK_SECONDS)
-      if await self._is_dormant_target(trigger.session_id):
-        return
+      reason = await self._dormancy_reason(trigger.session_id)
+      if reason is not None:
+        return reason
 
   async def _reload_pending(self, trigger: PendingTrigger) -> PendingTrigger | None:
     """Re-read a trigger after a wait. None when the file vanished mid-wait (logged) or
@@ -733,8 +754,10 @@ class TriggerManager:
 
   async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
     """Every _wait_and_fire exit where the event cannot be delivered ends the same
-    way: stamp CANCELLED, persist, drop the in-memory task handle, log the path's reason."""
+    way: stamp CANCELLED with the path's reason, persist, drop the in-memory
+    task handle, log the path."""
     fresh.status = TriggerStatus.CANCELLED
+    fresh.fire_reason = reason
     await self._save_trigger(fresh)
     self._tasks.pop(fresh.id, None)
     log.info(
@@ -809,13 +832,13 @@ class TriggerManager:
           raise exc
 
     if watchdog_task in done:
-      # Watchdog win: the chain end went dormant mid-wait. Same re-read as the
-      # fire-time backstop below, so a trigger cancelled while we waited is not
-      # re-stamped.
+      # Watchdog win: the target went dormant mid-wait (an archived task node
+      # or a legacy archived chain end). Same re-read as the fire-time backstop
+      # below, so a trigger cancelled while we waited is not re-stamped.
       fresh = await self._reload_pending(trigger)
       if fresh is None:
         return
-      await self._cancel_undeliverable(fresh, reason="archived")
+      await self._cancel_undeliverable(fresh, reason=watchdog_task.result())
       return
 
     reason, finished, still_alive = wait_task.result()
@@ -848,8 +871,9 @@ class TriggerManager:
 
     # Race backstop: the watchdog covers the wait, so this fire-time re-check of
     # the same predicate catches an archive landing in the final stretch.
-    if await self._is_dormant_target(deliver_to):
-      await self._cancel_undeliverable(fresh, reason="archived")
+    dormancy_reason = await self._dormancy_reason(deliver_to)
+    if dormancy_reason is not None:
+      await self._cancel_undeliverable(fresh, reason=dormancy_reason)
       return
 
     # A v2 task-tree node takes the durable dispatcher route: the trigger's
@@ -932,7 +956,7 @@ class TriggerManager:
     serves it). *session_id* is the alias-resolved delivery target. A missing
     canonical node is a visible refusal, not a legacy fallback.
     """
-    from src.core.task_sessions import TaskForbiddenError, TaskInvalidError, TaskNotFoundError
+    from src.core.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
     task_mgr = self._task_tree_provider()
     session_id = session_id or trigger.session_id
@@ -954,6 +978,13 @@ class TriggerManager:
           input_id=trigger.id,
       )
       await task_mgr.dispatch.dispatch_pending(session_id)
+    except TaskArchivedError as e:
+      # The archive landed in the sliver between the dormancy backstop and the
+      # admission: the refusal is the delivery outcome, and the waiter must
+      # retire instead of lingering on a pending record.
+      log.info("trigger_cancelled_archived_target", trigger_id=trigger.id, session=session_id, error=str(e))
+      await self._cancel_undeliverable(trigger, reason="target task is archived")
+      return True
     except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
       log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
       raise

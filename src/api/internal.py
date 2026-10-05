@@ -491,8 +491,8 @@ async def session_message(
   window is minted or revoked), then wakes the target master with the relay
   prefix. The injected content bypasses slash-command dispatch; when the target
   session is mid-run the wake enqueues on the master work-item queue. An
-  archived target still receives the event: the wake that follows pulls it
-  back to active.
+  archived task target refuses the relay with 409 (``task <id> is archived``);
+  only the user's own message restores an archived node.
   """
   caller = require_found(await session_mgr.get_session(req.session_id))
   target = await session_mgr.get_session(req.target_session_id)

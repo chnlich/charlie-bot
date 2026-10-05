@@ -4,7 +4,7 @@ A v2 node takes the trigger through the shared admission path — the trigger's
 own id is the input's stable identity — so a crash after the durable admission
 but before the FIRED stamp replays into the SAME input instead of duplicating
 the task input or its process. Closed nodes keep late history without
-reopening; established aliases resolve without changing task ownership; and
+restoring; established aliases resolve without changing task ownership; and
 the legacy route keeps serving v1 sessions unchanged.
 """
 

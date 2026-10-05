@@ -21,10 +21,11 @@ tree. ``retry`` creates the request-bound retry run of one recorded run.
 JSON body (summary/result_refs/run_ids); a duplicate request id replays the
 original outcome, and an agent's own active Run may request its own manager's
 closure (202 pending_run_finish; a request already facing blockers is refused
-409 with the blocker list and not saved). ``cancel`` explicitly cancels an open task
-with a reason — an operator cancels any open task, an agent running inside a
-Run cancels only a direct child of its own task; ``reopen`` reopens one
-closed task and refuses closed ancestors.
+409 with the blocker list and not saved). ``cancel`` explicitly cancels an open
+task with a reason — an operator cancels any open task, an agent running inside
+a Run cancels only a direct child of its own task. Archiving is the single end
+state (``DELETE /api/sessions/{id}`` on the server): the user's own message to
+an archived node restores it, and unarchiving is the sidebar's restore.
 
 ``acknowledge`` durably resolves exact task inputs the operator handled
 out-of-band (the terminal-driven node's resolution step): operator scope,
@@ -128,13 +129,6 @@ def _build_parser() -> argparse.ArgumentParser:
   cancel.add_argument("--reason", required=True, help="Cancellation reason")
   cancel.add_argument("--request-id", default=None, help="Request id binding the cancel (defaults to a fresh UUID)")
 
-  reopen = sub.add_parser("reopen", help="Reopen one closed task")
-  reopen.add_argument("session_id", help="Task id")
-  reopen.add_argument("--reason", required=True, help="Reopen reason")
-  reopen.add_argument("--request-id", default=None, help="Request id binding the reopen (defaults to a fresh UUID)")
-  reopen.add_argument(
-      "--closed-event", default=None, help="The task_closed event id to reopen (default: the latest close fact)")
-
   send = sub.add_parser(
       "send", help="Relay a message to another session as an agent_message", formatter_class=CliHelpFormatter)
   send.add_argument("target", help="Target session id")
@@ -219,16 +213,6 @@ def _cmd_cancel(args: argparse.Namespace) -> None:
       payload,
       readback=lambda: find_local_task_close(args.session_id, request_id))
   print(json.dumps(result, indent=2))
-
-
-def _cmd_reopen(args: argparse.Namespace) -> None:
-  payload = {
-      "request_id": args.request_id or str(uuid.uuid4()),
-      "reason": args.reason,
-  }
-  if args.closed_event is not None:
-    payload["closed_event_id"] = args.closed_event
-  print(json.dumps(post_internal_api(f"/api/sessions/{args.session_id}/reopen", payload), indent=2))
 
 
 def _cmd_send(args: argparse.Namespace) -> None:
@@ -317,8 +301,6 @@ def main() -> None:
     _cmd_complete(args)
   elif args.session_command == "cancel":
     _cmd_cancel(args)
-  elif args.session_command == "reopen":
-    _cmd_reopen(args)
   elif args.session_command == "send":
     _cmd_send(args)
   elif args.session_command == "dialog":

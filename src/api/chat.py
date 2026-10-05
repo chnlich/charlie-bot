@@ -100,13 +100,14 @@ async def send_message(
 
   # A v2 task node routes input through the durable dispatcher: browser and
   # operator input are real user input, a run-token agent on the same route
-  # stays agent input with its own provenance. Closed nodes retain the input
-  # as history; the executor seam (next stage) decides any launch. A tui-cli
+  # stays agent input with its own provenance. An archived node refuses the
+  # agent input with 409 and restores for the user's own message before the
+  # admission; the executor seam (next stage) decides any launch. A tui-cli
   # manager task's input is durable and pending (the terminal is its execution
   # surface — no headless turn is started), so the response carries the
   # decision that names the transport limit.
   if meta.profile is not None:
-    from src.core.task_sessions import TaskForbiddenError, TaskInvalidError
+    from src.core.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
 
     event_type = input_event_type_for_caller(caller)
     from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
@@ -122,7 +123,7 @@ async def send_message(
           from_session_name=from_session_name,
       )
       decision = await task_mgr.dispatch.dispatch_pending(session_id)
-    except (TaskForbiddenError, TaskInvalidError) as e:
+    except (TaskConflictError, TaskForbiddenError, TaskInvalidError) as e:
       from src.api.sessions import _task_http_error
       raise _task_http_error(e) from e
     return JSONResponse(

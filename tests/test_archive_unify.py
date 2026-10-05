@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from conftest import OPERATOR, build_env, create_task
@@ -284,6 +285,34 @@ async def test_user_message_restores_and_is_the_rounds_only_input(tmp_path: Path
   assert decision["launch"] is True
   assert executor.batches == [(leaf.id, ["msg-1"])]
   assert str(admitted["id"]) == "msg-1"
+
+
+@pytest.mark.asyncio
+async def test_user_message_announces_every_restored_node(tmp_path: Path) -> None:
+  """The restore the user message rides announces one reopened fact per
+  restored node from its own node, after the control lock releases — the
+  same after-lock announcement restore_chain makes on the sidebar path."""
+  _cfg, session_mgr, tree = build_env(tmp_path)
+  root, mid, leaf, _completed = await build_tree(tree)
+  await tree.archive_subtree(root.id, caller=OPERATOR)
+
+  announce = mock.AsyncMock()
+  with mock.patch.object(session_mgr, "announce_appended_event", new=announce):
+    await tree.dispatch.admit_input(leaf.id, event_type=ET.USER, content="resume", actor="user")
+
+  announced = [(call.args[0], call.args[1]["type"]) for call in announce.await_args_list]
+  assert announced == [
+      (root.id, ET.TASK_REOPENED),
+      (mid.id, ET.TASK_REOPENED),
+      (leaf.id, ET.TASK_REOPENED),
+      (leaf.id, ET.USER),
+  ]
+  # Each announced reopen fact is the node's own durable fact, not a stand-in.
+  for node_id in (root.id, mid.id, leaf.id):
+    reopens = [e for e in tree.events.load_events(node_id) if e["type"] == ET.TASK_REOPENED]
+    assert len(reopens) == 1
+    announced_event = next(c.args[1] for c in announce.await_args_list if c.args[0] == node_id)
+    assert str(announced_event["id"]) == str(reopens[0]["id"])
 
 
 @pytest.mark.asyncio

@@ -128,6 +128,7 @@ class TaskInputDispatcher:
       raise TaskForbiddenError("only the server's own scheduler mints scheduled triggers")
     tree = self._tree
     epoch = await tree.sessions.prime_aggregator(session_id)
+    restore_announcements: list[tuple[str, dict, int]] = []
     async with tree.control_lock:
       meta = await tree.load_task_meta(session_id)
       if tree.task_state(session_id) != "open" and event_type != ET.USER:
@@ -165,7 +166,8 @@ class TaskInputDispatcher:
         # round's only input. The restore's request id is the input event's
         # id, so a replayed message with a stable input id re-derives the
         # same restore facts instead of duplicating them.
-        await tree.completion.restore_chain_locked(session_id, request_id=str(event["id"]), reason="user message")
+        _restored, restore_announcements = await tree.completion.restore_chain_locked(
+            session_id, request_id=str(event["id"]), reason="user message")
       await tree.events.append(session_id, event)
       if event_type == ET.USER:
         # A real user message is the one input that reorders the
@@ -190,6 +192,11 @@ class TaskInputDispatcher:
           if when > current.updated_at:
             await tree.sessions.update_thinking_state(node.id, when)
         tree.invalidate_tree_index()
+    # The restore's per-node announcements ride the same after-lock window as
+    # restore_chain's: each reopened fact reaches the page from its own node
+    # (the rows leave the archived list), then the message itself.
+    for node_id, reopen_event, reopen_epoch in restore_announcements:
+      await tree.sessions.announce_appended_event(node_id, reopen_event, epoch=reopen_epoch)
     await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
     return event
 

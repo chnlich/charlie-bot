@@ -1024,31 +1024,44 @@ test('turn engine: quiet prerender-ready reproject preserves a one-notch landing
   assert.equal(root.scrollTop, landedScrollTop, 'quiet pre-render does not pin the viewport');
 });
 
-test('turn engine: append follow matches the legacy 150px auto-scroll band', () => {
-  function appendAtDistance(distance) {
+test('turn engine: append follow reads the user pin intent, not the geometry band', () => {
+  function rig(distance) {
     const state = mountEngine(ePage(`append_${distance}_`, 24), {
       clientHeight: 120,
       clampScrollTop: true,
     });
     settle(state.timers);
     state.root.scrollTop = state.root.scrollHeight - state.root.clientHeight - distance;
-    const before = state.root.scrollTop;
-    assert.equal(distanceFromBottom(state.root), distance, `fixture landed ${distance}px from bottom`);
-    state.engine.appendMessage(eMsg('assistant', `append-${distance}`, 'new answer'), false);
-    return {state, before};
+    return state;
   }
 
-  const exact = appendAtDistance(0);
-  assert.equal(distanceFromBottom(exact.state.root), 0, 'append at the exact bottom follows');
+  // A reader who never scrolled sits on the mount intent: follows at any
+  // distance the viewport happens to rest at.
+  const exact = rig(0);
+  exact.engine.appendMessage(eMsg('assistant', 'append-exact', 'new answer'), false);
+  assert.equal(distanceFromBottom(exact.root), 0, 'append at the exact bottom follows');
 
-  const insideBand = appendAtDistance(149);
-  assert.equal(distanceFromBottom(insideBand.state.root), 0, 'append inside 150px follows');
+  const insideBand = rig(149);
+  insideBand.engine.appendMessage(eMsg('assistant', 'append-inside', 'new answer'), false);
+  assert.equal(distanceFromBottom(insideBand.root), 0, 'an unscrolled reader inside the band follows');
 
-  const outsideBand = appendAtDistance(150);
-  assert.equal(outsideBand.state.root.scrollTop, outsideBand.before,
-      'append at exactly 150px does not follow');
-  assert.ok(distanceFromBottom(outsideBand.state.root) > 150,
-      'append outside the legacy band leaves the viewport where the user put it');
+  // A reader who wheeled up — even one notch, still inside the 150px band —
+  // stopped the follow: the append raises the jump button instead of yanking.
+  const paused = rig(0);
+  const pausedTop = paused.root.scrollHeight - paused.root.clientHeight - 100;
+  paused.root.scrollTop = pausedTop;
+  paused.root.fire('scroll');
+  assert.equal(paused.engine.pinnedIntent, false, 'a 100px wheel-up clears the pin intent');
+  paused.engine.appendMessage(eMsg('assistant', 'append-paused', 'new answer'), false);
+  assert.equal(paused.root.scrollTop, pausedTop, 'append after a wheel-up keeps the viewport');
+  assert.ok(distanceFromBottom(paused.root) > 100, 'the appended message landed below the fold');
+
+  // Wheeling back down to the tail re-arms the follow.
+  paused.root.scrollTop = paused.root.scrollHeight;
+  paused.root.fire('scroll');
+  assert.equal(paused.engine.pinnedIntent, true, 'a scroll back to the tail re-arms the pin');
+  paused.engine.appendMessage(eMsg('assistant', 'append-resumed', 'new answer'), false);
+  assert.equal(distanceFromBottom(paused.root), 0, 'append after returning to the tail follows');
 });
 
 test('turn engine: a resize/clamp landing at the bottom still follows a later append', () => {

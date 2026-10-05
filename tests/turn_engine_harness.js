@@ -19,6 +19,53 @@ const TEXT_NODE = 3;
 // Height model behind FakeElement.getBoundingClientRect — see the getter.
 const FAKE_LEAF_HEIGHT = 24;
 
+// Selector support the turn engine's reading-anchor lookups need: '.class',
+// '[data-attr]' and '[data-attr="value"]'. Anything else stays unsupported.
+function fakeElementMatches(el, selector) {
+  if (selector.startsWith('.')) {
+    return el.classList.contains(selector.slice(1));
+  }
+  const attr = selector.match(/^\[([a-zA-Z-]+)(?:="([^"]*)")?\]$/);
+  if (attr) {
+    const value = el.dataset ? el.dataset[attr[1].replace(/^data-/, '').replace(/-([a-z])/g, (_, c) => c.toUpperCase())] : undefined;
+    if (!attr[2]) return value != null && value !== '';
+    return String(value) === attr[2];
+  }
+  throw new Error(`Unsupported selector: ${selector}`);
+}
+
+// Absolute top within the layout tree: the sum of every preceding sibling's
+// height, walked up to the root. Margin-free by construction — the engine's
+// anchor corrections read rect deltas, which cancel margins on both ends.
+function fakeElementTop(el) {
+  let top = 0;
+  let node = el;
+  while (node.parentElement) {
+    const parent = node.parentElement;
+    const siblings = parent._nodes;
+    const index = siblings.indexOf(node);
+    for (let i = 0; i < index; i++) {
+      if (siblings[i].nodeType === ELEMENT_NODE) top += fakeElementHeight(siblings[i]);
+    }
+    node = parent;
+  }
+  return top;
+}
+
+// Scroll positions of every ancestor: a real getBoundingClientRect is
+// viewport-relative, so content inside a scrolled container reports its box
+// minus the scroll offset. An element's own scrollTop never affects its own
+// rect.
+function fakeAncestorScrollOffset(el) {
+  let offset = 0;
+  let node = el.parentElement;
+  while (node) {
+    offset += node.scrollTop || 0;
+    node = node.parentElement;
+  }
+  return offset;
+}
+
 function fakeElementHeight(el) {
   const styled = typeof el.style?.height === 'string' && el.style.height.endsWith('px');
   if (styled) return parseFloat(el.style.height);
@@ -162,7 +209,10 @@ class FakeElement {
   // the element's own base plus the sum of its children, with a default leaf
   // height for text-bearing leaves.
   getBoundingClientRect() {
-    return {height: fakeElementHeight(this)};
+    return {
+      height: fakeElementHeight(this),
+      top: fakeElementTop(this) - fakeAncestorScrollOffset(this),
+    };
   }
 
   replaceWith(newNode) {
@@ -212,14 +262,8 @@ class FakeElement {
   }
 
   querySelector(selector) {
-    if (!selector.startsWith('.')) {
-      throw new Error(`Unsupported selector: ${selector}`);
-    }
-    const className = selector.slice(1);
     for (const child of this.children) {
-      if (child.classList.contains(className)) {
-        return child;
-      }
+      if (fakeElementMatches(child, selector)) return child;
       const nested = child.querySelector(selector);
       if (nested) return nested;
     }
@@ -227,13 +271,9 @@ class FakeElement {
   }
 
   querySelectorAll(selector) {
-    if (!selector.startsWith('.')) {
-      throw new Error(`Unsupported selector: ${selector}`);
-    }
-    const className = selector.slice(1);
     const matches = [];
     for (const child of this.children) {
-      if (child.classList.contains(className)) matches.push(child);
+      if (fakeElementMatches(child, selector)) matches.push(child);
       matches.push(...child.querySelectorAll(selector));
     }
     return matches;
@@ -266,6 +306,7 @@ class FakeElement {
 function loadChatContext(document) {
   const nowIso = '2026-04-02T03:04:05.000Z';
   const context = {
+    CSS: {escape: (value) => String(value)},
     SESSION_ID: 'session-a',
     document: {
       addEventListener() {},
@@ -488,12 +529,16 @@ function installEngineTimers(context, timers) {
   context.clearTimeout = () => {};
 }
 
+// Like a real scroller, the position never leaves the laid-out range: writes
+// clamp, and a read clamps again so content shrinking under the viewport
+// (fold collapses, pagination sentinel removal) behaves like the browser's.
 function installScrollTopClamp(root) {
   let scrollTop = root.scrollTop;
   Object.defineProperty(root, 'scrollTop', {
     configurable: true,
     get() {
-      return scrollTop;
+      const max = Math.max(0, root.scrollHeight - root.clientHeight);
+      return Math.max(0, Math.min(scrollTop, max));
     },
     set(value) {
       scrollTop = Math.max(0, Math.min(value, root.scrollHeight - root.clientHeight));

@@ -22,7 +22,10 @@ function paintStreamDraft(draft) {
   const el = document.getElementById('streaming-msg');
   const inner = document.getElementById('streaming-content');
   const container = document.getElementById('messages');
-  const wasAtBottom = shouldAutoScroll(container);
+  // A reader parked inside the 150px geometry band is still reading: under
+  // the turn engine the follow decision is the engine's user-intent flag.
+  const engine = Chat.TurnEngine && container ? Chat.TurnEngine.activeFor(container) : null;
+  const wasAtBottom = engine ? engine.pinnedIntent : shouldAutoScroll(container);
   el.classList.remove('hidden');
   const content = (draft && draft.content) || '';
   const thinking = (draft && draft.thinking) || '';

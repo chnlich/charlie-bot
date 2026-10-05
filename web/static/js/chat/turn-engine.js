@@ -142,11 +142,27 @@
       this.offsetsDirty = true;
       this.totalHeight = 0;
       this.lastScrollTs = -Infinity;
-      // Mount intent is bottom-pinned; genuine user scrolls re-derive it and
-      // follow-appends re-arm it. It is the pin source for 'resize' projects.
+      // Mount intent is bottom-pinned; a genuine upward user scroll clears it
+      // and a genuine scroll landing at the bottom re-arms it. It is the pin
+      // source for every follow decision — never live geometry, which still
+      // reads "pinned" inside the 150px band a reader paused in.
       this.pinnedIntent = true;
+      // scrollTop at the last genuine (non-echo) scroll event; the direction
+      // of each new genuine event is read against it.
+      this.lastUserScrollTop = null;
+      // The reading position: one content node's identity plus its offset
+      // from the container's visible top. `readingAnchor` is maintained on
+      // every frame (the recovery input when a hidden container loses its
+      // scrollTop); `pendingAnchor` is a restore target that outlives single
+      // reprojections until the anchored node is back in the DOM.
+      this.readingAnchor = null;
+      this.pendingAnchor = null;
       this.rafScheduled = false;
       this.rafHandle = null;
+      // scrollHeight at the last write or scroll event; an upward event that
+      // arrives with a shrunk container is the browser's clamp of an
+      // out-of-range position, not the user's wheel.
+      this.lastSeenScrollHeight = null;
       this.resizeObserver = null;
       this.resizeRafScheduled = false;
       this.resizeRafHandle = null;
@@ -459,9 +475,20 @@
       const height = el.getBoundingClientRect().height;
       this.stats.measuredTurnCount++;
       if (el.classList.contains('turn-placeholder')) return height;
+      // The measurement belongs to the materialization the node was built
+      // for, not to the current policy: a depth change swaps open wraps for
+      // folded rows, and recording the outgoing open wrap's 400px into the
+      // folded table would poison every folded-row height with it.
+      const parts = (seg.cachedSig || '').split(':');
       if (seg.kind === 'flat') {
         this.measuredFlat.set(seg, height);
-      } else if (!this.effectiveOpen(seg)) {
+      } else if (parts[0] === 'folded') {
+        this.measuredFolded.set(seg.key, height);
+        this.noteFoldedMeasure(height);
+      } else if (parts[0] === 'open') {
+        const sig = parts[2] === 'true' ? 'open-x' : 'open-c';
+        this.measuredOpen.set(seg.key + '|' + sig, height);
+      } else if (el.dataset.turnOpen === 'false') {
         this.measuredFolded.set(seg.key, height);
         this.noteFoldedMeasure(height);
       } else {
@@ -614,6 +641,34 @@
       // from scratch instead of repairing a degenerate window.
       if (this.container.clientHeight === 0) return;
       this.ensureOffsets();
+      // A resize that finds the viewport away from the reading position has
+      // lost its scroll state (the browser resets scrollTop across
+      // display:none): re-enter at the reading anchor's segment before
+      // projecting, and make its exact viewport offset the restore target.
+      // This runs before the fresh capture below, which would otherwise
+      // anchor whatever sits at the reset scrollTop.
+      if (reason === 'resize' && !this.pinnedIntent && this.readingAnchor
+          && this.anchorFor(this.container.scrollTop)
+              !== this.segmentIndexOfAnchor(this.readingAnchor)) {
+        this.pendingAnchor = this.readingAnchor;
+        const segIndex = this.segmentIndexOfAnchor(this.readingAnchor);
+        const maxScroll = Math.max(0, this.container.scrollHeight - this.container.clientHeight);
+        const seed = segIndex >= 0 ? Math.max(0, this.offsets[segIndex]) : 0;
+        this.writeScrollTop(Math.min(seed, maxScroll));
+      }
+      // The reading position is re-read only when the reader themselves moved
+      // (a scroll frame) or re-declared it (a depth change re-anchors the
+      // surviving turn row). Every other frame mutates the DOM around the
+      // reader — prerender materialization shifts content by the estimate
+      // error, a reset re-derives the whole store — and a capture here would
+      // bake the mid-mutation viewport into the anchor, abandoning the
+      // message the reader was actually holding. Those frames restore the
+      // existing anchor instead (the branch below); the recovery path after a
+      // hidden container reads the same preserved anchor.
+      const freshAnchor = reason === 'scroll' || reason === 'depth'
+        ? this.captureReadingAnchor(reason === 'depth')
+        : null;
+      if (freshAnchor) this.readingAnchor = freshAnchor;
       // Hysteresis: while the viewport stays comfortably inside the current
       // window, a scroll frame is pure bookkeeping — no DOM work at all.
       if (reason === 'scroll' && this.window) {
@@ -630,20 +685,42 @@
           return;
         }
       }
-      // A resize moves the very geometry isPinned() would read (hidden-mount
-      // recovery starts from scrollTop 0; a growing viewport drops content
-      // into the follow band), so 'resize' projects pin from the user's
-      // intent instead. Every other reason keeps live geometry.
-      const wasPinned = reason === 'resize' ? this.pinnedIntent : this.isPinned();
+      // Every follow decision reads the user's intent, never live geometry:
+      // geometry still reports "pinned" inside the 150px band a reader paused
+      // in, which is what let appends, stream growth and resizes yank a
+      // reader back down. 'scroll' keeps geometry for its range choice only —
+      // the user is mid-gesture, and their motion already set the intent.
+      // Prepend never pins: pagination moves the reading position into
+      // history by definition.
+      const wasPinned = reason === 'prepend' ? false
+        : reason === 'scroll' ? this.isPinned()
+        : this.pinnedIntent;
+      const snapToBottom = wasPinned && reason !== 'scroll';
       // At the pinned bottom the browser's scrollTop and the height model
       // disagree by the container's sibling margins, which makes a
       // scrollTop-derived range flap ±1 segment in a limit cycle. The pinned
       // range is therefore derived from the model's own offsets — stable by
       // construction.
       const range = wasPinned ? this.pinnedRange() : this.computeTargetRange();
+      // The restore target's segment stays projected even when the update
+      // shrank the content above the reader (a depth collapse): without it
+      // the anchor node cannot come back and the position is lost until the
+      // reader scrolls blind through collapsed rows.
+      const restoreTarget = snapToBottom
+        ? null
+        : (this.pendingAnchor || (reason === 'prepend' ? null : this.readingAnchor));
+      if (restoreTarget) {
+        const anchorSeg = this.segmentIndexOfAnchor(restoreTarget);
+        if (anchorSeg >= 0 && (anchorSeg < range.start || anchorSeg > range.end)) {
+          range.start = Math.min(range.start, anchorSeg);
+          range.end = Math.max(range.end, anchorSeg);
+          while (range.end - range.start + 1 > MAX_WINDOW_TURNS) {
+            if (anchorSeg - range.start > range.end - anchorSeg) range.start++;
+            else range.end--;
+          }
+        }
+      }
       const scrollTop = this.container.scrollTop;
-      const anchor = this.segments.length ? this.anchorFor(scrollTop) : null;
-      const anchorOffsetBefore = anchor != null && anchor >= 0 ? this.offsets[anchor] : 0;
 
       // Classify the work first: evicted segments, changed segments replaced
       // in place (materialization sig moved — policy flip, placeholder
@@ -714,12 +791,29 @@
       // User scroll and quiet-phase pre-rendering are new engine reasons; they
       // must not turn a near-bottom viewport back into a pinned one. The
       // positional snap remains for the legacy-equivalent reasons.
-      const snapToBottom = wasPinned && reason !== 'scroll' && reason !== 'prerender-ready';
       if (snapToBottom) {
         this.writeScrollTop(this.container.scrollHeight);
-      } else if (anchor != null && anchor >= 0 && this.offsets[anchor] != null) {
-        const delta = this.offsets[anchor] - anchorOffsetBefore;
-        if (delta !== 0) this.writeScrollTop(scrollTop + delta);
+        this.pendingAnchor = null;
+      } else if (reason !== 'scroll') {
+        // Reading-position correction: put the anchored node back at the
+        // viewport offset it held before the update. The sticky pending
+        // anchor wins — it still describes where the reader was, across the
+        // placeholder period where the node is temporarily out of the DOM.
+        const target = restoreTarget;
+        if (target) {
+          if (this.restoreReadingAnchor(target)) {
+            this.readingAnchor = target;
+            this.pendingAnchor = null;
+          } else if (this.anchorAwaitingRematerialization(target)) {
+            this.pendingAnchor = target;
+          } else {
+            this.pendingAnchor = null;
+          }
+        }
+      }
+      if (reason === 'scroll' && !freshAnchor) {
+        const settled = this.captureReadingAnchor();
+        if (settled) this.readingAnchor = settled;
       }
     }
 
@@ -738,13 +832,37 @@
     writeScrollTop(value) {
       this.container.scrollTop = value;
       this.lastProgrammaticScrollTop = this.container.scrollTop;
+      this.lastUserScrollTop = this.lastProgrammaticScrollTop;
+      this.lastSeenScrollHeight = this.container.scrollHeight;
     }
 
     handleScroll() {
       if (this.container.scrollTop === this.lastProgrammaticScrollTop) return;
-      this.pinnedIntent = this.isPinned();
       this.lastScrollTs = performance.now();
       this.lastProgrammaticScrollTop = null;
+      const top = this.container.scrollTop;
+      const prev = this.lastUserScrollTop;
+      const height = this.container.scrollHeight;
+      const shrank = this.lastSeenScrollHeight != null
+        && height < this.lastSeenScrollHeight - 0.5;
+      this.lastSeenScrollHeight = height;
+      this.lastUserScrollTop = top;
+      // A genuine scroll re-declares the reading position by itself; a sticky
+      // restore target from an earlier update must not fight it.
+      this.pendingAnchor = null;
+      // Pin intent follows the user's motion, not the 150px geometry band: any
+      // upward scroll stops the follow (a 100px wheel-up from the bottom sits
+      // inside the band but is still reading), and only a downward scroll that
+      // reaches the band re-arms it. An upward event over shrunk content is
+      // the browser clamping an out-of-range position after an update — the
+      // reported mount-time unpin — and says nothing about the user's wheel.
+      if (prev != null && top < prev - 0.5 && !shrank) {
+        this.pinnedIntent = false;
+        if (typeof showScrollToBottom === 'function') showScrollToBottom();
+      } else if (prev != null && top > prev + 0.5 && this.isPinned()) {
+        this.pinnedIntent = true;
+        if (Chat && typeof Chat.hideScrollToBottom === 'function') Chat.hideScrollToBottom();
+      }
       if (this.rafScheduled || !this.alive) return;
       this.rafScheduled = true;
       const fire = () => {
@@ -769,7 +887,12 @@
     }
 
     // ---- lifecycle -----------------------------------------------------------
-    mount(messages) {
+    // `options.pinned: false` mounts a reader who is mid-history: the window
+    // projects around `options.readingAnchor` (a captureReadingAnchor() value
+    // taken from the view this mount replaces) and the anchor's viewport
+    // offset is restored once its segment is real. Default mount stays
+    // bottom-pinned.
+    mount(messages, options = {}) {
       const streamEl = document.getElementById('streaming-msg');
       while (this.container.firstChild) this.container.removeChild(this.container.firstChild);
 
@@ -789,20 +912,52 @@
       this.container.appendChild(this.bottomSpacer);
       if (streamEl) this.container.appendChild(streamEl);
 
+      const pinned = options.pinned !== false;
+      const anchor = pinned ? null : (options.readingAnchor || null);
+      this.pinnedIntent = pinned;
+      this.readingAnchor = anchor;
+      this.pendingAnchor = anchor;
+
       this.ensureOffsets();
       // Seed the spacers so the browser exposes its full range, then pin
       // against the real scrollHeight (margins included), then project. A
       // hidden (zero-height) container skips the bottom-spacer seed and both
       // pin writes: reproject guards itself, so a hidden mount projects
-      // nothing and the first 'resize' builds the window instead.
+      // nothing and the first 'resize' builds the window instead. An anchor
+      // mount seeds the scroll position at the anchor's segment so the
+      // projected window covers it.
       this.topSpacer.style.height = '0px';
       if (this.container.clientHeight !== 0) {
         this.bottomSpacer.style.height = Math.round(this.totalHeight) + 'px';
-        this.writeScrollTop(this.container.scrollHeight);
+        if (pinned) {
+          this.writeScrollTop(this.container.scrollHeight);
+        } else if (anchor) {
+          const segIndex = this.segmentIndexOfAnchor(anchor);
+          const maxScroll = Math.max(0, this.container.scrollHeight - this.container.clientHeight);
+          const seed = segIndex >= 0 ? Math.max(0, this.offsets[segIndex]) : 0;
+          this.writeScrollTop(Math.min(seed, maxScroll));
+        }
       }
       this.reproject('mount');
-      if (this.container.clientHeight !== 0) this.writeScrollTop(this.container.scrollHeight);
+      if (pinned && this.container.clientHeight !== 0) this.writeScrollTop(this.container.scrollHeight);
+      if (!pinned && anchor) this.renderAnchorSegmentSync(anchor);
       this.scheduleIdle();
+    }
+
+    // The fold-open rule applied to mounts: one synchronously rendered turn
+    // puts the anchored node in the DOM immediately, so the reader's exact
+    // position restores at mount instead of waiting for idle slices.
+    renderAnchorSegmentSync(anchor) {
+      const segIndex = this.segmentIndexOfAnchor(anchor);
+      if (segIndex < 0) return;
+      const seg = this.segments[segIndex];
+      if (seg.kind === 'turn' && !this.effectiveOpen(seg)) return;
+      if (this.segmentReady(seg)) return;
+      seg.entries.forEach((entry) => {
+        if (!entry.ready) this.renderAtom(entry, true);
+      });
+      seg.cachedSig = null;
+      this.reproject('prerender-ready');
     }
 
     dispose() {
@@ -833,6 +988,9 @@
       this.entries = [];
       this.knownIds.clear();
       this.segments = [];
+      this.readingAnchor = null;
+      this.pendingAnchor = null;
+      this.lastUserScrollTop = null;
       this.registry.clear();
       this.measuredFolded.clear();
       this.measuredOpen.clear();
@@ -843,6 +1001,112 @@
       this.offsetsDirty = false;
       this.totalHeight = 0;
       activeEngines().delete(this.container);
+    }
+
+    // ---- reading position -----------------------------------------------------
+    // The reader's place is one content node's identity plus its offset from
+    // the container's visible top. Message nodes are the precise anchor; a
+    // turn wrap is the fallback when the top edge sits on a fold row or a
+    // placeholder (identities survive re-materialization through their
+    // data attributes). All measurements are live-rect deltas, so container
+    // margins and the pagination sentinel cancel out of every correction.
+    anchorSelector(target) {
+      const value = target.kind === 'message' ? target.id : target.key;
+      const attr = target.kind === 'message' ? 'data-message-id' : 'data-turn-key';
+      return '[' + attr + '="' + CSS.escape(String(value)) + '"]';
+    }
+
+    segmentIndexOfAnchor(target) {
+      if (!target) return -1;
+      if (target.kind === 'message') {
+        return this.segments.findIndex((seg) => seg.entries.some(
+          (entry) => String(entry.msg.id) === String(target.id)));
+      }
+      return this.segments.findIndex((seg) => seg.kind === 'turn' && seg.key === target.key);
+    }
+
+    captureReadingAnchor(preferTurn = false) {
+      if (!this.segments.length) return null;
+      const cTop = this.container.getBoundingClientRect().top;
+      // The top-edge segment is read off the real boxes, in segment order:
+      // the height model carries estimates for never-materialized turns, so
+      // the model segment at scrollTop can sit screens away from the content
+      // the reader actually sees at the top edge.
+      const rendered = [];
+      this.segments.forEach((seg) => {
+        const el = this.domBySeg.get(seg);
+        if (el) rendered.push({seg, el});
+      });
+      if (!rendered.length) return null;
+      let pick = rendered[0];
+      for (const cand of rendered) {
+        if (cand.el.getBoundingClientRect().top - cTop <= 1) pick = cand;
+        else break;
+      }
+      const seg = pick.seg;
+      const segEl = pick.el;
+      const segTop = segEl.getBoundingClientRect().top;
+      const anchorOf = (el) => ({
+        kind: 'message',
+        id: el.dataset.messageId,
+        offset: el.getBoundingClientRect().top - cTop,
+      });
+      const turnAnchor = () => (segEl.dataset.turnKey != null
+        ? {kind: 'turn', key: segEl.dataset.turnKey, offset: segTop - cTop}
+        : null);
+      if (segTop > cTop + 1) {
+        // The top edge sits in the spacer or margin above this segment's real
+        // box: anchor its first message, wherever it lands below the edge.
+        const first = segEl.querySelector('[data-message-id]');
+        if (first) return anchorOf(first);
+        return turnAnchor();
+      }
+      if (seg.kind === 'turn' && segEl.dataset.turnKey != null
+          && (preferTurn || !segEl.querySelector('[data-message-id]'))) {
+        // A fold row or placeholder fills the segment: the wrap identity is
+        // the only stable anchor. A depth change prefers it outright — the
+        // top-edge message may be inside a turn the new depth folds away,
+        // and the row is the position that survives every depth.
+        return turnAnchor();
+      }
+      let straddling = null;
+      const nodes = segEl.querySelectorAll('[data-message-id]');
+      for (const node of nodes) {
+        if (node.getBoundingClientRect().top <= cTop + 1) straddling = node;
+        else break;
+      }
+      if (straddling) return anchorOf(straddling);
+      const first = nodes[0];
+      if (first) return anchorOf(first);
+      return segEl.dataset.turnKey != null
+        ? {kind: 'turn', key: segEl.dataset.turnKey, offset: segTop - cTop}
+        : null;
+    }
+
+    restoreReadingAnchor(target) {
+      const el = this.container.querySelector(this.anchorSelector(target));
+      if (!el) return false;
+      const delta = el.getBoundingClientRect().top
+        - this.container.getBoundingClientRect().top - target.offset;
+      if (delta) this.writeScrollTop(this.container.scrollTop + delta);
+      return true;
+    }
+
+    // True when the anchored node is merely out of the DOM for now — its
+    // segment is projected as a placeholder (or not yet projected) and will
+    // carry the node again. False when the position is gone for good: the
+    // segment folded away, or the update removed the content.
+    anchorAwaitingRematerialization(target) {
+      const segIndex = this.segmentIndexOfAnchor(target);
+      if (segIndex < 0) return false;
+      const el = this.domBySeg.get(this.segments[segIndex]);
+      return !el || el.classList.contains('turn-placeholder');
+    }
+
+    jumpToBottom() {
+      this.pinnedIntent = true;
+      this.pendingAnchor = null;
+      this.writeScrollTop(this.container.scrollHeight);
     }
 
     // ---- ingest: pagination ---------------------------------------------------
@@ -859,11 +1123,21 @@
       }).map((msg) => this.makeEntry(msg));
       if (!fresh.length) return 0;
 
+      // The reading anchor must be captured before the store moves: after the
+      // prepend, the model offsets no longer describe the live DOM the reader
+      // is looking at. A message-kind sticky anchor wins over a weaker
+      // turn-kind one still pending from an earlier page.
+      const captured = this.captureReadingAnchor();
+      this.pendingAnchor = captured && captured.kind === 'message'
+        ? captured
+        : (this.pendingAnchor && this.pendingAnchor.kind === 'message' ? this.pendingAnchor : captured);
+      // Pagination never flips the follow pin by itself: a pinned reader is at
+      // the bottom and stays there while older content lands above (the
+      // mount-time fill), and a reader inside history already unpinned
+      // themselves with their wheel.
+
       this.ensureOffsets();
       const scrollTopBefore = this.container.scrollTop;
-      const anchor = this.anchorFor(scrollTopBefore);
-      const anchorEntriesBefore = anchor >= 0 ? this.segments[anchor].entries : null;
-      const anchorOffsetBefore = anchor >= 0 ? this.offsets[anchor] : 0;
 
       const firstPage = this.deriveSegments(fresh);
       // Insert the page's settled prefix first. The page tail must then be
@@ -899,17 +1173,8 @@
       this.scheduleIdle();
       this.ensureOffsets();
 
-      // Keep the anchored content visually still: the anchor is identified by
-      // its own message identity — never by position, which pagination moves.
-      let shift = 0;
-      if (anchorEntriesBefore && anchorEntriesBefore.length) {
-        const anchorIndexAfter = this.segments.findIndex(
-          (seg) => seg.entries.includes(anchorEntriesBefore[0]));
-        if (anchorIndexAfter >= 0) shift = this.offsets[anchorIndexAfter] - anchorOffsetBefore;
-      }
-      if (shift) this.writeScrollTop(scrollTopBefore + shift);
       this.reproject('prepend');
-      return shift;
+      return this.container.scrollTop - scrollTopBefore;
     }
 
     // ---- ingest: live stream --------------------------------------------------
@@ -919,7 +1184,7 @@
           id: 'client:' + String(this.sessionId) + ':' + (++this.liveMessageSequence),
         });
       }
-      const wasPinned = this.isPinned();
+      const wasPinned = this.pinnedIntent;
       const entry = {msg, node: null, ready: false};
       this.renderAtom(entry, true);
       this.entries.push(entry);
@@ -956,8 +1221,7 @@
       if (forceScroll || wasPinned) {
         // A follow-append re-arms the pin intent; it never clears it here —
         // only a genuine user scroll may do that (handleScroll).
-        this.pinnedIntent = true;
-        this.writeScrollTop(this.container.scrollHeight);
+        this.jumpToBottom();
       } else if (typeof showScrollToBottom === 'function') {
         showScrollToBottom();
       }
@@ -1065,13 +1329,13 @@
   Chat.toggleExplainPanel = toggleExplainPanelTracked;
   globalThis.toggleExplainPanel = toggleExplainPanelTracked;
 
-  function mountIfAvailable(container, messages, sessionId) {
+  function mountIfAvailable(container, messages, sessionId, options) {
     if (!supportsTurnEngine(container)) return null;
     const prev = activeEngines().get(container);
     if (prev) prev.dispose();
     const engine = new TurnEngine(container, sessionId);
     activeEngines().set(container, engine);
-    engine.mount(messages || []);
+    engine.mount(messages || [], options);
     return engine;
   }
 

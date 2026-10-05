@@ -14,22 +14,21 @@ never surfaces after one of them.
 from __future__ import annotations
 
 import asyncio
-from collections import defaultdict
+import collections
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from src.core import event_types as ET
-from src.core.log_once import LazyStructlogLogger
-from src.core.tasks import create_logged_task
+from src.core import log_once, tasks
 
 if TYPE_CHECKING:
-  from fastapi import WebSocket
+  import fastapi
 
 # Fresh non-server processes reach this module through src.core.sessions (the
 # memory CLI's run-token audience resolution) and pay every module-level import
 # per process; the server-only dependencies ride their call sites below.
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The client already paints stream drafts at a 200 ms cadence (usage.js
 # showStreaming), so a matching coalesce window adds at most one window of
@@ -59,16 +58,16 @@ class StreamingManager:
   """Fan-out WebSocket events from Worker subprocesses to browser clients."""
 
   def __init__(self) -> None:
-    self._connections: dict[str, set[WebSocket]] = defaultdict(set)
+    self._connections: dict[str, set[fastapi.WebSocket]] = collections.defaultdict(set)
     self._pending_stream: dict[str, dict[str, Any]] = {}
     self._stream_timers: dict[str, asyncio.TimerHandle] = {}
     self._lock = asyncio.Lock()
 
-  async def subscribe(self, thread_id: str, ws: WebSocket) -> None:
+  async def subscribe(self, thread_id: str, ws: fastapi.WebSocket) -> None:
     async with self._lock:
       self._connections[thread_id].add(ws)
 
-  async def unsubscribe(self, thread_id: str, ws: WebSocket) -> None:
+  async def unsubscribe(self, thread_id: str, ws: fastapi.WebSocket) -> None:
     async with self._lock:
       self._connections[thread_id].discard(ws)
       if not self._connections[thread_id]:
@@ -101,7 +100,7 @@ class StreamingManager:
     self._stream_timers.pop(thread_id, None)
     event = self._pending_stream.pop(thread_id, None)
     if event is not None:
-      create_logged_task(self._fan_out(thread_id, _serialize(event)), name=f"stream-flush-{thread_id}")
+      tasks.create_logged_task(self._fan_out(thread_id, _serialize(event)), name=f"stream-flush-{thread_id}")
 
   def _drop_pending_stream(self, thread_id: str) -> None:
     timer = self._stream_timers.pop(thread_id, None)
@@ -117,8 +116,8 @@ class StreamingManager:
       text = payload if isinstance(payload, str) else _serialize(payload)
       await self._send_all(thread_id, sockets, text)
 
-  async def _send_all(self, thread_id: str, sockets: set[WebSocket], text: str) -> None:
-    dead: set[WebSocket] = set()
+  async def _send_all(self, thread_id: str, sockets: set[fastapi.WebSocket], text: str) -> None:
+    dead: set[fastapi.WebSocket] = set()
     for ws in sockets:
       try:
         await ws.send_text(text)
@@ -169,7 +168,7 @@ async def handle_compaction_events(
   """Detect compact_boundary and compact-failure system events, log, persist, and
   broadcast a synthesized event. At most one synthesized event is emitted per
   input event."""
-  from src.agents.backends.base import make_context_compact_failed_event, make_context_compacted_event
+  from src.agents.backends import base
 
   if event.get("type") != ET.SYSTEM:
     return
@@ -185,9 +184,9 @@ async def handle_compaction_events(
         pre_tokens=meta.get(ET.COMPACT_PRE_TOKENS),
         post_tokens=meta.get(ET.COMPACT_POST_TOKENS),
         **log_context)
-    await persist_and_broadcast(make_context_compacted_event(trigger, meta, model=None))
+    await persist_and_broadcast(base.make_context_compacted_event(trigger, meta, model=None))
     return
   if subtype == "status" and event.get("compact_result") == "failed":
     error = event.get("compact_error")
     log.info("cc_context_compact_failed", error=error, **log_context)
-    await persist_and_broadcast(make_context_compact_failed_event(error, model=None))
+    await persist_and_broadcast(base.make_context_compact_failed_event(error, model=None))

@@ -193,8 +193,9 @@ async def test_every_parts_text_joins_into_exactly_one_unnormalized_final(
 @pytest.mark.asyncio
 async def test_candidates_without_parts_join_into_one_empty_final(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  # Measured refusal shape: finishReason STOP with content {} — the model says
-  # nothing, the same clips the Live engine loses to a 1008 policy close.
+  # Measured no-speech shape: finishReason STOP with content {} — the model
+  # says nothing on recordings without speech, the same three the Live API
+  # closes with 1008 on.
   _patch_credentials(monkeypatch, API_KEY)
   reply = {"candidates": [{"content": {}, "finishReason": "STOP", "index": 0}]}
   with _gateway(200, reply) as gateway:
@@ -203,6 +204,38 @@ async def test_candidates_without_parts_join_into_one_empty_final(
     events = [event async for event in backend.transcribe(_one_chunk_audio(), vocabulary=[], languages=[])]
 
   assert [(event.kind, event.text) for event in events] == [("final", "")]
+
+
+@pytest.mark.asyncio
+async def test_a_non_stop_finish_reason_with_no_parts_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  # A refusal such as SAFETY must surface, not pass as a silent recording: an
+  # empty final has the browser drop the recording without notice.
+  _patch_credentials(monkeypatch, API_KEY)
+  body = b'{"candidates": [{"content": {}, "finishReason": "SAFETY", "index": 0}]}'
+  with _gateway(200, body) as gateway:
+    backend = _backend(tmp_path, gateway.base_url)
+
+    with pytest.raises(RuntimeError) as excinfo:
+      await anext(backend.transcribe(_one_chunk_audio(), vocabulary=[], languages=[]))
+
+  message = str(excinfo.value)
+  assert "SAFETY" in message
+  assert body.decode("utf-8") in message  # the reply body rides along as the excerpt
+  assert API_KEY not in message
+
+
+@pytest.mark.asyncio
+async def test_a_missing_finish_reason_with_no_parts_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  # Without a finishReason the empty parts prove nothing: not provable silence.
+  _patch_credentials(monkeypatch, API_KEY)
+  reply = {"candidates": [{"content": {}}]}
+  with _gateway(200, reply) as gateway:
+    backend = _backend(tmp_path, gateway.base_url)
+
+    with pytest.raises(RuntimeError) as excinfo:
+      await anext(backend.transcribe(_one_chunk_audio(), vocabulary=[], languages=[]))
+
+  assert "finishReason" in str(excinfo.value)
 
 
 @pytest.mark.asyncio

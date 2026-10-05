@@ -91,17 +91,30 @@ def _final_text(reply: dict, reply_body: str) -> str:
   """Join every part's ``audioTranscription.text`` — the reply's only text location.
 
   A reply without candidates is a transport-level break and raises. Candidates
-  carrying no parts is the model saying nothing — measured on clips Google's
-  policy refuses, where the Live engine gets the same refusal as a 1008 close —
-  and joins zero parts into an empty text. A part that exists but lacks the
-  transcription raises instead of passing as silence: that shape is the
-  2026-09 batch's parse bug, wrong-location reading dressed up as model output.
+  carrying no parts is the model saying nothing only when the candidate closed
+  with ``finishReason: STOP`` — measured on three recordings without speech
+  (two digital silences and one noise clip, the same three the Live API closed
+  with 1008 on) — and joins zero parts into an empty text. Any other
+  finishReason, or a missing one, raises instead of passing as silence: an
+  empty text has the browser report no speech and drop the recording, hiding a
+  refusal such as SAFETY. A part that exists but lacks the transcription
+  raises too: that shape is the 2026-09 batch's parse bug, wrong-location
+  reading dressed up as model output.
   """
   excerpt = _body_excerpt(reply_body)
   candidates = reply.get("candidates")
   if not isinstance(candidates, list) or not candidates:
     raise RuntimeError(f"transcription reply carries no candidates: {excerpt}")
-  parts = candidates[0].get("content", {}).get("parts") or []
+  candidate = candidates[0]
+  parts = candidate.get("content", {}).get("parts") or []
+  if not parts:
+    # Only STOP makes the empty parts a proven silence; any other close, or
+    # none, is a refusal the browser would read as no speech and drop.
+    finish_reason = candidate.get("finishReason")
+    if finish_reason != "STOP":
+      if finish_reason is None:
+        raise RuntimeError(f"transcription reply carries no parts and no finishReason: {excerpt}")
+      raise RuntimeError(f"transcription reply carries no parts with finishReason {finish_reason!r}: {excerpt}")
   texts = []
   for part in parts:
     transcription = part.get("audioTranscription")

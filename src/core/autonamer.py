@@ -30,23 +30,25 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-from src.agents.backends.deferred_build import load_build_backend
-from src.core import claude_accounts
+from src.agents.backends import deferred_build
+from src.core import (
+    claude_accounts,
+    config,
+    deferred,
+    log_once,
+    message_aggregator,
+    models,
+    sessions,
+    streaming,
+    timeouts,
+)
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, default_claude_dir
-from src.core.deferred import deferred_module_getattr
-from src.core.log_once import LazyStructlogLogger
-from src.core.message_aggregator import extract_text_from_message
-from src.core.models import BackendOption, SessionMetadata
-from src.core.sessions import SessionManager
-from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def __getattr__(name: str) -> Any:
-  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
+  return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
 
 
 # Matches true defaults ("Session 7"), legacy empty placeholders ("7: "), and
@@ -135,7 +137,7 @@ def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
   return None, None
 
 
-def iter_light_backends(cfg: CharlieBotConfig) -> Iterator[BackendOption]:
+def iter_light_backends(cfg: config.CharlieBotConfig) -> Iterator[models.BackendOption]:
   """Yield each resolved light one-shot backend once, in preference order."""
   yielded_ids: set[str] = set()
   for entry_id in cfg.backends.preference:
@@ -156,8 +158,8 @@ def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
 
 
 async def _apply_name_to_session(
-    session_mgr: SessionManager,
-    session_meta: SessionMetadata,
+    session_mgr: sessions.SessionManager,
+    session_meta: models.SessionMetadata,
     name: str | None,
     group: str | None,
 ) -> None:
@@ -179,13 +181,13 @@ async def _apply_name_to_session(
 
   await session_mgr.rename_session(session_meta.id, name)
 
-  channel = session_channel(session_meta.id)
-  await streaming_manager.broadcast(channel, {
+  channel = streaming.session_channel(session_meta.id)
+  await streaming.streaming_manager.broadcast(channel, {
       "type": ET.SESSION_RENAMED,
       "name": name,
   })
-  await streaming_manager.broadcast(
-      SIDEBAR_CHANNEL, {
+  await streaming.streaming_manager.broadcast(
+      streaming.SIDEBAR_CHANNEL, {
           "type": ET.SESSION_RENAMED,
           "session_id": session_meta.id,
           "name": name,
@@ -201,7 +203,7 @@ async def _apply_name_to_session(
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
 
 
-async def name_after_round(cfg: CharlieBotConfig, session_id: str, session_mgr: SessionManager) -> None:
+async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, session_mgr: sessions.SessionManager) -> None:
   """Name a session from its saved chat log after a master round finishes.
 
   The manager prompt is composed from typed input events, so naming reads the
@@ -221,7 +223,7 @@ async def name_after_round(cfg: CharlieBotConfig, session_id: str, session_mgr: 
   assistant_text = ""
   for ev in events:
     if ev.get("type") == ET.ASSISTANT:
-      assistant_text += extract_text_from_message(ev.get("message"))
+      assistant_text += message_aggregator.extract_text_from_message(ev.get("message"))
   if not assistant_text:
     return
 
@@ -230,11 +232,11 @@ async def name_after_round(cfg: CharlieBotConfig, session_id: str, session_mgr: 
 
 
 async def maybe_auto_name(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     user_message: str,
     assistant_response: str,
-    session_mgr: SessionManager,
+    session_mgr: sessions.SessionManager,
     existing_groups: list[str],
 ) -> None:
   """If the session still has a default name, generate a descriptive name and group."""
@@ -264,9 +266,9 @@ async def maybe_auto_name(
 
     for option in options:
       try:
-        backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
+        backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
         raw = await backend.one_shot_text(
-            f"{title_instruction}\n\n{prompt}", system_prompt, timeout=LIGHT_ONESHOT_TIMEOUT)
+            f"{title_instruction}\n\n{prompt}", system_prompt, timeout=timeouts.LIGHT_ONESHOT_TIMEOUT)
       except Exception as e:
         log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
         continue
@@ -292,8 +294,8 @@ async def maybe_auto_name(
 
 
 async def maybe_auto_name_from_claude_ai_title(
-    session_meta: SessionMetadata,
-    session_mgr: SessionManager,
+    session_meta: models.SessionMetadata,
+    session_mgr: sessions.SessionManager,
 ) -> None:
   """Claude ai-title strategy. For TUI sessions only.
 
@@ -310,7 +312,7 @@ async def maybe_auto_name_from_claude_ai_title(
   Group is intentionally left empty for TUI sessions in this version.
   """
   session_id = session_meta.id
-  matches = claude_accounts.transcript_matches(default_claude_dir(), session_id)
+  matches = claude_accounts.transcript_matches(config.default_claude_dir(), session_id)
   if not matches:
     return
 

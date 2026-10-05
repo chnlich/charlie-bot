@@ -173,10 +173,9 @@ def test_relay_stays_inside_the_pool_and_names_it_when_exhausted(tmp_path: Path)
       cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
 
   assert (nxt, refused) == (None, None)
-  assert error is not None
-  assert claude_relay.POOL_EXHAUSTED_PHRASE in error
-  assert "'alpha'" in error
-  assert "21:00 UTC" in error, "the reset time is the exhausted pool's own"
+  assert error == (
+      "Claude account pool has no available account (pool 'alpha'; earliest reset 21:00 UTC); "
+      "this run did not complete.")
 
 
 def test_relay_exhaustion_without_pools_keeps_the_unnamed_message(tmp_path: Path) -> None:
@@ -191,7 +190,26 @@ def test_relay_exhaustion_without_pools_keeps_the_unnamed_message(tmp_path: Path
 
   assert nxt is None
   assert error == claude_relay.pool_exhausted_message(cfg, NOW)
-  assert claude_relay.POOL_EXHAUSTED_PHRASE in error and "UTC" in error
+  assert error == (
+      "Claude account pool has no available account (earliest reset 21:00 UTC); "
+      "this run did not complete.")
+
+
+def test_pool_exhaustion_names_the_pool_even_without_a_reset_time(tmp_path: Path) -> None:
+  """A pool exhausted with no rejection reading -- every login emptied, say -- still names
+  the pool; the reset slot reads 'no reset time known'."""
+  cfg = _pool_cfg(tmp_path, pools={"alpha": ["main", "ext-1"]})
+  write_pool_credentials(tmp_path / "claude-main", access_token="")
+  write_pool_credentials(tmp_path / "claude-ext-1", access_token="")
+  current = claude_accounts.account_by_label(cfg, "main")
+
+  nxt, error, refused = claude_relay.move_to_next_account(
+      cfg, FABLE_MODEL, current, "uuid-1", now=NOW, account_pool="alpha")
+
+  assert (nxt, refused) == (None, None)
+  assert error == (
+      "Claude account pool has no available account (pool 'alpha'; no reset time known); "
+      "this run did not complete.")
 
 
 # ---------------------------------------------------------------------------

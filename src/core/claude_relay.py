@@ -136,14 +136,16 @@ class RelayWatch:
 def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None, account_pool: str | None = None) -> str:
   """The pool-exhausted error: it names the pool and that pool's earliest reset.
 
-  *account_pool* rides inside the rendered message (``... pool 'name' ...``)
-  while ``POOL_EXHAUSTED_PHRASE`` itself stays byte-identical: the improve quota
-  classification matches the phrase's lowercase form.
+  A named pool renders ``... no available account (pool 'alpha'; earliest reset
+  03:00 UTC); ...``; with no pool the reset stands alone (``... no available
+  account (no reset time known); ...``). ``POOL_EXHAUSTED_PHRASE`` itself stays
+  byte-identical: the improve quota classification matches the phrase's
+  lowercase form.
   """
   reset = claude_accounts.earliest_reset(cfg, now, account_pool)
   when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC" if reset else "no reset time known"
-  named = f" '{account_pool}'" if account_pool else ""
-  return f"{POOL_EXHAUSTED_PHRASE}{named} ({when}); this run did not complete."
+  detail = f"pool '{account_pool}'; {when}" if account_pool else when
+  return f"{POOL_EXHAUSTED_PHRASE} ({detail}); this run did not complete."
 
 
 def relay_limit_message() -> str:

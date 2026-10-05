@@ -55,6 +55,7 @@ Express requirements in their most concise form.
 
 Applies to all writing.
 
+- Write in the spirit of ASD-STE100 (Simplified Technical English), in Chinese as in English.
 - Plain, matter-of-fact tone.
 - Prefer commas, colons, parentheses, or restructure over dashes in prose
   (code excepted).
@@ -279,6 +280,9 @@ Default to HTML for response output. Read the file-server skill before writing a
 artifact — it defines the HTML requirements and the page quality bar; write
 `artifacts/<name>.html` and share it via the file-server link. Use markdown only when
 the user opts out or the response is a brief acknowledgment.
+
+When a diagram shows the point better than prose, draw it in the HTML page. Leave out a
+diagram that you cannot draw clearly.
 
 ## Situation Brief
 

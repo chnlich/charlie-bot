@@ -265,17 +265,22 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   assert executor.batches[1][0] == root.id and len(executor.batches[1][1]) == 1
   assert tree.task_state(worker.id) == "completed"  # auto-close landed
 
-  # The closed node keeps late input as history.
-  await admit(tree, worker.id, "late arrival", input_id="late-1")
+  # The closed node keeps a late machine input as history (and the machine
+  # refusal never mints an authorization window).
+  from src.core.task_sessions import TaskArchivedError
+  with pytest.raises(TaskArchivedError):
+    await admit(tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
+  assert [str(e["id"]) for e in input_events(tree, worker.id)] == []
   decision = await tree.dispatch.dispatch_pending(worker.id)
   assert decision["launch"] is False and "closed" in decision["reason"]
-  assert [str(e["id"]) for e in input_events(tree, worker.id)] == ["late-1"]
 
-  # A later authorized user retry uses the preserved inputs.
+  # A later authorized user retry restores the node and is the round's only
+  # input: the restore's fresh boundary keeps the closed period as history.
   await admit(tree, worker.id, "take off — redo it", input_id="user-retry-1")
-  with pytest.raises(DelegationBlockedError):
-    # the node is still closed: the gate requires open tasks before any launch
-    await tree.check_task_authorization(worker.id)
+  reopens = [e for e in tree.events.load_events(worker.id) if e["type"] == ET.TASK_REOPENED]
+  assert [e["reason"] for e in reopens] == ["user message"]
+  assert tree.task_state(worker.id) == "open"
+  assert [str(e["id"]) for e in input_events(tree, worker.id)] == ["user-retry-1"]
 
 
 @pytest.mark.asyncio
@@ -566,26 +571,26 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
     closes = [e for e in tree.events.load_events(root.id) if e["type"] == ET.TASK_CLOSED]
     assert len(closes) == 1
 
-    # Reopen is operator action; an agent token cannot mutate.
-    reopened = client.post(f"/api/sessions/{root.id}/reopen", json={"request_id": "route-3", "reason": "more work"})
-    assert reopened.status_code == 200 and reopened.json()["task_state"] == "open"
+    # Archive (DELETE) is the single end state; an agent token cannot mutate.
     await tree.runs.register_run(RunRecord(id="run-root-agent", session_id=root.id, kind="work"))
     await tree.runs.record_launch(root.id, "run-root-agent", pid=424243, pid_start="ps-2")
     agent_token = sign_run_token(RunTokenClaims(run_id="run-root-agent", session_id=root.id, agent="a"), key)
     key2_headers = {"Authorization": f"Bearer {agent_token}"}
-    forbidden = client.post(
-        f"/api/sessions/{root.id}/reopen", json={
-            "request_id": "route-4",
-            "reason": "x"
-        }, headers=key2_headers)
+    forbidden = client.delete(f"/api/sessions/{root.id}", headers=key2_headers)
     assert forbidden.status_code == 403
+    # Unarchive is operator action too; an agent token cannot mutate.
+    agent_restore = client.post(f"/api/sessions/{root.id}/unarchive", headers=key2_headers)
+    assert agent_restore.status_code == 403
     await tree.dispatch.finish_run(root.id, "run-root-agent", outcome="success")
+    restored = client.post(f"/api/sessions/{root.id}/unarchive")
+    assert restored.status_code == 200 and restored.json()["restored"] == [root.id]
+    assert tree.task_state(root.id) == "open"
 
-    # Cancel preserves history and stays visible.
+    # Cancel preserves history and stays visible (an end state like archive).
     cancelled = client.post(f"/api/sessions/{root.id}/cancel", json={"request_id": "route-5", "reason": "not needed"})
     assert cancelled.status_code == 200 and cancelled.json()["task_state"] == "cancelled"
     index = await tree._get_index()
-    assert tree.archived_of(index, index.metas[root.id]) is False
+    assert tree.archived_of(index, index.metas[root.id]) is True  # cancelled is an end state
     # Cancel is refused on a task that is not open.
     refused = client.post(f"/api/sessions/{root.id}/cancel", json={"request_id": "route-6", "reason": "again"})
     assert refused.status_code == 409

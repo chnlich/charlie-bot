@@ -131,18 +131,16 @@ class LastRunStatus(StrEnum):
 # not a task-tree node.
 TaskProfile = Literal["manager", "worker"]
 
-# Tree display preference: shown pins the row visible, hidden pins it collapsed
-# (the legacy archive entry maps here), auto derives from task facts.
-PresentationMode = Literal["auto", "shown", "hidden"]
-
 # What one Run actually executed. review is the same worker node's review pass;
 # iteration is one round of an improve loop; scheduled_step is one cron-chain
 # step.
 RunKind = Literal["manager_turn", "work", "review", "iteration", "scheduled_step"]
 
 # Derived task lifecycle, rebuilt from task_closed/task_reopened facts - never
-# persisted as a state machine.
-TaskState = Literal["open", "completed", "cancelled"]
+# persisted as a state machine. archived is the single end state: a node whose
+# last lifecycle fact is a close of any outcome (completed, cancelled, or the
+# user's manual archive) is archived until a task_reopened fact follows.
+TaskState = Literal["open", "completed", "cancelled", "archived"]
 
 # Derived per-node work state, rebuilt from run and input facts.
 WorkState = Literal["idle", "running", "waiting"]
@@ -303,7 +301,9 @@ class PendingTrigger(BaseModel):
   status: TriggerStatus = TriggerStatus.PENDING
   fired_at: UtcDatetime | None = None
   watch_targets: list[WatchTarget] = Field(default_factory=list)
-  fire_reason: str | None = None  # one of 'completed', 'timeout', populated when fired
+  # 'completed' or 'timeout' when fired; the cancel reason ('archived',
+  # 'target task is archived', ...) when a delivery path cancelled it.
+  fire_reason: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +440,6 @@ class SessionMetadata(BaseModel):
   task_parent_id: str | None = None
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
-  presentation: PresentationMode = "auto"
   # The create operation's source event (provenance and retry dedup).
   created_by_event: EventRef | None = None
   # History-copy source (fork/elone), kept separate from task_parent_id.
@@ -528,7 +527,6 @@ class PatchSessionTaskRequest(BaseModel):
   task_parent_id: str | None = None
   profile: TaskProfile | None = None
   task: TaskSpec | None = None
-  presentation: PresentationMode | None = None
   # New rule bodies (or null to clear); the server stores the body immutable
   # and swaps the reference atomically, recording prompt_changed.
   subtree_prompt: str | None = None
@@ -621,15 +619,6 @@ class AcknowledgeTaskInputsRequest(BaseModel):
   request_id: str
   input_ids: list[str]
   note: str = ""
-
-
-class ReopenTaskRequest(BaseModel):
-  # POST /api/sessions/{id}/reopen body: explicit operator reopen.
-  model_config = ConfigDict(extra="forbid")
-
-  request_id: str
-  reason: str
-  closed_event_id: str | None = None
 
 
 class CancelRunRequest(BaseModel):

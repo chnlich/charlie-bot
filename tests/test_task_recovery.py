@@ -332,7 +332,7 @@ async def test_recovery_closed_task_skips_landing(tmp_path: Path, monkeypatch: p
 
 @pytest.mark.asyncio
 async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A reopened task derives "open" again, so its replayed review follow-up
+  """A restored task derives "open" again, so its replayed review follow-up
     runs the full landing proof (the counter observes git_verify_commit_landed)."""
   from src.core.task_recovery import reconcile_task_tree
 
@@ -340,7 +340,7 @@ async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypat
   await reconcile_task_tree(cfg, tree)
   assert tree.task_state(worker.id) == "completed"
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
-  await tree.completion.reopen_task(worker.id, request_id="reopen-1", reason="recheck the delivery", caller=OPERATOR)
+  await tree.completion.restore_task(worker.id, request_id="reopen-1", reason="recheck the delivery", caller=OPERATOR)
   assert tree.task_state(worker.id) == "open"
 
   counts = _count_landing_git(monkeypatch)

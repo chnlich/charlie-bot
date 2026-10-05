@@ -232,12 +232,15 @@ async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
                 "goal": "ship the tree",
                 "acceptance": ["tests pass"]
             },
-            "presentation": "shown",
         })
     assert patched.status_code == 200
     body = patched.json()
     assert body["task"]["goal"] == "ship the tree"
-    assert body["presentation"] == "shown"
+    assert "presentation" not in body  # the retired display preference is gone
+
+    # The retired display preference is refused, not silently dropped.
+    retired = client.patch(f"/api/sessions/{ids['worker']}", json={"presentation": "hidden"})
+    assert retired.status_code == 422
 
     # Reparent to a worker target is a 400; to a missing task a 404.
     bad = client.patch(f"/api/sessions/{ids['worker']}", json={"task_parent_id": ids["worker"]})
@@ -382,7 +385,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
 
     # User-only structural mutations are 403 for an agent caller.
     patch_try = client.patch(
-        f"/api/sessions/{ids['worker']}", json={"presentation": "hidden"}, headers=agent_headers(claims))
+        f"/api/sessions/{ids['worker']}", json={"profile": "manager"}, headers=agent_headers(claims))
     assert patch_try.status_code == 403
 
     retry_try = client.post(

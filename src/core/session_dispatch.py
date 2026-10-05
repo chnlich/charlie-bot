@@ -115,7 +115,7 @@ class TaskInputDispatcher:
         route may mint USER only for operator callers (the route enforces
         that; this method refuses the mismatch as a backstop).
         """
-    from src.core.task_sessions import TaskForbiddenError, TaskInvalidError
+    from src.core.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError
 
     if event_type not in INPUT_EVENT_TYPES:
       raise TaskInvalidError(f"{event_type} is not a task input type")
@@ -130,6 +130,11 @@ class TaskInputDispatcher:
     epoch = await tree.sessions.prime_aggregator(session_id)
     async with tree.control_lock:
       meta = await tree.load_task_meta(session_id)
+      if tree.task_state(session_id) != "open" and event_type != ET.USER:
+        # The archived node answers machine input with the one archived
+        # sentence, whatever the sender's own standing — the user's message is
+        # the only input that gets past this gate (it restores just below).
+        raise TaskArchivedError(session_id)
       await self._authorize_agent_message(meta, event_type, from_session)
       events = tree.fact_history(session_id)
       if input_id is not None:
@@ -153,6 +158,14 @@ class TaskInputDispatcher:
         event["from_session"] = from_session
       if from_session_name is not None:
         event["from_session_name"] = from_session_name
+      if tree.task_state(session_id) != "open":
+        # A real user message is the one input that restores an archived
+        # chain: the target and every archived ancestor reopen (topmost
+        # first), then this message lands past the fresh boundary as the
+        # round's only input. The restore's request id is the input event's
+        # id, so a replayed message with a stable input id re-derives the
+        # same restore facts instead of duplicating them.
+        await tree.completion.restore_chain_locked(session_id, request_id=str(event["id"]), reason="user message")
       await tree.events.append(session_id, event)
       if event_type == ET.USER:
         # A real user message is the one input that reorders the
@@ -590,6 +603,17 @@ class TaskInputDispatcher:
           actor=actor)
     if created:
       await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+      parent_meta = await tree.load_meta(recipient)
+      if parent_meta is not None and parent_meta.profile is not None and tree.task_state(recipient) != "open":
+        # The archived parent keeps the report as history: it counts as
+        # delivered and never wakes the node.
+        log.info(
+            "child_report_into_archived_parent_kept_as_history",
+            parent=recipient,
+            child=child_session_id,
+            report=str(report.get("id")),
+        )
+        return report, created
       await self.wake_parent(recipient, report=report)
     return report, created
 

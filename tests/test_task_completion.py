@@ -1,4 +1,4 @@
-"""Completion-stage tests: evidence, close/cancel/reopen, projection, routes."""
+"""Completion-stage tests: evidence, close/cancel/restore, projection, routes."""
 
 from __future__ import annotations
 
@@ -341,7 +341,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
 
 
 # ---------------------------------------------------------------------------
-# Cancel and reopen
+# Cancel and restore
 # ---------------------------------------------------------------------------
 
 

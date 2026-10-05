@@ -35,6 +35,7 @@ from conftest import (
     write_nightly_task,
 )
 
+from src.core import event_types as ET
 from src.core.config import CharlieBotConfig, ScheduledTaskConfig
 from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
 from src.core.scheduler import TASK_HANDLERS, Scheduler
@@ -369,13 +370,14 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
 
 @pytest.mark.asyncio
 async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, _session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home)
   await scheduler._tick()
   original_id = _read_task_yaml(home)["session_id"]
   # The user archived the node, then deleted the task and re-created it under
   # the same name without a binding.
-  await tree.set_presentation(original_id, "hidden")
+  from conftest import OPERATOR
+  assert await tree.archive_subtree(original_id, caller=OPERATOR) == [original_id]
   (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").unlink()
   write_nightly_task(home)
 
@@ -385,10 +387,10 @@ async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
   assert body["session_id"] == original_id  # the original node, not a second one
   node = await tree.load_meta(original_id)
   assert node is not None
-  # The replayed node is unarchived: the task must not fire into a hidden node.
-  fresh = await session_mgr.get_session(original_id)
-  assert fresh is not None and fresh.status == SessionStatus.ACTIVE
-  assert node.presentation == "shown"
+  # The replayed node is restored: the task must not fire into an archived node.
+  assert tree.task_state(original_id) == "open"
+  reopens = [e for e in tree.events.load_events(original_id) if e["type"] == ET.TASK_REOPENED]
+  assert [e["reason"] for e in reopens] == ["cron auto-bind"]
   roots = [m for m in (await tree._get_index()).metas.values() if m.task_parent_id is None and m.profile == "manager"]
   assert [m.id for m in roots] == [original_id]
 

@@ -115,7 +115,7 @@ executable verification recipe, never a mock:
   creation toolbar and the one-click New Session flow (drafts kept, the
   dropdown's selected model carried on the create), explicit child/worker
   creation, goal and rule editing, node switching, Context and run history,
-  the completion/refusal/reopen/move controls, a reload with selection, the
+  the completion/refusal/archive/move controls, a reload with selection, the
   narrow viewport, and the live spinner/gear motion proven on the animation
   timeline (advance equals wall time; any restart or stall fails), under
   `prefers-reduced-motion` too — plus one created-and-run task per selected

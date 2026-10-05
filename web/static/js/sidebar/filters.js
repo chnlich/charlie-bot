@@ -123,15 +123,23 @@ async function deleteSessionPermanently(sessionId) {
 async function unarchiveSession(id) {
   try {
     const res = await fetch(`/api/sessions/${id}/unarchive`, { method: 'POST' });
-    if (!res.ok) throw new Error(`Unarchive failed: ${res.status}`);
+    if (!res.ok) throw new Error(await archiveRefusalDetail(res));
+    // A task node's restore answers with the restored ids: the target plus
+    // its archived ancestor chain, so the archived list drops them all. A
+    // legacy session's restore answers with the session metadata; its row is
+    // the only one that leaves.
+    let restored = [id];
+    const body = await res.json().catch(() => null);  // an unreadable body keeps the single-row drop
+    if (body && Array.isArray(body.restored)) restored = body.restored;
     if (currentFilter === 'archived') {
-      archivedForgetSession(id);
+      restored.forEach(rid => archivedForgetSession(rid));
       await removeSessionRowInline(id);
       return;
     }
     switchSidebarFilter(currentFilter);
   } catch (err) {
     console.error('Unarchive failed:', err);
+    showToast(err.message, true);
   }
 }
 

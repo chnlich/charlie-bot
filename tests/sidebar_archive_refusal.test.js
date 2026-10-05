@@ -1,9 +1,13 @@
 // ---------------------------------------------------------------------------
-// The sidebar archive entry's refusal display (sidebar/filters.js): a failed
-// DELETE /api/sessions/{id} surfaces the server's detail to the user through
-// the page toast — the 409 blockers shape (message + blocker list), a plain
-// string detail, and the status line when the refusal carries no body — while
-// a success removes the row and stays quiet.
+// The sidebar list operations' server-answer handling (sidebar/filters.js):
+// a failed archive (DELETE /api/sessions/{id}) or unarchive
+// (POST /api/sessions/{id}/unarchive) surfaces the server's detail to the
+// user through the page toast — the 409 blockers shape (message + blocker
+// list), a plain string detail, and the status line when the refusal carries
+// no body. A successful archive removes the row; a successful unarchive
+// drops every id the restore names (a task node's response lists the whole
+// restored chain) or just the clicked row (a legacy session's response is
+// the session metadata), and stays quiet.
 // ---------------------------------------------------------------------------
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -11,7 +15,7 @@ const vm = require('node:vm');
 
 const {readStatic} = require('./read_static');
 
-function buildContext({fetchImpl, showToastImpl}) {
+function buildContext({fetchImpl, showToastImpl, archivedForgetSessionImpl = () => {}}) {
   const context = {
     console,
     fetch: fetchImpl,
@@ -23,7 +27,7 @@ function buildContext({fetchImpl, showToastImpl}) {
     updateSidebarHighlight: () => {},
     switchSession: async () => {},
     renderNoActiveSessionView: () => {},
-    archivedForgetSession: () => {},
+    archivedForgetSession: archivedForgetSessionImpl,
     switchSidebarFilter: () => {},
     document: {
       getElementById: () => null,
@@ -97,4 +101,78 @@ test('a successful archive removes the row and shows no toast', async () => {
 
   assert.equal(removed, 1);
   assert.deepEqual(toasts, []);
+});
+
+
+// ---------------------------------------------------------------------------
+// The unarchive entry: the restored-ids answer drops the whole restored chain
+// from the archived list, the legacy metadata answer drops only the clicked
+// row, and a refusal rides the same toast the archive refusal rides.
+// ---------------------------------------------------------------------------
+
+test('a task-node unarchive drops every restored id from the archived list', async () => {
+  const forgotten = [];
+  const toasts = [];
+  let repainted = 0;
+  const context = buildContext({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({restored: ['root-1', 'mid-1', 'leaf-1']}),
+    }),
+    showToastImpl: (msg, isError) => toasts.push([msg, isError]),
+    archivedForgetSessionImpl: (id) => forgotten.push(id),
+  });
+  context.currentFilter = 'archived';
+  context.Sidebar.removeSessionFromRenderedList = () => {
+    repainted += 1;
+    return true;
+  };
+
+  await context.unarchiveSession('leaf-1');
+
+  assert.deepEqual(forgotten, ['root-1', 'mid-1', 'leaf-1']);
+  assert.equal(repainted, 1);
+  assert.deepEqual(toasts, []);
+});
+
+test('a legacy unarchive (session metadata body) drops only the clicked row', async () => {
+  const toasts = [];
+  const forgotten = [];
+  const context = buildContext({
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({id: 'legacy-1', status: 'active', name: 'Legacy'}),
+    }),
+    showToastImpl: (msg, isError) => toasts.push([msg, isError]),
+    archivedForgetSessionImpl: (id) => forgotten.push(id),
+  });
+  context.currentFilter = 'archived';
+  context.Sidebar.removeSessionFromRenderedList = () => true;
+
+  await context.unarchiveSession('legacy-1');
+
+  assert.deepEqual(forgotten, ['legacy-1']);
+  assert.deepEqual(toasts, []);
+});
+
+test('a failed unarchive shows the server detail through the toast', async () => {
+  const toasts = [];
+  const forgotten = [];
+  const context = buildContext({
+    fetchImpl: async () => ({
+      ok: false,
+      status: 403,
+      json: async () => ({detail: 'unarchiving a task requires operator credentials'}),
+    }),
+    showToastImpl: (msg, isError) => toasts.push([msg, isError]),
+    archivedForgetSessionImpl: (id) => forgotten.push(id),
+  });
+  context.currentFilter = 'archived';
+
+  await context.unarchiveSession('leaf-1');
+
+  assert.deepEqual(toasts, [['unarchiving a task requires operator credentials', true]]);
+  assert.deepEqual(forgotten, []);
 });

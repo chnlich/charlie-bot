@@ -873,9 +873,14 @@ function _appendRenderedMessage(html, forceScroll) {
   restoreBottomPin(container, wasAtBottom, forceScroll);
 }
 
-function appendMessageObject(msg, sessionId) {
-  if (ingestLiveMessage(msg, sessionId, msg.role === "user")) return;
-  _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), msg.role === "user");
+function appendMessageObject(msg, sessionId, forceScroll) {
+  // Default: a user message follows (the local send path). Callers that
+  // deliver messages the reader did not produce — a WS arrival from another
+  // client, a catch-up page — pass false and leave the follow decision to the
+  // engine's pin intent.
+  const follow = forceScroll !== undefined ? forceScroll : msg.role === "user";
+  if (ingestLiveMessage(msg, sessionId, follow)) return;
+  _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), follow);
 }
 
 function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {

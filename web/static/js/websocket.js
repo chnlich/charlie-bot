@@ -116,9 +116,12 @@ function _commitMessage(msg) {
     return;
   }
   // A committed bubble supersedes the streaming preview: the draft it carries is
-  // the same text the preview holds.
+  // the same text the preview holds. The message arrived over the wire — the
+  // local tab did not produce it — so it never forces the follow; a reader
+  // pinned at the bottom follows through their pin intent, one reading
+  // history keeps their place.
   hideStreaming();
-  appendMessageObject(msg);
+  appendMessageObject(msg, SESSION_ID, false);
 }
 
 function handleWSEvent(ev, socketSessionId, socketGeneration) {

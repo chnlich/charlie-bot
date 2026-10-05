@@ -73,6 +73,38 @@ function shouldAutoScroll(container, threshold = 150) {
   return container.scrollHeight - container.scrollTop - container.clientHeight < threshold;
 }
 
+// The reading position for the legacy (non-engine) views, in the same shape
+// the turn engine uses: one message's identity plus its offset from the
+// container's visible top. Captured before a full re-render, restored after;
+// live-rect deltas on both ends keep margins and fixture rows cancelled out.
+function captureReadingPosition(container) {
+  if (!container || typeof container.getBoundingClientRect !== 'function') return null;
+  const cTop = container.getBoundingClientRect().top;
+  let straddling = null;
+  const nodes = container.querySelectorAll('[data-message-id]');
+  for (const node of nodes) {
+    if (node.getBoundingClientRect().top <= cTop + 1) straddling = node;
+    else break;
+  }
+  if (!straddling) return null;
+  return {
+    kind: 'message',
+    id: straddling.dataset.messageId,
+    offset: straddling.getBoundingClientRect().top - cTop,
+  };
+}
+
+function restoreReadingPosition(container, captured) {
+  if (!container || !captured || captured.kind !== 'message') return false;
+  const el = container.querySelector(
+    '[data-message-id="' + CSS.escape(String(captured.id)) + '"]');
+  if (!el) return false;
+  const delta = el.getBoundingClientRect().top
+    - container.getBoundingClientRect().top - captured.offset;
+  if (delta) container.scrollTop += delta;
+  return true;
+}
+
 function escapeHtml(str) {
   const d = document.createElement('div');
   d.textContent = str;
@@ -175,6 +207,8 @@ function isRenderedMessage(msg) {
 const GLOBALS = {
   splitTurnSpan,
   shouldAutoScroll,
+  captureReadingPosition,
+  restoreReadingPosition,
   escapeHtml,
   escapeHtmlAttr,
   isRenderedMessage,

@@ -231,12 +231,35 @@ function applyTranscriptUpdate(data) {
       // A reset re-renders the whole transcript (the committed prefix is no
       // longer current — a Run header's state moved, or the delivery close
       // landed). The full committed history is now on screen, so the chat
-      // tail's scroll-up pagination stands down.
-      renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
+      // tail's scroll-up pagination stands down. The reader's place survives
+      // the repaint: pinned readers stay at the bottom, one reading history
+      // keeps their message at the same viewport offset.
+      const engine = globalThis.Chat && Chat.TurnEngine
+        ? Chat.TurnEngine.activeFor(container) : null;
+      const wasPinned = engine ? engine.pinnedIntent : shouldAutoScroll(container);
+      const reading = engine
+        ? engine.captureReadingAnchor()
+        : captureReadingPosition(container);
       sessionHasMore = false;
       sessionOlderBeforeCursor = Infinity;
       sessionLoadingMore = false;
-      container.scrollTop = container.scrollHeight;
+      if (engine) {
+        // A reset invalidates the engine's whole projection; remount on the
+        // new messages instead of repainting under a live engine.
+        Chat.TurnEngine.mountIfAvailable(
+            container, data.messages || [], SESSION_ID,
+            {pinned: wasPinned, readingAnchor: wasPinned ? null : reading});
+      } else {
+        renderMessagesIntoContainer(container, data.messages || [], SESSION_ID);
+        if (wasPinned) {
+          container.scrollTop = container.scrollHeight;
+        } else {
+          // A reader in history keeps their message's viewport offset; when
+          // the reset removed that message the browser's own post-render
+          // position is the closest surviving state.
+          restoreReadingPosition(container, reading);
+        }
+      }
     } else if ((data.messages || []).length) {
       for (const msg of data.messages) appendMessageObject(msg);
     }
@@ -603,8 +626,12 @@ function renderSessionView(data) {
 
   // A tail page shorter than the viewport leaves the container unscrollable, so
   // no scroll event ever fires and the idle sentinel would wait forever. This
-  // attempt returns immediately when the container is already scrollable.
-  if (sessionHasMore) loadOlderIfNeeded(container);
+  // attempt returns immediately when the container is already scrollable —
+  // a freshly mounted engine has not written its bottom pin yet, so scrollTop
+  // is not a scrollability signal here.
+  if (sessionHasMore && container.scrollHeight <= container.clientHeight + 80) {
+    loadOlderIfNeeded(container);
+  }
 }
 
 async function loadExplainStatuses(sessionId) {

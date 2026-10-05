@@ -86,11 +86,16 @@ voice:
   engine: sherpa
   model_id: Qwen/Qwen3-ASR-1.7B-hf
   # Transcription backend used before a choice is made in the page's dropdown:
-  # one of the transcription registry's ids (local, gemini, muse). The cloud
-  # backends need credentials.yaml keys (gemini.api_key, meta.model_api_key).
+  # one of the transcription registry's ids (local, gemini, gemini-aigw, muse).
+  # The cloud backends need credentials.yaml keys (gemini.api_key, aigw.api_key,
+  # meta.model_api_key).
   default_backend: local
+  # aigw gateway root URL for the 'gemini-aigw' backend, which sends the whole
+  # recording through the gateway's /gemini pass-through to Gemini 3.5
+  # Transcribe; empty leaves that backend unavailable.
+  aigw_base_url: ''
   # Proper-noun vocabulary passed to the backends that support it (Gemini,
-  # Muse); the local engine ignores it.
+  # gemini-aigw, Muse); the local engine ignores it.
   vocabulary: []
   # Language hints as BCP-47 base codes (zh, en); empty = auto-detect.
   languages: []

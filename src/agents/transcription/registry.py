@@ -33,13 +33,19 @@ def _gemini(cfg: config.CharlieBotConfig, **kwargs: object) -> base.Transcriptio
   return gemini.GeminiTranscriptionBackend(cfg, **kwargs)
 
 
+def _gemini_aigw(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
+  from src.agents.transcription import gemini_aigw
+
+  return gemini_aigw.GeminiAigwTranscriptionBackend(cfg, **kwargs)
+
+
 def _muse(cfg: config.CharlieBotConfig, **kwargs: object) -> base.TranscriptionBackend:
   from src.agents.transcription import muse
 
   return muse.MuseTranscriptionBackend(cfg, **kwargs)
 
 
-_FACTORIES.update({"local": _local, "gemini": _gemini, "muse": _muse})
+_FACTORIES.update({"local": _local, "gemini": _gemini, "gemini-aigw": _gemini_aigw, "muse": _muse})
 
 
 def backend_ids() -> tuple[str, ...]:

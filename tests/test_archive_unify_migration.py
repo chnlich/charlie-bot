@@ -15,6 +15,7 @@ from conftest import OPERATOR, build_env, create_task, stub_credentials
 
 import scripts.archive_unify_migration as migration
 from src.core import event_types as ET
+from src.core.models import RunRecord
 
 KEY = "op-secret"
 ORIGINAL_REQUEST = migration._request
@@ -149,8 +150,17 @@ async def test_rollback_unarchives_every_archived_task_node(script_env, monkeypa
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   keep = await create_task(tree, parent=None, request_id="keep")
+  # A lone archived root with no archived descendant in the tree rows below
+  # it: the walk's own root page must name it (its only child completed before
+  # the archive, so nothing under it is an "archived" row).
+  lone = await create_task(tree, parent=None, request_id="lone")
+  done = await create_task(tree, parent=lone.id, request_id="done", profile="worker")
+  await tree.runs.register_run(RunRecord(id="run-done", session_id=done.id, kind="work"))
+  await tree.dispatch.finish_run(done.id, "run-done", outcome="success")
+  await tree.archive_subtree(lone.id, caller=OPERATOR)
   await tree.archive_subtree(root.id, caller=OPERATOR)
   assert tree.task_state(mid.id) == "archived"
+  assert tree.task_state(done.id) == "completed"
 
   monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
   migration.cmd_rollback()
@@ -158,7 +168,11 @@ async def test_rollback_unarchives_every_archived_task_node(script_env, monkeypa
   assert tree.task_state(root.id) == "open"
   assert tree.task_state(mid.id) == "open"
   assert tree.task_state(keep.id) == "open"
-  for node in (root.id, mid.id):
+  # The lone root restores through its own row; its completed child is a
+  # descendant the restore deliberately leaves at its end state.
+  assert tree.task_state(lone.id) == "open"
+  assert tree.task_state(done.id) == "completed"
+  for node in (root.id, mid.id, lone.id):
     reopens = [e for e in tree.events.load_events(node) if e["type"] == ET.TASK_REOPENED]
     assert len(reopens) >= 1
 

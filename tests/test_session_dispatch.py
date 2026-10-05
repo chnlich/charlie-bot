@@ -269,7 +269,8 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   # refusal never mints an authorization window).
   from src.core.task_sessions import TaskArchivedError
   with pytest.raises(TaskArchivedError):
-    await admit(tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
+    await admit(
+        tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   assert [str(e["id"]) for e in input_events(tree, worker.id)] == []
   decision = await tree.dispatch.dispatch_pending(worker.id)
   assert decision["launch"] is False and "closed" in decision["reason"]

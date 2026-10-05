@@ -133,10 +133,17 @@ class RelayWatch:
     return self.reason
 
 
-def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None) -> str:
-  reset = claude_accounts.earliest_reset(cfg, now)
+def pool_exhausted_message(cfg: CharlieBotConfig, now: datetime | None = None, account_pool: str | None = None) -> str:
+  """The pool-exhausted error: it names the pool and that pool's earliest reset.
+
+  *account_pool* rides inside the rendered message (``... pool 'name' ...``)
+  while ``POOL_EXHAUSTED_PHRASE`` itself stays byte-identical: the improve quota
+  classification matches the phrase's lowercase form.
+  """
+  reset = claude_accounts.earliest_reset(cfg, now, account_pool)
   when = f"earliest reset {reset.astimezone(UTC).strftime('%H:%M')} UTC" if reset else "no reset time known"
-  return f"{POOL_EXHAUSTED_PHRASE} ({when}); this run did not complete."
+  named = f" '{account_pool}'" if account_pool else ""
+  return f"{POOL_EXHAUSTED_PHRASE}{named} ({when}); this run did not complete."
 
 
 def relay_limit_message() -> str:
@@ -161,21 +168,24 @@ def move_to_next_account(
     current: ClaudeAccount,
     cc_session_id: str | None,
     now: datetime | None = None,
+    account_pool: str | None = None,
 ) -> tuple[ClaudeAccount | None, str | None, ClaudeAccount | None]:
   """Choose the account with the most headroom besides *current* and copy the transcript there.
 
-  Returns ``(account, None, None)``, or ``(None, error, refused_holder)``: the
-  pool exhausted and the transcript-missing cases leave *refused_holder* None,
-  and a copy the newer-transcript guard refused carries the destination account
-  holding the newer transcript. This module never redirects a refused move --
-  adopting *refused_holder* and continuing the run from it is the consumer's
-  decision; a consumer that has none ends the run loudly on *error*.
+  The next account comes from pool *account_pool* alone; the relay never falls
+  back to another pool. Returns ``(account, None, None)``, or ``(None, error,
+  refused_holder)``: the pool exhausted and the transcript-missing cases leave
+  *refused_holder* None, and a copy the newer-transcript guard refused carries
+  the destination account holding the newer transcript. This module never
+  redirects a refused move -- adopting *refused_holder* and continuing the run
+  from it is the consumer's decision; a consumer that has none ends the run
+  loudly on *error*.
   """
   if not cc_session_id:
     return None, "Claude account relay impossible: the run produced no session id to resume.", None
-  nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now)
+  nxt = claude_accounts.select(cfg, model, exclude={current.label}, now=now, account_pool=account_pool)
   if nxt is None:
-    return None, pool_exhausted_message(cfg, now), None
+    return None, pool_exhausted_message(cfg, now, account_pool), None
   try:
     claude_accounts.move_transcript(cc_session_id, current.config_dir, nxt.config_dir)
   except claude_accounts.TranscriptMoveError as exc:

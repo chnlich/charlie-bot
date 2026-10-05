@@ -68,6 +68,42 @@ def test_choose_turn_account_keeps_a_warm_healthy_account_under_the_warning_line
 
 
 # ---------------------------------------------------------------------------
+# Turn placement inside a named pool
+# ---------------------------------------------------------------------------
+
+
+def test_choose_turn_account_reselects_inside_the_pool_when_the_current_account_is_outside(tmp_path: Path) -> None:
+  """A warm, healthy, under-warning account outside the option's pool does not stick: the turn
+  re-selects inside the pool."""
+  cfg = fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
+  claude_accounts.observe_rate_limit("ext-1", rate_limit_event("allowed", 0.50)["rate_limit_info"], now=NOW)
+  meta = _session_on("ext-1")
+
+  chosen, cold = master_cc_relay.choose_turn_account(
+      cfg, meta, FABLE_MODEL, NOW - timedelta(minutes=10), now=NOW, account_pool="alpha")
+
+  assert (chosen.label, cold) == ("main", False)
+
+
+@pytest.mark.asyncio
+async def test_place_turn_copies_the_transcript_into_the_option_pool(tmp_path: Path) -> None:
+  """A mid-session switch to another pool's option re-selects inside that pool and the existing
+  move layer carries the transcript to the new account's directory."""
+  cfg = fable_pool_cfg(tmp_path, claude_pools={"alpha": ["main"], "beta": ["ext-1", "ext-2"]})
+  option = cfg.get_backend_option(POOLED_FABLE_ID)
+  make_transcript(tmp_path / "claude-ext-1", UUID)
+  meta = _session_on("ext-1")
+  item = make_work_item(cfg, meta, option)
+
+  account, error = await master_cc_relay.place_turn(
+      cfg, item, option, UUID, str(tmp_path / "work"), None, NOW - timedelta(minutes=10), now=NOW)
+
+  assert (account.label if account else None, error) == ("main", None)
+  assert meta.claude_account == "main"
+  assert claude_accounts.transcript_path(tmp_path / "claude-main", UUID) is not None
+
+
+# ---------------------------------------------------------------------------
 # _run_cc across accounts
 # ---------------------------------------------------------------------------
 

@@ -1258,15 +1258,23 @@ def pool_cfg(
     home: Path,
     worktree_dir: Path,
     labels: tuple[str, ...],
+    claude_pools: dict[str, list[str]] | None = None,
 ) -> CharlieBotConfig:
-  """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir."""
+  """A pooled CharlieBotConfig: one ClaudeAccount per label, pool credentials planted in each config dir.
+
+  ``claude_pools`` splits the labels into named pools; the caller's cc-claude options then name
+  their pool in ``account_pool`` (the config validator refuses an unpaired combination).
+  """
   accounts = [models.ClaudeAccount(label=label, config_dir=str(tmp_path / f"claude-{label}")) for label in labels]
   for account in accounts:
     write_pool_credentials(Path(account.config_dir))
   return CharlieBotConfig(
       charliebot_home=home,
       paths={"worktree_dir": str(worktree_dir)},
-      accounts={"claude": accounts},
+      accounts={
+          "claude": accounts,
+          "claude_pools": claude_pools or {}
+      },
       backends={"options": backend_options},
   )
 
@@ -1279,17 +1287,27 @@ FABLE_MODEL = "claude-fable-5-1"
 POOLED_FABLE_ID = "claude-fable-5"
 
 
-def fable_pool_cfg(tmp_path: Path, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")) -> CharlieBotConfig:
-  """A pooled config with one pooled Fable option and a second pinned Fable entry."""
+def fable_pool_cfg(
+    tmp_path: Path,
+    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+    claude_pools: dict[str, list[str]] | None = None,
+) -> CharlieBotConfig:
+  """A pooled config with one pooled Fable option and a second pinned Fable entry.
+
+  ``claude_pools`` splits *labels* into named pools; both Fable options then draw from the
+  first pool (their ``account_pool``), as the config validator requires.
+  """
+  extra = {} if not claude_pools else {"account_pool": next(iter(claude_pools))}
   return pool_cfg(
       tmp_path,
       [
-          backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL),
-          backend_option(id="pinned", label="Pinned", type="cc-claude", model=FABLE_MODEL),
+          backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL, **extra),
+          backend_option(id="pinned", label="Pinned", type="cc-claude", model=FABLE_MODEL, **extra),
       ],
       home=tmp_path / ".charliebot",
       worktree_dir=tmp_path / "worktrees",
       labels=labels,
+      claude_pools=claude_pools,
   )
 
 

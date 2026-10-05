@@ -1221,9 +1221,11 @@ class TaskExecutionAdapter:
       # process starts, through the pool-exhausted branch below.
       claude_account: ClaudeAccount | None = None
       if claude_accounts.is_pooled(option, self._cfg):
-        claude_account = claude_accounts.select(self._cfg, option.model)
+        account_pool = claude_accounts.option_pool(option)
+        claude_account = claude_accounts.select(self._cfg, option.model, account_pool=account_pool)
         if claude_account is None:
-          raise claude_relay.PoolExhaustedError(claude_relay.pool_exhausted_message(self._cfg))
+          raise claude_relay.PoolExhaustedError(
+              claude_relay.pool_exhausted_message(self._cfg, account_pool=account_pool))
       worker = Worker(
           binding,  # type: ignore[arg-type]
           working_dir,

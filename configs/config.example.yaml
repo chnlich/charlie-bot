@@ -75,6 +75,8 @@ backends:
 # Accounts: the Claude subscription pool and its compaction floors.
 accounts:
   claude: []
+  # Named account pools: each key maps a pool name to the account labels (from `claude` above) it holds.
+  claude_pools: {}
   claude_compaction:
     relay_tokens: 100000
     expired_cache_tokens: 50000

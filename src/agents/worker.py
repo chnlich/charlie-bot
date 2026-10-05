@@ -350,7 +350,11 @@ class Worker:
     if self._relays >= claude_relay.MAX_RELAYS_PER_TURN:
       raise RuntimeError(claude_relay.relay_limit_message())
     nxt, error, _refused_holder = claude_relay.move_to_next_account(
-        self._cfg, self._backend_option.model, current, self._thread.claude_session_id)
+        self._cfg,
+        self._backend_option.model,
+        current,
+        self._thread.claude_session_id,
+        account_pool=claude_accounts.option_pool(self._backend_option))
     if nxt is None:
       # A guard-refused move ends the worker loudly like every other relay
       # failure: adoption is the master turn's consumer decision, not this loop's.

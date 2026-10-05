@@ -1915,15 +1915,21 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
 
 
 def build_pooled_env(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, labels: tuple[str, ...] = ("main", "ext-1", "ext-2")):
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    labels: tuple[str, ...] = ("main", "ext-1", "ext-2"),
+    claude_pools: dict[str, list[str]] | None = None):
   """The task-tree env over a pooled config: one cc-claude option drawing from the
     Claude account pool *labels* (pool_cfg plants healthy credentials in every account
-    dir). ``labels=()`` keeps the same cc-claude option over an empty pool. Children
-    sign against the synthetic home (seed_signing_home).
+    dir). ``labels=()`` keeps the same cc-claude option over an empty pool;
+    ``claude_pools`` splits the labels into named pools the option draws from by its
+    first pool name. Children sign against the synthetic home (seed_signing_home).
     """
   home = tmp_path / "charliebot-home"
-  option = backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL)
-  cfg = pool_cfg(tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels)
+  extra = {} if not claude_pools else {"account_pool": next(iter(claude_pools))}
+  option = backend_option(id=POOLED_FABLE_ID, label="Fable", type="cc-claude", model=FABLE_MODEL, **extra)
+  cfg = pool_cfg(
+      tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels, claude_pools=claude_pools)
   seed_signing_home(home, monkeypatch)
   session_mgr = SessionManager(cfg)
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
@@ -2000,6 +2006,39 @@ async def test_pooled_fresh_worker_launches_hand_worker_the_selected_account(
 
   assert recorder.accounts == [expected, expected]
   assert [b["kwargs"]["claude_account"] for b in builds] == [expected, expected]
+
+
+@pytest.mark.asyncio
+async def test_pooled_worker_launch_selects_inside_the_option_pool(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """With pools defined, the launch hands Worker an account of the option's pool: beta's
+    untouched accounts, holding more headroom than every alpha member, stay unused."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_pooled_env(
+      tmp_path, monkeypatch, claude_pools={
+          "alpha": ["main"],
+          "beta": ["ext-1", "ext-2"]
+      })
+  worker = await create_task(
+      tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  recorder = WorkerAccountRecorder()
+  recorder.install(monkeypatch)
+  builds = install_backends(
+      monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # main sits at half a window; across all accounts an untouched beta account wins.
+  claude_accounts.observe_rate_limit("main", rate_limit_event("allowed", 0.50)["rate_limit_info"])
+  expected = claude_accounts.select(cfg, FABLE_MODEL, account_pool="alpha")
+  assert expected is not None and expected.label == "main"
+  assert claude_accounts.select(cfg, FABLE_MODEL).label != "main"
+
+  await _register_work_run(tree, worker.id, "run-pool", POOLED_FABLE_ID, FABLE_MODEL)
+  tree.dispatch.executor.launch(worker.id, "run-pool")
+  _run, outcome = await wait_for_terminal_run(tree, worker.id, "run-pool")
+  assert outcome == "success"
+
+  assert recorder.accounts == [expected]
+  assert builds[0]["kwargs"]["claude_account"] == expected
 
 
 @pytest.mark.asyncio

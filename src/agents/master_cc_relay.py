@@ -83,15 +83,17 @@ def choose_turn_account(
     model: str | None,
     last_request_at: datetime.datetime | None,
     now: datetime.datetime | None,
+    account_pool: str | None = None,
 ) -> tuple[models.ClaudeAccount | None, bool]:
   """The account this turn runs on and whether the cache is cold.
 
-  The current account stays while the cache is warm, it is healthy, its newest
-  reading sits under the warning line with no rejection pending, and no other
-  running session holds it; every other case re-selects among idle accounts.
-  The busy set is derived read-only from the running work items -- one account
-  carries one turn -- so two sessions never pile onto one login, and when every
-  healthy account is busy the choice falls back to all of them.
+  The current account stays while it belongs to pool *account_pool*, the cache
+  is warm, the account is healthy, its newest reading sits under the warning
+  line with no rejection pending, and no other running session holds it; every
+  other case re-selects among idle accounts inside the pool. The busy set is
+  derived read-only from the running work items -- one account carries one turn
+  -- so two sessions never pile onto one login, and when every healthy account
+  is busy the choice falls back to all of them.
   """
   moment = claude_accounts.now_or(now)
   current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
@@ -101,12 +103,13 @@ def choose_turn_account(
       for sid, item in master_cc_state._current_items.items()
       if sid != session_meta.id and item.session_meta and item.session_meta.claude_account
   }
-  if current is not None and current.label not in busy and not cold and claude_accounts.healthy(current, moment):
+  if (current is not None and claude_accounts.in_pool(cfg, current.label, account_pool) and
+      current.label not in busy and not cold and claude_accounts.healthy(current, moment)):
     reading = claude_accounts.latest_reading(current.label, model)
     rejected = reading is not None and reading.rejected_until is not None and reading.rejected_until > moment
     if reading is None or (reading.utilization < claude_accounts.WARNING_UTILIZATION and not rejected):
       return current, cold
-  chosen = claude_accounts.select(cfg, model, busy_accounts=busy, now=moment)
+  chosen = claude_accounts.select(cfg, model, busy_accounts=busy, now=moment, account_pool=account_pool)
   return chosen, cold
 
 
@@ -198,9 +201,10 @@ async def place_turn(
   """
   session_meta = item.session_meta
   await _probe_reconcile_label(cfg, item, resume_id)
-  chosen, cold = choose_turn_account(cfg, session_meta, option.model, last_request_at, now)
+  account_pool = claude_accounts.option_pool(option)
+  chosen, cold = choose_turn_account(cfg, session_meta, option.model, last_request_at, now, account_pool)
   if chosen is None:
-    return None, claude_relay.pool_exhausted_message(cfg, now)
+    return None, claude_relay.pool_exhausted_message(cfg, now, account_pool)
   previous = claude_accounts.account_by_label(cfg, session_meta.claude_account)
   if previous is None or previous.label != chosen.label:
     if resume_id and previous is not None:
@@ -292,7 +296,8 @@ async def prepare_relay(
   holding the newer transcript, for the consumer's adoption decision.
   """
   session_meta = item.session_meta
-  nxt, error, refused_holder = claude_relay.move_to_next_account(cfg, option.model, current, cc_session_id, None)
+  nxt, error, refused_holder = claude_relay.move_to_next_account(
+      cfg, option.model, current, cc_session_id, None, account_pool=claude_accounts.option_pool(option))
   if nxt is None:
     return None, error, refused_holder
   log.warning(

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import conftest
 import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
@@ -111,8 +112,8 @@ async def test_manager_template_identical_at_every_depth_and_no_pm_load(tmp_path
 
 async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) -> None:
   """One division of work for both manager kinds: the snapshot holds master.md
-  full text between the shared base and the task-tree template, and its new
-  Direct Work text rides verbatim."""
+  followed by manager_workflows.md between the shared base and the task-tree
+  template, and the rules master.md no longer carries ride in the second file."""
   cfg, _sm, mgr = build_env(tmp_path)
   ids = await build_three_levels(mgr)
   meta = await mgr.load_meta(ids["root"])
@@ -120,14 +121,23 @@ async def test_manager_prompt_carries_the_shared_master_rules(tmp_path: Path) ->
   snapshot = assemble_snapshot(segments)
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/master.md" in refs
+  assert "prompts/manager_workflows.md" in refs
   assert "prompts/task_base.md" in refs
   assert "prompts/task_manager.md" in refs
-  # master.md sits between task_base and task_manager in the rule order.
+  # master.md sits between task_base and task_manager in the rule order, with
+  # manager_workflows.md directly after it.
   assert refs.index("prompts/task_base.md") < refs.index("prompts/master.md") < refs.index("prompts/task_manager.md")
+  assert refs.index("prompts/manager_workflows.md") == refs.index("prompts/master.md") + 1
   joined = snapshot.instructions_text
   assert "Direct work and delegation divide by where the change lands." in joined
   assert "Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker." in joined
   assert "Repository implementation stays with worker leaves at every manager depth." in joined
+  # Every second-level section of the old single-file master.md reaches the
+  # manager: 15 still in master.md, the 6 moved ones through manager_workflows.md.
+  for filename in ("master.md", "manager_workflows.md"):
+    for line in (conftest.ROOT / "prompts" / filename).read_text(encoding="utf-8").splitlines():
+      if line.startswith("## "):
+        assert line in joined, line
 
 
 async def test_default_empty_local_rules_launch_cleanly(tmp_path: Path) -> None:

@@ -1918,12 +1918,15 @@ class FakeSlackClient:
 
 def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
-  reads "BASE PROMPT". claude_md_file and memory_dir name paths that do not exist, so the built
-  instructions carry neither host override nor memory block."""
+  reads "BASE PROMPT", with the two second rule files the builder reads after it. claude_md_file
+  and memory_dir name paths that do not exist, so the built instructions carry neither host
+  override nor memory block."""
   home = tmp_path / "home"
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
   (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
+  (repo / "prompts" / "manager_workflows.md").write_text("MANAGER WORKFLOWS PROMPT", encoding="utf-8")
+  (repo / "prompts" / "thread_session.md").write_text("THREAD SESSION PROMPT", encoding="utf-8")
   return SimpleNamespace(
       charlie_bot_repo=repo,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",

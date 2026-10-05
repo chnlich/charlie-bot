@@ -7,6 +7,7 @@ import pytest
 from conftest import (
     AGY_BACKEND_OPTION,
     BUILD_BACKEND_PATCH_TARGET,
+    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
     FakeBackend,
     backend_option,
     make_work_item,
@@ -15,9 +16,11 @@ from conftest import (
 
 from src.agents import master_cc
 from src.agents.backends import base as backend_base
+from src.agents.backends.registry import build_backend as real_build_backend
 from src.core import config as core_config
 from src.core import models
 from src.core.constants import SESSION_ID_ENV_VAR
+from src.core.thread_sessions import THREAD_CONTEXT_WINDOW
 
 
 def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
@@ -53,6 +56,89 @@ def test_build_master_env_writes_own_session_and_keeps_inherited_path(
   assert env["PATH"] == "/usr/bin"
   assert str(venv_bin) not in env["PATH"].split(os.pathsep)
   assert "CLAUDECODE" not in env
+
+
+def build_charlie_code_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:
+  """CharlieBotConfig whose first entry is the shared charlie-code option: the entry thread
+  sessions and main sessions resolve to, carrying its own (large) context window."""
+  return core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / ".charliebot",
+      backends={
+          "options":
+              [
+                  backend_option(
+                      id="charlie-code-kimi-k3",
+                      label="Kimi-K3",
+                      type="charlie-code",
+                      model="moonshotai/Kimi-K3",
+                      api_base="http://test.invalid/v1",
+                      context_window=409_600,
+                  )
+              ]
+      },
+  )
+
+
+def capturing_clc_build_backend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, captured: dict[str, object]):
+  """A build_backend double that records the resolved option AND the real CLC command line
+  built from it, while the run itself drives a FakeBackend (no subprocess)."""
+
+  def fake_build_backend(
+      option: models.BackendOption, cfg: core_config.CharlieBotConfig, **kwargs: object) -> FakeBackend:
+    captured["option"] = option
+    monkeypatch.setattr(CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET, lambda name, fallback: "/usr/bin/charlie-code")
+    real = real_build_backend(option, cfg)
+    transport = tmp_path / "transport"
+    transport.mkdir()
+    real._prepare_transport(transport)
+    captured["cmd"] = real._build_command("hello")
+    return FakeBackend()
+
+  return fake_build_backend
+
+
+def command_window(cmd: list[str]) -> str:
+  """The value following --context-window in a CLC command line."""
+  return cmd[cmd.index("--context-window") + 1]
+
+
+@pytest.mark.asyncio
+async def test_run_cc_thread_session_pins_clc_context_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A thread session on a charlie-code option runs the fixed thread window: the resolved
+  option carries THREAD_CONTEXT_WINDOW and the CLC command line passes it as
+  --context-window, in place of the option's own value."""
+  cfg = build_charlie_code_cfg(tmp_path)
+  patch_instructions_content(monkeypatch)
+  captured: dict[str, object] = {}
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
+
+  session_meta = models.SessionMetadata(
+      id="session-id",
+      name="Thread",
+      backend="charlie-code-kimi-k3",
+      slack_origin=models.SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"))
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0])
+  await master_cc._run_cc(item)
+
+  assert captured["option"].context_window == THREAD_CONTEXT_WINDOW  # type: ignore[attr-defined]
+  assert command_window(captured["cmd"]) == "96000"  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_run_cc_main_session_keeps_option_context_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A main session on the same option keeps the option's own context window, on the resolved
+  option and on the CLC command line alike."""
+  cfg = build_charlie_code_cfg(tmp_path)
+  patch_instructions_content(monkeypatch)
+  captured: dict[str, object] = {}
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
+
+  session_meta = models.SessionMetadata(id="session-id", name="Main", backend="charlie-code-kimi-k3")
+  item = make_work_item(cfg, session_meta, cfg.backends.options[0])
+  await master_cc._run_cc(item)
+
+  assert captured["option"].context_window == 409_600  # type: ignore[attr-defined]
+  assert command_window(captured["cmd"]) == "409600"  # type: ignore[index]
 
 
 def test_route_resume_session_uses_native_resume_id_for_charlie_code() -> None:

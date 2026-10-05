@@ -287,18 +287,24 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   """The manager contract at any depth: common rules + shared manager rules + template.
 
   Every manager depth selects the same rule set: the shared base, the full
-  shared manager rules file (prompts/master.md — one division of work for both
-  manager kinds), and the task-tree manager template. Project/feature
-  differences live in the Task record and inherited rules. No PM identity, no
-  project body, no per-layer template exists on v2.
+  shared manager rules (prompts/master.md followed by prompts/manager_workflows.md —
+  one division of work for both manager kinds; master.md carries the core
+  rules, manager_workflows.md the page/delegation/improve-loop/design rules a
+  thread session reads on demand), and the task-tree manager template.
+  Project/feature differences live in the Task record and inherited rules.
+  No PM identity, no project body, no per-layer template exists on v2.
   """
   base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
   shared = _read_source_file(
       cfg.charlie_bot_repo / "prompts" / "master.md", what="shared manager rules").replace("{{session_id}}", meta.id)
+  workflows = _read_source_file(
+      cfg.charlie_bot_repo / "prompts" / "manager_workflows.md",
+      what="manager workflow rules").replace("{{session_id}}", meta.id)
   contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries"))
   segments = [
       RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),)),
       RuleSegment(text=shared, sources=(PromptSource(SCOPE_BASE, "prompts/master.md"),)),
+      RuleSegment(text=workflows, sources=(PromptSource(SCOPE_BASE, "prompts/manager_workflows.md"),)),
       RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/task_manager.md"),)),
   ]
   host = _host_supplement(cfg, meta)

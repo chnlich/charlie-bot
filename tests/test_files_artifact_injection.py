@@ -1,11 +1,11 @@
 """Tests for artifact review-UI injection in the file server (src/api/files.py)."""
 
-from pathlib import Path
-from types import SimpleNamespace
+import pathlib
+import types
 
+import fastapi
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 from src.api import files as files_api
 from src.api import pages as pages_api
@@ -14,7 +14,7 @@ SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asse
 
 
 @pytest.fixture
-def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def sessions_root(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.Path:
   """Point the configured sessions root at a test value.
 
   files.py imports ``get_config`` by name, so the patch lands on the module. A
@@ -23,22 +23,22 @@ def sessions_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   the request at all — no credential is stubbed or sent unless a test wants to
   pin that the router ignores it.
   """
-  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path))
+  monkeypatch.setattr(files_api, "get_config", lambda: types.SimpleNamespace(sessions_dir=tmp_path))
   return tmp_path
 
 
-def _build_client(access_key: str | None) -> TestClient:
+def _build_client(access_key: str | None) -> testclient.TestClient:
   """A files-router client that sends *access_key* as the charliebot_access_key
   cookie; None sends no credential. The cookie rides the client because httpx
   deprecates per-request cookies. The router ignores the credential either way —
   the argument exists to pin that injection never branches on it."""
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(files_api.router, prefix="/absolute_filepath")
   cookies = {"charliebot_access_key": access_key} if access_key is not None else None
-  return TestClient(app, cookies=cookies)
+  return testclient.TestClient(app, cookies=cookies)
 
 
-def _write(path: Path) -> Path:
+def _write(path: pathlib.Path) -> pathlib.Path:
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text("<html><body><h1>Plan</h1></body></html>")
   return path
@@ -62,7 +62,7 @@ def test_inject_inserts_exactly_one_before_body() -> None:
 # --- route-level: inject vs not-inject decision, anchored on the sessions root ---
 
 
-def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
+def test_serve_file_injects_for_artifact_path(sessions_root: pathlib.Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
 
   resp = _build_client("secret").get("/absolute_filepath" + str(page))
@@ -81,7 +81,7 @@ def test_serve_file_injects_for_artifact_path(sessions_root: Path) -> None:
   assert resp.headers["cache-control"] == "no-store"
 
 
-def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: Path) -> None:
+def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: pathlib.Path) -> None:
   """A payload larger than one 1 MiB chunk rides the chunked read path; the
   served body must be exactly the file's bytes with identity transport."""
   page = sessions_root / "S" / "artifacts" / "trace.bin"
@@ -96,7 +96,7 @@ def test_serve_file_binary_body_is_byte_identical_across_chunks(sessions_root: P
   assert resp.content == payload
 
 
-def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
+def test_serve_file_injects_deeper_nested_artifact(sessions_root: pathlib.Path) -> None:
   # A deeply nested page: the predicate only cares that the
   # page sits under <session>/... with an `artifacts` parent, not how deep.
   page = _write(sessions_root / "S" / "threads" / "T" / "sub" / "artifacts" / "x.html")
@@ -114,7 +114,7 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: Path) -> None:
 # --- diff requests: ?diff=<base artifact path> serves the annotated page ---
 
 
-def _write_pages(sessions_root: Path) -> tuple[Path, Path]:
+def _write_pages(sessions_root: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
   """A two-version artifact pair whose word-level difference plan_diff can mark."""
   base = sessions_root / "S" / "artifacts" / "plan_01.html"
   new = sessions_root / "S" / "artifacts" / "plan_02.html"
@@ -124,7 +124,7 @@ def _write_pages(sessions_root: Path) -> tuple[Path, Path]:
   return base, new
 
 
-def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions_root: Path) -> None:
+def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions_root: pathlib.Path) -> None:
   page = _write(sessions_root / "S" / "artifacts" / "x.html")
   original = page.read_text(encoding="utf-8")
 
@@ -135,7 +135,7 @@ def test_serve_file_without_diff_is_byte_identical_to_pre_diff_response(sessions
   assert resp.text == files_api._inject_artifact_ui(original, "S")
 
 
-def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: Path) -> None:
+def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: pathlib.Path) -> None:
   new = sessions_root / "S" / "artifacts" / "plan_02.html"
   _write(new)
 
@@ -144,7 +144,7 @@ def test_serve_file_diff_missing_base_is_404_naming_the_path(sessions_root: Path
   assert "plan_01.html" in resp.text
 
 
-def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: Path) -> None:
+def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: pathlib.Path) -> None:
   _, new = _write_pages(sessions_root)
   _write(sessions_root / "S" / "notes" / "plan_01.html")
 

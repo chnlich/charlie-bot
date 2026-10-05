@@ -157,6 +157,11 @@
       // reprojections until the anchored node is back in the DOM.
       this.readingAnchor = null;
       this.pendingAnchor = null;
+      // The last reading-position restore the browser overran: the requested
+      // write and the position the scroll range actually allowed, with the
+      // anchor identity. Evidence for "held as well as the document permits",
+      // never state anything reads back.
+      this.lastRestoreClamp = null;
       this.rafScheduled = false;
       this.rafHandle = null;
       // scrollHeight at the last write or scroll event; an upward event that
@@ -657,17 +662,21 @@
         this.writeScrollTop(Math.min(seed, maxScroll));
       }
       // The reading position is re-read only when the reader themselves moved
-      // (a scroll frame) or re-declared it (a depth change re-anchors the
-      // surviving turn row). Every other frame mutates the DOM around the
+      // (a scroll frame). Every other frame mutates the DOM around the
       // reader — prerender materialization shifts content by the estimate
-      // error, a reset re-derives the whole store — and a capture here would
-      // bake the mid-mutation viewport into the anchor, abandoning the
-      // message the reader was actually holding. Those frames restore the
-      // existing anchor instead (the branch below); the recovery path after a
-      // hidden container reads the same preserved anchor.
-      const freshAnchor = reason === 'scroll' || reason === 'depth'
-        ? this.captureReadingAnchor(reason === 'depth')
-        : null;
+      // error, a reset re-derives the whole store, a depth change swaps open
+      // wraps for fold rows — and a capture here would bake the mid-mutation
+      // viewport into the anchor, abandoning the message the reader was
+      // actually holding. A depth change that re-captured would be worse: it
+      // would re-anchor whatever row the previous switch's clamp left at the
+      // top edge, so walking expanded → outline → compact drifts the place
+      // one turn per switch and the reader's message ends screens away.
+      // Those frames restore the existing anchor instead (the branch below);
+      // the recovery path after a hidden container reads the same preserved
+      // anchor. While the anchor's turn hides its message, its fold row
+      // carries the place (restoreReadingAnchor), so the identity survives
+      // every depth.
+      const freshAnchor = reason === 'scroll' ? this.captureReadingAnchor() : null;
       if (freshAnchor) this.readingAnchor = freshAnchor;
       // Hysteresis: while the viewport stays comfortably inside the current
       // window, a scroll frame is pure bookkeeping — no DOM work at all.
@@ -1025,7 +1034,7 @@
       return this.segments.findIndex((seg) => seg.kind === 'turn' && seg.key === target.key);
     }
 
-    captureReadingAnchor(preferTurn = false) {
+    captureReadingAnchor() {
       if (!this.segments.length) return null;
       const cTop = this.container.getBoundingClientRect().top;
       // The top-edge segment is read off the real boxes, in segment order:
@@ -1062,11 +1071,9 @@
         return turnAnchor();
       }
       if (seg.kind === 'turn' && segEl.dataset.turnKey != null
-          && (preferTurn || !segEl.querySelector('[data-message-id]'))) {
+          && !segEl.querySelector('[data-message-id]')) {
         // A fold row or placeholder fills the segment: the wrap identity is
-        // the only stable anchor. A depth change prefers it outright — the
-        // top-edge message may be inside a turn the new depth folds away,
-        // and the row is the position that survives every depth.
+        // the only stable anchor.
         return turnAnchor();
       }
       let straddling = null;
@@ -1085,17 +1092,56 @@
 
     restoreReadingAnchor(target) {
       const el = this.container.querySelector(this.anchorSelector(target));
-      if (!el) return false;
-      const delta = el.getBoundingClientRect().top
-        - this.container.getBoundingClientRect().top - target.offset;
-      if (delta) this.writeScrollTop(this.container.scrollTop + delta);
+      const top = el ? el.getBoundingClientRect().top : this.foldRowTopForAnchor(target);
+      if (top == null) return false;
+      return this.writeRestoreDelta(target, top);
+    }
+
+    // Viewport-relative top of the fold row standing in for a hidden message:
+    // a depth switch or a manual collapse replaced the message's turn body
+    // with the row, so the row is the position that carries the reader's
+    // place until the turn reopens and the message returns to it. Null when
+    // no row stands in (placeholder period, segment out of the window) — the
+    // restore keeps waiting instead.
+    foldRowTopForAnchor(target) {
+      if (target.kind !== 'message') return null;
+      const segIndex = this.segmentIndexOfAnchor(target);
+      if (segIndex < 0) return null;
+      const segEl = this.domBySeg.get(this.segments[segIndex]);
+      if (!segEl || segEl.classList.contains('turn-placeholder')
+          || segEl.dataset.turnKey == null) return null;
+      return segEl.getBoundingClientRect().top;
+    }
+
+    // One restore write: move the positioned element back to the anchor's
+    // viewport offset, and record the browser's clamp whenever the scroll
+    // range cannot deliver that offset (a fold collapsed the document the
+    // offset was measured against). The record is evidence, not state.
+    writeRestoreDelta(target, top) {
+      const delta = top - this.container.getBoundingClientRect().top - target.offset;
+      if (delta) {
+        const requested = this.container.scrollTop + delta;
+        this.writeScrollTop(requested);
+        const limited = this.container.scrollTop;
+        if (Math.abs(limited - requested) > 0.5) {
+          this.lastRestoreClamp = {
+            kind: target.kind,
+            id: target.id || null,
+            key: target.key || null,
+            offset: target.offset,
+            requestedScrollTop: requested,
+            limitedScrollTop: limited,
+          };
+        }
+      }
       return true;
     }
 
     // True when the anchored node is merely out of the DOM for now — its
     // segment is projected as a placeholder (or not yet projected) and will
-    // carry the node again. False when the position is gone for good: the
-    // segment folded away, or the update removed the content.
+    // carry the node again. False when the update removed the content. A
+    // folded segment is neither: its fold row carries the reader's place and
+    // the restore positions it directly, so this wait is not involved.
     anchorAwaitingRematerialization(target) {
       const segIndex = this.segmentIndexOfAnchor(target);
       if (segIndex < 0) return false;
@@ -1365,6 +1411,7 @@
         stats: engine.stats,
         queueLength: engine.queueEntries().length,
         lastScrollAgeMs: performance.now() - engine.lastScrollTs,
+        lastRestoreClamp: engine.lastRestoreClamp,
       };
     },
   };

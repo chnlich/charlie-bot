@@ -148,6 +148,42 @@ WRAP_OF_JS = """((id) => {
                  y: wrap.getBoundingClientRect().top - c.getBoundingClientRect().top} : null;
 })"""
 
+# The engine's own reading anchor: the identity the engine held the place
+# with, and the one a preserved place must keep across display-mode switches.
+ENGINE_ANCHOR_JS = """(() => {
+  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  return e && e.readingAnchor ? {kind: e.readingAnchor.kind,
+      key: e.readingAnchor.key || null, id: e.readingAnchor.id || null,
+      offset: e.readingAnchor.offset} : null;
+})()"""
+
+# The turn wrap / fold row of one turn key: the identity that survives a
+# depth's fold, reached through data-turn-key. ``inView`` means it intersects
+# the viewport — a row holding a negative offset legitimately pokes above it.
+ROW_OF_JS = """((key) => {
+  const c = document.getElementById('messages');
+  const row = key ? c.querySelector('[data-turn-key="' + key + '"]') : null;
+  if (!row) return null;
+  const top = row.getBoundingClientRect().top - c.getBoundingClientRect().top;
+  return {key, y: top, open: row.dataset.turnOpen,
+          inView: top <= c.clientHeight
+              && row.getBoundingClientRect().bottom >= c.getBoundingClientRect().top};
+})"""
+
+# The engine's record of the last restore the browser overran: the requested
+# write and the position the scroll range actually allowed. Read per step and
+# cleared before the next, so every row carries its own clamp evidence.
+READ_CLAMP_JS = """(() => {
+  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  return e && e.lastRestoreClamp ? Object.assign({}, e.lastRestoreClamp) : null;
+})()"""
+
+CLEAR_CLAMP_JS = """(() => {
+  const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'));
+  if (e) e.lastRestoreClamp = null;
+  return true;
+})()"""
+
 # Engine-level instrumentation: every reproject's reason/pin/position and every
 # scrollTop write, so each scenario's evidence carries the trace that explains
 # its outcome.
@@ -350,6 +386,31 @@ async def wheel_until_trigger(cdp: CDP, session_id: str, max_gestures: int = 6) 
        f"{max_gestures} gestures (fetch log empty)")
 
 
+async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0) -> None:
+  """Wait until the reader and the document are both at rest: no genuine scroll
+  event for 400ms and the pre-render queue empty.
+
+  A synthesized gesture's realized travel trickles in past the CDP call returning,
+  and a big jump leaves idle slices materializing the new window, so a place
+  pinned on a fixed sleep can describe a reader who is still moving or a height
+  model that is still growing. The engine's own lastScrollAgeMs and queueLength
+  are the truth; programmatic writes never refresh the scroll age.
+  """
+  probe = ("(() => {const c = document.getElementById('messages');"
+           "const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(c);"
+           "if (!e) return null;"
+           "return {age: Math.round(performance.now() - e.lastScrollTs),"
+           "        queue: Chat.TurnEngine.debug(c).queueLength};})()")
+  deadline = time.monotonic() + timeout_s
+  last = None
+  while time.monotonic() < deadline:
+    last = await ev(cdp, session_id, probe)
+    if last and last["age"] >= 400 and last["queue"] == 0:
+      return
+    await asyncio.sleep(0.25)
+  fail(f"the reader never settled within {timeout_s}s (last probe {last})")
+
+
 async def scroll_write(cdp: CDP, session_id: str, top: int) -> None:
   """A plain position write: the reader parks at an absolute scrollTop.
 
@@ -419,6 +480,116 @@ def pos_holds(before: dict | None, after: dict | None, tol=ANCHOR_TOLERANCE_PX) 
       and abs(before["y"] - after["y"]) <= tol
       and (before["gap"] is None or after["gap"] is None
            or abs(before["gap"] - after["gap"]) <= tol))
+
+
+def anchor_held(engine_anchor: dict | None, expected: dict | None) -> bool:
+  """The engine kept the reading identity: same kind and same content id/key."""
+  return (
+      engine_anchor is not None and expected is not None
+      and engine_anchor["kind"] == expected["kind"]
+      and engine_anchor.get("id") == expected.get("id")
+      and engine_anchor.get("key") == expected.get("key"))
+
+
+async def pin_reading_place(cdp: CDP, session_id: str) -> dict:
+  """Pin the reader's place before a walk: the visible message with its offset
+  and spacing, its turn wrap, and the engine's own anchor with that anchor's
+  wrap. Every later assertion reads these identities, never whatever the engine
+  re-selects after a switch."""
+  top_visible = await ev(cdp, session_id, TOP_VISIBLE_JS)
+  ay = await anchor_y(cdp, session_id, top_visible["id"]) if top_visible else None
+  wrap = None
+  if top_visible:
+    wrap = await ev(cdp, session_id, WRAP_OF_JS + f'("{top_visible["id"]}")')
+  engine_anchor = await ev(cdp, session_id, ENGINE_ANCHOR_JS)
+  engine_wrap = None
+  if engine_anchor and engine_anchor["kind"] == "message" and engine_anchor.get("id"):
+    engine_wrap = await ev(cdp, session_id, WRAP_OF_JS + f'("{engine_anchor["id"]}")')
+  elif engine_anchor and engine_anchor.get("key"):
+    engine_wrap = await ev(cdp, session_id, ROW_OF_JS + f'("{engine_anchor["key"]}")')
+  return {"msg": top_visible, "ay": ay, "wrap": wrap,
+          "engine_anchor": engine_anchor, "engine_wrap": engine_wrap}
+
+
+async def depth_step_state(cdp: CDP, session_id: str, msg_id: str, wrap_key: str | None) -> dict:
+  """One measurement point: the pinned message's place, the read turn's row,
+  the engine's anchor and clamp record, and the scroll snapshot."""
+  return {
+      "msg": await anchor_y(cdp, session_id, msg_id),
+      "row": await ev(cdp, session_id, ROW_OF_JS + f'("{wrap_key}")') if wrap_key else None,
+      "engine_anchor": await ev(cdp, session_id, ENGINE_ANCHOR_JS),
+      "clamp": await ev(cdp, session_id, READ_CLAMP_JS),
+      "snap": await snap(cdp, session_id),
+  }
+
+
+async def depth_click(cdp: CDP, session_id: str, depth: str) -> None:
+  await ev(cdp, session_id,
+           f"document.querySelector('#page-depth-control button[data-page-depth={depth}]').click()")
+
+
+async def walk_depths(cdp: CDP, session_id: str, sc: Scenario, place: dict,
+                      expect_clamp: bool) -> list[dict]:
+  """expanded -> outline -> compact with no user scroll in between, asserting
+  each step against the pinned identities at two measurement points (the switch's
+  own synchronous reprojection, then the render settle). The engine's anchor
+  never changes kind or content; the message holds its viewport offset whenever
+  it is rendered; its fold row carries the offset while the turn hides it; a
+  fold that cannot reach the offset records the browser's limit instead."""
+  anchor = place["msg"]
+  ay_before = place["ay"]
+  engine_anchor0 = place["engine_anchor"]
+  wrap_key = place["engine_wrap"]["key"] if place["engine_wrap"] else None
+  rows = []
+  for depth in ("expanded", "outline", "compact"):
+    await ev(cdp, session_id, CLEAR_CLAMP_JS)
+    await depth_click(cdp, session_id, depth)
+    immediate = await depth_step_state(cdp, session_id, anchor["id"], wrap_key)
+    await settle()
+    settled = await depth_step_state(cdp, session_id, anchor["id"], wrap_key)
+    rows.append({"depth": depth, "immediate": immediate, "settled": settled})
+    sc.check(anchor_held(immediate["engine_anchor"], engine_anchor0)
+             and anchor_held(settled["engine_anchor"], engine_anchor0),
+             f"{depth}: the engine kept the reading identity "
+             f"({immediate['engine_anchor']} vs {engine_anchor0})")
+    if depth == "outline":
+      sc.check(immediate["msg"] is None and settled["msg"] is None,
+               f"{depth}: the reading message is folded out of the DOM")
+      clamp = immediate["clamp"]
+      row_holds = (
+          immediate["row"] is not None
+          and abs(immediate["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
+      clamp_consistent = clamp is not None and abs(
+          clamp["limitedScrollTop"] - immediate["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
+      if expect_clamp:
+        sc.check(clamp is not None and clamp["requestedScrollTop"] > clamp["limitedScrollTop"],
+                 f"{depth}: the impossible restore was recorded against its target ({clamp})")
+        sc.check(clamp_consistent,
+                 f"{depth}: the recorded limit is the position the browser kept "
+                 f"({clamp} vs top {immediate['snap']['top']})")
+        sc.check(immediate["row"] is not None and immediate["row"]["inView"],
+                 f"{depth}: the fold row stays in view as the closest surviving state "
+                 f"({immediate['row']})")
+      else:
+        sc.check(row_holds,
+                 f"{depth}: the fold row carries the reading offset "
+                 f"(row {immediate['row']} vs {engine_anchor0['offset']})")
+        sc.check(clamp is None,
+                 f"{depth}: the fold had room to hold the offset (clamp {clamp})")
+    elif depth == "expanded":
+      sc.check(pos_holds(ay_before, immediate["msg"]) and pos_holds(ay_before, settled["msg"]),
+               f"{depth}: the reading message holds its offset "
+               f"(immediate {immediate['msg']}, settled {settled['msg']} vs {ay_before})")
+    else:
+      sc.check(pos_holds(ay_before, immediate["msg"]),
+               f"{depth}: the original message returned to its pre-walk offset "
+               f"(immediate {immediate['msg']} vs {ay_before})")
+      sc.check(pos_holds(ay_before, settled["msg"]),
+               f"{depth}: the original message holds through the render settle "
+               f"(settled {settled['msg']} vs {ay_before})")
+  settled_snap = await snap(cdp, session_id)
+  sc.check(settled_snap["depth"] == "compact", "depth returned to compact")
+  return rows
 
 
 # --- seeding ----------------------------------------------------------------
@@ -755,77 +926,97 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   sc.data.update({"anchor": anchor, "ay_before": ay_before, "ay_settled": ay_settled, "settled": settled})
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "transcript_reset"))
 
-  # -- S9: the three display modes keep the reading position ----------------
+  # -- S9: the three display modes keep the reading content -----------------
+  # The review run's acceptance gap: the old walk asserted compact on whatever
+  # row the engine had just re-selected, so it passed while the original
+  # message sat 639px away (expanded 31px -> outline row -> compact 670px).
+  # This walk pins the message identity and its pre-switch offset first, then
+  # holds every switch against THAT identity. The reader here sits at the
+  # document's top edge, so the outline fold has the whole document below it
+  # and holds the offset unclamped; the clamp-limited variant is its own
+  # scenario below.
   sc = Scenario("depth_switches_keep_reading_position")
   await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
   await asyncio.sleep(0.4)
-  await wheel(cdp, cs, 600)
-  await asyncio.sleep(0.5)
-  anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
-  ay_before = await anchor_y(cdp, cs, anchor["id"])
-  wrap_before = await ev(cdp, cs, WRAP_OF_JS + f'("{anchor["id"]}")')
-  if wrap_before is None:
+  # The ample-space reader reads up to the document's top edge: the whole
+  # document then sits below the reading place, so the outline fold has the
+  # room to hold the offset unclamped (the clamp-limited variant is S12). The
+  # approach rides stepped plain position writes — every landing stays inside
+  # the materialized window, so the parked place is a real message, while one
+  # big write would land in placeholder territory and the long synthesized-
+  # gesture stream would trickle scroll events past its call. Each write is a
+  # genuine scroll to the engine: it unpins and captures.
+  approach_steps = []
+  for _ in range(6):
+    before = await snap(cdp, cs)
+    if before["top"] <= 0:
+      break
+    target = max(0, before["top"] - 700)
+    await scroll_write(cdp, cs, target)
+    approach_steps.append({"from": before["top"], "to": target})
+  await wait_reader_settled(cdp, cs)
+  place = await pin_reading_place(cdp, cs)
+  anchor = place["msg"]
+  ay_before = place["ay"]
+  wrap_before = place["wrap"]
+  engine_anchor0 = place["engine_anchor"]
+  if wrap_before is None or engine_anchor0 is None or place["engine_wrap"] is None:
     # The parked place sits in the live tail's flat segment: no turn row
     # exists to follow across depths. Pre-fix engines park readers there by
     # never unpinning; the depth walk would measure nothing real.
-    sc.check(cond=False, message=f"anchor {anchor['id']} has no turn row to follow across depths")
+    sc.check(cond=False, message=f"anchor {anchor and anchor['id']} has no turn row to follow across depths")
     sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": None})
     await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_outline"))
     return
-  # The reader's turn row is the identity that survives every depth: reached
-  # through the message node while it is rendered, through its data-turn-key
-  # wrap row when the depth folds the message away.
-  ROW_OF_JS = ("((key) => {"
-    "  const c = document.getElementById('messages');"
-    "  const row = key ? c.querySelector('[data-turn-key=\"' + key + '\"]') : null;"
-    "  return row ? {key, y: row.getBoundingClientRect().top - c.getBoundingClientRect().top,"
-    "                open: row.dataset.turnOpen,"
-    "                inView: row.getBoundingClientRect().top >= c.getBoundingClientRect().top - 4"
-    "                        && row.getBoundingClientRect().bottom <= c.getBoundingClientRect().bottom + 4}"
-    "               : null;})")
-  depth_rows = []
-  for depth in ("expanded", "outline", "compact"):
-    await ev(cdp, cs,
-             f"document.querySelector('#page-depth-control button[data-page-depth={depth}]').click()")
-    await asyncio.sleep(1.0)
-    ay = await anchor_y(cdp, cs, anchor["id"])
-    # The engine's own reading anchor after this depth's restore: the identity
-    # the engine held the place with.
-    engine_anchor = await ev(cdp, cs,
-        "(() => {const e = Chat.TurnEngine.activeFor(document.getElementById('messages'));"
-        "return e.readingAnchor ? {kind: e.readingAnchor.kind,"
-        "key: e.readingAnchor.key || null, id: e.readingAnchor.id || null,"
-        "offset: e.readingAnchor.offset} : null;})()")
-    row = await ev(cdp, cs, ROW_OF_JS + f'("{wrap_before["key"]}")')
-    msg_ok = ay is not None and pos_holds(ay_before, ay)
-    row_holds = (
-        row is not None and wrap_before is not None
-        and row["key"] == wrap_before["key"]
-        and abs(row["y"] - wrap_before["y"]) <= ANCHOR_TOLERANCE_PX)
-    depth_rows.append({"depth": depth, "anchor": ay, "row": row,
-                       "engine_anchor": engine_anchor,
-                       "msg_ok": msg_ok, "row_holds": row_holds})
-    if depth == "outline":
-      # Folding every older turn shrinks the document to less than the old
-      # offset needs: the browser clamps to its maximum, and the row stays in
-      # the viewport -- the closest surviving state of the reader's place.
-      sc.check(row is not None and row["key"] == wrap_before["key"] and row["inView"],
-               f"{depth}: the reader's turn row survives folded and in view ({row})")
-    elif depth == "compact":
-      # The depth change re-anchors on the turn row at the viewport's top
-      # edge; the restore must hold that row at the offset it was captured at.
-      key = engine_anchor and engine_anchor.get("key")
-      held_row = await ev(cdp, cs, ROW_OF_JS + f'("{key}")') if key else None
-      held = held_row is not None and abs(held_row["y"] - engine_anchor["offset"]) <= ANCHOR_TOLERANCE_PX
-      sc.check(held,
-               f"{depth}: the re-anchored turn row holds its viewport offset "
-               f"(row y {held_row and held_row['y']} vs captured {engine_anchor and engine_anchor['offset']})")
-    else:
-      sc.check(msg_ok or row_holds,
-               f"{depth}: the reading place holds ({'message' if msg_ok else 'turn row'} anchor)")
-  settled = await snap(cdp, cs)
-  sc.check(settled["depth"] == "compact", "depth returned to compact")
-  sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": wrap_before, "rows": depth_rows})
+  sc.check(engine_anchor0["kind"] == "message",
+           f"the engine anchored the reader on message {engine_anchor0['id']} "
+           f"at {engine_anchor0['offset']}px")
+  sc.data.update({"approach_steps": approach_steps})
+  depth_rows = await walk_depths(cdp, cs, sc, place, expect_clamp=False)
+
+  # A user scroll between switches re-decides the reading place: the following
+  # switches must hold the NEWLY read identity, not the walk's original one.
+  # The reader sits at the top edge, so the scroll goes down the document.
+  await wheel(cdp, cs, -600)
+  await wait_reader_settled(cdp, cs)
+  place2 = await pin_reading_place(cdp, cs)
+  sc.check(place2["engine_anchor"] is not None
+           and not anchor_held(place2["engine_anchor"], engine_anchor0),
+           f"the user's scroll chose a new reading place ({place2['engine_anchor']})")
+  if place2["engine_anchor"] is not None and place2["engine_wrap"] is not None:
+    wrap_key2 = place2["engine_wrap"]["key"]
+    for depth in ("outline", "compact"):
+      await ev(cdp, cs, CLEAR_CLAMP_JS)
+      await depth_click(cdp, cs, depth)
+      immediate = await depth_step_state(cdp, cs, place2["msg"]["id"], wrap_key2)
+      await settle()
+      settled = await depth_step_state(cdp, cs, place2["msg"]["id"], wrap_key2)
+      depth_rows.append({"depth": f"user-scroll->{depth}", "immediate": immediate,
+                         "settled": settled})
+      sc.check(anchor_held(immediate["engine_anchor"], place2["engine_anchor"])
+               and anchor_held(settled["engine_anchor"], place2["engine_anchor"]),
+               f"{depth}: the switches kept the user's newly read identity "
+               f"({immediate['engine_anchor']} vs {place2['engine_anchor']})")
+      if depth == "outline":
+        clamp = immediate["clamp"]
+        row_holds = (
+            immediate["row"] is not None
+            and abs(immediate["row"]["y"] - place2["engine_anchor"]["offset"])
+            <= ANCHOR_TOLERANCE_PX)
+        clamp_consistent = clamp is not None and abs(
+            clamp["limitedScrollTop"] - immediate["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
+        sc.check(row_holds or clamp_consistent,
+                 f"{depth}: the newly read place survives on its fold row "
+                 f"(row {immediate['row']}, clamp {clamp})")
+      else:
+        sc.check(pos_holds(place2["ay"], immediate["msg"])
+                 and pos_holds(place2["ay"], settled["msg"]),
+                 f"{depth}: the newly read message holds its offset "
+                 f"(immediate {immediate['msg']}, settled {settled['msg']} vs {place2['ay']})")
+  else:
+    sc.check(cond=False, message="the user's scroll left no message anchor to walk with")
+  sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": wrap_before,
+                  "engine_anchor": engine_anchor0, "rows": depth_rows, "place2": place2})
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_outline"))
 
   # -- S10: a viewport resize keeps the reading position ---------------------
@@ -875,6 +1066,94 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   sc.check(pos_holds(ay_before, ay_back), f"anchor {anchor['id']} recovered at its viewport offset")
   sc.data.update({"hidden": hidden, "back": back, "ay_before": ay_before, "ay_back": ay_back})
   await sc.finish(cdp, cs, results, None)
+
+  # -- S12: a fold without the room to hold the offset records the limit -----
+  # The reported walk's geometry: one wheel up from the bottom puts the reader
+  # in a turn whose outline fold shrinks the document below the viewport, so
+  # no scrollTop can deliver the reading offset. The identity must still
+  # survive both switches and the message must still come back to its offset
+  # in compact, where the space exists again.
+  sc = Scenario("depth_switch_fold_clamp_records_limit")
+  await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
+  await asyncio.sleep(0.4)
+  await wheel(cdp, cs, 600)
+  await wait_reader_settled(cdp, cs)
+  place = await pin_reading_place(cdp, cs)
+  anchor = place["msg"]
+  ay_before = place["ay"]
+  wrap_before = place["wrap"]
+  engine_anchor0 = place["engine_anchor"]
+  if wrap_before is None or engine_anchor0 is None or place["engine_wrap"] is None:
+    sc.check(cond=False, message=f"anchor {anchor and anchor['id']} has no turn row to follow across depths")
+    sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": None})
+    await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_clamp"))
+    return
+  depth_rows = await walk_depths(cdp, cs, sc, place, expect_clamp=True)
+  sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": wrap_before,
+                  "engine_anchor": engine_anchor0, "rows": depth_rows})
+  await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_clamp"))
+
+  # -- S13: single-turn collapse and reopen keep the reading content ---------
+  # The same identity rule for the manual path: collapsing the turn the reader
+  # is inside parks its fold row at the reading offset (or records the clamp),
+  # and reopening returns the message to the offset it held before.
+  sc = Scenario("single_turn_fold_expand_keeps_reading_content")
+  await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
+  await asyncio.sleep(0.4)
+  await wheel(cdp, cs, 600)
+  await wait_reader_settled(cdp, cs)
+  place = await pin_reading_place(cdp, cs)
+  engine_anchor0 = place["engine_anchor"]
+  if not engine_anchor0 or engine_anchor0["kind"] != "message" or place["engine_wrap"] is None:
+    sc.check(cond=False, message=f"no message anchor to fold around ({engine_anchor0})")
+    sc.data.update({"place": place})
+    await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "single_turn_fold"))
+    return
+  anchor = place["msg"]
+  ay_before = place["ay"]
+  wrap_key = place["engine_wrap"]["key"]
+  steps = []
+  await ev(cdp, cs, CLEAR_CLAMP_JS)
+  await ev(cdp, cs, f"document.querySelector('[data-turn-key=\"{wrap_key}\"] .turn-collapse').click()")
+  folded_now = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
+  await settle()
+  folded_settled = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
+  steps.append({"step": "collapse", "immediate": folded_now, "settled": folded_settled})
+  sc.check(anchor_held(folded_now["engine_anchor"], engine_anchor0)
+           and anchor_held(folded_settled["engine_anchor"], engine_anchor0),
+           f"the collapse kept the reading identity "
+           f"({folded_now['engine_anchor']} vs {engine_anchor0})")
+  sc.check(folded_now["msg"] is None and folded_settled["msg"] is None,
+           "the collapse hid the reading message")
+  clamp = folded_now["clamp"]
+  row_holds = (
+      folded_now["row"] is not None
+      and abs(folded_now["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
+  clamp_consistent = clamp is not None and abs(
+      clamp["limitedScrollTop"] - folded_now["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
+  sc.check(row_holds or clamp_consistent,
+           f"the fold row carries the reading offset or the clamp says why "
+           f"(row {folded_now['row']}, offset {engine_anchor0['offset']}, clamp {clamp})")
+
+  await ev(cdp, cs, CLEAR_CLAMP_JS)
+  await ev(cdp, cs, f"document.querySelector('[data-turn-key=\"{wrap_key}\"] .turn-row').click()")
+  reopened_now = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
+  await settle()
+  reopened_settled = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
+  steps.append({"step": "reopen", "immediate": reopened_now, "settled": reopened_settled})
+  sc.check(anchor_held(reopened_now["engine_anchor"], engine_anchor0)
+           and anchor_held(reopened_settled["engine_anchor"], engine_anchor0),
+           f"the reopen kept the reading identity "
+           f"({reopened_now['engine_anchor']} vs {engine_anchor0})")
+  restore_target = {"y": engine_anchor0["offset"], "gap": None}
+  sc.check(pos_holds(restore_target, reopened_now["msg"])
+           and pos_holds(restore_target, reopened_settled["msg"]),
+           f"the reopen put the reading message back at its offset "
+           f"(immediate {reopened_now['msg']}, settled {reopened_settled['msg']} "
+           f"vs {engine_anchor0['offset']})")
+  sc.data.update({"anchor": anchor, "ay_before": ay_before, "engine_anchor": engine_anchor0,
+                  "wrap_key": wrap_key, "steps": steps})
+  await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "single_turn_fold"))
 
 
 # --- harness shell ----------------------------------------------------------

@@ -29,23 +29,7 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 ## Intent First
 
-Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres).
-
-## Artifact Genres
-
-Align the understanding before designing: the genre decides the approval path, so pick it
-first by comparing the rows.
-
-| Genre | When | Deliverable | What follows |
-|---|---|---|---|
-| understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |
-| plan | Plan-scale work whose reading is already aligned; bounded fixes, revision rounds, and requests that already state their deliverable and acceptance start here | A registered plan decision surface (`charliebot plan present`) | Verify rounds, then "take off" releases delegation |
-| sitrep | The user asks the state of completed, in-flight, or blocked work, and the conclusion stays a report | `artifacts/sitrep_<topic-slug>_v<n>.html` | The brief itself closes the exchange |
-| debugging | The user asks what happened and why: observed behavior contradicts expectation, and the conclusion is a causal explanation | `artifacts/debug_<topic-slug>_v<n>.html` per `prompts/debug_template.html` | The page closes the exchange; a mid-investigation status question still gets a sitrep, and the two pages cross-reference |
-| explainer | The user asks to be walked to understanding: their stated mental model contradicts what they observe, and the conclusion is the reader confirming the contradiction dissolved; a renewed miss signal revises the page in place | `artifacts/explain_<topic-slug>_v<n>.html` per `prompts/explain_template.html` | The reader's confirmation closes the exchange; a renewed miss signal revises the page in place, version numbers being reserved for legs compared side by side; a new anomalous observation routes back to debugging, the two pages cross-referencing |
-
-Understanding and plan format, confirmation semantics, and plan linkage:
-`skills/plan-approval/SKILL.md`. Sitrep page grammar: `prompts/sitrep_template.html`.
+Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres in prompts/manager_workflows.md).
 
 ## Concise Expression
 
@@ -171,22 +155,6 @@ Sibling variants are named by what differs between them; a document comparing th
 content name, inherited ones included. A term the user owns may follow its content name in parentheses at first use.
 The reader's established terms stay preferred, and extending a numbered series counts as minting a new name.
 
-## Design
-
-Prefer stateless solutions over state machines. Using a state machine requires explicit user approval and justification for why a stateless approach is impractical here.
-
-## Executable Recipes
-
-A recipe consumed by execution (submit, deploy, recovery, preflight sequences) lives as one
-executable entry point in its owning repo: invoking it runs the complete recipe on every use.
-Documents state the invocation and the reason the entry point exists; prose step lists elsewhere
-point to it. The second execution of a prose step list raises its conversion into an entry point
-as a deliverable of its own: the task at hand runs the steps as written, and the conversion
-reaches the user as a Trade-off in that task's plan or as a plan of its own.
-
-A preflight check asserts the mechanisms the task depends on (a resolvable launcher, present
-credentials, an inherited environment), so one check covers the whole fault class.
-
 ## Direct Work
 Handle reads, searches, read-only commands, and questions yourself. The reversibility test from `skills/plan-approval/SKILL.md` governs direct work too: an operation you can undo alone at similar cost, whose effect reaches neither other people nor systems they rely on, proceeds without asking; one that fails the test waits for explicit approval. Direct work and delegation divide by where the change lands. Every write to a repository, whatever its size, goes through `charliebot delegate` to a worker. Small edits outside repositories (a value, a line or a paragraph in an existing host file, script or config) you make directly, under the reversibility test above. Larger work outside repositories, such as a new multi-file script set or anything that needs its own test or job run, goes to a repo-less worker: `charliebot delegate` without `--repo`, normally as quick-edit, which has no reviewer; choose implement when a reviewer should check the result against its acceptance tests.
 
@@ -229,33 +197,9 @@ operational notes in the `charliebot` skill).
 
 For handling diff-comment batches, see the `charliebot` skill.
 
-## Delegation
-
-Session identity travels in `CHARLIEBOT_SESSION_ID`, which the server writes into each manager process, so a session-scoped CLI lands in this session from any cwd; cwd supplies the identity only when that variable is absent, and an explicit `--session` is rejected on mismatch. Omit `--session` in normal manager use. The same applies to the `improve`, `schedule-trigger`, and `remote-launch` examples below.
-
-### Runtime delegation authorization
-Runtime authorization is derived from the chat event log — see skills/plan-approval/SKILL.md for the full contract.
-
-Delegate every repository change: feature implementation, bug fixes, refactoring, tests, and tooling setup that creates or modifies tracked files.
-
-**Do NOT delegate** answering questions, reading/researching code, explaining concepts, updating memory, simple file reads.
-
-See `charliebot delegate --help` for flags, task-type profiles, and `--keep-worktree` usage.
-
 ## External System Writes
 
 Any mutation to external systems (Feishu / Slack / Linear) requires showing the full content draft first and waiting for the user to say "take off" before executing. Applies to create, update, delete equally. Corrections and re-posts also require approval. A Slack-origin or Discord-origin session's reply to its own thread is the exception: it goes out through `charliebot slack reply` or `charliebot discord reply` (contract: prompts/thread_reply_format.md) without a take off. Drafts follow the writing-style skill's coordination-messages genre (skills/writing-style/genres/coordination-messages.md).
-
-## Improve Loop
-
-Iterative change→run→verify loop; workers are fully autonomous (human on the loop, not in
-the loop). Use improve when the task needs iteration/convergence ("make it better until X",
-tuning, repeated test-fix); use one-shot delegation when there's a discrete deliverable.
-`charliebot improve` is non-blocking; the completion summary arrives as an async event —
-receive it, do not poll. Steer a running loop by editing goal.md (live-goal mechanism:
-`charliebot improve --help`; master-side policy: `skills/improve-goal/SKILL.md`). Take-off
-follows `skills/plan-approval/SKILL.md`. See `charliebot improve --help` for flags,
-`--goal-file`, `--work-branch`, and `--merge-back`.
 
 ## Delayed Triggers
 
@@ -283,21 +227,3 @@ the user opts out or the response is a brief acknowledgment.
 
 When a diagram shows the point better than prose, draw it in the HTML page. Leave out a
 diagram that you cannot draw clearly.
-
-## Situation Brief
-
-A situation brief is a self-contained HTML page following `prompts/sitrep_template.html`,
-written to `artifacts/sitrep_<topic-slug>_v<n>.html` and shared via file-server link with a
-short chat summary. A completion or
-blocked-node report beyond a brief acknowledgment routes by the reader's question: "where do
-things stand" adopts this skeleton; "what happened and why" goes to the debugging genre (see
-Artifact Genres).
-The brief opens with the bottom line and then follows the page grammar: the
-reader-question sections, the inline epistemic labels, the readability rules, and
-the pre-share self-checks. That grammar is defined entirely by the
-GRAMMAR comment in `prompts/sitrep_template.html`. Sitrep prose follows
-the Writing Style section above, as memory entries do (the `llm-context-guideline` skill). A
-sitrep is an ordinary session artifact; plan registration and approval semantics
-stay with plans.
-
-Reload the plan-approval skill in full before drafting any plan or understanding page, and follow it.

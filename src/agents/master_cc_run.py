@@ -37,6 +37,7 @@ from src.core.ndjson import type_line_filter
 from src.core.process import kill_group_escalating
 from src.core.sessions import backend_switch_reset_reason, context_reset_note
 from src.core.streaming import handle_compaction_events
+from src.core.thread_sessions import THREAD_CONTEXT_WINDOW, is_thread_session
 
 log = LazyStructlogLogger()
 
@@ -273,7 +274,14 @@ class _Instructions(str):
 
 def _build_instructions_content(
     session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
-  """Build master agent instructions: base prompt + per-host override + memory store + declared overlay.
+  """Build master agent instructions: base prompt + second rule file + per-host override + memory store + declared overlay.
+
+  The second rule file follows the session kind
+  (:func:`src.core.thread_sessions.is_thread_session`): a thread session gets
+  ``prompts/thread_session.md`` (the short brief naming what it may read on
+  demand); every other session gets ``prompts/manager_workflows.md`` (the full
+  manager-workflow rules master.md no longer carries). The file is read
+  unconditionally, so a missing file raises.
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.core.memory.assemble_master` (resident topics full text + index
@@ -298,6 +306,15 @@ def _build_instructions_content(
     base_text = base_prompt_file.read_text(encoding="utf-8")
     base_text = base_text.replace("{{session_id}}", session_meta.id)
     parts.append(base_text)
+
+  # 1b. Second rule file, chosen by session kind. A thread session gets the
+  # short thread brief naming the manager workflows file it may read on demand;
+  # every other session gets those manager workflows in full. Read
+  # unconditionally: a missing file is a broken repo and raises.
+  rule_file = (
+      cfg.charlie_bot_repo / "prompts" /
+      ("thread_session.md" if is_thread_session(session_meta) else "manager_workflows.md"))
+  parts.append(rule_file.read_text(encoding="utf-8").replace("{{session_id}}", session_meta.id))
 
   # 2. Per-host override (~/.charliebot/MASTER_AGENT_PROMPT.md)
   host_prompt_file = cfg.claude_md_file
@@ -600,6 +617,13 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     return await _refuse_turn(item, msg)
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
+  # A thread session on the CLC backend runs the fixed thread context window in
+  # place of the option's own: the option entry is shared with main sessions
+  # and workers, so its window must keep serving them, and a thread session is
+  # born without a backend of its own to pin a narrower entry on. Only
+  # charlie-code reads a --context-window; other backend types are untouched.
+  if option.type == BackendType.CHARLIE_CODE and is_thread_session(session_meta):
+    option = option.model_copy(update={"context_window": THREAD_CONTEXT_WINDOW})
 
   if item.task_instructions is not None:
     # A v2 task turn delivers the context owner's committed snapshot bytes and

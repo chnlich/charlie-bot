@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable
 
 from src.core.config import cron_path
 from src.core.models import SessionMetadata
+from src.core.thread_sessions import is_thread_session
 from src.core.yaml_utils import load_yaml, save_yaml
 
 
@@ -95,12 +96,11 @@ def chat_thread_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str
   """Map every chat-thread row's id to the id of the thread session above it.
 
   The chat-thread rule over :func:`subtree_roots`: a row belongs to one chat
-  thread's subtree when its parent chain reaches a session carrying a platform
-  origin — ``slack_origin`` or ``discord_origin`` — and that thread session
+  thread's subtree when its parent chain reaches a thread session
+  (:func:`src.core.thread_sessions.is_thread_session`) and that thread session
   itself is a member of its subtree (the sidebar's Threads view lists it).
   """
-  return subtree_roots(
-      metas, lambda meta: meta.slack_origin is not None or meta.discord_origin is not None, include_root=True)
+  return subtree_roots(metas, is_thread_session, include_root=True)
 
 
 class ScheduledSessionBusyError(RuntimeError):

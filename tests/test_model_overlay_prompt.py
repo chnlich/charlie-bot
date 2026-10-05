@@ -30,6 +30,8 @@ def _wake_cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> core_c
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
   (repo / "prompts" / "master.md").write_text("BASE PROMPT", encoding="utf-8")
+  (repo / "prompts" / "manager_workflows.md").write_text("MANAGER WORKFLOWS PROMPT", encoding="utf-8")
+  (repo / "prompts" / "thread_session.md").write_text("THREAD SESSION PROMPT", encoding="utf-8")
   home = tmp_path / "home"
   (home / "memory" / "entries").mkdir(parents=True)
   (home / "memory" / "topics").write_text("profile resident\n", encoding="utf-8")
@@ -58,9 +60,9 @@ def _rendered_overlay_alert(event: dict) -> list[dict]:
 @pytest.mark.parametrize(
     ("prompt_overlay", "file_exists", "expected_product", "expects_alert"),
     [
-        ("synthetic_overlay", True, "BASE PROMPT\n\nOVERLAY BODY", False),
-        ("none", False, "BASE PROMPT", False),
-        (None, False, "BASE PROMPT", True),
+        ("synthetic_overlay", True, "BASE PROMPT\n\nMANAGER WORKFLOWS PROMPT\n\nOVERLAY BODY", False),
+        ("none", False, "BASE PROMPT\n\nMANAGER WORKFLOWS PROMPT", False),
+        (None, False, "BASE PROMPT\n\nMANAGER WORKFLOWS PROMPT", True),
     ],
 )
 async def test_wake_path_overlay_four_states(

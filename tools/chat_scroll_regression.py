@@ -66,22 +66,22 @@ import time  # noqa: E402
 import urllib.request  # noqa: E402
 
 from tools.browser_harness_session_tree import (  # noqa: E402
-  CDP,
-  DESKTOP_CAPTURE_FLAGS,
-  connect_cdp,
-  devtools_ws_url,
-  evaluate,
-  fail,
-  launch_chrome,
-  log,
-  mint_access_key,
-  open_cdp_page,
-  open_evidence_dir,
-  pick_free_port,
-  resolve_chrome,
-  stop_child,
-  wait_for,
-  write_credentials_yaml,
+    CDP,
+    DESKTOP_CAPTURE_FLAGS,
+    connect_cdp,
+    devtools_ws_url,
+    evaluate,
+    fail,
+    launch_chrome,
+    log,
+    mint_access_key,
+    open_cdp_page,
+    open_evidence_dir,
+    pick_free_port,
+    resolve_chrome,
+    stop_child,
+    wait_for,
+    write_credentials_yaml,
 )
 
 ANCHOR_TOLERANCE_PX = 2.0
@@ -361,7 +361,8 @@ async def wheel(cdp: CDP, session_id: str, dy: int) -> None:
   ``dy`` is the distance the reader travels UP (positive scrolls up), matching
   the gesture's yDistance convention.
   """
-  box = await ev(cdp, session_id, """(() => {
+  box = await ev(
+      cdp, session_id, """(() => {
     const r = document.getElementById('messages').getBoundingClientRect();
     return {x: r.x + r.width / 2, y: r.y + r.height / 2};
   })()""")
@@ -396,11 +397,12 @@ async def wait_reader_settled(cdp: CDP, session_id: str, timeout_s: float = 30.0
   model that is still growing. The engine's own lastScrollAgeMs and queueLength
   are the truth; programmatic writes never refresh the scroll age.
   """
-  probe = ("(() => {const c = document.getElementById('messages');"
-           "const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(c);"
-           "if (!e) return null;"
-           "return {age: Math.round(performance.now() - e.lastScrollTs),"
-           "        queue: Chat.TurnEngine.debug(c).queueLength};})()")
+  probe = (
+      "(() => {const c = document.getElementById('messages');"
+      "const e = Chat.TurnEngine && Chat.TurnEngine.activeFor(c);"
+      "if (!e) return null;"
+      "return {age: Math.round(performance.now() - e.lastScrollTs),"
+      "        queue: Chat.TurnEngine.debug(c).queueLength};})()")
   deadline = time.monotonic() + timeout_s
   last = None
   while time.monotonic() < deadline:
@@ -453,8 +455,7 @@ class Scenario:
       self.ok = False
     return cond
 
-  async def finish(self, cdp: CDP, cs: str, results: list[dict],
-                   screenshot_name: str | None) -> None:
+  async def finish(self, cdp: CDP, cs: str, results: list[dict], screenshot_name: str | None) -> None:
     """Record the row with the engine trace tails as its diagnosis."""
     try:
       self.data["proj_tail"] = (await ev(cdp, cs, "window.__projLog || []"))[-40:]
@@ -463,32 +464,29 @@ class Scenario:
     except Exception as exc:  # the trace is evidence, never a failure source
       self.data["trace_error"] = repr(exc)
     detail = "; ".join(("PASS: " if c["ok"] else "FAIL: ") + c["check"] for c in self.checks)
-    results.append({
-        "name": self.name,
-        "ok": self.ok,
-        "detail": detail,
-        "data": self.data,
-        "screenshot": screenshot_name,
-    })
+    results.append(
+        {
+            "name": self.name,
+            "ok": self.ok,
+            "detail": detail,
+            "data": self.data,
+            "screenshot": screenshot_name,
+        })
     log(f"  [{'PASS' if self.ok else 'FAIL'}] {self.name}: {detail[:400]}")
 
 
 def pos_holds(before: dict | None, after: dict | None, tol=ANCHOR_TOLERANCE_PX) -> bool:
   """The reader's place survived: same viewport offset, same spacing above."""
   return (
-      before is not None and after is not None
-      and abs(before["y"] - after["y"]) <= tol
-      and (before["gap"] is None or after["gap"] is None
-           or abs(before["gap"] - after["gap"]) <= tol))
+      before is not None and after is not None and abs(before["y"] - after["y"]) <= tol and
+      (before["gap"] is None or after["gap"] is None or abs(before["gap"] - after["gap"]) <= tol))
 
 
 def anchor_held(engine_anchor: dict | None, expected: dict | None) -> bool:
   """The engine kept the reading identity: same kind and same content id/key."""
   return (
-      engine_anchor is not None and expected is not None
-      and engine_anchor["kind"] == expected["kind"]
-      and engine_anchor.get("id") == expected.get("id")
-      and engine_anchor.get("key") == expected.get("key"))
+      engine_anchor is not None and expected is not None and engine_anchor["kind"] == expected["kind"] and
+      engine_anchor.get("id") == expected.get("id") and engine_anchor.get("key") == expected.get("key"))
 
 
 async def pin_reading_place(cdp: CDP, session_id: str) -> dict:
@@ -507,8 +505,7 @@ async def pin_reading_place(cdp: CDP, session_id: str) -> dict:
     engine_wrap = await ev(cdp, session_id, WRAP_OF_JS + f'("{engine_anchor["id"]}")')
   elif engine_anchor and engine_anchor.get("key"):
     engine_wrap = await ev(cdp, session_id, ROW_OF_JS + f'("{engine_anchor["key"]}")')
-  return {"msg": top_visible, "ay": ay, "wrap": wrap,
-          "engine_anchor": engine_anchor, "engine_wrap": engine_wrap}
+  return {"msg": top_visible, "ay": ay, "wrap": wrap, "engine_anchor": engine_anchor, "engine_wrap": engine_wrap}
 
 
 async def depth_step_state(cdp: CDP, session_id: str, msg_id: str, wrap_key: str | None) -> dict:
@@ -524,12 +521,10 @@ async def depth_step_state(cdp: CDP, session_id: str, msg_id: str, wrap_key: str
 
 
 async def depth_click(cdp: CDP, session_id: str, depth: str) -> None:
-  await ev(cdp, session_id,
-           f"document.querySelector('#page-depth-control button[data-page-depth={depth}]').click()")
+  await ev(cdp, session_id, f"document.querySelector('#page-depth-control button[data-page-depth={depth}]').click()")
 
 
-async def walk_depths(cdp: CDP, session_id: str, sc: Scenario, place: dict,
-                      expect_clamp: bool) -> list[dict]:
+async def walk_depths(cdp: CDP, session_id: str, sc: Scenario, place: dict, expect_clamp: bool) -> list[dict]:
   """expanded -> outline -> compact with no user scroll in between, asserting
   each step against the pinned identities at two measurement points (the switch's
   own synchronous reprojection, then the render settle). The engine's anchor
@@ -548,45 +543,46 @@ async def walk_depths(cdp: CDP, session_id: str, sc: Scenario, place: dict,
     await settle()
     settled = await depth_step_state(cdp, session_id, anchor["id"], wrap_key)
     rows.append({"depth": depth, "immediate": immediate, "settled": settled})
-    sc.check(anchor_held(immediate["engine_anchor"], engine_anchor0)
-             and anchor_held(settled["engine_anchor"], engine_anchor0),
-             f"{depth}: the engine kept the reading identity "
-             f"({immediate['engine_anchor']} vs {engine_anchor0})")
+    sc.check(
+        anchor_held(immediate["engine_anchor"], engine_anchor0) and
+        anchor_held(settled["engine_anchor"], engine_anchor0), f"{depth}: the engine kept the reading identity "
+        f"({immediate['engine_anchor']} vs {engine_anchor0})")
     if depth == "outline":
-      sc.check(immediate["msg"] is None and settled["msg"] is None,
-               f"{depth}: the reading message is folded out of the DOM")
+      sc.check(
+          immediate["msg"] is None and settled["msg"] is None, f"{depth}: the reading message is folded out of the DOM")
       clamp = immediate["clamp"]
       row_holds = (
-          immediate["row"] is not None
-          and abs(immediate["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
+          immediate["row"] is not None and abs(immediate["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
       clamp_consistent = clamp is not None and abs(
           clamp["limitedScrollTop"] - immediate["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
       if expect_clamp:
-        sc.check(clamp is not None and clamp["requestedScrollTop"] > clamp["limitedScrollTop"],
-                 f"{depth}: the impossible restore was recorded against its target ({clamp})")
-        sc.check(clamp_consistent,
-                 f"{depth}: the recorded limit is the position the browser kept "
-                 f"({clamp} vs top {immediate['snap']['top']})")
-        sc.check(immediate["row"] is not None and immediate["row"]["inView"],
-                 f"{depth}: the fold row stays in view as the closest surviving state "
-                 f"({immediate['row']})")
+        sc.check(
+            clamp is not None and clamp["requestedScrollTop"] > clamp["limitedScrollTop"],
+            f"{depth}: the impossible restore was recorded against its target ({clamp})")
+        sc.check(
+            clamp_consistent, f"{depth}: the recorded limit is the position the browser kept "
+            f"({clamp} vs top {immediate['snap']['top']})")
+        sc.check(
+            immediate["row"] is not None and immediate["row"]["inView"],
+            f"{depth}: the fold row stays in view as the closest surviving state "
+            f"({immediate['row']})")
       else:
-        sc.check(row_holds,
-                 f"{depth}: the fold row carries the reading offset "
-                 f"(row {immediate['row']} vs {engine_anchor0['offset']})")
-        sc.check(clamp is None,
-                 f"{depth}: the fold had room to hold the offset (clamp {clamp})")
+        sc.check(
+            row_holds, f"{depth}: the fold row carries the reading offset "
+            f"(row {immediate['row']} vs {engine_anchor0['offset']})")
+        sc.check(clamp is None, f"{depth}: the fold had room to hold the offset (clamp {clamp})")
     elif depth == "expanded":
-      sc.check(pos_holds(ay_before, immediate["msg"]) and pos_holds(ay_before, settled["msg"]),
-               f"{depth}: the reading message holds its offset "
-               f"(immediate {immediate['msg']}, settled {settled['msg']} vs {ay_before})")
+      sc.check(
+          pos_holds(ay_before, immediate["msg"]) and pos_holds(ay_before, settled["msg"]),
+          f"{depth}: the reading message holds its offset "
+          f"(immediate {immediate['msg']}, settled {settled['msg']} vs {ay_before})")
     else:
-      sc.check(pos_holds(ay_before, immediate["msg"]),
-               f"{depth}: the original message returned to its pre-walk offset "
-               f"(immediate {immediate['msg']} vs {ay_before})")
-      sc.check(pos_holds(ay_before, settled["msg"]),
-               f"{depth}: the original message holds through the render settle "
-               f"(settled {settled['msg']} vs {ay_before})")
+      sc.check(
+          pos_holds(ay_before, immediate["msg"]), f"{depth}: the original message returned to its pre-walk offset "
+          f"(immediate {immediate['msg']} vs {ay_before})")
+      sc.check(
+          pos_holds(ay_before, settled["msg"]), f"{depth}: the original message holds through the render settle "
+          f"(settled {settled['msg']} vs {ay_before})")
   settled_snap = await snap(cdp, session_id)
   sc.check(settled_snap["depth"] == "compact", "depth returned to compact")
   return rows
@@ -621,7 +617,15 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   for i in range(40):
     await session_mgr.save_chat_event(sid, {"type": "user", "content": f"history question {i:02d}"})
     await session_mgr.save_chat_event(
-        sid, {"type": "assistant", "message": {"content": [{"type": "text", "text": f"history answer {i:02d}"}]}})
+        sid, {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": f"history answer {i:02d}"
+                }]
+            }
+        })
     await session_mgr.save_chat_event(sid, {"type": "master_done"})
   other = await session_mgr.create_session(
       CreateSessionRequest(name="Reading-position second"), backend="fake-scripted")
@@ -629,7 +633,15 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   for i in range(3):
     await session_mgr.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})
     await session_mgr.save_chat_event(
-        sid_b, {"type": "assistant", "message": {"content": [{"type": "text", "text": f"Session B answer {i}"}]}})
+        sid_b, {
+            "type": "assistant",
+            "message": {
+                "content": [{
+                    "type": "text",
+                    "text": f"Session B answer {i}"
+                }]
+            }
+        })
     await session_mgr.save_chat_event(sid_b, {"type": "master_done"})
   bootstrap = await build_session_bootstrap_data(sid, session_mgr)
   return sid, sid_b, bootstrap.messages, session_mgr
@@ -643,7 +655,15 @@ async def broadcast_user(session_mgr, sid: str, text: str) -> None:
 async def broadcast_assistant_draft(session_mgr, sid: str, text: str) -> None:
   """One real stream delta: the assistant event buffers into the live draft."""
   await session_mgr.persist_and_broadcast(
-      sid, {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}})
+      sid, {
+          "type": "assistant",
+          "message": {
+              "content": [{
+                  "type": "text",
+                  "text": text
+              }]
+          }
+      })
 
 
 async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
@@ -660,8 +680,8 @@ async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
 # --- scenarios --------------------------------------------------------------
 
 
-async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
-                        evidence_dir: Path, results: list[dict]) -> None:
+async def run_scenarios(
+    cdp: CDP, page: str, sid: str, sid_b: str, session_mgr, evidence_dir: Path, results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
   ``page`` is the CDP page session the browser calls ride; ``sid``/``sid_b``
@@ -674,19 +694,17 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   # -- setup: engine mounted, compact depth (the fresh view opens outline) ---
   sc = Scenario("setup_engine_mounted")
   await wait_for(
-      cdp, cs,
-      "Chat.TurnEngine && document.getElementById('messages') "
+      cdp,
+      cs, "Chat.TurnEngine && document.getElementById('messages') "
       "&& Chat.TurnEngine.activeFor(document.getElementById('messages')) "
       "&& document.querySelector('#messages [data-message-id]')",
       label="turn engine mounted with rendered messages")
   head_first_id = await ev(
-      cdp, cs,
-      "document.querySelector('#messages [data-message-id]').getAttribute('data-message-id')")
+      cdp, cs, "document.querySelector('#messages [data-message-id]').getAttribute('data-message-id')")
   await ev(cdp, cs, INSTALL_HELPERS_JS)
   await ev(cdp, cs, INSTALL_INSTRUMENT_JS)
   await ev(cdp, cs, "window.__sessionId = " + json.dumps(sid))
-  await ev(cdp, cs,
-           "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
+  await ev(cdp, cs, "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
   await settle()
   state = await snap(cdp, cs)
   sc.check(state["pinned"] is True, "engine mounted bottom-pinned")
@@ -704,8 +722,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await wheel(cdp, cs, 100)
   after = await snap(cdp, cs)
   sc.check(before["pinned"] is True, "started pinned at the bottom")
-  sc.check(after["top"] < before["top"] - 60,
-           f"the wheel moved the view up ({before['top']} -> {after['top']})")
+  sc.check(after["top"] < before["top"] - 60, f"the wheel moved the view up ({before['top']} -> {after['top']})")
   sc.check(after["pinned"] is False, "pin intent cleared by the upward scroll")
   sc.check(after["jumpBtn"] is True, "jump button shown")
   sc.data.update({"before": before, "after": after})
@@ -766,14 +783,13 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await scroll_write(cdp, cs, 450)
   pre = await snap(cdp, cs)
   await wheel_until_trigger(cdp, cs)
-  lead_key = await ev(cdp, cs,
-      "Chat.TurnEngine.activeFor(document.getElementById('messages')).segments[0].key")
+  lead_key = await ev(cdp, cs, "Chat.TurnEngine.activeFor(document.getElementById('messages')).segments[0].key")
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   await wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="pagination fetch fired")
   await wait_for(
-      cdp, cs,
-      "Chat.TurnEngine.activeFor(document.getElementById('messages'))"
+      cdp,
+      cs, "Chat.TurnEngine.activeFor(document.getElementById('messages'))"
       ".entries.some(e => e.msg && e.msg.id === 'pg1_00u')",
       label="older page ingested")
   immediate = await snap(cdp, cs)
@@ -783,38 +799,50 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   ay_settled = await anchor_y(cdp, cs, anchor["id"])
   fetches = await ev(cdp, cs, "window.__fetchLog.length")
   sc.check(fetches == 1, f"exactly one page fetched (got {fetches})")
-  sc.check(pos_holds(ay_before, ay_settled),
-           f"anchor {anchor['id']} holds its viewport offset once rendering settles")
-  sc.check(settled["bottom"] > 150,
-           f"reader not parked at the new bottom (bottom={settled['bottom']})")
+  sc.check(pos_holds(ay_before, ay_settled), f"anchor {anchor['id']} holds its viewport offset once rendering settles")
+  sc.check(settled["bottom"] > 150, f"reader not parked at the new bottom (bottom={settled['bottom']})")
   sc.check(settled["pinned"] is False, "pin intent stays cleared")
-  sc.check(settled["height"] - pre["height"] > 1200,
-           f"added history exceeds the old scroll range (height {pre['height']} -> {settled['height']})")
-  merge_state = await ev(cdp, cs, (
-      "(() => {const e = Chat.TurnEngine.activeFor(document.getElementById('messages'));"
-      "const seg = e.segments.find(sg => sg.entries.some(en => en.msg && en.msg.id === 'pg1_24u'));"
-      "return {merged: seg ? seg.key || ('flat#' + e.segments.indexOf(seg)) : null,"
-      "rederives: e.stats.rederivesOfSettledTurns};})()"))
+  sc.check(
+      settled["height"] - pre["height"] > 1200,
+      f"added history exceeds the old scroll range (height {pre['height']} -> {settled['height']})")
+  merge_state = await ev(
+      cdp, cs, (
+          "(() => {const e = Chat.TurnEngine.activeFor(document.getElementById('messages'));"
+          "const seg = e.segments.find(sg => sg.entries.some(en => en.msg && en.msg.id === 'pg1_24u'));"
+          "return {merged: seg ? seg.key || ('flat#' + e.segments.indexOf(seg)) : null,"
+          "rederives: e.stats.rederivesOfSettledTurns};})()"))
   # The page's open trailing span derives under the shared span rule against
   # the head's leading turn: one fused turn whose conclusion and separator are
   # the head-leading turn's, with the seam round's head message on the front.
   expected_merged = 'pg1_24u|' + '|'.join(lead_key.split('|')[1:]) if lead_key else None
-  sc.check(merge_state["merged"] == expected_merged,
-           f"the page's trailing span fused with the head's leading turn "
-           f"({merge_state}, expected {expected_merged})")
-  sc.check(settled["bottom"] > 150 or pos_holds(ay_before, ay_immediate, tol=40),
-           "already right after the update the reader is not thrown toward the bottom")
-  sc.data.update({
-      "anchor": anchor, "ay_before": ay_before, "ay_immediate": ay_immediate,
-      "ay_settled": ay_settled, "pre": pre, "immediate": immediate, "settled": settled,
-      "fetches": fetches, "merge": merge_state, "lead_key": lead_key,
-  })
+  sc.check(
+      merge_state["merged"] == expected_merged, f"the page's trailing span fused with the head's leading turn "
+      f"({merge_state}, expected {expected_merged})")
+  sc.check(
+      settled["bottom"] > 150 or pos_holds(ay_before, ay_immediate, tol=40),
+      "already right after the update the reader is not thrown toward the bottom")
+  sc.data.update(
+      {
+          "anchor": anchor,
+          "ay_before": ay_before,
+          "ay_immediate": ay_immediate,
+          "ay_settled": ay_settled,
+          "pre": pre,
+          "immediate": immediate,
+          "settled": settled,
+          "fetches": fetches,
+          "merge": merge_state,
+          "lead_key": lead_key,
+      })
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "pagination_hold"))
 
   # -- S6: a stale pagination response after a session switch is dropped ----
   sc = Scenario("session_switch_drops_stale_response")
-  stale_page = {"messages": [stub_message("user", "stale_marker_u", "STALE-PAGE-MARKER", 0)],
-                "has_more": False, "next_before": -1000}
+  stale_page = {
+      "messages": [stub_message("user", "stale_marker_u", "STALE-PAGE-MARKER", 0)],
+      "has_more": False,
+      "next_before": -1000
+  }
   await ev(cdp, cs, "window.__stubPages = [" + json.dumps(stale_page) + "]")
   await ev(cdp, cs, "window.__delayNextMs = 2500")
   await ev(cdp, cs, "window.__fetchLog = []")
@@ -822,18 +850,14 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await wait_for(cdp, cs, "window.__fetchLog.length >= 1", label="stale fetch in flight")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_b) + ")")
   await wait_for(
-      cdp, cs,
-      "document.body.innerText.includes('Session B opening question 0')",
-      label="session B rendered")
+      cdp, cs, "document.body.innerText.includes('Session B opening question 0')", label="session B rendered")
   await asyncio.sleep(3.0)
   body_text = await ev(cdp, cs, "document.body.innerText.includes('STALE-PAGE-MARKER')")
-  stale_node = await ev(cdp, cs,
-      "(Chat.TurnEngine.activeFor(document.getElementById('messages'))||{entries:[]})"
+  stale_node = await ev(
+      cdp, cs, "(Chat.TurnEngine.activeFor(document.getElementById('messages'))||{entries:[]})"
       ".entries.some(e => e.msg && e.msg.id === 'stale_marker_u')")
   active = await snap(cdp, cs)
-  mounted_b = await ev(
-      cdp, cs,
-      "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted_b = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
   sc.check(active["sessionId"] == sid_b, "session B is the active view")
   sc.check(not body_text and not stale_node, "the stale page's content never rendered")
   sc.check(mounted_b, "engine mounted for session B")
@@ -844,13 +868,13 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   sc = Scenario("pagination_failure_retry_and_last_page")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid) + ")")
   await wait_for(
-      cdp, cs,
+      cdp,
+      cs,
       "Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'))",
       label="session A re-rendered")
   await settle()
   await ev(cdp, cs, "window.__sessionId = " + json.dumps(sid))
-  await ev(cdp, cs,
-           "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
+  await ev(cdp, cs, "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
   await ev(cdp, cs, "window.__failNextStatus = 500")
   await ev(cdp, cs, "window.__stubPages = [" + json.dumps(page_payload(page2, has_more=False)) + "]")
   await scroll_write(cdp, cs, 450)
@@ -860,7 +884,9 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   await wait_for(
-      cdp, cs, "(document.getElementById('load-more-sentinel')||{dataset:{}}).dataset.state === 'failed'",
+      cdp,
+      cs,
+      "(document.getElementById('load-more-sentinel')||{dataset:{}}).dataset.state === 'failed'",
       label="sentinel entered the failed state")
   await settle()
   failed = await snap(cdp, cs)
@@ -871,8 +897,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   settled = await snap(cdp, cs)
   ay_settled = await anchor_y(cdp, cs, anchor["id"])
   sc.check(settled["sentinel"] is None, "last page removed the pagination hint")
-  sc.check(pos_holds(ay_before, ay_settled),
-           f"anchor {anchor['id']} holds through the retry and the hint's removal")
+  sc.check(pos_holds(ay_before, ay_settled), f"anchor {anchor['id']} holds through the retry and the hint's removal")
   sc.check(settled["bottom"] > 150, "reader not parked at the bottom")
   sc.data.update({"failed": failed, "settled": settled, "ay_before": ay_before, "ay_settled": ay_settled})
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "pagination_retry"))
@@ -885,19 +910,17 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   # can genuinely keep.
   await ev(cdp, cs, "switchSession(" + json.dumps(sid_b) + ")")
   await wait_for(
-      cdp, cs,
-      "document.body.innerText.includes('Session B opening question 0')",
-      label="session B rendered")
+      cdp, cs, "document.body.innerText.includes('Session B opening question 0')", label="session B rendered")
   await ev(cdp, cs, "switchSession(" + json.dumps(sid) + ")")
   await wait_for(
-      cdp, cs,
+      cdp,
+      cs,
       "Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages'))",
       label="session A re-rendered")
   await ev(cdp, cs, INSTALL_HELPERS_JS)
   await ev(cdp, cs, INSTALL_INSTRUMENT_JS)
   await ev(cdp, cs, "window.__sessionId = " + json.dumps(sid))
-  await ev(cdp, cs,
-           "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
+  await ev(cdp, cs, "document.querySelector('#page-depth-control button[data-page-depth=compact]').click()")
   await settle()
   await ev(cdp, cs, "document.getElementById('scroll-to-bottom').click()")
   await asyncio.sleep(0.4)
@@ -906,8 +929,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   reset_messages = await bootstrap_messages_now(sid, session_mgr)
-  payload = {"reset": True, "messages": reset_messages, "revision": "regression-reset",
-             "total": len(reset_messages)}
+  payload = {"reset": True, "messages": reset_messages, "revision": "regression-reset", "total": len(reset_messages)}
   await ev(cdp, cs, "window.__transcriptPayload = " + json.dumps(payload))
   await ev(cdp, cs, "setWorkerTranscriptMode({sessionId: SESSION_ID})")
   await wait_for(cdp, cs, "window.__transcriptReads >= 1", label="transcript poll fetched")
@@ -916,12 +938,9 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await ev(cdp, cs, "window.__transcriptPayload = null")
   settled = await snap(cdp, cs)
   ay_settled = await anchor_y(cdp, cs, anchor["id"])
-  mounted = await ev(
-      cdp, cs,
-      "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
   sc.check(mounted, "the live engine survived the reset")
-  sc.check(pos_holds(ay_before, ay_settled),
-           f"anchor {anchor['id']} holds its viewport offset across the repaint")
+  sc.check(pos_holds(ay_before, ay_settled), f"anchor {anchor['id']} holds its viewport offset across the repaint")
   sc.check(settled["bottom"] > 150, "reader not thrown to the bottom by the repaint")
   sc.data.update({"anchor": anchor, "ay_before": ay_before, "ay_settled": ay_settled, "settled": settled})
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "transcript_reset"))
@@ -968,9 +987,9 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
     sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": None})
     await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_outline"))
     return
-  sc.check(engine_anchor0["kind"] == "message",
-           f"the engine anchored the reader on message {engine_anchor0['id']} "
-           f"at {engine_anchor0['offset']}px")
+  sc.check(
+      engine_anchor0["kind"] == "message", f"the engine anchored the reader on message {engine_anchor0['id']} "
+      f"at {engine_anchor0['offset']}px")
   sc.data.update({"approach_steps": approach_steps})
   depth_rows = await walk_depths(cdp, cs, sc, place, expect_clamp=False)
 
@@ -980,9 +999,9 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await wheel(cdp, cs, -600)
   await wait_reader_settled(cdp, cs)
   place2 = await pin_reading_place(cdp, cs)
-  sc.check(place2["engine_anchor"] is not None
-           and not anchor_held(place2["engine_anchor"], engine_anchor0),
-           f"the user's scroll chose a new reading place ({place2['engine_anchor']})")
+  sc.check(
+      place2["engine_anchor"] is not None and not anchor_held(place2["engine_anchor"], engine_anchor0),
+      f"the user's scroll chose a new reading place ({place2['engine_anchor']})")
   if place2["engine_anchor"] is not None and place2["engine_wrap"] is not None:
     wrap_key2 = place2["engine_wrap"]["key"]
     for depth in ("outline", "compact"):
@@ -991,32 +1010,38 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
       immediate = await depth_step_state(cdp, cs, place2["msg"]["id"], wrap_key2)
       await settle()
       settled = await depth_step_state(cdp, cs, place2["msg"]["id"], wrap_key2)
-      depth_rows.append({"depth": f"user-scroll->{depth}", "immediate": immediate,
-                         "settled": settled})
-      sc.check(anchor_held(immediate["engine_anchor"], place2["engine_anchor"])
-               and anchor_held(settled["engine_anchor"], place2["engine_anchor"]),
-               f"{depth}: the switches kept the user's newly read identity "
-               f"({immediate['engine_anchor']} vs {place2['engine_anchor']})")
+      depth_rows.append({"depth": f"user-scroll->{depth}", "immediate": immediate, "settled": settled})
+      sc.check(
+          anchor_held(immediate["engine_anchor"], place2["engine_anchor"]) and
+          anchor_held(settled["engine_anchor"], place2["engine_anchor"]),
+          f"{depth}: the switches kept the user's newly read identity "
+          f"({immediate['engine_anchor']} vs {place2['engine_anchor']})")
       if depth == "outline":
         clamp = immediate["clamp"]
         row_holds = (
-            immediate["row"] is not None
-            and abs(immediate["row"]["y"] - place2["engine_anchor"]["offset"])
-            <= ANCHOR_TOLERANCE_PX)
+            immediate["row"] is not None and
+            abs(immediate["row"]["y"] - place2["engine_anchor"]["offset"]) <= ANCHOR_TOLERANCE_PX)
         clamp_consistent = clamp is not None and abs(
             clamp["limitedScrollTop"] - immediate["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
-        sc.check(row_holds or clamp_consistent,
-                 f"{depth}: the newly read place survives on its fold row "
-                 f"(row {immediate['row']}, clamp {clamp})")
+        sc.check(
+            row_holds or clamp_consistent, f"{depth}: the newly read place survives on its fold row "
+            f"(row {immediate['row']}, clamp {clamp})")
       else:
-        sc.check(pos_holds(place2["ay"], immediate["msg"])
-                 and pos_holds(place2["ay"], settled["msg"]),
-                 f"{depth}: the newly read message holds its offset "
-                 f"(immediate {immediate['msg']}, settled {settled['msg']} vs {place2['ay']})")
+        sc.check(
+            pos_holds(place2["ay"], immediate["msg"]) and pos_holds(place2["ay"], settled["msg"]),
+            f"{depth}: the newly read message holds its offset "
+            f"(immediate {immediate['msg']}, settled {settled['msg']} vs {place2['ay']})")
   else:
     sc.check(cond=False, message="the user's scroll left no message anchor to walk with")
-  sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": wrap_before,
-                  "engine_anchor": engine_anchor0, "rows": depth_rows, "place2": place2})
+  sc.data.update(
+      {
+          "anchor": anchor,
+          "ay_before": ay_before,
+          "wrap_before": wrap_before,
+          "engine_anchor": engine_anchor0,
+          "rows": depth_rows,
+          "place2": place2
+      })
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_outline"))
 
   # -- S10: a viewport resize keeps the reading position ---------------------
@@ -1024,15 +1049,23 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   before = await snap(cdp, cs)
   await cdp.send(
-      "Emulation.setDeviceMetricsOverride",
-      {"width": 1440, "height": 600, "deviceScaleFactor": 1, "mobile": False},
+      "Emulation.setDeviceMetricsOverride", {
+          "width": 1440,
+          "height": 600,
+          "deviceScaleFactor": 1,
+          "mobile": False
+      },
       session_id=cs)
   await asyncio.sleep(1.0)
   resized = await snap(cdp, cs)
   ay_resized = await anchor_y(cdp, cs, anchor["id"])
   await cdp.send(
-      "Emulation.setDeviceMetricsOverride",
-      {"width": 1440, "height": 900, "deviceScaleFactor": 1, "mobile": False},
+      "Emulation.setDeviceMetricsOverride", {
+          "width": 1440,
+          "height": 900,
+          "deviceScaleFactor": 1,
+          "mobile": False
+      },
       session_id=cs)
   await asyncio.sleep(1.0)
   restored = await snap(cdp, cs)
@@ -1057,9 +1090,7 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await settle()
   back = await snap(cdp, cs)
   ay_back = await anchor_y(cdp, cs, anchor["id"])
-  mounted = await ev(
-      cdp, cs,
-      "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
+  mounted = await ev(cdp, cs, "!!(Chat.TurnEngine && Chat.TurnEngine.activeFor(document.getElementById('messages')))")
   sc.check(hidden["viewport"] == 0, "the chat column actually hid")
   sc.check(back["viewport"] > 0, "the chat column is visible again")
   sc.check(mounted, "engine still mounted after hide/show")
@@ -1089,8 +1120,14 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
     await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_clamp"))
     return
   depth_rows = await walk_depths(cdp, cs, sc, place, expect_clamp=True)
-  sc.data.update({"anchor": anchor, "ay_before": ay_before, "wrap_before": wrap_before,
-                  "engine_anchor": engine_anchor0, "rows": depth_rows})
+  sc.data.update(
+      {
+          "anchor": anchor,
+          "ay_before": ay_before,
+          "wrap_before": wrap_before,
+          "engine_anchor": engine_anchor0,
+          "rows": depth_rows
+      })
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "depth_clamp"))
 
   # -- S13: single-turn collapse and reopen keep the reading content ---------
@@ -1119,21 +1156,19 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await settle()
   folded_settled = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
   steps.append({"step": "collapse", "immediate": folded_now, "settled": folded_settled})
-  sc.check(anchor_held(folded_now["engine_anchor"], engine_anchor0)
-           and anchor_held(folded_settled["engine_anchor"], engine_anchor0),
-           f"the collapse kept the reading identity "
-           f"({folded_now['engine_anchor']} vs {engine_anchor0})")
-  sc.check(folded_now["msg"] is None and folded_settled["msg"] is None,
-           "the collapse hid the reading message")
+  sc.check(
+      anchor_held(folded_now["engine_anchor"], engine_anchor0) and
+      anchor_held(folded_settled["engine_anchor"], engine_anchor0), f"the collapse kept the reading identity "
+      f"({folded_now['engine_anchor']} vs {engine_anchor0})")
+  sc.check(folded_now["msg"] is None and folded_settled["msg"] is None, "the collapse hid the reading message")
   clamp = folded_now["clamp"]
   row_holds = (
-      folded_now["row"] is not None
-      and abs(folded_now["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
+      folded_now["row"] is not None and abs(folded_now["row"]["y"] - engine_anchor0["offset"]) <= ANCHOR_TOLERANCE_PX)
   clamp_consistent = clamp is not None and abs(
       clamp["limitedScrollTop"] - folded_now["snap"]["top"]) <= ANCHOR_TOLERANCE_PX
-  sc.check(row_holds or clamp_consistent,
-           f"the fold row carries the reading offset or the clamp says why "
-           f"(row {folded_now['row']}, offset {engine_anchor0['offset']}, clamp {clamp})")
+  sc.check(
+      row_holds or clamp_consistent, f"the fold row carries the reading offset or the clamp says why "
+      f"(row {folded_now['row']}, offset {engine_anchor0['offset']}, clamp {clamp})")
 
   await ev(cdp, cs, CLEAR_CLAMP_JS)
   await ev(cdp, cs, f"document.querySelector('[data-turn-key=\"{wrap_key}\"] .turn-row').click()")
@@ -1141,18 +1176,24 @@ async def run_scenarios(cdp: CDP, page: str, sid: str, sid_b: str, session_mgr,
   await settle()
   reopened_settled = await depth_step_state(cdp, cs, engine_anchor0["id"], wrap_key)
   steps.append({"step": "reopen", "immediate": reopened_now, "settled": reopened_settled})
-  sc.check(anchor_held(reopened_now["engine_anchor"], engine_anchor0)
-           and anchor_held(reopened_settled["engine_anchor"], engine_anchor0),
-           f"the reopen kept the reading identity "
-           f"({reopened_now['engine_anchor']} vs {engine_anchor0})")
+  sc.check(
+      anchor_held(reopened_now["engine_anchor"], engine_anchor0) and
+      anchor_held(reopened_settled["engine_anchor"], engine_anchor0), f"the reopen kept the reading identity "
+      f"({reopened_now['engine_anchor']} vs {engine_anchor0})")
   restore_target = {"y": engine_anchor0["offset"], "gap": None}
-  sc.check(pos_holds(restore_target, reopened_now["msg"])
-           and pos_holds(restore_target, reopened_settled["msg"]),
-           f"the reopen put the reading message back at its offset "
-           f"(immediate {reopened_now['msg']}, settled {reopened_settled['msg']} "
-           f"vs {engine_anchor0['offset']})")
-  sc.data.update({"anchor": anchor, "ay_before": ay_before, "engine_anchor": engine_anchor0,
-                  "wrap_key": wrap_key, "steps": steps})
+  sc.check(
+      pos_holds(restore_target, reopened_now["msg"]) and pos_holds(restore_target, reopened_settled["msg"]),
+      f"the reopen put the reading message back at its offset "
+      f"(immediate {reopened_now['msg']}, settled {reopened_settled['msg']} "
+      f"vs {engine_anchor0['offset']})")
+  sc.data.update(
+      {
+          "anchor": anchor,
+          "ay_before": ay_before,
+          "engine_anchor": engine_anchor0,
+          "wrap_key": wrap_key,
+          "steps": steps
+      })
   await sc.finish(cdp, cs, results, await screenshot(cdp, cs, evidence_dir, "single_turn_fold"))
 
 
@@ -1178,17 +1219,26 @@ async def run_harness(args: argparse.Namespace) -> None:
   server_port = pick_free_port()
   config = {
       "headless_chrome_bin": host_chrome_bin,
-      "server": {"port": server_port, "host": "127.0.0.1"},
-      "backends": {
-          "options": [{
-              "id": "fake-scripted",
-              "label": "Scripted (never launches)",
-              "type": "cc-claude",
-              "model": "scripted-model",
-          }],
-          "preference": ["fake-scripted"],
+      "server": {
+          "port": server_port,
+          "host": "127.0.0.1"
       },
-      "paths": {"worktree_dir": str(home / "worktrees")},
+      "backends":
+          {
+              "options":
+                  [
+                      {
+                          "id": "fake-scripted",
+                          "label": "Scripted (never launches)",
+                          "type": "cc-claude",
+                          "model": "scripted-model",
+                      }
+                  ],
+              "preference": ["fake-scripted"],
+          },
+      "paths": {
+          "worktree_dir": str(home / "worktrees")
+      },
   }
   (home / "config.yaml").write_text(json.dumps(config, indent=2), encoding="utf-8")
   access_key = mint_access_key("scroll-regression-key-")
@@ -1213,8 +1263,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   import uvicorn
 
   from server import app as server_app
-  server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port,
-                                 log_level="error", lifespan="off")
+  server_config = uvicorn.Config(server_app, host="127.0.0.1", port=server_port, log_level="error", lifespan="off")
   server = uvicorn.Server(server_config)
   serve_task = asyncio.get_running_loop().create_task(server.serve())
   deadline = time.monotonic() + 30
@@ -1263,20 +1312,21 @@ async def run_harness(args: argparse.Namespace) -> None:
   try:
     page_session, _target = await open_cdp_page(cdp, ("Page", "Runtime", "Network"))
     await cdp.send(
-        "Network.setCookie",
-        {"name": "charliebot_access_key", "value": key, "url": base + "/"},
+        "Network.setCookie", {
+            "name": "charliebot_access_key",
+            "value": key,
+            "url": base + "/"
+        },
         session_id=page_session)
     # The client's own auth gate reads localStorage before first paint; seed
     # it the same way a logged-in browser carries it, so the auth overlay
     # never covers the page and the input domain reaches the chat column.
     await cdp.send(
         "Page.addScriptToEvaluateOnNewDocument",
-        {"source": "try { localStorage.setItem('charliebot_access_key', "
-                   + json.dumps(key) + "); } catch (e) {}"},
+        {"source": "try { localStorage.setItem('charliebot_access_key', " + json.dumps(key) + "); } catch (e) {}"},
         session_id=page_session)
     await cdp.send("Page.navigate", {"url": f"{base}/?session={sid}"}, session_id=page_session)
-    await run_scenarios(cdp, page_session, sid, sid_b, session_mgr, evidence_dir,
-                        results_payload["scenarios"])
+    await run_scenarios(cdp, page_session, sid, sid_b, session_mgr, evidence_dir, results_payload["scenarios"])
     results_payload["console_errors"] = list(cdp.console_errors)
   except Exception as exc:
     results_payload["aborted_by"] = repr(exc)
@@ -1305,16 +1355,17 @@ async def run_harness(args: argparse.Namespace) -> None:
 
 def main() -> None:
   parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-  parser.add_argument("--evidence-dir", default=None,
-                      help="where screenshots and the results JSON land (default: host temp dir)")
-  parser.add_argument("--chrome", default=None,
-                      help="chrome binary override (default: config headless_chrome_bin, then google-chrome)")
-  parser.add_argument("--keep", action="store_true",
-                      help="keep the temp home/profile for debugging (still stops the browser)")
+  parser.add_argument(
+      "--evidence-dir", default=None, help="where screenshots and the results JSON land (default: host temp dir)")
+  parser.add_argument(
+      "--chrome", default=None, help="chrome binary override (default: config headless_chrome_bin, then google-chrome)")
+  parser.add_argument(
+      "--keep", action="store_true", help="keep the temp home/profile for debugging (still stops the browser)")
   args = parser.parse_args()
   if args.evidence_dir is None:
-    args.evidence_dir = str(Path(tempfile.gettempdir()) / (
-        "charliebot-scroll-regression-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
+    args.evidence_dir = str(
+        Path(tempfile.gettempdir()) /
+        ("charliebot-scroll-regression-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())))
   try:
     asyncio.run(run_harness(args))
   except SystemExit:

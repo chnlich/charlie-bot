@@ -9,15 +9,15 @@ logs all five as None. Every string here is synthetic.
 
 import io
 import json
+import pathlib
 import wave
-from pathlib import Path
 
+import fastapi
 import pytest
-from fastapi import UploadFile
-from structlog.testing import capture_logs
+from structlog import testing
 
 from src.api import voice
-from src.core.config import CharlieBotConfig
+from src.core import config
 
 SESSION_ID = "session-a"
 BACKEND = "local"
@@ -47,14 +47,14 @@ def _wav_body(samples: int = 160) -> bytes:
   return buffer.getvalue()
 
 
-def _upload_file(body: bytes) -> UploadFile:
-  return UploadFile(file=io.BytesIO(body), filename="recording.wav")
+def _upload_file(body: bytes) -> fastapi.UploadFile:
+  return fastapi.UploadFile(file=io.BytesIO(body), filename="recording.wav")
 
 
 @pytest.fixture
-def endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def endpoint(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """The upload endpoint against a temporary sessions dir and a faked decode."""
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home")
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
   monkeypatch.setattr(voice, "get_config", lambda: cfg)
   monkeypatch.setattr(voice, "_speech_bundle", _fake_bundle)
   monkeypatch.setattr(voice, "_transcribe_with_bundle", _fake_decode)
@@ -69,8 +69,8 @@ async def _fake_decode(session_id: str, bundle: object, pcm_bytes: bytes) -> str
   return DECODED_TEXT
 
 
-async def _post(cfg: CharlieBotConfig, devices: str | None) -> tuple[object, list[dict]]:
-  with capture_logs() as logs:
+async def _post(cfg: config.CharlieBotConfig, devices: str | None) -> tuple[object, list[dict]]:
+  with testing.capture_logs() as logs:
     response = await voice.upload_voice_recording(
         SESSION_ID, audio=_upload_file(_wav_body()), backend=BACKEND, devices=devices)
   return response, logs
@@ -110,7 +110,7 @@ async def test_an_absent_devices_field_logs_all_five_as_none(endpoint) -> None:
 
 
 @pytest.mark.asyncio
-async def test_malformed_devices_json_is_a_400_that_persists_nothing(endpoint, tmp_path: Path) -> None:
+async def test_malformed_devices_json_is_a_400_that_persists_nothing(endpoint, tmp_path: pathlib.Path) -> None:
   response, logs = await _post(endpoint, "not json at all")
 
   assert response.status_code == 400
@@ -121,7 +121,7 @@ async def test_malformed_devices_json_is_a_400_that_persists_nothing(endpoint, t
 
 
 @pytest.mark.asyncio
-async def test_a_devices_field_with_a_wrong_key_set_is_a_400(endpoint, tmp_path: Path) -> None:
+async def test_a_devices_field_with_a_wrong_key_set_is_a_400(endpoint, tmp_path: pathlib.Path) -> None:
   short = {key: value for key, value in DEVICES.items() if key != "output_device"}
 
   response, logs = await _post(endpoint, json.dumps(short))

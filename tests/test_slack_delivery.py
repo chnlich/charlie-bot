@@ -47,7 +47,7 @@ _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
 _TEAM = "T_TEST"
 _RETRY_DELAYS_PATCH_TARGET = "src.core.thread_entry._RETRY_DELAYS"
-_QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc.queued_user_event_ids"
+_QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc_queue.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/thread_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.
@@ -75,7 +75,7 @@ def _listener_seam(
 
   ``_bot_client`` always returns *client*. *tasks* feeds ``create_logged_task``'s
   task spawner, *trigger* replaces ``trigger_master``, *queued* pins
-  ``master_cc.queued_user_event_ids``; each stays unpatched when its argument is
+  ``master_cc_queue.queued_user_event_ids``; each stays unpatched when its argument is
   None. Any further patch a test needs (retry delays, log capture) stays visible
   at the call site as a sibling context.
   """

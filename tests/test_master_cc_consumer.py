@@ -30,7 +30,7 @@ from conftest import (
     run_session_consumer,
 )
 
-from src.agents import master_cc, master_cc_run, master_cc_state
+from src.agents import master_cc_queue, master_cc_run, master_cc_state
 from src.agents.backends.base import make_result_event
 from src.core import event_types as ET
 from src.core import latex, streaming, thinking_state
@@ -86,7 +86,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
   observed_cc_session_ids: list = []
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple[str | None, int, str | None, dict]:
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     observed_cc_session_ids.append(item.session_meta.cc_session_id)
     return ("cc-id-from-bootstrap", 0, None, {})
 
@@ -134,7 +134,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       return
     injected = True
     injected_task = asyncio.create_task(
-        master_cc.run_message(
+        master_cc_queue.run_message(
             cfg,
             SessionMetadata(id=session_id, name="t"),
             "extra",
@@ -143,7 +143,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
             skip_user_event=True,
         ))
 
-  async def fake_run_cc(item: master_cc._WorkItem) -> tuple:
+  async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple:
     entries.append(thinking_state.busy_since(session_id))
     if inject_at == "run_cc":
       await _inject_once()
@@ -182,7 +182,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
   async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        master_cc.run_message(
+        master_cc_queue.run_message(
             cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, ET.USER, skip_user_event=True))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
@@ -241,7 +241,8 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session.id):
-    result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), ET.USER, skip_user_event=True)
+    result = await master_cc_queue.run_message(
+        cfg, session, "hi", session_mgr.callbacks(), ET.USER, skip_user_event=True)
     assert result == backend_returned_id
     await drain_session_consumer(session.id, timeout=5)
 
@@ -276,7 +277,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 
   item = make_work_item(
       cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
-  await master_cc._run_cc(item)
+  await master_cc_run._run_cc(item)
 
   events = session_mgr.load_chat_events_sync(session.id)
   dropped = [e for e in events if e.get("type") == ET.RESUME_CONTEXT_DROPPED]
@@ -334,7 +335,7 @@ async def _run_stream_consumer(
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session_id):
-    await master_cc.run_message(cfg, meta, "hi", cb, ET.USER, skip_user_event=True)
+    await master_cc_queue.run_message(cfg, meta, "hi", cb, ET.USER, skip_user_event=True)
     await drain_session_consumer(session_id, timeout=5)
   return cb
 
@@ -365,7 +366,7 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
 
-  async def fake_resume_cc(item: master_cc._WorkItem) -> tuple:
+  async def fake_resume_cc(item: master_cc_state._WorkItem) -> tuple:
     return "cc-resumed-id", 0, None, {"zero_output": True}
 
   patch_resume_seams(monkeypatch, resume_cc=fake_resume_cc)

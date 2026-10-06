@@ -88,7 +88,7 @@ async def test_wake_path_overlay_four_states(
       lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or conftest.FakeBackend())
 
   item = conftest.make_work_item(cfg, models.SessionMetadata(id="s", name="S", backend="fake"), option)
-  cc_session_id, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+  cc_session_id, exit_code, error_msg, _extras = await master_cc.master_cc_run._run_cc(item)
 
   assert cc_session_id is None
   assert exit_code == 0

@@ -45,7 +45,7 @@ log = LazyStructlogLogger()
 
 router = APIRouter()
 
-_load_cancel_master = deferred_import_loader("cancel_master", "src.agents.master_cc")
+_load_cancel_master = deferred_import_loader("cancel_master", "src.agents.master_cc_queue")
 
 
 def __getattr__(name: str) -> Any:
@@ -279,9 +279,9 @@ async def run_and_finalize(
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
   # lazy: keeps the master-turn chain off the M99 server import floor (docs/perf_baseline.md)
-  from src.agents.master_cc import run_message
+  from src.agents import master_cc_queue
   try:
-    await run_message(
+    await master_cc_queue.run_message(
         cfg,
         meta,
         content,

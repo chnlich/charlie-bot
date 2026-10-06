@@ -154,7 +154,7 @@ async def reconcile_master_identity(
   ``_MasterScanFailedError``: no records were judged, so a replay pass run on the
   empty map would double-answer turns — every caller skips replay on it.
   """
-  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+  from src.agents import master_cc_queue, master_cc_run  # lazy: mirrors the spawner import's cycle guard
 
   try:
     metas = await asyncio.to_thread(session_mgr.list_active_session_metas)
@@ -209,7 +209,7 @@ async def reconcile_master_identity(
         pid_start=record.pid_start,
         started_at=record.started_at,
         backend_type=option.type,
-        translate=master_cc._build_fresh_translate(cfg, option),
+        translate=master_cc_run._build_fresh_translate(cfg, option),
         host_boot_time=host_boot,
     )
     log.info(
@@ -240,7 +240,7 @@ async def reconcile_master_identity(
             resolution.outcome is runs.RunOutcome.DIED and resolution.reason == runs.DIED_WITHOUT_RESULT_REASON and
             not record.user_event_ids))
     if follow:
-      future = await master_cc.enqueue_master_resume(
+      future = await master_cc_queue.enqueue_master_resume(
           cfg,
           meta,
           record,
@@ -276,7 +276,7 @@ async def _replay_unanswered_inputs(
   pass's full exclusion map: replaying with a partial map double-answers a
   turn.
   """
-  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+  from src.agents import master_cc_queue  # lazy: mirrors the spawner import's cycle guard
 
   for meta in await asyncio.to_thread(session_mgr.list_active_session_metas):
     if meta.profile is not None:
@@ -285,12 +285,12 @@ async def _replay_unanswered_inputs(
       continue
     try:
       events = session_mgr.load_chat_events_sync(meta.id)
-      skip = excluded.get(meta.id, set()) | master_cc.queued_user_event_ids(meta.id)
+      skip = excluded.get(meta.id, set()) | master_cc_queue.queued_user_event_ids(meta.id)
       for ev in unanswered_input_events(events, skip):
         log.warning("master_replaying_user_message", session=meta.id, event_id=ev.get("id"))
         replay = (
-            master_cc.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type")
-            == ET.SCHEDULED_TRIGGER else master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
+            master_cc_queue.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type")
+            == ET.SCHEDULED_TRIGGER else master_cc_queue.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
         tasks.create_logged_task(replay, name=f"master-replay-{meta.id[:8]}")
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)

@@ -1065,7 +1065,7 @@ class TaskExecutionAdapter:
         notice (the task summary and where the earlier history lives), while an
         input-only change keeps the conversation.
         """
-    from src.agents.master_cc import run_message
+    from src.agents import master_cc_queue
     from src.agents.master_cc_state import TaskRunBinding
 
     session_id, run_id = meta.id, run.id
@@ -1131,7 +1131,7 @@ class TaskExecutionAdapter:
         inputs=len(run.input_event_ids),
         prompt_hash=snapshot.prompt_hash[:12],
         fresh_native=fresh_native)
-    await run_message(
+    await master_cc_queue.run_message(
         self._cfg,
         meta,
         prompt,
@@ -1706,7 +1706,7 @@ class TaskExecutionAdapter:
         out-of-space failure can reach the end-landing retry after this call
         has returned.
         """
-    from src.agents.master_cc import enqueue_master_resume
+    from src.agents import master_cc_queue
     from src.agents.master_cc_state import TaskRunBinding
     from src.core import models
 
@@ -1723,7 +1723,7 @@ class TaskExecutionAdapter:
 
     on_task_finish = self._manager_finish_recorder(meta.id, run.id, option, transport_dir, ended_at=ended_at)
 
-    return await enqueue_master_resume(
+    return await master_cc_queue.enqueue_master_resume(
         self._cfg,
         meta,
         record,

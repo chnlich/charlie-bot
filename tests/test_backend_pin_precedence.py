@@ -139,7 +139,7 @@ async def test_replay_runs_on_the_sessions_pinned_backend_not_backend_options_ze
   conftest.patch_instructions_content(monkeypatch)
 
   user_event = {"id": "u1", "type": "user", "content": "unanswered message"}
-  await master_cc.replay_user_message(cfg, session, user_event, session_mgr.callbacks())
+  await master_cc.master_cc_queue.replay_user_message(cfg, session, user_event, session_mgr.callbacks())
 
   assert captured["option"].id == "codex-o3"
 
@@ -156,7 +156,7 @@ async def test_replay_unresolvable_pin_hard_fails_not_substituted(
   await _expect_pin_hard_fail(
       session_mgr,
       session.id,
-      lambda: master_cc.replay_user_message(cfg, session, user_event, session_mgr.callbacks()),
+      lambda: master_cc.master_cc_queue.replay_user_message(cfg, session, user_event, session_mgr.callbacks()),
       monkeypatch,
       error_substring="codex-ghost-9",
   )

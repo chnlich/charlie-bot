@@ -48,7 +48,7 @@ def test_build_master_env_writes_own_session_and_keeps_inherited_path(
   monkeypatch.setenv("CLAUDECODE", "1")
   monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
 
-  env = master_cc._build_master_env(cfg, "own-session")
+  env = master_cc.master_cc_run._build_master_env(cfg, "own-session")
 
   assert env[SESSION_ID_ENV_VAR] == "own-session"
   assert env["GIT_CEILING_DIRECTORIES"] == str(tmp_path / "home")
@@ -118,7 +118,7 @@ async def test_run_cc_thread_session_pins_clc_context_window(tmp_path: Path, mon
       backend="charlie-code-kimi-k3",
       slack_origin=models.SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"))
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
-  await master_cc._run_cc(item)
+  await master_cc.master_cc_run._run_cc(item)
 
   assert captured["option"].context_window == THREAD_CONTEXT_WINDOW  # type: ignore[attr-defined]
   assert command_window(captured["cmd"]) == "96000"  # type: ignore[index]
@@ -135,21 +135,21 @@ async def test_run_cc_main_session_keeps_option_context_window(tmp_path: Path, m
 
   session_meta = models.SessionMetadata(id="session-id", name="Main", backend="charlie-code-kimi-k3")
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
-  await master_cc._run_cc(item)
+  await master_cc.master_cc_run._run_cc(item)
 
   assert captured["option"].context_window == 409_600  # type: ignore[attr-defined]
   assert command_window(captured["cmd"]) == "409600"  # type: ignore[index]
 
 
 def test_route_resume_session_uses_native_resume_id_for_charlie_code() -> None:
-  assert master_cc._route_resume_session("charlie-code", "existing-session-id") == (
+  assert master_cc.master_cc_run._route_resume_session("charlie-code", "existing-session-id") == (
       [],
       "existing-session-id",
   )
 
 
 def test_route_resume_session_uses_native_resume_id_for_antigravity() -> None:
-  assert master_cc._route_resume_session("antigravity", "existing-session-id") == (
+  assert master_cc.master_cc_run._route_resume_session("antigravity", "existing-session-id") == (
       [],
       "existing-session-id",
   )
@@ -204,7 +204,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
 
   fresh_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy")
   item1 = make_work_item(cfg, fresh_meta, cfg.backends.options[0])
-  cc_session_id, exit_code, error_msg, _ = await master_cc._run_cc(item1)
+  cc_session_id, exit_code, error_msg, _ = await master_cc.master_cc_run._run_cc(item1)
 
   assert cc_session_id == "conv-abc"
   assert exit_code == 0
@@ -213,7 +213,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   # Run 2: the anchored session passes the anchor through as the resume id.
   anchored_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
   item2 = make_work_item(cfg, anchored_meta, cfg.backends.options[0])
-  await master_cc._run_cc(item2)
+  await master_cc.master_cc_run._run_cc(item2)
 
   assert captures["kwargs"]["resume_session_id"] == "conv-abc"
 
@@ -231,7 +231,7 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
 
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
 
-  _cc_session_id, exit_code, error_msg, _finish_extras = await master_cc._run_cc(item)
+  _cc_session_id, exit_code, error_msg, _finish_extras = await master_cc.master_cc_run._run_cc(item)
 
   assert exit_code != 0
   assert error_msg is not None
@@ -261,7 +261,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
 
   item = make_work_item(cfg, session_meta, option)
 
-  await master_cc._run_cc(item)
+  await master_cc.master_cc_run._run_cc(item)
 
   backend_kwargs = captures["kwargs"]
   assert backend_kwargs["extra_flags"] == ["--exclude-dynamic-system-prompt-sections"]

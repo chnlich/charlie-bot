@@ -787,7 +787,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
   chance.
   """
   platform = adapter.platform
-  from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
+  from src.agents import master_cc_queue  # lazy: mirrors the spawner import's cycle guard
 
   sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
   reported = 0
@@ -798,7 +798,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
     lost = lost_summons(
         platform,
         events,
-        owned=master_cc.queued_user_event_ids(meta.id),
+        owned=master_cc_queue.queued_user_event_ids(meta.id),
         running=set(meta.master_run.user_event_ids) if meta.master_run else set())
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,

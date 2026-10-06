@@ -131,7 +131,7 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
   conftest.patch_instructions_content(monkeypatch)
 
   item = conftest.make_work_item(cfg, session_meta, None)
-  cc_session_id, exit_code, error_msg, extras = await master_cc._run_cc(item)
+  cc_session_id, exit_code, error_msg, extras = await master_cc.master_cc_run._run_cc(item)
 
   assert not spawned
   assert cc_session_id is None
@@ -160,9 +160,9 @@ def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: pathlib.Path) -> N
   nested.mkdir(parents=True)
   (nested / "agent-deep.jsonl").write_text("{}\n", encoding="utf-8")
 
-  assert master_cc._cc_transcript_exists(cfg_dir, "conv-1") is True
-  assert master_cc._cc_transcript_exists(cfg_dir, "agent-deep") is False
-  assert master_cc._cc_transcript_exists(cfg_dir, "absent") is False
+  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "conv-1") is True
+  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "agent-deep") is False
+  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "absent") is False
 
 
 # Rows are the transcript-reachability gate's two outcomes for a non-pooled
@@ -204,7 +204,7 @@ async def test_run_cc_resume_gate_by_transcript_location(
   conftest.patch_instructions_content(monkeypatch)
 
   item = conftest.make_work_item(cfg, session_meta, cfg.backends.options[0])
-  _cc, exit_code, error_msg, _extras = await master_cc._run_cc(item)
+  _cc, exit_code, error_msg, _extras = await master_cc.master_cc_run._run_cc(item)
 
   assert exit_code == 0 and error_msg is None
   extra_flags = captures["kwargs"]["extra_flags"] or []

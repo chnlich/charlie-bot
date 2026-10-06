@@ -12,28 +12,28 @@ flag at the copied home on this host, labeled with its name there.
 """
 
 import argparse
-from pathlib import Path
+import pathlib
 
-from src.cli.help_formatter import CliHelpFormatter
+from src.cli import help_formatter
 
 
-def _home_pair(value: str) -> tuple[str, Path]:
+def _home_pair(value: str) -> tuple[str, pathlib.Path]:
   label, sep, path = value.partition("=")
   if not sep or not label or not path:
     raise argparse.ArgumentTypeError(f"expected LABEL=DIR, got {value!r}")
-  home = Path(path)
+  home = pathlib.Path(path)
   if not home.is_dir():
     raise argparse.ArgumentTypeError(f"directory does not exist: {home}")
   return label, home
 
 
-def _ledger_path(args: argparse.Namespace) -> Path:
+def _ledger_path(args: argparse.Namespace) -> pathlib.Path:
   if args.ledger is not None:
     return args.ledger
   # Deferred like the other core stacks: --help and parser errors stay off the config import.
-  from src.core.usage_ledger import default_ledger_path
+  from src.core import usage_ledger
 
-  return default_ledger_path()
+  return usage_ledger.default_ledger_path()
 
 
 def _print_written(written: dict[str, int]) -> None:
@@ -42,19 +42,17 @@ def _print_written(written: dict[str, int]) -> None:
 
 
 def _cmd_capture(args: argparse.Namespace) -> None:
-  from src.core.token_tally import capture_local
-  from src.core.usage_ledger import UsageLedger
+  from src.core import token_tally, usage_ledger
 
-  with UsageLedger(_ledger_path(args)) as ledger:
-    _print_written(capture_local(ledger))
+  with usage_ledger.UsageLedger(_ledger_path(args)) as ledger:
+    _print_written(token_tally.capture_local(ledger))
 
 
 def _cmd_import(args: argparse.Namespace) -> None:
-  from src.core.token_tally import capture_usage
-  from src.core.usage_ledger import UsageLedger
+  from src.core import token_tally, usage_ledger
 
-  with UsageLedger(_ledger_path(args)) as ledger:
-    written = capture_usage(
+  with usage_ledger.UsageLedger(_ledger_path(args)) as ledger:
+    written = token_tally.capture_usage(
         ledger,
         host=args.host,
         claude_homes=dict(args.claude_home),
@@ -67,7 +65,8 @@ def _cmd_import(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
-  parser = argparse.ArgumentParser(description="CharlieBot usage ledger", formatter_class=CliHelpFormatter)
+  parser = argparse.ArgumentParser(
+      description="CharlieBot usage ledger", formatter_class=help_formatter.CliHelpFormatter)
   sub = parser.add_subparsers(dest="command", required=True)
 
   ledger_help = "SQLite ledger path (default: <charliebot home>/usage/ledger.sqlite3)."
@@ -75,19 +74,19 @@ def main() -> None:
   capture = sub.add_parser(
       "capture",
       help="Capture this host's own CLI logs into the ledger",
-      formatter_class=CliHelpFormatter,
+      formatter_class=help_formatter.CliHelpFormatter,
       description="Capture this host's own CLI logs into the ledger with their host defaults: the discovered "
       "Claude config dirs and Codex homes, the opencode db, the charlie-bot session tree.")
-  capture.add_argument("--ledger", type=Path, help=ledger_help)
+  capture.add_argument("--ledger", type=pathlib.Path, help=ledger_help)
 
   imp = sub.add_parser(
       "import",
       help="Backfill another host's copied logs into the ledger",
-      formatter_class=CliHelpFormatter,
+      formatter_class=help_formatter.CliHelpFormatter,
       description="Backfill another host's history from its copied logs: each home flag names the copied "
       "directory on this host, labeled with its name on the host it came from.")
   imp.add_argument("--host", required=True, help="Host the copied logs came from.")
-  imp.add_argument("--ledger", type=Path, help=ledger_help)
+  imp.add_argument("--ledger", type=pathlib.Path, help=ledger_help)
   imp.add_argument(
       "--claude-home",
       action="append",
@@ -102,7 +101,7 @@ def main() -> None:
       default=[],
       metavar="LABEL=DIR",
       help="A copied Codex home; repeatable.")
-  imp.add_argument("--opencode-db", type=Path, help="A copied opencode sqlite db.")
+  imp.add_argument("--opencode-db", type=pathlib.Path, help="A copied opencode sqlite db.")
 
   args = parser.parse_args()
   if args.command == "import" and not (args.claude_home or args.codex_home or args.opencode_db):

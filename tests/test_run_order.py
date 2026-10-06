@@ -13,42 +13,46 @@ its cursor semantics stay exactly as they were.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+import datetime
+import pathlib
 
+import conftest
+import fastapi
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
+from src.api import deps
 from src.api import sessions as sessions_api
-from src.api.deps import get_run_store, get_session_manager, get_task_manager
-from src.core.models import RunRecord
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.core import models, sessions, task_sessions
 
-BASE = datetime(2026, 1, 1, tzinfo=UTC)
+BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 
 
 @pytest_asyncio.fixture
-async def store_env(tmp_path: Path):
-  from conftest import make_home_config
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+async def store_env(tmp_path: pathlib.Path):
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   task = await tree.create_task(
-      request_id="t", task_parent_id=None, profile="worker", task=None, name="T", backend=None, caller=OPERATOR)
+      request_id="t",
+      task_parent_id=None,
+      profile="worker",
+      task=None,
+      name="T",
+      backend=None,
+      caller=conftest.OPERATOR)
   return tree, task.id
 
 
-async def seed_runs(tree: TaskTreeManager, session_id: str, launched: int, queued: int = 2) -> None:
+async def seed_runs(tree: task_sessions.TaskTreeManager, session_id: str, launched: int, queued: int = 2) -> None:
   """``launched`` started runs in chronological order plus ``queued`` reservations."""
   for i in range(launched):
     await tree.runs.register_run(
-        RunRecord(id=f"run-{i:04d}", session_id=session_id, kind="work", started_at=BASE + timedelta(minutes=i)))
+        models.RunRecord(
+            id=f"run-{i:04d}", session_id=session_id, kind="work", started_at=BASE + datetime.timedelta(minutes=i)))
   for q in range(queued):
-    await tree.runs.register_run(RunRecord(id=f"queued-{q}", session_id=session_id, kind="work"))
+    await tree.runs.register_run(models.RunRecord(id=f"queued-{q}", session_id=session_id, kind="work"))
 
 
 # ---------------------------------------------------------------------------
@@ -90,12 +94,12 @@ async def test_cursor_minted_under_one_order_is_refused_under_the_other(store_en
 @pytest_asyncio.fixture
 async def api_env(store_env):
   tree, session_id = store_env
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.dependency_overrides[get_session_manager] = lambda: SessionManager(tree._cfg)
-  app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_run_store] = lambda: tree.runs
-  return tree, session_id, TestClient(app)
+  app.dependency_overrides[deps.get_session_manager] = lambda: sessions.SessionManager(tree._cfg)
+  app.dependency_overrides[deps.get_task_manager] = lambda: tree
+  app.dependency_overrides[deps.get_run_store] = lambda: tree.runs
+  return tree, session_id, testclient.TestClient(app)
 
 
 @pytest.mark.asyncio

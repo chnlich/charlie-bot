@@ -5,27 +5,16 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import pathlib
 import re
 from collections.abc import Iterator
-from pathlib import Path
 
-from pydantic import BaseModel
+import pydantic
 
-from src.core import claude_relay
+from src.core import claude_relay, config, git, log_once, message_aggregator, models, timeouts
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.git import (
-    _git_rev_parse,
-    _git_stdout,
-    git_push_branch,
-    git_push_refspec,
-)
-from src.core.log_once import LazyStructlogLogger
-from src.core.message_aggregator import extract_text_from_message
-from src.core.models import utc_now_iso
-from src.core.timeouts import SUBPROCESS_GIT_READ_TIMEOUT_ASYNC
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Shared contract strings: the v2 controller (improve_sequence) reproduces this
 # module's iteration description, fallback report, and failure payloads verbatim,
@@ -70,7 +59,7 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
 # ---------------------------------------------------------------------------
 
 
-class ImproveState(BaseModel):
+class ImproveState(pydantic.BaseModel):
   loop_id: int
   goal: str
   # running | stopped | completed | failed | blocked | interrupted.
@@ -107,37 +96,37 @@ class ImproveLoopAlreadyRunningError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 
-def _loops_dir(session_id: str, cfg: CharlieBotConfig) -> Path:
+def _loops_dir(session_id: str, cfg: config.CharlieBotConfig) -> pathlib.Path:
   return cfg.sessions_dir / session_id / "loops"
 
 
-def _active_loop_path(session_id: str, cfg: CharlieBotConfig) -> Path:
+def _active_loop_path(session_id: str, cfg: config.CharlieBotConfig) -> pathlib.Path:
   return _loops_dir(session_id, cfg) / "active.lock"
 
 
-def _loop_state_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+def _loop_state_path(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> pathlib.Path:
   return _loops_dir(session_id, cfg) / str(loop_id) / "state.json"
 
 
-def _goal_file_path(loop_dir: Path) -> Path:
+def _goal_file_path(loop_dir: pathlib.Path) -> pathlib.Path:
   return loop_dir / "goal.md"
 
 
-def _plan_file_path(loop_dir: Path) -> Path:
+def _plan_file_path(loop_dir: pathlib.Path) -> pathlib.Path:
   return loop_dir / "plan.md"
 
 
-def loop_goal_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+def loop_goal_path(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> pathlib.Path:
   """Path to the live goal file for a loop (the editable per-iteration goal)."""
   return _goal_file_path(_loops_dir(session_id, cfg) / str(loop_id))
 
 
-def loop_plan_path(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> Path:
+def loop_plan_path(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> pathlib.Path:
   """Path to the optional live plan file for a loop."""
   return _plan_file_path(_loops_dir(session_id, cfg) / str(loop_id))
 
 
-async def read_loop_goal(loop_dir: Path) -> str:
+async def read_loop_goal(loop_dir: pathlib.Path) -> str:
   """Read the live goal for a loop, failing loudly if goal.md is missing.
 
   The goal file is re-read at the start of every iteration so the user can steer
@@ -150,7 +139,7 @@ async def read_loop_goal(loop_dir: Path) -> str:
   return await asyncio.to_thread(goal_path.read_text)
 
 
-async def read_loop_plan(loop_dir: Path) -> str | None:
+async def read_loop_plan(loop_dir: pathlib.Path) -> str | None:
   """Read the optional live plan for a loop, returning None when absent."""
   plan_path = _plan_file_path(loop_dir)
   if not await asyncio.to_thread(plan_path.exists):
@@ -158,7 +147,7 @@ async def read_loop_plan(loop_dir: Path) -> str | None:
   return await asyncio.to_thread(plan_path.read_text)
 
 
-def _iter_numeric_loop_dirs(loops_dir: Path) -> Iterator[tuple[Path, int]]:
+def _iter_numeric_loop_dirs(loops_dir: pathlib.Path) -> Iterator[tuple[pathlib.Path, int]]:
   # Yields the child path itself, not loops_dir / str(loop_id): zero-padded
   # names ("007") resolve to a different directory through str(int).
   for child in loops_dir.iterdir():
@@ -170,7 +159,7 @@ def _iter_numeric_loop_dirs(loops_dir: Path) -> Iterator[tuple[Path, int]]:
       continue
 
 
-def _next_loop_id_sync(loops_dir: Path) -> int:
+def _next_loop_id_sync(loops_dir: pathlib.Path) -> int:
   if not loops_dir.exists():
     return 1
 
@@ -180,19 +169,19 @@ def _next_loop_id_sync(loops_dir: Path) -> int:
   return max_loop_id + 1 if max_loop_id else 1
 
 
-def _find_state_loop_ids_sync(loops_dir: Path) -> list[int]:
+def _find_state_loop_ids_sync(loops_dir: pathlib.Path) -> list[int]:
   if not loops_dir.exists():
     return []
 
   return [loop_id for child, loop_id in _iter_numeric_loop_dirs(loops_dir) if (child / "state.json").exists()]
 
 
-def _create_empty_file_exclusive(path: Path) -> None:
+def _create_empty_file_exclusive(path: pathlib.Path) -> None:
   with path.open("x"):
     pass
 
 
-async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> ImproveState | None:
+async def load_loop_state(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> ImproveState | None:
   """Read the loop state file, returning None if it is missing."""
   path = _loop_state_path(session_id, loop_id, cfg)
   if not await asyncio.to_thread(path.exists):
@@ -200,7 +189,7 @@ async def load_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) 
   return ImproveState.model_validate_json(await asyncio.to_thread(path.read_text))
 
 
-async def require_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> ImproveState:
+async def require_loop_state(session_id: str, loop_id: int, cfg: config.CharlieBotConfig) -> ImproveState:
   """Read the loop state file, raising RuntimeError if it is missing."""
   state = await load_loop_state(session_id, loop_id, cfg)
   if state is None:
@@ -208,27 +197,27 @@ async def require_loop_state(session_id: str, loop_id: int, cfg: CharlieBotConfi
   return state
 
 
-async def save_loop_state(session_id: str, state: ImproveState, cfg: CharlieBotConfig) -> None:
+async def save_loop_state(session_id: str, state: ImproveState, cfg: config.CharlieBotConfig) -> None:
   """Write the loop state file."""
   path = _loop_state_path(session_id, state.loop_id, cfg)
   await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
   await asyncio.to_thread(path.write_text, state.model_dump_json(indent=2))
 
 
-async def clear_active_loop_lock(session_id: str, cfg: CharlieBotConfig) -> None:
+async def clear_active_loop_lock(session_id: str, cfg: config.CharlieBotConfig) -> None:
   """Remove the session's active loop lock file, if present."""
   active_path = _active_loop_path(session_id, cfg)
   if await asyncio.to_thread(active_path.exists):
     await asyncio.to_thread(active_path.unlink)
 
 
-async def next_loop_id(session_id: str, cfg: CharlieBotConfig) -> int:
+async def next_loop_id(session_id: str, cfg: config.CharlieBotConfig) -> int:
   """Return the next sequential loop id for a session."""
   loops_dir = _loops_dir(session_id, cfg)
   return await asyncio.to_thread(_next_loop_id_sync, loops_dir)
 
 
-async def _reserve_loop_dir(session_id: str, cfg: CharlieBotConfig) -> tuple[int, Path]:
+async def _reserve_loop_dir(session_id: str, cfg: config.CharlieBotConfig) -> tuple[int, pathlib.Path]:
   """Create a unique per-loop directory for this session."""
   loops_dir = _loops_dir(session_id, cfg)
   await asyncio.to_thread(loops_dir.mkdir, parents=True, exist_ok=True)
@@ -243,7 +232,7 @@ async def _reserve_loop_dir(session_id: str, cfg: CharlieBotConfig) -> tuple[int
     return loop_id, loop_dir
 
 
-async def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> ImproveState | None:
+async def find_running_loop(session_id: str, cfg: config.CharlieBotConfig) -> ImproveState | None:
   """Return the running loop for a session, if any."""
   loops_dir = _loops_dir(session_id, cfg)
   state_loop_ids = await asyncio.to_thread(_find_state_loop_ids_sync, loops_dir)
@@ -259,7 +248,7 @@ async def find_running_loop(session_id: str, cfg: CharlieBotConfig) -> ImproveSt
 # ---------------------------------------------------------------------------
 
 
-async def stop_improve_loop(session_id: str, cfg: CharlieBotConfig) -> bool:
+async def stop_improve_loop(session_id: str, cfg: config.CharlieBotConfig) -> bool:
   """Set improve loop status to stopped. Returns True if there was an active loop."""
   state = await find_running_loop(session_id, cfg)
   if state is None:
@@ -291,7 +280,7 @@ def _commits_section_first_none(text: str) -> bool:
 
 
 async def _iter_report_validity(
-    report_path: Path,
+    report_path: pathlib.Path,
     iteration: int,
     commits_added: int,
 ) -> tuple[bool, str | None]:
@@ -319,7 +308,7 @@ def _invalid_iteration_summary(
     commits_added: int,
     tip_before: str,
     tip_after: str,
-    report_path: Path,
+    report_path: pathlib.Path,
 ) -> str:
   """Build the fixed single-line placeholder for an invalid iteration."""
   return (
@@ -327,29 +316,29 @@ def _invalid_iteration_summary(
       f"tip {tip_before}..{tip_after}; report: {report_path}")
 
 
-async def _worktree_commit_delta(wt_path: Path, tip_before: str) -> tuple[str, int, str]:
+async def _worktree_commit_delta(wt_path: pathlib.Path, tip_before: str) -> tuple[str, int, str]:
   """Compute (tip_after, commits_added, diffstat) for the iteration's commits."""
-  tip_after = await _git_rev_parse(wt_path, "HEAD") or ""
+  tip_after = await git._git_rev_parse(wt_path, "HEAD") or ""
   commits_added = 0
   diffstat = ""
   if tip_before and tip_after:
-    ok, out, _ = await _git_stdout(
+    ok, out, _ = await git._git_stdout(
         wt_path,
         "rev-list",
         "--count",
         f"{tip_before}..{tip_after}",
-        timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+        timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
         timeout_label="git rev-list --count",
     )
     if ok and out.isdigit():
       commits_added = int(out)
     if commits_added > 0:
-      ok, ds, _ = await _git_stdout(
+      ok, ds, _ = await git._git_stdout(
           wt_path,
           "diff",
           "--shortstat",
           f"{tip_before}..{tip_after}",
-          timeout=SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
+          timeout=timeouts.SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
           timeout_label="git diff --shortstat",
       )
       if ok:
@@ -365,7 +354,7 @@ def _summary_text(event: dict) -> str | None:
   if event.get("type") == ET.RESULT and event.get("result"):
     return event["result"][:500]
   if event.get("type") == ET.ASSISTANT:
-    text = extract_text_from_message(event.get("message"))
+    text = message_aggregator.extract_text_from_message(event.get("message"))
     if text:
       return text[:500]
   return None
@@ -395,7 +384,7 @@ def _build_summary_payload(payload_type: str, goal: str, summaries: list[str]) -
 
 
 async def _land_work_branch_after_loop(
-    resolved_repo: Path,
+    resolved_repo: pathlib.Path,
     work_branch: str,
     base_branch: str | None,
     merge_back: bool,
@@ -416,12 +405,12 @@ async def _land_work_branch_after_loop(
   # via the trigger payload — no rebase-retry, no fallback subagent — so it can decide
   # how to land (e.g. open a PR, manual rebase).
   if merge_back and not stopped_by_user and previous_summaries:
-    ok, push_err = await git_push_refspec(resolved_repo, work_branch, base_branch)
+    ok, push_err = await git.git_push_refspec(resolved_repo, work_branch, base_branch)
     if ok:
       return {'merged': True, 'base_branch': base_branch}
     log.warning("improve_loop_landing_ff_push_failed", session=session_id, error=push_err)
     # Keep the work branch on origin so the master agent can act on it.
-    ok_push, push_branch_err = await git_push_branch(resolved_repo, work_branch)
+    ok_push, push_branch_err = await git.git_push_branch(resolved_repo, work_branch)
     if not ok_push:
       log.warning("improve_loop_work_branch_push_failed", session=session_id, error=push_branch_err)
     return {
@@ -431,7 +420,7 @@ async def _land_work_branch_after_loop(
         'base_branch': base_branch,
     }
   # Best-effort push work_branch to remote
-  ok, push_err = await git_push_branch(resolved_repo, work_branch)
+  ok, push_err = await git.git_push_branch(resolved_repo, work_branch)
   if not ok:
     log.warning("improve_loop_push_failed", session=session_id, error=push_err)
   return None
@@ -454,7 +443,7 @@ async def reserve_loop_state(
     goal: str,
     work_branch: str,
     repo_path: str,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     *,
     plan: str | None = None,
     base_branch: str | None = None,
@@ -486,11 +475,11 @@ async def reserve_loop_state(
         status="running",
         work_branch=work_branch,
         base_branch=base_branch,
-        repo_path=str(Path(repo_path).resolve()),
+        repo_path=str(pathlib.Path(repo_path).resolve()),
         merge_back=merge_back,
         backend=resolved_backend or None,
         model=resolved_model or None,
-        created_at=utc_now_iso(),
+        created_at=models.utc_now_iso(),
         server_pid=os.getpid(),
     )
     await save_loop_state(session_id, state, cfg)
@@ -513,7 +502,7 @@ def _event_text(event: dict) -> str:
     if value is None:
       continue
     if key == "message" and isinstance(value, dict):
-      text = extract_text_from_message(value)
+      text = message_aggregator.extract_text_from_message(value)
       if text:
         parts.append(text)
       continue
@@ -577,15 +566,18 @@ def _failed_iteration_judgments(events_newest_first: Iterator[dict], iteration: 
 # ---------------------------------------------------------------------------
 
 
-def _newest_first_events(events_path: Path) -> Iterator[dict]:
+def _newest_first_events(events_path: pathlib.Path) -> Iterator[dict]:
   """The iteration thread's events log, newest line first — the stream both
   iteration judgments scan (the from-the-end walk parses only the bytes the
   answer needs)."""
-  from src.core.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events_from_end, type_line_filter
+  from src.core import ndjson
 
   # Both judgments match on these five types alone (_quota_blocker_match,
   # _summary_text), so the walk parses nothing else — the multi-megabyte
   # tool_result lines a no-match exhaustion would otherwise parse whole.
   candidate_types = frozenset({ET.RESULT, ET.ASSISTANT, ET.ASSISTANT_ERROR, ET.ERROR, ET.RATE_LIMIT_EVENT})
-  return iter_ndjson_events_from_end(
-      events_path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}, parse_filter=type_line_filter(candidate_types))
+  return ndjson.iter_ndjson_events_from_end(
+      events_path,
+      log_event=ndjson.PARSE_SKIP_LOG_EVENT,
+      log_fields={},
+      parse_filter=ndjson.type_line_filter(candidate_types))

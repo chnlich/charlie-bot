@@ -2,20 +2,17 @@ from __future__ import annotations
 
 import json
 
-from conftest import assistant_text_event as _assistant_text_event
-from conftest import assistant_text_tool_use_event as _assistant_text_tool_use_event
-from conftest import delegate_invocation as _delegate_invocation
-from conftest import queued_user_reorder_events as _reorder_events
+import conftest
 
-from src.api.message_utils import events_to_messages, events_to_view
+from src.api import message_utils
 from src.core import event_types as ET
-from src.core.message_aggregator import MessageAggregator
+from src.core import message_aggregator
 
 VOICE_KEY = "is_voice"
 
 
 def test_user_event_emits_a_user_message_delta() -> None:
-  agg = MessageAggregator()
+  agg = message_aggregator.MessageAggregator()
   deltas = list(agg.feed({
       "type": "user",
       "content": "hello",
@@ -37,8 +34,8 @@ def test_user_event_emits_a_user_message_delta() -> None:
 
 
 def test_assistant_text_then_master_done_commits_message() -> None:
-  agg = MessageAggregator()
-  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
+  agg = message_aggregator.MessageAggregator()
+  list(agg.feed({**conftest.assistant_text_event("Hi"), "timestamp": "t1"}))
   master_done_deltas = list(agg.feed({"type": "master_done", "thinking_seconds": 3, "timestamp": "t2"}))
 
   assert master_done_deltas == [
@@ -68,7 +65,7 @@ def test_assistant_text_then_master_done_commits_message() -> None:
 
 
 def test_still_thinking_master_done_yields_separator_without_seconds() -> None:
-  agg = MessageAggregator()
+  agg = message_aggregator.MessageAggregator()
   deltas = list(agg.feed({"type": "master_done", "still_thinking": True, "timestamp": "t1"}))
 
   assert deltas == [
@@ -98,7 +95,7 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
           "timestamp": "t1"
       },
       {
-          **_assistant_text_event("first answer"), "timestamp": "t2"
+          **conftest.assistant_text_event("first answer"), "timestamp": "t2"
       },
       {
           "type": ET.USER,
@@ -106,7 +103,7 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
           "timestamp": "t3"
       },
       {
-          **_assistant_text_event("mid-round answer"), "timestamp": "t4"
+          **conftest.assistant_text_event("mid-round answer"), "timestamp": "t4"
       },
       {
           "type": ET.MASTER_DONE,
@@ -114,7 +111,7 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
           "timestamp": "t5"
       },
       {
-          **_assistant_text_event("second answer"), "timestamp": "t6"
+          **conftest.assistant_text_event("second answer"), "timestamp": "t6"
       },
       {
           "type": ET.MASTER_DONE,
@@ -123,8 +120,8 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
       },
   ]
 
-  messages = events_to_messages(events)
-  view_messages, pending = events_to_view(events)
+  messages = message_utils.events_to_messages(events)
+  view_messages, pending = message_utils.events_to_view(events)
 
   assert [message["role"] for message in messages] == [
       "user",
@@ -143,9 +140,9 @@ def test_queued_input_renders_inside_the_turn_that_answers_it() -> None:
 
 
 def test_task_delegated_message_exposes_metadata_without_full_description_body() -> None:
-  agg = MessageAggregator()
+  agg = message_aggregator.MessageAggregator()
   long_description = "## Goal\nDo a long task spec that belongs in Workers."
-  invocation = _delegate_invocation(task_spec_file="/tmp/task.md", reviewer_context_file="/tmp/reviewer.md")
+  invocation = conftest.delegate_invocation(task_spec_file="/tmp/task.md", reviewer_context_file="/tmp/reviewer.md")
 
   deltas = list(
       agg.feed(
@@ -183,8 +180,8 @@ def test_task_delegated_message_exposes_metadata_without_full_description_body()
 
 
 def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
-  agg = MessageAggregator()
-  list(agg.feed(_assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1")))
+  agg = message_aggregator.MessageAggregator()
+  list(agg.feed(conftest.assistant_text_tool_use_event("Running", "Bash", {"command": "ls"}, "t1")))
   # Internal CC tool_result event arrives as a user event with `message` only.
   list(
       agg.feed(
@@ -212,8 +209,8 @@ def test_tool_use_attaches_to_buffer_then_tool_result_updates_output() -> None:
 
 
 def test_thinking_is_flushed_with_assistant_draft() -> None:
-  agg = MessageAggregator()
-  list(agg.feed({**_assistant_text_event("Hi"), "timestamp": "t1"}))
+  agg = message_aggregator.MessageAggregator()
+  list(agg.feed({**conftest.assistant_text_event("Hi"), "timestamp": "t1"}))
   list(agg.feed({"type": "thinking", "content": "planning", "timestamp": "t2"}))
   deltas = list(agg.feed({"type": "master_done", "thinking_seconds": 1, "timestamp": "t3"}))
 
@@ -224,10 +221,10 @@ def test_thinking_is_flushed_with_assistant_draft() -> None:
 
 
 def test_stable_history_orders_queued_user_between_completed_runs() -> None:
-  events = _reorder_events()
+  events = conftest.queued_user_reorder_events()
 
-  messages = events_to_messages(events)
-  view_messages, pending = events_to_view(events)
+  messages = message_utils.events_to_messages(events)
+  view_messages, pending = message_utils.events_to_view(events)
 
   assert view_messages == messages
   assert pending is None
@@ -238,13 +235,13 @@ def test_stable_history_orders_queued_user_between_completed_runs() -> None:
 
 
 def test_stream_deltas_stay_bounded_after_a_giant_tool_result() -> None:
-  agg = MessageAggregator()
+  agg = message_aggregator.MessageAggregator()
   list(agg.feed({"type": ET.TOOL_USE, "name": "Bash", "input": {"cmd": "cat big.log"}}))
   list(agg.feed({"type": ET.TOOL_RESULT, "tool_name": "Bash", "content": "z" * 10_000_000}))
 
   serialized = []
   for i in range(20):
-    list(agg.feed(_assistant_text_event(f"delta {i}")))
+    list(agg.feed(conftest.assistant_text_event(f"delta {i}")))
     draft = agg.pending_draft_message()
     serialized.append(len(json.dumps(draft)))
 

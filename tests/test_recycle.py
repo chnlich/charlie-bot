@@ -2,29 +2,24 @@
 
 from __future__ import annotations
 
+import datetime
 import json
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BROADCAST_PATCH_TARGET,
-    make_home_session,
-    recycle_archive_cutoff_events,
-)
-from conftest import append_events as _append_events
-from conftest import archive_cutoff_events as _archive_cutoff_events
 
-from src.api.message_utils import build_session_bootstrap_data
-from src.core.models import ThreadMetadata, ThreadStatus
-from src.core.ndjson import count_ndjson_lines
+from src.api import message_utils
+from src.core import models, ndjson
 
 
-def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, completed_at: datetime | None) -> None:
+def _write_thread(
+    threads_dir: pathlib.Path, thread_id: str, status: models.ThreadStatus,
+    completed_at: datetime.datetime | None) -> None:
   thread_dir = threads_dir / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)
-  meta = ThreadMetadata(
+  meta = models.ThreadMetadata(
       id=thread_id,
       session_id="ignored",
       description=f"thread {thread_id}",
@@ -37,21 +32,21 @@ def _write_thread(threads_dir: Path, thread_id: str, status: ThreadStatus, compl
 
 
 @pytest.mark.asyncio
-async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None:
-  cfg, mgr, session = await make_home_session(tmp_path, name="t")
+async def test_recycle_deletes_only_old_terminal_threads(tmp_path: pathlib.Path) -> None:
+  cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
   threads_dir = cfg.sessions_dir / session.id / "threads"
 
-  now = datetime.now(UTC)
-  cutoff = now - timedelta(days=7)
-  old = cutoff - timedelta(days=1)
-  recent = cutoff + timedelta(days=1)
+  now = datetime.datetime.now(datetime.UTC)
+  cutoff = now - datetime.timedelta(days=7)
+  old = cutoff - datetime.timedelta(days=1)
+  recent = cutoff + datetime.timedelta(days=1)
 
-  _write_thread(threads_dir, "old-completed", ThreadStatus.COMPLETED, old)
-  _write_thread(threads_dir, "old-failed", ThreadStatus.FAILED, old)
-  _write_thread(threads_dir, "old-cancelled", ThreadStatus.CANCELLED, old)
-  _write_thread(threads_dir, "recent-completed", ThreadStatus.COMPLETED, recent)
-  _write_thread(threads_dir, "running", ThreadStatus.RUNNING, None)
-  _write_thread(threads_dir, "idle", ThreadStatus.IDLE, None)
+  _write_thread(threads_dir, "old-completed", models.ThreadStatus.COMPLETED, old)
+  _write_thread(threads_dir, "old-failed", models.ThreadStatus.FAILED, old)
+  _write_thread(threads_dir, "old-cancelled", models.ThreadStatus.CANCELLED, old)
+  _write_thread(threads_dir, "recent-completed", models.ThreadStatus.COMPLETED, recent)
+  _write_thread(threads_dir, "running", models.ThreadStatus.RUNNING, None)
+  _write_thread(threads_dir, "idle", models.ThreadStatus.IDLE, None)
   # Corrupt metadata: should be tolerated (skipped, not deleted).
   bad_dir = threads_dir / "broken"
   bad_dir.mkdir()
@@ -71,17 +66,17 @@ async def test_recycle_deletes_only_old_terminal_threads(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: pathlib.Path) -> None:
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
-  cutoff, events = _archive_cutoff_events()
+  cutoff, events = conftest.archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
+  conftest.append_events(live_path, events)
 
   result = await mgr.recycle_scheduled_session(session.id, cutoff)
 
   assert result["events_archived"] == 5
-  archive_path = Path(result["archive_file"])
+  archive_path = pathlib.Path(result["archive_file"])
   assert archive_path.exists()
   iso = cutoff.isocalendar()
   assert archive_path.name == f"chat_events.{iso.year}-W{iso.week:02d}.jsonl"
@@ -97,35 +92,35 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: Pa
   assert meta.archive_offset == 5
 
   # Subsequent persist_and_broadcast must continue the global numbering.
-  with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()) as mock:
+  with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
     await mgr.persist_and_broadcast(
         session.id,
         {
             "type": "user",
             "content": "after",
-            "timestamp": (cutoff + timedelta(days=1)).isoformat()
+            "timestamp": (cutoff + datetime.timedelta(days=1)).isoformat()
         },
     )
-  msg_payloads = [c.args[1] for c in mock.await_args_list if c.args[1].get("type") == "message"]
+  msg_payloads = [c.args[1] for c in broadcast_mock.await_args_list if c.args[1].get("type") == "message"]
   assert msg_payloads, "expected at least one message delta"
   # Live now has 3 retained tail events + 1 new = 4 lines; global = 5 + 4 - 1 = 8.
   assert msg_payloads[0]["message"]["event_index"] == 8
 
 
 @pytest.mark.asyncio
-async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+async def test_recycle_noop_when_nothing_old(tmp_path: pathlib.Path) -> None:
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
-  cutoff = datetime(2026, 5, 10, 0, 0, 0, tzinfo=UTC)
+  cutoff = datetime.datetime(2026, 5, 10, 0, 0, 0, tzinfo=datetime.UTC)
   events = [
       {
           "type": "user",
           "content": "future",
-          "timestamp": (cutoff + timedelta(hours=1)).isoformat()
+          "timestamp": (cutoff + datetime.timedelta(hours=1)).isoformat()
       },
   ]
   live_path = mgr.get_chat_events_path(session.id)
-  _append_events(live_path, events)
+  conftest.append_events(live_path, events)
 
   result = await mgr.recycle_scheduled_session(session.id, cutoff)
 
@@ -140,27 +135,32 @@ async def test_recycle_noop_when_nothing_old(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  cutoff, live_path = await recycle_archive_cutoff_events(mgr, session.id)
-  _append_events(live_path, [{"type": "user", "content": "f3", "timestamp": (cutoff + timedelta(days=2)).isoformat()}])
-  count_ndjson_lines(live_path)
+async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: pathlib.Path) -> None:
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
+  cutoff, live_path = await conftest.recycle_archive_cutoff_events(mgr, session.id)
+  conftest.append_events(
+      live_path, [{
+          "type": "user",
+          "content": "f3",
+          "timestamp": (cutoff + datetime.timedelta(days=2)).isoformat()
+      }])
+  ndjson.count_ndjson_lines(live_path)
 
-  def delete_mid_count(path: Path) -> int:
+  def delete_mid_count(path: pathlib.Path) -> int:
     path.unlink()
     raise FileNotFoundError(2, "No such file or directory")
 
   # A delete landing inside the walk's count bracket must not escape as an
   # exception: the read returns an empty page.
-  with patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
+  with mock.patch("src.core.chat_events.count_ndjson_lines", side_effect=delete_mid_count):
     got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
   assert got == []
 
 
 @pytest.mark.asyncio
-async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  await recycle_archive_cutoff_events(mgr, session.id)
+async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: pathlib.Path) -> None:
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
+  await conftest.recycle_archive_cutoff_events(mgr, session.id)
   live_path = mgr.get_chat_events_path(session.id)
   # blank and malformed lines consume an index, a CRLF pair terminates one
   # line, and the final line carries no newline.
@@ -171,7 +171,7 @@ async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: P
       b'{"content": "a1"}\r\n'
       b'{"content": "a2"}\n'
       b'{"content": "a3"}')
-  count_ndjson_lines(live_path)
+  ndjson.count_ndjson_lines(live_path)
   spec: list[str | None] = ["a0", None, None, "a1", "a2", "a3"]
 
   # The full build covers every index; the walk-built windows must match it.
@@ -184,16 +184,16 @@ async def test_live_range_walk_matches_full_build_across_line_shapes(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_session_bootstrap_uses_global_event_indices_after_archive(tmp_path: Path) -> None:
-  _cfg, mgr, session = await make_home_session(tmp_path, name="t")
-  await recycle_archive_cutoff_events(mgr, session.id)
+async def test_session_bootstrap_uses_global_event_indices_after_archive(tmp_path: pathlib.Path) -> None:
+  _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
+  await conftest.recycle_archive_cutoff_events(mgr, session.id)
 
-  full_view = await build_session_bootstrap_data(session.id, mgr)
+  full_view = await message_utils.build_session_bootstrap_data(session.id, mgr)
   assert full_view.total_event_count == 8
   assert full_view.has_more is True
   assert [m["event_index"] for m in full_view.messages] == [5, 6, 7]
 
-  tail_view = await build_session_bootstrap_data(session.id, mgr, message_limit=2)
+  tail_view = await message_utils.build_session_bootstrap_data(session.id, mgr, message_limit=2)
   assert tail_view.total_event_count == 8
   assert tail_view.has_more is True
   assert full_view.oldest_message_ordinal == 5

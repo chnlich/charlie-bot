@@ -9,31 +9,20 @@ an unchanged divider costs nothing.
 
 import asyncio
 import json
-from pathlib import Path
+import pathlib
 from typing import Any
 
 import structlog
 
-from src.agents.backends.deferred_build import load_build_backend
-from src.api.message_utils import events_to_messages
-from src.core.autonamer import iter_light_backends
-from src.core.config import CharlieBotConfig
-from src.core.deferred import deferred_module_getattr
-from src.core.json_utils import load_json_dict, write_json_atomically
-from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.models import utc_now_iso
-from src.core.sessions import (
-    ELONE_BOOTSTRAP_OPENER,
-    FORK_BOOTSTRAP_OPENER,
-    SessionManager,
-)
-from src.core.timeouts import LIGHT_ONESHOT_TIMEOUT
+from src.agents.backends import deferred_build
+from src.api import message_utils
+from src.core import autonamer, config, deferred, json_utils, memo, models, sessions, timeouts
 
 log = structlog.get_logger()
 
 
 def __getattr__(name: str) -> Any:
-  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
+  return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
 
 
 _ASK_CHARS = 80
@@ -53,12 +42,12 @@ _SUMMARY_CACHE_MEMO_CAP = 8
 # uuid4; the deterministic ids (uuid5 per Slack thread, pinned
 # CreateSessionRequest ids) are covered by _drop_session_runtime_state hooking
 # drop_extract_memo.
-_extract_memo: BoundedMemo[tuple[str, int], dict] = BoundedMemo(_EXTRACT_MEMO_CAP)
+_extract_memo: memo.BoundedMemo[tuple[str, int], dict] = memo.BoundedMemo(_EXTRACT_MEMO_CAP)
 
 # path -> (mtime_ns, size, parsed document). Served values are treated
 # read-only: readers only run dict lookups, and the writer side (_write_cache_entry)
 # loads the file fresh instead of touching this memo.
-_summary_cache_memo: StatSignatureMemo[Path, dict] = StatSignatureMemo(_SUMMARY_CACHE_MEMO_CAP)
+_summary_cache_memo: memo.StatSignatureMemo[pathlib.Path, dict] = memo.StatSignatureMemo(_SUMMARY_CACHE_MEMO_CAP)
 
 
 def drop_extract_memo(session_id: str) -> None:
@@ -74,9 +63,9 @@ def drop_extract_memo(session_id: str) -> None:
 # self-wakes are excluded by event type (ET.SCHEDULED_TRIGGER), not by this list.
 _AUTO_INJECTED_PREFIXES = (
     "This session was cloned from a previous conversation.",
-    FORK_BOOTSTRAP_OPENER,
+    sessions.FORK_BOOTSTRAP_OPENER,
     "You're taking over a task from a previous session where user wasn't satisfied.",
-    ELONE_BOOTSTRAP_OPENER,
+    sessions.ELONE_BOOTSTRAP_OPENER,
 )
 
 _SUMMARY_SYSTEM_PROMPT = (
@@ -117,7 +106,7 @@ def _is_auto_injected(content: str) -> bool:
   return any(stripped.startswith(prefix) for prefix in _AUTO_INJECTED_PREFIXES)
 
 
-def extract_recap(session_mgr: SessionManager, session_id: str, upto: int | None = None) -> dict:
+def extract_recap(session_mgr: sessions.SessionManager, session_id: str, upto: int | None = None) -> dict:
   """Scan events [0, upto] and return ``{asks, last}`` via pure extraction (no LLM).
 
   asks: ordered first-lines of genuine user messages (auto-injected ones dropped),
@@ -162,7 +151,7 @@ def extract_recap_memo_hit(session_id: str, upto: int | None) -> dict | None:
 
 def _extract_from_events(events: list[dict]) -> dict:
   """The extract_recap scan body: events already sliced to the divider."""
-  messages = events_to_messages(events)
+  messages = message_utils.events_to_messages(events)
 
   asks: list[str] = []
   last_user_idx: int | None = None
@@ -191,12 +180,12 @@ def _extract_from_events(events: list[dict]) -> dict:
   return {"asks": asks, "last": last}
 
 
-def _cache_path(session_mgr: SessionManager, session_id: str) -> Path:
+def _cache_path(session_mgr: sessions.SessionManager, session_id: str) -> pathlib.Path:
   """Per-session recap-summary cache, sitting next to chat_events.jsonl."""
   return session_mgr.get_chat_events_path(session_id).parent / "recap_summaries.json"
 
 
-def _load_cache_signed(path: Path) -> dict:
+def _load_cache_signed(path: pathlib.Path) -> dict:
   """The parsed cache document behind a signature memo, or ``{}`` when absent.
 
   Only successful parses memoize; a corrupt document keeps raising on every
@@ -224,7 +213,8 @@ def _summary_verdict(cache: dict, upto: int) -> tuple[str | None, bool]:
   return None, False
 
 
-def summary_lookup_memo_hit(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool] | None:
+def summary_lookup_memo_hit(session_mgr: sessions.SessionManager, session_id: str,
+                            upto: int) -> tuple[str | None, bool] | None:
   """The stat + memo half of lookup_cached_summary, safe on the event loop.
 
   Returns the ``(summary, stale)`` verdict, or ``None`` when the cache file's
@@ -243,7 +233,7 @@ def summary_lookup_memo_hit(session_mgr: SessionManager, session_id: str, upto: 
   return _summary_verdict(cache, upto)
 
 
-def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
+def lookup_cached_summary(session_mgr: sessions.SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
   """Return ``(summary, stale)`` for the divider at *upto*.
 
   Exact cache hit -> ``(summary, False)``. No exact hit but a summary computed at
@@ -254,17 +244,17 @@ def lookup_cached_summary(session_mgr: SessionManager, session_id: str, upto: in
   return _summary_verdict(cache, upto)
 
 
-def _write_cache_entry(session_mgr: SessionManager, session_id: str, upto: int, summary: str) -> None:
+def _write_cache_entry(session_mgr: sessions.SessionManager, session_id: str, upto: int, summary: str) -> None:
   path = _cache_path(session_mgr, session_id)
-  cache = load_json_dict(path)
-  cache[str(upto)] = {"summary": summary, "generated_at": utc_now_iso()}
+  cache = json_utils.load_json_dict(path)
+  cache[str(upto)] = {"summary": summary, "generated_at": models.utc_now_iso()}
   # The recap GET reads this file from an executor thread with no coordination
   # against this write; the swap keeps every read on one complete document.
-  write_json_atomically(path, cache, indent=2)
+  json_utils.write_json_atomically(path, cache, indent=2)
 
 
 async def generate_and_cache_summary(
-    session_mgr: SessionManager, session_id: str, upto: int, cfg: CharlieBotConfig) -> str:
+    session_mgr: sessions.SessionManager, session_id: str, upto: int, cfg: config.CharlieBotConfig) -> str:
   """Generate a recap summary for the divider at *upto*, cache it, and return it.
 
   Feeds the LLM ONLY the bounded extraction (asks + last), never raw events. The
@@ -277,7 +267,7 @@ async def generate_and_cache_summary(
     log.warning("recap_skipped", reason="no_session_backend", session_id=session_id)
     return ""
 
-  options = list(iter_light_backends(cfg))
+  options = list(autonamer.iter_light_backends(cfg))
   if not options:
     log.warning("recap_skipped", reason="no_resolvable_preference", session_id=session_id)
     return ""
@@ -294,8 +284,8 @@ async def generate_and_cache_summary(
   last_exception: Exception | None = None
   for option in options:
     try:
-      backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
-      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=LIGHT_ONESHOT_TIMEOUT)
+      backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
+      summary = await backend.one_shot_text(prompt, _SUMMARY_SYSTEM_PROMPT, timeout=timeouts.LIGHT_ONESHOT_TIMEOUT)
     except Exception as e:
       last_exception = e
       log.warning("recap_backend_failed", session_id=session_id, error=str(e))

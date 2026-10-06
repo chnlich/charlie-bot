@@ -6,47 +6,38 @@ the id and its producing backend together."""
 
 from __future__ import annotations
 
+import dataclasses
+import pathlib
 from collections.abc import AsyncIterator
-from dataclasses import replace
-from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    TerminateFlagBackend,
-    backend_option,
-    make_transcript,
-    make_work_item,
-    mock_session_callbacks,
-    patch_instructions_content,
-)
 
 from src.agents import master_cc_run, master_cc_state
 from src.agents.backends import base as backend_base
+from src.core import config, models, sessions
 from src.core import event_types as ET
-from src.core.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
-from src.core.models import SessionCallbacks, SessionMetadata
-from src.core.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE, context_reset_note
 
 
-def _rule_cfg(tmp_path: Path) -> CharlieBotConfig:
+def _rule_cfg(tmp_path: pathlib.Path) -> config.CharlieBotConfig:
   """One Claude family (two models, one login dir) plus one Codex option: the
   minimal config the cross-family rule needs."""
-  return CharlieBotConfig(
+  return config.CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={
           "options":
               [
-                  backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
-                  backend_option(id="claude-fable-5", label="Fable 5", type="cc-claude", model="claude-fable-5"),
-                  backend_option(id="codex-o3", label="Codex", type="codex", model="o3"),
+                  conftest.backend_option(id="claude-opus-5", label="Opus 5", type="cc-claude", model="claude-opus-5"),
+                  conftest.backend_option(
+                      id="claude-fable-5", label="Fable 5", type="cc-claude", model="claude-fable-5"),
+                  conftest.backend_option(id="codex-o3", label="Codex", type="codex", model="o3"),
               ]
       },
   )
 
 
-class _ScriptedBackend(TerminateFlagBackend):
+class _ScriptedBackend(conftest.TerminateFlagBackend):
   """Backend double: records the prompt of every run() call and yields one
   scripted session id (or none), then a clean, non-zero-usage result."""
 
@@ -90,13 +81,14 @@ def _scripted_build(landing: dict[str, list[str | None]], log: list[dict]):
   return build
 
 
-def _callbacks(*, completed_round: bool) -> SessionCallbacks:
+def _callbacks(*, completed_round: bool) -> models.SessionCallbacks:
   """Mocked callbacks with has_completed_round pinned to *completed_round*."""
-  return replace(mock_session_callbacks(), has_completed_round=AsyncMock(return_value=completed_round))
+  return dataclasses.replace(
+      conftest.mock_session_callbacks(), has_completed_round=mock.AsyncMock(return_value=completed_round))
 
 
 async def _run_scripted_turn(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
     backend_id: str,
@@ -117,19 +109,19 @@ async def _run_scripted_turn(
   if login_dir is not None:
     config_dir = tmp_path / "login-dir"
     if login_dir == "transcript":
-      make_transcript(config_dir, "c1")
+      conftest.make_transcript(config_dir, "c1")
     elif login_dir == "empty":
       config_dir.mkdir(parents=True)
     else:
       raise AssertionError(f"unknown login_dir state: {login_dir}")
-    monkeypatch.setenv(CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
-  session_meta = SessionMetadata(
+    monkeypatch.setenv(config.CLAUDE_CONFIG_DIR_ENV_VAR, str(config_dir))
+  session_meta = models.SessionMetadata(
       id="session-id", name="S", backend=backend_id, cc_session_id="c1", native_backend=native_backend)
   log: list[dict] = []
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, _scripted_build({backend_id: [None]}, log))
-  patch_instructions_content(monkeypatch)
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, _scripted_build({backend_id: [None]}, log))
+  conftest.patch_instructions_content(monkeypatch)
 
-  item = make_work_item(
+  item = conftest.make_work_item(
       cfg,
       session_meta,
       cfg.get_backend_option(backend_id),
@@ -146,7 +138,8 @@ async def _run_scripted_turn(
 
 
 @pytest.mark.asyncio
-async def test_pre_rule_session_resumes_as_today_on_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_pre_rule_session_resumes_as_today_on_codex(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(a) A pre-rule session (a held id, no recorded producer) on a codex option
   resumes the id as before; no note, no drop."""
   item, log = await _run_scripted_turn(
@@ -160,7 +153,7 @@ async def test_pre_rule_session_resumes_as_today_on_codex(tmp_path: Path, monkey
 
 @pytest.mark.asyncio
 async def test_pre_rule_session_resumes_as_today_on_claude_with_transcript(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(a) The same pre-rule session on a cc-claude option with its transcript
   present resumes through --resume; no note, no drop."""
   item, log = await _run_scripted_turn(
@@ -180,7 +173,7 @@ async def test_pre_rule_session_resumes_as_today_on_claude_with_transcript(
 
 @pytest.mark.asyncio
 async def test_cross_family_without_completed_round_starts_fresh_silently(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(f) A cross-family turn on a session without a completed round of its own:
   fresh, no resume id, and no note."""
   item, log = await _run_scripted_turn(
@@ -208,19 +201,20 @@ def test_context_reset_note_assembles_history_note_and_instruction() -> None:
   without_goal = (
       "[Context reset: this session switched from backend claude-sonnet-5 to codex-gpt-luna, "
       "which starts its own conversation. "
-      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
-  assert context_reset_note(
+      f"{sessions.HISTORY_LOCATION_NOTE} {sessions.CONTEXT_RESET_INSTRUCTION}]")
+  assert sessions.context_reset_note(
       "this session switched from backend claude-sonnet-5 to codex-gpt-luna, "
       "which starts its own conversation") == without_goal
   with_goal = (
       "[Context reset: this task's managed instructions changed. The task is: ship the parser. "
-      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
-  assert context_reset_note("this task's managed instructions changed", task_goal="ship the parser") == with_goal
+      f"{sessions.HISTORY_LOCATION_NOTE} {sessions.CONTEXT_RESET_INSTRUCTION}]")
+  assert sessions.context_reset_note(
+      "this task's managed instructions changed", task_goal="ship the parser") == with_goal
 
 
 @pytest.mark.asyncio
 async def test_cross_family_switch_note_carries_the_instruction(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A cc-claude session switched to a codex option: the turn starts a fresh
   native conversation whose prompt opens with the full reset note, instruction
   included."""
@@ -237,11 +231,12 @@ async def test_cross_family_switch_note_carries_the_instruction(
   assert sep and tail == "hello"
   assert note == (
       "[Context reset: this session switched from backend claude-opus-5 to codex-o3, "
-      f"which starts its own conversation. {HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+      f"which starts its own conversation. {sessions.HISTORY_LOCATION_NOTE} {sessions.CONTEXT_RESET_INSTRUCTION}]")
 
 
 @pytest.mark.asyncio
-async def test_dropped_resume_note_carries_the_instruction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_dropped_resume_note_carries_the_instruction(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The could-not-be-resumed path (same producer, transcript gone): the note
   names the dropped resume and still carries the instruction."""
   _item, log = await _run_scripted_turn(
@@ -256,12 +251,12 @@ async def test_dropped_resume_note_carries_the_instruction(tmp_path: Path, monke
   assert sep and tail == "hello"
   assert note == (
       "[Context reset: the previous conversation could not be resumed. "
-      f"{HISTORY_LOCATION_NOTE} {CONTEXT_RESET_INSTRUCTION}]")
+      f"{sessions.HISTORY_LOCATION_NOTE} {sessions.CONTEXT_RESET_INSTRUCTION}]")
 
 
 @pytest.mark.asyncio
 async def test_switch_back_to_producer_before_sending_resumes_without_note(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A session switched away and back before the next message: the recorded
   producer equals the current backend, so the native conversation continues
   and no note is added."""
@@ -275,7 +270,8 @@ async def test_switch_back_to_producer_before_sending_resumes_without_note(
 
 
 @pytest.mark.asyncio
-async def test_same_login_model_switch_resumes_without_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_same_login_model_switch_resumes_without_note(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Two cc-claude options over one login directory (the claude-sonnet-5 to
   claude-opus-5 shape) share one continuation domain: the held conversation
   resumes across the model switch and no note is added."""

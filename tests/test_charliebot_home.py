@@ -97,7 +97,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   from src.core import init as core_init
   from src.core import slash_commands
 
-  asyncio.run(core_init.init_charliebot_home())
+  asyncio.run(core_init.init_seed.init_charliebot_home())
 
   cfg = core_config.get_config()
   core_config.get_scheduled_tasks()

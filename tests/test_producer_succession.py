@@ -38,7 +38,7 @@ async def test_crash_recovery_report_lands_in_successor(tmp_path: pathlib.Path) 
   child_id = await _elone(mgr, parent_id)
 
   with _broadcast_patch():
-    await init._report_recovery_event(mgr, parent_id, "worker thread ended with descendant procs")
+    await init.init_worker_recovery._report_recovery_event(mgr, parent_id, "worker thread ended with descendant procs")
 
   child_events = mgr.load_chat_events_sync(child_id)
   report = next(ev for ev in child_events if ev.get("source") == "crash_recovery")
@@ -52,7 +52,7 @@ async def test_crash_recovery_report_no_successor_writes_into_itself_without_ori
   session_id = await conftest.make_parent(mgr)
 
   with _broadcast_patch():
-    await init._report_recovery_event(mgr, session_id, "worker thread stalled")
+    await init.init_worker_recovery._report_recovery_event(mgr, session_id, "worker thread stalled")
 
   own_events = mgr.load_chat_events_sync(session_id)
   report = next(ev for ev in own_events if ev.get("source") == "crash_recovery")

@@ -99,7 +99,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   reset_config_caches()
 
   monkeypatch.setattr(server_module, "get_config", lambda: cfg)
-  monkeypatch.setattr(server_module, "reconcile_master_identity", _AsyncStub(return_value=None))
+  monkeypatch.setattr(server_module.init_master_recovery, "reconcile_master_identity", _AsyncStub(return_value=None))
   monkeypatch.setattr(server_module, "_run_crash_recovery", _AsyncStub())
   monkeypatch.setattr(server_module, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server_module, "log_session_cgroup_startup", lambda *a, **k: None)

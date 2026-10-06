@@ -50,7 +50,7 @@ with gc_off(collect=False):
   )
   from src.api.auth import AuthMiddleware, _credential_matches
   from src.api.deps import session_manager, set_trigger_manager, task_manager
-  from src.core import timeouts
+  from src.core import init_master_recovery, init_seed, timeouts
   from src.core.agent_environment import apply_agent_environment
   from src.core.buildinfo import init_build_info
   from src.core.config import (
@@ -63,11 +63,6 @@ with gc_off(collect=False):
   )
   from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
   from src.core.http import close_http_client
-  from src.core.init import (
-      init_charliebot_home,
-      reconcile_master_identity,
-      run_crash_recovery,
-  )
   from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
   from src.core.message_aggregator import MessageAggregator
   from src.core.models import SessionMetadata, utc_now
@@ -316,14 +311,15 @@ def _provision_speech_models(cfg: CharlieBotConfig) -> None:
 async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
   """Background startup recovery; logs completion and never swallows failures.
 
-  Wraps init.run_crash_recovery so an exception surfaces loudly instead of
-  vanishing into the event loop, and reports the recovered count + elapsed time
+  Wraps init_master_recovery.run_crash_recovery so an exception surfaces
+  loudly instead of vanishing into the event loop, and reports the recovered
+  count + elapsed time
   once the deferred scan finishes. *identity* is the lifespan's one shielded
   reconcile_master_identity task, forwarded for the replay pass.
   """
   started = utc_now()
   try:
-    await run_crash_recovery(cfg, boot_time, session_manager(), master_identity=identity)
+    await init_master_recovery.run_crash_recovery(cfg, boot_time, session_manager(), master_identity=identity)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
     log.info("crash_recovery_done", elapsed_ms=elapsed_ms)
   except Exception:
@@ -382,7 +378,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     init_build_info()
 
     # Ensure home directory structure exists (fast, mandatory part of startup).
-    await init_charliebot_home()
+    await init_seed.init_charliebot_home()
     log.info("charliebot_home_ready", path=str(cfg.charliebot_home))
 
     # Session memory-cap cgroups: the one boot line stating whether
@@ -410,7 +406,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # with a timeout; the shield keeps the one judgment running past the bound
     # and the recovery task re-awaits that same task for the replay pass.
     session_mgr = session_manager()
-    identity = asyncio.create_task(reconcile_master_identity(cfg, session_mgr, boot_time))
+    identity = asyncio.create_task(init_master_recovery.reconcile_master_identity(cfg, session_mgr, boot_time))
     try:
       await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
     except TimeoutError:

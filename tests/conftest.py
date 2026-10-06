@@ -3090,7 +3090,7 @@ async def _settle_parent(
 
 
 def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-  """Record every path init.iter_recent_thread_metas actually reads+parses."""
+  """Record every path init_worker_recovery.iter_recent_thread_metas actually reads+parses."""
   read_paths: list[Path] = []
   real_load = worker_recovery_module.load_json_meta
 

@@ -1,7 +1,7 @@
 """CLI script for master CC to delegate tasks to worker agents.
 
 Called by the master Claude Code instance as a shell command (session
-identity resolves per ``resolve_session_id``):
+identity resolves per ``common.resolve_session_id``):
 
   charliebot delegate \
     --repo /path/to/repo \
@@ -21,17 +21,7 @@ import argparse
 import json
 import sys
 
-from src.cli.common import (
-    add_session_arg,
-    find_local_task_child,
-    find_local_thread,
-    post_internal_api,
-    read_required_text_file,
-    resolve_session_id,
-    validate_repo_path,
-    validate_task_spec_markdown,
-)
-from src.cli.help_formatter import CliRawDescriptionHelpFormatter
+from src.cli import common, help_formatter
 
 DELEGATE_EPILOG = """\
 Task spec format (--task-spec-file):
@@ -81,9 +71,9 @@ def main() -> None:
   parser = argparse.ArgumentParser(
       description="Delegate a task to a CharlieBot worker agent",
       epilog=DELEGATE_EPILOG,
-      formatter_class=CliRawDescriptionHelpFormatter,
+      formatter_class=help_formatter.CliRawDescriptionHelpFormatter,
   )
-  add_session_arg(parser)
+  common.add_session_arg(parser)
   parser.add_argument(
       "--repo",
       required=False,
@@ -160,14 +150,14 @@ def main() -> None:
           f"--repo and --base-branch are given together for a repo task or omitted together "
           f"for a repo-less one; exactly one was given for --task-type {args.task_type}")
     if args.repo is not None:
-      validate_repo_path(parser, args.repo)
+      common.validate_repo_path(parser, args.repo)
 
-  session_id = resolve_session_id(args.session)
-  task_spec = read_required_text_file("--task-spec-file", args.task_spec_file)
-  validate_task_spec_markdown(task_spec)
+  session_id = common.resolve_session_id(args.session)
+  task_spec = common.read_required_text_file("--task-spec-file", args.task_spec_file)
+  common.validate_task_spec_markdown(task_spec)
   reviewer_context = None
   if args.reviewer_context_file is not None:
-    reviewer_context = read_required_text_file("--reviewer-context-file", args.reviewer_context_file)
+    reviewer_context = common.read_required_text_file("--reviewer-context-file", args.reviewer_context_file)
 
   payload = {
       "session_id": session_id,
@@ -201,16 +191,16 @@ def main() -> None:
     # landed. A v2 task-tree child (a worker task under this session with the
     # same spec) returns the new {session_id, parent_session_id, run_id,
     # thread_id} contract; a v1 session keeps its legacy thread shape.
-    child = find_local_task_child(
+    child = common.find_local_task_child(
         session_id, description=task_spec, task_type=args.task_type, request_id=args.request_id)
     if child is not None:
       return child
-    thread = find_local_thread(session_id, description=task_spec, task_type=args.task_type)
+    thread = common.find_local_thread(session_id, description=task_spec, task_type=args.task_type)
     if thread is None:
       return None
     return {"thread_id": thread["id"], "description": thread["description"]}
 
-  result = post_internal_api("/api/internal/delegate", payload, readback=_readback)
+  result = common.post_internal_api("/api/internal/delegate", payload, readback=_readback)
   print("Worker spawned in the background; the completion summary arrives as an async wake-up.", file=sys.stderr)
   print(json.dumps(result, indent=2))
 

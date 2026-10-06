@@ -70,6 +70,7 @@ artifacts directory sits at `../../artifacts/` relative to your working director
 `memory_report_<YYYY-MM-DD>.html` there, with the header's diff link pointing at `diff_path`
 root-relatively.
 
-Your final message gives the page path, the head SHA, `diff_path`, and the day's disposition
-counts (`admit N, revise N, reject N`). An empty delta ends the step with a one-sentence final
-message.
+Your final message gives the page path, the head SHA, the diff link, and the day's disposition
+counts (`admit N, revise N, reject N`). Write the diff link in the form that the skill's
+"Proposal review and landing" chapter states. An empty delta ends the step with a
+one-sentence final message.

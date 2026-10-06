@@ -11,15 +11,15 @@ prints a shutdown marker and exits 0.
 from __future__ import annotations
 
 import os
+import pathlib
 import signal
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "start-server.sh"
 
 READY_LINE = "fake_server_ready"
@@ -50,7 +50,7 @@ while True:
 """
 
 
-def _read_log(log_dir: Path) -> str:
+def _read_log(log_dir: pathlib.Path) -> str:
   latest = log_dir / "server-latest.log"
   if not latest.exists():
     return ""
@@ -58,7 +58,7 @@ def _read_log(log_dir: Path) -> str:
 
 
 @pytest.mark.integration
-def test_launcher_tee_outlives_sigint_and_records_the_exit_line(tmp_path: Path) -> None:
+def test_launcher_tee_outlives_sigint_and_records_the_exit_line(tmp_path: pathlib.Path) -> None:
   """After SIGINT to the whole process group, the log file carries the server's
   shutdown marker followed by the launcher's exit line."""
   bin_dir = tmp_path / "bin"

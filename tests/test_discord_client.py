@@ -8,29 +8,19 @@ are synthetic throughout.
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, call, patch
+from unittest import mock
 
 import httpx
 import pytest
 
-from src.core.discord_client import (
-    BASE_URL,
-    REQUIRED_PERMISSIONS,
-    DiscordAPIError,
-    DiscordClient,
-    message_content_intent_enabled,
-    message_link,
-    missing_permissions,
-    parse_message_link,
-    snowflake_key,
-)
+from src.core import discord_client
 
 _TOKEN = "synthetic-token-not-a-secret"
 
 
-def _client(handler) -> DiscordClient:
+def _client(handler) -> discord_client.DiscordClient:
   """A client wired to an in-memory transport instead of the network."""
-  return DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token=_TOKEN)
+  return discord_client.DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token=_TOKEN)
 
 
 @pytest.mark.asyncio
@@ -75,12 +65,12 @@ async def test_rate_limit_retries_once_with_reported_wait():
     return httpx.Response(200, json={"url": "wss://gateway.example/synthetic"})
 
   seen: dict = {"count": 0}
-  sleep = AsyncMock()
-  with patch("src.core.discord_client.asyncio.sleep", new=sleep):
+  sleep = mock.AsyncMock()
+  with mock.patch("src.core.discord_client.asyncio.sleep", new=sleep):
     result = await _client(handler).get_gateway_url()
   assert result == "wss://gateway.example/synthetic"
   assert seen["count"] == 2
-  assert sleep.await_args_list == [call(1.25)]
+  assert sleep.await_args_list == [mock.call(1.25)]
 
 
 @pytest.mark.asyncio
@@ -92,15 +82,16 @@ async def test_rate_limit_three_times_raises():
     return httpx.Response(429, headers={"Retry-After": "2"}, json={"message": "rate limited"})
 
   seen: dict = {"count": 0}
-  sleep = AsyncMock()
-  with patch("src.core.discord_client.asyncio.sleep", new=sleep), pytest.raises(DiscordAPIError) as exc_info:
+  sleep = mock.AsyncMock()
+  with mock.patch("src.core.discord_client.asyncio.sleep",
+                  new=sleep), pytest.raises(discord_client.DiscordAPIError) as exc_info:
     await _client(handler).get_current_user()
   error = exc_info.value
   assert error.status == 429
   assert error.path == "/users/@me"
   assert seen["count"] == 3
   # Both retries waited on the Retry-After header fallback.
-  assert sleep.await_args_list == [call(2.0), call(2.0)]
+  assert sleep.await_args_list == [mock.call(2.0), mock.call(2.0)]
 
 
 @pytest.mark.asyncio
@@ -110,7 +101,7 @@ async def test_http_error_carries_code_and_message_without_token():
   def handler(request: httpx.Request) -> httpx.Response:
     return httpx.Response(403, json={"code": 50013, "message": "Missing Permissions"})
 
-  with pytest.raises(DiscordAPIError) as exc_info:
+  with pytest.raises(discord_client.DiscordAPIError) as exc_info:
     await _client(handler).get_channel("555555555555555555")
   error = exc_info.value
   assert (error.method, error.path, error.status, error.code,
@@ -132,7 +123,7 @@ async def test_get_message_fetches_one_message_by_id():
 
   seen: dict = {}
   assert await _client(handler).get_message("111111111111111111", "222222222222222222") == body
-  assert seen["url"] == f"{BASE_URL}/channels/111111111111111111/messages/222222222222222222"
+  assert seen["url"] == f"{discord_client.BASE_URL}/channels/111111111111111111/messages/222222222222222222"
 
 
 @pytest.mark.asyncio
@@ -159,7 +150,7 @@ async def test_get_messages_sorts_oldest_first_by_integer_id():
   assert [message["content"] for message in messages] == ["oldest", "newest"]
   assert seen["params"] == {"limit": "100", "after": "888888888888888888"}
   # The same ordering comparison, directly: string order would flip it.
-  assert snowflake_key("99999999999999999") < snowflake_key("100000000000000000")
+  assert discord_client.snowflake_key("99999999999999999") < discord_client.snowflake_key("100000000000000000")
   assert sorted(["100000000000000000", "99999999999999999"]) == ["100000000000000000", "99999999999999999"]
 
 
@@ -174,7 +165,7 @@ async def test_thread_name_truncated_to_100_chars():
 
   seen: dict = {}
   await _client(handler).start_thread_from_message("333333333333333333", "222222222222222222", "x" * 140)
-  assert seen["url"] == f"{BASE_URL}/channels/333333333333333333/messages/222222222222222222/threads"
+  assert seen["url"] == f"{discord_client.BASE_URL}/channels/333333333333333333/messages/222222222222222222/threads"
   assert seen["body"] == {"name": "x" * 100, "auto_archive_duration": 10080}
 
 
@@ -191,21 +182,22 @@ async def test_reaction_emoji_is_url_encoded():
   assert await client.add_reaction("333333333333333333", "222222222222222222", "\U0001F440") is None
   assert await client.remove_own_reaction("333333333333333333", "222222222222222222", "\U0001F440") is None
   reaction_path = "/channels/333333333333333333/messages/222222222222222222/reactions/%F0%9F%91%80/@me"
-  assert seen["PUT"] == f"{BASE_URL}{reaction_path}"
+  assert seen["PUT"] == f"{discord_client.BASE_URL}{reaction_path}"
   assert seen["DELETE"] == seen["PUT"]
 
 
 def test_message_link_round_trip():
   """message_link and parse_message_link invert each other, message id optional."""
-  assert message_link(
+  assert discord_client.message_link(
       "111111111111111111",
       "222222222222222222") == "https://discord.com/channels/111111111111111111/222222222222222222"
-  assert message_link("111111111111111111", "222222222222222222", "333333333333333333") == (
+  assert discord_client.message_link("111111111111111111", "222222222222222222", "333333333333333333") == (
       "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333")
-  assert parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222") == (
+  assert discord_client.parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222") == (
       "111111111111111111", "222222222222222222", None)
-  assert parse_message_link("https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333"
-                           ) == ("111111111111111111", "222222222222222222", "333333333333333333")
+  assert discord_client.parse_message_link(
+      "https://discord.com/channels/111111111111111111/222222222222222222/333333333333333333") == (
+          "111111111111111111", "222222222222222222", "333333333333333333")
 
 
 def test_parse_message_link_rejects_non_discord_urls():
@@ -219,20 +211,20 @@ def test_parse_message_link_rejects_non_discord_urls():
       "",
   ):
     with pytest.raises(ValueError):
-      parse_message_link(bad)
+      discord_client.parse_message_link(bad)
 
 
 def test_message_content_intent_bits():
   """The intent is enabled by 1<<18 (full) or 1<<19 (limited), nothing else."""
-  assert not message_content_intent_enabled(0)
-  assert message_content_intent_enabled(1 << 18)
-  assert message_content_intent_enabled(1 << 19)
-  assert not message_content_intent_enabled(1 << 17)
+  assert not discord_client.message_content_intent_enabled(0)
+  assert discord_client.message_content_intent_enabled(1 << 18)
+  assert discord_client.message_content_intent_enabled(1 << 19)
+  assert not discord_client.message_content_intent_enabled(1 << 17)
 
 
 def test_missing_permissions_table_and_administrator():
   """missing_permissions names the absent bits; ADMINISTRATOR grants everything."""
-  assert list(REQUIRED_PERMISSIONS) == [
+  assert list(discord_client.REQUIRED_PERMISSIONS) == [
       "VIEW_CHANNEL",
       "SEND_MESSAGES",
       "SEND_MESSAGES_IN_THREADS",
@@ -240,7 +232,7 @@ def test_missing_permissions_table_and_administrator():
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
   ]
-  assert missing_permissions(0) == [
+  assert discord_client.missing_permissions(0) == [
       "VIEW_CHANNEL",
       "SEND_MESSAGES",
       "SEND_MESSAGES_IN_THREADS",
@@ -248,10 +240,10 @@ def test_missing_permissions_table_and_administrator():
       "READ_MESSAGE_HISTORY",
       "ADD_REACTIONS",
   ]
-  assert missing_permissions(sum(REQUIRED_PERMISSIONS.values())) == []
-  assert missing_permissions(1 << 3) == []
+  assert discord_client.missing_permissions(sum(discord_client.REQUIRED_PERMISSIONS.values())) == []
+  assert discord_client.missing_permissions(1 << 3) == []
   have = (1 << 10) | (1 << 11)
-  assert missing_permissions(have) == [
+  assert discord_client.missing_permissions(have) == [
       "SEND_MESSAGES_IN_THREADS",
       "CREATE_PUBLIC_THREADS",
       "READ_MESSAGE_HISTORY",

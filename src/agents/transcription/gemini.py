@@ -16,15 +16,8 @@ import json
 import re
 from collections.abc import AsyncIterator, Sequence
 
-from src.agents.transcription.base import (
-    SAMPLE_RATE,
-    TranscriptEvent,
-    TranscriptionBackend,
-    TranscriptionRejected,
-)
-from src.core import timeouts
-from src.core.config import CharlieBotConfig
-from src.core.credentials import get_credentials
+from src.agents.transcription import base
+from src.core import config, credentials, timeouts
 
 MODEL = "models/gemini-3.5-transcribe-live"
 DEFAULT_ENDPOINT_URL = (
@@ -99,18 +92,18 @@ def _normalize_transcript(text: str) -> str:
   return "".join(chars)
 
 
-class GeminiTranscriptionBackend(TranscriptionBackend):
+class GeminiTranscriptionBackend(base.TranscriptionBackend):
   id = "gemini"
   label = "Gemini 3.5 Transcribe Live"
   live_partials = True
 
-  def __init__(self, cfg: CharlieBotConfig, endpoint_url: str = DEFAULT_ENDPOINT_URL) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, endpoint_url: str = DEFAULT_ENDPOINT_URL) -> None:
     self._cfg = cfg
     # Constructor argument, not config: tests point it at a loopback fake server.
     self._endpoint_url = endpoint_url
 
   def unavailable_reason(self) -> str | None:
-    if not get_credentials().get("gemini", "api_key"):
+    if not credentials.get_credentials().get("gemini", "api_key"):
       return "needs gemini.api_key"
     return None
 
@@ -120,15 +113,15 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
       *,
       vocabulary: Sequence[str],
       languages: Sequence[str],
-  ) -> AsyncIterator[TranscriptEvent]:
-    api_key = str(get_credentials().get("gemini", "api_key") or "")
+  ) -> AsyncIterator[base.TranscriptEvent]:
+    api_key = str(credentials.get_credentials().get("gemini", "api_key") or "")
     if not api_key:
-      raise TranscriptionRejected("gemini.api_key is not set in credentials.yaml")
-    from websockets.asyncio.client import connect
+      raise base.TranscriptionRejected("gemini.api_key is not set in credentials.yaml")
+    from websockets.asyncio import client
 
     # The key rides the query string like the public endpoint expects; it is
     # never logged and never reaches an event.
-    async with connect(
+    async with client.connect(
         f"{self._endpoint_url}?key={api_key}",
         max_size=None,
         open_timeout=SETUP_TIMEOUT_S,
@@ -137,12 +130,15 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
       await socket.send(json.dumps(self._setup_frame(vocabulary, languages)))
       reply = json.loads(await asyncio.wait_for(socket.recv(), SETUP_TIMEOUT_S))
       if "setupComplete" not in reply:
-        raise TranscriptionRejected(f"setup reply was not setupComplete: {sorted(reply)}")
+        raise base.TranscriptionRejected(f"setup reply was not setupComplete: {sorted(reply)}")
 
       async def send_audio() -> None:
         await socket.send(json.dumps({"realtimeInput": {"activityStart": {}}}))
         async for chunk in audio:
-          audio_frame = {"data": base64.b64encode(chunk).decode("ascii"), "mimeType": f"audio/pcm;rate={SAMPLE_RATE}"}
+          audio_frame = {
+              "data": base64.b64encode(chunk).decode("ascii"),
+              "mimeType": f"audio/pcm;rate={base.SAMPLE_RATE}"
+          }
           await socket.send(json.dumps({"realtimeInput": {"audio": audio_frame}}))
         await socket.send(json.dumps({"realtimeInput": {"activityEnd": {}}}))
 
@@ -161,12 +157,12 @@ class GeminiTranscriptionBackend(TranscriptionBackend):
           content = json.loads(raw).get("serverContent", {})
           interim = content.get("interimInputTranscription", {}).get("text")
           if interim is not None:
-            yield TranscriptEvent(kind="partial", text=_normalize_transcript(interim))
+            yield base.TranscriptEvent(kind="partial", text=_normalize_transcript(interim))
             continue
           final_text = content.get("inputTranscription", {}).get("text")
           if final_text is not None:
             # The generationComplete arriving with it says no text follows.
-            yield TranscriptEvent(kind="final", text=_normalize_transcript(final_text))
+            yield base.TranscriptEvent(kind="final", text=_normalize_transcript(final_text))
             return
       finally:
         sender.cancel()

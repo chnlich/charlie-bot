@@ -6,27 +6,23 @@ import json
 import math
 import mimetypes
 import os
+import pathlib
 import re
 from collections.abc import Callable
-from pathlib import Path
 from typing import TypeVar
-from urllib.parse import quote
+from urllib import parse
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+import fastapi
+from fastapi import responses
 
-from src.api.pages import _static_asset_version
-from src.api.responses import GZIP_RESPONSE_HEADERS, gzip_file_fresh, request_wants_gzip
-from src.core.compression import gzip_level1
-from src.core.config import get_config
-from src.core.constants import FILE_SERVER_MOUNTS
-from src.core.human_size import format_size
-from src.core.memo import BoundedMemo, StatSignatureMemo
+from src.api import pages
+from src.api import responses as responses_api
+from src.core import compression, config, constants, human_size, memo
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 
-class _ServedFileResponse(FileResponse):
+class _ServedFileResponse(responses.FileResponse):
   # Starlette 1.0.0 exposes the read chunk size as this class attribute (no
   # __init__ parameter). The 64 KiB default prices a page-cache serve at
   # ~250 MB/s: one executor hop plus one ASGI send per chunk. A 1 MiB chunk
@@ -64,7 +60,8 @@ _SERVED_FILE_GZIP_MEDIA_TYPES = frozenset(
         "image/svg+xml",
     })
 
-_served_file_gzip_memo: StatSignatureMemo[Path, bytes] = StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
+_served_file_gzip_memo: memo.StatSignatureMemo[pathlib.Path,
+                                               bytes] = memo.StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
 
 # Bound on _annotate_memo in annotated diff pages: one compare view reads one
 # page against one base at a time, so the cap covers every compare view open
@@ -85,12 +82,12 @@ _CLEAN_VIEW_MEMO_LIMIT = 8
 # the sibling memos.
 _AnnotateKey = tuple[str, int, int, str, int, int]
 
-_annotate_memo: BoundedMemo[_AnnotateKey, str] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+_annotate_memo: memo.BoundedMemo[_AnnotateKey, str] = memo.BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
 
 # The gzip form of the same annotated page, keyed and bounded alike. It lives in
 # its own memo so a client that sends no Accept-Encoding: gzip never pays the
 # deflate.
-_annotate_gzip_memo: BoundedMemo[_AnnotateKey, bytes] = BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+_annotate_gzip_memo: memo.BoundedMemo[_AnnotateKey, bytes] = memo.BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
 
 # Memo key for one clean artifact view: the resolved path plus the page's
 # (mtime_ns, size) taken before its read. The injection is a pure function of
@@ -102,11 +99,11 @@ _annotate_gzip_memo: BoundedMemo[_AnnotateKey, bytes] = BoundedMemo(_DIFF_ANNOTA
 # idiom of the sibling memos.
 _CleanViewKey = tuple[str, int, int]
 
-_clean_view_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
+_clean_view_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
 # The gzip form of the same body, keyed and bounded alike. It lives in its own
 # memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
-_clean_view_gzip_memo: BoundedMemo[_CleanViewKey, bytes] = BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
+_clean_view_gzip_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
 # Client-visible error details of the files route's diff and read arms. The
 # "not a session artifact page" sentence is a wire contract the tests pin, so
@@ -121,16 +118,16 @@ _PERMISSION_DENIED_DETAIL = "Permission denied"
 # it: the plain and the gzip artifact responses alike set Cache-Control:
 # no-store, the gzip one on top of the pre-compressed headers.
 _NO_STORE_HEADERS = {"Cache-Control": "no-store"}
-_ARTIFACT_GZIP_HEADERS = {**GZIP_RESPONSE_HEADERS, **_NO_STORE_HEADERS}
+_ARTIFACT_GZIP_HEADERS = {**responses_api.GZIP_RESPONSE_HEADERS, **_NO_STORE_HEADERS}
 
 
-def _file_signature(path: Path) -> tuple[int, int]:
+def _file_signature(path: pathlib.Path) -> tuple[int, int]:
   """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
   st = path.stat()
   return (st.st_mtime_ns, st.st_size)
 
 
-def _annotate_key(base_path: Path, page_path: Path) -> _AnnotateKey:
+def _annotate_key(base_path: pathlib.Path, page_path: pathlib.Path) -> _AnnotateKey:
   """Both resolved paths plus each file's (mtime_ns, size) taken before its read.
 
   The base's missing file is the same 404 the annotate raises, so the key's one
@@ -139,12 +136,12 @@ def _annotate_key(base_path: Path, page_path: Path) -> _AnnotateKey:
   try:
     base_sig = (str(base_path), *_file_signature(base_path))
   except OSError as e:
-    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
+    raise fastapi.HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_sig = (str(page_path), *_file_signature(page_path))
   return (*base_sig, *page_sig)
 
 
-def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> str:
+def _annotated_diff_page(base_path: pathlib.Path, page_path: pathlib.Path, session_id: str) -> str:
   """The diff page's target annotated against its base, comment tray wrapped on, repeats served from the memo.
 
   A cold annotate parses both pages end to end (~0.25 s on a 1 MB pair,
@@ -160,7 +157,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> s
   try:
     base_text = base_path.read_text(encoding="utf-8")
   except OSError as e:
-    raise HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
+    raise fastapi.HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_text = page_path.read_text(encoding="utf-8")
   # plan_diff drags html.parser and difflib and serves only this compare view;
   # the server import floor (docs/perf_baseline.md M99) depends on it staying
@@ -175,7 +172,7 @@ def _annotated_diff_page(base_path: Path, page_path: Path, session_id: str) -> s
 _K = TypeVar("_K")
 
 
-def _gzip_form(memo: BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]) -> bytes:
+def _gzip_form(gzip_memo: memo.BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]) -> bytes:
   """The level-1 gzip form of the plain body *build* yields, memoized under *key*.
 
   A hit returns the stored bytes and never calls *build*; a miss deflates
@@ -183,15 +180,15 @@ def _gzip_form(memo: BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]
   Content-Encoding: gzip set upstream, which is what makes the server's gzip
   middleware skip its own whole-body deflate.
   """
-  hit = memo.get(key)
+  hit = gzip_memo.get(key)
   if hit is not None:
     return hit
-  compressed = gzip_level1(build())
-  memo.store(key, compressed)
+  compressed = compression.gzip_level1(build())
+  gzip_memo.store(key, compressed)
   return compressed
 
 
-def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str) -> bytes:
+def _annotated_diff_page_gzip(base_path: pathlib.Path, page_path: pathlib.Path, session_id: str) -> bytes:
   """The annotated diff page's gzip form, memoized beside the plain body.
 
   Level 1 over the multi-MB worst compare view is the per-click cost the memo
@@ -202,7 +199,7 @@ def _annotated_diff_page_gzip(base_path: Path, page_path: Path, session_id: str)
       _annotate_gzip_memo, key, lambda: _annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
 
 
-def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
+def _injected_artifact_page(fs_path: pathlib.Path, session_id: str) -> bytes:
   """The artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
 
   A repeat view of an unchanged page pays one stat and zero file bytes — the
@@ -220,7 +217,7 @@ def _injected_artifact_page(fs_path: Path, session_id: str) -> bytes:
   return body
 
 
-def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
+def _injected_artifact_page_gzip(fs_path: pathlib.Path, session_id: str) -> bytes:
   """The artifact view's gzip form, memoized beside the plain body.
 
   Level 1 over the ~1 MB worst page measures ~27 ms per view.
@@ -229,7 +226,7 @@ def _injected_artifact_page_gzip(fs_path: Path, session_id: str) -> bytes:
   return _gzip_form(_clean_view_gzip_memo, key, lambda: _injected_artifact_page(fs_path, session_id))
 
 
-def _artifact_session_id(fs_path: Path) -> str | None:
+def _artifact_session_id(fs_path: pathlib.Path) -> str | None:
   """Return the session id owning an artifact page, or None when it belongs to no session.
 
   Anchored on the configured sessions root, not on the path's shape: a page counts only
@@ -238,7 +235,7 @@ def _artifact_session_id(fs_path: Path) -> str | None:
   artifact-shaped path outside the root are excluded. Both sides are resolved — fs_path
   by ``serve_file``, the root here — so a symlink on either side cannot misjudge.
   """
-  root = get_config().sessions_dir.resolve()
+  root = config.get_config().sessions_dir.resolve()
   try:
     rel = fs_path.relative_to(root)
   except ValueError:
@@ -256,7 +253,7 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   script tags so the id is set before the comment scripts run."""
   # One version per body: two walks could straddle a tree edit and ship mixed
   # tokens in one page.
-  version = _static_asset_version()
+  version = pages._static_asset_version()
   tags = (
       f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
       f"<script src=/static/js/comment_post.js?v={version}></script>\n"
@@ -267,7 +264,7 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   return html_text[:idx] + tags + "\n" + html_text[idx:]
 
 
-def _resolve_diff_base(session_id: str, diff_param: str) -> Path:
+def _resolve_diff_base(session_id: str, diff_param: str) -> pathlib.Path:
   """Resolve the ``?diff=`` query parameter of a diff request to the base page's path.
 
   The parameter is a session-relative artifact path — the plan registry's ``versions[].file``
@@ -277,9 +274,9 @@ def _resolve_diff_base(session_id: str, diff_param: str) -> Path:
   is 404 naming it — a reader who sees no marks has to be able to trust there are none, so
   a broken diff never falls back to the clean page.
   """
-  candidate = (get_config().sessions_dir / session_id / diff_param).resolve()
+  candidate = (config.get_config().sessions_dir / session_id / diff_param).resolve()
   if candidate.suffix.lower() != ".html" or _artifact_session_id(candidate) is None:
-    raise HTTPException(status_code=400, detail=f"diff base is not a session artifact page: {diff_param}")
+    raise fastapi.HTTPException(status_code=400, detail=f"diff base is not a session artifact page: {diff_param}")
   return candidate
 
 
@@ -329,11 +326,11 @@ _LISTING_MEMO_LIMIT = 8
 # build from a repeat view.
 _ListingKey = tuple[str, str, tuple[tuple[bool, str, int, float], ...]]
 
-_listing_memo: BoundedMemo[_ListingKey, str] = BoundedMemo(_LISTING_MEMO_LIMIT)
+_listing_memo: memo.BoundedMemo[_ListingKey, str] = memo.BoundedMemo(_LISTING_MEMO_LIMIT)
 
 # The gzip form of the same page, keyed and bounded alike. It lives in its own
 # memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
-_listing_gzip_memo: BoundedMemo[_ListingKey, bytes] = BoundedMemo(_LISTING_MEMO_LIMIT)
+_listing_gzip_memo: memo.BoundedMemo[_ListingKey, bytes] = memo.BoundedMemo(_LISTING_MEMO_LIMIT)
 
 # A row's bytes are a pure function of its key: the entry's walked tuple plus
 # the URL prefix the href embeds — the same walked-state ground the page memo's
@@ -343,7 +340,7 @@ _listing_gzip_memo: BoundedMemo[_ListingKey, bytes] = BoundedMemo(_LISTING_MEMO_
 # mtimes such renames leave behind LRU-first.
 _ROW_MEMO_LIMIT = 8192
 _RowKey = tuple[str, bool, str, int, float]
-_row_memo: BoundedMemo[_RowKey, str] = BoundedMemo(_ROW_MEMO_LIMIT)
+_row_memo: memo.BoundedMemo[_RowKey, str] = memo.BoundedMemo(_ROW_MEMO_LIMIT)
 
 # A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
 # urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
@@ -374,7 +371,8 @@ _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -> tuple[str | None, _ListingKey | None]:
+def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str,
+                      diff_param: str | None) -> tuple[str | None, _ListingKey | None]:
   """The listing page and its memo key, or (None, None) when *dir_path* is not a directory.
 
   The key is the walked state the page is a pure function of; the route's gzip
@@ -393,11 +391,11 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
     # The diff 400 outranks the unreadable 403: the route contract checks the
     # diff target before it tries to read the directory.
     if diff_param is not None:
-      raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path)) from e
-    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
+      raise fastapi.HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path)) from e
+    raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
   if diff_param is not None:
     scandir_iter.close()
-    raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path))
+    raise fastapi.HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(dir_path))
   entries: list[tuple[bool, str, int, float]] = []
   with scandir_iter:
     for entry in scandir_iter:
@@ -416,8 +414,8 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
   rows = []
   prefix = url_prefix.rstrip("/")
   # Parent directory link (unless at a mount root)
-  if prefix != FILE_SERVER_MOUNTS[0]:
-    parent = "/".join(prefix.split("/")[:-1]) or FILE_SERVER_MOUNTS[0]
+  if prefix != constants.FILE_SERVER_MOUNTS[0]:
+    parent = "/".join(prefix.split("/")[:-1]) or constants.FILE_SERVER_MOUNTS[0]
     rows.append('<tr>'
                 f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
                 '<td></td><td></td>'
@@ -433,8 +431,8 @@ def _dir_listing_page(dir_path: Path, url_prefix: str, diff_param: str | None) -
       href = f"{escaped_prefix}/{name}"
       if _SAFE_ENTRY_RE.fullmatch(name) is None:
         name_text = html.escape(name_text)
-        href = html.escape(f"{prefix}/{quote(name, safe='')}")
-      size_text = "" if is_dir else format_size(size)
+        href = html.escape(f"{prefix}/{parse.quote(name, safe='')}")
+      size_text = "" if is_dir else human_size.format_size(size)
       mtime_text = _format_mtime(mtime)
       row = (
           f'<tr>'
@@ -456,7 +454,7 @@ def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
 
 
 def _resolve_and_list(path: str, url_prefix: str,
-                      diff_param: str | None) -> tuple[Path, tuple[str, _ListingKey] | None, bool]:
+                      diff_param: str | None) -> tuple[pathlib.Path, tuple[str, _ListingKey] | None, bool]:
   """Resolve the request path and attempt its listing in one executor hop.
 
   Returns ``(resolved_path, page, exists)`` where *page* is the listing page
@@ -467,7 +465,7 @@ def _resolve_and_list(path: str, url_prefix: str,
   file — pays its explicit ``os.path.exists``. ``FileNotFoundError`` from a
   vanished or absent path answers ``exists=False`` without a second stat.
   """
-  fs_path = (Path("/") / path).resolve()
+  fs_path = (pathlib.Path("/") / path).resolve()
   try:
     page = _dir_listing_page(fs_path, url_prefix, diff_param)
   except FileNotFoundError:
@@ -478,26 +476,26 @@ def _resolve_and_list(path: str, url_prefix: str,
 
 
 @router.api_route("/{path:path}", methods=["GET", "HEAD"])
-async def serve_file(path: str, request: Request) -> Response:
+async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
   """Serve a file or directory listing from the filesystem.
 
   HEAD answers the same status as GET, which is how the chat asks whether a linked path is
   still there without pulling the file down.
   """
   diff_param = request.query_params.get("diff")
-  url_prefix = f"{FILE_SERVER_MOUNTS[0]}/{path}" if path else FILE_SERVER_MOUNTS[0]
+  url_prefix = f"{constants.FILE_SERVER_MOUNTS[0]}/{path}" if path else constants.FILE_SERVER_MOUNTS[0]
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to the artifact and
-  # FileResponse arms.
+  # responses.FileResponse arms.
   fs_path, page, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix, diff_param)
   if not exists:
-    raise HTTPException(status_code=404, detail="Not found")
+    raise fastapi.HTTPException(status_code=404, detail="Not found")
   if page is not None:
     listing, listing_key = page
-    if request_wants_gzip(request):
+    if responses_api.request_wants_gzip(request):
       body = await asyncio.to_thread(_listing_page_gzip, listing_key, listing)
-      return Response(content=body, media_type="text/html", headers=GZIP_RESPONSE_HEADERS)
-    return HTMLResponse(listing)
+      return responses.Response(content=body, media_type="text/html", headers=responses_api.GZIP_RESPONSE_HEADERS)
+    return responses.HTMLResponse(listing)
 
   # Standalone artifact HTML gets the review UI injected here — the single chokepoint
   # that serves every artifact page — regardless of how the artifact was authored and
@@ -511,23 +509,23 @@ async def serve_file(path: str, request: Request) -> Response:
     # rather than silently answered with the clean page. The marks themselves
     # are spliced into the response before the comment layer wraps them.
     if session_id is None:
-      raise HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
+      raise fastapi.HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
     base_path = _resolve_diff_base(session_id, diff_param)
-    if request_wants_gzip(request):
+    if responses_api.request_wants_gzip(request):
       body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, session_id)
-      return Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
+      return responses.Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
     # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
     # build runs off the event loop; a memo hit answers with zero file bytes.
     html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, session_id)
-    return HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)
+    return responses.HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)
 
   if session_id is not None:
-    if request_wants_gzip(request):
+    if responses_api.request_wants_gzip(request):
       body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
-      return Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
+      return responses.Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
     # One executor hop: signature, memo hit, and on a miss the read+inject+store.
     body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
-    return HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
+    return responses.HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
 
   # Serve the file with auto-detected MIME type. A gzip-accepting GET of a
   # gated media type under the memo cap rides the memo arm: Content-Encoding
@@ -536,12 +534,13 @@ async def serve_file(path: str, request: Request) -> Response:
   # Every other shape — no-gzip clients, Range requests, unlisted media types,
   # over-cap files — stays on the streaming arm unchanged.
   media_type, _ = mimetypes.guess_type(str(fs_path))
-  if (request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
+  if (responses_api.request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
       (media_type.startswith(_SERVED_FILE_GZIP_MEDIA_PREFIXES) or media_type in _SERVED_FILE_GZIP_MEDIA_TYPES)):
-    compressed = await asyncio.to_thread(gzip_file_fresh, _served_file_gzip_memo, fs_path, _SERVED_FILE_GZIP_MAX_BYTES)
+    compressed = await asyncio.to_thread(
+        responses_api.gzip_file_fresh, _served_file_gzip_memo, fs_path, _SERVED_FILE_GZIP_MAX_BYTES)
     if compressed is not None:
-      return Response(content=compressed, media_type=media_type, headers=GZIP_RESPONSE_HEADERS)
+      return responses.Response(content=compressed, media_type=media_type, headers=responses_api.GZIP_RESPONSE_HEADERS)
   try:
     return _ServedFileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
-    raise HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
+    raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e

@@ -10,12 +10,12 @@ reply path turns that refusal into a refused reply and the CLI into a non-zero
 exit.
 """
 
+import pathlib
 import secrets
 import shutil
-from pathlib import Path
 from typing import Self
 
-from src.core.config import CharlieBotConfig
+from src.core import config
 
 
 class PublishError(Exception):
@@ -25,9 +25,9 @@ class PublishError(Exception):
 class PublishResult(str):
   """The published URL string plus the path of the published copy."""
 
-  path: Path
+  path: pathlib.Path
 
-  def __new__(cls, url: str, path: Path) -> Self:
+  def __new__(cls, url: str, path: pathlib.Path) -> Self:
     result = super().__new__(cls, url)
     result.path = path
     return result
@@ -38,7 +38,7 @@ class PublishResult(str):
     return str(self)
 
 
-def publish_artifact(artifact: str | Path, cfg: CharlieBotConfig) -> PublishResult:
+def publish_artifact(artifact: str | pathlib.Path, cfg: config.CharlieBotConfig) -> PublishResult:
   """Copy *artifact* to ``<publish.dir>/<token>/<basename>`` and return its URL and path.
 
   Preflight, in order, before any write: ``publish.dir`` and
@@ -62,7 +62,7 @@ def publish_artifact(artifact: str | Path, cfg: CharlieBotConfig) -> PublishResu
   index = cfg.publish.dir / "index.html"
   if not index.is_file():
     raise PublishError(f"publish directory has no index.html, so its listing would expose every link: {index}")
-  src = Path(artifact)
+  src = pathlib.Path(artifact)
   if not src.is_file():
     raise PublishError(f"artifact is not an existing regular file: {src}")
   token = secrets.token_urlsafe(16)

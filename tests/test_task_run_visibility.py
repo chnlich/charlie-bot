@@ -12,58 +12,54 @@ with pagination and the delivery close.
 
 from __future__ import annotations
 
+import datetime
 import json
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import OPERATOR, patch_instructions_content, stub_credentials
 
 from src.core import event_types as ET
-from src.core import thinking_state
-from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
-from src.core.task_sessions import TaskTreeManager
-from tests.test_task_execution import (
-    build_env,
-    make_api_client,
-)
+from src.core import models, task_sessions, thinking_state
+from tests import test_task_execution
 
 
 async def manager_with_worker(tmp_path, monkeypatch):
   """One root manager with one worker child, no user input anywhere."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  patch_instructions_content(monkeypatch)
-  stub_credentials({"charliebot": {"access_key": "vis-key"}})
+  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  conftest.patch_instructions_content(monkeypatch)
+  conftest.stub_credentials({"charliebot": {"access_key": "vis-key"}})
   root = await tree.create_task(
       request_id="root",
       task_parent_id=None,
       profile="manager",
-      task=TaskSpec(goal="project"),
+      task=models.TaskSpec(goal="project"),
       name="Project",
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=root.id,
       profile="worker",
-      task=TaskSpec(goal="leaf"),
+      task=models.TaskSpec(goal="leaf"),
       name="W",
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   return cfg, session_mgr, tree, root, worker
 
 
 @pytest.mark.asyncio
 async def test_worker_run_opens_the_busy_interval_and_every_finish_closes_it(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A worker Run's launch opens its node's busy interval at the recorded
   started_at (the header timer) and records its display backend; each
   terminal outcome closes exactly that interval. The manager parent's own
   master-queue interval is never borrowed."""
   _cfg, _session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  started = datetime.now(UTC) - timedelta(seconds=3)
+  started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=3)
   await tree.runs.register_run(
-      RunRecord(id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model", started_at=started))
+      models.RunRecord(
+          id="run-1", session_id=worker.id, kind="work", backend="fake", model="fake-model", started_at=started))
   await tree.runs.record_launch(worker.id, "run-1", pid=424242, pid_start="1-424000")
 
   assert thinking_state.busy_since(worker.id) == started
@@ -80,52 +76,54 @@ async def test_worker_run_opens_the_busy_interval_and_every_finish_closes_it(
 
 
 @pytest.mark.asyncio
-async def test_a_run_closes_only_the_interval_it_opened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_run_closes_only_the_interval_it_opened(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A manager_turn Run opens no interval, so its finish leaves the master
   queue's own interval standing; a legacy parent's interval is untouched by a
   child Run; a queued Run that never launched closes nothing on finish."""
   _cfg, session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
-  queue_since = datetime.now(UTC) - timedelta(seconds=9)
+  queue_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=9)
   thinking_state.mark_busy(root.id, since=queue_since)
   await tree.runs.register_run(
-      RunRecord(id="turn-1", session_id=root.id, kind="manager_turn", started_at=datetime.now(UTC)))
+      models.RunRecord(
+          id="turn-1", session_id=root.id, kind="manager_turn", started_at=datetime.datetime.now(datetime.UTC)))
   await tree.runs.record_launch(root.id, "turn-1", pid=424250, pid_start="1-424010")
   await tree.runs.record_finish(root.id, "turn-1", "success")
   assert thinking_state.busy_since(root.id) == queue_since
 
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend="fake")
-  legacy_since = datetime.now(UTC) - timedelta(seconds=5)
+  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"), backend="fake")
+  legacy_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=5)
   thinking_state.mark_busy(legacy.id, since=legacy_since)
   child = await tree.create_task(
       request_id="lw",
       task_parent_id=legacy.id,
       profile="worker",
-      task=TaskSpec(goal="leaf"),
+      task=models.TaskSpec(goal="leaf"),
       name="LW",
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   await tree.runs.register_run(
-      RunRecord(
+      models.RunRecord(
           id="run-l",
           session_id=child.id,
           kind="work",
           backend="fake",
           model="fake-model",
-          started_at=datetime.now(UTC)))
+          started_at=datetime.datetime.now(datetime.UTC)))
   await tree.runs.record_launch(child.id, "run-l", pid=424244, pid_start="1-424002")
   assert thinking_state.busy_since(child.id) is not None
   await tree.runs.record_finish(child.id, "run-l", "success")
   assert thinking_state.busy_since(child.id) is None
   assert thinking_state.busy_since(legacy.id) == legacy_since
 
-  worker_since = datetime.now(UTC) - timedelta(seconds=2)
+  worker_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=2)
   await tree.runs.register_run(
-      RunRecord(
+      models.RunRecord(
           id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model",
           started_at=worker_since))
   await tree.runs.record_launch(worker.id, "run-live", pid=424251, pid_start="1-424011")
   await tree.runs.register_run(
-      RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-queued", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.runs.record_finish(worker.id, "run-queued", "cancelled")
   assert thinking_state.busy_since(worker.id) == worker_since
 
@@ -135,7 +133,7 @@ async def test_a_run_closes_only_the_interval_it_opened(tmp_path: Path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def _write_run_events(tree: TaskTreeManager, session_id: str, run_id: str, events: list[dict]) -> None:
+def _write_run_events(tree: task_sessions.TaskTreeManager, session_id: str, run_id: str, events: list[dict]) -> None:
   path = tree.runs.run_dir(session_id, run_id) / "events.jsonl"
   path.parent.mkdir(parents=True, exist_ok=True)
   with path.open("a", encoding="utf-8") as f:
@@ -144,7 +142,8 @@ def _write_run_events(tree: TaskTreeManager, session_id: str, run_id: str, event
 
 
 @pytest.mark.asyncio
-async def test_failed_run_header_reads_failed_with_its_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_failed_run_header_reads_failed_with_its_error(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Run that failed before its process started (no started_at — the launch
   refusal precedes any spawn, and a registered Run carries none) heads its
   segment as "launch failed" with the error text in full, exactly once: the
@@ -155,14 +154,14 @@ async def test_failed_run_header_reads_failed_with_its_error(tmp_path: Path, mon
   error_text = "RuntimeError: worktree preparation failed: task/x differs from origin/main"
   # Registered without a task spec (the improve-iteration shape): no task_spec_ref.
   await tree.runs.register_run(
-      RunRecord(id="run-f", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-f", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   _write_run_events(
       tree, worker.id, "run-f", [
           {
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": utc_now_iso()
+              "timestamp": models.utc_now_iso()
           },
       ])
   await tree.dispatch.finish_run(worker.id, "run-f", outcome="failed", exit_code=-1)
@@ -187,21 +186,20 @@ async def test_failed_run_header_reads_failed_with_its_error(tmp_path: Path, mon
 
 @pytest.mark.asyncio
 async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A Run that started (its launch recorded) and then failed still reads plain
   "failed" — launch_failed is false — and its launch prompt link points at the
   assembled file. Its error text also lands in the header exactly once."""
-  from src.core import worker_transcript
-  from src.core.task_prompts import LAUNCH_TEXT_FILENAME
+  from src.core import task_prompts, worker_transcript
 
   _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
   await tree.runs.register_run(
-      RunRecord(id="run-s", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-s", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   # The real launch seam sets started_at (launched) and the adapter persists
   # the launch text under the run dir before spawn.
   await tree.runs.record_launch(worker.id, "run-s", pid=424401, pid_start="1-424401")
-  launch_prompt = tree.runs.run_dir(worker.id, "run-s") / LAUNCH_TEXT_FILENAME
+  launch_prompt = tree.runs.run_dir(worker.id, "run-s") / task_prompts.LAUNCH_TEXT_FILENAME
   launch_prompt.parent.mkdir(parents=True, exist_ok=True)
   launch_prompt.write_text("the exact launch text\n", encoding="utf-8")
   _write_run_events(
@@ -210,7 +208,7 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": utc_now_iso()
+              "timestamp": models.utc_now_iso()
           },
       ])
   await tree.runs.record_finish(worker.id, "run-s", "failed")
@@ -224,12 +222,12 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
   assert header["error"] == error_text
   assert [m for m in messages if error_text in str(m.get("content") or "")] == []
   assert header["launch_prompt_ref"] == str(launch_prompt)
-  assert Path(header["launch_prompt_ref"]).is_file()
+  assert pathlib.Path(header["launch_prompt_ref"]).is_file()
 
 
 @pytest.mark.asyncio
 async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A running Run's error event is an ordinary row; once the Run finishes
   failed, a poll carrying the previous revision answers reset (the client
   re-renders) and the error text lives only in the header's error field."""
@@ -238,7 +236,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
   cfg, session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
   await tree.runs.register_run(
-      RunRecord(id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
+      models.RunRecord(id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
   await tree.runs.record_launch(worker.id, "run-live", pid=424451, pid_start="1-424451")
   monkeypatch.setattr(runs_mod, "is_run_alive", lambda *a, **k: True)
   _write_run_events(
@@ -247,11 +245,11 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
               "type": ET.ERROR,
               "message": error_text,
               "content": error_text,
-              "timestamp": utc_now_iso()
+              "timestamp": models.utc_now_iso()
           },
       ])
 
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
     running = client.get(f"/api/sessions/{worker.id}/transcript?after=0&revision=")
     assert running.status_code == 200, running.text
     running_body = running.json()

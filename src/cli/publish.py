@@ -13,23 +13,23 @@ published and no URL falls back to the server port.
 import argparse
 
 from src.cli import common as cli_common
-from src.cli.help_formatter import CliHelpFormatter
+from src.cli import help_formatter
 
 
 def main() -> None:
   parser = argparse.ArgumentParser(
-      description="Publish an artifact and print the URL readers outside use", formatter_class=CliHelpFormatter)
+      description="Publish an artifact and print the URL readers outside use",
+      formatter_class=help_formatter.CliHelpFormatter)
   parser.add_argument("artifact", help="Path of the artifact file to publish")
   args = parser.parse_args()
   # The publish and config stacks ride the one publish that needs them: a
   # deferral here keeps --help and parser errors off their import chains (the
   # src.cli.config deferral shape).
-  from src.core.config import get_config
-  from src.core.publish import PublishError, publish_artifact
+  from src.core import config, publish
 
   try:
-    result = publish_artifact(args.artifact, get_config())
-  except PublishError as e:
+    result = publish.publish_artifact(args.artifact, config.get_config())
+  except publish.PublishError as e:
     cli_common.exit_error(str(e))
   print(result.url)
 

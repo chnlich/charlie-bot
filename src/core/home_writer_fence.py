@@ -26,17 +26,14 @@ killed by this module.
 
 from __future__ import annotations
 
+import dataclasses
 import fcntl
 import os
-from dataclasses import dataclass
-from pathlib import Path
+import pathlib
 
-from src.core.json_utils import atomic_write_text, load_json_meta
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import utc_now_iso
-from src.core.runs import read_pid_stat
+from src.core import json_utils, log_once, models, runs
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 STATE_DIR_NAME = "state"
 FENCE_LOCK_NAME = "home_writer.lock"
@@ -46,7 +43,7 @@ FENCE_IDENTITY_NAME = "writer_identity.json"
 class HomeWriterActiveError(RuntimeError):
   """The home's writer fence is held by a live process (startup/apply refuses)."""
 
-  def __init__(self, holder: FenceHolder | None, home: Path, purpose: str) -> None:
+  def __init__(self, holder: FenceHolder | None, home: pathlib.Path, purpose: str) -> None:
     self.holder = holder
     self.home = home
     detail = (
@@ -60,7 +57,7 @@ class FencePathRefusalError(RuntimeError):
   """A fence path is unsafe (symlinked state dir, lock, or identity record)."""
 
 
-@dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True)
 class FenceHolder:
   """The recorded identity of the fence's current holder."""
   pid: int
@@ -71,22 +68,22 @@ class FenceHolder:
   home: str
 
 
-def fence_lock_path(home: Path) -> Path:
+def fence_lock_path(home: pathlib.Path) -> pathlib.Path:
   return home / STATE_DIR_NAME / FENCE_LOCK_NAME
 
 
-def fence_identity_path(home: Path) -> Path:
+def fence_identity_path(home: pathlib.Path) -> pathlib.Path:
   return home / STATE_DIR_NAME / FENCE_IDENTITY_NAME
 
 
-def _checked_fence_paths(home: Path) -> None:
+def _checked_fence_paths(home: pathlib.Path) -> None:
   """Refuse fence paths that would place or read the exclusion outside the home.
 
   The state directory must be a real directory inside the home, and neither
   fence file may be a symlink: a symlink would redirect the exclusion (or the
   identity evidence) to whatever the link names.
   """
-  home = Path(home)
+  home = pathlib.Path(home)
   state = home / STATE_DIR_NAME
   if state.is_symlink():
     raise FencePathRefusalError(f"home state directory is a symlink: {state}")
@@ -100,7 +97,7 @@ def _checked_fence_paths(home: Path) -> None:
 
 
 def _pid_start_of(pid: int) -> str | None:
-  pair = read_pid_stat(pid)
+  pair = runs.read_pid_stat(pid)
   return pair[0] if pair else None
 
 
@@ -108,7 +105,7 @@ def _holder_alive(holder: FenceHolder) -> bool:
   """Whether the recorded holder is still the same live process instance."""
   if holder.pid <= 0:
     return False
-  pair = read_pid_stat(holder.pid)
+  pair = runs.read_pid_stat(holder.pid)
   if pair is None or pair[1] == "Z":
     return False
   if holder.pid_start is not None and pair[0] != holder.pid_start:
@@ -119,7 +116,7 @@ def _holder_alive(holder: FenceHolder) -> bool:
 class HomeWriterFence:
   """An acquired exclusive home-writer exclusion; hold for the whole run."""
 
-  def __init__(self, home: Path, purpose: str) -> None:
+  def __init__(self, home: pathlib.Path, purpose: str) -> None:
     self.home = home
     self.purpose = purpose
     self._fd: int | None = None
@@ -153,7 +150,7 @@ class HomeWriterFence:
     self.release()
 
 
-def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
+def acquire_home_writer_fence(home: pathlib.Path, *, purpose: str) -> HomeWriterFence:
   """Take the home's exclusive writer exclusion, or refuse with holder details.
 
   The lock file is created if absent; the flock is exclusive and non-blocking,
@@ -165,7 +162,7 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   and its fd before re-raising: a half-acquired fence is never left behind in
   a still-live process.
   """
-  home = Path(home)
+  home = pathlib.Path(home)
   _checked_fence_paths(home)
   lock_path = fence_lock_path(home)
   lock_path.parent.mkdir(parents=True, exist_ok=True)
@@ -183,13 +180,13 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   holder = FenceHolder(
       pid=os.getpid(),
       pid_start=_pid_start_of(os.getpid()),
-      started_at=utc_now_iso(),
+      started_at=models.utc_now_iso(),
       purpose=purpose,
       argv=" ".join(os.sys.argv),
       home=str(home),
   )
   try:
-    atomic_write_text(fence_identity_path(home), _holder_json(holder))
+    json_utils.atomic_write_text(fence_identity_path(home), _holder_json(holder))
   except BaseException:
     fence._fd = None
     try:
@@ -201,9 +198,9 @@ def acquire_home_writer_fence(home: Path, *, purpose: str) -> HomeWriterFence:
   return fence
 
 
-def read_fence_holder(home: Path) -> FenceHolder | None:
+def read_fence_holder(home: pathlib.Path) -> FenceHolder | None:
   """The identity record's holder, or None when absent/unreadable."""
-  raw = load_json_meta(fence_identity_path(home), "home_writer_identity_unreadable")
+  raw = json_utils.load_json_meta(fence_identity_path(home), "home_writer_identity_unreadable")
   if not isinstance(raw, dict):
     return None
   try:
@@ -234,14 +231,14 @@ def _holder_json(holder: FenceHolder) -> str:
       sort_keys=True)
 
 
-def probe_writer_fence(home: Path) -> dict:
+def probe_writer_fence(home: pathlib.Path) -> dict:
   """Read-only fence status for dry-run reporting. Never signals a process.
 
   ``exclusive_holder_alive`` is proven by a non-blocking SHARED lock attempt:
   it succeeds only when no exclusive holder exists, and taking it momentarily
   mutates nothing. The identity row names the holder when it can.
   """
-  home = Path(home)
+  home = pathlib.Path(home)
   _checked_fence_paths(home)
   lock_path = fence_lock_path(home)
   status: dict = {

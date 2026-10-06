@@ -1,39 +1,37 @@
 """Master run queueing — per-session consumer, run/cancel/resume entry points, restart replay."""
 
 import asyncio
+import datetime
+import zoneinfo
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from zoneinfo import ZoneInfo
 
 from src.agents import master_cc_run, master_cc_state
-from src.agents.backends.base import make_error_event, make_master_done_event
-from src.core import claude_accounts, runs, sidebar_state
-from src.core import event_types as ET
-from src.core.config import HOUSE_TIMEZONE, CharlieBotConfig
-from src.core.constants import BackendType
-from src.core.latex import get_tex_path, snapshot_tex
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import (
-    BackendOption,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
-    utc_now_iso,
+from src.agents.backends import base
+from src.core import (
+    claude_accounts,
+    config,
+    constants,
+    latex,
+    log_once,
+    models,
+    process,
+    runs,
+    session_dispatch,
+    sidebar_state,
+    streaming,
+    tasks,
+    thinking_state,
 )
-from src.core.process import kill_group_escalating
-from src.core.session_dispatch import INPUT_EVENT_TYPES
-from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
-from src.core.tasks import create_logged_task
-from src.core.thinking_state import busy_since, clear_busy, mark_busy
+from src.core import event_types as ET
 
 if TYPE_CHECKING:
-  from src.core.sessions import SessionManager
+  from src.core import sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
-def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) -> tuple[datetime, bool]:
+def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) -> tuple[datetime.datetime, bool]:
   """Atomically mark busy, queue the item, and ensure a consumer exists.
 
   No await and no statement that can raise after the state's first mutation: a
@@ -43,18 +41,18 @@ def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) ->
   on that. The declared input type is validated before any state changes, so a
   bad declaration fails the caller without touching the queue or busy state.
   """
-  if (work_item.input_event_type is not None and work_item.input_event_type not in INPUT_EVENT_TYPES):
+  if (work_item.input_event_type is not None and work_item.input_event_type not in session_dispatch.INPUT_EVENT_TYPES):
     raise ValueError(
         f"input_event_type {work_item.input_event_type!r} is not an INPUT_EVENT_TYPES member; "
-        f"the enqueueing entry point must declare one of {sorted(INPUT_EVENT_TYPES)}")
+        f"the enqueueing entry point must declare one of {sorted(session_dispatch.INPUT_EVENT_TYPES)}")
   # The batch header stamps each part with the moment it was enqueued.
-  work_item.received_at = datetime.now(ZoneInfo(HOUSE_TIMEZONE))
+  work_item.received_at = datetime.datetime.now(zoneinfo.ZoneInfo(config.HOUSE_TIMEZONE))
   if session_id not in master_cc_state._session_queues:
     master_cc_state._session_queues[session_id] = asyncio.Queue()
   # A resume item is re-attaching a turn that already started, so its busy
   # interval begins at the recorded start rather than at this enqueue.
   resumed = work_item.resume_record
-  thinking_since, created = mark_busy(session_id, since=resumed.started_at if resumed else None)
+  thinking_since, created = thinking_state.mark_busy(session_id, since=resumed.started_at if resumed else None)
   master_cc_state._session_queues[session_id].put_nowait(work_item)
   if session_id not in master_cc_state._session_consumers or master_cc_state._session_consumers[session_id].done():
     master_cc_state._session_consumers[session_id] = asyncio.create_task(
@@ -68,7 +66,7 @@ async def _broadcast_running_changed(
     session_id: str,
     *,
     has_running_tasks: bool,
-    thinking_since: datetime | None,
+    thinking_since: datetime.datetime | None,
     auto_trigger: bool,
 ) -> None:
   """Notify the sidebar of a busy-state change.
@@ -76,8 +74,8 @@ async def _broadcast_running_changed(
   Single construction site for the RUNNING_CHANGED payload keys;
   web/static/js/websocket.js reads them off the event verbatim.
   """
-  await streaming_manager.broadcast(
-      SIDEBAR_CHANNEL,
+  await streaming.streaming_manager.broadcast(
+      streaming.SIDEBAR_CHANNEL,
       {
           "type": ET.RUNNING_CHANGED,
           "session_id": session_id,
@@ -105,7 +103,7 @@ async def _enqueue_and_notify(session_id: str, work_item: master_cc_state._WorkI
 
 
 async def _persist_with_readback(
-    callbacks: SessionCallbacks,
+    callbacks: models.SessionCallbacks,
     persist: Callable[..., Awaitable[str | None]],
     session_id: str,
     value: str,
@@ -231,12 +229,12 @@ async def _refresh_anchors_from_disk(
   not disk -- is what resumes the same conversation. On a failed disk read
   (raised or missing metadata) the relay alone applies.
   """
-  fresh: SessionMetadata | None = None
+  fresh: models.SessionMetadata | None = None
   try:
     # Local import, same as the teardown's: the SessionManager class is a patch
     # seam (tests swap it), so the reference must resolve at call time.
-    from src.core.sessions import SessionManager
-    fresh = await SessionManager(item.cfg).read_metadata_fresh(session_id)
+    from src.core import sessions
+    fresh = await sessions.SessionManager(item.cfg).read_metadata_fresh(session_id)
   except Exception:
     log.exception("master_cc_dequeue_anchor_refresh_failed", session=session_id)
   meta = item.session_meta
@@ -270,7 +268,7 @@ async def _session_consumer(session_id: str) -> None:
   # Teardown context for the idle RUNNING_CHANGED broadcast, captured per item
   # so the finally never reads the loop variable — `item` is unbound when the
   # consumer exits (e.g. via cancellation) before the first queue.get() returns.
-  teardown_cfg: CharlieBotConfig | None = None
+  teardown_cfg: config.CharlieBotConfig | None = None
   teardown_auto_trigger = False
   try:
     while True:
@@ -309,7 +307,7 @@ async def _session_consumer(session_id: str) -> None:
         if finish_extras.get("zero_output"):
           if not _error_msg:
             resume_ref = cc_session_id or "fresh session"
-            zero_err = make_error_event(
+            zero_err = base.make_error_event(
                 f"Master run produced zero model output (cc_session_id={resume_ref}): "
                 f"the turn settled with an all-zero usage result and no assistant text, "
                 f"thinking, tool use, or manual compaction. "
@@ -373,11 +371,11 @@ async def _session_consumer(session_id: str) -> None:
         # when this round leaves the queue empty.
         thinking_seconds = None
         if not still_thinking:
-          busy_start = busy_since(session_id)
+          busy_start = thinking_state.busy_since(session_id)
           if busy_start is not None:
-            thinking_seconds = int((datetime.now(UTC) - busy_start).total_seconds())
+            thinking_seconds = int((datetime.datetime.now(datetime.UTC) - busy_start).total_seconds())
 
-        done_event = make_master_done_event(exit_code, still_thinking=still_thinking)
+        done_event = base.make_master_done_event(exit_code, still_thinking=still_thinking)
         if item.user_event_ids:
           done_event[ET.INPUT_EVENT_IDS] = list(item.user_event_ids)
         if thinking_seconds is not None:
@@ -406,7 +404,7 @@ async def _session_consumer(session_id: str) -> None:
         # Every round origin (chat, task, auto-trigger) ends on this MASTER_DONE path.
         # Fire-and-forget: the consumer serializes rounds; awaiting it would delay the next round.
         if item.callbacks.after_round is not None:
-          create_logged_task(item.callbacks.after_round(session_id), name=f"after-round-{session_id}")
+          tasks.create_logged_task(item.callbacks.after_round(session_id), name=f"after-round-{session_id}")
 
         # Post-MASTER_DONE copy retirement: with the round's account label
         # funnel-persisted above, the pool's redundant copies of this transcript
@@ -443,11 +441,11 @@ async def _session_consumer(session_id: str) -> None:
     # Clean up the queue if empty to avoid memory leaks from abandoned sessions.
     if session_id in master_cc_state._session_queues and master_cc_state._session_queues[session_id].empty():
       master_cc_state._session_queues.pop(session_id, None)
-    clear_busy(session_id)
+    thinking_state.clear_busy(session_id)
     if teardown_cfg is not None:
       # Check if workers are still running before declaring idle.
-      from src.core.sessions import SessionManager
-      workers_running = await SessionManager(teardown_cfg)._has_running_tasks(session_id)
+      from src.core import sessions
+      workers_running = await sessions.SessionManager(teardown_cfg)._has_running_tasks(session_id)
       await _broadcast_running_changed(
           session_id,
           has_running_tasks=workers_running,
@@ -457,14 +455,14 @@ async def _session_consumer(session_id: str) -> None:
 
 
 async def run_message(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     user_content: str,
-    callbacks: SessionCallbacks,
+    callbacks: models.SessionCallbacks,
     input_event_type: str | None,
     skip_user_event: bool = False,
     auto_trigger: bool = False,
-    backend_option: BackendOption | None = None,
+    backend_option: models.BackendOption | None = None,
     extra_claude_flags: list[str] | None = None,
     display_content: str | None = None,
     uploaded_files: list[dict] | None = None,
@@ -521,31 +519,31 @@ async def run_message(
   # claude SDK subprocess for them.
   backend_id = session_meta.backend or (cfg.backends.options[0].id if cfg.backends.options else "")
   backend_lookup = cfg.get_backend_option(backend_id)
-  if backend_lookup is not None and backend_lookup.type == BackendType.TUI_CLI:
+  if backend_lookup is not None and backend_lookup.type == constants.BackendType.TUI_CLI:
     log.info("master_cc_skip_tui_backend", session=session_meta.id, backend=backend_id)
     return None
 
   session_dir = cfg.sessions_dir / session_meta.id
   session_dir.mkdir(parents=True, exist_ok=True)
 
-  tex_path = get_tex_path()
+  tex_path = latex.get_tex_path()
   should_check_tex = tex_path.exists()
   if should_check_tex:
-    await asyncio.to_thread(snapshot_tex)
+    await asyncio.to_thread(latex.snapshot_tex)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up).
   if not skip_user_event:
     user_event = {
         "type": ET.USER,
         "content": user_content if display_content is None else display_content,
-        "timestamp": utc_now_iso(),
+        "timestamp": models.utc_now_iso(),
         "is_voice": is_voice,
     }
     if uploaded_files:
       user_event["uploaded_files"] = uploaded_files
     await callbacks.persist_and_broadcast(session_meta.id, user_event)
     user_event_id = user_event.get("id")
-    session_meta.updated_at = datetime.now(UTC)
+    session_meta.updated_at = datetime.datetime.now(datetime.UTC)
     await callbacks.update_thinking_state(session_meta.id, updated_at=session_meta.updated_at)
 
   # Create a future for the caller to await.
@@ -583,8 +581,8 @@ async def run_message(
 async def cancel_master(
     session_id: str,
     *,
-    meta: SessionMetadata | None,
-    session_mgr: SessionManager | None,
+    meta: models.SessionMetadata | None,
+    session_mgr: sessions.SessionManager | None,
 ) -> bool:
   """Terminate the running master CC turn for this session.
 
@@ -613,7 +611,7 @@ async def cancel_master(
       # Detached turn still running: the record's own liveness proof authorized
       # this kill.
       log.info("master_cancel_killing_detached_run", session=session_id, pid=record.pid)
-      await kill_group_escalating(record.pid, alive)
+      await process.kill_group_escalating(record.pid, alive)
       await session_mgr.persist_master_run(session_id, None)
       log.info("master_cancel_succeeded", session=session_id)
       return True
@@ -623,10 +621,10 @@ async def cancel_master(
 
 
 async def enqueue_master_resume(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
-    record: MasterRunRecord,
-    callbacks: SessionCallbacks,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
+    record: models.MasterRunRecord,
+    callbacks: models.SessionCallbacks,
     *,
     is_alive: Callable[[], bool],
     task_run: master_cc_state.TaskRunBinding | None = None,
@@ -702,10 +700,10 @@ _REPLAY_MARKER = (
 
 
 async def replay_user_message(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     user_event: dict,
-    callbacks: SessionCallbacks,
+    callbacks: models.SessionCallbacks,
 ) -> None:
   """Redeliver an unanswered user message after a restart, marked as a replay.
 
@@ -720,10 +718,10 @@ async def replay_user_message(
 
 
 async def replay_scheduled_trigger(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     wake_event: dict,
-    callbacks: SessionCallbacks,
+    callbacks: models.SessionCallbacks,
 ) -> None:
   """Redeliver an unanswered scheduled-trigger wake after a restart, marked as a replay.
 
@@ -736,10 +734,10 @@ async def replay_scheduled_trigger(
 
 
 async def _replay_chat_event(
-    cfg: CharlieBotConfig,
-    session_meta: SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
     event: dict,
-    callbacks: SessionCallbacks,
+    callbacks: models.SessionCallbacks,
     input_event_type: str,
     *,
     is_voice: bool = False,

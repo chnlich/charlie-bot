@@ -244,6 +244,7 @@ from src.core import runs  # noqa: E402
 from src.core import thinking_state  # noqa: E402
 from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.core import models  # noqa: E402
+from src.core import streaming  # noqa: E402
 from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
@@ -397,7 +398,7 @@ async def _run_seeded_consumer(
   try:
     with (
         patch.object(master_cc_run, "_run_cc", side_effect=fake_run_cc),
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(streaming.streaming_manager, "broadcast", new=AsyncMock()),
         manager_patch,
     ):
       await asyncio.wait_for(master_cc_queue._session_consumer(session_id), timeout=5)
@@ -480,7 +481,7 @@ def patch_resume_seams(
   else:
     monkeypatch.setattr(master_cc_run, "_build_fresh_translate", lambda *a, **k: (lambda event: [event]))
   broadcast = AsyncMock()
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast)
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast)
   workers_mock = MagicMock()
   workers_mock._has_running_tasks = AsyncMock(return_value=False)
   monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
@@ -1352,10 +1353,10 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
 
 # Import-path patch target shared by every test that stubs the workers-running probe the master
-# consumer's teardown runs. master_cc_queue binds the class with call-time `from
-# src.core.sessions import SessionManager`, so mock and
-# monkeypatch.setattr land the stand-in on the src.core.sessions module attribute and the
-# teardown's SessionManager(...) construction resolves it at call time.
+# consumer's teardown runs. master_cc_queue resolves the class through a call-time local
+# import of the src.core.sessions module, so mock and monkeypatch.setattr land the stand-in on
+# the src.core.sessions module attribute and the teardown's sessions.SessionManager(...)
+# construction resolves it at call time.
 SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"
 
 # Import-path patch target shared by every test that silences or spies on the master wake a
@@ -2775,7 +2776,7 @@ async def run_captured_round(
     workers_mock = MagicMock()
     workers_mock._has_running_tasks = AsyncMock(return_value=False)
     with (
-        patch.object(master_cc_queue.streaming_manager, "broadcast", new=AsyncMock()),
+        patch.object(streaming.streaming_manager, "broadcast", new=AsyncMock()),
         patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
     ):
       await drive(cfg, meta, callbacks)

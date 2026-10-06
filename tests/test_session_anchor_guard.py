@@ -3,37 +3,35 @@
 disk, the six in-class lock-holding save sites run declared under their locks,
 and the weekly recycle clears the anchor through its channel."""
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import build_sessions_cfg
-from structlog.testing import capture_logs
+from structlog import testing
 
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.core import models, sessions, task_sessions
 
 
 def _corrections(logs: list[dict]) -> list[dict]:
   return [entry for entry in logs if entry["event"] == "session_anchor_write_corrected"]
 
 
-async def _seed_anchors(mgr: SessionManager, session_id: str, *, cc: str, label: str) -> None:
+async def _seed_anchors(mgr: sessions.SessionManager, session_id: str, *, cc: str, label: str) -> None:
   await mgr.persist_cc_session_id(session_id, cc)
   await mgr.persist_claude_account(session_id, label)
 
 
 @pytest.mark.asyncio
-async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tmp_path: Path) -> None:
+async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tmp_path: pathlib.Path) -> None:
   """The rate_round shape: a route mutates its injected (stale) meta object and
   whole-object saves. The guard corrects the anchor back to disk on the write."""
-  mgr = SessionManager(build_sessions_cfg(tmp_path))
-  session = await mgr.create_session(CreateSessionRequest(name="stale-writer"))
+  mgr = sessions.SessionManager(conftest.build_sessions_cfg(tmp_path))
+  session = await mgr.create_session(models.CreateSessionRequest(name="stale-writer"))
   await _seed_anchors(mgr, session.id, cc="cc-live", label="pool-b")
 
   stale = await mgr.get_session(session.id)
   stale.claude_account = "pool-a"  # the enqueue-time value the caller still holds
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await mgr.save_metadata(stale)
 
   disk = await mgr.read_metadata_fresh(session.id)
@@ -45,11 +43,11 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
 
 
 @pytest.mark.asyncio
-async def test_authorized_channels_still_change_the_anchors(tmp_path: Path) -> None:
+async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Path) -> None:
   """The two funnels and the clear channel write their fields; the guard's
   reconciliation is skipped for exactly them."""
-  mgr = SessionManager(build_sessions_cfg(tmp_path))
-  session = await mgr.create_session(CreateSessionRequest(name="channels"))
+  mgr = sessions.SessionManager(conftest.build_sessions_cfg(tmp_path))
+  session = await mgr.create_session(models.CreateSessionRequest(name="channels"))
 
   read_back = await mgr.persist_cc_session_id(session.id, "cc-2")
   assert read_back == "cc-2"
@@ -68,8 +66,8 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: Path) -> N
 
   # The v2 launch's spawn-time channel writes the provenance triple in one
   # authorized save (driven here through the real TaskTreeManager channel).
-  cfg = build_sessions_cfg(tmp_path)
-  tree = TaskTreeManager(cfg, mgr)
+  cfg = conftest.build_sessions_cfg(tmp_path)
+  tree = task_sessions.TaskTreeManager(cfg, mgr)
   await tree.record_native_anchor(
       session.id, prompt_hash="hash-3", backend="opus", model="opus-model", reset_anchor=False)
   disk = await mgr.read_metadata_fresh(session.id)

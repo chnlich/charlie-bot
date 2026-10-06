@@ -11,21 +11,27 @@ outcomes, and the ancestor activity count the collapsed-row cue reads.
 
 from __future__ import annotations
 
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, NotificationSpy, build_env, identity_of, live_subprocess
 
 from src.core import event_types as ET
-from src.core.models import RunRecord
+from src.core import models
 
 
 @pytest_asyncio.fixture
-async def env(tmp_path: Path):
-  _, session_mgr, tree = build_env(tmp_path)
+async def env(tmp_path: pathlib.Path):
+  _, session_mgr, tree = conftest.build_env(tmp_path)
   root = await tree.create_task(
-      request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
+      request_id="root",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name="Root",
+      backend=None,
+      caller=conftest.OPERATOR)
   worker = await tree.create_task(
       request_id="w1",
       task_parent_id=root.id,
@@ -33,24 +39,24 @@ async def env(tmp_path: Path):
       task=None,
       name="Worker",
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   return tree, session_mgr, root.id, worker.id
 
 
 @pytest.mark.asyncio
 async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) -> None:
   tree, _session_mgr, root_id, worker_id = env
-  run = await tree.runs.register_run(RunRecord(id="run-1", session_id=worker_id, kind="work"))
+  run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
   # Queued first: the row is waiting work and no ancestor shows delegated running.
   index = await tree._get_index()
   assert tree.session_row(index, worker_id).work_state == "waiting"
   assert tree.session_row(index, root_id).running_descendant_count == 0
 
-  spy = NotificationSpy(tree)
+  spy = conftest.NotificationSpy(tree)
   spy.install()
-  proc = live_subprocess()
+  proc = conftest.live_subprocess()
   try:
-    pid, pid_start = identity_of(proc.pid)
+    pid, pid_start = conftest.identity_of(proc.pid)
     await tree.runs.record_launch(worker_id, run.id, pid=pid, pid_start=pid_start)
 
     assert spy.calls == [(worker_id, "run_launched")
@@ -68,16 +74,16 @@ async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) 
 @pytest.mark.asyncio
 async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -> None:
   tree, _session_mgr, root_id, worker_id = env
-  run = await tree.runs.register_run(RunRecord(id="run-1", session_id=worker_id, kind="work"))
-  proc = live_subprocess()
+  run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
+  proc = conftest.live_subprocess()
   try:
-    pid, pid_start = identity_of(proc.pid)
+    pid, pid_start = conftest.identity_of(proc.pid)
     await tree.runs.record_launch(worker_id, run.id, pid=pid, pid_start=pid_start)
   finally:
     if proc.poll() is None:
       proc.kill()
 
-  spy = NotificationSpy(tree)
+  spy = conftest.NotificationSpy(tree)
   spy.install()
   finished = await tree.dispatch.finish_run(worker_id, run.id, outcome="success", exit_code=0)
   assert finished.ended_at is not None
@@ -88,7 +94,7 @@ async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -
   assert root_row.running_descendant_count == 0, ("the collapsed-ancestor cue clears with the terminal fact")
 
   # A failed run reads idle, not running: a terminal Run is not activity.
-  run2 = await tree.runs.register_run(RunRecord(id="run-2", session_id=worker_id, kind="work"))
+  run2 = await tree.runs.register_run(models.RunRecord(id="run-2", session_id=worker_id, kind="work"))
   await tree.dispatch.finish_run(worker_id, run2.id, outcome="failed", exit_code=1)
   failed_row = tree.session_row(await tree._get_index(), worker_id)
   assert failed_row.work_state == "idle"

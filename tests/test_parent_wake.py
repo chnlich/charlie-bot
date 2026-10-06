@@ -11,15 +11,14 @@ the durable record either way.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from unittest.mock import AsyncMock
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, OPUS_BACKEND_ID, build_env, create_task
 
 from src.core import event_types as ET
-from src.core.models import CreateSessionRequest, RunRecord, TaskSpec, utc_now_iso
-from src.core.task_execution import TaskExecutionAdapter
+from src.core import models, task_execution
 
 
 async def await_wake(task: asyncio.Task | None) -> None:
@@ -32,7 +31,7 @@ def child_report(child_session_id: str, *, outcome: str, summary: str, event_id:
   return {
       "id": event_id,
       "type": ET.CHILD_REPORT,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
       "actor": "system",
       "source_session_id": child_session_id,
       "child_session_id": child_session_id,
@@ -44,14 +43,16 @@ def child_report(child_session_id: str, *, outcome: str, summary: str, event_id:
 
 
 @pytest.mark.asyncio
-async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+async def test_legacy_parent_wakes_through_trigger_master_once(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  legacy = await session_mgr.create_session(
+      models.CreateSessionRequest(name="Legacy"), backend=conftest.OPUS_BACKEND_ID)
   child_id = "child-task-1"
   report = child_report(child_id, outcome="completed", summary="the work landed", event_id="report-1")
   await tree.events.append(legacy.id, report)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await await_wake(await tree.dispatch.wake_parent(legacy.id, report=report))
 
@@ -65,15 +66,16 @@ async def test_legacy_parent_wakes_through_trigger_master_once(tmp_path: Path, m
 
 @pytest.mark.asyncio
 async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The parent's own turn already holds the outcome in its HTTP response; an
   echo wake would only replay the parent's own words as a new queued turn."""
-  _cfg, session_mgr, tree = build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+  _cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  legacy = await session_mgr.create_session(
+      models.CreateSessionRequest(name="Legacy"), backend=conftest.OPUS_BACKEND_ID)
   report = child_report("child-task-1", outcome="cancelled", summary="no longer needed", event_id="report-1")
   await tree.events.append(legacy.id, report)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   task = await tree.dispatch.wake_parent(legacy.id, report=report, caller_session_id=legacy.id)
 
@@ -84,14 +86,15 @@ async def test_legacy_parent_closed_by_its_own_turn_skips_the_wake(
 
 
 @pytest.mark.asyncio
-async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
-  node = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
-  dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
+async def test_node_parent_dispatches_its_pending_inputs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  _cfg, _session_mgr, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
+  dispatch = mock.AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent(
       node.id, report=child_report(node.id, outcome="completed", summary="done", event_id="report-node"))
@@ -103,16 +106,16 @@ async def test_node_parent_dispatches_its_pending_inputs(tmp_path: Path, monkeyp
 
 @pytest.mark.asyncio
 async def test_task_tree_parent_with_the_caller_equal_to_itself_still_dispatches(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The skip rule is legacy-only: a manager node's dispatch consults its
   durable inputs, never the caller — even when the closer is the node itself."""
-  _cfg, _session_mgr, tree = build_env(tmp_path)
-  node = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
-  dispatch = AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
+  _cfg, _session_mgr, tree = conftest.build_env(tmp_path)
+  node = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
+  dispatch = mock.AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await tree.dispatch.wake_parent(
       node.id,
@@ -144,36 +147,37 @@ async def drain_legacy_wakes() -> None:
     await asyncio.gather(*pending)
 
 
-def _failed_work_run(session_id: str, run_id: str) -> RunRecord:
-  return RunRecord(id=run_id, session_id=session_id, kind="work", backend="fake", model="fake-model")
+def _failed_work_run(session_id: str, run_id: str) -> models.RunRecord:
+  return models.RunRecord(id=run_id, session_id=session_id, kind="work", backend="fake", model="fake-model")
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["failed", "blocked"])
 async def test_failure_report_wakes_a_legacy_parent_once_and_a_replay_never_wakes_again(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, outcome: str) -> None:
   """Only a freshly created report wakes the parent.
 
   A startup reconcile or a repeated finalize re-derives the same stable report
   id, finds it already in the parent's log, appends nothing — and must not
   spend a legacy parent's full model turn on the replay.
   """
-  cfg, session_mgr, tree = build_env(tmp_path)
-  adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
+  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  adapter = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
+  legacy = await session_mgr.create_session(
+      models.CreateSessionRequest(name="Legacy"), backend=conftest.OPUS_BACKEND_ID)
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=legacy.id,
       profile="worker",
-      task=TaskSpec(goal="fix the thing"),
+      task=models.TaskSpec(goal="fix the thing"),
       name="W",
       backend=None,
       caller="operator")
   await tree.runs.register_run(_failed_work_run(worker.id, "run-t"))
   await tree.runs.record_finish(worker.id, "run-t", outcome)
   run = await tree.runs.get_run(worker.id, "run-t")
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await adapter._report_failure_to_parent(worker.id, run, outcome)
   await drain_legacy_wakes()
@@ -192,23 +196,23 @@ async def test_failure_report_wakes_a_legacy_parent_once_and_a_replay_never_wake
 
 @pytest.mark.asyncio
 async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The first failed/blocked delivery is a task-tree parent's new durable
   input: its next serialized turn dispatches now, and the legacy master wake
   never fires for a node parent."""
-  cfg, session_mgr, tree = build_env(tmp_path)
-  adapter = TaskExecutionAdapter(cfg, session_mgr, tree)
-  manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="project"), name="Project")
-  worker = await create_task(
-      tree, parent=manager.id, request_id="w", profile="worker", task=TaskSpec(goal="fix the thing"), name="W")
+  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  adapter = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
+  manager = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
+  worker = await conftest.create_task(
+      tree, parent=manager.id, request_id="w", profile="worker", task=models.TaskSpec(goal="fix the thing"), name="W")
   await tree.runs.register_run(_failed_work_run(worker.id, "run-t"))
   await tree.runs.record_finish(worker.id, "run-t", "failed")
   run = await tree.runs.get_run(worker.id, "run-t")
-  dispatch = AsyncMock(return_value={"session_id": manager.id, "pending": 1, "launch": False})
+  dispatch = mock.AsyncMock(return_value={"session_id": manager.id, "pending": 1, "launch": False})
   monkeypatch.setattr(tree.dispatch, "dispatch_pending", dispatch)
-  trigger = AsyncMock()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
+  trigger = mock.AsyncMock()
+  monkeypatch.setattr(conftest.MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
 
   await adapter._report_failure_to_parent(worker.id, run, "failed")
 

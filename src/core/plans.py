@@ -11,32 +11,21 @@ consume the tolerant read in ``read_plans_tolerant`` — the single authority fo
 
 from __future__ import annotations
 
+import enum
 import json
+import pathlib
 import posixpath
-from enum import IntEnum
-from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.core import plan_paths
-from src.core.constants import (
-    PLAN_AMEND_TRIGGERS,
-    PLAN_CLOSE_ABANDONED,
-    PLAN_CLOSE_COMPLETED,
-    PLAN_CLOSE_MODES,
-    PLAN_CLOSE_SUPERSEDED,
-)
-from src.core.memo import StatSignatureMemo
-from src.core.sidebar_state import mark_sidebar_dirty
+from src.core import constants, memo, plan_paths, sidebar_state
 
 if TYPE_CHECKING:
   import asyncio
 
-  from src.core.artifact_check import AssertionOutcome
-  from src.core.config import CharlieBotConfig
-  from src.core.sessions import SessionManager
+  from src.core import artifact_check, config, sessions
 
 
-def run_assertions(*args: object, **kwargs: object) -> list[AssertionOutcome]:
+def run_assertions(*args: object, **kwargs: object) -> list[artifact_check.AssertionOutcome]:
   """Lazy delegate to ``artifact_check.run_assertions``.
 
   The artifact-check import drags the backends registry (numpy, fastapi) — a
@@ -44,9 +33,9 @@ def run_assertions(*args: object, **kwargs: object) -> list[AssertionOutcome]:
   the plan chain's read paths (list endpoint, sidebar probe, ``plan list``)
   never load it.
   """
-  from src.core.artifact_check import run_assertions as _run_assertions
+  from src.core import artifact_check
 
-  return _run_assertions(*args, **kwargs)
+  return artifact_check.run_assertions(*args, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -54,7 +43,7 @@ def run_assertions(*args: object, **kwargs: object) -> list[AssertionOutcome]:
 # ---------------------------------------------------------------------------
 
 
-class _DerivedState(IntEnum):
+class _DerivedState(enum.IntEnum):
   UNKNOWN = 0
   AWAITING_APPROVAL = 1
   APPROVED = 2
@@ -75,11 +64,11 @@ _DERIVED_STATE_STR: dict[_DerivedState, str] = {
     # A closed plan's derived state IS its close mode's spelling; the three entries reuse
     # constants' named spellings so the derive and the close verb cannot drift apart.
     _DerivedState.SUPERSEDED:
-        PLAN_CLOSE_SUPERSEDED,
+        constants.PLAN_CLOSE_SUPERSEDED,
     _DerivedState.ABANDONED:
-        PLAN_CLOSE_ABANDONED,
+        constants.PLAN_CLOSE_ABANDONED,
     _DerivedState.COMPLETED:
-        PLAN_CLOSE_COMPLETED,
+        constants.PLAN_CLOSE_COMPLETED,
 }
 
 
@@ -95,11 +84,11 @@ def _derive_state(closed: dict | None, takeoff: dict | None) -> _DerivedState:
     if not isinstance(closed, dict):
       raise ValueError(f"closed must be a dict or None, got {type(closed).__name__}")
     close_as = closed.get("as")
-    if close_as == PLAN_CLOSE_SUPERSEDED:
+    if close_as == constants.PLAN_CLOSE_SUPERSEDED:
       return _DerivedState.SUPERSEDED
-    if close_as == PLAN_CLOSE_ABANDONED:
+    if close_as == constants.PLAN_CLOSE_ABANDONED:
       return _DerivedState.ABANDONED
-    if close_as == PLAN_CLOSE_COMPLETED:
+    if close_as == constants.PLAN_CLOSE_COMPLETED:
       return _DerivedState.COMPLETED
     raise ValueError(f"unknown closed.as: {close_as!r}")
   if takeoff is None:
@@ -121,10 +110,10 @@ def derive_state_str(plan: dict) -> str:
 
 def _utc_now_iso() -> str:
   # Lazy: the model stack (pydantic) stays off this module's import path; only
-  # the verb paths stamp times. The stamp form itself lives on utc_now_iso.
-  from src.core.models import utc_now_iso
+  # the verb paths stamp times. The stamp form itself lives on models.utc_now_iso.
+  from src.core import models
 
-  return utc_now_iso()
+  return models.utc_now_iso()
 
 
 def require_plan(plans: list[dict], plan_id: int) -> dict:
@@ -170,16 +159,16 @@ def _project_registry(data: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 # Bound on the tolerant-read memo in sessions. Registry writes go through
-# write_json_atomically, so any content change moves mtime_ns and an unchanged
+# json_utils.write_json_atomically, so any content change moves mtime_ns and an unchanged
 # (mtime_ns, size) proves the content current (the stat-before-read race
-# contract is StatSignatureMemo's). Callers (the list endpoint, the sidebar
+# contract is memo.StatSignatureMemo's). Callers (the list endpoint, the sidebar
 # probe) only read the returned structure. ~0.3 ms read+derive per call on the
 # heaviest on-disk corpus; the list endpoint serves it on every plan-panel poll.
 _TOLERANT_READ_MEMO_LIMIT = 32
-_tolerant_read_memo: StatSignatureMemo[str, dict] = StatSignatureMemo(_TOLERANT_READ_MEMO_LIMIT)
+_tolerant_read_memo: memo.StatSignatureMemo[str, dict] = memo.StatSignatureMemo(_TOLERANT_READ_MEMO_LIMIT)
 
 
-def tolerant_memo_hit(plans_path: Path) -> dict | None:
+def tolerant_memo_hit(plans_path: pathlib.Path) -> dict | None:
   """The memo-hit half of :func:`read_plans_tolerant`: one stat plus a lookup.
 
   Returns the memoized result when the file's (mtime_ns, size) still matches,
@@ -197,7 +186,7 @@ def tolerant_memo_hit(plans_path: Path) -> dict | None:
   return _tolerant_read_memo.fresh(str(plans_path), st)
 
 
-def read_plans_tolerant(plans_path: Path, session_id: str) -> dict:
+def read_plans_tolerant(plans_path: pathlib.Path, session_id: str) -> dict:
   """Tolerant read of a session's plans.json, memoized on the file signature.
 
   Returns ``{"plans": [<projected plan enriched with "state">...], "errors": [<entry>...]}``.
@@ -234,7 +223,7 @@ def _file_level_error(session_id: str, error: Exception) -> dict:
   return {"plans": [], "errors": [{"session_id": session_id, "plan_id": None, "error": str(error)}]}
 
 
-def _read_plans_uncached(plans_path: Path, session_id: str) -> tuple[dict, bool]:
+def _read_plans_uncached(plans_path: pathlib.Path, session_id: str) -> tuple[dict, bool]:
   """The read+derive half of ``read_plans_tolerant``, minus the memo.
 
   The bool reports cacheability: an OSError reflects the file's environment
@@ -283,7 +272,7 @@ def _read_plans_uncached(plans_path: Path, session_id: str) -> tuple[dict, bool]
 class PlanRegistryManager:
   """Per-session plan registry: lineage state and version mutations."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager) -> None:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._locks: dict[str, asyncio.Lock] = {}
@@ -292,12 +281,12 @@ class PlanRegistryManager:
 
   def _lock_for(self, session_id: str) -> asyncio.Lock:
     # Deferred with asyncio itself: the sync CLI read path never reaches the locked verbs.
-    from src.core.locks import lock_for
-    return lock_for(self._locks, session_id)
+    from src.core import locks
+    return locks.lock_for(self._locks, session_id)
 
   # -- persistence --------------------------------------------------------
 
-  def _plans_path(self, session_id: str) -> Path:
+  def _plans_path(self, session_id: str) -> pathlib.Path:
     return self._cfg.sessions_dir / session_id / "plans.json"
 
   async def _load(self, session_id: str) -> dict:
@@ -322,11 +311,12 @@ class PlanRegistryManager:
     # this write, not resurrect.
     import asyncio
 
-    from src.core.json_utils import write_json_atomically
-    await asyncio.to_thread(write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
+    from src.core import json_utils
+    await asyncio.to_thread(
+        json_utils.write_json_atomically, self._plans_path(session_id), _project_registry(data), indent=2)
     # Single funnel for every registry verb (present/amend/approve/close):
     # an awaiting-approval change must reach the sidebar snapshot.
-    mark_sidebar_dirty(session_id)
+    sidebar_state.mark_sidebar_dirty(session_id)
 
   async def _broadcast(self, session_id: str, plan_id: int) -> None:
     await self._session_mgr.broadcast_only(
@@ -439,8 +429,8 @@ class PlanRegistryManager:
       trigger: str = "feedback",
       base: dict | None = None,
   ) -> dict:
-    if trigger not in PLAN_AMEND_TRIGGERS:
-      raise ValueError(f"trigger must be one of {'|'.join(PLAN_AMEND_TRIGGERS)}, got {trigger!r}")
+    if trigger not in constants.PLAN_AMEND_TRIGGERS:
+      raise ValueError(f"trigger must be one of {'|'.join(constants.PLAN_AMEND_TRIGGERS)}, got {trigger!r}")
     if not isinstance(note, str) or not note.strip():
       raise ValueError("amend requires a non-empty --note stating why this version differs from its predecessor")
     async with self._lock_for(session_id):
@@ -498,8 +488,8 @@ class PlanRegistryManager:
     return candidates[0]
 
   async def close(self, session_id: str, plan_id: int, close_as: str) -> dict:
-    if close_as not in PLAN_CLOSE_MODES:
-      raise ValueError(f"--as must be {'|'.join(PLAN_CLOSE_MODES)}, got {close_as!r}")
+    if close_as not in constants.PLAN_CLOSE_MODES:
+      raise ValueError(f"--as must be {'|'.join(constants.PLAN_CLOSE_MODES)}, got {close_as!r}")
     async with self._lock_for(session_id):
       data = await self._load(session_id)
       plan = require_plan(data["plans"], plan_id)

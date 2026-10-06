@@ -180,6 +180,8 @@ The user reviews the PR at a pinned version through the diff page (`diff_path`) 
 which lists every PR commit with its proof lines, the reviewer's rewrites of the day, the
 conflicts between new candidates and existing PR lines, and the candidates rejected since the
 PR opened.
+When a reply links a PR version, give the diff page as an absolute markdown link:
+`[diff](<base_url><diff_path>)`. Resolve `<base_url>` as the file-server skill states.
 On the user's approval of version `<sha>`, the session that received the approval runs
 `charliebot memory proposal land <sha>`, which fast-forwards the live store
 `~/.charliebot/memory/` to exactly that version.

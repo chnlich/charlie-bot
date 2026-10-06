@@ -1,29 +1,25 @@
 """Slash command loading and execution."""
 
 import asyncio
+import dataclasses
+import enum
+import pathlib
 import signal
-from dataclasses import dataclass
-from enum import StrEnum
-from pathlib import Path
 
+import pydantic
 import yaml
-from pydantic import BaseModel
 
-from src.core.config import charliebot_home_dir
-from src.core.log_once import LazyStructlogLogger
-from src.core.process import kill_process_group
-from src.core.timeouts import SLASH_COMMAND_DEFAULT_TIMEOUT
-from src.core.yaml_utils import load_yaml_text
+from src.core import config, log_once, process, timeouts, yaml_utils
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
-def _slash_commands_file() -> Path:
+def _slash_commands_file() -> pathlib.Path:
   """Path of this profile's slash command file. Resolved per call, never at import."""
-  return charliebot_home_dir() / 'slash_commands.yaml'
+  return config.charliebot_home_dir() / 'slash_commands.yaml'
 
 
-class SlashCommandParam(BaseModel):
+class SlashCommandParam(pydantic.BaseModel):
   name: str
   label: str = ''
   type: str = 'text'  # text, number, select, checkbox
@@ -33,13 +29,13 @@ class SlashCommandParam(BaseModel):
   options: list[str] = []  # for type=select
 
 
-class SlashCommand(BaseModel):
+class SlashCommand(pydantic.BaseModel):
   name: str
   scope: str  # 'shell' or 'prompt'
   description: str
   command: str | None = None
   prompt: str | None = None
-  timeout: int = SLASH_COMMAND_DEFAULT_TIMEOUT
+  timeout: int = timeouts.SLASH_COMMAND_DEFAULT_TIMEOUT
   args: str | None = None  # Description string for help text
   cwd: str | None = None
   claude_code_flags: list[str] = []  # Extra CLI flags passed to Claude Code subprocess (scope=prompt only)
@@ -53,7 +49,7 @@ def load_slash_commands() -> list[SlashCommand]:
     return []
   try:
     raw = path.read_text(encoding='utf-8')
-    data = load_yaml_text(raw, default={})
+    data = yaml_utils.load_yaml_text(raw, default={})
   except (OSError, yaml.YAMLError) as e:
     log.warning('slash_commands_load_failed', path=str(path), error=str(e))
     return []
@@ -107,7 +103,7 @@ async def execute_shell_command(
     stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout)
   except TimeoutError:
     log.warning('slash_shell_timeout', cmd=cmd, timeout=timeout)
-    kill_process_group(proc.pid, signal.SIGKILL)
+    process.kill_process_group(proc.pid, signal.SIGKILL)
     return {'stdout': '', 'stderr': 'Command timed out', 'exit_code': -1}
 
   return {
@@ -117,7 +113,7 @@ async def execute_shell_command(
   }
 
 
-class SlashDispatchKind(StrEnum):
+class SlashDispatchKind(enum.StrEnum):
   """Dispatch outcome of a slash command; every ``SlashDispatchResult.kind`` is one of these."""
   NOT_FOUND = 'not_found'
   SHELL_RESULT = 'shell_result'
@@ -125,7 +121,7 @@ class SlashDispatchKind(StrEnum):
   ERROR = 'error'
 
 
-@dataclass
+@dataclasses.dataclass
 class SlashDispatchResult:
   """Result of dispatching a slash command."""
   kind: SlashDispatchKind

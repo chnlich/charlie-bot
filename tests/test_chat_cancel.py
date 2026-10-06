@@ -17,7 +17,7 @@ from conftest import (
 )
 from fastapi import HTTPException
 
-from src.agents import master_cc, master_cc_run
+from src.agents import master_cc_run
 from src.agents.backends.base import AgentBackend
 from src.api.chat import cancel_master_agent
 from src.core import config as core_config
@@ -50,7 +50,7 @@ async def _run_cc_with_backend(
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], user_content=user_content, callbacks=callbacks)
-  result = await master_cc._run_cc(item)
+  result = await master_cc_run._run_cc(item)
   return callbacks, result
 
 

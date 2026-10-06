@@ -20,7 +20,7 @@ from src.core.sessions import SessionManager
 
 log = LazyStructlogLogger()
 
-_load_run_message = deferred_import_loader("run_message", "src.agents.master_cc")
+_load_run_message = deferred_import_loader("run_message", "src.agents.master_cc_queue")
 
 
 def __getattr__(name: str) -> Any:

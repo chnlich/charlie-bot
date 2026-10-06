@@ -53,7 +53,7 @@ def _thread_session(session_id: str = "session-1") -> types.SimpleNamespace:
 
 def test_resident_body_present_non_resident_index_only(tmp_path: pathlib.Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(_main_session(), cfg, None)
+  out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   # Resident entry: full body injected, heading synthesized from the frontmatter title.
@@ -68,7 +68,7 @@ def test_resident_body_present_non_resident_index_only(tmp_path: pathlib.Path) -
 
 def test_staging_content_absent(tmp_path: pathlib.Path) -> None:
   cfg = _cfg(tmp_path)
-  out = master_cc._build_instructions_content(_main_session(), cfg, None)
+  out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   # Staging candidates are never injected.
   assert "STAGED BODY" not in out
@@ -78,7 +78,7 @@ def test_staging_content_absent(tmp_path: pathlib.Path) -> None:
 def test_missing_memory_dir_still_builds(tmp_path: pathlib.Path) -> None:
   """A missing memory_dir is the one tolerated degradation: prompt still builds."""
   cfg = conftest.make_instruction_cfg(tmp_path)  # memory_dir left unpopulated
-  out = master_cc._build_instructions_content(_main_session(), cfg, None)
+  out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
   assert "User prefers dark UI." not in out
@@ -115,7 +115,7 @@ def test_main_session_instructions_carry_every_manager_section() -> None:
   second-level heading the old single-file master.md carried is present exactly once across
   the two files, and the manager workflows file's full text rides verbatim."""
   cfg = _real_repo_cfg()
-  out = master_cc._build_instructions_content(_main_session(), cfg, None)
+  out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   master_headings = _repo_section_headings("master.md")
   workflow_headings = _repo_section_headings("manager_workflows.md")
@@ -132,7 +132,7 @@ def test_thread_session_instructions_carry_the_thread_brief_and_no_moved_section
   """A thread session gets master.md plus thread_session.md: the brief's full text rides
   verbatim and none of the six manager-workflow sections enters the instructions."""
   cfg = _real_repo_cfg()
-  out = master_cc._build_instructions_content(_thread_session(), cfg, None)
+  out = master_cc.master_cc_run._build_instructions_content(_thread_session(), cfg, None)
   assert out is not None
   brief = (conftest.ROOT / "prompts" / "thread_session.md").read_text(encoding="utf-8")
   assert brief in out
@@ -148,8 +148,8 @@ def test_session_id_substitution_reaches_both_second_rule_files(tmp_path: pathli
       "manager rules for {{session_id}}", encoding="utf-8")
   (cfg.charlie_bot_repo / "prompts" / "thread_session.md").write_text(
       "thread rules for {{session_id}}", encoding="utf-8")
-  main_out = master_cc._build_instructions_content(_main_session("sess-main"), cfg, None)
-  thread_out = master_cc._build_instructions_content(_thread_session("sess-thread"), cfg, None)
+  main_out = master_cc.master_cc_run._build_instructions_content(_main_session("sess-main"), cfg, None)
+  thread_out = master_cc.master_cc_run._build_instructions_content(_thread_session("sess-thread"), cfg, None)
   assert main_out is not None and thread_out is not None
   assert "manager rules for sess-main" in main_out
   assert "thread rules for sess-thread" in thread_out

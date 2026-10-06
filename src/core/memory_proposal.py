@@ -15,11 +15,11 @@ All git operations are local subprocesses; a refusal raises
 and the live checkout exactly as they were.
 """
 
+import collections
+import pathlib
 import subprocess
 import tarfile
 import tempfile
-from collections import Counter
-from pathlib import Path, PurePosixPath
 
 from src.core import memory
 
@@ -31,16 +31,16 @@ class ProposalRefusalError(Exception):
   """A refused operation; the reason is the message and nothing was changed."""
 
 
-def proposal_worktree(memory_dir: Path) -> Path:
+def proposal_worktree(memory_dir: pathlib.Path) -> pathlib.Path:
   """The proposal worktree path: the live store root's sibling."""
   return memory_dir.parent / f"{memory_dir.name}{_WORKTREE_SUFFIX}"
 
 
-def _run(cwd: Path, *args: str) -> subprocess.CompletedProcess:
+def _run(cwd: pathlib.Path, *args: str) -> subprocess.CompletedProcess:
   return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=False)
 
 
-def _git(cwd: Path, *args: str) -> str:
+def _git(cwd: pathlib.Path, *args: str) -> str:
   """Run ``git <args>`` in *cwd* and return stdout; a failure is a refusal."""
   result = _run(cwd, *args)
   if result.returncode != 0:
@@ -48,7 +48,7 @@ def _git(cwd: Path, *args: str) -> str:
   return result.stdout
 
 
-def _base_branch(memory_dir: Path) -> str:
+def _base_branch(memory_dir: pathlib.Path) -> str:
   """The branch the live checkout is on — the PR's base, read live each time."""
   result = _run(memory_dir, "symbolic-ref", "--short", "HEAD")
   if result.returncode != 0:
@@ -58,7 +58,7 @@ def _base_branch(memory_dir: Path) -> str:
   return result.stdout.strip()
 
 
-def _ensure_branch(memory_dir: Path, base: str) -> None:
+def _ensure_branch(memory_dir: pathlib.Path, base: str) -> None:
   """Create ``proposal`` at the base head when absent."""
   result = _run(memory_dir, "rev-parse", "--verify", "--quiet", f"refs/heads/{PROPOSAL_BRANCH}")
   if result.returncode != 0:
@@ -66,7 +66,7 @@ def _ensure_branch(memory_dir: Path, base: str) -> None:
     _git(memory_dir, "branch", PROPOSAL_BRANCH, base_sha)
 
 
-def _validate_worktree(memory_dir: Path, worktree: Path) -> None:
+def _validate_worktree(memory_dir: pathlib.Path, worktree: pathlib.Path) -> None:
   """A present worktree must be this repo's, checked out on ``proposal``."""
   head_ref = _git(worktree, "symbolic-ref", "--short", "HEAD").strip()
   if head_ref != PROPOSAL_BRANCH:
@@ -77,17 +77,17 @@ def _validate_worktree(memory_dir: Path, worktree: Path) -> None:
     raise ProposalRefusalError(f"{worktree} exists but is not a worktree of the memory repo at {memory_dir}")
 
 
-def _ensure_worktree(memory_dir: Path, worktree: Path) -> None:
+def _ensure_worktree(memory_dir: pathlib.Path, worktree: pathlib.Path) -> None:
   """Create the worktree when absent; a present one is validated first."""
   if not worktree.exists():
     _git(memory_dir, "worktree", "add", str(worktree), PROPOSAL_BRANCH)
 
 
-def _ahead_count(memory_dir: Path, base: str) -> int:
+def _ahead_count(memory_dir: pathlib.Path, base: str) -> int:
   return int(_git(memory_dir, "rev-list", "--count", f"{base}..{PROPOSAL_BRANCH}").strip())
 
 
-def open_proposal(memory_dir: Path) -> dict[str, str]:
+def open_proposal(memory_dir: pathlib.Path) -> dict[str, str]:
   """Ensure the branch and worktree exist, align them with base, and print status.
 
   Refuses — leaving everything as it was — when the live checkout carries
@@ -130,7 +130,7 @@ def open_proposal(memory_dir: Path) -> dict[str, str]:
   return status(memory_dir)
 
 
-def status(memory_dir: Path) -> dict[str, str]:
+def status(memory_dir: pathlib.Path) -> dict[str, str]:
   """The PR's read-only state as ``key: value`` fields."""
   memory_dir = memory_dir.resolve()
   base = _base_branch(memory_dir)
@@ -158,26 +158,26 @@ def status(memory_dir: Path) -> dict[str, str]:
   }
 
 
-def _rev_lines(memory_dir: Path, rev: str, path: str) -> Counter:
+def _rev_lines(memory_dir: pathlib.Path, rev: str, path: str) -> collections.Counter:
   """The non-blank lines of ``<rev>:<path>``; an absent file counts as empty."""
   listing = _run(memory_dir, "ls-tree", rev, "--", path)
   if listing.returncode != 0:
     raise ProposalRefusalError(f"git ls-tree {rev} -- {path} failed in {memory_dir}: {listing.stderr.strip()}")
   if not listing.stdout.strip():
-    return Counter()
+    return collections.Counter()
   text = _git(memory_dir, "show", f"{rev}:{path}")
-  return Counter(line for line in text.split("\n") if line.strip())
+  return collections.Counter(line for line in text.split("\n") if line.strip())
 
 
-def _store_path(path: str) -> PurePosixPath:
+def _store_path(path: str) -> pathlib.PurePosixPath:
   """Validate a store-relative path argument; anything escaping the store is a refusal."""
-  rel = PurePosixPath(path)
+  rel = pathlib.PurePosixPath(path)
   if rel.is_absolute() or ".." in rel.parts or not rel.parts:
     raise ProposalRefusalError(f"path must be store-relative (e.g. entries/<topic>/<slug>.md or topics): {path!r}")
   return rel
 
 
-def commit(memory_dir: Path, path: str, message_file: Path) -> str:
+def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path) -> str:
   """Commit exactly one store-relative path on the proposal branch; return the new SHA.
 
   The guard: every non-blank line the PR already added to this file (the
@@ -198,10 +198,10 @@ def commit(memory_dir: Path, path: str, message_file: Path) -> str:
     raise ProposalRefusalError(f"no proposal worktree at {worktree}; run 'charliebot memory proposal open' first")
   base = _base_branch(memory_dir)
   added = _rev_lines(memory_dir, PROPOSAL_BRANCH, path) - _rev_lines(memory_dir, base, path)
-  current_file = worktree / Path(*rel.parts)
-  current = Counter()
+  current_file = worktree / pathlib.Path(*rel.parts)
+  current = collections.Counter()
   if current_file.is_file():
-    current = Counter(line for line in current_file.read_text(encoding="utf-8").split("\n") if line.strip())
+    current = collections.Counter(line for line in current_file.read_text(encoding="utf-8").split("\n") if line.strip())
   missing = added - current
   if missing:
     listed = "\n".join(f"  {line}" for line, count in sorted(missing.items()) for _ in range(count))
@@ -215,7 +215,7 @@ def commit(memory_dir: Path, path: str, message_file: Path) -> str:
   return _git(worktree, "rev-parse", "HEAD").strip()
 
 
-def land(memory_dir: Path, sha: str) -> dict[str, str]:
+def land(memory_dir: pathlib.Path, sha: str) -> dict[str, str]:
   """Fast-forward the live checkout to one approved proposal commit.
 
   Every precondition is a refusal: the live checkout must be clean and on a
@@ -253,12 +253,12 @@ def land(memory_dir: Path, sha: str) -> dict[str, str]:
   }
 
 
-def _lint_tree(memory_dir: Path, commit_sha: str) -> None:
+def _lint_tree(memory_dir: pathlib.Path, commit_sha: str) -> None:
   """Lint the tree of *commit_sha*, extracted with git archive; a violation is a refusal."""
   with tempfile.TemporaryDirectory() as tmp:
-    tree = Path(tmp) / "tree"
+    tree = pathlib.Path(tmp) / "tree"
     tree.mkdir()
-    archive = Path(tmp) / "tree.tar"
+    archive = pathlib.Path(tmp) / "tree.tar"
     _git(memory_dir, "archive", "--format=tar", "--output", str(archive), commit_sha)
     with tarfile.open(archive) as tf:
       tf.extractall(tree, filter="data")

@@ -6,10 +6,10 @@ file leaves such a pointer dangling and the rule silently unwritten, so the
 test walks every prompts/ file and resolves each reference against skills/.
 """
 
+import pathlib
 import re
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 PROMPTS_DIR = ROOT / "prompts"
 SKILLS_DIR = ROOT / "skills"
 

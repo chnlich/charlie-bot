@@ -12,37 +12,29 @@ per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 """
 
 import asyncio
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import cron_d_dir as _cron_d_dir
-from conftest import dump_yaml as _dump
-from conftest import write_cron_task as _write_task_text
 
-from src.core.config import (
-    get_config,
-    get_scheduled_task_errors,
-    get_scheduled_tasks,
-)
-from src.core.init import init_charliebot_home, seed_default_cron_tasks
-from src.core.yaml_utils import load_yaml
+from src.core import config, init, yaml_utils
 
 # --- helpers -----------------------------------------------------------------
 
 
-def _write_healthy(home: Path, name: str, cron: str, prompt_body: str) -> Path:
+def _write_healthy(home: pathlib.Path, name: str, cron: str, prompt_body: str) -> pathlib.Path:
   """Write a pointer-backed healthy task: a ``prompt_file`` host file whose
   pointed file exists in the repo, exactly as production host files look."""
   repo = home / "repo"
   repo.mkdir(parents=True, exist_ok=True)
   pf = repo / f"{name}.md"
   pf.write_text(prompt_body, encoding="utf-8")
-  _write_task_text(home, name, _dump({"cron": cron, "prompt_file": str(pf)}))
+  conftest.write_cron_task(home, name, conftest.dump_yaml({"cron": cron, "prompt_file": str(pf)}))
   return pf
 
 
-def _write_legacy_cron(home: Path) -> Path:
-  p = Path(home) / ".charliebot" / "config.d" / "cron.yaml"
+def _write_legacy_cron(home: pathlib.Path) -> pathlib.Path:
+  p = pathlib.Path(home) / ".charliebot" / "config.d" / "cron.yaml"
   p.parent.mkdir(parents=True, exist_ok=True)
   p.write_text("scheduled_tasks: []\n", encoding="utf-8")
   return p
@@ -51,18 +43,18 @@ def _write_legacy_cron(home: Path) -> Path:
 # --- 1. seed idempotence (per-job files) -------------------------------------
 
 
-def test_seed_idempotence(temp_home: Path) -> None:
-  cfg = get_config()
+def test_seed_idempotence(temp_home: pathlib.Path) -> None:
+  cfg = config.get_config()
   cron_d = cfg.config_d_dir / "cron.d"
   assert not cron_d.exists()
 
-  report1 = seed_default_cron_tasks(cfg)
+  report1 = init.seed_default_cron_tasks(cfg)
   created = next(it for it in report1 if it["status"] == "created")
   seeded_path = cron_d / f"{created['name']}.yaml"
   assert seeded_path.exists()
   bytes1 = seeded_path.read_bytes()
 
-  body1 = load_yaml(seeded_path, default={})
+  body1 = yaml_utils.load_yaml(seeded_path, default={})
   # The seeded host file keeps the repo pointers: the pointed files own the
   # prompt bodies, and the host file carries only the paths to them.
   assert body1 == {
@@ -87,7 +79,7 @@ def test_seed_idempotence(temp_home: Path) -> None:
   assert "backend" not in body1
   assert "name" not in body1
 
-  report2 = seed_default_cron_tasks(cfg)
+  report2 = init.seed_default_cron_tasks(cfg)
   bytes2 = seeded_path.read_bytes()
   assert bytes1 == bytes2
   assert all(it["status"] == "exists" for it in report2)
@@ -96,14 +88,14 @@ def test_seed_idempotence(temp_home: Path) -> None:
 # --- 3. startup never writes cron config -------------------------------------
 
 
-def test_startup_never_writes_cron(temp_home: Path) -> None:
+def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
   _write_healthy(temp_home, "task-a", "0 0 * * *", "a body")
-  path = _cron_d_dir(temp_home) / "task-a.yaml"
+  path = conftest.cron_d_dir(temp_home) / "task-a.yaml"
   before = path.read_bytes()
-  asyncio.run(init_charliebot_home())
+  asyncio.run(init.init_charliebot_home())
   after = path.read_bytes()
   assert before == after
-  assert "seed_default_cron_tasks" not in init_charliebot_home.__code__.co_names
+  assert "seed_default_cron_tasks" not in init.init_charliebot_home.__code__.co_names
 
 
 # --- 4. get_scheduled_tasks is read-only -------------------------------------
@@ -117,9 +109,9 @@ def test_startup_never_writes_cron(temp_home: Path) -> None:
 # handler/loop is likewise an error whose message names prompt_file.
 
 
-def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
+def test_loader_loads_prompt_file_pointer(temp_home: pathlib.Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "body v1")
-  tasks = get_scheduled_tasks()
+  tasks = config.get_scheduled_tasks()
   assert len(tasks) == 1
   assert tasks[0].name == "t"
   assert tasks[0].prompt == "body v1"
@@ -137,11 +129,11 @@ def test_loader_loads_prompt_file_pointer(temp_home: Path) -> None:
         pytest.param({"cron": "* * * * *"}, id="no-prompt-source"),
     ],
 )
-def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dict) -> None:
-  _write_task_text(temp_home, "t", _dump(task_yaml))
+def test_loader_rejects_task_without_prompt_file(temp_home: pathlib.Path, task_yaml: dict) -> None:
+  conftest.write_cron_task(temp_home, "t", conftest.dump_yaml(task_yaml))
 
-  assert not get_scheduled_tasks()
-  errors = get_scheduled_task_errors()
+  assert not config.get_scheduled_tasks()
+  errors = config.get_scheduled_task_errors()
   assert len(errors) == 1 and errors[0].name == "t"
   # the message the operator reads names prompt_file as the missing source
   assert "prompt_file" in errors[0].error
@@ -150,12 +142,12 @@ def test_loader_rejects_task_without_prompt_file(temp_home: Path, task_yaml: dic
 # --- 6. shipped default is loadable and seeds per-job files ------------------
 
 
-def test_seed_fails_loud_on_legacy_cron(temp_home: Path) -> None:
-  cfg = get_config()
+def test_seed_fails_loud_on_legacy_cron(temp_home: pathlib.Path) -> None:
+  cfg = config.get_config()
   _write_legacy_cron(temp_home)
   assert not (cfg.config_d_dir / "cron.d").exists()
   with pytest.raises(ValueError, match="legacy"):
-    seed_default_cron_tasks(cfg)
+    init.seed_default_cron_tasks(cfg)
   assert not (cfg.config_d_dir / "cron.d").exists(), "nothing written on legacy tripwire"
 
 

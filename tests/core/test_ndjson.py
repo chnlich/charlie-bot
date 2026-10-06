@@ -7,25 +7,18 @@ paths.
 """
 
 import asyncio
+import itertools
 import json
 import os
-from itertools import islice
-from pathlib import Path
+import pathlib
 from typing import IO, Any
 
 import pytest
 
-from src.core.ndjson import (
-    append_ndjson,
-    count_ndjson_lines,
-    iter_ndjson_events,
-    iter_ndjson_events_from_end,
-    parse_ndjson_file,
-    parse_ndjson_line,
-)
+from src.core import ndjson
 
 
-def _write_ndjson(path: Path, payloads: list[dict], trailing_newline: bool = True) -> None:
+def _write_ndjson(path: pathlib.Path, payloads: list[dict], trailing_newline: bool = True) -> None:
   body = "".join(json.dumps(p) + "\n" for p in payloads)
   if not trailing_newline and body:
     body = body[:-1]
@@ -67,19 +60,20 @@ def test_iter_ndjson_events_matches_stdlib_parse_over_event_shapes() -> None:
           },
       ]
   ] + ["  " + json.dumps({"padded": True}) + "  ", '{"dup": 1, "dup": 2}']
-  assert list(iter_ndjson_events(lines, log_event="t", log_fields={})) == [json.loads(raw_line) for raw_line in lines]
+  assert list(ndjson.iter_ndjson_events(lines, log_event="t",
+                                        log_fields={})) == [json.loads(raw_line) for raw_line in lines]
 
 
 def test_parse_ndjson_line_applies_the_skip_contract_per_line() -> None:
   # The one-line contract home: a blank (or whitespace-only) line and a line
   # the parser rejects (including the orjson NaN/Infinity boundary) answer
   # None; a parseable line answers its dict.
-  assert parse_ndjson_line('{"i": 1}', log_event="t", log_fields={}) == {"i": 1}
-  assert parse_ndjson_line('  {"i": 1}  ', log_event="t", log_fields={}) == {"i": 1}
-  assert parse_ndjson_line("", log_event="t", log_fields={}) is None
-  assert parse_ndjson_line("   \n", log_event="t", log_fields={}) is None
-  assert parse_ndjson_line("{not json", log_event="t", log_fields={}) is None
-  assert parse_ndjson_line('{"a": NaN}', log_event="t", log_fields={}) is None
+  assert ndjson.parse_ndjson_line('{"i": 1}', log_event="t", log_fields={}) == {"i": 1}
+  assert ndjson.parse_ndjson_line('  {"i": 1}  ', log_event="t", log_fields={}) == {"i": 1}
+  assert ndjson.parse_ndjson_line("", log_event="t", log_fields={}) is None
+  assert ndjson.parse_ndjson_line("   \n", log_event="t", log_fields={}) is None
+  assert ndjson.parse_ndjson_line("{not json", log_event="t", log_fields={}) is None
+  assert ndjson.parse_ndjson_line('{"a": NaN}', log_event="t", log_fields={}) is None
 
 
 def test_parse_ndjson_line_bytes_torn_multibyte_parses_as_replacement_char() -> None:
@@ -87,10 +81,10 @@ def test_parse_ndjson_line_bytes_torn_multibyte_parses_as_replacement_char() -> 
   # replace fallback decides the line, so a torn multibyte char inside an
   # otherwise valid line parses as U+FFFD instead of skipping as malformed.
   line = b'{"text": "ok\xff"}'
-  assert parse_ndjson_line(line, log_event="t", log_fields={}) == {"text": "ok\ufffd"}
+  assert ndjson.parse_ndjson_line(line, log_event="t", log_fields={}) == {"text": "ok\ufffd"}
 
 
-def test_parse_ndjson_file_matches_the_from_end_walk_over_mixed_corpora(tmp_path: Path) -> None:
+def test_parse_ndjson_file_matches_the_from_end_walk_over_mixed_corpora(tmp_path: pathlib.Path) -> None:
   # The whole-file parse and the from-the-end walk share one skip contract over
   # one line domain, so a corpus with blank, whitespace, malformed, torn-UTF-8,
   # hard-corrupt, multi-megabyte and unterminated-final lines parses identically
@@ -106,26 +100,27 @@ def test_parse_ndjson_file_matches_the_from_end_walk_over_mixed_corpora(tmp_path
     f.write(b'{"i": 2, "hard": "ok\xff\n')
     f.write(giant.encode() + b"\n")
     f.write(b'{"i": 3}')
-  assert parse_ndjson_file(target) == list(iter_ndjson_events_from_end(target, log_event="t", log_fields={}))[::-1]
+  assert ndjson.parse_ndjson_file(target) == list(
+      ndjson.iter_ndjson_events_from_end(target, log_event="t", log_fields={}))[::-1]
 
 
-def test_parse_ndjson_file_multi_megabyte_lines_parse_whole(tmp_path: Path) -> None:
+def test_parse_ndjson_file_multi_megabyte_lines_parse_whole(tmp_path: pathlib.Path) -> None:
   # A line far larger than any read chunk parses whole: the mapping has no
   # chunk boundaries, so the parse output is the line's JSON object exactly.
   target = tmp_path / "events.jsonl"
   payload = {"blob": "x" * (8 * 1024 * 1024)}
   _write_ndjson(target, [payload, {"i": 1}])
-  assert parse_ndjson_file(target) == [payload, {"i": 1}]
+  assert ndjson.parse_ndjson_file(target) == [payload, {"i": 1}]
 
 
-def _write_mixed(path: Path, chunks: list[str], trailing_newline: bool = True) -> None:
+def _write_mixed(path: pathlib.Path, chunks: list[str], trailing_newline: bool = True) -> None:
   body = "\n".join(chunks)
   if trailing_newline and body:
     body += "\n"
   path.write_text(body, encoding="utf-8")
 
 
-def test_iter_ndjson_events_from_end_tail_limit_skips_a_malformed_band(tmp_path: Path) -> None:
+def test_iter_ndjson_events_from_end_tail_limit_skips_a_malformed_band(tmp_path: pathlib.Path) -> None:
   # 300 lines of ~3 KB each with a malformed band in the middle: the newest
   # 200 parseable events the walk answers equal the whole-file parse's last
   # 200, so lines the parser rejects never count toward the consumer's limit.
@@ -136,8 +131,8 @@ def test_iter_ndjson_events_from_end_tail_limit_skips_a_malformed_band(tmp_path:
     if 100 <= i < 150:
       chunks.append('{"malformed": ' + "y" * 3000)
   _write_mixed(target, chunks)
-  newest_first = list(islice(iter_ndjson_events_from_end(target, log_event="t", log_fields={}), 200))
-  assert newest_first[::-1] == parse_ndjson_file(target)[-200:]
+  newest_first = list(itertools.islice(ndjson.iter_ndjson_events_from_end(target, log_event="t", log_fields={}), 200))
+  assert newest_first[::-1] == ndjson.parse_ndjson_file(target)[-200:]
   assert [e["i"] for e in newest_first[::-1]] == list(range(100, 300))
 
 
@@ -145,7 +140,7 @@ def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   calls: list[str] = []
   real_open = open
 
-  def spy(file: Path | str, mode: str = "r", *args: object, **kwargs: object) -> IO[Any]:
+  def spy(file: pathlib.Path | str, mode: str = "r", *args: object, **kwargs: object) -> IO[Any]:
     calls.append(str(file))
     return real_open(file, mode, *args, **kwargs)
 
@@ -153,18 +148,19 @@ def _spy_opens(monkeypatch: pytest.MonkeyPatch) -> list[str]:
   return calls
 
 
-def test_count_ndjson_lines_memo_recounts_after_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_count_ndjson_lines_memo_recounts_after_append(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   target = tmp_path / "events.jsonl"
   _write_ndjson(target, [{"i": i} for i in range(5)])
-  assert count_ndjson_lines(target) == 5
+  assert ndjson.count_ndjson_lines(target) == 5
   calls = _spy_opens(monkeypatch)
   with open(target, "a", encoding="utf-8") as f:
     f.write(json.dumps({"i": 5}) + "\n")
-  assert count_ndjson_lines(target) == 6
+  assert ndjson.count_ndjson_lines(target) == 6
   assert str(target) in calls
 
 
-def test_append_ndjson_fdatasyncs_once_after_the_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_append_ndjson_fdatasyncs_once_after_the_writes(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   target = tmp_path / "events.jsonl"
   ops: list[tuple[str, int]] = []
   real_write, real_fdatasync = os.write, os.fdatasync
@@ -180,7 +176,7 @@ def test_append_ndjson_fdatasyncs_once_after_the_writes(tmp_path: Path, monkeypa
 
   monkeypatch.setattr(os, "write", spy_write)
   monkeypatch.setattr(os, "fdatasync", spy_fdatasync)
-  asyncio.run(append_ndjson(target, {"i": 1}))
+  asyncio.run(ndjson.append_ndjson(target, {"i": 1}))
 
   # One fdatasync, on the fd that received the writes, after every write.
   fd = ops[0][1]

@@ -1,18 +1,16 @@
 """GET /api/threads/{sid}/threads/{tid}/events incremental (after=) semantics."""
 
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
+import fastapi
 import pytest
-from conftest import make_home_config, seed_thread
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
-from src.api.deps import get_thread_manager
-from src.api.threads import router as threads_router
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
+from src.api import deps
+from src.api import threads as threads_api
+from src.core import models, sessions, threads
 
 EVENTS = [
     {
@@ -38,24 +36,24 @@ EVENTS = [
 ]
 
 
-async def _client_with_log(tmp_path: Path) -> tuple[TestClient, str, Path]:
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="Events"))
-  meta = await seed_thread(thread_mgr, session, "events")
+async def _client_with_log(tmp_path: pathlib.Path) -> tuple[testclient.TestClient, str, pathlib.Path]:
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  thread_mgr = threads.ThreadManager(cfg)
+  session = await session_mgr.create_session(models.CreateSessionRequest(name="Events"))
+  meta = await conftest.seed_thread(thread_mgr, session, "events")
   path = await thread_mgr.get_events_log_path(session.id, meta.id)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text("".join(json.dumps(e) + "\n" for e in EVENTS), encoding="utf-8")
-  app = FastAPI()
-  app.include_router(threads_router, prefix="/api/threads")
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
+  app = fastapi.FastAPI()
+  app.include_router(threads_api.router, prefix="/api/threads")
+  app.dependency_overrides[deps.get_thread_manager] = lambda: thread_mgr
   url = f"/api/threads/{session.id}/threads/{meta.id}/events"
-  return TestClient(app), url, path
+  return testclient.TestClient(app), url, path
 
 
 @pytest.mark.asyncio
-async def test_after_envelope_slice_reset_and_rejection(tmp_path: Path) -> None:
+async def test_after_envelope_slice_reset_and_rejection(tmp_path: pathlib.Path) -> None:
   client, url, _path = await _client_with_log(tmp_path)
   full = client.get(url).json()
   assert isinstance(full, list)  # no-after keeps the plain-list shape
@@ -72,7 +70,7 @@ async def test_after_envelope_slice_reset_and_rejection(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_full_fetch_serves_stored_render_and_renders_after_append(tmp_path: Path) -> None:
+async def test_full_fetch_serves_stored_render_and_renders_after_append(tmp_path: pathlib.Path) -> None:
   client, url, _path = await _client_with_log(tmp_path)
   first = client.get(url)
   second = client.get(url)

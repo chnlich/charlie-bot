@@ -10,16 +10,15 @@ parser wording.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import pathlib
 
 import pytest
 
 from src.cli import main as cli_main
-from src.core import token_tally
-from src.core.usage_ledger import UsageLedger
+from src.core import token_tally, usage_ledger
 
 
-def _write_claude_fixture(root: Path) -> Path:
+def _write_claude_fixture(root: pathlib.Path) -> pathlib.Path:
   """A minimal copied Claude config dir: one project jsonl carrying one usage record."""
   home = root / "copied-claude"
   sess_dir = home / "projects" / "rel" / "sess1"
@@ -49,14 +48,14 @@ def _run(*argv: str) -> None:
   cli_main.main(["usage-ledger", *argv])
 
 
-def test_import_writes_the_fixture_then_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_import_writes_the_fixture_then_zero(tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   home = _write_claude_fixture(tmp_path)
   ledger_path = tmp_path / "ledger.sqlite3"
   argv = ["import", "--host", "old-host", "--claude-home", f"work={home}", "--ledger", str(ledger_path)]
 
   _run(*argv)
   assert "Claude Code: 1 records written" in capsys.readouterr().out
-  with UsageLedger(ledger_path) as ledger:
+  with usage_ledger.UsageLedger(ledger_path) as ledger:
     rows = ledger.model_rows()
   assert len(rows) == 1
   assert (rows[0].source, rows[0].calls, rows[0].output) == ("Claude Code", 1, 5)
@@ -65,7 +64,8 @@ def test_import_writes_the_fixture_then_zero(tmp_path: Path, capsys: pytest.Capt
   assert "Claude Code: 0 records written" in capsys.readouterr().out
 
 
-def test_malformed_pair_and_missing_source_flag_exit_2(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_malformed_pair_and_missing_source_flag_exit_2(
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]) -> None:
   ledger = str(tmp_path / "ledger.sqlite3")
   with pytest.raises(SystemExit) as malformed:
     _run("import", "--host", "old-host", "--claude-home", "no-separator", "--ledger", ledger)
@@ -82,11 +82,11 @@ def test_malformed_pair_and_missing_source_flag_exit_2(tmp_path: Path, capsys: p
 
 
 def test_capture_prints_one_line_per_source(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   ledger_path = tmp_path / "ledger.sqlite3"
-  opened: list[Path] = []
+  opened: list[pathlib.Path] = []
 
-  def fake_capture_local(ledger: UsageLedger) -> dict[str, int]:
+  def fake_capture_local(ledger: usage_ledger.UsageLedger) -> dict[str, int]:
     opened.append(ledger._path)
     return {"Claude Code": 2, "Codex": 1}
 

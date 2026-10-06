@@ -1542,16 +1542,16 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS
 # import resolve_binary`) get a ``*_RESOLVE_BINARY_PATCH_TARGET`` on their own module,
 # where monkeypatch.setattr lands the stand-in and the __init__ reads the helper at
 # call time and never probes PATH, while sibling backends binding the same helper keep
-# their own namespaces. codex, gemini_cli and antigravity_cli instead read the helper
-# through the base module at call time (`base.resolve_binary`, module-style import), so
-# their targets are the shared base attribute; a stand-in there reaches all three
+# their own namespaces. codex, gemini_cli, antigravity_cli and opencode instead read the
+# helper through the base module at call time (`base.resolve_binary`, module-style import),
+# so their targets are the shared base attribute; a stand-in there reaches all four
 # backends' __init__ because the import-scope siblings read their own bindings. The backend start contract spawns through the
 # off-loop spawn seam (src/agents/backends/spawn.py), which base.py imports and reads
 # as a module global at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
 # land the stand-in on that one shared attribute; the caller-qualified form records
 # which backend's spawn a test drives.
 BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
-OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.opencode.resolve_binary"
+OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
 OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
 CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
 ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"

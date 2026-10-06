@@ -7,11 +7,11 @@ eviction must not pop a key between a hit's dict lookup and its
 move_to_end.
 """
 
+import collections
 import os
+import pathlib
 import threading
-from collections import OrderedDict
 from collections.abc import Callable, Hashable, Iterator
-from pathlib import Path
 from typing import Generic, TypeVar
 
 K = TypeVar("K", bound=Hashable)
@@ -32,7 +32,7 @@ class BoundedMemo(Generic[K, V]):
 
   def __init__(self, limit: int) -> None:
     self._limit = limit
-    self._entries: OrderedDict[K, V] = OrderedDict()
+    self._entries: collections.OrderedDict[K, V] = collections.OrderedDict()
     self._lock = threading.Lock()
 
   def get(self, key: K) -> V | None:
@@ -97,7 +97,7 @@ class BoundedMemo(Generic[K, V]):
       return len(self._entries)
 
 
-def stat_signature(path: str | Path) -> tuple[int, int] | None:
+def stat_signature(path: str | pathlib.Path) -> tuple[int, int] | None:
   """(mtime_ns, size) of *path*, or None when the stat fails.
 
   The signature StatSignatureMemo entries carry and the paired reads re-stat:

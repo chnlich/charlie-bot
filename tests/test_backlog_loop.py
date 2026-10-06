@@ -1,18 +1,17 @@
 """Tests for the improvement-loop lifecycle module."""
 
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from unittest.mock import AsyncMock, patch
+import datetime
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
 import yaml
-from conftest import BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET
 
-from src.core.backlog_loop import determine_action
-from src.core.config import ImprovementLoopConfig
+from src.core import backlog_loop, config
 
 
-def _make_cfg(**overrides: object) -> ImprovementLoopConfig:
+def _make_cfg(**overrides: object) -> config.ImprovementLoopConfig:
   defaults = {
       'backlog': 'backlog/backlog.yaml',
       'role': 'test agent',
@@ -23,10 +22,10 @@ def _make_cfg(**overrides: object) -> ImprovementLoopConfig:
       'stale_timeout_hours': 1.0,
   }
   defaults.update(overrides)
-  return ImprovementLoopConfig(**defaults)
+  return config.ImprovementLoopConfig(**defaults)
 
 
-def _write_backlog(path: Path, items: list[dict]) -> None:
+def _write_backlog(path: pathlib.Path, items: list[dict]) -> None:
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(yaml.dump(items, default_flow_style=False, allow_unicode=True, sort_keys=False))
 
@@ -47,7 +46,7 @@ def _assert_concise_description_constraint(prompt: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_revision_requested_picked_first(tmp_path: Path) -> None:
+async def test_revision_requested_picked_first(tmp_path: pathlib.Path) -> None:
   """Revision feedback takes priority over approved items."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
@@ -67,7 +66,7 @@ async def test_revision_requested_picked_first(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'revision'
   assert '002' in prompt
@@ -80,10 +79,10 @@ async def test_revision_requested_picked_first(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stale_in_progress_reset(tmp_path: Path) -> None:
+async def test_stale_in_progress_reset(tmp_path: pathlib.Path) -> None:
   """Stale in_progress items get reset to failed, YAML updated."""
   backlog = tmp_path / 'backlog.yaml'
-  old_time = (datetime.now(UTC) - timedelta(hours=2)).isoformat()
+  old_time = (datetime.datetime.now(datetime.UTC) - datetime.timedelta(hours=2)).isoformat()
   items = [
       {
           'id': '001',
@@ -95,8 +94,8 @@ async def test_stale_in_progress_reset(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg()
 
-  with patch(BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, new_callable=AsyncMock) as mock_commit:
-    action, prompt = await determine_action(backlog, cfg, tmp_path)
+  with mock.patch(conftest.BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET, new_callable=mock.AsyncMock) as mock_commit:
+    action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'stale_reset'
   assert prompt is None
@@ -129,7 +128,7 @@ _IMPLEMENT_PICK_ROWS = [
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("items", "expected_id", "expected_title"), _IMPLEMENT_PICK_ROWS)
 async def test_implement_picks_highest_priority_approved_item(
-    tmp_path: Path, items: list[tuple[str, str, str]], expected_id: str, expected_title: str) -> None:
+    tmp_path: pathlib.Path, items: list[tuple[str, str, str]], expected_id: str, expected_title: str) -> None:
   """Multiple approved items — picks highest priority."""
   backlog = tmp_path / 'backlog.yaml'
   _write_backlog(
@@ -144,7 +143,7 @@ async def test_implement_picks_highest_priority_approved_item(
       ])
   cfg = _make_cfg()
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'implement'
   assert expected_id in prompt
@@ -157,7 +156,7 @@ async def test_implement_picks_highest_priority_approved_item(
 
 
 @pytest.mark.asyncio
-async def test_generate_when_no_active(tmp_path: Path) -> None:
+async def test_generate_when_no_active(tmp_path: pathlib.Path) -> None:
   """No approved/in_progress items and under cap → generate."""
   backlog = tmp_path / 'backlog.yaml'
   items = [
@@ -175,7 +174,7 @@ async def test_generate_when_no_active(tmp_path: Path) -> None:
   _write_backlog(backlog, items)
   cfg = _make_cfg(max_pending=10)
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'generate'
   assert '003' in prompt  # next sequential ID
@@ -188,14 +187,14 @@ async def test_generate_when_no_active(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_noop_when_at_cap(tmp_path: Path) -> None:
+async def test_noop_when_at_cap(tmp_path: pathlib.Path) -> None:
   """At max_pending, no active items → skip generate, go to scan."""
   backlog = tmp_path / 'backlog.yaml'
   items = [{'id': f'{i:03d}', 'status': 'pending', 'title': f'Item {i}'} for i in range(1, 11)]
   _write_backlog(backlog, items)
   cfg = _make_cfg(max_pending=10)
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   # At cap: skip generate, fall through to scan
   assert action == 'scan'
@@ -208,13 +207,13 @@ async def test_noop_when_at_cap(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_scan_fallback(tmp_path: Path) -> None:
+async def test_scan_fallback(tmp_path: pathlib.Path) -> None:
   """Empty backlog → scan fallback."""
   backlog = tmp_path / 'backlog.yaml'
   _write_backlog(backlog, [])
   cfg = _make_cfg(max_pending=0)  # at cap, forces skip of generate
 
-  action, prompt = await determine_action(backlog, cfg, tmp_path)
+  action, prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'scan'
   assert 'test agent' in prompt
@@ -227,22 +226,22 @@ async def test_scan_fallback(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_backlog_generates(tmp_path: Path) -> None:
+async def test_missing_backlog_generates(tmp_path: pathlib.Path) -> None:
   """Missing backlog file → generate (empty backlog, under cap)."""
   backlog = tmp_path / 'nonexistent' / 'backlog.yaml'
   cfg = _make_cfg(max_pending=10)
 
-  action, _prompt = await determine_action(backlog, cfg, tmp_path)
+  action, _prompt = await backlog_loop.determine_action(backlog, cfg, tmp_path)
 
   assert action == 'generate'
 
 
 @pytest.mark.asyncio
-async def test_malformed_backlog_fails_loud(tmp_path: Path) -> None:
+async def test_malformed_backlog_fails_loud(tmp_path: pathlib.Path) -> None:
   """A non-list backlog file errors naming the file instead of silently reading as empty."""
   backlog = tmp_path / 'backlog.yaml'
   backlog.write_text('items:\n- id: 001\n', encoding='utf-8')
   cfg = _make_cfg()
 
   with pytest.raises(ValueError, match=r'backlog\.yaml: expected a YAML list of backlog items, got dict'):
-    await determine_action(backlog, cfg, tmp_path)
+    await backlog_loop.determine_action(backlog, cfg, tmp_path)

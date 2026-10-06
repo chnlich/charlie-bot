@@ -12,36 +12,26 @@ receives its exception.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+import dataclasses
+import datetime
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BROADCAST_PATCH_TARGET,
-    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
-    _async_wait_for,
-    drain_session_consumer,
-    fresh_master_state,
-    make_sound_round,
-    mock_session_callbacks,
-    run_session_consumer,
-)
 
 from src.agents import master_cc_queue, master_cc_run, master_cc_state
 from src.core import event_types as ET
-from src.core.models import MasterRunRecord, SessionCallbacks, SessionMetadata, utc_now_iso
-from src.core.session_dispatch import INPUT_EVENT_TYPES
+from src.core import models, session_dispatch
 
 
-def _meta(session_id: str) -> SessionMetadata:
-  return SessionMetadata(id=session_id, name="batch", backend="fake", cc_session_id=None)
+def _meta(session_id: str) -> models.SessionMetadata:
+  return models.SessionMetadata(id=session_id, name="batch", backend="fake", cc_session_id=None)
 
 
-def _callbacks(**overrides) -> SessionCallbacks:
+def _callbacks(**overrides) -> models.SessionCallbacks:
   """mock_session_callbacks() with per-field overrides; the frozen dataclass derives via replace."""
-  return replace(mock_session_callbacks(), **overrides)
+  return dataclasses.replace(conftest.mock_session_callbacks(), **overrides)
 
 
 def _item(
@@ -56,7 +46,7 @@ def _item(
     should_check_tex: bool = False,
     uploaded_files: list[dict] | None = None,
     backend_option=None,
-    callbacks: SessionCallbacks | None = None,
+    callbacks: models.SessionCallbacks | None = None,
     **extra,
 ) -> master_cc_state._WorkItem:
   """A directly-constructed work item the way run_message builds one."""
@@ -110,7 +100,7 @@ async def test_full_backlog_runs_as_one_turn_in_arrival_order() -> None:
     captured.append(item)
     return ("cc-batch", 0, None, {})
 
-  await run_session_consumer(session_id, parts, fake_run_cc)
+  await conftest.run_session_consumer(session_id, parts, fake_run_cc)
 
   assert len(captured) == 1, "the whole backlog must run as one turn"
   merged = captured[0]
@@ -133,13 +123,11 @@ async def test_full_backlog_runs_as_one_turn_in_arrival_order() -> None:
 
 
 def build_cfg():
-  from conftest import backend_option
+  from src.core import config
 
-  from src.core.config import CharlieBotConfig
-
-  return CharlieBotConfig(
-      charliebot_home=Path("/tmp/charliebot-batching"),
-      backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]})
+  return config.CharlieBotConfig(
+      charliebot_home=pathlib.Path("/tmp/charliebot-batching"),
+      backends={"options": [conftest.backend_option(id="fake", label="Fake", type="codex", model="fake-model")]})
 
 
 @pytest.mark.asyncio
@@ -158,7 +146,7 @@ async def test_merged_turn_emits_one_master_done_with_the_whole_id_list() -> Non
       _item(session_id, "a", ET.SCHEDULED_TRIGGER, cfg, event_id="evt-a", auto_trigger=True, callbacks=callbacks),
       _item(session_id, "b", ET.USER, cfg, event_id="evt-b", callbacks=callbacks),
   ]
-  await run_session_consumer(session_id, parts, make_sound_round("cc-1"))
+  await conftest.run_session_consumer(session_id, parts, conftest.make_sound_round("cc-1"))
 
   dones = [e for e in persisted if e.get("type") == ET.MASTER_DONE]
   assert len(dones) == 1
@@ -189,7 +177,7 @@ async def test_backend_option_change_splits_the_queue_into_two_turns() -> None:
     captured.append(item)
     return (f"cc-{len(captured)}", 0, None, {})
 
-  await run_session_consumer(session_id, parts, fake_run_cc)
+  await conftest.run_session_consumer(session_id, parts, fake_run_cc)
 
   assert len(captured) == 2
   assert captured[0].user_event_ids == ["e-a1", "e-a2"]
@@ -204,7 +192,8 @@ async def test_backend_option_change_splits_the_queue_into_two_turns() -> None:
 async def test_resume_item_and_task_run_item_each_run_alone() -> None:
   session_id = "batch-unmergeable"
   cfg = build_cfg()
-  record = MasterRunRecord(started_at=datetime.now(UTC), raw_log="/x/agent.raw.ndjson", user_event_ids=["e-resume"])
+  record = models.MasterRunRecord(
+      started_at=datetime.datetime.now(datetime.UTC), raw_log="/x/agent.raw.ndjson", user_event_ids=["e-resume"])
 
   resume_item = _item(
       session_id, "", None, cfg, event_id="e-resume", resume_record=record, resume_is_alive=lambda: False)
@@ -223,8 +212,8 @@ async def test_resume_item_and_task_run_item_each_run_alone() -> None:
     captured.append(item)
     return ("cc-x", 0, None, {})
 
-  with patch.object(master_cc_run, "_resume_cc", side_effect=fake_round):
-    await run_session_consumer(session_id, parts, fake_round)
+  with mock.patch.object(master_cc_run, "_resume_cc", side_effect=fake_round):
+    await conftest.run_session_consumer(session_id, parts, fake_round)
 
   # The plain head cannot pull the resume follower; the resume item and the
   # task_run item each stand alone as their own turn.
@@ -244,7 +233,8 @@ async def test_resume_head_pulls_no_follower() -> None:
   conversation)."""
   session_id = "batch-resume-head"
   cfg = build_cfg()
-  record = MasterRunRecord(started_at=datetime.now(UTC), raw_log="/x/agent.raw.ndjson", user_event_ids=["e-resume"])
+  record = models.MasterRunRecord(
+      started_at=datetime.datetime.now(datetime.UTC), raw_log="/x/agent.raw.ndjson", user_event_ids=["e-resume"])
   resume_item = _item(
       session_id, "", None, cfg, event_id="e-resume", resume_record=record, resume_is_alive=lambda: False)
   plain = _item(session_id, "after", ET.USER, cfg, event_id="e-after")
@@ -259,8 +249,8 @@ async def test_resume_head_pulls_no_follower() -> None:
     resume_calls.append(item)
     return ("cc-resume", 0, None, {})
 
-  with patch.object(master_cc_run, "_resume_cc", side_effect=fake_resume):
-    await run_session_consumer(session_id, [resume_item, plain], fake_run)
+  with mock.patch.object(master_cc_run, "_resume_cc", side_effect=fake_resume):
+    await conftest.run_session_consumer(session_id, [resume_item, plain], fake_run)
 
   assert resume_calls == [resume_item]
   assert len(run_calls) == 1
@@ -291,7 +281,7 @@ async def test_task_run_head_pulls_no_follower() -> None:
     captured.append(item)
     return ("cc-x", 0, None, {})
 
-  await run_session_consumer(session_id, [task_item, plain], fake_run)
+  await conftest.run_session_consumer(session_id, [task_item, plain], fake_run)
 
   assert len(captured) == 2
   assert captured[0] is task_item
@@ -313,7 +303,7 @@ async def test_single_queued_item_runs_byte_identical_to_today() -> None:
     captured.append(seen)
     return ("cc-1", 0, None, {})
 
-  await run_session_consumer(session_id, [item], fake_run_cc)
+  await conftest.run_session_consumer(session_id, [item], fake_run_cc)
 
   # The dequeued head itself runs, untouched: same object, same prompt fields,
   # no header line anywhere.
@@ -346,7 +336,7 @@ async def test_voice_disclaimer_and_attachments_are_carried_per_part() -> None:
     captured.append(item)
     return ("cc-1", 0, None, {})
 
-  await run_session_consumer(session_id, parts, fake_run_cc)
+  await conftest.run_session_consumer(session_id, parts, fake_run_cc)
 
   merged = captured[0]
   # The disclaimer rides inside the voice part's section only.
@@ -377,7 +367,7 @@ async def test_batch_exception_reaches_every_constituents_future() -> None:
   async def exploding_round(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
     raise RuntimeError("backend exploded")
 
-  await run_session_consumer(session_id, parts, exploding_round)
+  await conftest.run_session_consumer(session_id, parts, exploding_round)
 
   for part in parts:
     assert part.future.done()
@@ -402,7 +392,8 @@ async def test_enqueue_rejects_a_type_outside_input_event_types() -> None:
 
 
 def test_input_event_types_members_cover_the_declared_entry_points() -> None:
-  assert INPUT_EVENT_TYPES == frozenset({ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
+  assert session_dispatch.INPUT_EVENT_TYPES == frozenset(
+      {ET.USER, ET.AGENT_MESSAGE, ET.SCHEDULED_TRIGGER, ET.CHILD_REPORT})
 
 
 @pytest.mark.asyncio
@@ -410,18 +401,19 @@ async def test_received_at_stamps_the_enqueue_moment() -> None:
   session_id = "batch-received-at"
   cfg = build_cfg()
   item = _item(session_id, "x", ET.USER, cfg)
-  before = datetime.now(UTC)
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  before = datetime.datetime.now(datetime.UTC)
+  workers_mock = mock.MagicMock()
+  workers_mock._has_running_tasks = mock.AsyncMock(return_value=False)
   with (
-      patch.object(master_cc_run, "_run_cc", new=AsyncMock(return_value=("cc-1", 0, None, {}))),
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
+      mock.patch.object(master_cc_run, "_run_cc", new=mock.AsyncMock(return_value=("cc-1", 0, None, {}))),
+      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch(conftest.SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
   ):
     master_cc_queue._enqueue_work_item(session_id, item)
-    await drain_session_consumer(session_id, 5)
+    await conftest.drain_session_consumer(session_id, 5)
   assert item.received_at.utcoffset() is not None
-  assert before - timedelta(seconds=5) <= item.received_at <= datetime.now(UTC) + timedelta(seconds=5)
+  assert before - datetime.timedelta(seconds=5) <= item.received_at <= datetime.datetime.now(
+      datetime.UTC) + datetime.timedelta(seconds=5)
 
 
 # ---------------------------------------------------------------------------
@@ -431,19 +423,17 @@ async def test_received_at_stamps_the_enqueue_moment() -> None:
 
 @pytest.mark.asyncio
 async def test_backlog_through_the_real_funnels_persists_user_events_separately(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """24 trigger wakes, 2 chat messages, and 1 child-report wake arrive while a
   turn runs: every entry point declares its input type, the chat log keeps the
   two user messages as separate events, and the following turn runs the whole
   backlog once with all 27 futures resolved."""
-  from src.core.config import CharlieBotConfig
-  from src.core.master_trigger import trigger_master
-  from src.core.sessions import SessionManager
+  from src.core import config, master_trigger, sessions
 
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       backends={"options": [_backend_option(id="fake", label="Fake", type="codex", model="fake-model")]})
-  session_mgr = SessionManager(cfg)
+  session_mgr = sessions.SessionManager(cfg)
   meta = await session_mgr.create_session(_create_session_request("backlog"))
   sid = meta.id
   callbacks = session_mgr.callbacks()
@@ -455,7 +445,7 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
         sid, {
             "type": ET.SCHEDULED_TRIGGER,
             "content": f"[Scheduled trigger fired] wake {i}",
-            "timestamp": utc_now_iso(),
+            "timestamp": models.utc_now_iso(),
         })
     events = session_mgr.load_chat_events_sync(sid)
     wake_ids.append(events[-1]["id"])
@@ -485,15 +475,15 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
   monkeypatch.setattr(master_cc_queue, "_enqueue_work_item", counting_enqueue)
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_round)
 
-  async with fresh_master_state(sid):
-    with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
+  async with conftest.fresh_master_state(sid):
+    with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()):
       # Every entry point resolves the backend option the way chat.py does
       # before calling run_message, so the run settings match across funnels.
       option = cfg.get_backend_option("fake")
       running = asyncio.create_task(
           master_cc_queue.run_message(
               cfg, meta, "the running turn", callbacks, ET.USER, skip_user_event=True, backend_option=option))
-      await _async_wait_for(
+      await conftest._async_wait_for(
           lambda: len(captured) == 1, 5.0, "the running turn never reached the enqueue count", poll=0.01)
 
       # Each caller is serialized through its own enqueue: the test pins the
@@ -508,7 +498,7 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
         task = asyncio.create_task(coro)
         calls.append(task)
         try:
-          await _async_wait_for(
+          await conftest._async_wait_for(
               lambda: enqueued[0] >= ordinal, 10.0, f"the enqueue count never reached {ordinal}", poll=0.01)
         except BaseException:
           if task.done() and not task.cancelled():
@@ -517,7 +507,7 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
 
       for i, wake_id in enumerate(wake_ids):
         await arrive(
-            trigger_master(
+            master_trigger.trigger_master(
                 sid,
                 f"[Scheduled trigger fired] wake {i}",
                 cfg,
@@ -531,7 +521,7 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
       await arrive(
           master_cc_queue.run_message(
               cfg, meta.model_copy(deep=True), "second user message", callbacks, ET.USER, backend_option=option), 27)
-      await arrive(trigger_master(sid, '{"iteration": 3}', cfg, session_mgr, ET.CHILD_REPORT), 28)
+      await arrive(master_trigger.trigger_master(sid, '{"iteration": 3}', cfg, session_mgr, ET.CHILD_REPORT), 28)
       await asyncio.wait_for(reached_backlog.wait(), timeout=10)
       release.set()
       await asyncio.wait_for(running, timeout=10)
@@ -561,12 +551,8 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
 
 
 def _backend_option(**kwargs):
-  from conftest import backend_option
-
-  return backend_option(**kwargs)
+  return conftest.backend_option(**kwargs)
 
 
 def _create_session_request(name: str):
-  from src.core.models import CreateSessionRequest
-
-  return CreateSessionRequest(name=name)
+  return models.CreateSessionRequest(name=name)

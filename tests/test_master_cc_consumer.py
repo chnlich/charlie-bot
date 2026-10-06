@@ -30,10 +30,10 @@ from conftest import (
     run_session_consumer,
 )
 
-from src.agents import master_cc, master_cc_queue, master_cc_run, master_cc_state
+from src.agents import master_cc, master_cc_run, master_cc_state
 from src.agents.backends.base import make_result_event
 from src.core import event_types as ET
-from src.core import thinking_state
+from src.core import latex, streaming, thinking_state
 from src.core.models import (
     CreateSessionRequest,
     MasterRunRecord,
@@ -121,7 +121,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   """
   session_id = f"t1-{inject_at}"
   cfg = build_master_cc_cfg(tmp_path)
-  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   entries: list[datetime | None] = []
   injected = False
@@ -177,7 +177,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   )
 
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", broadcast_hook)
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast_hook)
   monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
   async with fresh_master_state(session_id):
@@ -237,8 +237,8 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   backend_returned_id = "cc-backend-session-42"
 
   monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
-  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session.id):
     result = await master_cc.run_message(cfg, session, "hi", session_mgr.callbacks(), ET.USER, skip_user_event=True)
@@ -272,7 +272,7 @@ async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: _NoopBackend())
   patch_instructions_content(monkeypatch)
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   item = make_work_item(
       cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
@@ -330,8 +330,8 @@ async def _run_stream_consumer(
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
   patch_instructions_content(monkeypatch)
-  monkeypatch.setattr(master_cc_queue, "get_tex_path", lambda: tmp_path / "missing.tex")
-  monkeypatch.setattr(master_cc_queue.streaming_manager, "broadcast", AsyncMock())
+  monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session_id):
     await master_cc.run_message(cfg, meta, "hi", cb, ET.USER, skip_user_event=True)

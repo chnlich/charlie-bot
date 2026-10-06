@@ -378,9 +378,9 @@ def _bearer(claims):
 
 
 def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
-  from src.agents.master_cc_queue import streaming_manager
+  from src.core import streaming
   from src.core.task_execution import TaskExecutionAdapter
-  monkeypatch.setattr(streaming_manager, "broadcast", _async_noop)
+  monkeypatch.setattr(streaming.streaming_manager, "broadcast", _async_noop)
   return TaskExecutionAdapter(cfg, session_mgr, tree)
 
 

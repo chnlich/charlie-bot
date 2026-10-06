@@ -30,14 +30,13 @@ spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
 """
 
 import os
+import pathlib
 import re
 from collections.abc import Callable
-from pathlib import Path
 
-from src.core.log_once import LazyStructlogLogger
-from src.core.memo import BoundedMemo
+from src.core import log_once, memo
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"
@@ -47,7 +46,8 @@ _STAGING_DIRNAME = "staging"
 # dir in steady state (tests hold several), so a small cap bounds memoized
 # Store payloads. An entry holds the stat-only signature alongside the Store.
 _STORE_MEMO_LIMIT = 8
-_store_memo: BoundedMemo[Path, tuple[tuple[tuple[str, int, int], ...], Store]] = BoundedMemo(_STORE_MEMO_LIMIT)
+_store_memo: memo.BoundedMemo[pathlib.Path, tuple[tuple[tuple[str, int, int], ...],
+                                                  Store]] = memo.BoundedMemo(_STORE_MEMO_LIMIT)
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).
@@ -117,7 +117,7 @@ class Entry:
   )
 
   def __init__(
-      self, path: Path, topic: str | None, slug: str, scope: str | None, audience: list[str] | None,
+      self, path: pathlib.Path, topic: str | None, slug: str, scope: str | None, audience: list[str] | None,
       audience_raw: str | None, created: str | None, source: str | None, revises: str | None, title: str,
       title_in_header: bool, body: str) -> None:
     self.path = path
@@ -143,7 +143,7 @@ class Store:
 
   __slots__ = ("entries", "memory_dir", "topics")
 
-  def __init__(self, memory_dir: Path, topics: dict[str, Topic], entries: list[Entry]) -> None:
+  def __init__(self, memory_dir: pathlib.Path, topics: dict[str, Topic], entries: list[Entry]) -> None:
     self.memory_dir = memory_dir
     self.topics = topics
     self.entries = entries
@@ -156,7 +156,7 @@ def _parse_audience(raw: str) -> list[str]:
   return [part.strip() for part in raw.split(",")]
 
 
-def parse_entry(path: Path) -> Entry:
+def parse_entry(path: pathlib.Path) -> Entry:
   """Parse one entry file into an :class:`Entry`, or raise :class:`MemoryFormatError`.
 
   Structural validation only: the ``---`` framing, header line format, known
@@ -172,7 +172,7 @@ def parse_entry(path: Path) -> Entry:
   return parse_entry_text(path.read_text(encoding="utf-8"), entry_path=path)
 
 
-def parse_entry_text(text: str, *, entry_path: Path) -> Entry:
+def parse_entry_text(text: str, *, entry_path: pathlib.Path) -> Entry:
   """Parse one entry file's *text* into an :class:`Entry`, or raise :class:`MemoryFormatError`.
 
   Shared body of :func:`parse_entry`, callable without a file on disk so a
@@ -243,7 +243,7 @@ def parse_entry_text(text: str, *, entry_path: Path) -> Entry:
   )
 
 
-def _load_topics(memory_dir: Path) -> dict[str, Topic]:
+def _load_topics(memory_dir: pathlib.Path) -> dict[str, Topic]:
   """Read the topics vocabulary; raise :class:`MemoryFormatError` on a bad line."""
   topics_path = memory_dir / _TOPICS_FILENAME
   if not topics_path.is_file():
@@ -340,12 +340,12 @@ def _validate_entry(entry: Entry, topics: dict[str, Topic], *, relaxed: bool, st
   return violations
 
 
-def _iter_entry_files(memory_dir: Path) -> list[Path]:
+def _iter_entry_files(memory_dir: pathlib.Path) -> list[pathlib.Path]:
   """Return sorted entry .md files under entries/<topic>/."""
   entries_dir = memory_dir / _ENTRIES_DIRNAME
   if not entries_dir.is_dir():
     return []
-  files: list[Path] = []
+  files: list[pathlib.Path] = []
   for topic_dir in sorted(entries_dir.iterdir()):
     if not topic_dir.is_dir():
       continue
@@ -353,7 +353,7 @@ def _iter_entry_files(memory_dir: Path) -> list[Path]:
   return files
 
 
-def _store_signature(memory_dir: Path) -> tuple[tuple[str, int, int], ...] | None:
+def _store_signature(memory_dir: pathlib.Path) -> tuple[tuple[str, int, int], ...] | None:
   """Stat-only signature of every byte :func:`load_store` parses.
 
   One (relative path, mtime_ns, size) triple per parsed file — the topics
@@ -363,8 +363,8 @@ def _store_signature(memory_dir: Path) -> tuple[tuple[str, int, int], ...] | Non
   memoize, and the load itself surfaces or tolerates the missing file exactly
   as the uncached path does.
 
-  Walked with os.scandir and string joins: Path.glob/Path.relative_to would
-  rebuild a Path per entry, and that allocation cost dominates the stats the
+  Walked with os.scandir and string joins: pathlib.Path.glob/pathlib.Path.relative_to would
+  rebuild a pathlib.Path per entry, and that allocation cost dominates the stats the
   signature exists to pay (the _load_session_metas preamble's lesson).
   """
   sig: list[tuple[str, int, int]] = []
@@ -392,7 +392,7 @@ def _store_signature(memory_dir: Path) -> tuple[tuple[str, int, int], ...] | Non
   return tuple(sig)
 
 
-def load_store(memory_dir: Path) -> Store:
+def load_store(memory_dir: pathlib.Path) -> Store:
   """Read the topics vocabulary and all entries; raise on any violation.
 
   Fail-loud: an unknown topic, a directory/topic mismatch, a bad filename
@@ -429,7 +429,7 @@ def load_store(memory_dir: Path) -> Store:
   return store
 
 
-def _load_store_uncached(memory_dir: Path) -> Store:
+def _load_store_uncached(memory_dir: pathlib.Path) -> Store:
   """Parse the store from disk; the work :func:`load_store` memoizes."""
   topics = _load_topics(memory_dir)
   entries: list[Entry] = []
@@ -442,7 +442,7 @@ def _load_store_uncached(memory_dir: Path) -> Store:
   return Store(memory_dir=memory_dir, topics=topics, entries=entries)
 
 
-def lint(memory_dir: Path) -> list[str]:
+def lint(memory_dir: pathlib.Path) -> list[str]:
   """Return all store violations (empty = clean).
 
   Validates entries/ with the strict v2 rules (frontmatter ``title`` required;
@@ -598,7 +598,7 @@ WORKER_USAGE_LINE = (
     "never entries/).")
 
 
-def _load_selection_store(memory_dir: Path) -> Store | None:
+def _load_selection_store(memory_dir: pathlib.Path) -> Store | None:
   """The store for a selection, or None when the memory dir is missing (logged)."""
   if not memory_dir.is_dir():
     log.error("memory_dir_missing", path=str(memory_dir))
@@ -655,7 +655,7 @@ def _selection_from_parts(
   )
 
 
-def select_master_memory(memory_dir: Path) -> MemorySelection | None:
+def select_master_memory(memory_dir: pathlib.Path) -> MemorySelection | None:
   """Select the master-audience memory for a spawn (the provenance-bearing result).
 
   Full bodies of entries in resident topics whose audience contains ``master``,
@@ -683,7 +683,7 @@ def select_master_memory(memory_dir: Path) -> MemorySelection | None:
   return _selection_from_parts("master", None, full_body_entries, index_entries, usage_line=None)
 
 
-def select_worker_memory(memory_dir: Path, repo_basename: str) -> MemorySelection | None:
+def select_worker_memory(memory_dir: pathlib.Path, repo_basename: str) -> MemorySelection | None:
   """Select the worker-audience memory for *repo_basename* (the provenance-bearing result).
 
   Full bodies of entries whose topic equals *repo_basename* and whose audience
@@ -729,7 +729,7 @@ def resident_topic_names(store: Store) -> set[str]:
   return {t.name for t in store.topics.values() if t.resident}
 
 
-def assemble_master(memory_dir: Path) -> str | None:
+def assemble_master(memory_dir: pathlib.Path) -> str | None:
   """Assemble the master spawn memory block (derived from :func:`select_master_memory`).
 
   Full bodies of entries in resident topics whose audience contains
@@ -745,7 +745,7 @@ def assemble_master(memory_dir: Path) -> str | None:
   return selection.text if selection is not None else None
 
 
-def assemble_worker(memory_dir: Path, repo_basename: str) -> str | None:
+def assemble_worker(memory_dir: pathlib.Path, repo_basename: str) -> str | None:
   """Assemble the worker spawn memory block for *repo_basename* (from :func:`select_worker_memory`).
 
   Full bodies of entries whose topic equals *repo_basename* and whose audience

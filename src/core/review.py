@@ -1,26 +1,20 @@
 """Review prompts, backend selection, and the event-log readers the review Run shares."""
 
 import asyncio
-from pathlib import Path
+import pathlib
 
+from src.core import (
+    chat_events,
+    config,
+    log_once,
+    message_aggregator,
+    models,
+    ndjson,
+    threads,
+)
 from src.core import event_types as ET
-from src.core.chat_events import chat_events_path
-from src.core.config import CharlieBotConfig, require_backend_option
-from src.core.log_once import LazyStructlogLogger
-from src.core.message_aggregator import extract_text_from_message
-from src.core.models import (
-    BackendOption,
-    option_default_model,
-)
-from src.core.ndjson import (
-    PARSE_SKIP_LOG_EVENT,
-    iter_ndjson_events_containing,
-    iter_ndjson_events_from_end,
-    type_line_filter,
-)
-from src.core.threads import thread_events_log_path
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # The reviewer contract's stable parts, one maintained home: src/core/review.py
 # owns the review rules; prompts/ owns the generic templates. review_rules_text
@@ -144,7 +138,7 @@ def review_context_lines(
   return lines
 
 
-def review_log_pointer(chat_log_path: Path, worker_log_path: Path) -> str:
+def review_log_pointer(chat_log_path: pathlib.Path, worker_log_path: pathlib.Path) -> str:
   """The context footer that sends the reviewer to the run's full logs."""
   return (
       f"If the summary above is insufficient or you are unsure about intent, "
@@ -158,7 +152,7 @@ def review_git_venue(branch_name: str, wt_path: str) -> str:
       f"All git operations below run from the worktree.")
 
 
-def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
+def _first_delegation_description(chat_log: pathlib.Path, thread_id: str) -> str | None:
   """First task_delegated description naming *thread_id*, in file order, or None.
 
   Stops at the first matching event whether its description carries text or
@@ -168,7 +162,8 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   are the needle the containing reader may skip by.
   """
   needle = thread_id.encode("utf-8")
-  for event in iter_ndjson_events_containing(chat_log, needle, log_event=PARSE_SKIP_LOG_EVENT, log_fields={}):
+  for event in ndjson.iter_ndjson_events_containing(chat_log, needle, log_event=ndjson.PARSE_SKIP_LOG_EVENT,
+                                                    log_fields={}):
     if event.get("type") == ET.TASK_DELEGATED and event.get("thread_id") == thread_id:
       value = event.get("description")
       if isinstance(value, str):
@@ -179,7 +174,7 @@ def _first_delegation_description(chat_log: Path, thread_id: str) -> str | None:
   return None
 
 
-def _worker_summary_from_events_log(worker_log: Path) -> str | None:
+def _worker_summary_from_events_log(worker_log: pathlib.Path) -> str | None:
   """The worker's own closing words: the newest non-empty result-or-assistant
   text, whichever kind is newer, or None.
 
@@ -191,8 +186,8 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
   whole.
   """
   summary_types = frozenset({ET.RESULT, ET.ASSISTANT})
-  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={},
-                                           parse_filter=type_line_filter(summary_types)):
+  for event in ndjson.iter_ndjson_events_from_end(worker_log, log_event=ndjson.PARSE_SKIP_LOG_EVENT, log_fields={},
+                                                  parse_filter=ndjson.type_line_filter(summary_types)):
     ev_type = event.get("type")
     if ev_type == ET.RESULT:
       val = event.get("result")
@@ -204,13 +199,13 @@ def _worker_summary_from_events_log(worker_log: Path) -> str | None:
       continue
     if ev_type == ET.ASSISTANT:
       msg = event.get("message") if isinstance(event.get("message"), dict) else None
-      text = extract_text_from_message(msg).strip()
+      text = message_aggregator.extract_text_from_message(msg).strip()
       if text:
         return text
   return None
 
 
-def _worker_error_from_events_log(worker_log: Path) -> str | None:
+def _worker_error_from_events_log(worker_log: pathlib.Path) -> str | None:
   """The newest non-empty error-event text in a worker's events log, or None.
 
   A run that failed before its process produced any output (a worktree or
@@ -219,8 +214,8 @@ def _worker_error_from_events_log(worker_log: Path) -> str | None:
   skip contract as :func:`_worker_summary_from_events_log`.
   """
   error_types = frozenset({ET.ERROR})
-  for event in iter_ndjson_events_from_end(worker_log, log_event=PARSE_SKIP_LOG_EVENT, log_fields={},
-                                           parse_filter=type_line_filter(error_types)):
+  for event in ndjson.iter_ndjson_events_from_end(worker_log, log_event=ndjson.PARSE_SKIP_LOG_EVENT, log_fields={},
+                                                  parse_filter=ndjson.type_line_filter(error_types)):
     for key in ("message", "content"):
       val = event.get(key)
       if isinstance(val, str):
@@ -233,8 +228,8 @@ def _worker_error_from_events_log(worker_log: Path) -> str | None:
 async def extract_review_context(
     session_id: str,
     thread_id: str,
-    sessions_dir: Path,
-    worker_log_path: Path | None = None,
+    sessions_dir: pathlib.Path,
+    worker_log_path: pathlib.Path | None = None,
 ) -> tuple[str | None, str | None]:
   """Extract user request and worker summary from JSONL logs for review context.
 
@@ -248,7 +243,7 @@ async def extract_review_context(
   session_dir = sessions_dir / session_id
 
   try:
-    chat_log = chat_events_path(session_dir)
+    chat_log = chat_events.chat_events_path(session_dir)
     description = await asyncio.to_thread(_first_delegation_description, chat_log, thread_id)
     if description is not None:
       user_request = description
@@ -259,7 +254,7 @@ async def extract_review_context(
     log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
 
   try:
-    worker_log = worker_log_path or thread_events_log_path(session_dir, thread_id)
+    worker_log = worker_log_path or threads.thread_events_log_path(session_dir, thread_id)
     chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log)
     if chosen:
       worker_summary = chosen
@@ -272,17 +267,17 @@ async def extract_review_context(
   return user_request, worker_summary
 
 
-def _resolve_preference_option(cfg: CharlieBotConfig, option_id: str) -> BackendOption:
+def _resolve_preference_option(cfg: config.CharlieBotConfig, option_id: str) -> models.BackendOption:
   """Resolve a backends.preference entry to its BackendOption with default model.
 
   Raises ValueError if the option_id is not in backends.options or requires but lacks a model.
   """
-  option = require_backend_option(cfg, option_id, subject="backends.preference entry ")
-  return option.model_copy(update={"model": option_default_model(option, subject="backends.preference entry ")})
+  option = config.require_backend_option(cfg, option_id, subject="backends.preference entry ")
+  return option.model_copy(update={"model": models.option_default_model(option, subject="backends.preference entry ")})
 
 
 def select_reviewer_backend(
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     worker_backend: str,
     worker_model: str | None,
     tried_backends: list[str],

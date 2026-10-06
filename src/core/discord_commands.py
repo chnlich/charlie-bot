@@ -17,20 +17,7 @@ endpoint maps onto the response.
 
 from __future__ import annotations
 
-from src.core import discord_listener, thread_entry
-from src.core.config import CharlieBotConfig, get_credentials
-from src.core.discord_client import (
-    DiscordAPIError,
-    DiscordClient,
-    message_content_intent_enabled,
-    missing_permissions,
-    parse_message_link,
-    snowflake_key,
-)
-from src.core.discord_listener import DISCORD, DiscordThreadAdapter, eligible_message
-from src.core.models import DiscordOrigin
-from src.core.sessions import SessionManager
-from src.core.thread_entry import ThreadReplyError
+from src.core import config, discord_client, discord_listener, models, sessions, thread_entry
 
 
 def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str]) -> dict:
@@ -55,7 +42,7 @@ def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str])
   }
 
 
-async def _read_thread_messages(client: DiscordClient, thread_id: str) -> list[dict]:
+async def _read_thread_messages(client: discord_client.DiscordClient, thread_id: str) -> list[dict]:
   """Every message of the thread *thread_id*, oldest first, paged 100 at a time from id "0".
 
   Discord caps one read at 100 messages, so each page continues after the
@@ -68,15 +55,16 @@ async def _read_thread_messages(client: DiscordClient, thread_id: str) -> list[d
   while True:
     try:
       page = await client.get_messages(thread_id, after=after, limit=100)
-    except DiscordAPIError as e:
-      raise ThreadReplyError(502, str(e)) from e
+    except discord_client.DiscordAPIError as e:
+      raise thread_entry.ThreadReplyError(502, str(e)) from e
     messages.extend(page)
     if len(page) < 100:
       return messages
     after = page[-1]["id"]
 
 
-async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
+async def _read_own_thread(
+    session_id: str, limit: int, cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager) -> dict:
   """Read the session's own Discord thread; the unread messages returned are marked read.
 
   The thread's starter rides first, outside the window count, when it lives in
@@ -87,27 +75,27 @@ async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, s
   ``thread_entry.ack_messages``, which advances the watermark; ``more_unread``
   counts the unread left outside the window.
   """
-  meta = await thread_entry.require_thread_session(DISCORD, session_id, session_mgr)
-  origin: DiscordOrigin = meta.discord_origin
+  meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, session_mgr)
+  origin: models.DiscordOrigin = meta.discord_origin
   client = discord_listener._bot_client()
-  adapter = DiscordThreadAdapter(client)
+  adapter = discord_listener.DiscordThreadAdapter(client)
   watermark = meta.discord_watermark_id
   thread_messages = await _read_thread_messages(client, origin.thread_id)
   try:
     starter = await client.get_message(origin.parent_channel_id, origin.thread_id)
-  except DiscordAPIError as e:
+  except discord_client.DiscordAPIError as e:
     if e.status != 404:
-      raise ThreadReplyError(502, str(e)) from e
+      raise thread_entry.ThreadReplyError(502, str(e)) from e
     starter = None
   # One read feeds both the window and the unread flags: a message landing after
   # this fetch is simply not in the readback, never an id the window pick misses.
   unread_ids = {
       m["id"] for m in thread_entry.unread_after(
           thread_messages,
-          eligible=lambda m: eligible_message(m, cfg.discord.allowed_users),
+          eligible=lambda m: discord_listener.eligible_message(m, cfg.discord.allowed_users),
           message_id=lambda m: m["id"],
           watermark=watermark,
-          id_key=snowflake_key)
+          id_key=discord_client.snowflake_key)
   }
   if unread_ids:
     start = next(i for i, m in enumerate(thread_messages) if m["id"] in unread_ids)
@@ -125,7 +113,7 @@ async def _read_own_thread(session_id: str, limit: int, cfg: CharlieBotConfig, s
   return {"messages": messages, "watermark_id": watermark_id, "more_unread": len(unread_ids) - len(window_unread_ids)}
 
 
-async def _read_linked_channel(url: str, limit: int, cfg: CharlieBotConfig) -> dict:
+async def _read_linked_channel(url: str, limit: int, cfg: config.CharlieBotConfig) -> dict:
   """Read the newest *limit* messages of the channel *url* names; nothing is marked read.
 
   A url that is not a discord.com channel link refuses with 422. Discord
@@ -133,16 +121,16 @@ async def _read_linked_channel(url: str, limit: int, cfg: CharlieBotConfig) -> d
   refuses with 404; any other Discord refusal is 502.
   """
   try:
-    _guild_id, channel_id, _message_id = parse_message_link(url)
+    _guild_id, channel_id, _message_id = discord_client.parse_message_link(url)
   except ValueError as e:
-    raise ThreadReplyError(422, str(e)) from e
+    raise thread_entry.ThreadReplyError(422, str(e)) from e
   client = discord_listener._bot_client()
   try:
     newest = await client.get_messages(channel_id, limit=limit)
-  except DiscordAPIError as e:
+  except discord_client.DiscordAPIError as e:
     if e.status in (403, 404):
-      raise ThreadReplyError(404, "the bot cannot see this channel") from e
-    raise ThreadReplyError(502, str(e)) from e
+      raise thread_entry.ThreadReplyError(404, "the bot cannot see this channel") from e
+    raise thread_entry.ThreadReplyError(502, str(e)) from e
   allowed_users = cfg.discord.allowed_users
   return {
       "messages": [_message_view(m, unread=False, allowed_users=allowed_users) for m in newest],
@@ -155,8 +143,8 @@ async def read_thread(
     session_id: str,
     url: str | None,
     limit: int,
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    cfg: config.CharlieBotConfig,
+    session_mgr: sessions.SessionManager,
 ) -> dict:
   """Read one Discord thread server-side and return its messages, oldest first.
 
@@ -177,7 +165,7 @@ async def read_thread(
   return await _read_own_thread(session_id, limit, cfg, session_mgr)
 
 
-async def check_setup(cfg: CharlieBotConfig) -> dict:
+async def check_setup(cfg: config.CharlieBotConfig) -> dict:
   """Report the Discord bot token's setup: identity, intent, and per-guild permissions.
 
   Refuses with 409 when ``credentials.discord.bot_token`` is unset — there is
@@ -187,21 +175,21 @@ async def check_setup(cfg: CharlieBotConfig) -> dict:
   Discord call raises ``ThreadReplyError`` 502 (a 401 means the token is
   invalid). The readback carries no token.
   """
-  if get_credentials().get("discord", "bot_token") is None:
-    raise ThreadReplyError(409, "credentials.discord.bot_token is not set")
+  if config.get_credentials().get("discord", "bot_token") is None:
+    raise thread_entry.ThreadReplyError(409, "credentials.discord.bot_token is not set")
   client = discord_listener._bot_client()
   try:
     user = await client.get_current_user()
     application = await client.get_current_application()
     guilds = await client.list_current_user_guilds()
-  except DiscordAPIError as e:
-    raise ThreadReplyError(502, str(e)) from e
-  intent = message_content_intent_enabled(application["flags"])
+  except discord_client.DiscordAPIError as e:
+    raise thread_entry.ThreadReplyError(502, str(e)) from e
+  intent = discord_client.message_content_intent_enabled(application["flags"])
   guild_views = [
       {
           "id": g["id"],
           "name": g["name"],
-          "missing_permissions": missing_permissions(int(g["permissions"])),
+          "missing_permissions": discord_client.missing_permissions(int(g["permissions"])),
       } for g in guilds
   ]
   return {

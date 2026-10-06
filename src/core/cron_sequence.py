@@ -39,20 +39,13 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
+from src.core import config, control_events, log_once, models, review, runs, task_completion
 from src.core import event_types as ET
-from src.core import review
-from src.core.config import ScheduledTaskConfig, get_scheduled_tasks
-from src.core.control_events import stable_run_id
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
-from src.core.runs import RUN_EVENTS_NAME
-from src.core.task_completion import RUN_REF_PREFIX
 
 if TYPE_CHECKING:
-  from src.core.task_execution import LaunchSettlement
-  from src.core.task_sessions import TaskTreeManager
+  from src.core import task_execution, task_sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 class ScheduledBindingError(RuntimeError):
@@ -75,7 +68,7 @@ def firing_ref_prefix(owner_ref: str) -> tuple[str, str] | None:
   return name, firing
 
 
-def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
+def load_bound_task(task_name: str, cfg: object) -> config.ScheduledTaskConfig | None:
   """The current config of one named scheduled task, or None when unconfigured.
 
   Reads the task's own cron.d file under this instance's home so recovery can
@@ -83,13 +76,11 @@ def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
   """
   import logging
 
-  from src.core.config import _load_cron_file
-
   path = cfg.charliebot_home / "config.d" / "cron.d" / f"{task_name}.yaml"
   if not path.is_file():
     return None
   try:
-    task, _mtimes = _load_cron_file(path, cfg.charlie_bot_repo, task_name)
+    task, _mtimes = config._load_cron_file(path, cfg.charlie_bot_repo, task_name)
   except Exception as exc:
     logging.getLogger(__name__).warning(
         "cron_sequence_task_config_unreadable", task=task_name, path=str(path), error=str(exc))
@@ -97,7 +88,7 @@ def load_bound_task(task_name: str, cfg: object) -> ScheduledTaskConfig | None:
   return task
 
 
-def bound_task_name(session_id: str, tasks: list[ScheduledTaskConfig] | None = None) -> str | None:
+def bound_task_name(session_id: str, tasks: list[config.ScheduledTaskConfig] | None = None) -> str | None:
   """The loaded scheduled task whose ``session_id`` binding names *session_id*.
 
   The one "is this node bound by a task" judgment, derived from the loaded task
@@ -107,7 +98,7 @@ def bound_task_name(session_id: str, tasks: list[ScheduledTaskConfig] | None = N
   that already holds one (the sidebar lists' schedule join) reads a single
   generation; the default loads the current one.
   """
-  for task_cfg in (tasks if tasks is not None else get_scheduled_tasks()):
+  for task_cfg in (tasks if tasks is not None else config.get_scheduled_tasks()):
     if task_cfg.session_id == session_id:
       return task_cfg.name
   return None
@@ -123,27 +114,27 @@ def chain_step_prompt(prompt: str, previous_name: str, previous_result: str) -> 
   return f"{prompt.rstrip()}\n\n## Result of the previous step ({previous_name})\n{previous_result}"
 
 
-def firing_ref(task_cfg: ScheduledTaskConfig, firing: str) -> str:
+def firing_ref(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
   """The durable owner_ref of one firing: task name + the due occurrence."""
   return f"cron:{task_cfg.name}:{firing}"
 
 
-def leaf_request_id(task_cfg: ScheduledTaskConfig, firing: str) -> str:
+def leaf_request_id(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
   return f"{firing_ref(task_cfg, firing)}:leaf"
 
 
-def step_run_request_id(task_cfg: ScheduledTaskConfig, firing: str, position: int) -> str:
+def step_run_request_id(task_cfg: config.ScheduledTaskConfig, firing: str, position: int) -> str:
   return f"{firing_ref(task_cfg, firing)}:step:{position}"
 
 
-def work_run_request_id(task_cfg: ScheduledTaskConfig, firing: str) -> str:
+def work_run_request_id(task_cfg: config.ScheduledTaskConfig, firing: str) -> str:
   return f"{firing_ref(task_cfg, firing)}:work"
 
 
 async def resolve_binding(
-    task_cfg: ScheduledTaskConfig,
-    tree: TaskTreeManager,
-) -> SessionMetadata:
+    task_cfg: config.ScheduledTaskConfig,
+    tree: task_sessions.TaskTreeManager,
+) -> models.SessionMetadata:
   """Load the bound task-tree node; every invalid binding fails loudly.
 
   A bound task never discovers or creates a session: the binding IS the node.
@@ -165,9 +156,9 @@ async def resolve_binding(
 
 
 async def check_fireable_binding(
-    task_cfg: ScheduledTaskConfig,
-    tree: TaskTreeManager,
-) -> SessionMetadata:
+    task_cfg: config.ScheduledTaskConfig,
+    tree: task_sessions.TaskTreeManager,
+) -> models.SessionMetadata:
   """The binding a NEW cron execution may start against.
 
   Closed bound nodes generate no new cron execution (the configuration itself
@@ -193,9 +184,9 @@ async def check_fireable_binding(
 
 
 async def fire_bound_master(
-    task_cfg: ScheduledTaskConfig,
-    meta: SessionMetadata,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    meta: models.SessionMetadata,
+    tree: task_sessions.TaskTreeManager,
     firing: str,
 ) -> dict:
   """Admit one typed scheduled input to the bound manager and dispatch it.
@@ -225,13 +216,13 @@ async def fire_bound_master(
 
 
 async def ensure_firing_leaf(
-    task_cfg: ScheduledTaskConfig,
-    meta: SessionMetadata,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    meta: models.SessionMetadata,
+    tree: task_sessions.TaskTreeManager,
     firing: str,
     goal: str,
-    task_type: TaskType | None = None,
-) -> SessionMetadata:
+    task_type: models.TaskType | None = None,
+) -> models.SessionMetadata:
   """Create (or re-admit) the ONE worker leaf this firing owns.
 
   Stable by (parent, firing): a replayed fire returns the original leaf. The
@@ -246,17 +237,17 @@ async def ensure_firing_leaf(
   session (profile None) parents its firings' leaves in place, exactly as the
   delegation path parents a worker under it.
   """
-  from src.core.task_sessions import TaskInvalidError
+  from src.core import task_sessions
 
   if meta.profile not in ("manager", None):
-    raise TaskInvalidError(
+    raise task_sessions.TaskInvalidError(
         f"scheduled task '{task_cfg.name}' cannot create a worker leaf under "
         f"{meta.id}: the parent is neither a manager nor the task's legacy cron session")
   return await tree.create_task(
       request_id=leaf_request_id(task_cfg, firing),
       task_parent_id=meta.id,
       profile="worker",
-      task=TaskSpec(
+      task=models.TaskSpec(
           goal=goal,
           repo_path=task_cfg.repo,
           base_branch=None,
@@ -269,27 +260,27 @@ async def ensure_firing_leaf(
 
 
 async def register_leaf_run(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     leaf_id: str,
-    task_cfg: ScheduledTaskConfig,
+    task_cfg: config.ScheduledTaskConfig,
     firing: str,
     *,
     kind: str,
     position: int | None,
     backend: str,
     model: str | None,
-) -> RunRecord:
+) -> models.RunRecord:
   """Register the firing's work Run (or one step's scheduled_step Run)."""
   if kind == "work":
     request_id = work_run_request_id(task_cfg, firing)
   else:
     assert position is not None
     request_id = step_run_request_id(task_cfg, firing, position)
-  run_id = stable_run_id(leaf_id, request_id)
+  run_id = control_events.stable_run_id(leaf_id, request_id)
   existing = await tree.runs.get_run(leaf_id, run_id)
   if existing is not None:
     return existing
-  record = RunRecord(
+  record = models.RunRecord(
       id=run_id,
       session_id=leaf_id,
       kind=kind,  # type: ignore[arg-type]
@@ -297,7 +288,7 @@ async def register_leaf_run(
       model=model,
       repo_path=task_cfg.repo,
       sequence_ref=(
-          SequenceRef(kind="cron_steps", owner_ref=firing_ref(task_cfg, firing), position=position)
+          models.SequenceRef(kind="cron_steps", owner_ref=firing_ref(task_cfg, firing), position=position)
           if position is not None else None),
   )
   async with tree.control_lock:
@@ -307,9 +298,9 @@ async def register_leaf_run(
   return fresh
 
 
-async def run_result_text(tree: TaskTreeManager, leaf_id: str, run_id: str) -> str:
+async def run_result_text(tree: task_sessions.TaskTreeManager, leaf_id: str, run_id: str) -> str:
   """One Run's closing words from its translated events log ('' without any)."""
-  events_path = tree.runs.run_dir(leaf_id, run_id) / RUN_EVENTS_NAME
+  events_path = tree.runs.run_dir(leaf_id, run_id) / runs.RUN_EVENTS_NAME
   if not events_path.is_file():
     return ""
   return await asyncio.to_thread(review._worker_summary_from_events_log, events_path)
@@ -321,9 +312,9 @@ async def run_result_text(tree: TaskTreeManager, leaf_id: str, run_id: str) -> s
 
 
 async def run_firing_steps(
-    task_cfg: ScheduledTaskConfig,
-    meta: SessionMetadata,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    meta: models.SessionMetadata,
+    tree: task_sessions.TaskTreeManager,
     firing: str,
     leaf_id: str,
 ) -> None:
@@ -383,7 +374,7 @@ async def run_firing_steps(
           leaf_id,
           run_id=last_run_id,
           summary=summary,
-          result_refs=[f"{RUN_REF_PREFIX}{rid}" for _pos, rid, _n, _b, _r in executed],
+          result_refs=[f"{task_completion.RUN_REF_PREFIX}{rid}" for _pos, rid, _n, _b, _r in executed],
           request_id=f"auto:{firing_ref(task_cfg, firing)}",
       )
       return  # the close delivered the report to the bound manager
@@ -399,10 +390,10 @@ async def run_firing_steps(
 
 
 async def deliver_boundary_report(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     leaf_id: str,
     recipient: str,
-    task_cfg: ScheduledTaskConfig,
+    task_cfg: config.ScheduledTaskConfig,
     firing: str,
     outcome: str,
     summary: str,
@@ -439,7 +430,7 @@ async def deliver_boundary_report(
       created=created)
 
 
-async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
+async def redrive_firing(leaf_id: str, tree: task_sessions.TaskTreeManager, cfg) -> None:
   """Re-drive one firing's chain or boundary from its leaf's durable facts.
 
   The single re-drive entry the startup recovery pass and every scheduled_step
@@ -476,15 +467,15 @@ async def redrive_firing(leaf_id: str, tree: TaskTreeManager, cfg) -> None:
 # ---------------------------------------------------------------------------
 
 
-def effective_backend(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> str:
+def effective_backend(task_cfg: config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str:
   """The task's effective backend id, resolved strictly against the config."""
-  from src.core.scheduler import effective_scheduled_task_backend
-  return effective_scheduled_task_backend(task_cfg, tree._cfg)
+  from src.core import scheduler
+  return scheduler.effective_scheduled_task_backend(task_cfg, tree._cfg)
 
 
 def resolved_backend_option(
-    task_cfg: ScheduledTaskConfig,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    tree: task_sessions.TaskTreeManager,
     backend_id: str | None,
 ):
   """The configured BackendOption one fire's backend id resolves to, strictly."""
@@ -496,20 +487,20 @@ def resolved_backend_option(
 
 
 def resolved_backend_model(
-    task_cfg: ScheduledTaskConfig,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    tree: task_sessions.TaskTreeManager,
     backend_id: str | None,
 ) -> tuple[str, str | None]:
   """(backend, model) for one fire's run: the step's or task's backend, resolved
   strictly to its configured default model (the same resolution the legacy
   scheduled worker spawn rode)."""
-  from src.core.backend_models import option_default_model
+  from src.core import backend_models
 
   option = resolved_backend_option(task_cfg, tree, backend_id)
-  return option.id, option_default_model(option, subject="scheduled task backend ")
+  return option.id, backend_models.option_default_model(option, subject="scheduled task backend ")
 
 
-def distinct_backend_conflict(task_cfg: ScheduledTaskConfig, tree: TaskTreeManager) -> str | None:
+def distinct_backend_conflict(task_cfg: config.ScheduledTaskConfig, tree: task_sessions.TaskTreeManager) -> str | None:
   """The first ``distinct_backend_from`` pair whose resolved (type, model) matches, as a
   report sentence; None when every declared pair stays distinct.
 
@@ -518,7 +509,7 @@ def distinct_backend_conflict(task_cfg: ScheduledTaskConfig, tree: TaskTreeManag
   routing type with its default model — an Antigravity-style backend that picks
   its own model is told apart by type alone.
   """
-  from src.core.backend_models import option_default_model
+  from src.core import backend_models
 
   steps = task_cfg.steps or []
   positions = {step.name: i for i, step in enumerate(steps)}
@@ -528,8 +519,9 @@ def distinct_backend_conflict(task_cfg: ScheduledTaskConfig, tree: TaskTreeManag
     prior = steps[positions[step.distinct_backend_from]]
     option = resolved_backend_option(task_cfg, tree, step.backend or task_cfg.backend)
     prior_option = resolved_backend_option(task_cfg, tree, prior.backend or task_cfg.backend)
-    signature = (option.type, option_default_model(option, subject="scheduled task backend "))
-    prior_signature = (prior_option.type, option_default_model(prior_option, subject="scheduled task backend "))
+    signature = (option.type, backend_models.option_default_model(option, subject="scheduled task backend "))
+    prior_signature = (
+        prior_option.type, backend_models.option_default_model(prior_option, subject="scheduled task backend "))
     if signature == prior_signature:
       backend_note = (
           f"backend '{option.id}'"
@@ -540,26 +532,26 @@ def distinct_backend_conflict(task_cfg: ScheduledTaskConfig, tree: TaskTreeManag
   return None
 
 
-def _adapter_of(tree: TaskTreeManager) -> object:
-  from src.core.task_execution import TaskExecutionAdapter
+def _adapter_of(tree: task_sessions.TaskTreeManager) -> object:
+  from src.core import task_execution
 
   adapter = tree.dispatch.executor
-  if not isinstance(adapter, TaskExecutionAdapter):
+  if not isinstance(adapter, task_execution.TaskExecutionAdapter):
     raise RuntimeError("task execution adapter is not installed; cannot fire a scheduled task")
   return adapter
 
 
-def launch(tree: TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None) -> None:
+def launch(tree: task_sessions.TaskTreeManager, leaf_id: str, run_id: str, prompt: str | None) -> None:
   """The scheduler-owned launch through the shared adapter."""
   _adapter_of(tree).launch(leaf_id, run_id, prompt=prompt)
 
 
 async def launch_and_settle(
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     leaf_id: str,
     run_id: str,
     prompt: str | None,
-) -> LaunchSettlement:
+) -> task_execution.LaunchSettlement:
   """The scheduler-owned launch followed to its settlement (the shared
   launch/wait observation): a durable terminal outcome, or an explicit
   withheld verdict when the launch precondition failed and no process
@@ -568,7 +560,7 @@ async def launch_and_settle(
   return await _adapter_of(tree).launch_and_settle(leaf_id, run_id, prompt=prompt)
 
 
-async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> bool:
+async def step_advanced(tree: task_sessions.TaskTreeManager, leaf_id: str, run_id: str) -> bool:
   """Whether one step's durable record clears the chain's advance gate.
 
   The legacy chain advanced on the process exit code; the v2 record carries
@@ -590,9 +582,9 @@ async def step_advanced(tree: TaskTreeManager, leaf_id: str, run_id: str) -> boo
 
 
 async def reconcile_bound_firings(
-    task_cfg: ScheduledTaskConfig,
-    meta: SessionMetadata,
-    tree: TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    meta: models.SessionMetadata,
+    tree: task_sessions.TaskTreeManager,
     firing: str,
     leaf_id: str,
 ) -> None:
@@ -611,9 +603,9 @@ async def reconcile_bound_firings(
     # follow must not hold this pass. A withheld launch records and reports
     # itself (once, by stable id), and a settled step Run's own finish chain
     # re-drives the frontier, so nothing is owed here after scheduling.
-    from src.core.tasks import create_logged_task
+    from src.core import tasks
 
-    create_logged_task(launch_and_settle(tree, leaf_id, run_id, prompt), name=f"cron-recovered-step-{run_id[:8]}")
+    tasks.create_logged_task(launch_and_settle(tree, leaf_id, run_id, prompt), name=f"cron-recovered-step-{run_id[:8]}")
 
   if tree.task_state(leaf_id) != "open":
     return
@@ -622,7 +614,7 @@ async def reconcile_bound_firings(
     return  # single-prompt firings ride the ordinary work-Run delivery chain
   records = tree.runs.list_run_records_sync(leaf_id)
   events = tree.runs.load_events_sync(leaf_id)
-  by_position: dict[int, RunRecord] = {}
+  by_position: dict[int, models.RunRecord] = {}
   for run in records:
     if run.sequence_ref is not None and run.sequence_ref.kind == "cron_steps":
       by_position[run.sequence_ref.position] = run
@@ -696,14 +688,14 @@ async def reconcile_bound_firings(
 
 
 async def run_firing_steps_boundary_report(
-    tree: TaskTreeManager,
-    task_cfg: ScheduledTaskConfig,
-    meta: SessionMetadata,
+    tree: task_sessions.TaskTreeManager,
+    task_cfg: config.ScheduledTaskConfig,
+    meta: models.SessionMetadata,
     firing: str,
     leaf_id: str,
 ) -> None:
   """The successful boundary's close (which delivers the one report)."""
-  from src.core.task_sessions import TaskConflictError
+  from src.core import task_sessions
 
   records = tree.runs.list_run_records_sync(leaf_id)
   events = tree.runs.load_events_sync(leaf_id)
@@ -737,10 +729,10 @@ async def run_firing_steps_boundary_report(
         leaf_id,
         run_id=chain[-1].id,
         summary=summary,
-        result_refs=[f"{RUN_REF_PREFIX}{r.id}" for r in chain],
+        result_refs=[f"{task_completion.RUN_REF_PREFIX}{r.id}" for r in chain],
         request_id=f"auto:{firing_ref(task_cfg, firing)}",
     )
-  except TaskConflictError as e:
+  except task_sessions.TaskConflictError as e:
     blockers = list(getattr(e, "blockers", None) or [])
     if any("no longer open" in str(b) for b in blockers):
       # A concurrent owner landed this close and delivered the completed

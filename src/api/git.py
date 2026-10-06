@@ -2,20 +2,18 @@
 
 import asyncio
 import os
+import pathlib
 import subprocess
-from pathlib import Path
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import fastapi
 
-from src.api.deps import get_config_on_loop
-from src.core.config import CharlieBotConfig
-from src.core.memo import BoundedMemo
-from src.core.timeouts import SUBPROCESS_GIT_DIFF_TIMEOUT, SUBPROCESS_GIT_READ_TIMEOUT
+from src.api import deps
+from src.core import config, memo, timeouts
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
-# Shared Query descriptions: the routes exposing the same parameter must carry
+# Shared fastapi.Query descriptions: the routes exposing the same parameter must carry
 # word-identical OpenAPI metadata, so each description has one copy here.
 _REPO_QUERY_DESC = "Full path to git repo"
 _BASE_REF_QUERY_DESC = "Base ref"
@@ -44,7 +42,7 @@ _ManifestKey = tuple[str, str, str, str, tuple[int, int] | None]
 # (every /diff refresh until a branch moves) re-runs zero git diff
 # subprocesses. Served rows are shared across responses, the no-defensive-copy
 # idiom of the sibling memos.
-_diff_files_memo: BoundedMemo[_ManifestKey, tuple[list[dict], int, int]] = BoundedMemo(_DIFF_FILES_MEMO_LIMIT)
+_diff_files_memo: memo.BoundedMemo[_ManifestKey, tuple[list[dict], int, int]] = memo.BoundedMemo(_DIFF_FILES_MEMO_LIMIT)
 
 # Bound on _diff_file_memo in per-file bodies: a review pass expands files one
 # at a time across the branch pairs open in tabs, and an evicted entry simply
@@ -57,7 +55,7 @@ _DIFF_FILE_MEMO_LIMIT = 64
 # ref pair re-run zero git diff subprocesses.
 _FileDiffKey = tuple[str, str, str, str, tuple[int, int] | None, tuple[str, ...]]
 
-_diff_file_memo: BoundedMemo[_FileDiffKey, str] = BoundedMemo(_DIFF_FILE_MEMO_LIMIT)
+_diff_file_memo: memo.BoundedMemo[_FileDiffKey, str] = memo.BoundedMemo(_DIFF_FILE_MEMO_LIMIT)
 
 # Signature of every file that feeds `git rev-parse` ref resolution: the git
 # dir's top-level files (HEAD, ORIG_HEAD, FETCH_HEAD, ...), packed-refs, and the
@@ -73,7 +71,7 @@ _RefResolveKey = tuple[str, tuple[str, ...], _RefSignature]
 
 _REF_RESOLVE_MEMO_LIMIT = 64
 
-_ref_resolution_memo: BoundedMemo[_RefResolveKey, tuple[str, ...]] = BoundedMemo(_REF_RESOLVE_MEMO_LIMIT)
+_ref_resolution_memo: memo.BoundedMemo[_RefResolveKey, tuple[str, ...]] = memo.BoundedMemo(_REF_RESOLVE_MEMO_LIMIT)
 
 # Bound on _branch_list_memo: one entry per repo the /diff branch picker has
 # served, and an evicted entry re-runs one `git branch -a`.
@@ -85,10 +83,10 @@ _BRANCH_LIST_MEMO_LIMIT = 8
 # unchanged signature proves the listing current.
 _BranchListKey = tuple[str, _RefSignature]
 
-_branch_list_memo: BoundedMemo[_BranchListKey, tuple[str, ...]] = BoundedMemo(_BRANCH_LIST_MEMO_LIMIT)
+_branch_list_memo: memo.BoundedMemo[_BranchListKey, tuple[str, ...]] = memo.BoundedMemo(_BRANCH_LIST_MEMO_LIMIT)
 
 
-def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
+def _attributes_signature(repo_path: pathlib.Path) -> tuple[int, int] | None:
   """Return (mtime_ns, size) of the repo's .gitattributes, or None when it has none."""
   try:
     st = (repo_path / ".gitattributes").stat()
@@ -105,20 +103,20 @@ def _attributes_signature(repo_path: Path) -> tuple[int, int] | None:
 _NOT_A_GIT_REPO_DETAIL = "Not a git repo: {}"
 
 
-def _resolve_repo_under_workspace(repo: str, cfg: CharlieBotConfig) -> Path:
-  """Validate repo path and return resolved Path; raise HTTPException(400) otherwise.
+def _resolve_repo_under_workspace(repo: str, cfg: config.CharlieBotConfig) -> pathlib.Path:
+  """Validate repo path and return resolved pathlib.Path; raise fastapi.HTTPException(400) otherwise.
 
   Besides the ``paths.workspace_dirs`` roots, the one extra repo outside them
   is the memory store (``cfg.memory_dir``): its PR flow serves its proposal
   diff through this same /diff page.
   """
-  repo_path = Path(repo).expanduser().resolve()
+  repo_path = pathlib.Path(repo).expanduser().resolve()
   if not (repo_path / ".git").exists():
-    raise HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
-  allowed_roots = [Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
+    raise fastapi.HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
+  allowed_roots = [pathlib.Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
   allowed_roots.append(cfg.memory_dir.resolve())
   if not any(repo_path.is_relative_to(root) for root in allowed_roots):
-    raise HTTPException(
+    raise fastapi.HTTPException(
         status_code=400, detail="repo must be under configured paths.workspace_dirs or the memory store")
   return repo_path
 
@@ -128,8 +126,8 @@ def _range_spec(base: str, head: str, mode: str) -> str:
   return f"{base}...{head}" if mode == "three-dot" else f"{base}..{head}"
 
 
-def _run_git_sync(repo_path: Path, args: list[str], timeout: float, failure_detail: str) -> str:
-  """Run `git <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
+def _run_git_sync(repo_path: pathlib.Path, args: list[str], timeout: float, failure_detail: str) -> str:
+  """Run `git <args>` in repo_path and return stdout; raise fastapi.HTTPException(500) on failure."""
   result = subprocess.run(
       ["git", *args],
       cwd=repo_path,
@@ -139,30 +137,30 @@ def _run_git_sync(repo_path: Path, args: list[str], timeout: float, failure_deta
       timeout=timeout,
   )
   if result.returncode != 0:
-    raise HTTPException(status_code=500, detail=result.stderr.strip() or failure_detail)
+    raise fastapi.HTTPException(status_code=500, detail=result.stderr.strip() or failure_detail)
   return result.stdout
 
 
-def _run_git_diff_sync(repo_path: Path, args: list[str]) -> str:
-  """Run `git diff <args>` in repo_path and return stdout; raise HTTPException(500) on failure."""
-  return _run_git_sync(repo_path, ["diff", *args], SUBPROCESS_GIT_DIFF_TIMEOUT, "git diff failed")
+def _run_git_diff_sync(repo_path: pathlib.Path, args: list[str]) -> str:
+  """Run `git diff <args>` in repo_path and return stdout; raise fastapi.HTTPException(500) on failure."""
+  return _run_git_sync(repo_path, ["diff", *args], timeouts.SUBPROCESS_GIT_DIFF_TIMEOUT, "git diff failed")
 
 
-async def _run_git_diff(repo_path: Path, args: list[str]) -> str:
+async def _run_git_diff(repo_path: pathlib.Path, args: list[str]) -> str:
   """Async front for the blocking diff; a subprocess that may hold for
-  SUBPROCESS_GIT_DIFF_TIMEOUT seconds stays off the event loop."""
+  timeouts.SUBPROCESS_GIT_DIFF_TIMEOUT seconds stays off the event loop."""
   return await asyncio.to_thread(_run_git_diff_sync, repo_path, args)
 
 
-def _resolve_commits_sync(repo_path: Path, refs: list[str]) -> list[str]:
+def _resolve_commits_sync(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
   """Resolve each git ref to its full commit SHA, in order, in one rev-parse call."""
   stdout = _run_git_sync(
-      repo_path, ["rev-parse", *[f"{ref}^{{commit}}" for ref in refs]], SUBPROCESS_GIT_READ_TIMEOUT,
+      repo_path, ["rev-parse", *[f"{ref}^{{commit}}" for ref in refs]], timeouts.SUBPROCESS_GIT_READ_TIMEOUT,
       "git rev-parse failed")
   return stdout.split()
 
 
-def _git_dirs(repo_path: Path) -> tuple[Path, Path]:
+def _git_dirs(repo_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
   """Return (git_dir, common_dir), following worktree .git files and commondir links.
 
   A linked worktree's .git is a file pointing at its per-worktree git dir; the
@@ -174,7 +172,7 @@ def _git_dirs(repo_path: Path) -> tuple[Path, Path]:
     line = dot_git.read_text(encoding="utf-8").strip()
     if not line.startswith("gitdir:"):
       raise ValueError(f"unreadable .git file: {dot_git}")
-    git_dir = Path(line[len("gitdir:"):].strip())
+    git_dir = pathlib.Path(line[len("gitdir:"):].strip())
     if not git_dir.is_absolute():
       git_dir = (repo_path / git_dir).resolve()
   else:
@@ -184,13 +182,13 @@ def _git_dirs(repo_path: Path) -> tuple[Path, Path]:
     rel = (git_dir / "commondir").read_text(encoding="utf-8").strip()
   except OSError:
     return git_dir, common_dir
-  common_dir = Path(rel)
+  common_dir = pathlib.Path(rel)
   if not common_dir.is_absolute():
     common_dir = (git_dir / rel).resolve()
   return git_dir, common_dir
 
 
-def _stat_or_skip(path: Path, sig: list[tuple[str, int, int]]) -> None:
+def _stat_or_skip(path: pathlib.Path, sig: list[tuple[str, int, int]]) -> None:
   """Append (path, mtime_ns, size) to sig when path exists."""
   try:
     st = path.stat()
@@ -199,7 +197,7 @@ def _stat_or_skip(path: Path, sig: list[tuple[str, int, int]]) -> None:
   sig.append((str(path), st.st_mtime_ns, st.st_size))
 
 
-def _walk_refs_dirs(root: Path, sig: list[tuple[str, int, int]]) -> None:
+def _walk_refs_dirs(root: pathlib.Path, sig: list[tuple[str, int, int]]) -> None:
   """Append (path, mtime_ns, size) for root and every directory under it.
 
   Git publishes every ref mutation through a lockfile rename into the containing
@@ -222,10 +220,10 @@ def _walk_refs_dirs(root: Path, sig: list[tuple[str, int, int]]) -> None:
       entries = list(os.scandir(current))
     except OSError:
       continue
-    stack.extend(Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False))
+    stack.extend(pathlib.Path(entry.path) for entry in entries if entry.is_dir(follow_symlinks=False))
 
 
-def _refs_signature(repo_path: Path) -> _RefSignature:
+def _refs_signature(repo_path: pathlib.Path) -> _RefSignature:
   """Stat-only signature of every file that feeds rev-parse ref resolution.
 
   Covers the git dir's top-level pseudo-refs (HEAD, ORIG_HEAD, FETCH_HEAD, ...),
@@ -259,7 +257,7 @@ def _refs_signature(repo_path: Path) -> _RefSignature:
   return tuple(sorted(sig))
 
 
-def _resolve_commits_memoized_sync(repo_path: Path, refs: list[str]) -> list[str]:
+def _resolve_commits_memoized_sync(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
   """Return the refs' SHAs, re-running the rev-parse subprocess only when the
   repo's ref state has moved since the last resolution of the same pair."""
   signature = _refs_signature(repo_path)
@@ -271,7 +269,7 @@ def _resolve_commits_memoized_sync(repo_path: Path, refs: list[str]) -> list[str
   return list(memoized)
 
 
-async def _resolve_commits_memoized(repo_path: Path, refs: list[str]) -> list[str]:
+async def _resolve_commits_memoized(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
   """Async front for the memoized blocking resolution; the signature walk and
   any rev-parse subprocess stay off the event loop in one thread hop."""
   return await asyncio.to_thread(_resolve_commits_memoized_sync, repo_path, refs)
@@ -332,17 +330,17 @@ def _parse_name_status_z(output: str) -> dict[str, str]:
   return status_by_path
 
 
-def _list_branches_sync(repo_path: Path) -> str:
-  """Run `git branch -a` in repo_path and return stdout; raise HTTPException(500) on failure."""
+def _list_branches_sync(repo_path: pathlib.Path) -> str:
+  """Run `git branch -a` in repo_path and return stdout; raise fastapi.HTTPException(500) on failure."""
   return _run_git_sync(
       repo_path,
       ["branch", "-a", "--sort=-committerdate", "--format=%(refname:short)"],
-      SUBPROCESS_GIT_READ_TIMEOUT,
+      timeouts.SUBPROCESS_GIT_READ_TIMEOUT,
       "git branch failed",
   )
 
 
-def _list_branches_memoized_sync(repo_path: Path) -> list[str]:
+def _list_branches_memoized_sync(repo_path: pathlib.Path) -> list[str]:
   """Return the branch listing's lines, re-running the subprocess only when the
   repo's ref state has moved since the last listing."""
   signature = _refs_signature(repo_path)
@@ -355,11 +353,11 @@ def _list_branches_memoized_sync(repo_path: Path) -> list[str]:
 
 
 @router.get("/branches")
-async def list_branches(repo: str = Query(..., description=_REPO_QUERY_DESC)) -> list[str]:
+async def list_branches(repo: str = fastapi.Query(..., description=_REPO_QUERY_DESC)) -> list[str]:
   """Return branch names for a repo, most recent first, up to 50."""
-  repo_path = Path(repo).expanduser()
+  repo_path = pathlib.Path(repo).expanduser()
   if not (repo_path / ".git").exists() and not repo_path.name == ".git":
-    raise HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
+    raise fastapi.HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
   # The endpoint deliberately accepts a path that IS a .git dir (git resolves the
   # repo from cwd); the signature walk reads <repo>/.git, so normalize to the
   # parent — same repo, same listing, one memo key.
@@ -383,7 +381,7 @@ async def list_branches(repo: str = Query(..., description=_REPO_QUERY_DESC)) ->
 
 
 @router.get("/repos")
-async def list_repos(cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> list[dict[str, str]]:
+async def list_repos(cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop)) -> list[dict[str, str]]:
   """Return the discovered repos as {"label", "path"} for the diff page's datalist."""
   repos = await asyncio.to_thread(cfg.discover_repos)
   return [{"label": repo["name"], "path": repo["path"]} for repo in repos]
@@ -391,11 +389,11 @@ async def list_repos(cfg: CharlieBotConfig = Depends(get_config_on_loop)) -> lis
 
 @router.get("/diff/files")
 async def diff_files(
-    repo: str = Query(..., description=_REPO_QUERY_DESC),
-    base: str = Query(..., description=_BASE_REF_QUERY_DESC),
-    head: str = Query(..., description=_HEAD_REF_QUERY_DESC),
-    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    repo: str = fastapi.Query(..., description=_REPO_QUERY_DESC),
+    base: str = fastapi.Query(..., description=_BASE_REF_QUERY_DESC),
+    head: str = fastapi.Query(..., description=_HEAD_REF_QUERY_DESC),
+    mode: Literal["three-dot", "two-dot"] = fastapi.Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Return a cheap per-file manifest (status + line counts) for the diff range.
 
@@ -452,15 +450,15 @@ async def diff_files(
 
 @router.get("/diff/file")
 async def diff_file(
-    repo: str = Query(..., description=_REPO_QUERY_DESC),
-    base: str = Query(..., description=_BASE_REF_QUERY_DESC),
-    head: str = Query(..., description=_HEAD_REF_QUERY_DESC),
-    mode: Literal["three-dot", "two-dot"] = Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
-    path: str = Query(..., description="Repo-relative path of the file to diff"),
-    old_path: str | None = Query(
+    repo: str = fastapi.Query(..., description=_REPO_QUERY_DESC),
+    base: str = fastapi.Query(..., description=_BASE_REF_QUERY_DESC),
+    head: str = fastapi.Query(..., description=_HEAD_REF_QUERY_DESC),
+    mode: Literal["three-dot", "two-dot"] = fastapi.Query("three-dot", description=_DIFF_MODE_QUERY_DESC),
+    path: str = fastapi.Query(..., description="Repo-relative path of the file to diff"),
+    old_path: str | None = fastapi.Query(
         None, description="Pre-rename path; pass alongside path so a rename/copy renders as a rename, not a re-add"),
-    force: bool = Query(default=False, description="Render even if the diff exceeds the per-file cap"),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    force: bool = fastapi.Query(default=False, description="Render even if the diff exceeds the per-file cap"),
+    cfg: config.CharlieBotConfig = fastapi.Depends(deps.get_config_on_loop),
 ) -> dict:
   """Return the unified diff for a single file.
 

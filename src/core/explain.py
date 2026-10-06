@@ -16,33 +16,26 @@ into any context pipeline.
 """
 
 import asyncio
+import datetime
 import os
+import pathlib
 import shutil
 import tempfile
-from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import structlog
 
-from src.agents.backends.deferred_build import load_build_backend
-from src.api.message_utils import events_to_messages
-from src.core.config import CharlieBotConfig
-from src.core.deferred import deferred_module_getattr
-from src.core.json_utils import load_json_dict, write_json_atomically
-from src.core.models import BackendOption, utc_now, utc_now_iso
-from src.core.sessions import SessionManager
-from src.core.streaming import session_channel, streaming_manager
-from src.core.tasks import create_logged_task
-from src.core.timeouts import EXPLAIN_ONESHOT_TIMEOUT
+from src.agents.backends import deferred_build
+from src.api import message_utils
+from src.core import config, deferred, json_utils, models, sessions, streaming, tasks, timeouts
 
 log = structlog.get_logger()
 
 
 def __getattr__(name: str) -> Any:
   if name == "base_one_shot_text":
-    return deferred_module_getattr(name, __name__, globals(), "base_one_shot_text", _load_base_one_shot_text)
-  return deferred_module_getattr(name, __name__, globals(), "build_backend", load_build_backend)
+    return deferred.deferred_module_getattr(name, __name__, globals(), "base_one_shot_text", _load_base_one_shot_text)
+  return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
 
 
 def _load_base_one_shot_text(namespace: dict[str, Any]) -> Any:
@@ -56,9 +49,9 @@ def _load_base_one_shot_text(namespace: dict[str, Any]) -> Any:
   bound = namespace.get("base_one_shot_text")
   if bound is not None:
     return bound
-  from src.agents.backends.base import AgentBackend
-  namespace["base_one_shot_text"] = AgentBackend.one_shot_text
-  return AgentBackend.one_shot_text
+  from src.agents.backends import base
+  namespace["base_one_shot_text"] = base.AgentBackend.one_shot_text
+  return base.AgentBackend.one_shot_text
 
 
 _NO_ROUND_TEXT_ERROR = "This round has no explainable answer text."
@@ -92,27 +85,27 @@ _register_lock = asyncio.Lock()
 _tasks: dict[tuple[str, int], asyncio.Task] = {}
 
 
-def results_path(session_mgr: SessionManager, session_id: str) -> Path:
+def results_path(session_mgr: sessions.SessionManager, session_id: str) -> pathlib.Path:
   """Per-session explain cache, sitting next to chat_events.jsonl."""
   return session_mgr.get_chat_events_path(session_id).parent / "explain_results.json"
 
 
-def _write_entry(session_mgr: SessionManager, session_id: str, upto: int, entry: dict) -> None:
+def _write_entry(session_mgr: sessions.SessionManager, session_id: str, upto: int, entry: dict) -> None:
   path = results_path(session_mgr, session_id)
-  results = load_json_dict(path)
+  results = json_utils.load_json_dict(path)
   results[str(upto)] = entry
   # Readers parse this file from executor threads with no coordination against this
   # write; the swap keeps every read on one complete document (recap's cache rule).
-  write_json_atomically(path, results, indent=2)
+  json_utils.write_json_atomically(path, results, indent=2)
 
 
 def _is_stale(entry: dict) -> bool:
   """True when a pending entry's own request has outlived the one-shot budget."""
-  requested = datetime.fromisoformat(entry["requested_at"])
-  return utc_now() - requested > timedelta(seconds=EXPLAIN_ONESHOT_TIMEOUT)
+  requested = datetime.datetime.fromisoformat(entry["requested_at"])
+  return models.utc_now() - requested > datetime.timedelta(seconds=timeouts.EXPLAIN_ONESHOT_TIMEOUT)
 
 
-def _reap_stale_pending(session_mgr: SessionManager, session_id: str, upto: int, entry: dict) -> dict:
+def _reap_stale_pending(session_mgr: sessions.SessionManager, session_id: str, upto: int, entry: dict) -> dict:
   """Land a pending entry the registry can no longer account for as an error, lazily.
 
   The memory-only registry dies with the process, so a server restart strands any
@@ -120,7 +113,7 @@ def _reap_stale_pending(session_mgr: SessionManager, session_id: str, upto: int,
   and persists this error instead of waiting on a generation that no longer exists.
   No startup hook: reaping happens only where a read actually touches the entry.
   """
-  reaped = {**entry, "state": "error", "error": _REAPED_ERROR, "generated_at": utc_now_iso()}
+  reaped = {**entry, "state": "error", "error": _REAPED_ERROR, "generated_at": models.utc_now_iso()}
   _write_entry(session_mgr, session_id, upto, reaped)
   log.warning("explain_pending_reaped", session_id=session_id, upto=upto)
   return reaped
@@ -132,7 +125,7 @@ def _pending_entry(backend_id: str) -> dict:
       "backend": backend_id,
       "answer": "",
       "error": None,
-      "requested_at": utc_now_iso(),
+      "requested_at": models.utc_now_iso(),
       "generated_at": None,
   }
 
@@ -144,24 +137,24 @@ def _terminal_entry(backend_id: str, requested_at: str, *, state: str, answer: s
       "answer": answer,
       "error": error,
       "requested_at": requested_at,
-      "generated_at": utc_now_iso(),
+      "generated_at": models.utc_now_iso(),
   }
 
 
-def extract_round_text(session_mgr: SessionManager, session_id: str, upto: int) -> str | None:
+def extract_round_text(session_mgr: sessions.SessionManager, session_id: str, upto: int) -> str | None:
   """The last assistant text over the global event range [0, upto+1) — the round the divider closes.
 
   The recap pipeline's path (``load_chat_events_range`` + ``events_to_messages``); ``None``
   when the range holds no assistant text at all (e.g. a pure tool round).
   """
   events, _ = session_mgr.load_chat_events_range(session_id, 0, upto + 1)
-  for msg in reversed(events_to_messages(events)):
+  for msg in reversed(message_utils.events_to_messages(events)):
     if msg.get("role") == "assistant" and (msg.get("content") or "").strip():
       return msg["content"]
   return None
 
 
-def _make_ro_copy(session_mgr: SessionManager, session_id: str) -> Path:
+def _make_ro_copy(session_mgr: sessions.SessionManager, session_id: str) -> pathlib.Path:
   """Copy chat_events.jsonl into a one-off temp dir, chmod 0444, and return the copy's path.
 
   The agent-run's write tools are reachable under skip-permissions, so "read the history,
@@ -169,7 +162,7 @@ def _make_ro_copy(session_mgr: SessionManager, session_id: str) -> Path:
   only this copy's path, and the real chat_events.jsonl path never enters any prompt.
   """
   real_path = session_mgr.get_chat_events_path(session_id)
-  tmp_dir = Path(tempfile.mkdtemp(prefix="charliebot-explain-"))
+  tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="charliebot-explain-"))
   copy_path = tmp_dir / real_path.name
   shutil.copyfile(real_path, copy_path)
   os.chmod(copy_path, 0o444)
@@ -178,8 +171,8 @@ def _make_ro_copy(session_mgr: SessionManager, session_id: str) -> Path:
 
 async def _broadcast_status(session_id: str, upto: int, state: str, backend_id: str) -> None:
   """One session-channel frame naming the divider's new state; the body never rides the frame."""
-  await streaming_manager.broadcast(
-      session_channel(session_id),
+  await streaming.streaming_manager.broadcast(
+      streaming.session_channel(session_id),
       {
           "type": "explain_status",
           "upto": upto,
@@ -190,7 +183,7 @@ async def _broadcast_status(session_id: str, upto: int, state: str, backend_id: 
 
 
 async def _finish(
-    session_mgr: SessionManager,
+    session_mgr: sessions.SessionManager,
     session_id: str,
     upto: int,
     backend_id: str,
@@ -208,8 +201,8 @@ async def _finish(
 
 
 async def _generate(
-    session_mgr: SessionManager, session_id: str, upto: int, option: BackendOption, cfg: CharlieBotConfig,
-    requested_at: str) -> None:
+    session_mgr: sessions.SessionManager, session_id: str, upto: int, option: models.BackendOption,
+    cfg: config.CharlieBotConfig, requested_at: str) -> None:
   """One explain generation: extract, hand over the read-only history copy, one-shot, land the entry."""
   backend_id = option.id
   try:
@@ -220,14 +213,14 @@ async def _generate(
     copy_path = await asyncio.to_thread(_make_ro_copy, session_mgr, session_id)
     try:
       prompt = _EXPLAIN_USER_PROMPT.format(upto=upto, round_text=round_text, history_path=copy_path)
-      backend = load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
+      backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_id)
       # Trade-off 1 (unified agent-run): call the BASE one_shot_text on the instance,
       # never the subclass's CLI-native override — the claude/codex/opencode overrides
       # run print-mode CLIs with Read denied, which cannot follow the read-only
       # history copy the prompt hands over, and the plan holds every configured
       # backend to the identical agent-run channel.
       answer = await _load_base_one_shot_text(globals())(
-          backend, prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=EXPLAIN_ONESHOT_TIMEOUT)
+          backend, prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=timeouts.EXPLAIN_ONESHOT_TIMEOUT)
     finally:
       await asyncio.to_thread(shutil.rmtree, copy_path.parent, ignore_errors=True)
     if not answer:
@@ -242,11 +235,11 @@ async def _generate(
 
 
 async def request_explain(
-    session_mgr: SessionManager,
+    session_mgr: sessions.SessionManager,
     session_id: str,
     upto: int,
-    option: BackendOption,
-    cfg: CharlieBotConfig,
+    option: models.BackendOption,
+    cfg: config.CharlieBotConfig,
 ) -> tuple[dict, bool]:
   """Register (or return) the explain task for one divider; returns ``(entry, created)``.
 
@@ -256,7 +249,7 @@ async def request_explain(
   generation; a stale one is reaped first, which frees the divider for this re-run.
   """
   async with _register_lock:
-    results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
+    results = await asyncio.to_thread(json_utils.load_json_dict, results_path(session_mgr, session_id))
     entry = results.get(str(upto))
     if entry is not None and entry.get("state") == "pending":
       if not _is_stale(entry):
@@ -265,7 +258,7 @@ async def request_explain(
     fresh = _pending_entry(option.id)
     await asyncio.to_thread(_write_entry, session_mgr, session_id, upto, fresh)
     key = (session_id, upto)
-    task = create_logged_task(
+    task = tasks.create_logged_task(
         _generate(session_mgr, session_id, upto, option, cfg, fresh["requested_at"]),
         name=f"explain:{session_id}:{upto}")
     _tasks[key] = task
@@ -273,9 +266,9 @@ async def request_explain(
     return dict(fresh), True
 
 
-async def get_explain_entry(session_mgr: SessionManager, session_id: str, upto: int) -> dict | None:
+async def get_explain_entry(session_mgr: sessions.SessionManager, session_id: str, upto: int) -> dict | None:
   """The single entry for one divider (answer/error included), reaping a stale pending on the way."""
-  results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
+  results = await asyncio.to_thread(json_utils.load_json_dict, results_path(session_mgr, session_id))
   entry = results.get(str(upto))
   if entry is None:
     return None
@@ -284,13 +277,13 @@ async def get_explain_entry(session_mgr: SessionManager, session_id: str, upto: 
   return dict(entry)
 
 
-async def explain_status(session_mgr: SessionManager, session_id: str) -> dict:
+async def explain_status(session_mgr: sessions.SessionManager, session_id: str) -> dict:
   """Every entry's ``{upto: {state, backend, generated_at}}`` summary; bodies excluded.
 
   The session page pulls this once per load/switch to render each divider's button
   from persisted truth; a stale pending met here is reaped like any other read.
   """
-  results = await asyncio.to_thread(load_json_dict, results_path(session_mgr, session_id))
+  results = await asyncio.to_thread(json_utils.load_json_dict, results_path(session_mgr, session_id))
   summary: dict[str, dict] = {}
   for key, entry in results.items():
     if entry.get("state") == "pending" and _is_stale(entry):

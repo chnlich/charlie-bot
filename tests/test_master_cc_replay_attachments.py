@@ -8,7 +8,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents import master_cc, master_cc_queue
+from src.agents import master_cc_queue
 from src.core import config, models
 from src.core import event_types as ET
 
@@ -23,7 +23,7 @@ async def test_run_message_passes_uploaded_files_to_backend(
 
   async def drive(
       cfg: config.CharlieBotConfig, meta: models.SessionMetadata, callbacks: models.SessionCallbacks) -> None:
-    await master_cc.run_message(cfg, meta, "what is in this picture", callbacks, ET.USER, uploaded_files=_FILES)
+    await master_cc_queue.run_message(cfg, meta, "what is in this picture", callbacks, ET.USER, uploaded_files=_FILES)
 
   backend = conftest.CapturingBackend()
   await conftest.run_captured_round(
@@ -44,7 +44,7 @@ async def test_replay_passes_uploaded_files_from_persisted_event_to_backend(
   async def drive(
       cfg: config.CharlieBotConfig, meta: models.SessionMetadata, callbacks: models.SessionCallbacks) -> None:
     user_event = {"id": "u1", "type": "user", "content": "what is in this picture", "uploaded_files": _FILES}
-    await master_cc.replay_user_message(cfg, meta, user_event, callbacks)
+    await master_cc_queue.replay_user_message(cfg, meta, user_event, callbacks)
 
   backend = conftest.CapturingBackend()
   await conftest.run_captured_round(

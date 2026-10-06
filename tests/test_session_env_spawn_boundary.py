@@ -91,7 +91,7 @@ async def test_master_child_environment_carries_its_own_session_id(
   patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, models.SessionMetadata(id="live-session", name="Live"), cfg.backends.options[0])
-  await master_cc._run_cc(item)
+  await master_cc.master_cc_run._run_cc(item)
 
   assert _read_env_dump(dump)[SESSION_ID_ENV_VAR] == "live-session"
 

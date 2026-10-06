@@ -12,13 +12,13 @@ persisted shape against that manifest and rebuilds only on a mismatch):
     python tests/backup_corpus_builder.py
 """
 
+import datetime
 import json
+import pathlib
 import shutil
 import uuid
-from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
-HOME = Path("/tmp/opencode/m112/home")
+HOME = pathlib.Path("/tmp/opencode/m112/home")
 # The build's receipt lives outside HOME so the measured corpus stays exactly the
 # builder's output: the M112 collector prices the corpus by a plain file walk, and
 # a manifest inside HOME would join it and move every reading.
@@ -89,15 +89,15 @@ def _event_line(i: int, ts: str, session_id: str) -> str:
   return json.dumps(event, separators=(",", ":"))
 
 
-def _write_lines(path: Path, target_bytes: int, session_id: str) -> int:
-  base = datetime(2026, 9, 1, 8, 0, 0, tzinfo=timezone.utc)
+def _write_lines(path: pathlib.Path, target_bytes: int, session_id: str) -> int:
+  base = datetime.datetime(2026, 9, 1, 8, 0, 0, tzinfo=datetime.timezone.utc)
   size = 0
   i = 0
   with open(path, "w", encoding="utf-8") as stream:
     while size < target_bytes:
       lines = []
       for _ in range(500):
-        lines.append(_event_line(i, (base + timedelta(seconds=i)).isoformat(), session_id))
+        lines.append(_event_line(i, (base + datetime.timedelta(seconds=i)).isoformat(), session_id))
         i += 1
       chunk = "\n".join(lines) + "\n"
       stream.write(chunk)
@@ -105,7 +105,7 @@ def _write_lines(path: Path, target_bytes: int, session_id: str) -> int:
   return i
 
 
-def _corpus_shape(home: Path) -> tuple[int, int]:
+def _corpus_shape(home: pathlib.Path) -> tuple[int, int]:
   files = [p for p in home.rglob("*") if p.is_file()]
   return len(files), sum(p.stat().st_size for p in files)
 

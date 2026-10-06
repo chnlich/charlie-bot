@@ -17,15 +17,15 @@ while no venv interpreter is left on PATH.
 """
 
 import os
+import pathlib
 import sys
 from collections.abc import Mapping
-from pathlib import Path
 
-from src.agents.backends.base import prepend_path_dir
+from src.agents.backends import base
 
 # This file sits at src/core/, so the shims are the sibling agent_entry_points/
 # directory - derived from the module location, never a host path literal.
-ENTRY_POINT_DIR = Path(__file__).resolve().parent / "agent_entry_points"
+ENTRY_POINT_DIR = pathlib.Path(__file__).resolve().parent / "agent_entry_points"
 
 VENV_BIN_ENV_VAR = "CHARLIEBOT_VENV_BIN"
 
@@ -33,7 +33,7 @@ VENV_BIN_ENV_VAR = "CHARLIEBOT_VENV_BIN"
 _ACTIVATION_VARS = ("VIRTUAL_ENV", "UV_RUN_RECURSION_DEPTH")
 
 
-def agent_environment(env: Mapping[str, str], venv_bin: Path) -> dict[str, str]:
+def agent_environment(env: Mapping[str, str], venv_bin: pathlib.Path) -> dict[str, str]:
   """Return a copy of *env* without the activation of the venv whose bin is *venv_bin*.
 
   The activation variables are dropped, and so is every PATH entry resolving to
@@ -45,7 +45,7 @@ def agent_environment(env: Mapping[str, str], venv_bin: Path) -> dict[str, str]:
   real_venv_bin = os.path.realpath(venv_bin)
   kept = [entry for entry in env["PATH"].split(os.pathsep) if os.path.realpath(entry) != real_venv_bin]
   result["PATH"] = os.pathsep.join(kept)
-  prepend_path_dir(result, str(ENTRY_POINT_DIR))
+  base.prepend_path_dir(result, str(ENTRY_POINT_DIR))
   result[VENV_BIN_ENV_VAR] = str(venv_bin)
   return result
 
@@ -58,6 +58,6 @@ def apply_agent_environment() -> None:
   """
   if sys.prefix == sys.base_prefix:
     raise RuntimeError(f"the CharlieBot server must run from a venv; sys.prefix {sys.prefix} is the base interpreter")
-  env = agent_environment(os.environ, Path(sys.prefix) / "bin")
+  env = agent_environment(os.environ, pathlib.Path(sys.prefix) / "bin")
   os.environ.clear()
   os.environ.update(env)

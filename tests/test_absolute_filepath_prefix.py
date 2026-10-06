@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 import server
 from src.api import auth, pages
 from src.api import files as files_api
+from src.core import config
 
 
 def _mounted_prefixes() -> list[str]:
@@ -78,7 +79,7 @@ def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Own the config and credentials the file router reads: sessions root under tmp_path,
   empty access key (the gate is a no-op). Without this the route reads the host profile,
   which is not a test fixture."""
-  monkeypatch.setattr(files_api, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
+  monkeypatch.setattr(config, "get_config", lambda: SimpleNamespace(sessions_dir=tmp_path / "sessions"))
   stub_credentials({"charliebot": {"access_key": ""}})
 
 

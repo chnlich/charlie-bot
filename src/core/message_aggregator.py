@@ -20,9 +20,8 @@ the output and emits no ``message`` delta. The next ``stream`` delta
 
 from collections.abc import Callable, Iterator
 
-from src.core import claude_accounts
+from src.core import claude_accounts, message_events
 from src.core import event_types as ET
-from src.core.message_events import normalize_user_message_event
 
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
@@ -636,7 +635,7 @@ class MessageAggregator:
         yield from self._stream_delta()
         return
       yield from self._flush_to_message_delta()
-      normalized = normalize_user_message_event(ev)
+      normalized = message_events.normalize_user_message_event(ev)
       yield {
           "type": "message",
           "message":

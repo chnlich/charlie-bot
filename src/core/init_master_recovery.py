@@ -3,33 +3,23 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
-from pathlib import Path
+import datetime
+import pathlib
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
-from src.core import runs
+from src.core import init_worker_recovery, log_once, runs, tasks
 
 if TYPE_CHECKING:
-  from src.core.config import CharlieBotConfig
-  from src.core.sessions import SessionManager
+  from src.core import config, sessions
 
-from src.core.init_worker_recovery import (
-    _liveness_probe,
-    _quarantine_stale_failed_worktrees,
-    _report_recovery_event,
-    _scan_thread_metas,
-)
-from src.core.log_once import LazyStructlogLogger
-from src.core.tasks import create_logged_task
-
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 async def run_crash_recovery(
-    cfg: CharlieBotConfig,
-    boot_time: datetime,
-    session_mgr: SessionManager | None = None,
+    cfg: config.CharlieBotConfig,
+    boot_time: datetime.datetime,
+    session_mgr: sessions.SessionManager | None = None,
     *,
     master_identity: asyncio.Task | None = None,
 ) -> None:
@@ -66,11 +56,11 @@ async def run_crash_recovery(
   passes inline.
   """
   if session_mgr is None:
-    from src.core.sessions import SessionManager
-    session_mgr = SessionManager(cfg)
+    from src.core import sessions
+    session_mgr = sessions.SessionManager(cfg)
   # Legacy threads are read-only records: nothing respawns them. Startup
   # sweeps the failed worktrees the thread metadata names.
-  threads = await asyncio.to_thread(_scan_thread_metas, cfg)
+  threads = await asyncio.to_thread(init_worker_recovery._scan_thread_metas, cfg)
   if master_identity is not None:
     # The lifespan barrier may already have awaited this task; re-awaiting a
     # done task is free, and the barrier's shield keeps the one execution
@@ -83,7 +73,7 @@ async def run_crash_recovery(
       await _replay_unanswered_inputs(cfg, session_mgr, excluded)
   else:
     await _reconcile_master_runs(cfg, session_mgr, boot_time)
-  await _quarantine_stale_failed_worktrees(cfg, threads)
+  await init_worker_recovery._quarantine_stale_failed_worktrees(cfg, threads)
 
 
 def unanswered_input_events(chat_events: list[dict], exclude_ids: set[str]) -> list[dict]:
@@ -135,8 +125,9 @@ def _master_alive_unfollowable_message(reason: str) -> str:
       "again on the next restart.")
 
 
-async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionManager,
-                                    boot_time: datetime) -> dict[str, set[str]]:
+async def reconcile_master_identity(
+    cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager,
+    boot_time: datetime.datetime) -> dict[str, set[str]]:
   """Resolve each active session's recorded master turn; return the replay exclusion set.
 
   master_run is a single slot per session that a new turn's _on_spawn
@@ -166,14 +157,14 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
   from src.agents import master_cc  # lazy: mirrors the spawner import's cycle guard
 
   try:
-    sessions = await asyncio.to_thread(session_mgr.list_active_session_metas)
+    metas = await asyncio.to_thread(session_mgr.list_active_session_metas)
   except Exception as e:
     log.exception("master_reconcile_scan_failed")
     raise _MasterScanFailedError(str(e)) from e
   host_boot = await asyncio.to_thread(runs.read_host_boot_time)
   excluded: dict[str, set[str]] = {}
 
-  for meta in sessions:
+  for meta in metas:
     record = meta.master_run
     if record is None:
       continue
@@ -196,7 +187,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
             outcome=None,
             reason=f"backend option {meta.backend!r} unresolved, record alive",
         )
-        await _report_recovery_event(
+        await init_worker_recovery._report_recovery_event(
             session_mgr, meta.id, _master_alive_unfollowable_message(f"backend option {meta.backend!r} unresolved"))
         excluded.setdefault(meta.id, set()).update(record.user_event_ids)
         continue
@@ -213,7 +204,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
       await session_mgr.persist_master_run(meta.id, None)
       continue
     resolution = runs.resolve_run(
-        raw_path=Path(record.raw_log),
+        raw_path=pathlib.Path(record.raw_log),
         pid=record.pid,
         pid_start=record.pid_start,
         started_at=record.started_at,
@@ -235,7 +226,8 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
       # followable — report only. The record is kept (the turn still owns its
       # inputs until a real outcome lands) and they stay out of this boot's
       # replay set.
-      await _report_recovery_event(session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
+      await init_worker_recovery._report_recovery_event(
+          session_mgr, meta.id, _master_alive_unfollowable_message(resolution.reason))
       excluded.setdefault(meta.id, set()).update(record.user_event_ids)
       continue
 
@@ -253,9 +245,9 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
           meta,
           record,
           session_mgr.callbacks(),
-          is_alive=_liveness_probe(record.pid, record.pid_start, record.started_at, host_boot),
+          is_alive=init_worker_recovery._liveness_probe(record.pid, record.pid_start, record.started_at, host_boot),
       )
-      create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
+      tasks.create_logged_task(_await_reattach(future), name=f"master-resume-{meta.id[:8]}")
       # The follower answers this round; keep its whole input list out of the
       # replay set so the round is answered exactly once.
       excluded.setdefault(meta.id, set()).update(record.user_event_ids)
@@ -269,7 +261,7 @@ async def reconcile_master_identity(cfg: CharlieBotConfig, session_mgr: SessionM
 
 
 async def _replay_unanswered_inputs(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, excluded: dict[str, set[str]]) -> None:
+    cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager, excluded: dict[str, set[str]]) -> None:
   """Replay every input event the identity pass left unanswered.
 
   Every real user event and scheduled-trigger wake after the last MASTER_DONE,
@@ -299,12 +291,13 @@ async def _replay_unanswered_inputs(
         replay = (
             master_cc.replay_scheduled_trigger(cfg, meta, ev, session_mgr.callbacks()) if ev.get("type")
             == ET.SCHEDULED_TRIGGER else master_cc.replay_user_message(cfg, meta, ev, session_mgr.callbacks()))
-        create_logged_task(replay, name=f"master-replay-{meta.id[:8]}")
+        tasks.create_logged_task(replay, name=f"master-replay-{meta.id[:8]}")
     except Exception:
       log.exception("master_replay_dispatch_failed", session=meta.id)
 
 
-async def _reconcile_master_runs(cfg: CharlieBotConfig, session_mgr: SessionManager, boot_time: datetime) -> None:
+async def _reconcile_master_runs(
+    cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager, boot_time: datetime.datetime) -> None:
   """Thin wrapper kept for existing callers: identity pass, then replay pass.
 
   New code should run :func:`reconcile_master_identity` once (before any door

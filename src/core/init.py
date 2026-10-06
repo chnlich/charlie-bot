@@ -1,29 +1,14 @@
 """Initialize ~/.charliebot/ directory structure on first run.
 
-Facade over the ``init_<part>`` modules: the re-export list carries exactly the
-names call sites still reach through ``src.core.init.<name>``, so existing
-import sites and monkeypatch targets on this module keep resolving. The parts
-hold the implementation and must never import this module — that would close an
-import cycle.
-
-The assignment at the bottom serves the scan-window constant sessions.py
-reaches through this module; it is an assignment, not an import, so the
-export-list evidence check sees only def/class names.
+Facade over the ``init_<part>`` modules: the facade carries the part modules
+themselves, so every name resolves through ``src.core.init.<part>.<name>``
+and the part module stays the name's one home. The parts hold the
+implementation and must never import this module — that would close an import
+cycle.
 """
 
-import src.core.init_worker_recovery as _init_worker_recovery
-from src.core.init_master_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-    reconcile_master_identity,
-    run_crash_recovery,
+from src.core import (  # noqa: F401  # re-export: facade modules (see module docstring)
+    init_master_recovery,
+    init_seed,
+    init_worker_recovery,
 )
-from src.core.init_seed import (  # noqa: F401  # re-export: facade import list (see module docstring)
-    init_charliebot_home,
-    seed_default_cron_tasks,
-)
-from src.core.init_worker_recovery import (  # noqa: F401  # re-export: facade import list (see module docstring)
-    _quarantine_stale_failed_worktrees,
-    _report_recovery_event,
-    iter_recent_thread_metas,
-)
-
-RUNNING_SCAN_WINDOW = _init_worker_recovery.RUNNING_SCAN_WINDOW

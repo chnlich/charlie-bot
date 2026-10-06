@@ -74,6 +74,7 @@ from typing import Any
 
 import yaml
 
+from src.core import init_seed
 from src.core.buildinfo import init_build_info
 from src.core.config import (
     CHARLIEBOT_HOME_ENV,
@@ -92,7 +93,6 @@ from src.core.home_writer_fence import (
     HomeWriterFence,
     acquire_home_writer_fence,
 )
-from src.core.init import init_charliebot_home
 from src.core.json_utils import atomic_write_text, load_json_meta
 from src.core.log_once import LazyStructlogLogger
 from src.core.models import utc_now, utc_now_iso
@@ -918,7 +918,7 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
     boot_time = utc_now()
     try:
       init_build_info()
-      await init_charliebot_home()
+      await init_seed.init_charliebot_home()
       log.info("preview_home_ready", path=str(cfg.charliebot_home))
       # The v2 recovery owner reconciles only this instance's own task nodes
       # and their Runs. The v1 scan, scheduler, trigger recovery, external

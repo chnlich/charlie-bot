@@ -50,7 +50,7 @@ import asyncio
 import os
 
 from src.core.config import get_config, get_scheduled_tasks
-from src.core.init import init_charliebot_home, seed_default_cron_tasks
+from src.core import init_seed
 from src.core.scheduler import effective_scheduled_task_backend
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"
@@ -74,7 +74,7 @@ home_items = [
 ]
 existed_before = {str(p): p.exists() for _, _, p in home_items}
 if not dry:
-    asyncio.run(init_charliebot_home())
+    asyncio.run(init_seed.init_charliebot_home())
 for label, path in [(lbl, p) for _, lbl, p in home_items]:
     now_exists = path.exists()
     if dry:
@@ -87,7 +87,7 @@ for label, path in [(lbl, p) for _, lbl, p in home_items]:
 # per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
 # same validation and legacy tripwire as the real run and writes nothing, so
 # the preview fails exactly where the real run would.
-for item in seed_default_cron_tasks(cfg, dry_run=dry):
+for item in init_seed.seed_default_cron_tasks(cfg, dry_run=dry):
     print(f"  cron {item['name']}: {item['status']}")
 
 # Effective scheduled task list: name / cron / resolved timezone / resolved

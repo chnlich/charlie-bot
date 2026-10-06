@@ -13,7 +13,7 @@ from conftest import (
 )
 
 from src.core import git as git_module
-from src.core import init as init_module
+from src.core import init_master_recovery as master_recovery_module
 from src.core import init_worker_recovery as worker_recovery_module
 from src.core.config import CharlieBotConfig
 from src.core.models import CreateSessionRequest, utc_now, utc_now_iso
@@ -164,7 +164,7 @@ async def test_sweep_quarantines_old_failed_worktree(tmp_path: Path, monkeypatch
   wt = _make_worktree(parent, "charliebot-task-old")
   quarantined = _install_recording_quarantine(monkeypatch)
 
-  await init_module._quarantine_stale_failed_worktrees(
+  await worker_recovery_module._quarantine_stale_failed_worktrees(
       cfg, [_thread(thread_id="t1", status="failed", worktree_path=wt, age_days=8.0)])
 
   assert quarantined == [str(wt)]
@@ -215,7 +215,7 @@ async def test_run_crash_recovery_recovers_and_sweeps(tmp_path: Path, monkeypatc
       _thread(
           thread_id="aged", status="failed", worktree_path=old_wt, branch_name="charliebot/task-aged", age_days=20.0))
 
-  await init_module.run_crash_recovery(cfg, utc_now() + timedelta(hours=1))
+  await master_recovery_module.run_crash_recovery(cfg, utc_now() + timedelta(hours=1))
 
   # The recovery pass writes nothing: legacy threads are read-only records.
   meta = json.loads(running_meta.read_text(encoding="utf-8"))
@@ -240,7 +240,7 @@ def test_scan_skips_post_boot_running_thread(tmp_path: Path) -> None:
           "started_at": (boot_time + timedelta(seconds=30)).isoformat(),
       })
 
-  threads = init_module._init_worker_recovery._scan_thread_metas(cfg)
+  threads = worker_recovery_module._scan_thread_metas(cfg)
 
   assert [m["id"] for m in threads] == ["post-boot"]
   # The scan writes nothing: the thread stays running.
@@ -258,7 +258,7 @@ async def test_scan_skips_archived_session_threads(tmp_path: Path) -> None:
     _write_thread_meta(cfg, session_id, {"id": thread_id, "status": "running", "pid": 4242, "started_at": started_at})
   await SessionManager(cfg).archive_session("done")
 
-  threads = init_module._init_worker_recovery._scan_thread_metas(cfg)
+  threads = worker_recovery_module._scan_thread_metas(cfg)
 
   # Quarantine sees both: archiving says nothing about reclaiming worktree disk.
   assert sorted(m["id"] for m in threads) == ["archived-thread", "live-thread"]
@@ -303,9 +303,9 @@ def test_scan_skips_out_of_window_thread(tmp_path: Path, monkeypatch: pytest.Mon
           "pid": 9999,
           "started_at": (boot_time - timedelta(days=200)).isoformat(),
       })
-  _age_metadata_mtime(stale_path, init_module.RUNNING_SCAN_WINDOW.days + 5)
+  _age_metadata_mtime(stale_path, worker_recovery_module.RUNNING_SCAN_WINDOW.days + 5)
 
-  threads = init_module._init_worker_recovery._scan_thread_metas(cfg)
+  threads = worker_recovery_module._scan_thread_metas(cfg)
 
   # Only the recent thread is read (the sweep's quarantine candidates live in
   # the recent window); the stale one is never touched.
@@ -339,7 +339,7 @@ async def test_recover_window_covers_quarantine_band_and_skips_older(
         _thread(thread_id=tid, status="failed", worktree_path=wt, branch_name=f"charliebot/task-{tid}", age_days=age))
     _age_metadata_mtime(meta_path, age)
 
-  await init_module.run_crash_recovery(cfg, utc_now())
+  await master_recovery_module.run_crash_recovery(cfg, utc_now())
 
   assert quarantined == [str(band_wt)]
   assert not band_wt.exists()

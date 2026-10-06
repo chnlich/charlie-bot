@@ -20,12 +20,11 @@ from src.core import event_types as ET
 
 if TYPE_CHECKING:
   import numpy as np
-from src.core import plan_paths, sidebar_state
+from src.core import init_worker_recovery, plan_paths, sidebar_state
 from src.core.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
 from src.core.gc_control import gc_off
-from src.core.init import RUNNING_SCAN_WINDOW, iter_recent_thread_metas
 from src.core.init_worker_recovery import walk_thread_meta_stats
 from src.core.json_utils import (
     atomic_write_stream,
@@ -340,8 +339,9 @@ def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> boo
   (mtime_ns, size) signature moves). *walked* supplies the scan's stat pairs
   from a walk the caller already took instead of a second one.
   """
-  for _thread_dir, _meta_path, meta in iter_recent_thread_metas(threads_dir, utc_now(), "thread_meta_read_failed",
-                                                                walked=walked):
+  for _thread_dir, _meta_path, meta in init_worker_recovery.iter_recent_thread_metas(threads_dir, utc_now(),
+                                                                                     "thread_meta_read_failed",
+                                                                                     walked=walked):
     if meta.get("status") == "running":
       return True
   return False
@@ -778,7 +778,7 @@ def _sidebar_probe_walk(
   thread_pairs = walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")
   for thread_dir, _meta_path, st in thread_pairs:
     thread_sig.append((os.path.basename(thread_dir), st.st_mtime_ns, st.st_size))
-    rollovers.append(st.st_mtime + RUNNING_SCAN_WINDOW.total_seconds())
+    rollovers.append(st.st_mtime + init_worker_recovery.RUNNING_SCAN_WINDOW.total_seconds())
   trigger_sig = []
   trigger_pairs: list[tuple[str, os.stat_result]] | None = None
   trigger_dir_sig: tuple[int, int] | None = None

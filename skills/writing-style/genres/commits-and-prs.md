@@ -4,37 +4,48 @@ Style for commit messages and pull request descriptions.
 
 ## Order
 
-Why, then evidence, then how. A reviewer decides how much attention to spend
-before opening the diff, so the reason and its size arrive first; the
-mechanism reads faster once the motive is known.
+- Write a commit message body in three parts, in this order: why, evidence, how.
+- Write a PR description in four sections, each under its own heading, in this order:
+  1. Why
+  2. How it works
+  3. Evidence
+  4. How the diff reads
+- In a commit message, the how part follows the rules of the How the diff reads section.
 
 ## Why
 
-- Open with the problem the change removes, stated as its cost to the reader.
-- Keep the summary line on the effect, and leave the mechanism to the body.
-- Say what a reader loses by skipping the change.
+- Open with the problem that the change removes, stated as its cost to the reviewer.
+- Keep the summary line on the effect. Put the mechanism in the body.
+- Say what the reviewer loses by skipping the change.
+
+## How it works
+
+- Describe how the changed system runs, in run order, before and after the change.
+- Keep the section to one short paragraph.
 
 ## Evidence
 
-- Quantify both the problem and the improvement, and name where each number
-  came from so a reviewer can rerun it.
-- Give the failing case in full when one exists: the input that triggers it,
-  the observed cost, and how often it lands.
-- Name the past pattern the change closes, so a reviewer can recognize the
-  next instance.
-- Keep unverified claims marked, and name the gate that settles each one.
+- Quantify the problem and the improvement.
+- For each number, name its source, so that the reviewer can rerun it.
+- When a failing case exists, give it in full:
+  - the input that triggers it
+  - the observed cost
+  - how often it occurs
+- Name the past pattern that the change closes, so that the reviewer can recognize the next instance.
+- Mark each unverified claim, and name the gate that settles it.
 
-## How
+## How the diff reads
 
-- Describe the approach after the evidence, in the order the diff reads.
-- Give each non-obvious choice its reason in one clause.
-- Say which parts change behavior and which only move code.
+- Describe the approach in the order that the diff reads.
+- Give each choice that is not obvious its reason in one clause.
+- Say which parts change behavior and which parts only move code.
 
 ## Length and vocabulary
 
-- The description is read before the diff and once; it fits on one screen. A derivation, a glossary, or an
-  operating guide the reader will need again lives in the code or the docs, and the description points there.
-- Use the reader's terms. A term the PR coins is defined in the module docstring it belongs to, and the
-  description uses it only after naming that home.
-- Evidence names the measurement and where to rerun it; run identifiers, codenames, and hostnames stay out of
-  the prose, since a reviewer cannot resolve them and they date the text.
+- The reviewer reads the description once, before the diff. Fit the description on one screen.
+- Put a derivation, a glossary, or an operating guide in the code or the docs. Point to it from the description.
+- Use the reviewer's terms.
+- When the PR coins a term, define it in the docstring of the module that owns the term.
+- Name that docstring before the description uses the term.
+- Name a run by its measurement and its rerun command. Run identifiers, codenames, and hostnames resolve only
+  for their author, and they date the text.

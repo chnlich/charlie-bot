@@ -1,62 +1,64 @@
 """Tests for the file-level lazy-load diff API (src/api/git.py)."""
 
+import pathlib
 import subprocess
-from pathlib import Path
 
+import conftest
+import fastapi
 import httpx
 import pytest
-from conftest import apply_config_overrides, run_git
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
 from src.api import git as git_api
-from src.core.config import CharlieBotConfig
+from src.core import config
 
 
-def _build_repo(workspace: Path) -> Path:
+def _build_repo(workspace: pathlib.Path) -> pathlib.Path:
   """Create a repo with a `main` and `feature` branch covering add/modify/delete/rename."""
   repo = workspace / "repo"
   repo.mkdir(parents=True)
-  run_git(repo, "init", "-q", "-b", "main")
-  run_git(repo, "config", "user.email", "t@t.t")
-  run_git(repo, "config", "user.name", "t")
+  conftest.run_git(repo, "init", "-q", "-b", "main")
+  conftest.run_git(repo, "config", "user.email", "t@t.t")
+  conftest.run_git(repo, "config", "user.name", "t")
   (repo / "keep.txt").write_text("line1\nline2\nline3\n")
   (repo / "torename.txt").write_text("old content\nsecond\n")
   (repo / "todelete.txt").write_text("to be deleted\n")
-  run_git(repo, "add", "-A")
-  run_git(repo, "commit", "-qm", "base")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(repo, "commit", "-qm", "base")
 
-  run_git(repo, "checkout", "-q", "-b", "feature")
+  conftest.run_git(repo, "checkout", "-q", "-b", "feature")
   (repo / "keep.txt").write_text("line1\nline2 changed\nline3\nline4\n")
-  run_git(repo, "mv", "torename.txt", "renamed.txt")
+  conftest.run_git(repo, "mv", "torename.txt", "renamed.txt")
   (repo / "renamed.txt").write_text("old content\nsecond\nthird\n")
-  run_git(repo, "rm", "-q", "todelete.txt")
+  conftest.run_git(repo, "rm", "-q", "todelete.txt")
   (repo / "added.txt").write_text("brand new\nfile\n")
-  run_git(repo, "add", "-A")
-  run_git(repo, "commit", "-qm", "feature")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(repo, "commit", "-qm", "feature")
   return repo
 
 
-def _build_app(workspace: Path) -> FastAPI:
-  cfg = CharlieBotConfig(
+def _build_app(workspace: pathlib.Path) -> fastapi.FastAPI:
+  cfg = config.CharlieBotConfig(
       charliebot_home=workspace / "charliebot-home",
       paths={"workspace_dirs": [str(workspace)]},
   )
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
-  apply_config_overrides(app, cfg)
+  conftest.apply_config_overrides(app, cfg)
   return app
 
 
-def _build_client(workspace: Path) -> TestClient:
-  return TestClient(_build_app(workspace))
+def _build_client(workspace: pathlib.Path) -> testclient.TestClient:
+  return testclient.TestClient(_build_app(workspace))
 
 
-def _get_diff(client: TestClient, endpoint: str, repo: Path, base: str, head: str, **params: str) -> httpx.Response:
+def _get_diff(
+    client: testclient.TestClient, endpoint: str, repo: pathlib.Path, base: str, head: str,
+    **params: str) -> httpx.Response:
   return client.get(f"/api/git/diff/{endpoint}", params={"repo": str(repo), "base": base, "head": head, **params})
 
 
-def test_diff_files_manifest(tmp_path: Path) -> None:
+def test_diff_files_manifest(tmp_path: pathlib.Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
@@ -85,7 +87,7 @@ def test_diff_files_manifest(tmp_path: Path) -> None:
   assert data["head_sha"] == expected_head_sha
 
 
-def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:
+def test_diff_file_returns_unified_diff(tmp_path: pathlib.Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
@@ -97,7 +99,7 @@ def test_diff_file_returns_unified_diff(tmp_path: Path) -> None:
   assert data["size_bytes"] == len(data["diff"].encode("utf-8"))
 
 
-def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
+def test_diff_file_rename_renders_as_rename(tmp_path: pathlib.Path) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
 
@@ -113,7 +115,8 @@ def test_diff_file_rename_renders_as_rename(tmp_path: Path) -> None:
   assert "new file" in readd
 
 
-def test_diff_file_too_large_returns_stub_and_force_loads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_diff_file_too_large_returns_stub_and_force_loads(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
   # Shrink the per-file cap so keep.txt's small diff trips it.
@@ -137,15 +140,15 @@ _HEAD_MOVE_CASES = [
 
 
 @pytest.mark.parametrize(("endpoint", "extra_params"), _HEAD_MOVE_CASES)
-def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: dict[str, str]) -> None:
+def test_diff_head_move_busts_memo(tmp_path: pathlib.Path, endpoint: str, extra_params: dict[str, str]) -> None:
   """A moved ref resolves to a new SHA key, so its view re-computes."""
   repo = _build_repo(tmp_path)
   client = _build_client(tmp_path)
   first = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
 
   (repo / "added.txt").write_text("brand new\nfile\nthird\n")
-  run_git(repo, "add", "-A")
-  run_git(repo, "commit", "-qm", "advance feature")
+  conftest.run_git(repo, "add", "-A")
+  conftest.run_git(repo, "commit", "-qm", "advance feature")
 
   second = _get_diff(client, endpoint, repo, "main", "feature", **extra_params).json()
   # The files response carries the moved SHA; the file response carries only the
@@ -158,43 +161,43 @@ def test_diff_head_move_busts_memo(tmp_path: Path, endpoint: str, extra_params: 
     assert "+third" in second["diff"]
 
 
-def test_memory_store_repo_accepted_outside_workspace_dirs(tmp_path: Path) -> None:
+def test_memory_store_repo_accepted_outside_workspace_dirs(tmp_path: pathlib.Path) -> None:
   """The memory store (cfg.memory_dir) is a diff-able repo even though it sits
   outside paths.workspace_dirs: the PR flow serves its proposal diff here."""
   workspace = tmp_path / "workspace"
   workspace.mkdir()
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"workspace_dirs": [str(workspace)]},
   )
   repo = _build_repo(cfg.memory_dir)
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
-  apply_config_overrides(app, cfg)
-  client = TestClient(app)
+  conftest.apply_config_overrides(app, cfg)
+  client = testclient.TestClient(app)
 
   resp = _get_diff(client, "files", repo, "main", "feature")
   assert resp.status_code == 200
   assert {f["path"] for f in resp.json()["files"]} >= {"added.txt", "renamed.txt"}
 
 
-def test_other_repo_outside_workspace_and_memory_rejected(tmp_path: Path) -> None:
+def test_other_repo_outside_workspace_and_memory_rejected(tmp_path: pathlib.Path) -> None:
   """A repo outside both the workspace roots and the memory store stays refused."""
   repo = _build_repo(tmp_path / "stray-repo")
-  cfg = CharlieBotConfig(
+  cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"workspace_dirs": [str(tmp_path / "elsewhere")]},
   )
-  app = FastAPI()
+  app = fastapi.FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
-  apply_config_overrides(app, cfg)
-  client = TestClient(app)
+  conftest.apply_config_overrides(app, cfg)
+  client = testclient.TestClient(app)
 
   resp = _get_diff(client, "files", repo, "main", "feature")
   assert resp.status_code == 400
 
 
-def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
+def test_refs_signature_tracks_ref_state(tmp_path: pathlib.Path) -> None:
   """The signature moves exactly when ref state moves, and holds still otherwise."""
   repo = _build_repo(tmp_path)
   before = git_api._refs_signature(repo)
@@ -203,17 +206,17 @@ def test_refs_signature_tracks_ref_state(tmp_path: Path) -> None:
   assert git_api._refs_signature(repo) == before
 
   # A commit rewrites the branch ref.
-  run_git(repo, "commit", "-q", "--allow-empty", "-m", "advance")
+  conftest.run_git(repo, "commit", "-q", "--allow-empty", "-m", "advance")
   after_commit = git_api._refs_signature(repo)
   assert after_commit != before
 
   # A checkout rewrites HEAD.
-  run_git(repo, "checkout", "-q", "main")
+  conftest.run_git(repo, "checkout", "-q", "main")
   assert git_api._refs_signature(repo) != after_commit
 
   # Packing rewrites packed-refs and removes the loose ref files, then holds still.
   before_pack = git_api._refs_signature(repo)
-  run_git(repo, "pack-refs", "--all")
+  conftest.run_git(repo, "pack-refs", "--all")
   after_pack = git_api._refs_signature(repo)
   assert after_pack != before_pack
   assert git_api._refs_signature(repo) == after_pack

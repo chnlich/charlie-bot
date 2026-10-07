@@ -320,10 +320,10 @@ def test_commit_refuses_deleted_pr_created_entry(store: Path, monkeypatch, capsy
 
 
 def _long_sentence() -> str:
-  """One 29-word sentence: over the 25-word cap the prose check enforces."""
+  """One 30-word sentence: over the 25-word cap the prose check enforces."""
   return (
       "The curator drafts each entry inside the proposal worktree so the diff against the base branch "
-      "shows exactly the lines awaiting the user's approval before anything reaches the store.")
+      "shows exactly the lines awaiting the user's approval before anything reaches the live store.")
 
 
 def test_commit_refuses_a_new_sentence_over_25_words(store: Path, monkeypatch, capsys) -> None:
@@ -337,7 +337,7 @@ def test_commit_refuses_a_new_sentence_over_25_words(store: Path, monkeypatch, c
       monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
   assert code == 1
   assert "prose check failed:" in err
-  assert f"sentence over 25 words (29): {sentence}" in err
+  assert f"sentence over 25 words (30): {sentence}" in err
   assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
 
 
@@ -376,6 +376,83 @@ def test_commit_allows_a_semicolon_inside_backticks(store: Path, monkeypatch, ca
   worktree = memory_proposal.proposal_worktree(store)
   (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
   (worktree / rel).write_text(_entry_text("backtick-semicolon", "- Run `a; b` twice.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert "prose check" not in err
+
+
+def test_commit_refuses_a_long_sentence_in_the_lead(store: Path, monkeypatch, capsys) -> None:
+  """The body lines before the first bullet form one unit that takes the sentence checks."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/long-lead.md")
+  sentence = _long_sentence()
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("long-lead", f"{sentence}\n- Short bullet stands.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert f"sentence over 25 words (30): {sentence}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_refuses_a_semicolon_in_the_lead(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/semicolon-lead.md")
+  lead = "The curator drafts the entry; the reviewer commits it."
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("semicolon-lead", f"{lead}\n- Short bullet stands.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert f"semicolon joins clauses: {lead}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_refuses_a_long_sentence_in_an_entry_without_bullets(store: Path, monkeypatch, capsys) -> None:
+  """Without bullets the whole body is one unit, so a sentence wrapped across two lines
+  is checked as the joined sentence."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/no-bullets.md")
+  sentence = _long_sentence()
+  first, second = sentence.split(" so the diff ")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("no-bullets", f"{first}\nso the diff {second}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert f"sentence over 25 words (30): {sentence}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_ignores_an_unchanged_long_sentence_in_an_old_lead(store: Path, monkeypatch, capsys) -> None:
+  rel = Path("entries/profile/legacy-lead.md")
+  base_text = _entry_text("legacy-lead", f"{_long_sentence()}\n- Legacy bullet stands.\n")
+  _live_commit(store, rel, base_text, "base lead holds the long sentence")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text + "- Short added line.\n", encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "append")))
+  assert code == 0, err
+  assert "Short added line" in (worktree / rel).read_text(encoding="utf-8")
+
+
+def test_commit_keeps_the_lead_apart_from_the_first_bullet(store: Path, monkeypatch, capsys) -> None:
+  """The lead's last sentence ends without a period: joined with the first bullet it would
+  run to 31 words, so the commit passes only while the two stay separate units."""
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/compliant-lead.md")
+  body = (
+      "Entries live under the store root. Each entry states one fact about the host and names the file that owns it\n"
+      "- Run the store lint before each commit so a broken entry never reaches the live store.\n"
+      "- Keep each bullet short.\n")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("compliant-lead", body), encoding="utf-8")
   code, _out, err = _run_cli(
       monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
   assert code == 0, err

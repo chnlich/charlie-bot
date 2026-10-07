@@ -3,7 +3,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents.backends import pty_common, tui
+from src.agents.backends import claude_launch, pty_common, tui
 
 
 @pytest.fixture(autouse=True)
@@ -14,7 +14,7 @@ def _clear_jsonl_memo() -> None:
 
 
 def test_build_claude_argv_joins_disallowed_tools_into_single_flag() -> None:
-  argv = tui.build_claude_argv(
+  argv = claude_launch.build_claude_argv(
       "session-id",
       resume=False,
       settings=tui._CLAUDE_TUI_SETTINGS,

@@ -1,29 +1,16 @@
 """Chat event persistence for CharlieBot sessions."""
 
+import datetime
 import os
+import pathlib
 import uuid
 from collections.abc import Callable
-from datetime import datetime
-from pathlib import Path
 
 import orjson
 
-from src.core.json_utils import atomic_write_text
-from src.core.log_once import LazyStructlogLogger
-from src.core.memo import BoundedMemo, StatSignatureMemo
-from src.core.models import SessionMetadata, parse_utc_datetime, utc_now_iso
-from src.core.ndjson import (
-    _TAIL_WINDOW_SIZE,
-    append_ndjson,
-    count_ndjson_lines,
-    parse_ndjson_events,
-    parse_ndjson_file,
-    parse_ndjson_line,
-    parse_ndjson_range,
-    parse_ndjson_tail,
-)
+from src.core import json_utils, log_once, memo, models, ndjson
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 # Bound on _archive_events_memo in files, not sessions: one scroll spans a
 # session's few weekly archive files, so the cap bounds parsed-archive memory
@@ -42,15 +29,15 @@ _LIVE_RANGE_MEMO_LIMIT = 4
 # readers' shared window size, so both read families price the same slice;
 # the walk's stop rule lives on _walk_tail_line_texts.
 _WALK_BYTE_BUDGET = 32 * 1024 * 1024
-_WALK_CHUNK_BYTES = _TAIL_WINDOW_SIZE
+_WALK_CHUNK_BYTES = ndjson._TAIL_WINDOW_SIZE
 
 
-def chat_events_path(session_dir: Path) -> Path:
+def chat_events_path(session_dir: pathlib.Path) -> pathlib.Path:
   """Return the path to a session's chat_events.jsonl under its session directory."""
   return session_dir / "data" / "chat_events.jsonl"
 
 
-def chat_event_archives_dir(session_dir: Path) -> Path:
+def chat_event_archives_dir(session_dir: pathlib.Path) -> pathlib.Path:
   """Return the directory holding a session's rotated chat-event archive files."""
   return session_dir / "data" / "archives"
 
@@ -110,7 +97,7 @@ def _raw_line_spans(buf: bytes) -> tuple[list[tuple[int, int]], bool]:
   return spans, ends
 
 
-def _walk_tail_line_texts(path: Path, size: int, count: int) -> tuple[list[str], int, bool] | None:
+def _walk_tail_line_texts(path: pathlib.Path, size: int, count: int) -> tuple[list[str], int, bool] | None:
   """Return the last *count* physical lines of the byte range ``[0, size)`` as decoded text,
   with the raw offset where they begin and whether the range ends on a line boundary.
 
@@ -161,7 +148,7 @@ def _walk_tail_line_texts(path: Path, size: int, count: int) -> tuple[list[str],
 
 def _live_range_event(segment: str, session_id: str) -> dict | None:
   """Parse one physical line; a blank or malformed line parses to None and consumes its index."""
-  return parse_ndjson_line(segment, log_event="live_range_parse_skip", log_fields={"session_id": session_id})
+  return ndjson.parse_ndjson_line(segment, log_event="live_range_parse_skip", log_fields={"session_id": session_id})
 
 
 class ChatEventStore:
@@ -169,9 +156,9 @@ class ChatEventStore:
 
   def __init__(
       self,
-      session_dir_fn: Callable[[str], Path],
-      metadata_path_fn: Callable[[str], Path],
-      metadata_cache: dict[str, tuple[SessionMetadata, float, tuple[int, int] | None]],
+      session_dir_fn: Callable[[str], pathlib.Path],
+      metadata_path_fn: Callable[[str], pathlib.Path],
+      metadata_cache: dict[str, tuple[models.SessionMetadata, float, tuple[int, int] | None]],
   ) -> None:
     self._session_dir = session_dir_fn
     self._metadata_path = metadata_path_fn
@@ -182,13 +169,15 @@ class ChatEventStore:
     # Parsed-archive memo: path -> (mtime_ns, size, events). Archive files are
     # append-only within their week and frozen after, so an unchanged
     # (mtime_ns, size) means unchanged bytes; an append re-parses one file.
-    self._archive_events_memo: StatSignatureMemo[Path, list[dict]] = StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
+    self._archive_events_memo: memo.StatSignatureMemo[pathlib.Path,
+                                                      list[dict]] = memo.StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
     # Archive file-list memo: archives dir -> (mtime_ns, size, sorted paths).
     # Membership changes only by creating or removing a directory entry, and
     # either moves the directory's own mtime_ns, so an unchanged signature
     # proves the name list current; a same-week append moves only the file's
     # own signature.
-    self._archive_files_memo: StatSignatureMemo[Path, list[Path]] = StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
+    self._archive_files_memo: memo.StatSignatureMemo[pathlib.Path,
+                                                     list[pathlib.Path]] = memo.StatSignatureMemo(_ARCHIVE_MEMO_LIMIT)
     # Live-file range memo: path -> (mtime_ns, size, inode, per-physical-line
     # events with None holes for blank/malformed lines, covered byte end,
     # ends on a line boundary, first covered line index, covered byte start).
@@ -200,8 +189,8 @@ class ChatEventStore:
     # unarchived sessions paginate through the message projection, so their
     # range callers (recap extract, bulk reads) would pay a whole-file parse
     # to retain a list a moving divider never reuses.
-    self._live_range_memo: BoundedMemo[Path, tuple[int, int, int, list[dict | None], int, bool, int,
-                                                   int]] = BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
+    self._live_range_memo: memo.BoundedMemo[pathlib.Path, tuple[int, int, int, list[dict | None], int, bool, int,
+                                                                int]] = memo.BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
 
   @property
   def events_cache(self) -> dict[str, list[dict]]:
@@ -213,7 +202,7 @@ class ChatEventStore:
   def clear_cache(self, session_id: str) -> None:
     self._events_cache.pop(session_id, None)
 
-  def get_chat_events_path(self, session_id: str) -> Path:
+  def get_chat_events_path(self, session_id: str) -> pathlib.Path:
     """Return the absolute path to a session's chat_events.jsonl."""
     return self._chat_events_path(session_id)
 
@@ -228,8 +217,8 @@ class ChatEventStore:
     if 'id' not in event:
       event['id'] = str(uuid.uuid4())
     if 'timestamp' not in event:
-      event['timestamp'] = utc_now_iso()
-    await append_ndjson(self._chat_events_path(session_id), event)
+      event['timestamp'] = models.utc_now_iso()
+    await ndjson.append_ndjson(self._chat_events_path(session_id), event)
     # Keep in-memory cache in sync
     if session_id in self._events_cache:
       self._events_cache[session_id].append(event)
@@ -238,7 +227,7 @@ class ChatEventStore:
     """Read all chat events for catch-up. Uses in-memory cache after first read."""
     if session_id in self._events_cache:
       return self._events_cache[session_id]
-    events = parse_ndjson_file(self._chat_events_path(session_id))
+    events = ndjson.parse_ndjson_file(self._chat_events_path(session_id))
     self._events_cache[session_id] = events
     return events
 
@@ -256,10 +245,10 @@ class ChatEventStore:
 
     Returns (events, total_line_count, has_more).
     """
-    events, total, has_more = parse_ndjson_tail(self._chat_events_path(session_id), limit)
+    events, total, has_more = ndjson.parse_ndjson_tail(self._chat_events_path(session_id), limit)
     return events, total, has_more
 
-  def get_chat_event_count_sync(self, session_id: str, session_meta: SessionMetadata | None = None) -> int:
+  def get_chat_event_count_sync(self, session_id: str, session_meta: models.SessionMetadata | None = None) -> int:
     """Return the current global chat event count without parsing event payloads.
 
     The count is archive_offset + live-file physical lines — the index space
@@ -273,7 +262,7 @@ class ChatEventStore:
       archive_offset = self.read_archive_offset_sync(session_id)
     if session_id in self._events_cache:
       return archive_offset + len(self._events_cache[session_id])
-    return archive_offset + count_ndjson_lines(self._chat_events_path(session_id))
+    return archive_offset + ndjson.count_ndjson_lines(self._chat_events_path(session_id))
 
   def load_chat_events_range(self, session_id: str, start: int, end: int) -> tuple[list[dict], bool]:
     """Load events in GLOBAL index range [start, end). Returns (events, has_more).
@@ -308,7 +297,7 @@ class ChatEventStore:
         # prefix per call (the recap's per-divider cost) and skews its window
         # by any malformed lines the cached count never charged.
         return cached[rel_start:rel_end], start > 0
-      events, _ = parse_ndjson_range(live_path, rel_start, rel_end)
+      events, _ = ndjson.parse_ndjson_range(live_path, rel_start, rel_end)
       return events, start > 0
     archive_events = self._load_archive_range(session_id, start, archive_offset)
     live_end = end - archive_offset
@@ -334,7 +323,7 @@ class ChatEventStore:
       raw = path.read_text(encoding="utf-8")
       if not raw.strip():
         return 0
-      return SessionMetadata.model_validate_json(raw).archive_offset
+      return models.SessionMetadata.model_validate_json(raw).archive_offset
     except (OSError, ValueError) as e:
       log.debug("archive_offset_read_failed", session_id=session_id, error=str(e))
       return 0
@@ -362,7 +351,7 @@ class ChatEventStore:
         break
     return events
 
-  def _archive_files(self, session_id: str) -> list[Path]:
+  def _archive_files(self, session_id: str) -> list[pathlib.Path]:
     """Return the session's archive files in chronological order, memoized on the dir's stat.
 
     The signature is taken before the glob, so a rotation racing this read keys
@@ -380,7 +369,7 @@ class ChatEventStore:
       self._archive_files_memo.record(archives_dir, st, paths)
     return paths
 
-  def _archive_file_events(self, path: Path, session_id: str) -> list[dict]:
+  def _archive_file_events(self, path: pathlib.Path, session_id: str) -> list[dict]:
     """Return one archive file's parsed events, memoized on (mtime_ns, size).
 
     Range reads re-enter here on every page turn; the memo keeps unchanged
@@ -396,14 +385,14 @@ class ChatEventStore:
     if events is not None:
       return events
     try:
-      events = parse_ndjson_events(path, log_event="archive_parse_skip", log_fields={"session_id": session_id})
+      events = ndjson.parse_ndjson_events(path, log_event="archive_parse_skip", log_fields={"session_id": session_id})
     except OSError as e:
       log.debug("archive_read_failed", path=str(path), error=str(e))
       return []
     self._archive_events_memo.record(path, st, events)
     return events
 
-  def _live_range_lines(self, path: Path, session_id: str, rel_start: int) -> tuple[list[dict | None], int]:
+  def _live_range_lines(self, path: pathlib.Path, session_id: str, rel_start: int) -> tuple[list[dict | None], int]:
     """Return the live file's parsed events from physical-line index ``rel_start`` to the
     file's end, with the index the returned list starts at.
 
@@ -436,15 +425,15 @@ class ChatEventStore:
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
       return [], rel_start
-    memo = self._live_range_memo.get(path)
-    if memo is not None and not (memo[0] == st.st_mtime_ns and memo[1] == st.st_size) \
-            and memo[2] == st.st_ino and st.st_size >= memo[4] and memo[5]:
-      memo = self._extend_lines_forward(path, session_id, st, memo)
-    if memo is not None and memo[0] == st.st_mtime_ns and memo[1] == st.st_size:
-      if rel_start >= memo[6]:
-        return memo[3], memo[6]
+    entry = self._live_range_memo.get(path)
+    if entry is not None and not (entry[0] == st.st_mtime_ns and entry[1] == st.st_size) \
+            and entry[2] == st.st_ino and st.st_size >= entry[4] and entry[5]:
+      entry = self._extend_lines_forward(path, session_id, st, entry)
+    if entry is not None and entry[0] == st.st_mtime_ns and entry[1] == st.st_size:
+      if rel_start >= entry[6]:
+        return entry[3], entry[6]
       if rel_start > 0:
-        extended = self._extend_lines_backward(path, session_id, memo, rel_start)
+        extended = self._extend_lines_backward(path, session_id, entry, rel_start)
         if extended is not None:
           return extended
     elif rel_start > 0:
@@ -462,37 +451,37 @@ class ChatEventStore:
     self._live_range_memo.store(path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, len(buf), ends, 0, 0))
     return lines, 0
 
-  def _extend_lines_forward(self, path: Path, session_id: str, st: os.stat_result, memo: tuple) -> tuple:
+  def _extend_lines_forward(self, path: pathlib.Path, session_id: str, st: os.stat_result, prior: tuple) -> tuple:
     """Parse an appended tail onto the covered lines of a same-inode grown file."""
     buf = None
     try:
       with open(path, "rb") as f:
-        f.seek(memo[4])
+        f.seek(prior[4])
         buf = f.read()
     except OSError as e:
       log.debug("live_range_read_failed", path=str(path), error=str(e))
     if buf is None:
-      return memo
+      return prior
     segments, ends = _universal_newline_segments(buf)
-    lines = memo[3] + [_live_range_event(segment, session_id) for segment in segments]
-    entry = (st.st_mtime_ns, st.st_size, st.st_ino, lines, memo[4] + len(buf), ends, memo[6], memo[7])
+    lines = prior[3] + [_live_range_event(segment, session_id) for segment in segments]
+    entry = (st.st_mtime_ns, st.st_size, st.st_ino, lines, prior[4] + len(buf), ends, prior[6], prior[7])
     self._live_range_memo.store(path, entry)
     return entry
 
-  def _extend_lines_backward(self, path: Path, session_id: str, memo: tuple,
+  def _extend_lines_backward(self, path: pathlib.Path, session_id: str, entry: tuple,
                              rel_start: int) -> tuple[list[dict | None], int] | None:
     """Prepend the lines ``[rel_start, covered start)`` to a suffix entry by walking backward
     from the covered content's first byte; None when the span exceeds the byte budget."""
-    walked = _walk_tail_line_texts(path, memo[7], memo[6] - rel_start)
+    walked = _walk_tail_line_texts(path, entry[7], entry[6] - rel_start)
     if walked is None:
       return None
     texts, byte_start, _ = walked
     prefix = [_live_range_event(text, session_id) for text in texts]
-    lines = prefix + memo[3]
-    self._live_range_memo.store(path, (memo[0], memo[1], memo[2], lines, memo[4], memo[5], rel_start, byte_start))
+    lines = prefix + entry[3]
+    self._live_range_memo.store(path, (entry[0], entry[1], entry[2], lines, entry[4], entry[5], rel_start, byte_start))
     return lines, rel_start
 
-  def _build_lines_walk(self, path: Path, session_id: str, st: os.stat_result,
+  def _build_lines_walk(self, path: pathlib.Path, session_id: str, st: os.stat_result,
                         rel_start: int) -> tuple[list[dict | None], int] | None:
     """Build the memo from the end: walk the last ``total - rel_start`` physical lines of
     ``[0, st.st_size)`` and store them as the entry's covered suffix.
@@ -502,7 +491,7 @@ class ChatEventStore:
     the byte budget; the caller full-builds.
     """
     try:
-      total = count_ndjson_lines(path)
+      total = ndjson.count_ndjson_lines(path)
       after = path.stat()
     except OSError as e:
       # A delete landing mid-call leaves the bracket unanswerable; None falls
@@ -523,10 +512,10 @@ class ChatEventStore:
         path, (st.st_mtime_ns, st.st_size, st.st_ino, lines, st.st_size, ends, rel_start, byte_start))
     return lines, rel_start
 
-  def _chat_events_path(self, session_id: str) -> Path:
+  def _chat_events_path(self, session_id: str) -> pathlib.Path:
     return chat_events_path(self._session_dir(session_id))
 
-  def archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime) -> dict:
+  def archive_old_chat_events_sync(self, session_id: str, cutoff_utc: datetime.datetime) -> dict:
     """Split live chat_events.jsonl at cutoff_utc, append the head to a weekly archive."""
     live_path = self._chat_events_path(session_id)
     if not live_path.exists():
@@ -557,7 +546,7 @@ class ChatEventStore:
           kept_raw.append(raw)
           continue
         try:
-          ts = parse_utc_datetime(ts_raw)
+          ts = models.parse_utc_datetime(ts_raw)
         except ValueError as e:
           log.debug("chat_event_archive_ts_parse_skip", session_id=session_id, error=str(e))
           split_reached = True
@@ -581,7 +570,7 @@ class ChatEventStore:
       for raw in archived_raw:
         f.write(raw + "\n")
 
-    atomic_write_text(live_path, "".join(raw + "\n" for raw in kept_raw))
+    json_utils.atomic_write_text(live_path, "".join(raw + "\n" for raw in kept_raw))
 
     return {
         "events_archived": len(archived_raw),

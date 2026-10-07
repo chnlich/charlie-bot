@@ -1,42 +1,40 @@
 """Tests for the plan internal-API endpoints and the sessions plans read path."""
 
-from pathlib import Path
+import pathlib
 from typing import Any
 
+import conftest
+import fastapi
 import pytest
-from conftest import make_plan_setup as _setup
-from conftest import write_plan_artifact as _write_artifact
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from fastapi import testclient
 
-from src.api.deps import get_plan_manager, get_session_manager, get_thread_manager
-from src.api.internal import router as internal_router
-from src.api.sessions import router as sessions_router
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
-from src.core.plans import PlanRegistryManager
-from src.core.sessions import SessionManager
-from src.core.threads import ThreadManager
+from src.api import deps, internal
+from src.api import sessions as sessions_api
+from src.core import config, models, plans, sessions, threads
 
 
-def _build_app(session_mgr: SessionManager, thread_mgr: ThreadManager, plan_mgr: PlanRegistryManager) -> FastAPI:
-  app = FastAPI()
-  app.include_router(internal_router, prefix="/api/internal")
-  app.include_router(sessions_router, prefix="/api/sessions")
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
-  app.dependency_overrides[get_plan_manager] = lambda: plan_mgr
+def _build_app(
+    session_mgr: sessions.SessionManager, thread_mgr: threads.ThreadManager,
+    plan_mgr: plans.PlanRegistryManager) -> fastapi.FastAPI:
+  app = fastapi.FastAPI()
+  app.include_router(internal.router, prefix="/api/internal")
+  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.dependency_overrides[deps.get_session_manager] = lambda: session_mgr
+  app.dependency_overrides[deps.get_thread_manager] = lambda: thread_mgr
+  app.dependency_overrides[deps.get_plan_manager] = lambda: plan_mgr
   return app
 
 
-async def _presented_rig(tmp_path: Path,) -> tuple[FastAPI, CharlieBotConfig, PlanRegistryManager, SessionMetadata]:
+async def _presented_rig(
+    tmp_path: pathlib.Path,
+) -> tuple[fastapi.FastAPI, config.CharlieBotConfig, plans.PlanRegistryManager, models.SessionMetadata]:
   """Plan-endpoints app over a fresh registry with plan 1 already presented from plan_01.html.
 
   Returns (app, cfg, plan_mgr, meta); amend tests need cfg to stage a second artifact, and
   the closed-state tests close the plan through plan_mgr.
   """
-  cfg, session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
+  cfg, session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  f = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f, title="P1")
   return _build_app(session_mgr, thread_mgr, plan_mgr), cfg, plan_mgr, meta
 
@@ -47,11 +45,11 @@ async def _presented_rig(tmp_path: Path,) -> tuple[FastAPI, CharlieBotConfig, Pl
 
 
 @pytest.mark.asyncio
-async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
-  f = _write_artifact(cfg, meta.id, "plan_01.html")
+async def test_plan_present_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  f = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
             "session_id": meta.id,
@@ -63,10 +61,10 @@ async def test_plan_present_endpoint_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
+async def test_plan_amend_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
   app, cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with TestClient(app) as client:
+  f2 = conftest.write_plan_artifact(cfg, meta.id, "plan_02.html")
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/amend",
         json={
@@ -97,11 +95,11 @@ async def test_plan_amend_endpoint_happy_path(tmp_path: Path) -> None:
         }, id="initial-trigger"),
     ],
 )
-async def test_plan_amend_rejects_422(tmp_path: Path, amend_fields: dict[str, Any]) -> None:
+async def test_plan_amend_rejects_422(tmp_path: pathlib.Path, amend_fields: dict[str, Any]) -> None:
   """note is required on the amend request, and trigger=initial — the create-time value — is a 422."""
   app, cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  f2 = _write_artifact(cfg, meta.id, "plan_02.html")
-  with TestClient(app) as client:
+  f2 = conftest.write_plan_artifact(cfg, meta.id, "plan_02.html")
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/amend", json={
             "session_id": meta.id,
@@ -113,18 +111,18 @@ async def test_plan_amend_rejects_422(tmp_path: Path, amend_fields: dict[str, An
 
 
 @pytest.mark.asyncio
-async def test_plan_approve_endpoint_happy_path(tmp_path: Path) -> None:
+async def test_plan_approve_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
   app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.post("/api/internal/plan/approve", json={"session_id": meta.id})
   assert resp.status_code == 200
   assert resp.json() == {"plan": 1, "v": 1, "state": "approved"}
 
 
 @pytest.mark.asyncio
-async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
+async def test_plan_close_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
   app, _cfg, _plan_mgr, meta = await _presented_rig(tmp_path)
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/close", json={
             "session_id": meta.id,
@@ -141,10 +139,10 @@ async def test_plan_close_endpoint_happy_path(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
-  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await _setup(tmp_path)
+async def test_plan_present_rejects_unknown_session_404(tmp_path: pathlib.Path) -> None:
+  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await conftest.make_plan_setup(tmp_path)
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
             "session_id": "nonexistent",
@@ -156,10 +154,10 @@ async def test_plan_present_rejects_unknown_session_404(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
+async def test_plan_close_rejects_already_closed_400(tmp_path: pathlib.Path) -> None:
   app, _cfg, plan_mgr, meta = await _presented_rig(tmp_path)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/close", json={
             "session_id": meta.id,
@@ -176,13 +174,13 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: pathlib.Path) -> None:
+  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   plans_path = cfg.sessions_dir / meta.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   plans_path.write_text("{not valid json", encoding="utf-8")
   app = _build_app(_session_mgr, thread_mgr, plan_mgr)
-  with TestClient(app) as client:
+  with testclient.TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200
   body = resp.json()

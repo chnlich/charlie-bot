@@ -11,65 +11,50 @@ rounds record no handle and stay outside the judgment.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, tzinfo
-from pathlib import Path
+import dataclasses
+import datetime
+import pathlib
 from typing import Any
-from unittest.mock import AsyncMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    SCHEDULER_GET_CONFIG_PATCH_TARGET,
-    SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET,
-    bind_deps_managers,
-    create_scheduled_node,
-    make_home_config,
-    write_thread_meta,
-)
 
+from src.core import config, models, sessions, task_sessions
 from src.core import scheduler as scheduler_module
-from src.core.config import ScheduledTaskConfig
-from src.core.models import (
-    LastRunStatus,
-    SessionMetadata,
-    parse_utc_datetime,
-)
-from src.core.scheduler import Scheduler
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
 
 
 class _Clock:
-  """Controllable ``datetime.now`` source for scheduler ticks."""
+  """Controllable ``datetime.datetime.now`` source for scheduler ticks."""
 
-  def __init__(self, start: datetime) -> None:
+  def __init__(self, start: datetime.datetime) -> None:
     self._now = start
 
-  def now(self, tz: tzinfo | None = None) -> datetime:
+  def now(self, tz: datetime.tzinfo | None = None) -> datetime.datetime:
     if tz is None:
       return self._now
     return self._now.astimezone(tz)
 
-  def set(self, value: datetime) -> None:
+  def set(self, value: datetime.datetime) -> None:
     self._now = value
 
 
-class _FakeDate(datetime):
-  """``datetime`` subclass whose ``now`` follows a controlled ``_Clock``.
+class _FakeDate(datetime.datetime):
+  """``datetime.datetime`` subclass whose ``now`` follows a controlled ``_Clock``.
 
   A subclass (not a bare replacement object) keeps
-  ``croniter(...).get_next(datetime)`` on the real datetime path, so the due-time
+  ``croniter(...).get_next(datetime.datetime)`` on the real datetime path, so the due-time
   arithmetic stays byte-for-byte the production line.
   """
 
   _clock: _Clock
 
   @classmethod
-  def now(cls, tz: tzinfo | None = None) -> datetime:
+  def now(cls, tz: datetime.tzinfo | None = None) -> datetime.datetime:
     return cls._clock.now(tz)
 
 
-@dataclass
+@dataclasses.dataclass
 class _PendingRound:
   """A live in-flight asyncio round plus counting.
 
@@ -79,10 +64,10 @@ class _PendingRound:
   many of those rounds have begun executing.
   """
 
-  session: SessionMetadata
+  session: models.SessionMetadata
   fires: int = 0
   started: int = 0
-  complete: asyncio.Event = field(default_factory=asyncio.Event)
+  complete: asyncio.Event = dataclasses.field(default_factory=asyncio.Event)
   handle: asyncio.Task = None  # type: ignore[assignment]
 
 
@@ -94,14 +79,15 @@ def _install_clock(monkeypatch: pytest.MonkeyPatch, clock: _Clock) -> None:
   )
 
 
-def _task(name: str = "code-health", **kw: Any) -> ScheduledTaskConfig:
+def _task(name: str = "code-health", **kw: Any) -> config.ScheduledTaskConfig:
   base: dict = {"name": name, "cron": "* * * * *", "timezone": "UTC", "prompt": "run the round"}
   base.update(kw)
-  return ScheduledTaskConfig(**base)
+  return config.ScheduledTaskConfig(**base)
 
 
 def install_pending_executor(
-    scheduler: Scheduler, clock: _Clock, pending: _PendingRound, tree: TaskTreeManager) -> None:
+    scheduler: scheduler_module.Scheduler, clock: _Clock, pending: _PendingRound,
+    tree: task_sessions.TaskTreeManager) -> None:
   """Replace ``_execute_task`` with a fire-and-forget scheduled fire.
 
   Births a live pending asyncio round (registered as the in-flight handle when
@@ -114,31 +100,32 @@ def install_pending_executor(
     pending.started += 1
     await pending.complete.wait()
 
-  async def _execute(task_cfg: ScheduledTaskConfig, record_handle: bool = False, firing: str | None = None) -> dict:
+  async def _execute(
+      task_cfg: config.ScheduledTaskConfig, record_handle: bool = False, firing: str | None = None) -> dict:
     pending.fires += 1
     handle = asyncio.create_task(_round())
     pending.handle = handle
     if record_handle:
       scheduler._handles[task_cfg.name] = handle
-    await tree.record_scheduled_fire(pending.session.id, last_scheduled_run=clock.now(UTC).isoformat())
+    await tree.record_scheduled_fire(pending.session.id, last_scheduled_run=clock.now(datetime.UTC).isoformat())
     return {"session_id": pending.session.id, "thread_id": None}
 
   scheduler._execute_task = _execute
 
 
 async def _tick(
-    scheduler: Scheduler,
-    task_cfg: ScheduledTaskConfig,
-    session_mgr: SessionManager,
+    scheduler: scheduler_module.Scheduler,
+    task_cfg: config.ScheduledTaskConfig,
+    session_mgr: sessions.SessionManager,
     clock: _Clock,
     minute: int,
     second: int = 0,
 ) -> None:
-  clock.set(datetime(2026, 6, 1, 0, minute, second, tzinfo=UTC))
+  clock.set(datetime.datetime(2026, 6, 1, 0, minute, second, tzinfo=datetime.UTC))
   await scheduler._maybe_run(task_cfg, session_mgr, {}, None)
 
 
-def _skip_events_since(session_mgr: SessionManager, since: int) -> int:
+def _skip_events_since(session_mgr: sessions.SessionManager, since: int) -> int:
   """Count scheduled_run_skipped events emitted since ``since`` (len-based cursor)."""
   count = 0
   for call in session_mgr.persist_and_broadcast.await_args_list[since:]:
@@ -150,33 +137,34 @@ def _skip_events_since(session_mgr: SessionManager, since: int) -> int:
 
 async def _bound_rig_tree(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> tuple[SessionManager, TaskTreeManager, SessionMetadata]:
+    tmp_path: pathlib.Path,
+) -> tuple[sessions.SessionManager, task_sessions.TaskTreeManager, models.SessionMetadata]:
   """One synthetic home with the tree wired as the scheduler's deps singleton,
   plus the task's manager node carrying the clock's instant as its anchor."""
-  cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
-  session = await create_scheduled_node(tree, name="code-health", backend=None)
+  cfg = conftest.make_home_config(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
+  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session = await conftest.create_scheduled_node(tree, name="code-health", backend=None)
   return session_mgr, tree, session
 
 
 async def _pending_rig(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> tuple[_Clock, Scheduler, SessionMetadata, SessionManager, TaskTreeManager, _PendingRound, ScheduledTaskConfig]:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
+) -> tuple[_Clock, scheduler_module.Scheduler, models.SessionMetadata, sessions.SessionManager,
+           task_sessions.TaskTreeManager, _PendingRound, config.ScheduledTaskConfig]:
   """Rig for the scheduled-path tests: clock parked at 2026-06-01 00:00 UTC, one
   pending in-flight round, node anchored at that instant, one-minute-cadence task."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
+  clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
-  cfg = make_home_config(tmp_path)
+  cfg = conftest.make_home_config(tmp_path)
   session_mgr, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
   await tree.record_scheduled_fire(session.id, last_scheduled_run=clock.now().isoformat())  # 00:00
-  scheduler = Scheduler(cfg, session_mgr)
+  scheduler = scheduler_module.Scheduler(cfg, session_mgr)
   pending = _PendingRound(session)
   install_pending_executor(scheduler, clock, pending, tree)
   # The skip event's count reads the broadcast spy, not the real broadcaster.
-  monkeypatch.setattr(session_mgr, "persist_and_broadcast", AsyncMock())
+  monkeypatch.setattr(session_mgr, "persist_and_broadcast", mock.AsyncMock())
   task_cfg = _task(session_id=session.id)
   return clock, scheduler, session, session_mgr, tree, pending, task_cfg
 
@@ -189,7 +177,7 @@ async def _pending_rig(
 @pytest.mark.asyncio
 async def test_at_most_one_round_in_flight(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   clock, scheduler, _session, session_mgr, _tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
 
@@ -213,7 +201,7 @@ async def test_at_most_one_round_in_flight(
 @pytest.mark.asyncio
 async def test_one_skip_consuming_delayed_occurrences(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """A tick delayed past several occurrences yields one record that consumes them."""
   clock, scheduler, session, session_mgr, tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
@@ -227,7 +215,8 @@ async def test_one_skip_consuming_delayed_occurrences(
   assert _skip_events_since(session_mgr, cursor) == 1
   anchored = await tree.load_meta(session.id)
   assert anchored is not None
-  assert parse_utc_datetime(anchored.last_scheduled_run) == datetime(2026, 6, 1, 0, 4, 0, tzinfo=UTC)
+  assert models.parse_utc_datetime(anchored.last_scheduled_run) == datetime.datetime(
+      2026, 6, 1, 0, 4, 0, tzinfo=datetime.UTC)
   pending.complete.set()
   await asyncio.sleep(0)
 
@@ -240,7 +229,7 @@ async def test_one_skip_consuming_delayed_occurrences(
 @pytest.mark.asyncio
 async def test_no_fire_on_completion_moment(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """After the pending round finishes, further fires land on the cron grid, never
   at the completion moment. Failing the skip or firing on completion makes the
@@ -269,7 +258,8 @@ async def test_no_fire_on_completion_moment(
   assert pending.fires == fires_at_completion + 1
   anchored = await tree.load_meta(session.id)
   assert anchored is not None
-  assert parse_utc_datetime(anchored.last_scheduled_run) == datetime(2026, 6, 1, 0, 3, 0, tzinfo=UTC)
+  assert models.parse_utc_datetime(anchored.last_scheduled_run) == datetime.datetime(
+      2026, 6, 1, 0, 3, 0, tzinfo=datetime.UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -280,21 +270,21 @@ async def test_no_fire_on_completion_moment(
 @pytest.mark.asyncio
 async def test_fire_ignores_stuck_running_disk_state(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """A node whose thread metadata says status=running with a pid that no
   longer exists, and whose last_run_status is stuck at 'running', still fires
   when no in-flight handle exists. Any implementation consulting either on-disk
   signal would stall this fire."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
+  clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
-  cfg = make_home_config(tmp_path)
+  cfg = conftest.make_home_config(tmp_path)
   session_mgr, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
-  scheduler = Scheduler(cfg, session_mgr)
+  scheduler = scheduler_module.Scheduler(cfg, session_mgr)
 
   # Stuck on-disk signals: a thread record whose status says running with a pid
   # that no longer exists, and node bookkeeping stuck at running.
-  write_thread_meta(
+  conftest.write_thread_meta(
       cfg, session.id, {
           "id": "stuck-thread",
           "session_id": session.id,
@@ -303,9 +293,9 @@ async def test_fire_ignores_stuck_running_disk_state(
           "pid": 999999,
       })
   await tree.record_scheduled_fire(
-      session.id, last_scheduled_run=clock.now().isoformat(), last_run_status=LastRunStatus.RUNNING)  # 00:00
+      session.id, last_scheduled_run=clock.now().isoformat(), last_run_status=models.LastRunStatus.RUNNING)  # 00:00
 
-  fired = AsyncMock()
+  fired = mock.AsyncMock()
   monkeypatch.setattr(scheduler, "_execute_task", fired)
   task_cfg = _task(session_id=session.id)
 
@@ -324,14 +314,14 @@ async def test_fire_ignores_stuck_running_disk_state(
 @pytest.mark.asyncio
 async def test_manual_run_is_outside_and_leaves_handle_unchanged(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   """run_task_now executes while a handle is in flight and leaves the recorded
   handle untouched (manual rounds neither block nor are blocked)."""
-  clock = _Clock(datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC))
+  clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
-  cfg = make_home_config(tmp_path)
-  scheduler = Scheduler(cfg, AsyncMock())
+  cfg = conftest.make_home_config(tmp_path)
+  scheduler = scheduler_module.Scheduler(cfg, mock.AsyncMock())
 
   # A scheduled round is in flight.
   async def _never() -> None:
@@ -340,9 +330,9 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   scheduled_handle = asyncio.create_task(_never())
   scheduler._handles["code-health"] = scheduled_handle
 
-  monkeypatch.setattr(scheduler, "_execute_task", AsyncMock(return_value={"session_id": "s", "thread_id": "t"}))
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [_task()])
+  monkeypatch.setattr(scheduler, "_execute_task", mock.AsyncMock(return_value={"session_id": "s", "thread_id": "t"}))
+  monkeypatch.setattr(conftest.SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [_task()])
 
   result = await scheduler.run_task_now("code-health")
 

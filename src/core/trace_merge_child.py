@@ -12,19 +12,19 @@ re-import. Module level stays stdlib-only: the parent imports the argv builder
 at server-import time, so the M99 server import floor carries no trace stack.
 """
 
+import pathlib
 import sys
-from pathlib import Path
 
 EXIT_OK = 0
 EXIT_FAILED = 1
 EXIT_NOT_A_TRACE = 2
 
 
-def parent_argv(paths: list[Path], out_path: Path, slim: bool, checkout_root: str) -> list[str]:
+def parent_argv(paths: list[pathlib.Path], out_path: pathlib.Path, slim: bool, checkout_root: str) -> list[str]:
   """The spawn argv the parent runs; *checkout_root* puts ``src`` on the child's path."""
   return [
       sys.executable,
-      str(Path(__file__).resolve()),
+      str(pathlib.Path(__file__).resolve()),
       checkout_root,
       *[str(path) for path in paths],
       str(out_path),
@@ -41,14 +41,14 @@ def main(argv: list[str]) -> int:
   (a decode error, a missing file's traceback exit) is EXIT_FAILED.
   """
   sys.path.insert(0, argv[1])
-  paths = [Path(value) for value in argv[2:-2]]
-  out_path = Path(argv[-2])
+  paths = [pathlib.Path(value) for value in argv[2:-2]]
+  out_path = pathlib.Path(argv[-2])
   slim = argv[-1] == "1"
-  from src.core.trace_merge import NotATraceError, merge_traces
+  from src.core import trace_merge
 
   try:
-    merge_traces(paths, out_path, slim)
-  except NotATraceError as error:
+    trace_merge.merge_traces(paths, out_path, slim)
+  except trace_merge.NotATraceError as error:
     print(str(error), file=sys.stderr)
     return EXIT_NOT_A_TRACE
   except ValueError as error:  # orjson decode errors subclass ValueError

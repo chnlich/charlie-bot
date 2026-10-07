@@ -29,24 +29,24 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import sys
 import urllib.error
 import urllib.request
-from pathlib import Path
 
 SNAPSHOT_KIND = "archive_unify_migration/snapshot/v1"
 
 
 def _base_url() -> str:
   """The configured server's base URL (the CLI's own resolution)."""
-  from src.runtime.cli.common import _internal_base_url
-  return _internal_base_url()
+  from src.runtime.cli import common
+  return common._internal_base_url()
 
 
 def _access_key() -> str:
   """The operator key every write rides; empty means the preflight fails."""
-  from src.infra.credentials import configured_access_key
-  return configured_access_key()
+  from src.infra import credentials
+  return credentials.configured_access_key()
 
 
 def _headers(key: str) -> dict[str, str]:
@@ -87,7 +87,7 @@ def preflight(*, require_server: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _read_jsonl(path: Path) -> list[dict]:
+def _read_jsonl(path: pathlib.Path) -> list[dict]:
   events: list[dict] = []
   try:
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -115,7 +115,7 @@ def _fold_task_state(events: list[dict]) -> str:
   return state
 
 
-def cmd_snapshot(out: Path) -> None:
+def cmd_snapshot(out: pathlib.Path) -> None:
   base = preflight(require_server=True)  # the old server must be the one running
   sessions_dir = _sessions_dir()
   migrate: list[str] = []
@@ -161,9 +161,9 @@ def cmd_snapshot(out: Path) -> None:
   print(f"snapshot: {len(migrate)} task node(s) to archive, {len(task_parents)} task node(s) recorded -> {out}")
 
 
-def _sessions_dir() -> Path:
-  from src.infra.home import charliebot_home_dir
-  path = charliebot_home_dir() / "sessions"
+def _sessions_dir() -> pathlib.Path:
+  from src.infra import home
+  path = home.charliebot_home_dir() / "sessions"
   if not path.is_dir():
     sys.exit(f"snapshot source missing: no sessions directory at {path}")
   return path
@@ -174,7 +174,7 @@ def _sessions_dir() -> Path:
 # ---------------------------------------------------------------------------
 
 
-def cmd_apply(source: Path) -> None:
+def cmd_apply(source: pathlib.Path) -> None:
   base = preflight(require_server=True)
   doc = json.loads(source.read_text(encoding="utf-8"))
   if doc.get("kind") != SNAPSHOT_KIND:
@@ -271,10 +271,10 @@ def main() -> None:
   sub = parser.add_subparsers(dest="command", required=True)
 
   snap = sub.add_parser("snapshot", help="List the migration set while the old server runs (read-only)")
-  snap.add_argument("--out", required=True, type=Path, help="Where the snapshot JSON is written")
+  snap.add_argument("--out", required=True, type=pathlib.Path, help="Where the snapshot JSON is written")
 
   apply_ = sub.add_parser("apply", help="Archive the snapshot's nodes after the restart, then verify")
-  apply_.add_argument("--in", dest="source", required=True, type=Path, help="The snapshot JSON to apply")
+  apply_.add_argument("--in", dest="source", required=True, type=pathlib.Path, help="The snapshot JSON to apply")
 
   sub.add_parser("rollback", help="Unarchive every task node whose last close outcome is archived")
 

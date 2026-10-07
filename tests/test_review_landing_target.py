@@ -10,37 +10,20 @@ reaches the manager's turn text with its summary after the typed header.
 from __future__ import annotations
 
 import asyncio
+import functools
+import pathlib
 import subprocess
-from functools import partial
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    WORKER_BUILD_BACKEND_PATCH_TARGET,
-    create_task,
-    init_repo_with_origin,
-    patch_instructions_content,
-    run_git,
-)
 
 from src.core import event_types as ET
-from src.core.models import TaskSpec, TaskType
-from src.core.task_sessions import TaskTreeManager
-from tests.test_task_execution import (
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    build_env,
-    implement_marker_commit,
-    install_backends,
-    result_event,
-    wait_for_terminal_run,
-    work_run_worktree,
-)
+from src.core import models, task_sessions
+from tests import test_task_execution
 
 
-async def _reviewed_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
-                             reviewer_pushes: bool) -> tuple[TaskTreeManager, str, str, Path]:
+async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *,
+                             reviewer_pushes: bool) -> tuple[task_sessions.TaskTreeManager, str, str, pathlib.Path]:
   """One implement task based on the bare ``main``, through work and a successful review.
 
   The work backend commits a marker on the work branch. When *reviewer_pushes*,
@@ -48,41 +31,43 @@ async def _reviewed_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   does, which moves origin's main and leaves the clone's local main behind.
   Returns once the review Run's delivery chain has reported to the manager.
   """
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  repo, _origin = init_repo_with_origin(tmp_path)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
-  worker = await create_task(
+  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  repo, _origin = conftest.init_repo_with_origin(tmp_path)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+  worker = await conftest.create_task(
       tree,
       parent=manager.id,
       request_id="w",
       profile="worker",
-      task=TaskSpec(goal="add a marker file", repo_path=str(repo), base_branch="main", task_type=TaskType.IMPLEMENT))
+      task=models.TaskSpec(
+          goal="add a marker file", repo_path=str(repo), base_branch="main", task_type=models.TaskType.IMPLEMENT))
 
   def manager_turn(option, cfg_, **kwargs):
-    backend = SpawningScriptedBackend([result_event("manager turn")])
+    backend = test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("manager turn")])
     if kwargs.get("on_spawn") is not None:
       backend.set_on_spawn(kwargs["on_spawn"])
     return backend
 
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, manager_turn)
-  patch_instructions_content(monkeypatch)
+  monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, manager_turn)
+  conftest.patch_instructions_content(monkeypatch)
   # The work-run launch judges the nearest-user authorization on the manager.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and add the marker.", actor="user")
 
   def publish() -> None:
     if reviewer_pushes:
-      run_git(work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
+      conftest.run_git(test_task_execution.work_run_worktree(tree, worker.id), "push", "-q", "origin", "HEAD:main")
 
-  install_backends(
+  test_task_execution.install_backends(
       monkeypatch, [
-          SpawningScriptedBackend(
-              [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),
-          SpawningScriptedBackend([result_event("review ok")], pre_run=publish),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("implemented")],
+              pre_run=functools.partial(test_task_execution.implement_marker_commit, tree, worker.id)),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("review ok")], pre_run=publish),
+      ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
-  _work, outcome = await wait_for_terminal_run(tree, worker.id, decision["run_id"])
+  _work, outcome = await test_task_execution.wait_for_terminal_run(tree, worker.id, decision["run_id"])
   assert outcome == "success"
 
   deadline = asyncio.get_event_loop().time() + 20
@@ -98,21 +83,21 @@ async def _reviewed_delivery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
   return tree, manager.id, worker.id, repo
 
 
-def _reports(tree: TaskTreeManager, manager_id: str) -> list[dict]:
+def _reports(tree: task_sessions.TaskTreeManager, manager_id: str) -> list[dict]:
   return [e for e in tree.events.load_events(manager_id) if e.get("type") == ET.CHILD_REPORT]
 
 
 @pytest.mark.asyncio
 async def test_commit_published_only_on_origin_base_closes_the_reviewed_task(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   tree, manager_id, worker_id, repo = await _reviewed_delivery(tmp_path, monkeypatch, reviewer_pushes=True)
 
   work = next(r for r in tree.runs.list_run_records_sync(worker_id) if r.kind == "work")
   assert work.base_branch == "main" and work.branch_name
-  commit = run_git(repo, "rev-parse", work.branch_name)
+  commit = conftest.run_git(repo, "rev-parse", work.branch_name)
   # The premise: the reviewed commit is on the published main only; the
   # clone's local main still sits at the seed commit.
-  assert run_git(repo, "rev-parse", "origin/main") == commit
+  assert conftest.run_git(repo, "rev-parse", "origin/main") == commit
   assert subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor", commit, "main"]).returncode == 1
 
   deadline = asyncio.get_event_loop().time() + 10
@@ -129,7 +114,7 @@ async def test_commit_published_only_on_origin_base_closes_the_reviewed_task(
 
 @pytest.mark.asyncio
 async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   tree, manager_id, worker_id, _repo = await _reviewed_delivery(tmp_path, monkeypatch, reviewer_pushes=False)
 
   reports = _reports(tree, manager_id)
@@ -142,19 +127,22 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
 
 @pytest.mark.asyncio
 async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  manager = await create_task(tree, parent=None, request_id="root")
-  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker", task=TaskSpec(goal="work"))
-  builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("noted")])], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  manager = await conftest.create_task(tree, parent=None, request_id="root")
+  child = await conftest.create_task(
+      tree, parent=manager.id, request_id="child", profile="worker", task=models.TaskSpec(goal="work"))
+  builds = test_task_execution.install_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("noted")])],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
+  conftest.patch_instructions_content(monkeypatch)
   summary = "work run run-w passed review but its branch did not land on main: ancestry check failed"
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "finish-1"}, outcome="blocked", summary=summary, recipient=manager.id)
 
   decision = await tree.dispatch.dispatch_pending(manager.id)
-  run, _outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  run, _outcome = await test_task_execution.wait_for_terminal_run(tree, manager.id, decision["run_id"])
 
   line = f"[Report from task {child.id} | outcome blocked] {summary}"
   launch_text = (tree.runs.run_dir(manager.id, run.id) / "launch_prompt.md").read_text(encoding="utf-8")

@@ -29,21 +29,17 @@ from __future__ import annotations
 
 import dataclasses
 import html
+import pathlib
 import re
 import uuid
 from collections.abc import Callable, Iterator
-from html.parser import HTMLParser
-from pathlib import Path
+from html import parser
 from typing import TYPE_CHECKING
 
-from src.core.artifact_shared import GENRE_TEMPLATES as _GENRE_TEMPLATES
-from src.core.artifact_shared import named_control_bytes, non_lf_control_bytes
-from src.core.constants import ARTIFACT_GENRES, REPO_ROOT
-from src.core.plan_diff import VOID_TAGS
-from src.core.timeouts import ARTIFACT_PROBE_TIMEOUT
+from src.core import artifact_shared, constants, plan_diff, timeouts
 
 if TYPE_CHECKING:
-  from src.core.config import CharlieBotConfig
+  from src.core import config
 
 # One name per assertion: the outcome name a check stamps, its _ASSERTION_RUNNERS key, and its
 # _ASSERTION_SETS member are the same string, so the registry and the genre sets build on these
@@ -94,7 +90,7 @@ def _weighted_goal_length(text: str) -> int:
   return len(text) + sum(1 for c in text if any(lo <= ord(c) <= hi for lo, hi in _CJK_RANGES))
 
 
-def _measure_goal_weighted(artifact: Path) -> int:
+def _measure_goal_weighted(artifact: pathlib.Path) -> int:
   """Weighted length of the artifact's Problem / Goal section; a missing section raises."""
   section = _GOAL_SECTION_RE.search(artifact.read_text(encoding="utf-8"))
   if section is None:
@@ -134,7 +130,7 @@ _PAGE_PROBE_TEMPLATE = """<!doctype html>
 """
 
 
-def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
+def _measure_page_height(chrome_bin: pathlib.Path, artifact: pathlib.Path) -> int:
   """Render *artifact* headlessly through a session-unique probe page; return its scroll height."""
   # The renderer's websockets stack costs ~60 ms of import and serves only this
   # probe; the artifact chain's import floor (docs/perf_baseline.md M102) depends
@@ -149,14 +145,14 @@ def _measure_page_height(chrome_bin: Path, artifact: Path) -> int:
     probe.unlink()
 
 
-def _require_chrome_bin(cfg: CharlieBotConfig) -> Path:
+def _require_chrome_bin(cfg: config.CharlieBotConfig) -> pathlib.Path:
   """Return the configured headless renderer path; raise when unset or unusable."""
   chrome_bin = cfg.headless_chrome_bin
   if not chrome_bin:
     raise ValueError(
         "headless_chrome_bin is required for plan registration: set it in the host config.yaml "
         "to the absolute path of a headless-chromium-compatible binary")
-  chrome = Path(chrome_bin)
+  chrome = pathlib.Path(chrome_bin)
   if not chrome.exists():
     raise ValueError(
         "headless_chrome_bin is required for plan registration but the configured path "
@@ -182,7 +178,7 @@ class _Element:
     self.parent = parent
 
 
-class _TreeBuilder(HTMLParser):
+class _TreeBuilder(parser.HTMLParser):
 
   def __init__(self) -> None:
     super().__init__(convert_charrefs=True)
@@ -192,7 +188,7 @@ class _TreeBuilder(HTMLParser):
   def handle_starttag(self, tag: str, attrs: list) -> None:
     el = _Element(tag, dict(attrs), self._stack[-1])
     self._stack[-1].children.append(el)
-    if tag not in VOID_TAGS:
+    if tag not in plan_diff.VOID_TAGS:
       self._stack.append(el)
 
   def handle_startendtag(self, tag: str, attrs: list) -> None:
@@ -275,9 +271,9 @@ def _fail(name: str, detail: str) -> AssertionOutcome:
 @dataclasses.dataclass
 class _Context:
   genre: str
-  artifact: Path
+  artifact: pathlib.Path
   root: _Element
-  cfg: CharlieBotConfig | None
+  cfg: config.CharlieBotConfig | None
 
 
 # Numbered-h2 count per genre as (required, exact): plan/sitrep/debug/explain demand exactly their
@@ -300,8 +296,8 @@ def _check_style_verbatim(ctx: _Context) -> list[AssertionOutcome]:
   page_styles = _find(ctx.root, "style")
   if len(page_styles) != 1:
     return [_fail(name, f"page carries {len(page_styles)} <style> blocks, expected exactly one")]
-  template_rel = f"prompts/{_GENRE_TEMPLATES[ctx.genre]}"
-  template_styles = _find(_parse_dom((REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
+  template_rel = f"prompts/{artifact_shared.GENRE_TEMPLATES[ctx.genre]}"
+  template_styles = _find(_parse_dom((constants.REPO_ROOT / template_rel).read_text(encoding="utf-8")), "style")
   if len(template_styles) != 1:
     raise RuntimeError(f"genre template {template_rel} carries {len(template_styles)} <style> blocks, expected one")
   if " ".join(_text(page_styles[0]).split()) == " ".join(_text(template_styles[0]).split()):
@@ -628,10 +624,10 @@ def _check_ordinal_named(ctx: _Context) -> list[AssertionOutcome]:
 
 def _check_byte_integrity(ctx: _Context) -> list[AssertionOutcome]:
   name = BYTE_INTEGRITY
-  bad = non_lf_control_bytes(ctx.artifact.read_bytes())
+  bad = artifact_shared.non_lf_control_bytes(ctx.artifact.read_bytes())
   if not bad:
     return [_ok(name)]
-  return [_fail(name, f"{len(bad)} non-LF control bytes: {named_control_bytes(bad)}")]
+  return [_fail(name, f"{len(bad)} non-LF control bytes: {artifact_shared.named_control_bytes(bad)}")]
 
 
 _KATEX_CSS_HINT = "katex.min.css"
@@ -718,14 +714,14 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
 # The CLI parses GENRES from src.core.constants (the artifact chain must not load this
 # module to build its parser), so the registry and the parsed vocabulary must state the
 # same genres; a registration that skips the constants tuple fails here, at import.
-GENRES: tuple[str, ...] = ARTIFACT_GENRES
+GENRES: tuple[str, ...] = constants.ARTIFACT_GENRES
 if GENRES != tuple(_ASSERTION_SETS):
   raise ValueError(
       f"src.core.constants.ARTIFACT_GENRES {GENRES} drifted from _ASSERTION_SETS "
       f"{tuple(_ASSERTION_SETS)}; name every registered genre in both")
 
 
-def run_assertions(genre: str, artifact: Path, cfg: CharlieBotConfig) -> list[AssertionOutcome]:
+def run_assertions(genre: str, artifact: pathlib.Path, cfg: config.CharlieBotConfig) -> list[AssertionOutcome]:
   """Run every assertion of *genre*'s set against *artifact*; return one outcome per printed line.
 
   Never stops at the first failure — a fix round clears every defect in one pass. A genre with
@@ -777,7 +773,7 @@ class ProbeResult:
   answer: str | None
 
 
-def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResult:
+def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str) -> ProbeResult:
   """Send the page's full text plus the seven-question prompt to the preferred light backends.
 
   Backends are tried in config backends.preference order (iter_light_backends); each failure is
@@ -792,9 +788,9 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
   # loading here and nowhere earlier.
   import asyncio
 
-  from src.agents.backends.registry import build_backend
-  from src.core.autonamer import iter_light_backends
-  options = list(iter_light_backends(cfg))
+  from src.agents.backends import registry
+  from src.core import autonamer
+  options = list(autonamer.iter_light_backends(cfg))
   if not options:
     raise ValueError("no light backends resolvable from config backends.preference")
   attempts: list[tuple[str, str]] = []
@@ -803,7 +799,8 @@ def run_probe(cfg: CharlieBotConfig, artifact: Path, trigger: str) -> ProbeResul
       # No cgroup_session_id: the artifact probe runs from the CLI with no
       # CharlieBot session home, so it cannot enter any session's cgroup.
       answer = asyncio.run(
-          build_backend(option, cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
+          registry.build_backend(option, cfg).one_shot_text(
+              prompt, _PROBE_SYSTEM_PROMPT, timeout=timeouts.ARTIFACT_PROBE_TIMEOUT))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
     except Exception as e:
       attempts.append((option.id, str(e)))

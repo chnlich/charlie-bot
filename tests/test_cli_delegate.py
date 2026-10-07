@@ -1,27 +1,18 @@
 """Tests for src/cli/delegate.py."""
 
 import json
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET,
-    assert_cli_reject,
-    assert_cli_reject_exit2,
-    delegate_invocation,
-    make_json_response,
-    make_sessions_dir_config,
-    patched_cli_post,
-)
-from conftest import setup_session_cwd as _setup_session_cwd
 
-from src.cli.delegate import main
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.cli import delegate
+from src.core import constants
 
 
-def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None = None) -> list[str]:
-  """Argv for a repo-scoped delegate main() call: the required repo/base-branch/task-spec-file and
+def _repo_argv(repo: str, task_spec_file: pathlib.Path, *extra: str, session: str | None = None) -> list[str]:
+  """Argv for a repo-scoped delegate.main() call: the required repo/base-branch/task-spec-file and
   keep-worktree skeleton plus the flags this test adds (extra); session stays omitted when the test
   lets cwd supply it."""
   argv = ["delegate"]
@@ -41,8 +32,8 @@ def _repo_argv(repo: str, task_spec_file: Path, *extra: str, session: str | None
   ]
 
 
-def _verify_argv(task_spec_file: Path, *extra: str, task_type: str) -> list[str]:
-  """Argv for a repoless delegate main() call: the session/task-spec-file/keep-worktree skeleton
+def _verify_argv(task_spec_file: pathlib.Path, *extra: str, task_type: str) -> list[str]:
+  """Argv for a repoless delegate.main() call: the session/task-spec-file/keep-worktree skeleton
   plus the flags this test adds (extra); task_type stays explicit because the parametrized sites
   pass non-verify types."""
   return [
@@ -75,72 +66,74 @@ def _task_spec(source_line: str = "- (none)") -> str:
       "Do not change unrelated files.\n")
 
 
-def _write_task_spec(tmp_path: Path, content: str | None = None) -> Path:
+def _write_task_spec(tmp_path: pathlib.Path, content: str | None = None) -> pathlib.Path:
   task_spec_file = tmp_path / "task_spec.md"
   task_spec_file.write_text(content if content is not None else _task_spec())
   return task_spec_file
 
 
-def _delegate_rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[MagicMock, Path]:
-  """The CLI main() rig: a sessions-dir config with cwd at tmp_path, plus one written task spec."""
-  cfg = make_sessions_dir_config(tmp_path)
+def _delegate_rig(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> tuple[mock.MagicMock, pathlib.Path]:
+  """The CLI delegate.main() rig: a sessions-dir config with cwd at tmp_path, plus one written task spec."""
+  cfg = conftest.make_sessions_dir_config(tmp_path)
   monkeypatch.chdir(tmp_path)
   return cfg, _write_task_spec(tmp_path)
 
 
 def test_main_routes_by_session_env_from_another_session_dir(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   """A master whose shell sits in an archived session's dir delegates, and the
   task lands in the session the server started it for. The warning names both
   ids, so the misplaced cwd stays visible."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "archived-session")
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "live-session")
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "archived-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "live-session")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
-    main()
+    delegate.main()
 
   assert post_mock.call_args.kwargs["json"]["session_id"] == "live-session"
   err = capsys.readouterr().err
   assert "archived-session" in err
-  assert f"{SESSION_ID_ENV_VAR}=live-session" in err
+  assert f"{constants.SESSION_ID_ENV_VAR}=live-session" in err
 
 
 def test_main_rejects_explicit_session_against_session_env(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
   """A copied --session literal stays a rejection that names both ids."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "live-session")
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "live-session")
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "live-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "live-session")
   task_spec_file = _write_task_spec(tmp_path)
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session="archived-session")) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session="archived-session")) as
+      post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
   assert exc_info.value.code == 2
   post_mock.assert_not_called()
   error = json.loads(capsys.readouterr().err)["error"]
   assert "--session=archived-session" in error
-  assert f"{SESSION_ID_ENV_VAR}=live-session" in error
+  assert f"{constants.SESSION_ID_ENV_VAR}=live-session" in error
 
 
-def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_posts_task_spec_file_to_delegate_endpoint(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
   task_spec = task_spec_file.read_text()
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3",
-                                        session="s1")) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "codex-o3",
+                                                 session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1", "description": "do work"}
-    main()
+    delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["session_id"] == "s1"
@@ -149,23 +142,23 @@ def test_main_posts_task_spec_file_to_delegate_endpoint(tmp_path: Path, monkeypa
   assert payload["backend"] == "codex-o3"
   assert payload["description"] == task_spec
   assert payload["task_type"] == "implement"
-  assert payload["delegate_invocation"] == delegate_invocation(
+  assert payload["delegate_invocation"] == conftest.delegate_invocation(
       repo_path=str(tmp_path), task_spec_file=str(task_spec_file))
   assert "context" not in payload
 
 
-def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_verify_posts_repoless_payload(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
-  with patched_cli_post(cfg, _verify_argv(task_spec_file, task_type="verify")) as post_mock:
+  with conftest.patched_cli_post(cfg, _verify_argv(task_spec_file, task_type="verify")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t2", "description": "task"}
-    main()
+    delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["task_type"] == "verify"
   assert "repo_path" not in payload
   assert "base_branch" not in payload
-  assert payload["delegate_invocation"] == delegate_invocation(
+  assert payload["delegate_invocation"] == conftest.delegate_invocation(
       task_type="verify", repo_path=None, base_branch=None, task_spec_file=str(task_spec_file), backend=None)
 
 
@@ -178,7 +171,7 @@ def test_main_verify_posts_repoless_payload(tmp_path: Path, monkeypatch: pytest.
     ],
 )
 def test_main_repo_task_types_take_repo_and_base_branch_together(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     task_type: str,
     half_argv: tuple[str, ...],
     named_flag: str,
@@ -188,23 +181,23 @@ def test_main_repo_task_types_take_repo_and_base_branch_together(
   task_spec_file = _write_task_spec(tmp_path)
 
   with (
-      patch("sys.argv", _verify_argv(task_spec_file, *half_argv, task_type=task_type)),
+      mock.patch("sys.argv", _verify_argv(task_spec_file, *half_argv, task_type=task_type)),
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject(exc_info, capsys, named_flag, "together")
+  conftest.assert_cli_reject(exc_info, capsys, named_flag, "together")
 
 
 @pytest.mark.parametrize("task_type", ["implement", "quick-edit", "script-run"])
 def test_main_repo_less_delegation_posts_no_repo_fields(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, task_type: str) -> None:
   """Omitting --repo and --base-branch together delegates a repo-less task."""
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
-  with patched_cli_post(cfg, _verify_argv(task_spec_file, task_type=task_type)) as post_mock:
+  with conftest.patched_cli_post(cfg, _verify_argv(task_spec_file, task_type=task_type)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t3", "description": "task"}
-    main()
+    delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["task_type"] == task_type
@@ -224,7 +217,7 @@ def test_main_repo_less_delegation_posts_no_repo_fields(
     ],
 )
 def test_main_rejects_bad_invocation_before_post(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], repo: str | None,
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], repo: str | None,
     extra_argv: tuple[str, ...], err_fragments: tuple[str, ...]) -> None:
   """Each malformed invocation names its cause on stderr and rejects before any POST: a relative
   --repo, a nonexistent --repo, and the removed --description/--context flags."""
@@ -232,18 +225,18 @@ def test_main_rejects_bad_invocation_before_post(
   repo_value = repo if repo is not None else str(tmp_path)
 
   with (
-      patched_cli_post(cfg, _repo_argv(repo_value, task_spec_file, *extra_argv, session="s1")) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(repo_value, task_spec_file, *extra_argv, session="s1")) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject(exc_info, capsys, *err_fragments)
+  conftest.assert_cli_reject(exc_info, capsys, *err_fragments)
   post_mock.assert_not_called()
 
 
 def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
-    main()
+  with mock.patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    delegate.main()
 
   assert exc_info.value.code == 0
   out = capsys.readouterr().out
@@ -252,8 +245,8 @@ def test_main_help_lists_verify_profile(capsys: pytest.CaptureFixture[str]) -> N
 
 
 def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[str]) -> None:
-  with patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
-    main()
+  with mock.patch("sys.argv", ["delegate", "--help"]), pytest.raises(SystemExit) as exc_info:
+    delegate.main()
 
   assert exc_info.value.code == 0
   out = " ".join(capsys.readouterr().out.split())
@@ -261,15 +254,15 @@ def test_main_help_states_backend_omission_rule(capsys: pytest.CaptureFixture[st
   assert "verify is routed to the first backends.preference entry that differs from it" in out
 
 
-def test_main_posts_reviewer_context_file_as_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_posts_reviewer_context_file_as_context(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
   reviewer_context_file = tmp_path / "reviewer_context.md"
   reviewer_context_file.write_text("review these state-machine edges")
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
-                                        str(reviewer_context_file), session="s1")) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--reviewer-context-file",
+                                                 str(reviewer_context_file), session="s1")) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t3"}
-    main()
+    delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["context"] == "review these state-machine edges"
@@ -285,7 +278,7 @@ _REQUIRED_FLAG_OMISSION_CASES = [
 
 @pytest.mark.parametrize("required_flag", _REQUIRED_FLAG_OMISSION_CASES)
 def test_main_rejects_omitted_required_flag(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], required_flag: str) -> None:
+    tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str], required_flag: str) -> None:
   """Omitting a required repo-skeleton flag rejects with a message naming the flag."""
   flag_values = {
       "--repo": str(tmp_path),
@@ -298,50 +291,50 @@ def test_main_rejects_omitted_required_flag(
   for flag, value in flag_values.items():
     argv += [flag, value]
 
-  with patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
-    main()
+  with mock.patch("sys.argv", argv), pytest.raises(SystemExit) as exc_info:
+    delegate.main()
 
-  assert_cli_reject(exc_info, capsys, required_flag)
+  conftest.assert_cli_reject(exc_info, capsys, required_flag)
 
 
 def test_main_rejects_invalid_task_type(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")),
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--task-type", "bogus", session="s1")),
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject(exc_info, capsys, "--task-type")
+  conftest.assert_cli_reject(exc_info, capsys, "--task-type")
 
 
 def test_main_rejects_legacy_require_review_flag(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")),
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--require-review", "0", session="s1")),
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
   assert exc_info.value.code != 0
   err = capsys.readouterr().err
   assert "--require-review" in err or "unrecognized" in err
 
 
-def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_main_uses_error_detail_from_response(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, task_spec_file = _delegate_rig(tmp_path, monkeypatch)
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, "--backend", "missing",
                                         session="s1"),
-                        return_value=make_json_response(
+                        return_value=conftest.make_json_response(
                             {"detail": "requested backend 'missing' is not in backends.options"},
                             status_code=422)), \
-       patch(CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), pytest.raises(SystemExit) as exc_info:
-    main()
+       mock.patch(conftest.CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET, return_value=None), pytest.raises(SystemExit) as exc_info:
+    delegate.main()
 
   assert exc_info.value.code == 1
 
@@ -361,7 +354,7 @@ def test_main_uses_error_detail_from_response(tmp_path: Path, monkeypatch: pytes
     ],
 )
 def test_main_rejects_unusable_file_argument(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     file_flag: str,
@@ -371,7 +364,7 @@ def test_main_rejects_unusable_file_argument(
     err_fragment: str,
 ) -> None:
   """An unusable required file argument rejects before posting, naming the flag and the cause."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   staged_file = tmp_path / staged_name
   if file_body is not None:
     staged_file.write_text(file_body)
@@ -383,27 +376,27 @@ def test_main_rejects_unusable_file_argument(
     extra_argv = []
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, *extra_argv)) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, *extra_argv)) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject_exit2(exc_info, capsys, file_flag, err_fragment)
+  conftest.assert_cli_reject_exit2(exc_info, capsys, file_flag, err_fragment)
   post_mock.assert_not_called()
 
 
 def test_main_rejects_task_spec_missing_required_heading(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec().replace("## Required Behavior\n", ""))
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject_exit2(exc_info, capsys, "## Required Behavior")
+  conftest.assert_cli_reject_exit2(exc_info, capsys, "## Required Behavior")
   post_mock.assert_not_called()
 
 
@@ -417,41 +410,41 @@ def test_main_rejects_task_spec_missing_required_heading(
     ids=["nonexistent-absolute", "relative-entry", "empty-section"],
 )
 def test_main_rejects_bad_source_files_entry(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source_line: str,
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], source_line: str,
     err_fragment: str) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(source_line))
 
   with (
-      patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
+      conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock,
       pytest.raises(SystemExit) as exc_info,
   ):
-    main()
+    delegate.main()
 
-  assert_cli_reject_exit2(exc_info, capsys, err_fragment)
+  conftest.assert_cli_reject_exit2(exc_info, capsys, err_fragment)
   post_mock.assert_not_called()
 
 
-def test_main_allows_source_files_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+def test_main_allows_source_files_none(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path, _task_spec("- (none)"))
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
-    main()
+    delegate.main()
 
   post_mock.assert_called_once()
 
 
-def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+def test_main_accepts_existing_absolute_source_file(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   source_file = tmp_path / "source.md"
   source_file.write_text("reference")
   task_spec_file = _write_task_spec(tmp_path, _task_spec(f"- {source_file}"))
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
-    main()
+    delegate.main()
 
   post_mock.assert_called_once()
 
@@ -465,18 +458,18 @@ def test_main_accepts_existing_absolute_source_file(tmp_path: Path, monkeypatch:
     ids=["derived-from-cwd", "explicit-flag-matching-cwd"],
 )
 def test_session_id_reaches_payload_from_cwd_or_flag(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     session_arg: str | None,
 ) -> None:
   """The resolved session id lands in the POST payload whether cwd derived it or an
   explicit --session matching the cwd supplied it."""
-  cfg = _setup_session_cwd(tmp_path, monkeypatch, "abc")
+  cfg = conftest.setup_session_cwd(tmp_path, monkeypatch, "abc")
   task_spec_file = _write_task_spec(tmp_path)
 
-  with patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session=session_arg)) as post_mock:
+  with conftest.patched_cli_post(cfg, _repo_argv(str(tmp_path), task_spec_file, session=session_arg)) as post_mock:
     post_mock.return_value.json.return_value = {"thread_id": "t1"}
-    main()
+    delegate.main()
 
   payload = post_mock.call_args.kwargs["json"]
   assert payload["session_id"] == "abc"

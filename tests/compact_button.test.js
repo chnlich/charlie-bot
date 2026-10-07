@@ -9,6 +9,7 @@ const { loadChatRenderingModules } = require('./chat_rendering_context_stub');
 const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
 const { FakeElement } = require('./fake_dom');
+const { createElement } = require('./dom_element_stub');
 
 function makeDocument(elements) {
   return {
@@ -152,6 +153,47 @@ test('compactContext posts the exact same request shape as the shared message-se
   assert.equal(calls[0].opts.method, calls[1].opts.method);
   assert.equal(calls[0].opts.body, calls[1].opts.body);
   assert.deepEqual(JSON.parse(calls[0].opts.body), { content: '/compact' });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. A typed /compact rides the same send path (no client-side interception).
+// ---------------------------------------------------------------------------
+test('a typed /compact posts through the shared message-send path like the Compact button', async () => {
+  const input = createElement({id: 'msg-input'});
+  input.value = '/compact';
+  input.style = {};
+  const elements = new Map([
+    ['messages', new FakeElement('DIV')],
+    ['msg-input', input],
+    ['usage-text', Object.assign(new FakeElement('SPAN'), { textContent: '50k / 200k' })],
+  ]);
+  const context = loadChatContext(elements);
+  // The page wires thinking state and drafts from config.js and chat/rendering;
+  // this harness only needs their presence.
+  context.DRAFT_KEY = null;
+  context.startThinking = () => {};
+  context.stopThinking = () => {};
+  const calls = [];
+  context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
+
+  await context.sendMessage();
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/chat/session-a/message');
+  assert.equal(calls[0].opts.method, 'POST');
+  // The send path's full payload shape; the typed /compact rides it as content.
+  assert.deepEqual(JSON.parse(calls[0].opts.body), {
+    content: '/compact',
+    uploaded_files: [],
+    is_voice: false,
+  });
+
+  // The button path lands on the same URL and body.
+  context.confirm = () => true;
+  await context.compactContext();
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1].url, calls[0].url);
+  assert.deepEqual(JSON.parse(calls[1].opts.body), { content: '/compact' });
 });
 
 // ---------------------------------------------------------------------------

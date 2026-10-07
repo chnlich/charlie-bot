@@ -10,10 +10,11 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from starlette.requests import Request
-from starlette.responses import Response
+from starlette.responses import JSONResponse, Response
 
 from src.api.deps import bad_request, get_config_on_loop, get_session_manager
 from src.api.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
+from src.core import event_types as ET
 from src.core.compression import gzip_level1
 from src.core.config import (
     CharlieBotConfig,
@@ -367,6 +368,34 @@ async def create_cron_task(req: TaskCreate, cfg: CharlieBotConfig = Depends(get_
   await asyncio.to_thread(_write_cron_yaml, req.name, body)
   log.debug('cron_task_created', name=req.name)
   return {'name': req.name, **body}
+
+
+@router.post('/tasks/{name}/run')
+async def run_cron_task_now(name: str, request: Request) -> JSONResponse:
+  """Run a scheduled task once now, through the same path a cron fire takes.
+
+  The call lands on ``scheduler.run_task_now`` and writes no chat event of its
+  own: a handler task leaves only its handler result (never a pending input),
+  and an agent task delivers its completion report to its node like a
+  scheduled fire does. The response type is the one the manual-run trigger has
+  always carried.
+  """
+  scheduler = getattr(request.app.state, 'scheduler', None)
+  if scheduler is None:
+    raise HTTPException(status_code=503, detail='Scheduler not available')
+  try:
+    result = await scheduler.run_task_now(name)
+  except ValueError as e:
+    raise HTTPException(status_code=404, detail=str(e)) from e
+  return JSONResponse(
+      status_code=202,
+      content={
+          'type': ET.TASK_TRIGGERED,
+          'task': name,
+          'session_id': result['session_id'],
+          'thread_id': result.get('thread_id'),
+      },
+  )
 
 
 @router.delete('/tasks/{name}')

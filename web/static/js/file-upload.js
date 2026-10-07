@@ -27,9 +27,9 @@ function voiceTranscriptionSettled() {
   refreshSendLock();
 }
 
-// The chat-input, slash-command, and /compact send paths all refuse submission
-// through this gate while an attachment upload or a voice transcription is in
-// flight; one definition keeps the refusal behavior from drifting.
+// The chat-input and /compact send paths both refuse submission through this
+// gate while an attachment upload or a voice transcription is in flight; one
+// definition keeps the refusal behavior from drifting.
 function blockIfUploadsInFlight() {
   if (uploadsInFlight <= 0 && voiceTranscribesInFlight <= 0) return false;
   showToast(uploadsInFlight > 0 ? UPLOAD_IN_FLIGHT_MESSAGE : VOICE_TRANSCRIBE_IN_FLIGHT_MESSAGE, true);
@@ -44,9 +44,8 @@ function getUploadedFilesForPayload() {
   return uploadedFiles.filter((file) => file.status === 'uploaded');
 }
 
-// The chat-message and slash-execute send paths both post entries validated
-// against UploadedFileRef in src/core/models.py; one projection keeps the two
-// wire payloads identical.
+// The chat-message send path posts entries validated against UploadedFileRef
+// in src/core/models.py; this projection is the wire payload's one definition.
 function toPayloadFiles(files) {
   return files.map((file) => ({
     filename: file.filename,

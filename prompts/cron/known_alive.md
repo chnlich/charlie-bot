@@ -23,11 +23,10 @@ Known-alive symbols:
   `src/agents/backends/registry.py`. The Python name has exactly zero whole-repo matches outside
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
 - Every FastAPI route handler in `src/api/*.py` (functions under `@router.get/post/patch/put/
-  delete/websocket` decorators, e.g. `list_projects`, `get_backlog`, `list_cron_tasks`,
+  delete/websocket` decorators, e.g. `get_backlog`, `list_cron_tasks`,
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
   each router with `include_router(prefix=...)` and `web/static/js/` fetches the composed paths
-  (e.g. `/api/sessions/projects` from `context-panel.js`, `/rounds/{id}/rate` from
-  `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside
+  (e.g. `/rounds/{id}/rate` from `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.
@@ -110,8 +109,8 @@ Known-alive symbols:
   one grep away from looking phase-1-deletable. Vulture also flags pydantic response-model
   fields served to `web/` (`schedule_cron`/`schedule_enabled`/`schedule_next_run`/
   `schedule_timezone`/`schedule_project`/`schedule_allow_failure` on `SessionMetadata`,
-  `parent_session_id` likewise, `placeholder` on
-  `SlashCommandParam`, `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
+  `parent_session_id` likewise,
+  `fired_at` on `PendingTrigger`) as unused variables/attributes, but every
   one of those names is grep-findable in repo (`_TRANSIENT_METADATA_FIELDS`, tests, web JS,
   Jinja templates), so the Step 3 grep already protects them and they get no entries.
 - `pytestmark` (module-level assignment, e.g. `tests/test_task_prompts.py`) — module-level

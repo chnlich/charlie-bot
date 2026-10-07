@@ -491,7 +491,7 @@ async def run_message(
     backend_option: Backend this turn spawns; None defers to the consumer,
       which re-resolves from ``session_meta.backend``.
     extra_claude_flags: Extra CLI flags appended to the spawned claude
-      process (prompt-scope slash dispatches).
+      process.
     display_content: User-visible content persisted to the chat log. Defaults
       to ``user_content`` when omitted.
     uploaded_files: Structured uploaded-file metadata persisted on the user event.

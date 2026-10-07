@@ -67,10 +67,10 @@
   </script>
 </head>
 <body class="dark bg-slate-900 text-slate-100 overflow-hidden" style="height:var(--app-h,100dvh)">
-  {# Shared chrome literals: form_label_class for the slash-command/context
-     sidebar labels and the scheduled-task modal labels below, close_btn_class
-     for the close_button calls below, cron_field_class for the scheduled-task
-     modal input/select fields below. Each literal stays a complete token run:
+  {# Shared chrome literals: form_label_class for the scheduled-task modal
+     labels below, close_btn_class for the close_button calls below,
+     cron_field_class for the scheduled-task modal input/select fields below.
+     Each literal stays a complete token run:
      Tailwind extracts class candidates from source text, never split across
      template syntax. #}
   {% set form_label_class = 'block text-xs text-slate-400 mb-1' %}
@@ -279,7 +279,6 @@
         <div id="input-area" class="border-t border-slate-700 p-4 {% if (active_session and active_session.profile == 'worker') or thread_view %}hidden{% endif %}">
           <!-- Uploaded file chips -->
           <div id="file-chips" class="hidden flex flex-wrap gap-1 mb-2"></div>
-          <div id="context-chip" class="hidden flex flex-wrap gap-1 mb-2"></div>
           <input type="file" id="file-input" multiple class="hidden" onchange="handleFiles(this)">
           <div class="flex gap-2 items-end input-row">
             <span
@@ -287,13 +286,12 @@
               class="hidden md:inline text-xs text-slate-400 whitespace-nowrap self-center"
             >{{ active_backend_label or active_backend }}</span>
             <div class="flex-1 relative">
-              <div id="slash-popup" class="slash-popup"></div>
               <textarea id="msg-input"
                         rows="1"
                         placeholder="Send a message..."
                         class="w-full bg-slate-800 border border-slate-600 rounded-xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:border-blue-500 placeholder-slate-500"
                         onkeydown="handleInputKey(event)"
-                        oninput="autoResize(this); saveDraft(); handleSlashInput(this)"></textarea>
+                        oninput="autoResize(this); saveDraft()"></textarea>
             </div>
             <div class="input-buttons flex gap-2">
               <div id="overflow-menu" class="collapsible">
@@ -314,9 +312,6 @@
               </div>
               <button onclick="sendMessage()" id="send-btn" class="p-2.5 rounded-xl bg-blue-600 hover:bg-blue-500 transition-colors" title="Send (Ctrl+Enter)">
                 <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5m0 0l-7 7m7-7l7 7"/></svg>
-              </button>
-              <button onclick="toggleSlashSidebar()" class="p-2.5 rounded-xl bg-slate-800 border border-slate-600 hover:border-slate-500 transition-colors" title="Slash commands (Ctrl+/)">
-                <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
               </button>
             </div>
           </div>
@@ -412,48 +407,6 @@
   {% include 'partials/welcome_view.html' %}
   </template>
 
-  <!-- ==================== SLASH COMMAND SIDEBAR ==================== -->
-  <div id="slash-sidebar" class="slash-sidebar">
-    <div class="slash-sidebar-header">
-      <div class="flex gap-1">
-        <button id="sidebar-tab-commands" class="sidebar-tab active" onclick="switchSidebarTab('commands')">Commands</button>
-        <button id="sidebar-tab-context" class="sidebar-tab" onclick="switchSidebarTab('context')">Context</button>
-      </div>
-      {{ close_button('toggleSlashSidebar()', 'Close (Esc)', close_btn_class) }}
-    </div>
-    <!-- Commands tab (existing content, unchanged) -->
-    <div id="sidebar-panel-commands" class="slash-sidebar-body">
-      <div class="mb-3">
-        <label class="{{ form_label_class }}">Command</label>
-        <select id="slash-sidebar-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onSlashSidebarCommandChange()">
-          <option value="">Select a command...</option>
-        </select>
-      </div>
-      <div id="slash-sidebar-params" class="space-y-3"></div>
-    </div>
-    <!-- Context tab -->
-    <div id="sidebar-panel-context" class="slash-sidebar-body hidden">
-      <div class="mb-4">
-        <label class="{{ form_label_class }}">Repo</label>
-        <select id="ctx-repo-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onCtxRepoChange()">
-          <option value="">None</option>
-        </select>
-      </div>
-      <div class="mb-4">
-        <label class="{{ form_label_class }}">Branch</label>
-        <select id="ctx-branch-select" class="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-blue-500" onchange="onCtxBranchChange()">
-          <option value="">Default</option>
-        </select>
-      </div>
-      <p class="text-xs text-slate-500">Select a repo and branch. Your messages will automatically include this context.</p>
-    </div>
-    <!-- Footer: only visible on Commands tab -->
-    <div id="slash-sidebar-footer" class="slash-sidebar-footer">
-      <div id="slash-sidebar-preview" class="text-xs font-mono text-slate-500 mb-2 min-h-[1.25rem] truncate"></div>
-      <button onclick="submitSlashSidebarForm()" id="slash-sidebar-run" class="w-full px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed" disabled>Run Command</button>
-    </div>
-  </div>
-
   <!-- ==================== RENAME INPUT (floating) ==================== -->
   <input id="rename-input" class="hidden fixed z-50 bg-slate-800 border border-blue-500 rounded-lg px-3 py-1.5 text-sm focus:outline-none" onkeydown="handleRenameKey(event)" onblur="commitRename()">
 
@@ -498,9 +451,6 @@
   <script src="/static/js/utils.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/page-timers.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/tabs.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/slash-commands.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/slash-form.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/context-panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/file-upload.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/namespace.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/chat/shared.js?v={{ static_asset_version|urlencode }}"></script>

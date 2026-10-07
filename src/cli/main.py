@@ -17,6 +17,7 @@ _COMMANDS = {
     "delegate": "src.cli.delegate",
     "discord": "src.cli.discord",
     "improve": "src.cli.improve",
+    "improve-stop": "src.cli.improve_stop",
     "schedule-trigger": "src.cli.schedule_trigger",
     "remote-launch": "src.cli.remote_launch",
     "gc-trash": "src.cli.gc_trash",

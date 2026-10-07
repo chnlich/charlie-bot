@@ -229,7 +229,6 @@ Compressed archive backups (not git) stored at `~/.charliebot_backup`, tiered re
 
 **Not needed (single-user):** SQLite (JSON preferred), worker retry/backoff, worker resource limits, rate limiting.
 **Done:** session full-text search, error handling consistency, session rewind.
-**Planned:** worker templates as slash commands.
 **Deferred:** metrics/observability, multi-repo dashboard, semantic search.
 
 ---
@@ -274,6 +273,11 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 - A newly added cron task first fires on its next occurrence after one full tick: the scheduler looks back a single tick from load, so a new daily expression starts the following day.
 - Cron config lives one job per file under `~/.charliebot/config.d/cron.d/<name>.yaml`, and the loader hot-reloads on a file or `prompt_file` mtime change — no restart is needed. A broken file yields an error entry for that job alone (logged as `cron_task_load_failed`) while every other job keeps loading, scheduling, and rendering through `GET /api/cron/tasks`.
 - The cron timezone is fixed in the config model, API, and UI: pin `America/Los_Angeles` explicitly for local tasks. Reread `config.d/cron.d/` at implementation time — concurrent sessions may mutate it.
+- Run a scheduled task once now with `POST /api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat event. An unknown task name answers 404.
+
+## Improve Loop Control
+
+`charliebot improve-stop` marks the session's running improve loop stopped; the session comes from `CHARLIEBOT_SESSION_ID`. A successful stop prints `stopped` and exits 0. With no running loop the command prints a message and exits 1. The current iteration finishes, and the next `charliebot improve` in the same session starts a new loop.
 
 ---
 
@@ -285,7 +289,6 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 |---------|------------|
 | Improve loop | `improve_command.py` |
 | Spawner + review | `spawner.py` |
-| Slash commands | `slash_commands.py` |
 | Backlog state machine | `backlog_loop.py` |
 | Scheduler | `scheduler.py` |
 | Delayed triggers | `triggers.py` |

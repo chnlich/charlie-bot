@@ -86,9 +86,9 @@ class ImproveLoopAlreadyRunningError(RuntimeError):
   def __init__(self, loop_id: int | None) -> None:
     self.loop_id = loop_id
     if loop_id is None:
-      super().__init__("An improve loop is already running for this session. Use /stop-improve first.")
+      super().__init__("An improve loop is already running for this session. Use charliebot improve-stop first.")
       return
-    super().__init__(f"Loop {loop_id} is already running for this session. Use /stop-improve first.")
+    super().__init__(f"Loop {loop_id} is already running for this session. Use charliebot improve-stop first.")
 
 
 # ---------------------------------------------------------------------------

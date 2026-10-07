@@ -204,9 +204,10 @@ You have these built-in features. If unsure how one works, read `src/core/`.
 
 See `charliebot --help` for CLI subcommands.
 
-Custom slash commands live in `~/.charliebot/slash_commands.yaml`; cron tasks live in
-`~/.charliebot/config.d/cron.d/` (one file per job; manage via `/run <name>` or the API;
-operational notes in the `charliebot` skill).
+Cron tasks live in `~/.charliebot/config.d/cron.d/` (one file per job; manage through the
+`/api/cron` API; operational notes in the `charliebot` skill). To run a scheduled task once
+now, POST `/api/cron/tasks/{name}/run`. The run takes the scheduled path and writes no chat
+event. To stop this session's improve loop, run `charliebot improve-stop`.
 
 ### Diff comment batches
 

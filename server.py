@@ -44,7 +44,6 @@ with gc_off(collect=False):
       pages,
       responses,
       sessions,
-      slash,
       threads,
       voice,
   )
@@ -550,7 +549,6 @@ with gc_off(collect=False):
   app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
   app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-  app.include_router(slash.router, prefix="/api/slash", tags=["slash"])
   app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
   app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
   app.include_router(git.router, prefix="/api/git", tags=["git"])

@@ -70,7 +70,6 @@ home_items = [
     ("file", "~/.charliebot/memory/.gitignore", cfg.memory_dir / ".gitignore"),
     ("dir", "~/.charliebot/memory/entries/", cfg.memory_dir / "entries"),
     ("dir", "~/.charliebot/memory/staging/", cfg.memory_dir / "staging"),
-    ("file", "~/.charliebot/slash_commands.yaml", cfg.charliebot_home / "slash_commands.yaml"),
 ]
 existed_before = {str(p): p.exists() for _, _, p in home_items}
 if not dry:

@@ -6,7 +6,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initSidebarResize();
   initLatexResize();
   initBacklogResize();
-  fetchSlashCommands();
   startTuiStatusPolling();
   restoreSidebarFromUrl();
   updateRelativeTimes();
@@ -126,10 +125,9 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Global input key handler (delegates to slash popup, then Enter-to-send)
+// Global input key handler (Enter-to-send)
 // ---------------------------------------------------------------------------
 function handleInputKey(e) {
-  if (handleSlashPopupKey(e)) return;
   if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
     e.preventDefault();
     sendMessage();
@@ -141,12 +139,6 @@ document.addEventListener('click', function(e) {
   const toggle = document.querySelector('.overflow-toggle');
   if (menu && toggle && !menu.contains(e.target) && !toggle.contains(e.target)) {
     menu.classList.remove('show');
-  }
-  // Hide slash popup on outside click
-  const popup = document.getElementById('slash-popup');
-  const input = document.getElementById('msg-input');
-  if (popup && input && !popup.contains(e.target) && e.target !== input) {
-    hideSlashPopup();
   }
 });
 

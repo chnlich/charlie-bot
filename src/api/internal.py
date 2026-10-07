@@ -26,6 +26,7 @@ from src.core.improve_command import (
     loop_plan_path,
     reserve_loop_state,
     save_loop_state,
+    stop_improve_loop,
 )
 from src.core.log_once import LazyStructlogLogger
 from src.core.master_trigger import trigger_master
@@ -36,6 +37,7 @@ from src.core.models import (
     DiscordReadRequest,
     DiscordReplyRequest,
     ImproveRequest,
+    ImproveStopRequest,
     PlanAmendRequest,
     PlanApproveRequest,
     PlanCloseRequest,
@@ -293,6 +295,25 @@ async def delegate_task(
   return await _delegate_task_tree(req, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
 
 
+@router.post("/improve/stop")
+async def stop_improve(
+    req: ImproveStopRequest,
+    cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    session_mgr: SessionManager = Depends(get_session_manager),
+) -> dict:
+  """Mark the session's running improve loop stopped (charliebot improve-stop).
+
+  The loop ends after its current iteration; the next `charliebot improve` in
+  the same session starts a new loop. No running loop is a 409, not an error
+  to retry.
+  """
+  require_found(await session_mgr.get_session(req.session_id))
+  if not await stop_improve_loop(req.session_id, cfg):
+    raise HTTPException(status_code=409, detail="No active improve loop in this session")
+  log.info("improve_loop_stopped", session=req.session_id)
+  return {"status": "stopped", "session_id": req.session_id}
+
+
 @router.post("/improve")
 async def start_improve_loop(
     req: ImproveRequest,
@@ -489,9 +510,9 @@ async def session_message(
 
   Persists an ``agent_message`` event (never a ``user`` event, so no takeoff
   window is minted or revoked), then wakes the target master with the relay
-  prefix. The injected content bypasses slash-command dispatch; when the target
-  session is mid-run the wake enqueues on the master work-item queue. An
-  archived task target refuses the relay with 409 (``task <id> is archived``);
+  prefix. A mid-run target session enqueues the wake on the master
+  work-item queue. An archived task target refuses the relay with 409
+  (``task <id> is archived``);
   only the user's own message restores an archived node.
   """
   caller = require_found(await session_mgr.get_session(req.session_id))

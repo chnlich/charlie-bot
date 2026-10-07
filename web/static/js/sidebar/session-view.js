@@ -138,7 +138,6 @@ function teardownActiveSessionView() {
   resetVoiceState();
   uploadedFiles = [];
   renderFileChips();
-  hideSlashPopup();
 }
 
 function scheduleLazySessionDataLoad() {

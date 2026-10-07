@@ -7,29 +7,14 @@ endpoint whose config entry sets ``image_input: false`` refuses them with
 one error event and nothing is sent.
 """
 
+import pathlib
 from collections.abc import AsyncIterator
-from pathlib import Path
 
-from src.agents.backends.base import (
-    IMAGE_MIME_BY_EXT,
-    USER_LOCAL_BIN,
-    AgentBackend,
-    apply_proxy_env,
-    make_compact_boundary_event,
-    make_context_reading_event,
-    make_error_event,
-    make_result_event,
-    make_text_event,
-    make_tool_result_event,
-    make_tool_use_event,
-    prepend_path_dir,
-    resolve_binary,
-)
+from src.agents.backends import base
+from src.core import constants, log_once
 from src.core import event_types as ET
-from src.core.constants import CHARLIE_CODE_API_KEY_ENV
-from src.core.log_once import LazyStructlogLogger
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def _duration_label(seconds: float) -> str:
@@ -54,7 +39,7 @@ def _context_reading_int(field: str, value: object) -> int | None:
   return value
 
 
-class CharlieCodeBackend(AgentBackend):
+class CharlieCodeBackend(base.AgentBackend):
   """Runs a `charlie-code --json` subprocess and translates NDJSON events to CC-compatible format.
 
   The task text is written to ``task.md`` in the run's transport directory
@@ -89,8 +74,8 @@ class CharlieCodeBackend(AgentBackend):
     self._temperature = temperature
     self._proxy_url = proxy_url
     self._api_key = api_key
-    self._bin = resolve_binary("charlie-code", USER_LOCAL_BIN)
-    self._transport_dir: Path | None = None
+    self._bin = base.resolve_binary("charlie-code", base.USER_LOCAL_BIN)
+    self._transport_dir: pathlib.Path | None = None
     # Absolute paths of the current run's image attachments; run() fills it
     # before delegating and _build_command reads it while assembling flags.
     self._image_paths: list[str] = []
@@ -107,18 +92,18 @@ class CharlieCodeBackend(AgentBackend):
     otherwise hand them to the CLI as --image flags.
 
     Image refs are picked out of ``uploaded_files`` by filename extension
-    (the ``IMAGE_MIME_BY_EXT`` keys). An endpoint whose option sets
+    (the ``base.IMAGE_MIME_BY_EXT`` keys). An endpoint whose option sets
     ``image_input: false`` gets exactly one error event and nothing else — no
     subprocess, no result. Non-image refs never produce flags; they keep
     riding the [Attached files] path text inside the task.
     """
     image_refs = [
         ref for ref in (uploaded_files or [])
-        if str(ref.get("filename", "")).rsplit(".", 1)[-1].lower() in IMAGE_MIME_BY_EXT
+        if str(ref.get("filename", "")).rsplit(".", 1)[-1].lower() in base.IMAGE_MIME_BY_EXT
     ]
     if image_refs and not self._image_input:
-      names = ", ".join(Path(str(ref.get("filename", ""))).name for ref in image_refs)
-      yield make_error_event(
+      names = ", ".join(pathlib.Path(str(ref.get("filename", ""))).name for ref in image_refs)
+      yield base.make_error_event(
           f"refused: image attachments not sent — this endpoint declares no image input "
           f"(image_input: false): {names}")
       return
@@ -130,17 +115,17 @@ class CharlieCodeBackend(AgentBackend):
       yield event
     self._image_paths = []
 
-  def _prepare_transport(self, log_dir: Path) -> None:
+  def _prepare_transport(self, log_dir: pathlib.Path) -> None:
     """Record the transport dir the task file will be written into."""
     self._transport_dir = log_dir
 
   def _prepare_env(self, env: dict) -> dict:
     charlie_code_env = {**env}
-    prepend_path_dir(charlie_code_env, USER_LOCAL_BIN)
+    base.prepend_path_dir(charlie_code_env, base.USER_LOCAL_BIN)
     if self._api_key is not None:
-      charlie_code_env[CHARLIE_CODE_API_KEY_ENV] = self._api_key
+      charlie_code_env[constants.CHARLIE_CODE_API_KEY_ENV] = self._api_key
     if self._proxy_url is not None:
-      apply_proxy_env(charlie_code_env, self._proxy_url)
+      base.apply_proxy_env(charlie_code_env, self._proxy_url)
     return charlie_code_env
 
   # charlie-code appends the cwd AGENTS.md to its system message.
@@ -185,11 +170,11 @@ class CharlieCodeBackend(AgentBackend):
       return [{"type": ET.SESSION_ATTACHED, "session_id": event["session_id"]}]
 
     if event_type == "thought":
-      return [make_text_event(event["text"])]
+      return [base.make_text_event(event["text"])]
 
     if event_type == "command":
       self._commands_by_id[event["id"]] = event["command"]
-      translated = make_tool_use_event("Bash", {"command": event["command"]})
+      translated = base.make_tool_use_event("Bash", {"command": event["command"]})
       translated["id"] = event["id"]
       return [translated]
 
@@ -217,14 +202,14 @@ class CharlieCodeBackend(AgentBackend):
       ]
 
     if event_type == "observation":
-      translated = make_tool_result_event("Bash", event.get("output", ""))
+      translated = base.make_tool_result_event("Bash", event.get("output", ""))
       translated["tool_use_id"] = event["id"]
       return [translated]
 
     if event_type == "result":
       usage = event.get("usage", {})
       return [
-          make_result_event(
+          base.make_result_event(
               input_tokens=usage.get("input_tokens", 0),
               output_tokens=usage.get("output_tokens", 0),
               cost=None,
@@ -232,14 +217,14 @@ class CharlieCodeBackend(AgentBackend):
       ]
 
     if event_type == "error":
-      return [make_error_event(event.get("message", ""))]
+      return [base.make_error_event(event.get("message", ""))]
 
     if event_type == "compact":
-      return [make_compact_boundary_event(event["trigger"], event["pre_tokens"])]
+      return [base.make_compact_boundary_event(event["trigger"], event["pre_tokens"])]
 
     if event_type == "context":
       return [
-          make_context_reading_event(
+          base.make_context_reading_event(
               model=event.get("model") or "",
               context_tokens=_context_reading_int(ET.CONTEXT_TOKENS, event.get("prompt_tokens")),
               context_full=_context_reading_int(ET.CONTEXT_FULL, event.get("context_window")),

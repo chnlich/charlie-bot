@@ -36,12 +36,12 @@ Open your first response to a new task with one or two sentences on the intent y
 The user returns to each session after a gap.
 The status block lets the user resume from the latest message alone.
 
-- End the last message of each turn with three bold-labeled items:
+- Open the last message of each turn with three bold-labeled items:
   - **Goal**: the session's current overall goal, in one sentence.
   - **Now**: where the work stands, including any job or trigger it waits on.
   - **Waiting on you**: the decision or action the user owes, or "nothing".
+- When another rule asks for opening sentences, write them after the status block.
 - When the turn shares a sitrep, take each item from the matching part of the page.
-- When the turn hands over a plan, end Waiting on you with the take off line.
 - A Slack or Discord thread post keeps the format of `prompts/thread_reply_format.md`.
 
 ## Concise Expression
@@ -153,7 +153,7 @@ it does.
 #### Length
 
 - Answer at the length of the question.
-- The status block follows the answer and stays outside the answer's length.
+- The status block precedes the answer and stays outside the answer's length.
 - Return a revision together with the intent of each change.
 
 ## Naming

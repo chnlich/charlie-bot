@@ -19,12 +19,12 @@ import hashlib
 import uuid
 from typing import TYPE_CHECKING
 
-from src.core.log_once import LazyStructlogLogger
+from src.core import log_once
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 if TYPE_CHECKING:
-  from src.core.sessions import SessionManager
+  from src.core import sessions
 
 # Deterministic namespace for the tree's stable ids: uuid5 keeps (parent,
 # request_id) -> one node id and (session, request_id) -> one run id across
@@ -126,12 +126,12 @@ def build_control_event(
   """One control event with the common header plus its typed payload fields."""
   # Lazy: the pydantic model stack stays off this module's import path; the
   # callers that stamp control facts pay it, not the boot chain.
-  from src.core.models import utc_now_iso
+  from src.core import models
 
   event: dict = {
       "id": event_id or str(uuid.uuid4()),
       "type": event_type,
-      "timestamp": utc_now_iso(),
+      "timestamp": models.utc_now_iso(),
       "actor": actor,
       "source_session_id": source_session_id,
   }
@@ -149,7 +149,7 @@ class ControlEventSink:
   persistence without changing the owners' call sites.
   """
 
-  def __init__(self, session_mgr: SessionManager) -> None:
+  def __init__(self, session_mgr: sessions.SessionManager) -> None:
     self._session_mgr = session_mgr
 
   async def append(self, session_id: str, event: dict) -> None:

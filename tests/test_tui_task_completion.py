@@ -132,7 +132,7 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
   # The terminal boundary: tmux + the attach PTY are scripted; the relay and
   # the pump run for real against the scripted pipe.
-  from src.agents.backends import tui
+  from src.agents.backends import pty_common, tui
 
   ensured: list[tuple[str, Path]] = []
   tmux_live: set[str] = set()
@@ -168,11 +168,10 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     killed.append(session_id)
     tmux_live.discard(session_id)
 
-  monkeypatch.setattr(tui, "_start_tmux_session", fake_start_tmux_session)
+  monkeypatch.setattr(pty_common, "_start_tmux_session", fake_start_tmux_session)
   monkeypatch.setattr(tui, "tmux_session_exists", fake_tmux_session_exists)
   monkeypatch.setattr(tui, "kill_tmux_session", fake_kill_tmux_session)
-  monkeypatch.setattr(tui, "PtyAttachment", ScriptedTtyAttachment)
-  from src.agents.backends import pty_common
+  monkeypatch.setattr(pty_common, "PtyAttachment", ScriptedTtyAttachment)
   monkeypatch.setattr(pty_common, "tmux_pane_pid", fake_tmux_pane_pid)
 
   import server as server_module

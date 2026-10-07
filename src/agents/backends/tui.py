@@ -12,46 +12,36 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import pathlib
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.agents.backends.claude_launch import (
-    DISABLE_CONNECTOR_SETTINGS,
-    SKIP_PERMISSIONS_SETTINGS,
-    build_claude_argv,
-)
-from src.agents.backends.pty_common import (
-    PTY_EXIT,
-    PtyAttachment,
-    _run_pty_relay,
-    _start_tmux_session,
-    _tmux_binary,
-    # re-export: imported from this module by src/api/sessions.py + src/core/sessions.py
-    # and monkeypatched here by tests
-    kill_tmux_session,  # noqa: F401
-    tmux_session_exists,
-    tmux_session_name,
-)
-from src.core.constants import BackendType
-from src.core.home import CLAUDE_CONFIG_DIR_ENV_VAR, default_claude_dir
-from src.core.json_utils import write_json_atomically
-from src.core.log_once import LazyStructlogLogger
+from src.agents.backends import claude_launch, pty_common
+from src.core import constants, home, json_utils, log_once
 
-log = LazyStructlogLogger()
+# re-export: imported from this module by src/api/sessions.py + src/core/sessions.py
+# and monkeypatched here by tests
+kill_tmux_session = pty_common.kill_tmux_session
+tmux_session_exists = pty_common.tmux_session_exists
+
+log = log_once.LazyStructlogLogger()
 
 # fastapi serves only run_tui_attachment's annotation (future-annotations keep it
 # unevaluated); the module also rides the claude-sub worker launch via
 # mark_project_trusted, so the web framework must stay out of its import.
 if TYPE_CHECKING:
-  from fastapi import WebSocket
+  import fastapi
 
-  from src.core.config import CharlieBotConfig
+  from src.core import config
 
 # Connector sync rides the same settings object: TUI sessions run under the
 # shared real ~/.claude where the announce-once dedup cache persists, and
 # disabling connectors removes even that one replay (DISABLE_CONNECTOR_SETTINGS).
-_CLAUDE_TUI_SETTINGS = json.dumps({**SKIP_PERMISSIONS_SETTINGS, **DISABLE_CONNECTOR_SETTINGS}, separators=(",", ":"))
+_CLAUDE_TUI_SETTINGS = json.dumps(
+    {
+        **claude_launch.SKIP_PERMISSIONS_SETTINGS,
+        **claude_launch.DISABLE_CONNECTOR_SETTINGS
+    }, separators=(",", ":"))
 _BUSY_THRESHOLD_SECONDS = 3.0
 
 # Transcript paths are stable per session id (claude treats a session's jsonl
@@ -59,10 +49,10 @@ _BUSY_THRESHOLD_SECONDS = 3.0
 # life and the exists() recheck covers deletion. A miss re-globs only after
 # this TTL, since a fresh session's jsonl appears when claude starts.
 _JSONL_MISS_TTL_SECONDS = 30.0
-_jsonl_path_memo: dict[str, tuple[Path | None, float]] = {}
+_jsonl_path_memo: dict[str, tuple[pathlib.Path | None, float]] = {}
 
 
-def _find_existing_claude_jsonl(session_id: str) -> Path | None:
+def _find_existing_claude_jsonl(session_id: str) -> pathlib.Path | None:
   """Glob ~/.claude/projects/*/<session_id>.jsonl and return first match (or None), memoized per session id."""
   entry = _jsonl_path_memo.get(session_id)
   if entry is not None:
@@ -76,7 +66,7 @@ def _find_existing_claude_jsonl(session_id: str) -> Path | None:
   # pydantic account models, and this module rides the claude-sub launch (M108).
   from src.core import claude_accounts
 
-  matches = claude_accounts.transcript_matches(default_claude_dir(), session_id)
+  matches = claude_accounts.transcript_matches(home.default_claude_dir(), session_id)
   path = matches[0] if matches else None
   _jsonl_path_memo[session_id] = (path, time.monotonic() + _JSONL_MISS_TTL_SECONDS)
   return path
@@ -96,11 +86,11 @@ def _claude_jsonl_busy(session_id: str, threshold_seconds: float = _BUSY_THRESHO
   return (time.time() - mtime) < threshold_seconds
 
 
-def _claude_config_path() -> Path:
-  config_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
+def _claude_config_path() -> pathlib.Path:
+  config_dir = os.environ.get(home.CLAUDE_CONFIG_DIR_ENV_VAR)
   if config_dir:
-    return Path(config_dir) / ".claude.json"
-  return Path.home() / ".claude.json"
+    return pathlib.Path(config_dir) / ".claude.json"
+  return pathlib.Path.home() / ".claude.json"
 
 
 def mark_project_trusted(config: dict[str, Any], project_path: str) -> bool:
@@ -119,7 +109,7 @@ def mark_project_trusted(config: dict[str, Any], project_path: str) -> bool:
   return changed
 
 
-def _ensure_claude_project_trusted(working_dir: Path) -> None:
+def _ensure_claude_project_trusted(working_dir: pathlib.Path) -> None:
   """Mark CharlieBot's generated Claude TUI cwd trusted before interactive startup."""
   project_path = str(working_dir.resolve())
   config_path = _claude_config_path()
@@ -130,13 +120,13 @@ def _ensure_claude_project_trusted(working_dir: Path) -> None:
   # private: the swap publishes a fresh inode, and the config can carry API-key
   # state, so the file lands 0600 instead of the umask default — matching the
   # claude_sub session-overlay writer of this same file.
-  write_json_atomically(config_path, config, indent=2, newline=True, private=True)
+  json_utils.write_json_atomically(config_path, config, indent=2, newline=True, private=True)
   log.info("tui_claude_project_trusted", path=project_path, config_path=str(config_path))
 
 
 async def ensure_tmux_session(
     session_id: str,
-    working_dir: Path,
+    working_dir: pathlib.Path,
     *,
     model: str | None = None,
     effort: str | None = None,
@@ -154,7 +144,7 @@ async def ensure_tmux_session(
   directory's CLAUDE.md before the session exists, so the launched claude
   reads exactly the snapshot's managed instruction bytes.
   """
-  name = tmux_session_name(session_id)
+  name = pty_common.tmux_session_name(session_id)
   working_dir.mkdir(parents=True, exist_ok=True)
   if instructions_text is not None:
     (working_dir / "CLAUDE.md").write_text(instructions_text, encoding="utf-8")
@@ -163,7 +153,7 @@ async def ensure_tmux_session(
     return
   native_id = native_session_id or session_id
   resume = _find_existing_claude_jsonl(native_id) is not None
-  command_args = build_claude_argv(
+  command_args = claude_launch.build_claude_argv(
       native_id,
       resume,
       settings=_CLAUDE_TUI_SETTINGS,
@@ -176,7 +166,7 @@ async def ensure_tmux_session(
     for key, value in inject_env.items():
       tmux_env_args.extend(["-e", f"{key}={value}"])
   log.info("tui_claude_invocation", mode="resume" if resume else "fresh", session_id=session_id)
-  await _start_tmux_session(name, str(working_dir), tmux_env_args, command_args)
+  await pty_common._start_tmux_session(name, str(working_dir), tmux_env_args, command_args)
   log.info("tui_tmux_session_created", session_id=session_id, name=name, cwd=str(working_dir))
 
 
@@ -189,17 +179,17 @@ class TuiBackend:
   handler and session manager.
   """
 
-  type = BackendType.TUI_CLI
+  type = constants.BackendType.TUI_CLI
 
   def __init__(self, **_kwargs: object) -> None:
     # Validate tmux is available at construction time so config errors fail fast.
-    _tmux_binary()
+    pty_common._tmux_binary()
 
 
 async def run_tui_attachment(
-    websocket: WebSocket,
+    websocket: fastapi.WebSocket,
     session_id: str,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
     task_tree: object,
 ) -> None:
   """Per-WS PTY loop: spawn `tmux attach`, pump bytes, handle pty_input/pty_resize.
@@ -215,16 +205,16 @@ async def run_tui_attachment(
   uses the current rules.
   """
   sessions_dir = cfg.sessions_dir
-  launch: TuiTaskLaunch | None = None
+  launch: task_execution.TuiTaskLaunch | None = None
   try:
     # Lazy: the launch seam lives with the other Run owners, whose module must
     # not be pulled onto this transport module's import path.
-    from src.core.task_execution import TuiTaskLaunch, prepare_tui_task_launch
-    launch = await prepare_tui_task_launch(cfg, session_id, task_tree)
+    from src.core import task_execution
+    launch = await task_execution.prepare_tui_task_launch(cfg, session_id, task_tree)
   except Exception as e:  # surface to client
     log.exception("tui_task_launch_failed", session_id=session_id)
     with contextlib.suppress(Exception):
-      await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
+      await websocket.send_json({"type": pty_common.PTY_EXIT, "error": str(e)})
     return
   try:
     if launch is None:
@@ -245,37 +235,37 @@ async def run_tui_attachment(
       # The Run is registered and its snapshot committed but nothing launched
       # (or the pane never appeared): land the definite terminal fact instead
       # of leaving a permanently queued ghost Run.
-      from src.core.task_execution import fail_unlaunched_tui_run
-      await fail_unlaunched_tui_run(launch._tree, session_id, launch.run_id, reason=str(e))
+      from src.core import task_execution
+      await task_execution.fail_unlaunched_tui_run(launch._tree, session_id, launch.run_id, reason=str(e))
     with contextlib.suppress(Exception):
-      await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
+      await websocket.send_json({"type": pty_common.PTY_EXIT, "error": str(e)})
     return
   finally:
     if launch is not None:
-      from src.core.task_execution import release_tui_launch
-      release_tui_launch(session_id)
+      from src.core import task_execution
+      task_execution.release_tui_launch(session_id)
 
-  attachment = PtyAttachment(session_id)
+  attachment = pty_common.PtyAttachment(session_id)
   try:
     attachment.spawn()
   except Exception as e:
     log.exception("tui_pty_spawn_failed", session_id=session_id)
     with contextlib.suppress(Exception):
-      await websocket.send_json({"type": PTY_EXIT, "error": str(e)})
+      await websocket.send_json({"type": pty_common.PTY_EXIT, "error": str(e)})
     return
 
   try:
-    await _run_pty_relay(websocket, attachment, pump_name=f"tui-pump-{session_id[:8]}")
+    await pty_common._run_pty_relay(websocket, attachment, pump_name=f"tui-pump-{session_id[:8]}")
   finally:
     try:
-      from src.api.deps import session_manager
-      from src.core.autonamer import maybe_auto_name_from_claude_ai_title
+      from src.api import deps
+      from src.core import autonamer
 
-      session_mgr = session_manager()
+      session_mgr = deps.session_manager()
       meta = await session_mgr.get_session(session_id)
       if meta is None:
         log.warning("tui_autoname_session_missing", session_id=session_id)
       else:
-        await maybe_auto_name_from_claude_ai_title(meta, session_mgr)
+        await autonamer.maybe_auto_name_from_claude_ai_title(meta, session_mgr)
     except Exception as e:  # autonaming must not break PTY cleanup
       log.warning("tui_autoname_failed", session_id=session_id, error=str(e), exc_info=True)

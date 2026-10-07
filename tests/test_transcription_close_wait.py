@@ -20,15 +20,16 @@ from typing import Any
 import pytest
 from conftest import assert_transcribe_cancel_honors_close_timeout
 
-from src.agents.transcription import gemini, muse
+from src.agents.transcription import muse
 from src.agents.transcription.gemini import GeminiTranscriptionBackend
 from src.agents.transcription.muse import MuseTranscriptionBackend
+from src.core import credentials
 from src.core.config import CharlieBotConfig
 from src.core.credentials import Credentials
 
 # The credentials section shape and the handshake reply are each backend's own
 # wire contract; the sections dict is what the patched get_credentials() serves.
-_GEMINI_CASE = (gemini, GeminiTranscriptionBackend, {"gemini": {"api_key": "test-key"}}, [{"setupComplete": {}}])
+_GEMINI_CASE = (credentials, GeminiTranscriptionBackend, {"gemini": {"api_key": "test-key"}}, [{"setupComplete": {}}])
 _MUSE_CASE = (muse, MuseTranscriptionBackend, {"meta": {"model_api_key": "test-key"}}, [{"type": "sessionStarted"}])
 
 CLOSE_WAIT_CASES = [

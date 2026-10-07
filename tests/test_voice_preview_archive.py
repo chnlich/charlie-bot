@@ -9,18 +9,18 @@ files behind, and the kept audio never exceeds the transcriber's sample cap.
 
 import asyncio
 import json
+import pathlib
 import wave
 from collections.abc import AsyncIterator
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import _async_wait_for
-from structlog.testing import capture_logs
+from structlog import testing
 
+from src.agents.transcription import base
 from src.agents.transcription import registry as transcription_registry
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend
 from src.api import voice
-from src.core.config import CharlieBotConfig
+from src.core import config
 
 SESSION_ID = "session-a"
 BACKEND_ID = "fake-live"
@@ -49,15 +49,15 @@ _DISCONNECT = {"type": "websocket.disconnect"}
 _HOLD = object()
 
 
-def _voice_dir(tmp_path: Path) -> Path:
+def _voice_dir(tmp_path: pathlib.Path) -> pathlib.Path:
   return tmp_path / "home" / "sessions" / SESSION_ID / "voice"
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=tmp_path / "home")
+def _build_cfg(tmp_path: pathlib.Path) -> config.CharlieBotConfig:
+  return config.CharlieBotConfig(charliebot_home=tmp_path / "home")
 
 
-def _read_wav_pcm(path: Path) -> bytes:
+def _read_wav_pcm(path: pathlib.Path) -> bytes:
   with wave.open(str(path), "rb") as reader:
     assert (reader.getnchannels(), reader.getsampwidth(), reader.getframerate()) == (1, 2, 16_000)
     return reader.readframes(reader.getnframes())
@@ -105,7 +105,7 @@ class FakePreviewSocket:
     self.closed = True
 
 
-class FakeLiveBackend(TranscriptionBackend):
+class FakeLiveBackend(base.TranscriptionBackend):
   """A live backend whose final the test scripts: gated after the audio, or early mid-audio."""
 
   id = BACKEND_ID
@@ -132,26 +132,26 @@ class FakeLiveBackend(TranscriptionBackend):
       *,
       vocabulary: list[str],
       languages: list[str],
-  ) -> AsyncIterator[TranscriptEvent]:
+  ) -> AsyncIterator[base.TranscriptEvent]:
     try:
       seen = 0
       async for _chunk in audio:
         seen += 1
         if self._early_after_chunks is not None and seen >= self._early_after_chunks:
-          yield TranscriptEvent(kind="final", text=self.final_text)
+          yield base.TranscriptEvent(kind="final", text=self.final_text)
           return
       if self._gate is not None:
         await self._gate.wait()
       if self._partial_text is not None:
-        yield TranscriptEvent(kind="partial", text=self._partial_text)
-      yield TranscriptEvent(kind="final", text=self.final_text)
+        yield base.TranscriptEvent(kind="partial", text=self._partial_text)
+      yield base.TranscriptEvent(kind="final", text=self.final_text)
     finally:
       self.closed = True  # the streamer's close of this iterator ends the backend session
 
 
 def _start_relay(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     socket: FakePreviewSocket,
     backend: FakeLiveBackend,
 ) -> asyncio.Task:
@@ -165,7 +165,7 @@ def _start_relay(
 
 @pytest.mark.asyncio
 async def test_final_after_end_archives_the_pair_then_pushes_the_final(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   socket = FakePreviewSocket([FRAME_A, FRAME_B, _END_FRAME], hang_when_script_ends=True)
   backend = FakeLiveBackend(FINAL_TEXT, partial_text="synthetic partial")
   dirs_at_final: list[list[str]] = []
@@ -176,7 +176,7 @@ async def test_final_after_end_archives_the_pair_then_pushes_the_final(
 
   socket.send_hook = hook
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await asyncio.wait_for(relay, timeout=2)
 
   assert [frame["type"] for frame in socket.sent] == ["partial", "final"]
@@ -209,11 +209,11 @@ async def test_final_after_end_archives_the_pair_then_pushes_the_final(
 
 @pytest.mark.asyncio
 async def test_an_end_frame_with_devices_logs_the_five_device_fields(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   socket = FakePreviewSocket([FRAME_A, _END_FRAME_WITH_DEVICES], hang_when_script_ends=True)
   backend = FakeLiveBackend(FINAL_TEXT)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await asyncio.wait_for(relay, timeout=2)
 
   transcribed = [entry for entry in logs if entry["event"] == "voice_transcribed"]
@@ -232,21 +232,21 @@ async def test_an_end_frame_with_devices_logs_the_five_device_fields(
 
 @pytest.mark.asyncio
 async def test_an_end_frame_with_a_missing_device_key_takes_the_protocol_error_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   short = {key: value for key, value in DEVICES.items() if key != "output_device"}
   await _assert_devices_protocol_error(monkeypatch, tmp_path, short)
 
 
 @pytest.mark.asyncio
 async def test_an_end_frame_with_an_extra_device_key_takes_the_protocol_error_path(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   extra = {**DEVICES, "microphone_label": "one key too many"}
   await _assert_devices_protocol_error(monkeypatch, tmp_path, extra)
 
 
 async def _assert_devices_protocol_error(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     devices: dict,
 ) -> None:
   """A devices object without exactly the five keys ends the preview as the
@@ -254,7 +254,7 @@ async def _assert_devices_protocol_error(
   socket = FakePreviewSocket([FRAME_A, {"type": "end", "devices": devices}])
   backend = FakeLiveBackend(FINAL_TEXT)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await asyncio.wait_for(relay, timeout=2)
 
   assert [frame["type"] for frame in socket.sent] == ["error"]
@@ -265,16 +265,16 @@ async def _assert_devices_protocol_error(
 
 @pytest.mark.asyncio
 async def test_an_archive_failure_pushes_an_error_and_leaves_no_files(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   socket = FakePreviewSocket([FRAME_A, _END_FRAME], hang_when_script_ends=True)
   backend = FakeLiveBackend(FINAL_TEXT)
 
-  def failing_write(path: Path, pcm_bytes: bytes) -> None:
+  def failing_write(path: pathlib.Path, pcm_bytes: bytes) -> None:
     raise OSError("synthetic write failure")
 
   monkeypatch.setattr(voice, "_write_wav", failing_write)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  with capture_logs() as logs:
+  with testing.capture_logs() as logs:
     await asyncio.wait_for(relay, timeout=2)
 
   assert [frame["type"] for frame in socket.sent] == ["error"]
@@ -288,13 +288,13 @@ async def test_an_archive_failure_pushes_an_error_and_leaves_no_files(
 
 @pytest.mark.asyncio
 async def test_a_final_before_the_end_frame_is_a_failure_with_no_archive(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   # The browser is parked mid-recording when the backend's final lands, so the
   # queue is unsealed and the final is early.
   socket = FakePreviewSocket([FRAME_A, _HOLD, _END_FRAME])
   backend = FakeLiveBackend(FINAL_TEXT, early_after_chunks=1)
   relay = _start_relay(monkeypatch, tmp_path, socket, backend)
-  await _async_wait_for(lambda: socket.sent, 1.0, "the preview relay never sent its first frame")
+  await conftest._async_wait_for(lambda: socket.sent, 1.0, "the preview relay never sent its first frame")
 
   assert [frame["type"] for frame in socket.sent] == ["error"]
   assert "end frame" in socket.sent[0]["message"]
@@ -309,7 +309,7 @@ async def test_a_final_before_the_end_frame_is_a_failure_with_no_archive(
 @pytest.mark.asyncio
 async def test_a_disconnect_after_the_end_frame_cancels_the_backend_and_archives_nothing(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
 ) -> None:
   gate = asyncio.Event()  # never set: the backend never reaches its final
   socket = FakePreviewSocket([FRAME_A, _END_FRAME])  # the script then disconnects
@@ -323,7 +323,8 @@ async def test_a_disconnect_after_the_end_frame_cancels_the_backend_and_archives
 
 
 @pytest.mark.asyncio
-async def test_frames_past_the_cap_are_cut_sample_exactly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_frames_past_the_cap_are_cut_sample_exactly(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   from src.agents import transcriber
 
   # Three 2048-sample frames against a 3072-sample cap: the second frame is cut

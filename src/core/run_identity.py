@@ -11,15 +11,15 @@ and one durable fact type — none of it needs a model at runtime.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from types import SimpleNamespace
+import pathlib
+import types
 from typing import TYPE_CHECKING
 
 from src.core import event_types as ET
-from src.core.ndjson import PARSE_SKIP_LOG_EVENT, parse_ndjson_events, type_line_filter
+from src.core import ndjson
 
 if TYPE_CHECKING:
-  from src.core.models import RunRecord
+  from src.core import models
 
 RUN_IDENTITY_UNKNOWN_DETAIL = "run token does not reference an active run"
 RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not launched"
@@ -29,7 +29,7 @@ RUN_IDENTITY_NOT_LAUNCHED_DETAIL = "run token references a run that has not laun
 SESSION_METADATA_NAME = "metadata.json"
 
 
-def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | None:
+def run_identity_refusal(run: models.RunRecord | None, events: list[dict]) -> str | None:
   """Why *run* is not an active, launched Run for caller identity, or None.
 
     The one predicate both identity consumers share: the API caller-identity
@@ -47,7 +47,7 @@ def run_identity_refusal(run: RunRecord | None, events: list[dict]) -> str | Non
   return None
 
 
-def read_run_identity_sync(path: Path) -> tuple[str, int | None, str | None] | None:
+def read_run_identity_sync(path: pathlib.Path) -> tuple[str, int | None, str | None] | None:
   """The (id, pid, pid_start) fields the refusal predicate reads, or None when absent.
 
   Skips and raises exactly like ``RunStore.read_run_sync``: a missing file
@@ -69,7 +69,7 @@ def read_run_identity_sync(path: Path) -> tuple[str, int | None, str | None] | N
   return run_id, record.get("pid"), record.get("pid_start")
 
 
-def run_scoped_refusal(sessions_dir: Path, session_id: str, run_id: str) -> str | None:
+def run_scoped_refusal(sessions_dir: pathlib.Path, session_id: str, run_id: str) -> str | None:
   """The caller-identity refusal for one run token, read without the model stack.
 
   The run-scoped CLI shape of :func:`run_identity_refusal`: the run record's
@@ -85,10 +85,10 @@ def run_scoped_refusal(sessions_dir: Path, session_id: str, run_id: str) -> str 
   if record is None:
     return RUN_IDENTITY_UNKNOWN_DETAIL
   run_id_read, pid, pid_start = record
-  run = SimpleNamespace(id=run_id_read, pid=pid, pid_start=pid_start)
-  events = parse_ndjson_events(
+  run = types.SimpleNamespace(id=run_id_read, pid=pid, pid_start=pid_start)
+  events = ndjson.parse_ndjson_events(
       session_dir / "data" / "chat_events.jsonl",
-      log_event=PARSE_SKIP_LOG_EVENT,
+      log_event=ndjson.PARSE_SKIP_LOG_EVENT,
       log_fields={},
-      parse_filter=type_line_filter(frozenset({ET.RUN_FINISHED})))
+      parse_filter=ndjson.type_line_filter(frozenset({ET.RUN_FINISHED})))
   return run_identity_refusal(run, events)  # type: ignore[arg-type]

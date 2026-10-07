@@ -9,23 +9,13 @@ home, synthetic ids throughout.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from unittest.mock import patch
+import pathlib
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
-    fake_backends,
-    make_internal_router_client,
-    stub_credentials,
-)
 
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import REQUIRED_PERMISSIONS, DiscordAPIError, snowflake_key
-from src.core.discord_commands import read_thread
-from src.core.discord_listener import summon_session_id
-from src.core.models import CreateSessionRequest, DiscordOrigin, utc_now
-from src.core.sessions import SessionManager
+from src.core import config, discord_client, discord_commands, discord_listener, models, sessions
 
 _GUILD = "800000000000000001"
 _PARENT = "800000000000000002"
@@ -81,14 +71,15 @@ class FakeDiscordClient:
     for message in self.channels.get(channel_id, []):
       if message["id"] == message_id:
         return message
-    raise DiscordAPIError("GET", f"/channels/{channel_id}/messages/{message_id}", 404, 10008, "Unknown Message")
+    raise discord_client.DiscordAPIError(
+        "GET", f"/channels/{channel_id}/messages/{message_id}", 404, 10008, "Unknown Message")
 
   async def get_messages(self, channel_id: str, *, after: str | None = None, limit: int = 100) -> list[dict]:
     self.calls.append(("get_messages", {"channel_id": channel_id, "after": after, "limit": limit}))
     if channel_id in self.hidden:
-      raise DiscordAPIError("GET", f"/channels/{channel_id}/messages", 403, 50001, "Missing Access")
-    floor = snowflake_key(after) if after is not None else 0
-    matches = [m for m in self.channels.get(channel_id, []) if snowflake_key(m["id"]) > floor]
+      raise discord_client.DiscordAPIError("GET", f"/channels/{channel_id}/messages", 403, 50001, "Missing Access")
+    floor = discord_client.snowflake_key(after) if after is not None else 0
+    matches = [m for m in self.channels.get(channel_id, []) if discord_client.snowflake_key(m["id"]) > floor]
     return matches[-limit:] if after is None else matches[:limit]
 
   async def create_message(self, channel_id: str, content: str) -> dict:
@@ -109,23 +100,24 @@ class FakeDiscordClient:
     return self.guilds
 
 
-def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
+def _build_cfg(tmp_path: pathlib.Path) -> config.CharlieBotConfig:
   """Config with the home under tmp_path, the stubbed test token, and one mapped account."""
-  stub_credentials({"discord": {"bot_token": "test-bot-token"}})
-  return CharlieBotConfig(
+  conftest.stub_credentials({"discord": {"bot_token": "test-bot-token"}})
+  return config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",
       discord={"allowed_users": {
           _USER: _PERSON,
           _OTHER_USER: "tester-two"
       }},
-      backends=fake_backends(),
+      backends=conftest.fake_backends(),
   )
 
 
-def _rig(tmp_path: Path, **client_kwargs: object) -> tuple[CharlieBotConfig, SessionManager, FakeDiscordClient]:
+def _rig(tmp_path: pathlib.Path,
+         **client_kwargs: object) -> tuple[config.CharlieBotConfig, sessions.SessionManager, FakeDiscordClient]:
   """Rig: cfg and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
-  return cfg, SessionManager(cfg), FakeDiscordClient(**client_kwargs)
+  return cfg, sessions.SessionManager(cfg), FakeDiscordClient(**client_kwargs)
 
 
 def _message(
@@ -155,21 +147,21 @@ def _message(
   }
 
 
-async def _make_session(session_mgr: SessionManager, *, watermark: str | None = None) -> str:
+async def _make_session(session_mgr: sessions.SessionManager, *, watermark: str | None = None) -> str:
   """A Discord-backed session like a summon leaves it, with an optional read watermark."""
   meta = await session_mgr.create_session(
-      CreateSessionRequest(
-          session_id=summon_session_id(_GUILD, _THREAD),
+      models.CreateSessionRequest(
+          session_id=discord_listener.summon_session_id(_GUILD, _THREAD),
           name="discord session",
-          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+          discord_origin=models.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
   if watermark is not None:
     meta.discord_watermark_id = watermark
-    meta.updated_at = utc_now()
+    meta.updated_at = models.utc_now()
     await session_mgr.save_metadata(meta)
   return meta.id
 
 
-def _ack_events(session_mgr: SessionManager, session_id: str) -> list[dict]:
+def _ack_events(session_mgr: sessions.SessionManager, session_id: str) -> list[dict]:
   return [ev for ev in session_mgr.load_chat_events_sync(session_id) if ev["type"] == "discord_ack"]
 
 
@@ -179,7 +171,7 @@ def _ack_events(session_mgr: SessionManager, session_id: str) -> list[dict]:
 
 
 @pytest.mark.asyncio
-async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path: Path) -> None:
+async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path: pathlib.Path) -> None:
   """The window starts at the oldest unread; the ack covers exactly its unread ids."""
   cfg, session_mgr, client = _rig(
       tmp_path,
@@ -202,8 +194,8 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   # Unread runs m4..m10 minus the ineligible bot messages (m3, m6); the window
   # is the four messages from the oldest unread (m4) on, bot message included,
   # read. The bot message is not unread and rides outside the ack.
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, None, 4, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (4, 5, 6, 7)]
   assert [m["unread"] for m in result["messages"]] == [True, True, False, True]
@@ -218,8 +210,8 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   assert acks[0]["discord_ack"] == {"message_ids": [_mid(4), _mid(5), _mid(7)], "watermark_id": _mid(7)}
 
   # A second read picks up the run the first window cut: the rest of the unread.
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    again = await read_thread(session_id, None, 4, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    again = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr)
   assert [m["id"] for m in again["messages"]] == [_mid(i) for i in (8, 9, 10)]
   assert [m["unread"] for m in again["messages"]] == [True, True, True]
   assert again["watermark_id"] == _mid(10)
@@ -227,13 +219,13 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_read_without_unread_returns_the_newest_limit(tmp_path: Path) -> None:
+async def test_read_without_unread_returns_the_newest_limit(tmp_path: pathlib.Path) -> None:
   """Nothing unread: the window is the newest *limit* messages and nothing is marked."""
   cfg, session_mgr, client = _rig(tmp_path, channels={_THREAD: [_message(i, f"m{i}") for i in range(1, 9)]})
   session_id = await _make_session(session_mgr, watermark=_mid(8))
 
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, None, 3, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 3, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (6, 7, 8)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -243,7 +235,7 @@ async def test_read_without_unread_returns_the_newest_limit(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
-async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: Path) -> None:
+async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: pathlib.Path) -> None:
   """A message arriving after the thread read stays out of the readback and breaks nothing.
 
   The unread set comes from the one fetched message list, so a message Discord
@@ -265,8 +257,8 @@ async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: 
     return page
 
   client.get_messages = get_messages
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, None, 50, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 50, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -276,7 +268,7 @@ async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path) -> None:
+async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: pathlib.Path) -> None:
   """A thread started from a parent message reads its starter first, not counted in *limit*."""
   starter = _message(0, "please plan the release", message_id=_THREAD, global_name="Display Name")
   cfg, session_mgr, client = _rig(
@@ -287,8 +279,8 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
       })
   session_id = await _make_session(session_mgr)
 
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, None, 2, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_THREAD, _mid(1), _mid(2)]
   # The starter rides first, unread false; limit=2 still delivered both unread.
@@ -316,22 +308,22 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: Path
 
 
 @pytest.mark.asyncio
-async def test_read_skips_a_404_starter(tmp_path: Path) -> None:
+async def test_read_skips_a_404_starter(tmp_path: pathlib.Path) -> None:
   """A forum post or a thread not started from a message has no starter: the read goes on without one."""
   cfg, session_mgr, client = _rig(
       tmp_path, channels={_THREAD: [_message(1, "first follow up"),
                                     _message(2, "second follow up")]})
   session_id = await _make_session(session_mgr)
 
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, None, 2, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
   assert [m["unread"] for m in result["messages"]] == [True, True]
 
 
 @pytest.mark.asyncio
-async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_path: Path) -> None:
+async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_path: pathlib.Path) -> None:
   """person is the account's configured name; an author outside the map reads as None everywhere."""
   cfg, session_mgr, client = _rig(
       tmp_path,
@@ -341,9 +333,9 @@ async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_
       })
   session_id = await _make_session(session_mgr)
 
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    own = await read_thread(session_id, None, 5, cfg, session_mgr)
-    linked = await read_thread(
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    own = await discord_commands.read_thread(session_id, None, 5, cfg, session_mgr)
+    linked = await discord_commands.read_thread(
         session_id, f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}", 5, cfg, session_mgr)
 
   persons = {m["id"]: m["person"] for m in own["messages"]}
@@ -359,14 +351,14 @@ async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_
 
 
 @pytest.mark.asyncio
-async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path: Path) -> None:
+async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path: pathlib.Path) -> None:
   """--url reads the newest *limit* of the linked channel, all unread false, nothing acked."""
   cfg, session_mgr, client = _rig(tmp_path, channels={_OTHER_CHANNEL: [_message(i, f"m{i}") for i in range(1, 6)]})
   session_id = await _make_session(session_mgr)
   url = f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"
 
-  with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await read_thread(session_id, url, 3, cfg, session_mgr)
+  with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
+    result = await discord_commands.read_thread(session_id, url, 3, cfg, session_mgr)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (3, 4, 5)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -381,14 +373,14 @@ async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: Path) -> None:
+async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: pathlib.Path) -> None:
   """A 403 from Discord answers 404 'cannot see'; a non-discord.com link answers 422."""
   cfg, session_mgr, client = _rig(tmp_path, hidden=(_OTHER_CHANNEL,))
   session_id = await _make_session(session_mgr)
 
   with (
-      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      make_internal_router_client(cfg, session_mgr) as http,
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      conftest.make_internal_router_client(cfg, session_mgr) as http,
   ):
     hidden = http.post(
         "/api/internal/discord/read",
@@ -405,14 +397,14 @@ async def test_read_with_url_refuses_hidden_channel_and_bad_link(tmp_path: Path)
 
 
 @pytest.mark.asyncio
-async def test_read_on_a_non_discord_session_answers_409(tmp_path: Path) -> None:
+async def test_read_on_a_non_discord_session_answers_409(tmp_path: pathlib.Path) -> None:
   """A session without a Discord thread refuses with 409 before any Discord call."""
   cfg, session_mgr, client = _rig(tmp_path)
-  meta = await session_mgr.create_session(CreateSessionRequest(name="plain"))
+  meta = await session_mgr.create_session(models.CreateSessionRequest(name="plain"))
 
   with (
-      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      make_internal_router_client(cfg, session_mgr) as http,
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      conftest.make_internal_router_client(cfg, session_mgr) as http,
   ):
     resp = http.post("/api/internal/discord/read", json={"session_id": meta.id})
 
@@ -427,7 +419,7 @@ async def test_read_on_a_non_discord_session_answers_409(tmp_path: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: Path) -> None:
+async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: pathlib.Path) -> None:
   """The reply gate fires before any post; the read marks the thread and the reply goes through."""
   cfg, session_mgr, client = _rig(
       tmp_path, channels={
@@ -437,8 +429,8 @@ async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: 
   session_id = await _make_session(session_mgr)
 
   with (
-      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      make_internal_router_client(cfg, session_mgr) as http,
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      conftest.make_internal_router_client(cfg, session_mgr) as http,
   ):
     refused = http.post("/api/internal/discord/reply", json={"session_id": session_id, "text": "the answer"})
     assert refused.status_code == 412
@@ -465,9 +457,10 @@ async def test_reply_refuses_412_while_unread_then_posts_after_a_read(tmp_path: 
 
 
 @pytest.mark.asyncio
-async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) -> None:
+async def test_check_reports_missing_permissions_and_intent_off(tmp_path: pathlib.Path) -> None:
   """A guild missing ADD_REACTIONS names it, the intent off reads false, and ok is false."""
-  every_permission_but_reactions = sum(REQUIRED_PERMISSIONS.values()) - REQUIRED_PERMISSIONS["ADD_REACTIONS"]
+  every_permission_but_reactions = sum(
+      discord_client.REQUIRED_PERMISSIONS.values()) - discord_client.REQUIRED_PERMISSIONS["ADD_REACTIONS"]
   cfg, session_mgr, client = _rig(
       tmp_path,
       user={
@@ -493,8 +486,8 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
   )
 
   with (
-      patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      make_internal_router_client(cfg, session_mgr) as http,
+      mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
+      conftest.make_internal_router_client(cfg, session_mgr) as http,
   ):
     resp = http.post("/api/internal/discord/check", json={})
 
@@ -528,12 +521,12 @@ async def test_check_reports_missing_permissions_and_intent_off(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_check_without_a_token_answers_409(tmp_path: Path) -> None:
+async def test_check_without_a_token_answers_409(tmp_path: pathlib.Path) -> None:
   """No bot token set: 409 naming the key, before any client could be built."""
-  stub_credentials({})
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
+  conftest.stub_credentials({})
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
 
-  with make_internal_router_client(cfg, SessionManager(cfg)) as http:
+  with conftest.make_internal_router_client(cfg, sessions.SessionManager(cfg)) as http:
     resp = http.post("/api/internal/discord/check", json={})
 
   assert resp.status_code == 409

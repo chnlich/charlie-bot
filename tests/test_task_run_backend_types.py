@@ -12,36 +12,31 @@ backends (which support raw re-attach) is unchanged and asserted per type.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    backend_option,
-)
 
+from src.core import backend_models, sessions, task_sessions
 from src.core import event_types as ET
-from src.core.backend_models import BackendType
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
 
 
-def build_env(tmp_path: Path, backend_type: BackendType):
+def build_env(tmp_path: pathlib.Path, backend_type: backend_models.BackendType):
   """One backend of the requested TYPE, configured the way the type requires."""
   import src.core.config as core_config
-  from src.core.config import CharlieBotConfig
 
   home = tmp_path / "home"
-  model = None if backend_type in (BackendType.ANTIGRAVITY, BackendType.TUI_CLI) else "fake-model"
+  model = None if backend_type in (
+      backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI) else "fake-model"
   kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type.value}
-  if backend_type not in (BackendType.ANTIGRAVITY, BackendType.TUI_CLI):
+  if backend_type not in (backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI):
     kwargs["model"] = model
-  if backend_type in (BackendType.CC_OPENAI_COMPATIBLE, BackendType.CHARLIE_CODE):
+  if backend_type in (backend_models.BackendType.CC_OPENAI_COMPATIBLE, backend_models.BackendType.CHARLIE_CODE):
     kwargs["api_base"] = "http://127.0.0.1:9"
-  if backend_type == BackendType.CC_KIMI:
+  if backend_type == backend_models.BackendType.CC_KIMI:
     kwargs["credential"] = "kimi"
-  option = backend_option(**kwargs)
-  cfg = CharlieBotConfig(
+  option = conftest.backend_option(**kwargs)
+  cfg = core_config.CharlieBotConfig(
       charliebot_home=home,
       backends={
           "options": [option],
@@ -52,52 +47,48 @@ def build_env(tmp_path: Path, backend_type: BackendType):
       core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
           "access_key": "key-type"
       }}))
-  session_mgr = SessionManager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  session_mgr = sessions.SessionManager(cfg)
+  return cfg, session_mgr, task_sessions.TaskTreeManager(cfg, session_mgr)
 
 
 def session_attached_event(native_id: str) -> dict:
   return {"type": "system", "subtype": "init", "session_id": native_id}
 
 
-BACKEND_TYPES = list(BackendType)
+BACKEND_TYPES = list(backend_models.BackendType)
 # The master queue only runs streaming backends: a manager turn on a TUI
 # backend is refused by the existing guard (recorded in the manager-queue
 # tests), so the identity assertions cover the eight executable types.
-STREAMING_BACKEND_TYPES = [t for t in BackendType if t is not BackendType.TUI_CLI]
+STREAMING_BACKEND_TYPES = [t for t in backend_models.BackendType if t is not backend_models.BackendType.TUI_CLI]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend_type", STREAMING_BACKEND_TYPES, ids=lambda t: t.value)
 async def test_run_records_stream_identity_and_result_truth(
-    tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
-  from tests.test_task_execution import (
-      SpawningScriptedBackend,
-      install_backends,
-      result_event,
-      wait_for_terminal_run,
-  )
+    tmp_path: pathlib.Path, backend_type: backend_models.BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
+  from tests import test_task_execution
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
   root = await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="M", backend=None, caller="operator")
-  backend = SpawningScriptedBackend([
-      session_attached_event("native-xyz-1"),
-      result_event("typed output"),
-  ])
-  install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-  from src.core.task_execution import TaskExecutionAdapter
-  tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
+  backend = test_task_execution.SpawningScriptedBackend(
+      [
+          session_attached_event("native-xyz-1"),
+          test_task_execution.result_event("typed output"),
+      ])
+  test_task_execution.install_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
+  from src.core import task_execution
+  tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
 
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
   run_id = decision["run_id"]
   assert run_id is not None
-  run, outcome = await wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
+  run, outcome = await test_task_execution.wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
 
   # The Run records the configured model, the stream's native session id,
   # and its own transport refs.
-  if backend_type not in (BackendType.ANTIGRAVITY, BackendType.TUI_CLI):
+  if backend_type not in (backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI):
     assert run.model == "fake-model"
   assert run.native_session_id == "native-xyz-1"
   run_dir = tree.runs.run_dir(root.id, run_id)
@@ -111,8 +102,8 @@ async def test_run_records_stream_identity_and_result_truth(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
 async def test_zero_output_and_error_results_fail_across_types(
-    tmp_path: Path, backend_type: BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
-  from tests.test_task_execution import SpawningScriptedBackend, install_backends, wait_for_terminal_run
+    tmp_path: pathlib.Path, backend_type: backend_models.BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
+  from tests import test_task_execution
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
   root = await tree.create_task(
@@ -125,13 +116,13 @@ async def test_zero_output_and_error_results_fail_across_types(
   # the dispatcher refuses before any Run exists (no headless failure, the
   # input stays pending).
   from src.agents.backends import base as backend_base
-  empty = SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
-  install_backends(monkeypatch, [empty], BUILD_BACKEND_PATCH_TARGET)
-  from src.core.task_execution import TaskExecutionAdapter
-  tree.dispatch.executor = TaskExecutionAdapter(cfg, session_mgr, tree)
+  empty = test_task_execution.SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
+  test_task_execution.install_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
+  from src.core import task_execution
+  tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Stay silent.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-  if backend_type is BackendType.TUI_CLI:
+  if backend_type is backend_models.BackendType.TUI_CLI:
     assert decision["launch"] is False
     assert "terminal" in decision["reason"]
     assert "run_id" not in decision
@@ -139,22 +130,22 @@ async def test_zero_output_and_error_results_fail_across_types(
     assert [e for e in tree.events.load_events(root.id) if e.get("type") == ET.RUN_FINISHED] == []
     return
   run_id = decision["run_id"]
-  _run, outcome = await wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
+  _run, outcome = await test_task_execution.wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
   assert outcome == "failed"
 
   # A backend whose transport dies mid-turn (run() raises) fails the turn
   # through the master queue's error path. The failed zero-output run gates
   # fresh dispatch, so this phase goes through the explicit retry path (the
   # same one the retry route uses).
-  class _TransportDeath(SpawningScriptedBackend):
+  class _TransportDeath(test_task_execution.SpawningScriptedBackend):
 
     async def run(self, prompt, cwd, env, uploaded_files=None):
       raise RuntimeError("transport died mid-turn")
       yield  # pragma: no cover
 
   errored = _TransportDeath([])
-  install_backends(monkeypatch, [errored], BUILD_BACKEND_PATCH_TARGET)
+  test_task_execution.install_backends(monkeypatch, [errored], conftest.BUILD_BACKEND_PATCH_TARGET)
   retry = await tree.create_retry(root.id, "retry-error", run_id)
   await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-  _run, outcome = await wait_for_terminal_run(tree, root.id, retry["run_id"], timeout=10.0)
+  _run, outcome = await test_task_execution.wait_for_terminal_run(tree, root.id, retry["run_id"], timeout=10.0)
   assert outcome == "failed"

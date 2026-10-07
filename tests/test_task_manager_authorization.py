@@ -21,8 +21,9 @@ import subprocess
 import conftest
 import pytest
 
-from src.core import control_events, models, sessions, task_sessions
-from src.core import event_types as ET
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import control_events, sessions, task_sessions
 from tests import test_task_execution
 
 KEY = "op-secret"
@@ -31,7 +32,7 @@ KEY = "op-secret"
 def live_run_identity() -> tuple[int, str]:
   """A real live process identity (the verified-live precondition of an own-run request)."""
   proc = subprocess.Popen(["/bin/sleep", "30"])
-  from src.core import runs
+  from src.runtime import runs
   pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
   return proc.pid, pair[0]
@@ -59,7 +60,7 @@ async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
-  from src.api import internal as internal_api
+  from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
   root = await tree.create_task(
       request_id="root",

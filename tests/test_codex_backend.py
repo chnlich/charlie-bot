@@ -4,8 +4,8 @@ from typing import Any
 import conftest
 import pytest
 
-from src.agents.backends import codex
-from src.core import event_types as ET
+from src.backends.codex import codex
+from src.infra import event_types as ET
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> codex.CodexBackend:

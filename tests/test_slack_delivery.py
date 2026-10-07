@@ -1,4 +1,4 @@
-"""Acceptance tests for the Slack reply path, the round-end audit, and the boot backfill (src.core.slack_listener)."""
+"""Acceptance tests for the Slack reply path, the round-end audit, and the boot backfill (src.features.slack.slack_listener)."""
 
 from __future__ import annotations
 
@@ -21,33 +21,21 @@ from conftest import (
 )
 from structlog.testing import capture_logs
 
-from src.agents import master_cc_state
-from src.agents.backends.base import make_text_event
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.message_aggregator import MessageAggregator
-from src.core.models import (
-    CreateSessionRequest,
-    MasterRunRecord,
-    SessionMetadata,
-    SlackOrigin,
-    utc_now,
-)
-from src.core.sessions import SessionManager
-from src.core.slack_listener import (
-    SLACK,
-    SlackReplyError,
-    backfill_lost_summons,
-    deliver_done,
-    post_reply,
-)
-from src.core.thread_entry import _NO_REPLY_NOTICE, lost_summons
+from src.features.chat_threads.thread_entry import _NO_REPLY_NOTICE, lost_summons
+from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_lost_summons, deliver_done, post_reply
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionMetadata, SlackOrigin, utc_now
+from src.runtime import master_cc_state
+from src.runtime.agent_process.base import make_text_event
+from src.runtime.message_aggregator import MessageAggregator
+from src.runtime.sessions import SessionManager
 
 _CHANNEL = "C_TEST"
 _THREAD = "1700000000.000100"
 _TEAM = "T_TEST"
-_RETRY_DELAYS_PATCH_TARGET = "src.core.thread_entry._RETRY_DELAYS"
-_QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.agents.master_cc_queue.queued_user_event_ids"
+_RETRY_DELAYS_PATCH_TARGET = "src.features.chat_threads.thread_entry._RETRY_DELAYS"
+_QUEUED_USER_EVENT_IDS_PATCH_TARGET = "src.runtime.master_cc_queue.queued_user_event_ids"
 _PERMALINK = "https://fake.slack.test/archives/C_TEST/p1700000000000100"
 # A summon prompt embeds prompts/thread_reply_format.md, which names the reply
 # command; the audit reads that name off the summon to know its contract.

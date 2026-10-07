@@ -7,7 +7,7 @@ escapes, and every reader JSON-parses the log per line.
 
 import json
 
-from src.agents import worker
+from src.runtime import worker
 
 
 def test_event_line_round_trips_the_event() -> None:

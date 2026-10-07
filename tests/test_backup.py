@@ -8,7 +8,8 @@ fixture, which pins CHARLIEBOT_HOME at a fresh directory per test.
 """
 import tarfile
 
-from src.core import backup, config
+from src.features.backup import backup
+from src.infra import config
 
 
 def test_exclusions_cover_the_secrets_file_and_noise() -> None:

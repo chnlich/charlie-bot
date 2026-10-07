@@ -15,9 +15,10 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, sessions, task_sessions
-from src.core import event_types as ET
-from src.core.scheduler import TASK_HANDLERS, Scheduler
+from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.infra import config
+from src.infra import event_types as ET
+from src.runtime import sessions, task_sessions
 
 
 def _count_event_lines(path: pathlib.Path) -> int:
@@ -29,7 +30,7 @@ def _count_event_lines(path: pathlib.Path) -> int:
 @pytest.fixture()
 def scheduler_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic home with the scheduler's deps singletons wired to it."""
-  import src.core.config as core_config
+  import src.infra.config as core_config
   home = tmp_path / "charliebot-home"
   cfg = config.CharlieBotConfig(
       charliebot_home=home,

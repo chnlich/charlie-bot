@@ -4,14 +4,8 @@ from html import unescape
 
 from conftest import ROOT
 
-from src.core.artifact_check import _descendants, _Element, _parse_dom
-from src.core.plan_diff import (
-    _BLOCK_TAGS,
-    _IGNORED_TAGS,
-    _first_descendant,
-    _parse_anchors,
-    annotate,
-)
+from src.features.artifacts.artifact_check import _descendants, _Element, _parse_dom
+from src.features.artifacts.plan_diff import _BLOCK_TAGS, _IGNORED_TAGS, _first_descendant, _parse_anchors, annotate
 
 
 def _parse(html: str) -> _Element:
@@ -184,7 +178,7 @@ def _reference_tokenise(text: str) -> list[tuple[str, int, int]]:
 
 
 def test_tokeniser_matches_the_per_character_reference_on_a_randomized_corpus() -> None:
-  from src.core.plan_diff import _tokenise
+  from src.features.artifacts.plan_diff import _tokenise
 
   rng = random.Random(20260908)
   for _ in range(500):
@@ -210,7 +204,7 @@ def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None
 
 
 def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
-  from src.core.plan_diff import _Node, _parse
+  from src.features.artifacts.plan_diff import _Node, _parse
 
   parser = _parse(source)
 

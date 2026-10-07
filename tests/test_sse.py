@@ -1,9 +1,9 @@
-"""Property tests for the spec-conformant SSE line splitter (src/core/sse.py)."""
+"""Property tests for the spec-conformant SSE line splitter (src/infra/sse.py)."""
 
 import conftest
 import pytest
 
-from src.core import sse
+from src.infra import sse
 
 
 async def _drain_lines(chunks: list[bytes]) -> list[str]:

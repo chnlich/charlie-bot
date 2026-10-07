@@ -1,4 +1,4 @@
-"""Tests for the file-level lazy-load diff API (src/api/git.py)."""
+"""Tests for the file-level lazy-load diff API (src/features/diff_view/api.py)."""
 
 import pathlib
 import subprocess
@@ -9,8 +9,8 @@ import httpx
 import pytest
 from fastapi import testclient
 
-from src.api import git as git_api
-from src.core import config
+from src.features.diff_view import api as git_api
+from src.infra import config
 
 
 def _build_repo(workspace: pathlib.Path) -> pathlib.Path:

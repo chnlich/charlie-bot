@@ -1,4 +1,4 @@
-"""Tests for src/cli/publish.py — URL on stdout, preflight failure exit codes."""
+"""Tests for src/features/artifacts/publish_cli.py — URL on stdout, preflight failure exit codes."""
 
 import json
 import pathlib
@@ -8,7 +8,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.cli import publish
+from src.features.artifacts import publish_cli as publish
 
 
 def test_publish_prints_the_url_on_stdout_and_exits_zero(

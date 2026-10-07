@@ -1,7 +1,7 @@
 """Voice replay evaluation: recorded dictations through the registered transcription backends.
 
 Replays every recorded dictation under ``<sessions_dir>/*/voice/`` through the
-transcription backends (src/agents/transcription/), then reports stop-to-final
+transcription backends (src/features/voice/transcription/), then reports stop-to-final
 latency and proper-noun accuracy against the message the user actually sent.
 Engine names are the registry ids plus variants: ``local-hotwords`` (the local
 backend built with --hotwords) and ``<id>-vocab`` for any backend (the same
@@ -39,12 +39,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
   sys.path.insert(0, str(_REPO_ROOT))
 
-from src.agents import transcriber  # noqa: E402
-from src.agents.transcription import registry  # noqa: E402
-from src.agents.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
-from src.agents.transcription.local import LocalTranscriptionBackend  # noqa: E402
-from src.core.config import CharlieBotConfig, load_config  # noqa: E402
-from src.core.models import utc_now_iso  # noqa: E402
+from src.features.voice import transcriber  # noqa: E402
+from src.features.voice.transcription import registry  # noqa: E402
+from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
+from src.features.voice.transcription.local import LocalTranscriptionBackend  # noqa: E402
+from src.infra.config import CharlieBotConfig, load_config  # noqa: E402
+from src.infra.models import utc_now_iso  # noqa: E402
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 # A voice recording pairs with the first voice-flagged user message sent within

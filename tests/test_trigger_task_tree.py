@@ -25,9 +25,9 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.core import event_types as ET
-from src.core.models import PendingTrigger, TaskSpec, TriggerStatus
-from src.core.triggers import TriggerManager
+from src.infra import event_types as ET
+from src.infra.models import PendingTrigger, TaskSpec, TriggerStatus
+from src.runtime.triggers import TriggerManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,

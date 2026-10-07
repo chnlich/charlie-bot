@@ -1,0 +1,97 @@
+"""GeminiCliBackend — AgentBackend wrapping the `gemini` CLI in stream-json mode."""
+
+from src.infra import event_types as ET
+from src.infra import log_once
+from src.runtime.agent_process import base
+
+log = log_once.LazyStructlogLogger()
+
+
+class GeminiCliBackend(base.AgentBackend):
+  """Runs a `gemini` CLI subprocess in stream-json mode and translates NDJSON events to CC-compatible format."""
+
+  def __init__(self, *, model: str, **kwargs: object) -> None:
+    if not model:
+      raise ValueError("gemini backend requires a model")
+    super().__init__(model=model, **kwargs)
+    self._gemini_bin = base.resolve_binary("gemini", base.USER_LOCAL_BIN)
+    self._text_buffer = ""
+
+  def _build_command(self, prompt: str) -> list[str]:
+    cmd = [
+        self._gemini_bin, "-m", self._model, "-p",
+        self._effective_prompt(prompt), "-o", "stream-json", "-y", "--sandbox=false"
+    ]
+    if self._resume_session_id:
+      cmd.extend(["--resume", self._resume_session_id])
+    cmd.extend(self._extra_flags)
+    return cmd
+
+  def _prepare_env(self, env: dict) -> dict:
+    return base.strip_google_api_keys(env)
+
+  def translate_event(self, ev: dict) -> list[dict]:
+    """Translate a single Gemini stream-json NDJSON event into CC-compatible event(s)."""
+    ev_type = ev.get("type", "")
+
+    def flush_buffer() -> list[dict]:
+      if self._text_buffer:
+        msg = [base.make_text_event(self._text_buffer)]
+        self._text_buffer = ""
+        return msg
+      return []
+
+    # --- init ---
+    if ev_type == "init":
+      return [{"type": ET.SESSION_ATTACHED, "session_id": ev.get("session_id", "")}]
+
+    # --- message ---
+    if ev_type == "message":
+      role = ev.get("role", "")
+      if role == "user":
+        return []
+      if role == "assistant":
+        self._text_buffer += ev.get("content", "")
+        if not ev.get("delta", False):
+          return flush_buffer()
+        return []
+
+    # --- tool_use ---
+    if ev_type == "tool_use":
+      events = flush_buffer()
+      events.append(base.make_tool_use_event(ev.get("tool_name", ""), ev.get("parameters", {})))
+      return events
+
+    # --- tool_result ---
+    if ev_type == "tool_result":
+      events = flush_buffer()
+      status = ev.get("status", "")
+      if status == "success":
+        events.append(base.make_tool_result_event(ev.get("tool_id", ""), ev.get("output", "")))
+      elif status == "error":
+        error = ev.get("error", {})
+        msg = error.get("message", str(error)) if isinstance(error, dict) else str(error)
+        events.append(base.make_tool_result_event(ev.get("tool_id", ""), msg))
+      return events
+
+    # --- error ---
+    if ev_type == "error":
+      events = flush_buffer()
+      msg = ev.get("message", "")
+      events.append(base.make_error_event(msg))
+      return events
+
+    # --- result ---
+    if ev_type == "result":
+      events = flush_buffer()
+      stats = ev.get("stats", {})
+      events.append(
+          base.make_result_event(
+              input_tokens=stats.get("input_tokens", 0),
+              output_tokens=stats.get("output_tokens", 0),
+              cache_read=stats.get("cached", 0),
+          ))
+      return events
+
+    log.debug("gemini_event_unhandled", type=ev_type)
+    return flush_buffer()

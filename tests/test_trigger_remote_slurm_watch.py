@@ -9,7 +9,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import models
+from src.infra import models
 
 # ---------------------------------------------------------------------------
 # Remote SLURM watch: completion and timeout
@@ -55,7 +55,7 @@ async def test_unreachable_host_fires_early_with_note(tmp_path: pathlib.Path) ->
   with (
       conftest.patch_trigger_fire(mock.AsyncMock(side_effect=_factory), sacct_available=False,
                                   sleep_mock=conftest.no_sleep) as mock_master,
-      mock.patch("src.core.triggers._REMOTE_SACCT_UNREACHABLE_GRACE", 0),
+      mock.patch("src.runtime.triggers._REMOTE_SACCT_UNREACHABLE_GRACE", 0),
   ):
     trigger = await trigger_mgr.create_trigger(
         session_id,

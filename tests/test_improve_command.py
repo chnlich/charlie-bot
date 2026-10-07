@@ -2,7 +2,7 @@
 
 The loop itself is the v2 improve sequence (tests/test_task_sequences.py); what
 lives here is the state store and the event-reading judgments its controller
-shares (src/core/improve_command.py).
+shares (src/features/improve/improve_command.py).
 """
 
 import json
@@ -12,7 +12,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import improve_command
+from src.features.improve import improve_command
 
 
 def _make_cfg(tmp_path: pathlib.Path) -> mock.MagicMock:
@@ -79,7 +79,7 @@ def test_newest_first_events_prefiltered_parity(tmp_path: pathlib.Path) -> None:
   # line, the type-less adopt signal, blank and malformed lines, the filtered
   # newest-first stream equals the full parse restricted to the candidate
   # types — so both judgments answer identically.
-  from src.core import ndjson
+  from src.infra import ndjson
 
   target = tmp_path / "events.jsonl"
   giant = {"type": "tool_result", "tool_name": "Bash", "content": "x" * (512 * 1024 + 11)}

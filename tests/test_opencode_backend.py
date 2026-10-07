@@ -16,9 +16,8 @@ from conftest import (
     stub_subprocess_spawn,
 )
 
-import src.agents.backends.opencode as opencode_mod
-from src.agents.backends.base import make_text_event
-from src.agents.backends.opencode import (
+import src.backends.opencode.opencode as opencode_mod
+from src.backends.opencode.opencode import (
     SSE_EVENT_MESSAGE_PART_UPDATED,
     SSE_EVENT_MESSAGE_UPDATED,
     SSE_EVENT_PERMISSION_ASKED,
@@ -27,12 +26,13 @@ from src.agents.backends.opencode import (
     SSE_EVENT_SESSION_IDLE,
     OpenCodeBackend,
 )
-from src.core import event_types as ET
+from src.infra import event_types as ET
+from src.runtime.agent_process.base import make_text_event
 
 # The opencode backend's httpx seam: the module's PEP 562 hook serves `httpx` as a
 # module attribute, so pytest's string-target resolution lands the stand-in on the
 # shared httpx module where the backend's local `import httpx` sites read it.
-_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.agents.backends.opencode.httpx.AsyncClient"
+_OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.backends.opencode.opencode.httpx.AsyncClient"
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> OpenCodeBackend:
@@ -265,7 +265,7 @@ _WATCHDOG_TEST_TIMEOUT = 0.2  # seconds
 
 
 def _patch_watchdog_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-  monkeypatch.setattr("src.core.timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
+  monkeypatch.setattr("src.infra.timeouts.OPENCODE_SSE_PROGRESS_TIMEOUT", _WATCHDOG_TEST_TIMEOUT)
 
 
 class _FakeDelayedStreamResponse:

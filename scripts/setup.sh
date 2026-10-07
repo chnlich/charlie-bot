@@ -49,9 +49,9 @@ DRY_RUN_VAL=$DRY_RUN uv run python - <<'PY'
 import asyncio
 import os
 
-from src.core.config import get_config, get_scheduled_tasks
-from src.core import init_seed
-from src.core.scheduler import effective_scheduled_task_backend
+from src.infra.config import get_config, get_scheduled_tasks
+from src.runtime import init_seed
+from src.features.cron.scheduler import effective_scheduled_task_backend
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"
 cfg = get_config()
@@ -108,7 +108,7 @@ echo "  Reminder: fill in the secret key charliebot_access_key before first star
 # Smoke-check the Claude Code backend command for headless-unsafe tools.
 echo "==> Checking Claude Code backend tools"
 uv run python - <<'PY'
-from src.agents.backends.claude_code import BASE_COMMAND
+from src.backends.claude_code.claude_code import BASE_COMMAND
 
 required = ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList"]
 
@@ -138,10 +138,10 @@ PY
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "==> NVIDIA GPU detected: provisioning the qwen3_hf voice engine"
   if (( DRY_RUN )); then
-    echo "  dry-run: would run: uv sync --group gpu-voice; then python -m src.core.voice_setup enable"
+    echo "  dry-run: would run: uv sync --group gpu-voice; then python -m src.features.voice.voice_setup enable"
   else
     uv sync --group gpu-voice
-    uv run --no-sync python -m src.core.voice_setup enable
+    uv run --no-sync python -m src.features.voice.voice_setup enable
   fi
 else
   echo "==> No NVIDIA GPU detected: voice engine stays sherpa (CPU)"

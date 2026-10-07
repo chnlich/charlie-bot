@@ -7,7 +7,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import models, sessions
+from src.infra import models
+from src.runtime import sessions
 
 
 def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:

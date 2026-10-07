@@ -1,4 +1,4 @@
-"""Acceptance tests for the Discord summon listener (src.core.discord_listener)."""
+"""Acceptance tests for the Discord summon listener (src.features.discord.discord_listener)."""
 
 from __future__ import annotations
 
@@ -19,10 +19,9 @@ from conftest import (
     stub_credentials,
 )
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import BASE_URL, DiscordClient, snowflake_key
-from src.core.discord_listener import (
+from src.features.chat_threads.thread_entry import ThreadReplyError
+from src.features.discord.discord_client import BASE_URL, DiscordClient, snowflake_key
+from src.features.discord.discord_listener import (
     _DM_NOTICE,
     _REPLY_COMMAND,
     DiscordThreadAdapter,
@@ -32,10 +31,11 @@ from src.core.discord_listener import (
     post_reply,
     summon_session_id,
 )
-from src.core.models import CreateSessionRequest, DiscordOrigin, SessionMetadata, SessionStatus, TriggerStatus
-from src.core.sessions import SessionManager
-from src.core.thread_entry import ThreadReplyError
-from src.core.triggers import TriggerManager
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest, DiscordOrigin, SessionMetadata, SessionStatus, TriggerStatus
+from src.runtime.sessions import SessionManager
+from src.runtime.triggers import TriggerManager
 
 _GUILD = "900000000000000001"
 _PARENT = "900000000000000002"
@@ -106,7 +106,7 @@ class FakeDiscordClient:
 def _build_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for discord tests: the home dir lives under tmp_path so each test owns its own
   tree, and the stubbed test token plus the single allowed user id wire the delivery and listener
-  paths under src.core.discord_listener."""
+  paths under src.features.discord.discord_listener."""
   stub_credentials({"discord": {"bot_token": "test-bot-token"}})
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",

@@ -6,8 +6,8 @@ import sys
 import conftest
 import pytest
 
-from src.cli import gc_trash
-from src.core import config
+from src.infra import config
+from src.runtime.cli import gc_trash
 
 
 def _cfg_with_trash(tmp_path: pathlib.Path) -> config.CharlieBotConfig:

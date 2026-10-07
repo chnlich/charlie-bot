@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 from conftest import backend_option, stub_credentials
 
-from src.agents.worker import Worker
-from src.core.config import CharlieBotConfig
-from src.core.models import ThreadMetadata
+from src.infra.config import CharlieBotConfig
+from src.infra.models import ThreadMetadata
+from src.runtime.worker import Worker
 
 # The types that resolve a CLI binary in __init__ (via resolve_binary); the
 # other four never do and therefore never raise FileNotFoundError on build.
@@ -28,7 +28,7 @@ BINARY_RESOLVING_TYPES = ["opencode", "antigravity", "codex", "gemini", "charlie
 
 # Every binary-resolving backend reads resolve_binary as base.resolve_binary at
 # call time, so hiding a binary means patching that one shared attribute.
-_RESOLVER_PATCH_TARGETS = ["src.agents.backends.base.resolve_binary"]
+_RESOLVER_PATCH_TARGETS = ["src.runtime.agent_process.base.resolve_binary"]
 
 
 def _hide_all_binaries(monkeypatch: pytest.MonkeyPatch) -> None:

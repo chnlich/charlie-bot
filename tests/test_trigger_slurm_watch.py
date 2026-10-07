@@ -15,7 +15,7 @@ from conftest import (
 from conftest import make_trigger_setup as _make_mgr
 from conftest import no_sleep as _no_sleep
 
-from src.core.models import SlurmJob
+from src.infra.models import SlurmJob
 
 # ---------------------------------------------------------------------------
 # Single slurm job: terminal-state detection

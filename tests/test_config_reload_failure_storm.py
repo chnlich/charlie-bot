@@ -13,7 +13,7 @@ import pathlib
 
 import pytest
 
-from src.core import config as core_config
+from src.infra import config as core_config
 
 
 @pytest.fixture
@@ -21,10 +21,10 @@ def reload_log(monkeypatch: pytest.MonkeyPatch) -> list[dict]:
   """Capture hot-reload warnings while the real log stays quiet.
 
   The reload caches warn through their owner modules' loggers: the cache class
-  lives in src.core.credentials (the light split) and config's own paths warn
+  lives in src.infra.credentials (the light split) and config's own paths warn
   through config's, so both land in the one records list.
   """
-  from src.core import credentials as core_credentials
+  from src.infra import credentials as core_credentials
 
   records: list[dict] = []
 

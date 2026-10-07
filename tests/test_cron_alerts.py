@@ -1,6 +1,6 @@
 """Acceptance tests for cron load-failure Telegram alerting.
 
-At every cron snapshot reload, ``src/core/config.py::_fire_cron_error_alert``
+At every cron snapshot reload, ``src/infra/config.py::_fire_cron_error_alert``
 compares the fresh broken-task name set against the last-alerted set persisted
 at ``<CHARLIEBOT_HOME>/state/cron_alert_fingerprint.json``: a transition to a
 non-empty set fires one ``"⚠️ cron tasks failed to load: <names>"``, a transition back
@@ -18,14 +18,14 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import config
+from src.infra import config
 
 # Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
-# in src/core/config.py imports send_telegram at call time (lazy, notifications imports config),
-# so that import resolves the stand-in landed on the src.core.notifications module attribute;
+# in src/infra/config.py imports send_telegram at call time (lazy, notifications imports config),
+# so that import resolves the stand-in landed on the src.infra.notifications module attribute;
 # import-scope binders of the same function keep their own bound object and
 # are not intercepted through this route.
-NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.core.notifications.send_telegram"
+NOTIFICATIONS_SEND_TELEGRAM_PATCH_TARGET = "src.infra.notifications.send_telegram"
 
 
 @pytest.fixture

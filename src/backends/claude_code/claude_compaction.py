@@ -1,0 +1,356 @@
+"""Sonnet compaction of a Claude Code transcript at the moments its prompt cache is already cold.
+
+A Fable session's prompt cache lives one hour and belongs to one organization
+(each pool account is its own organization), and Claude Code compacts with the
+model that invoked it. The two moments a Fable session has to re-read its whole
+context anyway, an account relay (a new organization) and a user message that
+arrives more than an hour after the previous request (the cache has expired),
+are therefore the moments a compaction adds no cache cost, and the compaction is
+handed to Sonnet: it reads the transcript at a fifth of Fable's price and its
+tokens land in the shared total bucket instead of Fable's own weekly bucket. A
+warm cache, a context below the configured floor, or a non-Fable session runs
+without compaction; nothing is compacted speculatively at the end of a turn,
+where the cache is still warm.
+
+The module runs ``claude -p --resume <uuid> --model claude-sonnet-5`` with
+``/compact`` on stdin inside the account's login directory and judges success
+from two facts: the transcript gained a ``compact_boundary`` row, and the
+models that took part in the run — those whose token counters grew over the
+transcript's newest ``cost-state`` row — are Sonnet alone. Growth over that row
+is the fact that counts, not presence in ``modelUsage``: ``--resume`` restores
+the session's per-model totals from the transcript's ``cost-state`` rows, so
+the run's ``modelUsage`` always repeats the session's earlier turns' usage next
+to the run's own. Success and failure surface through the same
+``context_compacted`` / ``context_compact_failed`` chat events the Claude Code
+auto compaction path emits, with ``model`` naming the compacting model. A
+failed run leaves the caller continuing without compaction; one rejected after
+its boundary row landed (the model check) leaves the compacted transcript in
+place.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import re
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from pathlib import Path
+
+from src.backends.claude_code import claude_accounts
+from src.backends.claude_code.claude_code import BASE_COMMAND, HEADLESS_DISALLOWED_TOOLS, claude_supervisor_env
+from src.backends.claude_code.claude_launch import DISABLE_CONNECTOR_SETTINGS, headless_claude_env
+from src.infra import event_types as ET
+from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
+from src.infra.log_once import LazyStructlogLogger
+from src.infra.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
+from src.infra.timeouts import CLAUDE_COMPACTION_TIMEOUT
+from src.runtime.agent_process.base import (
+    DISALLOWED_TOOLS_FLAG,
+    make_context_compact_failed_event,
+    make_context_compacted_event,
+)
+
+log = LazyStructlogLogger()
+
+# Claude Code writes one-hour prompt-cache entries only, and every hit renews the
+# entry, so a request more than an hour after the previous one finds nothing cached.
+CACHE_TTL = timedelta(minutes=60)
+
+COMPACTION_MODEL = "claude-sonnet-5"
+COMPACTION_FAMILY = "sonnet"
+# The family whose own weekly bucket the compaction spares.
+FABLE_FAMILY = "fable"
+
+# /compact needs no tool; every tool Claude Code could reach is disallowed so the
+# run can only read the transcript and write the summary.
+COMPACTION_DISALLOWED_TOOLS = ",".join(
+    (
+        HEADLESS_DISALLOWED_TOOLS,
+        "Bash,Read,Write,Edit,MultiEdit,NotebookEdit,Glob,Grep,WebSearch,WebFetch,TodoWrite,Skill,ToolSearch",
+        "KillShell,BashOutput,AskUserQuestion,ExitPlanMode,Task",
+    ))
+
+COMPACT_PROMPT = "/compact\n"
+
+# The JSON-quoted subtype the raw transcript lines carry; built from the
+# constant so the byte needle stays in sync with the persisted wire value.
+_BOUNDARY_MARKER = f'"{ET.COMPACT_BOUNDARY}"'
+
+# The JSON-quoted type the raw cost-state lines carry; the transcript writes it
+# with no shared constant, so the literal is the needle.
+_COST_STATE_MARKER = '"cost-state"'
+
+# ---------------------------------------------------------------------------
+# Trigger decisions (pure)
+# ---------------------------------------------------------------------------
+
+
+def is_fable(model: str | None) -> bool:
+  return claude_accounts.model_family(model) == FABLE_FAMILY
+
+
+def cache_expired(last_request_at: datetime | None, now: datetime | None) -> bool:
+  """True when the previous request is more than CACHE_TTL old; None (no request yet) is not expired."""
+  return last_request_at is not None and claude_accounts.now_or(now) - last_request_at > CACHE_TTL
+
+
+def expired_cache_compaction_wanted(
+    cfg: CharlieBotConfig,
+    model: str | None,
+    context_tokens: int | None,
+    last_request_at: datetime | None,
+    now: datetime | None,
+) -> bool:
+  """A Fable turn starting on an expired cache with a context at or above the floor."""
+  return (
+      is_fable(model) and context_tokens is not None and
+      context_tokens >= cfg.accounts.claude_compaction.expired_cache_tokens and cache_expired(last_request_at, now))
+
+
+def relay_compaction_wanted(cfg: CharlieBotConfig, model: str | None, context_tokens: int | None) -> bool:
+  """A Fable session about to relay to another account with a context at or above the floor."""
+  return is_fable(
+      model) and context_tokens is not None and context_tokens >= cfg.accounts.claude_compaction.relay_tokens
+
+
+# ---------------------------------------------------------------------------
+# Transcript facts
+# ---------------------------------------------------------------------------
+
+
+def _boundary_rows(transcript: Path) -> list[dict]:
+  rows: list[dict] = []
+  with transcript.open(encoding="utf-8", errors="replace") as handle:
+    for line in handle:
+      if _BOUNDARY_MARKER not in line:
+        continue
+      try:
+        row = json.loads(line)
+      except ValueError:
+        continue
+      if isinstance(row, dict) and row.get("subtype") == ET.COMPACT_BOUNDARY:
+        rows.append(row)
+  return rows
+
+
+def count_compact_boundaries(transcript: Path) -> int:
+  """Number of ``compact_boundary`` rows in an on-disk transcript."""
+  return len(_boundary_rows(transcript))
+
+
+def _newest_cost_state_model_usage(transcript: Path) -> dict:
+  """The newest ``cost-state`` row's ``modelUsage``, the session's running
+  per-model totals; {} when the transcript carries no such row."""
+  newest: dict = {}
+  with transcript.open(encoding="utf-8", errors="replace") as handle:
+    for line in handle:
+      if _COST_STATE_MARKER not in line:
+        continue
+      try:
+        row = json.loads(line)
+      except ValueError:
+        continue
+      if isinstance(row, dict) and row.get("type") == "cost-state":
+        usage = row.get("modelUsage")
+        newest = usage if isinstance(usage, dict) else {}
+  return newest
+
+
+# A camelCase/lowercase-or-digit boundary, i.e. every place a snake_case name
+# would carry an underscore: the transcript's camelCase keys convert by this one
+# rule, so a key the upstream adds later converts without a change here.
+_CAMEL_TO_SNAKE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _snake_case_keys(meta: dict) -> dict:
+  """Rename every key camelCase to snake_case, the form the streaming payload uses."""
+  return {_CAMEL_TO_SNAKE.sub("_", key).lower(): value for key, value in meta.items()}
+
+
+def _newest_boundary_compact_metadata(transcript: Path) -> dict | None:
+  """The newest boundary row's ``compactMetadata`` with snake_case keys; None when
+  the transcript has no boundary row carrying one."""
+  rows = _boundary_rows(transcript)
+  if not rows:
+    return None
+  meta = rows[-1].get("compactMetadata")
+  return _snake_case_keys(meta) if isinstance(meta, dict) else None
+
+
+# ---------------------------------------------------------------------------
+# The compaction run
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class CompactionOutcome:
+  ok: bool
+  error: str | None = None
+  models: tuple[str, ...] = ()
+
+
+def compaction_command(cc_session_id: str) -> list[str]:
+  return [
+      BASE_COMMAND[0],
+      "-p",
+      "--resume",
+      cc_session_id,
+      "--model",
+      COMPACTION_MODEL,
+      "--output-format",
+      "json",
+      DISALLOWED_TOOLS_FLAG,
+      COMPACTION_DISALLOWED_TOOLS,
+      # The compaction subprocess is a CharlieBot-spawned Claude session too,
+      # so connector sync stays off here as well (DISABLE_CONNECTOR_SETTINGS).
+      "--settings",
+      json.dumps(DISABLE_CONNECTOR_SETTINGS),
+  ]
+
+
+def compaction_env(config_dir: str | Path) -> dict[str, str]:
+  """Headless Claude Code environment pinned to one login directory.
+
+  The host's own CLAUDE_CONFIG_DIR never reaches the child: the pool chose the
+  directory and an inherited value would silently pick another account.
+  """
+  env = {**claude_supervisor_env(os.environ), **headless_claude_env()}
+  env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
+  env[CLAUDE_CONFIG_DIR_ENV_VAR] = str(Path(config_dir).expanduser())
+  return env
+
+
+# The token counters a run's modelUsage carries; growth in any one past the
+# baseline says the model served this run.
+_USAGE_COUNTERS = ("inputTokens", "outputTokens", "cacheReadInputTokens", "cacheCreationInputTokens")
+
+
+def _models_that_grew(result: dict, baseline: dict) -> tuple[str, ...]:
+  """The models whose token counters grew over the baseline's restored totals;
+  the run's ``modelUsage`` covers the whole session, so presence alone names
+  the earlier turns' models too."""
+  grew = []
+  for name, counters in (result.get("modelUsage") or {}).items():
+    restored = baseline.get(name) or {}
+    if any(counters.get(counter, 0) > restored.get(counter, 0) for counter in _USAGE_COUNTERS):
+      grew.append(str(name))
+  return tuple(grew)
+
+
+def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: int) -> CompactionOutcome:
+  try:
+    result = json.loads(stdout.decode("utf-8", errors="replace") or "null")
+  except ValueError:
+    result = None
+  if not isinstance(result, dict):
+    return CompactionOutcome(ok=False, error=f"exit {returncode}, no JSON result on stdout")
+  models = _models_that_grew(result, baseline)
+  if returncode != 0 or result.get("is_error"):
+    detail = str(result.get("result") or "").strip()[:200]
+    return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
+  if after <= before:
+    return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
+  if not models or any(claude_accounts.model_family(name) != COMPACTION_FAMILY for name in models):
+    return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
+  return CompactionOutcome(ok=True, models=models)
+
+
+async def compact_with_sonnet(
+    *,
+    cc_session_id: str,
+    cwd: str,
+    config_dir: str | Path,
+    pre_tokens: int | None,
+    persist_and_broadcast: Callable[[dict], Awaitable[None]],
+    log_context: dict,
+    timeout: float = CLAUDE_COMPACTION_TIMEOUT,
+    cgroup_session_id: str | None = None,
+) -> bool:
+  """Compact *cc_session_id*'s transcript under *config_dir* with Sonnet; True on success.
+
+  Emits one ``context_compacted`` (``model`` = Sonnet; ``compact_metadata`` is
+  the new boundary row's payload, with the caller's pre-compaction reading
+  winning for ``pre_tokens``) or one ``context_compact_failed`` (``error``
+  names the cause). Never raises for a failed run; a run rejected after its
+  boundary row landed (the model check) leaves the compacted transcript in
+  place.
+
+  *cgroup_session_id* is the owning CharlieBot session, so the compaction
+  process lands in that session's memory-cap cgroup; None (no session home)
+  spawns exactly as before.
+  """
+  transcript = claude_accounts.transcript_path(config_dir, cc_session_id)
+  if transcript is None:
+    return await _fail(persist_and_broadcast, log_context, f"no transcript for {cc_session_id} under {config_dir}")
+  before = count_compact_boundaries(transcript)
+  # The run's modelUsage covers the whole session (--resume restores the newest
+  # cost-state row), so the judge compares against these pre-run totals.
+  baseline = _newest_cost_state_model_usage(transcript)
+  cmd = compaction_command(cc_session_id)
+  log.info("claude_compaction_starting", cc_session_id=cc_session_id, pre_tokens=pre_tokens, **log_context)
+  cfg = get_config()
+  session_cgroup = prepare_session_cgroup(
+      cgroup_session_id,
+      memory_max_mb=cfg.server.session_memory_max_mb,
+      swap_max_mb=cfg.server.session_swap_max_mb,
+  )
+  try:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        cwd=cwd,
+        env=compaction_env(config_dir),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+        start_new_session=True,
+        preexec_fn=make_session_cgroup_preexec(session_cgroup.path if session_cgroup else None),
+    )
+  except OSError as exc:
+    return await _fail(persist_and_broadcast, log_context, f"could not start {cmd[0]}: {exc}")
+  try:
+    stdout, stderr = await asyncio.wait_for(proc.communicate(COMPACT_PROMPT.encode("utf-8")), timeout)
+  except TimeoutError:
+    if proc.pid is not None:
+      kill_process_group(proc.pid)
+    await proc.wait()
+    return await _fail(persist_and_broadcast, log_context, f"timed out after {int(timeout)} s")
+  after = count_compact_boundaries(transcript)
+  outcome = _judge(proc.returncode or 0, stdout, baseline, before, after)
+  if not outcome.ok:
+    stderr_tail = stderr.decode("utf-8", errors="replace").strip()[-300:]
+    log.warning(
+        "claude_compaction_failed",
+        cc_session_id=cc_session_id,
+        error=outcome.error,
+        models=list(outcome.models),
+        stderr=stderr_tail,
+        **log_context,
+    )
+    await persist_and_broadcast(make_context_compact_failed_event(outcome.error, model=COMPACTION_MODEL))
+    return False
+  # The boundary row's payload travels whole; the caller's own reading still wins
+  # for the pre count (today's precedence). When the row carries no readable
+  # compactMetadata the payload stays None and the line renders from what the
+  # caller contributed alone.
+  compact_metadata = _newest_boundary_compact_metadata(transcript)
+  if pre_tokens is not None:
+    compact_metadata = {**(compact_metadata or {}), ET.COMPACT_PRE_TOKENS: pre_tokens}
+  log.info(
+      "claude_compaction_done",
+      cc_session_id=cc_session_id,
+      pre_tokens=compact_metadata.get(ET.COMPACT_PRE_TOKENS) if compact_metadata else None,
+      post_tokens=compact_metadata.get(ET.COMPACT_POST_TOKENS) if compact_metadata else None,
+      models=list(outcome.models),
+      **log_context,
+  )
+  await persist_and_broadcast(make_context_compacted_event("manual", compact_metadata, model=COMPACTION_MODEL))
+  return True
+
+
+async def _fail(persist_and_broadcast: Callable[[dict], Awaitable[None]], log_context: dict, error: str) -> bool:
+  log.warning("claude_compaction_failed", error=error, **log_context)
+  await persist_and_broadcast(make_context_compact_failed_event(error, model=COMPACTION_MODEL))
+  return False

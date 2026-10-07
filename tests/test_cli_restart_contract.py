@@ -20,10 +20,11 @@ import threading
 import conftest
 import pytest
 
-from src.cli import common
-from src.cli import improve as improve_module
-from src.cli import session as session_module
-from src.core import config, control_events
+from src.features.improve import cli as improve_module
+from src.infra import config
+from src.runtime import control_events
+from src.runtime.cli import common
+from src.runtime.cli import session as session_module
 
 
 def _cfg(tmp_path: pathlib.Path, **overrides: object) -> config.CharlieBotConfig:
@@ -39,7 +40,7 @@ def _write_thread(cfg: config.CharlieBotConfig, session_id: str, thread_id: str,
 
 
 class _FakeClock:
-  """Replaces ``src.cli.common.time`` so retry backoff never sleeps for real."""
+  """Replaces ``src.runtime.cli.common.time`` so retry backoff never sleeps for real."""
 
   def __init__(self) -> None:
     self.now = 0.0
@@ -67,7 +68,7 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path)
   return the config.
 
   ``common``'s forwarder and the verbs' deferred imports both read the ``get_config``
-  attribute on ``src.core.config`` at call time, so patching it beside ``common``'s own
+  attribute on ``src.infra.config`` at call time, so patching it beside ``common``'s own
   name covers every verb shape (import-scope binding or call-scope import) or the
   readback would read the host's profile. The transport patch lands on ``common``'s
   adapter, which ``_request_with_contract`` reads at call time.

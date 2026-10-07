@@ -17,13 +17,13 @@ from conftest import (
 )
 from fastapi import HTTPException
 
-from src.agents import master_cc_run
-from src.agents.backends.base import AgentBackend
-from src.api.chat import cancel_master_agent
-from src.core import config as core_config
-from src.core import event_types as ET
-from src.core import models
-from src.core.models import RunRecord
+from src.infra import config as core_config
+from src.infra import event_types as ET
+from src.infra import models
+from src.infra.models import RunRecord
+from src.runtime import master_cc_run
+from src.runtime.agent_process.base import AgentBackend
+from src.runtime.api.chat import cancel_master_agent
 
 
 async def _run_cc_with_backend(
@@ -75,9 +75,9 @@ async def test_cancel_master_agent_success() -> None:
 async def _task_node(tmp_path: Path, profile: str = "manager"):
   from conftest import make_home_config
 
-  from src.api.deps import set_task_manager
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
+  from src.runtime.api.deps import set_task_manager
+  from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
 
   cfg = make_home_config(tmp_path)
   session_mgr = SessionManager(cfg)
@@ -90,7 +90,7 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
 
 @pytest.mark.asyncio
 async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -> None:
-  from src.api.deps import set_task_manager
+  from src.runtime.api.deps import set_task_manager
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
@@ -118,8 +118,8 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
   the v2 run-cancel route's 409 shape, never as a silent miss."""
   import subprocess
 
-  from src.api.deps import set_task_manager
-  from src.core.runs import read_pid_stat
+  from src.runtime.api.deps import set_task_manager
+  from src.runtime.runs import read_pid_stat
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))

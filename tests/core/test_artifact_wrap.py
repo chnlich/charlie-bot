@@ -1,8 +1,8 @@
 """Tests for the ``charliebot artifact wrap`` assembly verb and its pre-render driver.
 
-The driver runs the checkout's src/core/prerender_math.js against the vendored
+The driver runs the checkout's src/features/artifacts/prerender_math.js against the vendored
 KaTeX build (one CDN fetch per pytest session); the byte-integrity gate
-and the render-path assertion come from src/core/artifact_check.py.
+and the render-path assertion come from src/features/artifacts/artifact_check.py.
 """
 
 import re
@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 from conftest import ROOT
 
-from src.cli.artifact import main as artifact_main
-from src.core.artifact_wrap import ensure_vendored_katex, wrap_fragment
+from src.features.artifacts.artifact_wrap import ensure_vendored_katex, wrap_fragment
+from src.features.artifacts.cli import main as artifact_main
 
-_DRIVER = ROOT / "src" / "core" / "prerender_math.js"
+_DRIVER = ROOT / "src" / "features" / "artifacts" / "prerender_math.js"
 
 
 @pytest.fixture(scope="session")
@@ -29,10 +29,10 @@ def vendored_katex(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def cli_katex(monkeypatch: pytest.MonkeyPatch, vendored_katex: Path) -> Path:
   """Point the CLI verb's home resolution at the fetched vendor copy's home.
 
-  The wrap verb resolves the home off the env (src.core.home), not the config —
+  The wrap verb resolves the home off the env (src.infra.home), not the config —
   the M98 seam shape; the module-level name is the patch target.
   """
-  monkeypatch.setattr("src.cli.artifact.home.charliebot_home_dir", lambda: vendored_katex.parents[2])
+  monkeypatch.setattr("src.features.artifacts.cli.home.charliebot_home_dir", lambda: vendored_katex.parents[2])
   return vendored_katex
 
 

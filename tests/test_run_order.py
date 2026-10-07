@@ -22,9 +22,10 @@ import pytest
 import pytest_asyncio
 from fastapi import testclient
 
-from src.api import deps
-from src.api import sessions as sessions_api
-from src.core import models, sessions, task_sessions
+from src.infra import models
+from src.runtime import sessions, task_sessions
+from src.runtime.api import deps
+from src.runtime.api import sessions as sessions_api
 
 BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 

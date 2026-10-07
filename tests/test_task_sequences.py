@@ -26,12 +26,12 @@ from conftest import (
     stub_credentials,
 )
 
-from src.core import claude_accounts, claude_relay
-from src.core import event_types as ET
-from src.core.improve_command import load_loop_state
-from src.core.models import SessionMetadata, TaskSpec
-from src.core.runs import RUN_EVENTS_NAME
-from src.core.task_sessions import TaskTreeManager
+from src.backends.claude_code import claude_accounts, claude_relay
+from src.features.improve.improve_command import load_loop_state
+from src.infra import event_types as ET
+from src.infra.models import SessionMetadata, TaskSpec
+from src.runtime.runs import RUN_EVENTS_NAME
+from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     OP_HEADERS,
@@ -207,7 +207,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """No take-off anywhere in the chain: 403 with the gate's reason, never a
   500, and nothing reserved."""
-  from src.core.improve_command import _active_loop_path, _loops_dir, find_running_loop
+  from src.features.improve.improve_command import _active_loop_path, _loops_dir, find_running_loop
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")

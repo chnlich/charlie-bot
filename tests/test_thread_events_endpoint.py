@@ -8,9 +8,10 @@ import fastapi
 import pytest
 from fastapi import testclient
 
-from src.api import deps
-from src.api import threads as threads_api
-from src.core import models, sessions, threads
+from src.infra import models
+from src.runtime import sessions, threads
+from src.runtime.api import deps
+from src.runtime.api import threads as threads_api
 
 EVENTS = [
     {

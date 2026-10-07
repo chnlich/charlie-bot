@@ -4,9 +4,9 @@ import json
 
 import conftest
 
-from src.api import message_utils
-from src.core import event_types as ET
-from src.core import message_aggregator
+from src.infra import event_types as ET
+from src.runtime import message_aggregator
+from src.runtime.api import message_utils
 
 VOICE_KEY = "is_voice"
 

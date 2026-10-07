@@ -19,11 +19,11 @@ from conftest import (
     write_pool_credentials,
 )
 
-from src.agents import master_cc_state
-from src.core import claude_accounts, claude_relay
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata
+from src.backends.claude_code import claude_accounts, claude_relay
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import SessionMetadata
+from src.runtime import master_cc_state
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 SONNET = "claude-sonnet-5"

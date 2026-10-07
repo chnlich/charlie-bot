@@ -6,7 +6,7 @@ import pathlib
 
 import pytest
 
-from src.agents.backends import base
+from src.runtime.agent_process import base
 
 
 class _ScriptedBackend(base.AgentBackend):

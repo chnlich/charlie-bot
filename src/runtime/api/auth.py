@@ -1,0 +1,212 @@
+"""Bearer-token authentication middleware for CharlieBot."""
+
+import hmac
+import json
+from http import cookies
+
+from starlette import types
+
+from src.infra import config, constants
+from src.runtime import run_token
+
+
+def _credential_matches(candidate: str, key: str) -> bool:
+  """Constant-time comparison — the one place that owns the credential comparison."""
+  return hmac.compare_digest(candidate, key)
+
+
+# The cookie the login page sets (see _LOGIN_PAGE); its JS strings below must
+# keep the literal name because they are served HTML.
+_ACCESS_KEY_COOKIE = "charliebot_access_key"
+
+
+def _credential_accepted(bearer: str, cookie: str, key: str) -> bool:
+  """One home of the acceptance decision: bearer or cookie must match *key* in constant time."""
+  return (bool(bearer) and _credential_matches(bearer, key)) or (bool(cookie) and _credential_matches(cookie, key))
+
+
+# Paths that are always public (no auth required): the SPA shell and the credential
+# check the login page's submit reads. Everything else that touches host state — the
+# file server and the /perfetto, /perfetto/merged and /ncu viewers included — sits
+# behind the access key; charliebot_pub is the only unauthenticated read surface.
+_PUBLIC_PATHS = frozenset({"/", constants.AUTH_STATUS_PATH})
+_PUBLIC_PREFIXES = ("/static/",)
+
+# Self-contained HTML login page served to unauthenticated browser navigations.
+# On submit it stores the key in localStorage (the source of truth for the SPA
+# fetch wrapper and the terminal WS ?token=) AND sets the charliebot_access_key
+# cookie, which is the only credential a browser auto-sends on a top-level
+# navigation, then reloads. SameSite=Strict closes the CSRF surface cookie auth
+# would otherwise open; Secure is set on https (Tailscale) and omitted on plain
+# http, where the browser refuses Secure cookies — the loopback session-tree
+# preview serves plain http, and its login must survive the reload.
+_LOGIN_PAGE = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CharlieBot</title>
+<style>
+  body { margin:0; height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0f172a; color:#e2e8f0; font-family:system-ui,sans-serif; }
+  .box { width:100%; max-width:24rem; padding:0 1.5rem; text-align:center; }
+  h1 { color:#60a5fa; font-size:1.25rem; margin:0 0 1.5rem; }
+  p { color:#94a3b8; font-size:.875rem; margin:0 0 1rem; }
+  input, button { width:100%; box-sizing:border-box; border-radius:.5rem;
+                  padding:.625rem 1rem; font-size:.875rem; }
+  input { background:#1e293b; border:1px solid #475569; color:#e2e8f0; margin-bottom:.75rem; }
+  input:focus { outline:none; border-color:#3b82f6; }
+  button { background:#2563eb; color:#fff; border:none; font-weight:500; cursor:pointer; }
+  button:hover { background:#3b82f6; }
+</style>
+</head>
+<body>
+  <div class="box">
+    <h1>CharlieBot</h1>
+    <p>Enter access key to continue</p>
+    <form onsubmit="return unlock(event)">
+      <input id="k" type="password" placeholder="Access key" autofocus>
+      <button type="submit">Unlock</button>
+    </form>
+  </div>
+  <script>
+    function unlock(e) {
+      e.preventDefault();
+      var k = document.getElementById('k').value.trim();
+      if (!k) return false;
+      // localStorage is the source of truth for the SPA fetch wrapper and the terminal WS ?token=.
+      localStorage.setItem('charliebot_access_key', k);
+      // The cookie carries the credential on top-level navigations. SameSite=Strict; Secure
+      // only on https: — a loopback-HTTP deployment (the session-tree preview) cannot set
+      // Secure cookies, and without the cookie every top-level navigation would loop back
+      // to this login page.
+      var cookieAttrs = 'path=/; SameSite=Strict' + (location.protocol === 'https:' ? '; Secure' : '');
+      document.cookie = 'charliebot_access_key=' + k + '; ' + cookieAttrs;
+      location.reload();
+      return false;
+    }
+  </script>
+</body>
+</html>"""
+
+
+def _header_value(scope: types.Scope, name: bytes) -> str:
+  """First value of header *name* from the raw ASGI scope, or "" (starlette Headers.get parity)."""
+  for header_name, value in scope["headers"]:
+    if header_name == name:
+      return value.decode("latin-1")
+  return ""
+
+
+def _bearer_from_scope(scope: types.Scope) -> str:
+  return run_token.bearer_from_authorization(_header_value(scope, b"authorization"))
+
+
+def _cookie_key_from_scope(scope: types.Scope) -> str:
+  raw = b";".join(value for name, value in scope["headers"] if name == b"cookie")
+  if not raw:
+    return ""
+  jar = cookies.SimpleCookie()
+  try:
+    jar.load(raw.decode("latin-1"))
+  except cookies.CookieError:
+    return ""
+  morsel = jar.get(_ACCESS_KEY_COOKIE)
+  return morsel.value if morsel else ""
+
+
+def _scope_bearer_is_run_token(bearer: str, key: str) -> bool:
+  """Signature-only run-token check (the active-Run binding is enforced per route).
+
+  A bearer that is not the access key is treated as run-token use: a valid
+  signature passes the middleware and the caller-identity dependency
+  (``src.runtime.api.deps.require_caller``) binds it to an active Run. An invalid one
+  fails closed here — it never falls back to the operator cookie.
+  """
+  if not bearer or not key:
+    return False
+  try:
+    run_token.verify_run_token(bearer, key)
+  except run_token.RunTokenError:
+    return False
+  return True
+
+
+def _scope_has_access_key(scope: types.Scope, key: str) -> bool:
+  bearer = _bearer_from_scope(scope)
+  if bearer:
+    if key and _credential_matches(bearer, key):
+      return True
+    # A presented non-access-key bearer is run-token use: verified or rejected,
+    # the operator cookie is never consulted for it.
+    return _scope_bearer_is_run_token(bearer, key)
+  return _credential_accepted("", _cookie_key_from_scope(scope), key)
+
+
+# Both 401 bodies are constants of the module — the login page text and the one
+# JSON detail — so their bytes and content-length headers are built once. Every
+# unauthenticated request paid a json.dumps plus a header build here (measured
+# ~1.8 us of the raw-ASGI 401 floor the M3 sub-reading prices).
+_JSON_401_BODY = json.dumps({"detail": "Unauthorized"}).encode("utf-8")
+_JSON_401_HEADERS = [
+    (b"content-type", b"application/json"),
+    (b"content-length", str(len(_JSON_401_BODY)).encode("latin-1")),
+]
+_LOGIN_PAGE_BYTES = _LOGIN_PAGE.encode("utf-8")
+_HTML_401_HEADERS = [
+    (b"content-type", b"text/html; charset=utf-8"),
+    (b"content-length", str(len(_LOGIN_PAGE_BYTES)).encode("latin-1")),
+]
+
+
+async def _send_unauthorized(send: types.Send, html: bool) -> None:
+  if html:
+    body, headers = _LOGIN_PAGE_BYTES, _HTML_401_HEADERS
+  else:
+    body, headers = _JSON_401_BODY, _JSON_401_HEADERS
+  await send({"type": "http.response.start", "status": 401, "headers": headers})
+  await send({"type": "http.response.body", "body": body})
+
+
+class AuthMiddleware:
+  """Reject HTTP requests that lack a valid access key.
+
+  The key is accepted from either an ``Authorization: Bearer`` header or a
+  ``charliebot_access_key`` cookie. Unauthenticated browser navigations get an
+  HTML login page; other unauthenticated requests get a JSON 401. When
+  ``charliebot_access_key`` is empty the middleware is a no-op (all requests
+  pass through).
+
+  Pure ASGI, not BaseHTTPMiddleware: the middleware rides every request, and
+  the BaseHTTPMiddleware wrapper's per-request task plus anyio memory streams
+  are the M3 middleware-floor overhead this form removes.
+  """
+
+  def __init__(self, app: types.ASGIApp) -> None:
+    self.app = app
+
+  async def __call__(self, scope: types.Scope, receive: types.Receive, send: types.Send) -> None:
+    if scope["type"] != "http":
+      await self.app(scope, receive, send)
+      return
+    key = config.configured_access_key()
+    path = scope["path"]
+
+    # Let public paths through without auth.
+    if not key or path in _PUBLIC_PATHS or path.startswith(_PUBLIC_PREFIXES):
+      await self.app(scope, receive, send)
+      return
+
+    # Accept the access key from either the Authorization: Bearer header (used by
+    # the SPA fetch wrapper) or the charliebot_access_key cookie (the only
+    # credential a browser auto-sends on a top-level navigation).
+    if _scope_has_access_key(scope, key):
+      await self.app(scope, receive, send)
+      return
+
+    # Unauthenticated. Serve the HTML login page to browser navigations so the
+    # user can authenticate; keep the bare JSON 401 for API/fetch calls.
+    if scope["method"] == "GET" and "text/html" in _header_value(scope, b"accept"):
+      await _send_unauthorized(send, html=True)
+      return
+    await _send_unauthorized(send, html=False)

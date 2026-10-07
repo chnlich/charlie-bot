@@ -10,8 +10,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.api import message_utils
-from src.core import models, ndjson
+from src.infra import models, ndjson
+from src.runtime.api import message_utils
 
 
 def _write_thread(
@@ -152,7 +152,7 @@ async def test_live_range_walk_delete_race_returns_empty_page(tmp_path: pathlib.
 
   # A delete landing inside the walk's count bracket must not escape as an
   # exception: the read returns an empty page.
-  with mock.patch("src.core.ndjson.count_ndjson_lines", side_effect=delete_mid_count):
+  with mock.patch("src.infra.ndjson.count_ndjson_lines", side_effect=delete_mid_count):
     got, _has_more = mgr.load_chat_events_range(session.id, 6, 8)
   assert got == []
 

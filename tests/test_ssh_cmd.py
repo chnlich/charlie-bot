@@ -1,4 +1,4 @@
-"""Tests for src/core/ssh.py: the one argv builder every remote ssh subprocess takes."""
+"""Tests for src/infra/ssh.py: the one argv builder every remote ssh subprocess takes."""
 
 import os
 import pathlib
@@ -7,7 +7,7 @@ import stat
 import conftest
 import pytest
 
-from src.core import ssh
+from src.infra import ssh
 
 
 def test_argv_carries_the_policy_options(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:

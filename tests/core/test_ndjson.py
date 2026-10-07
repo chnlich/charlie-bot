@@ -1,4 +1,4 @@
-"""Tests for the NDJSON line readers in src/core/ndjson.py.
+"""Tests for the NDJSON line readers in src/infra/ndjson.py.
 
 The count half of the readers must match Python's file-iteration contract
 exactly — a final line without a trailing newline counts — because the tail
@@ -15,7 +15,7 @@ from typing import IO, Any
 
 import pytest
 
-from src.core import ndjson
+from src.infra import ndjson
 
 
 def _write_ndjson(path: pathlib.Path, payloads: list[dict], trailing_newline: bool = True) -> None:

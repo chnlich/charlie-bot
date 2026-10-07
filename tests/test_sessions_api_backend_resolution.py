@@ -8,7 +8,8 @@ from typing import Any
 import conftest
 import pytest
 
-from src.core import config, models, sessions
+from src.infra import config, models
+from src.runtime import sessions
 
 
 async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
@@ -39,7 +40,7 @@ def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
     return noop()
 
   monkeypatch.setattr(conftest.CHAT_RUN_AND_FINALIZE_PATCH_TARGET, fake_run_and_finalize)
-  monkeypatch.setattr("src.core.tasks.create_logged_task", conftest.close_create_logged_task)
+  monkeypatch.setattr("src.infra.tasks.create_logged_task", conftest.close_create_logged_task)
   return calls
 
 

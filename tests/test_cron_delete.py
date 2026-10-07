@@ -5,7 +5,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import models, task_sessions
+from src.infra import models
+from src.runtime import task_sessions
 
 
 @pytest.mark.asyncio

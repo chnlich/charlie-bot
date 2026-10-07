@@ -1,4 +1,4 @@
-"""Tests for artifact review-UI injection in the file server (src/api/files.py)."""
+"""Tests for artifact review-UI injection in the file server (src/features/files/api.py)."""
 
 import pathlib
 import types
@@ -7,9 +7,9 @@ import fastapi
 import pytest
 from fastapi import testclient
 
-from src.api import files as files_api
-from src.api import pages as pages_api
-from src.core import config
+from src.app import pages as pages_api
+from src.features.files import api as files_api
+from src.infra import config
 
 SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asset_version()}></script>"
 

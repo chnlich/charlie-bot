@@ -13,7 +13,7 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import config as core_config
+from src.infra import config as core_config
 
 # Both caches are keyed on nothing but their own mtimes, so a cached instance
 # from an earlier test would answer with the wrong profile.
@@ -90,11 +90,11 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   monkeypatch.setenv("HOME", str(fake_home))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
 
-  from src.api import cron as api_cron
-  from src.api import pages as api_pages
-  from src.cli import claude_sub
-  from src.core import backup as core_backup
-  from src.core import init as core_init
+  from src.app import pages as api_pages
+  from src.backends.claude_sub import claude_sub
+  from src.features.backup import backup as core_backup
+  from src.features.cron import api as api_cron
+  from src.runtime import init as core_init
 
   asyncio.run(core_init.init_seed.init_charliebot_home())
 
@@ -130,9 +130,9 @@ def test_no_new_hardcoded_state_paths() -> None:
 
   The isolation test catches any spelling but only on paths it reaches; this catches
   any path but only the two spellings that build one from the user's home directory.
-  ``src/core/home.py`` owns the resolution and is the single exemption.
+  ``src/infra/home.py`` owns the resolution and is the single exemption.
   """
-  exempt = {conftest.ROOT / "src" / "core" / "home.py"}
+  exempt = {conftest.ROOT / "src" / "infra" / "home.py"}
   offenders: list[str] = []
 
   python_files = [conftest.ROOT / "server.py", *sorted((conftest.ROOT / "src").rglob("*.py"))]
@@ -158,7 +158,7 @@ def test_no_new_hardcoded_state_paths() -> None:
 
 def test_terminal_session_name_separates_profiles(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """The tmux server is shared, so the session name is what separates profiles."""
-  from src.agents.backends import terminal
+  from src.features.terminal import terminal
 
   monkeypatch.setenv("HOME", str(tmp_path))
   monkeypatch.delenv("CHARLIEBOT_HOME", raising=False)

@@ -7,8 +7,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, models
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
 
 
 def test_config_without_slack_keys_yields_defaults() -> None:

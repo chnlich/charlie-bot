@@ -26,7 +26,7 @@ node_modules/
 *.log
 
 # Built in place by the editable install's build_ext step
-src/agents/backends/_vfkspawn*.so
+src/runtime/agent_process/_vfkspawn*.so
 
 # OS
 .DS_Store

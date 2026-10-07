@@ -17,8 +17,9 @@ import subprocess
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, task_sessions
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import task_sessions
 from tests import test_task_execution
 
 

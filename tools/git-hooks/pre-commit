@@ -12,7 +12,7 @@ while IFS= read -r file; do
       ;;
     # The host-auth panel files are leak-scanned too; the list mirrors
     # check-skills-host-leak.sh's host_auth_scan.
-    src/core/host_auth.py | src/api/host_auth.py | web/templates/host_auth.html | tests/test_host_auth.py)
+    src/features/host_auth/host_auth.py | src/features/host_auth/api.py | web/templates/host_auth.html | tests/test_host_auth.py)
       staged_files+=("$file")
       ;;
   esac

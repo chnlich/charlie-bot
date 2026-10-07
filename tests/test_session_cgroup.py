@@ -4,7 +4,7 @@ import pathlib
 
 import pytest
 
-from src.core import config, process
+from src.infra import config, process
 
 SESSION_ID = "abcd1234-ef56-7890-abcd-ef1234567890"
 

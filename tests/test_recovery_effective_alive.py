@@ -14,7 +14,7 @@ import pathlib
 
 import test_runs
 
-from src.core import runs
+from src.runtime import runs
 
 
 def _live_identity() -> tuple[int, str]:

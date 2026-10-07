@@ -14,12 +14,12 @@ from conftest import (
     make_home_config,
 )
 
-from src.core.backlog_loop import _handle_stale
-from src.core.config import ImprovementLoopConfig, ScheduledTaskConfig
-from src.core.models import parse_utc_datetime
-from src.core.scheduler import Scheduler
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.features.backlog.backlog_loop import _handle_stale
+from src.features.cron.scheduler import Scheduler
+from src.infra.config import ImprovementLoopConfig, ScheduledTaskConfig
+from src.infra.models import parse_utc_datetime
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 
 
 def test_parse_utc_datetime_accepts_z_and_normalizes_naive() -> None:
@@ -47,7 +47,7 @@ async def test_handle_stale_accepts_z_timestamp(
   cfg = ImprovementLoopConfig(
       backlog="backlog/backlog.yaml",
       role="test agent",
-      scope_files=["src/core"],
+      scope_files=["src/runtime"],
       stale_timeout_hours=1.0,
   )
   commit_mock = AsyncMock()
@@ -56,7 +56,7 @@ async def test_handle_stale_accepts_z_timestamp(
   # The stand-in mimics the datetime module surface _handle_stale reads: .datetime.now for the
   # clock and .UTC for the tz argument passed at the same call.
   monkeypatch.setattr(
-      "src.core.backlog_loop.datetime",
+      "src.features.backlog.backlog_loop.datetime",
       SimpleNamespace(
           datetime=SimpleNamespace(now=lambda tz: datetime(2026, 4, 17, 2, 30, tzinfo=tz)),
           UTC=UTC,

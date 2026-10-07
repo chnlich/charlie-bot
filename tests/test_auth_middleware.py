@@ -5,7 +5,7 @@ import json
 import conftest
 import pytest
 
-from src.api import auth
+from src.runtime.api import auth
 
 
 def _scope(

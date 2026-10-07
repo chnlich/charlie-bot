@@ -1,4 +1,4 @@
-"""Unit tests for the Discord gateway listener loop (src.core.discord_listener.run_listener).
+"""Unit tests for the Discord gateway listener loop (src.features.discord.discord_listener.run_listener).
 
 Each test drives the real loop over a scripted fake websocket handed out through
 the patched ``_connect``, with the REST client, the MESSAGE_CREATE handler and
@@ -33,21 +33,17 @@ from structlog.testing import capture_logs
 from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.discord_client import REQUIRED_PERMISSIONS
-from src.core.discord_listener import (
-    _INTENTS,
-    _STOP_CLOSE_CODES,
-    run_listener,
-)
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
-from src.core.triggers import TriggerManager
+from src.features.discord.discord_client import REQUIRED_PERMISSIONS
+from src.features.discord.discord_listener import _INTENTS, _STOP_CLOSE_CODES, run_listener
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest
+from src.runtime.sessions import SessionManager
+from src.runtime.triggers import TriggerManager
 
-_CONNECT_PATCH_TARGET = "src.core.discord_listener._connect"
-_HANDLER_PATCH_TARGET = "src.core.discord_listener.handle_message_create"
-_BACKFILL_PATCH_TARGET = "src.core.discord_listener._backfill_followed_threads"
+_CONNECT_PATCH_TARGET = "src.features.discord.discord_listener._connect"
+_HANDLER_PATCH_TARGET = "src.features.discord.discord_listener.handle_message_create"
+_BACKFILL_PATCH_TARGET = "src.features.discord.discord_listener._backfill_followed_threads"
 
 _GATEWAY_URL = "wss://gateway.discord.gg"
 _BOT_USER = "600000000000000001"
@@ -161,7 +157,7 @@ def _listener(
     stack.enter_context(patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=rest))
     stack.enter_context(patch(_HANDLER_PATCH_TARGET, new=handler))
     stack.enter_context(patch(_BACKFILL_PATCH_TARGET, new=backfill))
-    stack.enter_context(patch("src.core.discord_listener.asyncio.sleep", new=_compressed_sleep))
+    stack.enter_context(patch("src.features.discord.discord_listener.asyncio.sleep", new=_compressed_sleep))
     yield {"rest": rest, "connects": connects, "handler": handler, "backfill": backfill}
 
 
@@ -429,9 +425,9 @@ async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) ->
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   tasks: list[asyncio.Task] = []
   with (
-      patch("src.core.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack_deliver,
-      patch("src.core.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord_deliver,
-      patch("src.core.sessions.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch("src.features.slack.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack_deliver,
+      patch("src.features.discord.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord_deliver,
+      patch("src.runtime.sessions.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
     await session_mgr.persist_and_broadcast(meta.id, done)

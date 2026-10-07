@@ -11,11 +11,11 @@ import pytest
 import pytest_asyncio
 from conftest import stub_credentials
 
-from src.core.models import RunRecord, utc_now_iso
-from src.core.run_token import RunTokenClaims, sign_run_token
-from src.core.runs import read_pid_stat
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.infra.models import RunRecord, utc_now_iso
+from src.runtime.run_token import RunTokenClaims, sign_run_token
+from src.runtime.runs import read_pid_stat
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import make_api_client
 
 
@@ -404,8 +404,8 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
 
 @pytest.mark.asyncio
 async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env) -> None:
-  from src.core.control_events import build_control_event
-  from src.core.event_types import AGENT_MESSAGE
+  from src.infra.event_types import AGENT_MESSAGE
+  from src.runtime.control_events import build_control_event
 
   cfg, session_mgr, task_mgr = task_env
   stub_credentials({"charliebot": {"access_key": "op-secret"}})

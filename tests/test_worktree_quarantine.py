@@ -12,12 +12,12 @@ from conftest import (
     spy_on_load_json_meta,
 )
 
-from src.core import git as git_module
-from src.core import init_master_recovery as master_recovery_module
-from src.core import init_worker_recovery as worker_recovery_module
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, utc_now, utc_now_iso
-from src.core.sessions import SessionManager
+from src.infra import git as git_module
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest, utc_now, utc_now_iso
+from src.runtime import init_master_recovery as master_recovery_module
+from src.runtime import init_worker_recovery as worker_recovery_module
+from src.runtime.sessions import SessionManager
 
 
 async def _make_session(cfg: CharlieBotConfig, session_id: str) -> None:

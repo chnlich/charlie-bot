@@ -3,7 +3,7 @@ import json
 import conftest
 import pytest
 
-from src.api import anthropic_proxy
+from src.backends.openai_compatible import anthropic_proxy
 
 
 def test_anthropic_request_translates_text_tools_and_tool_results_to_openai() -> None:

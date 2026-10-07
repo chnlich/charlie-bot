@@ -1,10 +1,10 @@
 """Acceptance tests for repo-owned default cron tasks and the per-job loader.
 
-Covers the seed mechanism in ``src/core/init_seed.py::seed_default_cron_tasks`` (the
+Covers the seed mechanism in ``src/runtime/init_seed.py::seed_default_cron_tasks`` (the
 seeded host file keeps the ``prompt_file`` pointer, never an inlined body), the
 loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 (and of a body with no prompt source at all), ``timezone: local`` resolution
-plus hot-reload in ``src/core/config.py::get_scheduled_tasks`` /
+plus hot-reload in ``src/infra/config.py::get_scheduled_tasks`` /
 ``get_scheduled_task_errors``, broken-entry ``path``/``enabled`` carrying, the
 per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 ``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_selector.md`` /
@@ -17,7 +17,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import config, init, yaml_utils
+from src.infra import config, yaml_utils
+from src.runtime import init
 
 # --- helpers -----------------------------------------------------------------
 

@@ -1,6 +1,6 @@
 # Discord entrypoint
 
-The Discord entrypoint lets an allowed user summon CharlieBot from a Discord server and keep talking to it inside one thread. This guide is the operator path: what the entrypoint does, how to set the application up once, how to verify it, and how to operate it afterwards. The Discord half lives in `src/core/discord_listener.py`, `src/core/discord_commands.py`, and `src/core/discord_client.py`; the platform-neutral half it shares with Slack lives in `src/core/thread_entry.py`.
+The Discord entrypoint lets an allowed user summon CharlieBot from a Discord server and keep talking to it inside one thread. This guide is the operator path: what the entrypoint does, how to set the application up once, how to verify it, and how to operate it afterwards. The Discord half lives in `src/features/discord/discord_listener.py`, `src/features/discord/discord_commands.py`, and `src/features/discord/discord_client.py`; the platform-neutral half it shares with Slack lives in `src/features/chat_threads/thread_entry.py`.
 
 ## What it does and why
 
@@ -8,7 +8,7 @@ The point of the entrypoint is to run a CharlieBot session from where the conver
 
 The flow:
 
-- An allowed user mentions the bot in a server channel, thread, or forum post. The gateway listener (`run_listener` in `src/core/discord_listener.py`) receives the `MESSAGE_CREATE` event and applies Discord's drop rules first: non-human senders (a `bot` author flag or a `webhook_id`), message types that are neither plain messages nor replies (type 0 or 19), and authors whose id is not in the account map never reach the summon path.
+- An allowed user mentions the bot in a server channel, thread, or forum post. The gateway listener (`run_listener` in `src/features/discord/discord_listener.py`) receives the `MESSAGE_CREATE` event and applies Discord's drop rules first: non-human senders (a `bot` author flag or a `webhook_id`), message types that are neither plain messages nor replies (type 0 or 19), and authors whose id is not in the account map never reach the summon path.
 - In a text or announcement channel the bot opens a thread from the mention message, named from the mention's stripped content; in a thread or forum post it uses the thread the mention already sits in. One session is bound per thread — the session id is derived from the guild id and the thread id, so mentioning the bot in the same thread again always reaches the same session (created once, unarchived, or reused).
 - The bot lights the 👀 reaction on the mention message and starts a master round. The master reads the thread server-side with `charliebot discord read` (the readback returns the messages the bot can see and marks the unread ones read) and answers through `charliebot discord reply`, which posts the reply into the thread.
 - Later unmentioned messages from allowed users in that thread wake the same session: the wake fires about 45 seconds after the last message of a batch, and 300 seconds at most after the first message of the chain, so a steady trickle still flushes.
@@ -32,7 +32,7 @@ The checklist below is the whole Discord-side setup; run it once per application
    https://discord.com/oauth2/authorize?client_id=<application id>&scope=bot&permissions=309237713984
    ```
 
-   The `permissions` integer is the sum of `REQUIRED_PERMISSIONS` in `src/core/discord_client.py` — the six permission bits the entrypoint exercises:
+   The `permissions` integer is the sum of `REQUIRED_PERMISSIONS` in `src/features/discord/discord_client.py` — the six permission bits the entrypoint exercises:
 
    | Permission | Why the entrypoint needs it |
    |---|---|

@@ -1,6 +1,6 @@
 """Worker account relay: a delegated task keeps running when its pool login runs out of quota.
 
-Covers the Worker's own relay loop (src/agents/worker.py run/_relay): rejected-run relay onto
+Covers the Worker's own relay loop (src/runtime/worker.py run/_relay): rejected-run relay onto
 another account, the safe-point termination after a far warning, the relay limit, login-failure
 marking, and compaction.
 """
@@ -23,15 +23,11 @@ from conftest import (
     rate_limit_event,
 )
 
-from src.agents.worker import Worker
-from src.core import (
-    claude_accounts,
-    claude_compaction,
-    claude_relay,
-)
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import ThreadMetadata
+from src.backends.claude_code import claude_accounts, claude_compaction, claude_relay
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import ThreadMetadata
+from src.runtime.worker import Worker
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
 

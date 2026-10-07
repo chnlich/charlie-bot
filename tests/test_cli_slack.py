@@ -1,4 +1,4 @@
-"""Tests for src/cli/slack.py — argv to request body, readback printing, refusal exit codes."""
+"""Tests for src/features/slack/cli.py — argv to request body, readback printing, refusal exit codes."""
 
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ from conftest import (
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 
-from src.cli.slack import main
+from src.features.slack.cli import main
 
 _READBACK = {"posted": True, "chars": 10, "chunks": 1, "over_budget": False, "answers": "summon-1"}
 

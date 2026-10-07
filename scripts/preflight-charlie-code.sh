@@ -52,7 +52,7 @@ def fail(message: str):
 backend_id = sys.argv[1]
 
 # Mechanism 1: the config entry exists and is a charlie-code backend.
-from src.core.config import get_config
+from src.infra.config import get_config
 
 cfg = get_config()
 option = cfg.get_backend_option(backend_id)
@@ -68,7 +68,7 @@ if option.type != "charlie-code":
   )
 
 # Mechanism 2: the backend builds, so its binary resolves.
-from src.agents.backends.registry import build_backend
+from src.runtime.agent_process.registry import build_backend
 
 try:
   backend = build_backend(option, cfg)

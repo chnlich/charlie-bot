@@ -1,4 +1,4 @@
-"""Tests for the usage capture (src/core/token_tally.py): per-source parsing into the
+"""Tests for the usage capture (src/features/usage/token_tally.py): per-source parsing into the
 usage ledger's records.
 
 Each test builds fixture log directories under tmp_path and points the capture at them
@@ -18,15 +18,15 @@ from typing import Any
 import pytest
 from conftest import codex_token_count_event
 
-from src.core import token_tally as tt
-from src.core.constants import (
+from src.features.usage import token_tally as tt
+from src.features.usage.usage_ledger import RecordKind, UsageLedger, UsageRecord
+from src.infra.constants import (
     USAGE_SOURCE_CHARLIE_BOT,
     USAGE_SOURCE_CHARLIE_CODE,
     USAGE_SOURCE_CLAUDE_CODE,
     USAGE_SOURCE_CODEX,
     USAGE_SOURCE_OPENCODE,
 )
-from src.core.usage_ledger import RecordKind, UsageLedger, UsageRecord
 
 NAME = "claude-model"
 

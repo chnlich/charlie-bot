@@ -15,9 +15,9 @@ from typing import Self
 
 import pytest
 
-from src.agents.transcription.gemini import GeminiTranscriptionBackend, _normalize_transcript
-from src.core.config import CharlieBotConfig
-from src.core.credentials import Credentials
+from src.features.voice.transcription.gemini import GeminiTranscriptionBackend, _normalize_transcript
+from src.infra.config import CharlieBotConfig
+from src.infra.credentials import Credentials
 
 SETUP_REPLY = {"setupComplete": {}}
 SPACED_INTERIM = "请 查 一 下 任 务"
@@ -151,7 +151,7 @@ async def test_transcribe_normalizes_both_the_spaced_interim_and_the_spaced_fina
 
   monkeypatch.setattr("websockets.asyncio.client.connect", fake_connect)
   monkeypatch.setattr(
-      "src.core.credentials.get_credentials",
+      "src.infra.credentials.get_credentials",
       lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections={"gemini": {
           "api_key": "test-key"
       }}),

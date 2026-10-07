@@ -16,10 +16,11 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.api import internal
-from src.cli import session
-from src.core import event_types as ET
-from src.core import models, sessions
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import sessions
+from src.runtime.api import internal
+from src.runtime.cli import session
 
 # ---------------------------------------------------------------------------
 # A2 route boundaries

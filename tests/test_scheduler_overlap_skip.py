@@ -20,8 +20,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, models, sessions, task_sessions
-from src.core import scheduler as scheduler_module
+from src.features.cron import scheduler as scheduler_module
+from src.infra import config, models
+from src.runtime import sessions, task_sessions
 
 
 class _Clock:

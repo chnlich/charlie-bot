@@ -10,7 +10,7 @@ import sys
 import conftest
 import pytest
 
-from src.core import models
+from src.infra import models
 
 
 def _local(*pids: int) -> list[models.LocalPid]:

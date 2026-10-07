@@ -16,8 +16,8 @@ from fastapi import routing
 from fastapi.dependencies import models
 
 import server
-from src.api import deps
-from src.core import config
+from src.infra import config
+from src.runtime.api import deps
 
 
 def _dependency_calls(dependant: models.Dependant) -> Iterator[Callable[..., Any]]:

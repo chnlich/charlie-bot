@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-from src.core.gc_control import gc_off
+from src.infra.gc_control import gc_off
 
 # The import chain is the server's largest bulk build: ~560 modules — fastapi's
 # own chain, every router, and the pydantic models every route registers
@@ -28,31 +28,22 @@ with gc_off(collect=False):
   from starlette.responses import Response
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-  from src.api import (
-      anthropic_proxy,
-      backlog,
-      chat,
-      code_server,
-      cron,
-      diag,
-      ext_usage,
-      files,
-      git,
-      host_auth,
-      internal,
-      latex,
-      pages,
-      responses,
-      sessions,
-      threads,
-      voice,
-  )
-  from src.api.auth import AuthMiddleware, _credential_matches
-  from src.api.deps import session_manager, set_trigger_manager, task_manager
-  from src.core import init_master_recovery, init_seed, timeouts
-  from src.core.agent_environment import apply_agent_environment
-  from src.core.buildinfo import init_build_info
-  from src.core.config import (
+  from src.app import pages
+  from src.backends.openai_compatible import anthropic_proxy
+  from src.features.backlog import api as backlog
+  from src.features.code_server import api as code_server
+  from src.features.cron import api as cron
+  from src.features.cron.scheduler import Scheduler
+  from src.features.diag import api as diag
+  from src.features.diff_view import api as git
+  from src.features.files import api as files
+  from src.features.host_auth import api as host_auth
+  from src.features.latex import api as latex
+  from src.features.usage import ext_usage
+  from src.features.voice import api as voice
+  from src.infra import responses, timeouts
+  from src.infra.buildinfo import init_build_info
+  from src.infra.config import (
       CharlieBotConfig,
       configured_access_key,
       get_config,
@@ -60,17 +51,21 @@ with gc_off(collect=False):
       get_scheduled_tasks,
       require_backends,
   )
-  from src.core.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
-  from src.core.http import close_http_client
-  from src.core.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
-  from src.core.message_aggregator import MessageAggregator
-  from src.core.models import SessionMetadata, utc_now
-  from src.core.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.core.scheduler import Scheduler
-  from src.core.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
-  from src.core.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
-  from src.core.tasks import cancel_and_wait, create_logged_task
-  from src.core.triggers import TriggerManager
+  from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
+  from src.infra.http import close_http_client
+  from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
+  from src.infra.models import SessionMetadata, utc_now
+  from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
+  from src.infra.tasks import cancel_and_wait, create_logged_task
+  from src.runtime import init_master_recovery, init_seed
+  from src.runtime.agent_environment import apply_agent_environment
+  from src.runtime.api import chat, internal, sessions, threads
+  from src.runtime.api.auth import AuthMiddleware, _credential_matches
+  from src.runtime.api.deps import session_manager, set_trigger_manager, task_manager
+  from src.runtime.message_aggregator import MessageAggregator
+  from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
+  from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
+  from src.runtime.triggers import TriggerManager
 
 log = LazyStructlogLogger()
 
@@ -281,7 +276,7 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
 def _provision_speech_models(cfg: CharlieBotConfig) -> None:
   """Provision the speech models on a worker thread, then warm the decode path.
 
-  src.agents.transcriber carries the numpy import (~90 ms), so the module loads
+  src.features.voice.transcriber carries the numpy import (~90 ms), so the module loads
   here instead of the event loop's startup path: the M99 import floor
   (docs/perf_baseline.md@5175adf09) prices the import's wall, and this thread's span is
   exactly the cost the metric does not see.
@@ -292,7 +287,7 @@ def _provision_speech_models(cfg: CharlieBotConfig) -> None:
   warm failure only logs: readiness stays exactly as provisioning published it
   and the endpoints keep their lazy path as the fallback.
   """
-  from src.agents import transcriber
+  from src.features.voice import transcriber
 
   transcriber.provision_models(cfg)
   started = time.monotonic()
@@ -347,7 +342,7 @@ async def _run_backfill(
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
   # Before the first startup log line: every http_request line the server
-  # renders rides this renderer (see src/core/log_once.py).
+  # renders rides this renderer (see src/infra/log_once.py).
   ensure_lean_renderer()
   cfg = get_config()
   boot_time = utc_now()
@@ -356,9 +351,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   # a session-tree migration apply takes the same exclusive exclusion. Startup
   # refuses (and exits) while an apply or another server holds the fence;
   # holding it makes a concurrent apply refuse with this server's identity.
-  # See src/core/home_writer_fence.py — the flock is the exclusion, the
+  # See src/runtime/home_writer_fence.py — the flock is the exclusion, the
   # identity record is only the holder's name plate.
-  from src.core.home_writer_fence import HomeWriterActiveError, acquire_home_writer_fence
+  from src.runtime.home_writer_fence import HomeWriterActiveError, acquire_home_writer_fence
   writer_fence = None
   try:
     writer_fence = acquire_home_writer_fence(cfg.charliebot_home, purpose="server startup")
@@ -432,7 +427,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # own sessions directory and its owned records. The legacy (v1) scan stays
     # on the background task above for unmigrated v1 sessions only.
     try:
-      from src.core.task_recovery import reconcile_task_tree
+      from src.runtime.task_recovery import reconcile_task_tree
       task_tree_stats = await reconcile_task_tree(cfg, task_manager())
       log.info("task_tree_recovery_done", **task_tree_stats)
     except Exception:
@@ -453,7 +448,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     slack_listener_task = None
     creds = get_credentials()
     if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
-      from src.core.slack_listener import (  # lazy: avoids import cycle at module scope
+      from src.features.slack.slack_listener import (  # lazy: avoids import cycle at module scope
           backfill_lost_summons,
           run_listener,
       )
@@ -469,7 +464,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     discord_listener_task = None
     if creds.get("discord", "bot_token") and cfg.discord.allowed_users:
-      from src.core.discord_listener import (  # lazy: avoids import cycle at module scope
+      from src.features.discord.discord_listener import (  # lazy: avoids import cycle at module scope
           backfill_lost_summons,
           run_listener,
       )
@@ -628,7 +623,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     cfg = get_config()
     backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
     if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
-      from src.agents.backends.tui import run_tui_attachment
+      from src.backends.tui.tui import run_tui_attachment
       await run_tui_attachment(websocket, session_id, cfg, task_manager())
     else:
       await _ws_keepalive(websocket, "session_ws", session_id=session_id)
@@ -652,7 +647,7 @@ async def _send_session_catchup(
     # A worker node's chat record is its Runs' transcript; the catchup replay
     # and the first paint read the same projected event list, so the client's
     # cursor is one space across both.
-    from src.core import worker_transcript
+    from src.runtime import worker_transcript
     entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_manager(), session_id)
     events = entry.events
     return await _replay_aggregated_catchup(websocket, events, cursor, session_id), len(events)
@@ -733,7 +728,7 @@ class _CatchupWalk:
 def _render_frames(frames: list[dict]) -> list[str]:
   """Render each catchup frame to the wire text the sockets receive.
 
-  The render rides the shared orjson home (src.api.responses.fast_json_bytes,
+  The render rides the shared orjson home (src.infra.responses.fast_json_bytes,
   the same render the broadcast fan-out uses); the parsed content equals the
   stdlib ``send_json`` form, only the raw bytes differ at the boundaries
   responses.py pins.
@@ -791,7 +786,7 @@ async def terminal_websocket(websocket: WebSocket) -> None:
   await websocket.accept()
   log.info("terminal_ws_connected")
   try:
-    from src.agents.backends.terminal import run_terminal_attachment
+    from src.features.terminal.terminal import run_terminal_attachment
 
     await run_terminal_attachment(websocket)
   finally:

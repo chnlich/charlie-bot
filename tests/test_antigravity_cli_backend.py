@@ -6,9 +6,10 @@ from typing import Any
 import conftest
 import pytest
 
-from src.agents.backends import antigravity_cli, registry
-from src.core import config
-from src.core import event_types as ET
+from src.backends.antigravity import antigravity_cli
+from src.infra import config
+from src.infra import event_types as ET
+from src.runtime.agent_process import registry
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> antigravity_cli.AntigravityCliBackend:
@@ -82,7 +83,7 @@ JSON
   events = await _consume(backend, tmp_path)
 
   assert [e.get("type") for e in events] == [ET.SESSION_ATTACHED, "assistant", "result"]
-  from src.agents import master_cc_run
+  from src.runtime import master_cc_run
 
   adopted_events: list[dict] = []
 
@@ -152,7 +153,7 @@ printf '%s' '{"status":"SUCCESS","conversation_id":"conv-abc","response":"hi","u
   )
   backend = antigravity_cli.AntigravityCliBackend()
 
-  from src.agents import master_cc_run
+  from src.runtime import master_cc_run
 
   events = await _consume(backend, tmp_path)
 

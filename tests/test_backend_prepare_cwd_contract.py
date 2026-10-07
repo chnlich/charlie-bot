@@ -1,6 +1,6 @@
 """_prepare_cwd instructions-file contract for the backends that write one.
 
-``AgentBackend._prepare_cwd`` (src/agents/backends/base.py) owns the write/skip
+``AgentBackend._prepare_cwd`` (src/runtime/agent_process/base.py) owns the write/skip
 mechanics; each backend declares only its (filename, log event) pair as
 ``_INSTRUCTIONS_TARGET``. The parametrized cases drive each backend's
 ``_prepare_cwd`` so the wiring itself stays pinned: the configured instructions
@@ -18,7 +18,11 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents.backends import base, charlie_code, claude_code, codex, opencode
+from src.backends.charlie_code import charlie_code
+from src.backends.claude_code import claude_code
+from src.backends.codex import codex
+from src.backends.opencode import opencode
+from src.runtime.agent_process import base
 
 # (backend class, ctor kwargs, resolve_binary patch target or None, fake binary,
 # instructions file name). Each CLI row is the backend's shared conftest rig

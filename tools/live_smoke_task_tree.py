@@ -60,7 +60,7 @@ import tempfile  # noqa: E402
 import time  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
+from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
@@ -100,7 +100,7 @@ def load_production_backend_entry(backend_id: str) -> dict:
     Only this entry is copied into the synthetic home; nothing else from the
     production config (triggers, accounts, session state) reaches it.
     """
-  from src.core.config import load_config
+  from src.infra.config import load_config
   option = load_config().get_backend_option(backend_id)
   if option is None:
     fail(f"backend option {backend_id!r} is not configured in the production config")
@@ -116,12 +116,12 @@ def install_native_session_dir_isolation(clc_sessions: Path) -> None:
     backend for these runs appends the isolation flag through the existing
     extra_flags constructor kwarg.
     """
-  master_module = __import__("src.agents.backends.registry", fromlist=["build_backend"])
-  worker_module = __import__("src.agents.worker", fromlist=["build_backend"])
+  master_module = __import__("src.runtime.agent_process.registry", fromlist=["build_backend"])
+  worker_module = __import__("src.runtime.worker", fromlist=["build_backend"])
   original = master_module.build_backend
 
   def wrapped(option, cfg, **kwargs):
-    from src.core.backend_models import BackendType
+    from src.infra.backend_models import BackendType
     if option.type == BackendType.CHARLIE_CODE:
       kwargs["extra_flags"] = [*(kwargs.get("extra_flags") or []), "--session-dir", str(clc_sessions)]
     return original(option, cfg, **kwargs)
@@ -163,13 +163,13 @@ def preflight(backend_id: str) -> None:
   if "--session-dir" not in help_text.stdout + help_text.stderr:
     fail("installed charlie-code does not support --session-dir; native session "
          "isolation cannot be guaranteed")
-  from src.core.config import load_config
+  from src.infra.config import load_config
   if load_config().get_backend_option(backend_id) is None:
     fail(f"backend option {backend_id!r} missing from the production config")
 
 
 def deps_tree():
-  from src.api.deps import task_manager
+  from src.runtime.api.deps import task_manager
   return task_manager()
 
 
@@ -189,8 +189,8 @@ async def start_server(port: int, title: str) -> None:
   import uvicorn
   from fastapi import FastAPI
 
-  from src.api import chat, internal, sessions, threads
-  from src.api.auth import AuthMiddleware
+  from src.runtime.api import chat, internal, sessions, threads
+  from src.runtime.api.auth import AuthMiddleware
 
   app = FastAPI(title=title)
   app.add_middleware(AuthMiddleware)
@@ -244,7 +244,7 @@ async def wait_for_dispatch_run(session_id: str, label: str) -> str:
     The reservation id is deterministic (the dispatch request binds the sorted
     pending-batch ids), so the poll reads the same fact the dispatcher wrote.
     """
-  from src.core.control_events import sha256_hex, stable_run_id
+  from src.runtime.control_events import sha256_hex, stable_run_id
 
   tree = deps_tree()
   deadline = time.monotonic() + 30

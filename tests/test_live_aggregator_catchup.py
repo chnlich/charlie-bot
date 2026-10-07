@@ -18,9 +18,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, models
-from src.core import event_types as ET
-from src.core import sessions as sessions_module
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import sessions as sessions_module
 
 
 async def _seed_session(mgr: sessions_module.SessionManager) -> str:

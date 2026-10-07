@@ -9,9 +9,9 @@ from conftest import (
     build_worker_prompt,
 )
 
-from src.core import spawner
-from src.core.config import CharlieBotConfig
-from src.core.models import TaskType
+from src.infra.config import CharlieBotConfig
+from src.infra.models import TaskType
+from src.runtime import spawner
 
 
 def _build_cfg() -> CharlieBotConfig:

@@ -8,15 +8,9 @@ import pytest
 import yaml
 from conftest import ROOT, backend_option
 
-from src.core import config as config_module
-from src.core.config import (
-    CHARLIEBOT_HOME_ENV,
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    StepConfig,
-    require_backends,
-)
-from src.core.init_seed import init_charliebot_home
+from src.infra import config as config_module
+from src.infra.config import CHARLIEBOT_HOME_ENV, CharlieBotConfig, ScheduledTaskConfig, StepConfig, require_backends
+from src.runtime.init_seed import init_charliebot_home
 
 
 @pytest.mark.parametrize("fragment_name", ["x.yaml", "cron.yaml"])
@@ -111,7 +105,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monke
   home.mkdir()
   monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
   fake_cfg = CharlieBotConfig(charliebot_home=home)
-  monkeypatch.setattr("src.core.config.get_config", lambda: fake_cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: fake_cfg)
   asyncio.run(init_charliebot_home())
   credentials_path = home / "credentials.yaml"
   assert credentials_path.exists()

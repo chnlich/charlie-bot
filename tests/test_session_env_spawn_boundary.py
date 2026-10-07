@@ -21,11 +21,11 @@ from pathlib import Path
 import pytest
 from conftest import backend_option, make_work_item, patch_instructions_content
 
-from src.agents import master_cc
-from src.agents.backends.claude_code import ClaudeCodeBackend, claude_supervisor_env
-from src.core import config as core_config
-from src.core import models
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.backends.claude_code.claude_code import ClaudeCodeBackend, claude_supervisor_env
+from src.infra import config as core_config
+from src.infra import models
+from src.infra.constants import SESSION_ID_ENV_VAR
+from src.runtime import master_cc
 
 _SHIM_TEMPLATE = """#!/bin/sh
 env > '{dump}'
@@ -106,7 +106,7 @@ async def test_worker_child_environment_carries_no_session_id(
   cwd.mkdir()
   monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
 
-  # The mapping src/agents/worker.py hands to the shared constructor.
+  # The mapping src/runtime/worker.py hands to the shared constructor.
   env = claude_supervisor_env({**os.environ, "CHARLIEBOT_TEST_EXTRA": "1"})
   backend = ClaudeCodeBackend(model="fake-model", cli_binary=str(shim), instructions_content="instructions")
   async for _event in backend.run("prompt", str(cwd), env):

@@ -1,7 +1,7 @@
 """The per-entry ``proxy_url`` env contract, single-homed across the CLI backends.
 
 Both ``charlie-code`` and ``opencode`` inject the proxy through the shared
-``apply_proxy_env`` (src/agents/backends/base.py); each parametrized case drives
+``apply_proxy_env`` (src/runtime/agent_process/base.py); each parametrized case drives
 that backend's own ``_prepare_env`` call site, so both wirings stay covered while
 the assertions live in one place.
 """
@@ -11,7 +11,9 @@ from typing import Any
 import conftest
 import pytest
 
-from src.agents.backends import base, charlie_code, opencode
+from src.backends.charlie_code import charlie_code
+from src.backends.opencode import opencode
+from src.runtime.agent_process import base
 
 # Each row is the backend's shared conftest rig prefixed by its class:
 # (backend class, resolve_binary patch target, fake binary, constructor defaults).

@@ -18,8 +18,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.api import sessions as sessions_api
-from src.core import config, models, sessions, task_sessions, threads
+from src.infra import config, models
+from src.runtime import sessions, task_sessions, threads
+from src.runtime.api import sessions as sessions_api
 
 
 @dataclasses.dataclass

@@ -9,8 +9,9 @@ from typing import Any
 
 import pytest
 
-from src.core import claude_compaction, config, models
-from src.core import event_types as ET
+from src.backends.claude_code import claude_compaction
+from src.infra import config, models
+from src.infra import event_types as ET
 
 NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 FABLE = "claude-fable-5-1"

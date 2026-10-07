@@ -98,10 +98,11 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 ## Repository layout
 
-- `src/agents/` — backend harnesses
-- `src/api/` — FastAPI routers
-- `src/cli/` — `charliebot` subcommand entrypoints
-- `src/core/` — spawner, improve loop, scheduler, triggers, sessions, memory, config
+- `src/infra/` — config, models, logging, process, git and HTTP helpers; imports nothing else from `src`
+- `src/runtime/` — sessions, task tree, master and worker runs, agent processes, core API routers and CLI commands
+- `src/backends/` — one package per agent backend (`claude_code`, `codex`, `opencode`, ...)
+- `src/features/` — one package per feature (`cron`, `improve`, `slack`, `usage`, ...) with its logic, `api.py` and `cli.py`
+- `src/app/` — composition root: page routes and the `charliebot` command table
 - `web/` — Jinja2 templates + vanilla JS static assets
 - `skills/` — repo-shared agent skills
 - `prompts/` — agent prompt definitions

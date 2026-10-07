@@ -4,8 +4,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents.backends import claude_code, registry
-from src.core import config, models
+from src.backends.claude_code import claude_code
+from src.infra import config, models
+from src.runtime.agent_process import registry
 
 
 def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:

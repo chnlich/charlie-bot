@@ -1,4 +1,4 @@
-"""The git stash-write guard wrapper (src/agents/git_stash_guard/git).
+"""The git stash-write guard wrapper (src/runtime/git_stash_guard/git).
 
 Worker.run puts the guard directory first on the PATH of every worker and
 reviewer child, so these tests invoke the wrapper as a subprocess in fresh
@@ -29,9 +29,9 @@ from conftest import (
     stub_credentials,
 )
 
-from src.agents.worker import GIT_STASH_GUARD_DIR
-from src.core import event_types as ET
-from src.core.models import RunRecord
+from src.infra import event_types as ET
+from src.infra.models import RunRecord
+from src.runtime.worker import GIT_STASH_GUARD_DIR
 
 WRAPPER = GIT_STASH_GUARD_DIR / "git"
 
@@ -77,12 +77,12 @@ PARITY_ARGVS = [
 
 def _is_guard_shim_dir(entry: str) -> bool:
   """The guard shim by Worker.run's definition of GIT_STASH_GUARD_DIR: a
-  ``git_stash_guard`` directory inside a ``src/agents`` tree. The launching
+  ``git_stash_guard`` directory inside a ``src/runtime`` tree. The launching
   checkout and the imported tree can differ (a worktree-run session inherits
   the launcher's PATH), so any checkout's shim directory matches."""
   resolved = Path(entry).resolve()
   return (
-      resolved.name == "git_stash_guard" and resolved.parent.name == "agents" and resolved.parent.parent.name == "src")
+      resolved.name == "git_stash_guard" and resolved.parent.name == "runtime" and resolved.parent.parent.name == "src")
 
 
 def _path_without_guard_shim(raw_path: str) -> str:

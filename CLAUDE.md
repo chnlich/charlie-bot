@@ -13,7 +13,7 @@ lifecycle automatically.
 - Test budget: a unit test under 2 s, a `@pytest.mark.integration` test under 10 s, at most 50 integration tests — `tests/conftest.py` enforces all three
 - `scripts/` holds the scripts a CharlieBot operator runs on their own host (install, server launch, skill sync, backend preflight); repo maintenance tools (style and leak checks, git hooks, browser and live harnesses, builds, eval runners) live in `tools/`.
 
-- Imports name modules (Google Python Style Guide 2.2): `from src.core import models`, then
+- Imports name modules (Google Python Style Guide 2.2): `from src.infra import models`, then
   `models.SessionMetadata`; symbols from `typing`, `typing_extensions` and `collections.abc`
   import directly. New imports take this form; the code-health cron converts existing ones.
 - `uv run yapf -i <file>` formats each Python file a change touches.

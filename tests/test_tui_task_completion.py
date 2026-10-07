@@ -28,10 +28,10 @@ from conftest import OPERATOR, _async_wait_for
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.core import event_types as ET
-from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.core.models import TaskSpec
-from src.core.run_token import RunTokenClaims, sign_run_token
+from src.infra import event_types as ET
+from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
+from src.infra.models import TaskSpec
+from src.runtime.run_token import RunTokenClaims, sign_run_token
 from tests.test_task_execution import wait_for_terminal_run
 
 
@@ -83,19 +83,14 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance with a tui backend, the full public API mounted
   (sessions + chat + the real session websocket route), and the terminal
   boundary scripted."""
-  import src.core.config as core_config
-  from src.api import chat as chat_api
-  from src.api import sessions as sessions_api
-  from src.api.deps import (
-      get_config_on_loop,
-      get_run_store,
-      get_session_manager,
-      get_task_manager,
-  )
-  from src.core import config
-  from src.core.config import CharlieBotConfig
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
+  import src.infra.config as core_config
+  from src.infra import config
+  from src.infra.config import CharlieBotConfig
+  from src.runtime.api import chat as chat_api
+  from src.runtime.api import sessions as sessions_api
+  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+  from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
 
   home = tmp_path / "charliebot-home"
   # The terminal boundary is real enough to observe argv/env/instruction
@@ -132,7 +127,8 @@ def tui_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
   # The terminal boundary: tmux + the attach PTY are scripted; the relay and
   # the pump run for real against the scripted pipe.
-  from src.agents.backends import pty_common, tui
+  from src.backends.tui import tui
+  from src.runtime.agent_process import pty_common
 
   ensured: list[tuple[str, Path]] = []
   tmux_live: set[str] = set()
@@ -230,9 +226,9 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
 
   # A second, isolated synthetic instance: its data must never be touched.
   other_home = cfg.charliebot_home.parent / "second-instance-home"
-  from src.core.config import CharlieBotConfig
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
+  from src.infra.config import CharlieBotConfig
+  from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
   other_cfg = CharlieBotConfig(
       charliebot_home=other_home,
       backends={"options": [{
@@ -322,7 +318,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   # One Run per actual terminal launch, observed at the delivery boundary: the
   # env pairs, the argv, the instruction file, the scoped pid identity, and the
   # stored snapshot bytes the launched claude read.
-  from src.core.runs import read_pid_stat
+  from src.runtime.runs import read_pid_stat
   tui_runs = tree.runs.list_run_records_sync(session_id)
   assert len(tui_runs) == 1
   runs_first = tui_runs[0]
@@ -368,7 +364,7 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
   # A source edit during the live runtime: the live Run's stored snapshot is
   # untouched (its bytes stay the evidence of record), and the node's rule ref
   # moved for the NEXT launch only.
-  from src.core.models import PatchSessionTaskRequest
+  from src.infra.models import PatchSessionTaskRequest
   snapshot_before = Path(runs_first.prompt_snapshot_ref).read_bytes()
   patched = await tree.patch_task(
       session_id, PatchSessionTaskRequest(node_prompt="Live edit while attached"), caller=OPERATOR)
@@ -447,10 +443,10 @@ async def test_public_tui_task_full_route_under_scripted_terminal(tui_env, monke
       name="AL",
       backend=None,
       caller="operator")
-  from src.core.models import RunRecord
+  from src.infra.models import RunRecord
   await tree.runs.register_run(RunRecord(id="agent-run", session_id=agents_task.id, kind="work"))
 
-  from src.core.runs import read_pid_stat
+  from src.runtime.runs import read_pid_stat
   proc = subprocess.Popen(["/bin/sleep", "30"])
   pair = read_pid_stat(proc.pid)
   await tree.runs.record_launch(agents_task.id, "agent-run", pid=proc.pid, pid_start=pair[0])

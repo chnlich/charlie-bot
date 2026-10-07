@@ -6,7 +6,7 @@
 // strip — the same tree format the Workspace view builds. Pages merge into one
 // row list (first delivery wins; the server re-delivers a context ancestor a
 // previous page already carried); ordering, membership, and group aggregates
-// come from GET /api/sessions/archived (src/api/sessions.py), and in-list
+// come from GET /api/sessions/archived (src/runtime/api/sessions.py), and in-list
 // operations (unarchive / delete / set group) update the merged list and the
 // strip counts in place with no refetch. The rendered cap and Load more count
 // archived rows only: a context row is the tree's scaffolding, never part of

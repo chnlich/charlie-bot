@@ -9,9 +9,10 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.api import message_utils
-from src.core import event_types as ET
-from src.core import models, sessions, triggers
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import sessions, triggers
+from src.runtime.api import message_utils
 
 VOICE_KEY = "is_voice"
 
@@ -137,8 +138,8 @@ async def test_trigger_says_fired_the_moment_its_wake_is_enqueued(tmp_path: path
   import fastapi
   from fastapi import testclient
 
-  from src.api import deps
-  from src.api import sessions as sessions_api
+  from src.runtime.api import deps
+  from src.runtime.api import sessions as sessions_api
 
   cfg = conftest.make_home_config(tmp_path)
   session_mgr = sessions.SessionManager(cfg)

@@ -1,16 +1,16 @@
 import fastapi
 import pytest
 
-from src.agents.backends import pty_common
-from src.core import constants
+from src.infra import constants
+from src.runtime.agent_process import pty_common
 
 # Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
 # and its websocket handlers read it as a module global at call time, and the terminal handler
-# imports run_terminal_attachment at call time (`from src.agents.backends.terminal import
+# imports run_terminal_attachment at call time (`from src.features.terminal.terminal import
 # run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
 # on their defining module attributes and the handler's reads resolve them.
 SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
-TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.agents.backends.terminal.run_terminal_attachment"
+TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.features.terminal.terminal.run_terminal_attachment"
 
 
 class _AcceptingWebSocket:

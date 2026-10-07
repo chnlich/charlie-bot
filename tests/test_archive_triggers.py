@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 from conftest import bind_deps_managers, build_env, create_task
 
-from src.core.models import PendingTrigger
-from src.core.triggers import ArchivedSessionError, TriggerManager
+from src.infra.models import PendingTrigger
+from src.runtime.triggers import ArchivedSessionError, TriggerManager
 
 
 def _trigger(session_id: str, trigger_id: str = "trig-archived-1") -> PendingTrigger:
@@ -76,7 +76,7 @@ async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypat
   assert await trigger_mgr._is_dormant_target(node.id) is True
   # A session without a profile keeps the legacy chain-end check (its answer
   # is the legacy reason, not the task-node one).
-  from src.core.models import CreateSessionRequest
+  from src.infra.models import CreateSessionRequest
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=None)
   assert await trigger_mgr._dormancy_reason(legacy.id) is None
 
@@ -88,7 +88,7 @@ def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(
   import threading
   from http.server import HTTPServer
 
-  from src.cli import schedule_trigger as cli
+  from src.runtime.cli import schedule_trigger as cli
   from tests.test_cli_restart_contract import _QuietHandler
 
   detail = "task arch-node is archived (target task is archived); trigger rejected"
@@ -110,7 +110,7 @@ def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(
   port = httpd.server_address[1]
   threading.Thread(target=httpd.serve_forever, daemon=True).start()
   try:
-    monkeypatch.setattr("src.cli.common._internal_base_url", lambda: f"http://127.0.0.1:{port}")
+    monkeypatch.setattr("src.runtime.cli.common._internal_base_url", lambda: f"http://127.0.0.1:{port}")
     from conftest import stub_credentials
     stub_credentials({"charliebot": {"access_key": "op-secret"}})
     monkeypatch.delenv("CHARLIEBOT_SESSION_ID", raising=False)

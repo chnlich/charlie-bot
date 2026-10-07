@@ -1,6 +1,6 @@
 """The preview relay's archive: it keeps the audio it forwarded and publishes the pair first.
 
-Each test drives src/api/voice.py's relay handler against a fake live backend
+Each test drives src/features/voice/api.py's relay handler against a fake live backend
 and a temporary sessions dir; the fake websocket scripts the browser's frames
 and records the server's. The contract under test: the recording+text pair is
 on disk before the final frame goes out, a failed or unwanted final leaves no
@@ -17,10 +17,10 @@ import conftest
 import pytest
 from structlog import testing
 
-from src.agents.transcription import base
-from src.agents.transcription import registry as transcription_registry
-from src.api import voice
-from src.core import config
+from src.features.voice import api as voice
+from src.features.voice.transcription import base
+from src.features.voice.transcription import registry as transcription_registry
+from src.infra import config
 
 SESSION_ID = "session-a"
 BACKEND_ID = "fake-live"
@@ -325,7 +325,7 @@ async def test_a_disconnect_after_the_end_frame_cancels_the_backend_and_archives
 @pytest.mark.asyncio
 async def test_frames_past_the_cap_are_cut_sample_exactly(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
-  from src.agents import transcriber
+  from src.features.voice import transcriber
 
   # Three 2048-sample frames against a 3072-sample cap: the second frame is cut
   # in half (2048 of its samples kept), the third does not survive at all.

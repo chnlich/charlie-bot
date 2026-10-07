@@ -3,7 +3,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents.backends import claude_launch, pty_common, tui
+from src.backends.claude_code import claude_launch
+from src.backends.tui import tui
+from src.runtime.agent_process import pty_common
 
 
 @pytest.fixture(autouse=True)

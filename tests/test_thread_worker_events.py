@@ -5,7 +5,7 @@ from pathlib import Path
 
 from conftest import fresh_state_fixture
 
-from src.api import threads as threads_api
+from src.runtime.api import threads as threads_api
 
 TS = "2026-08-31T00:00:00+00:00"
 

@@ -45,7 +45,7 @@ function getUploadedFilesForPayload() {
 }
 
 // The chat-message send path posts entries validated against UploadedFileRef
-// in src/core/models.py; this projection is the wire payload's one definition.
+// in src/infra/models.py; this projection is the wire payload's one definition.
 function toPayloadFiles(files) {
   return files.map((file) => ({
     filename: file.filename,

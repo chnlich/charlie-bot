@@ -35,12 +35,12 @@ from conftest import (
     write_nightly_task,
 )
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig
-from src.core.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
-from src.core.scheduler import TASK_HANDLERS, Scheduler
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig, ScheduledTaskConfig
+from src.infra.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 from tests.test_cron_backend import _patch_cron_d
 from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
@@ -295,7 +295,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
       crash.setattr(TaskTreeManager, "adopt_scheduled_bookkeeping", _boom)
     elif fail_after == "copy":
       # Node + bookkeeping exist; the write-back never ran.
-      from src.core import scheduler as scheduler_module
+      from src.features.cron import scheduler as scheduler_module
       crash.setattr(scheduler_module, "write_cron_key", _boom)
     else:
       # The binding is on disk; the archive never ran (the next tick's sweep
@@ -429,7 +429,7 @@ async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
     tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """The editor keeps its contract: 409 before any yaml write when the switch
   cannot happen now (the node's own work is in flight)."""
-  from src.core.thinking_state import mark_busy
+  from src.runtime.thinking_state import mark_busy
   cfg, session_mgr, tree, scheduler, home = tick_env
   _patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
@@ -552,7 +552,7 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
   session's wake duties on the tree dispatch path: the weekly recycle clears
   the anchor predating the last Saturday 01:00 PT and GCs the old threads,
   and the fresh native conversation's turn carries the fixed report prefix."""
-  from src.core.master_trigger import scheduled_report_prefix
+  from src.runtime.master_trigger import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()  # binds; the daily task is not due
@@ -593,7 +593,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   """The report prefix marks a FRESH native conversation: once the node holds
   a live anchor (recorded by the previous turn) the next firing report's wake
   continues that conversation \u2014 no prefix, no reset notice, no recycle."""
-  from src.core.master_trigger import scheduled_report_prefix
+  from src.runtime.master_trigger import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()

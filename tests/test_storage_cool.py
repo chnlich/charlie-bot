@@ -1,4 +1,4 @@
-"""Tests for the cold-session storage sweep (src/core/storage_cool.py).
+"""Tests for the cold-session storage sweep (src/features/storage/storage_cool.py).
 
 The suite pins mechanisms, not literals: the transport rule deletes by path-then-name
 (uploads keep their stdout.log), rotation suffixes die only inside managed dirs, the
@@ -16,7 +16,9 @@ import sqlite3
 import conftest
 import pytest
 
-from src.core import config, runs, storage_cool
+from src.features.storage import storage_cool
+from src.infra import config
+from src.runtime import runs
 
 NOW = datetime.datetime(2026, 9, 4, 12, 0, 0, tzinfo=datetime.UTC)
 OLD = (NOW - datetime.timedelta(days=30)).isoformat()
@@ -380,10 +382,10 @@ def test_usage_ledger_handler_summarizes_and_propagates(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The scheduler's daily capture returns one line per source and never swallows
   a capture failure."""
-  from src.core import scheduler
+  from src.features.cron import scheduler
 
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
-  monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
+  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
 
   summary = asyncio.run(scheduler.TASK_HANDLERS["usage_ledger"]())
 
@@ -393,7 +395,7 @@ def test_usage_ledger_handler_summarizes_and_propagates(
   def failing(ledger: object) -> dict[str, int]:
     raise RuntimeError("ledger capture failed")
 
-  monkeypatch.setattr("src.core.token_tally.capture_local", failing)
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", failing)
   with pytest.raises(RuntimeError, match="ledger capture failed"):
     asyncio.run(scheduler.TASK_HANDLERS["usage_ledger"]())
 

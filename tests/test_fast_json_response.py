@@ -13,7 +13,7 @@ import json
 
 from fastapi import responses
 
-from src.api import responses as responses_api
+from src.infra import responses as responses_api
 
 _CJK_PAYLOAD = {
     "messages": [{

@@ -21,11 +21,11 @@ from conftest import (
     write_pool_credentials,
 )
 
-from src.agents import master_cc_relay, master_cc_run
-from src.agents.backends import base as backend_base
-from src.core import claude_accounts, claude_relay
-from src.core import event_types as ET
-from src.core.models import SessionCallbacks, SessionMetadata
+from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
+from src.infra import event_types as ET
+from src.infra.models import SessionCallbacks, SessionMetadata
+from src.runtime import master_cc_run
+from src.runtime.agent_process import base as backend_base
 
 NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
 UUID = "uuid-relay-1"

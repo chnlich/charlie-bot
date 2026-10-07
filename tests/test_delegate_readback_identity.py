@@ -15,8 +15,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.cli import common
-from src.core import control_events, models
+from src.infra import models
+from src.runtime import control_events
+from src.runtime.cli import common
 from tests import test_task_execution
 
 

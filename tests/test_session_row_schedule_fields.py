@@ -30,8 +30,8 @@ from conftest import (
     walk_archived_pages,
 )
 
-from src.core.models import CreateSessionRequest, RunRecord, SessionStatus
-from src.core.threads import ThreadManager
+from src.infra.models import CreateSessionRequest, RunRecord, SessionStatus
+from src.runtime.threads import ThreadManager
 
 
 def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool = True) -> None:
@@ -126,7 +126,7 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   """
   from datetime import UTC, datetime, timedelta
 
-  from src.api.sessions import row_schedule_fields
+  from src.runtime.api.sessions import row_schedule_fields
 
   _cfg, _session_mgr, tree = build_env(tmp_path)
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
@@ -161,7 +161,7 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
     def now(cls, tz=None):
       return crossed.astimezone(tz)
 
-  monkeypatch.setattr("src.api.cron.datetime", _ShiftedDateTime)
+  monkeypatch.setattr("src.features.cron.api.datetime", _ShiftedDateTime)
   advanced = row_schedule_fields(ids, crossed)
   assert datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
 

@@ -1,4 +1,4 @@
-"""Tests for the publish action (src.core.publish): preflight, the token-directory copy, and the URL join."""
+"""Tests for the publish action (src.features.artifacts.publish): preflight, the token-directory copy, and the URL join."""
 
 import os
 import pathlib
@@ -7,7 +7,8 @@ import re
 import conftest
 import pytest
 
-from src.core import config, publish
+from src.features.artifacts import publish
+from src.infra import config
 
 # The published URL for page.html: secrets.token_urlsafe(16) is 16 random bytes,
 # base64url without padding, so 22 URL-safe characters.

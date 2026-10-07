@@ -9,10 +9,10 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.agents import master_cc
-from src.core import config as core_config
-from src.core import event_types as ET
-from src.core import models, sessions, spawner, triggers
+from src.infra import config as core_config
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import master_cc, sessions, spawner, triggers
 
 
 def _write_transcript(config_dir: pathlib.Path, cc_session_id: str) -> None:
@@ -35,9 +35,9 @@ def _reload_rig(home: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> pathlib.
   cfg_path = home / ".charliebot" / "config.yaml"
   cfg_path.write_text("server:\n  port: 1111\n", encoding="utf-8")
   monkeypatch.delenv(core_config.CHARLIEBOT_HOME_ENV, raising=False)
-  # The home cache lives in src.core.home; config re-exports the name, but the
+  # The home cache lives in src.infra.home; config re-exports the name, but the
   # resolver reads its own module's global, so the reset must target the owner.
-  from src.core import home as core_home
+  from src.infra import home as core_home
   monkeypatch.setattr(core_home, "_home_cache", {})
   return cfg_path
 

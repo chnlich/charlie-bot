@@ -28,9 +28,9 @@ All instance-specific data (configs, sessions, memory) is stored here.
 `CHARLIEBOT_HOME` selects which one: unset gives `~/.charliebot`, and a set value (absolute
 or `~`-prefixed; relative is rejected) gives a separate profile, seeded on first use. Several
 profiles run side by side on one host, each with its own port in its own `config.yaml`. The
-home path is resolved in exactly one place, `charliebot_home_dir()` in `src/core/home.py`;
+home path is resolved in exactly one place, `charliebot_home_dir()` in `src/infra/home.py`;
 every other path derives from `CharlieBotConfig.charliebot_home`. One raw read of the variable
-sits outside it: the web terminal's profile check (`src/agents/backends/terminal.py`). A tmux
+sits outside it: the web terminal's profile check (`src/features/terminal/terminal.py`). A tmux
 pane inherits the tmux server's environment rather than the server process's, so the terminal
 checks whether a profile is set and passes the resolved home to new panes explicitly.
 
@@ -69,7 +69,7 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ### 3.2 Repository Code Structure (Stateless)
 ```text
 charlie-bot/
-├── src/                # Python backend (api/, core/, agents/)
+├── src/                # Python backend (infra/, runtime/, backends/, features/, app/)
 ├── web/                # Web UI (templates/ + static/)
 ├── configs/            # Default templates and examples
 ├── server.py           # Entry point
@@ -83,11 +83,11 @@ charlie-bot/
 ### 4.1 Agent Roles
 | Role | Type | Responsibilities |
 |------|------|------------------|
-| **Master Agent** | Claude Code session (`src/agents/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
-| **Worker Agent** | Claude Code CLI (`src/agents/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
+| **Master Agent** | Claude Code session (`src/runtime/master_cc.py`) | User interaction, high-level planning, delegating coding tasks to Workers, reviewing combined worker+reviewer results. Runs as a persistent Claude Code subprocess with `--resume` support across messages. Can use any configured backend. |
+| **Worker Agent** | Claude Code CLI (`src/runtime/worker.py`) | Code analysis, implementation, file editing, git operations, testing. Runs in an isolated git worktree on a dedicated branch. Told NOT to rebase/merge/remove the worktree — a reviewer handles that. |
 | **Review Agent** | Claude Code CLI (same Worker class) | Automatically spawned after a Worker succeeds. Reviews the diff, fixes issues, rebases onto the remote base, and pushes the branch to the base (git rejects a non-fast-forward push). Intentionally uses a DIFFERENT backend than the Worker (cross-backend review via `backends.preference` config). |
 
-**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/agents/backends/base.py`). The `BackendType` vocabulary (`src/core/constants.py`) names the backends, and `src/agents/backends/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
+**Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/runtime/agent_process/base.py`). The `BackendType` vocabulary (`src/infra/constants.py`) names the backends, and `src/runtime/agent_process/registry.py` dispatches each `BackendOption.type` to its implementation. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
@@ -115,8 +115,8 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 1. **Task Delegation** (Master → Worker):
    - User submits request via Web UI chat
    - Master Agent (Claude Code session) decides to delegate a coding task
-   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/cli/delegate.py`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
-   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`_delegate_task_tree` in `src/api/internal.py`); the tree's executor launches it (`execute_run` in `src/core/task_execution.py`)
+   - Master calls `charliebot delegate --repo /path --base-branch main --task-spec-file <file>` (`src/runtime/cli/delegate.py`); session identity comes from the `CHARLIEBOT_SESSION_ID` the server writes into the master process, with cwd as the fallback when it is absent
+   - The CLI POSTs to `/api/internal/delegate`, which creates the worker task-tree child and registers its first work Run (`_delegate_task_tree` in `src/runtime/api/internal.py`); the tree's executor launches it (`execute_run` in `src/runtime/task_execution.py`)
 
 2. **Worker Execution** (Phase 1 — Implement):
    - Spawner creates an isolated git worktree on a new branch (`charliebot/task-{ts}-{id}`)
@@ -126,7 +126,7 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
    - Events are streamed via WebSocket and persisted to `events.jsonl`
 
 3. **Review** (Phase 2 — Automatic on Worker Success):
-   - On successful work-run completion, `_maybe_spawn_review` (`src/core/task_execution.py`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`src/core/review.py`)
+   - On successful work-run completion, `_maybe_spawn_review` (`src/runtime/task_execution.py`) registers a review Run on the same task and launches it, picking the reviewer backend with `select_reviewer_backend` (`src/runtime/review.py`)
    - The reviewer intentionally uses a **different LLM backend** than the worker (cross-backend review), selected from `backends.preference` config
    - Reviewer reads session conversation + worker log for context, then:
      - Reviews `git diff base_branch...branch_name`
@@ -149,9 +149,9 @@ The Master Agent delegates coding tasks to Workers via the CLI delegate command:
 ### 5.2 Plan Registry (Draft, Approve, Delegate)
 For complex tasks, the master plans before building; the plan registry keeps that lifecycle:
 
-- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/cli/plan.py` → `PlanRegistryManager` in `src/core/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
+- **Draft & present**: The master drafts the plan as an HTML artifact (`artifacts/plan_NN.html`, grammar in `prompts/plan_template.html`) and registers it with `charliebot plan present --file <artifact> --title <title>` (`src/features/artifacts/plan_cli.py` → `PlanRegistryManager` in `src/features/artifacts/plans.py`). `charliebot plan amend --file <artifact> --note <why>` appends the next version (trigger: `auto_amend` or `feedback`).
 - **Review**: The plan renders in the web Plans panel with a version switcher, a diff toggle against the predecessor, and block-anchored comments (`web/static/js/plan-panel.js`).
-- **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/core/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
+- **Approve**: The user's "take off" approves the settled terms; `charliebot plan approve` records it against the latest version. The takeoff gate (`src/runtime/takeoff_gate.py`) lets `/delegate` and `/improve` proceed only when the session's latest real user message carries the approval (or a "pre take off" stamp within 12 hours).
 - **Close**: `charliebot plan close --plan N --as superseded|abandoned|completed` terminates the lineage.
 
 ---
@@ -187,7 +187,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 3. Audio uploaded to backend
 4. **Local speech transcription** decodes the complete recording offline: the VAD segments it and each segment decodes in one shot (sherpa-onnx Qwen3-ASR on CPU by default, `voice.engine=qwen3_hf` on GPU hosts; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
-6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/agents/master_cc_run.py`)
+6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/runtime/master_cc_run.py`)
 
 ---
 
@@ -202,7 +202,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 Workers run with `--output-format stream-json --verbose`, so the raw NDJSON log (`agent.raw.ndjson`)
 holds the CLI's stream. The lines are `assistant` events carrying `message.content` blocks
 (`text`, `thinking`, `tool_use`), `user` tool-result wrappers, and a final `result`.
-`AgentBackend.translate_event` (`src/agents/backends/base.py`) turns each line into the events that
+`AgentBackend.translate_event` (`src/runtime/agent_process/base.py`) turns each line into the events that
 land in `events.jsonl` and the WebSocket stream: the Anthropic-endpoint backends (cc-claude,
 cc-kimi, cc-openai-compatible) pass lines through unchanged; the other backends translate their
 native streams into CC-compatible events with per-backend vocabularies (codex, for one, emits
@@ -250,12 +250,12 @@ A raw log that stops growing while the process is still alive is what the server
 
 ### 10.2 Worker Instructions
 Worker and reviewer directives (role, skills discovery, worktree workflow, coding standards) ride in the prompt
-itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/core/spawner_prompt.py`) for
-workers, `review_rules_text` (`src/core/review.py`) for reviewers, rendered into the managed instructions by
-`_worker_kind_rule_segments` (`src/core/task_prompts.py`) beside the volatile review context that
-`_build_review_context` (`src/core/task_execution.py`) assembles. No instruction file is written into a
+itself: `prompts/worker.md` sections assembled by `_build_worker_prompt` (`src/runtime/spawner_prompt.py`) for
+workers, `review_rules_text` (`src/runtime/review.py`) for reviewers, rendered into the managed instructions by
+`_worker_kind_rule_segments` (`src/runtime/task_prompts.py`) beside the volatile review context that
+`_build_review_context` (`src/runtime/task_execution.py`) assembles. No instruction file is written into a
 worker's worktree, so the checked-out repo's own AGENTS.md/CLAUDE.md stays in effect. Master sessions are the
-only path that writes one: `_build_instructions_content` (`src/agents/master_cc_run.py`) assembles the
+only path that writes one: `_build_instructions_content` (`src/runtime/master_cc_run.py`) assembles the
 git-shared base prompt, the per-host override, the memory block, and the project layer, and the backend writes
 it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backends).
 
@@ -268,9 +268,9 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 **Backend**
 - FastAPI server (`server.py`)
 - All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py`)
-- Master Agent as Claude Code session (`src/agents/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
-- Delegation CLI (`src/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
-- Worker spawner (`src/core/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
+- Master Agent as Claude Code session (`src/runtime/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
+- Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
+- Worker spawner (`src/runtime/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.preference`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
@@ -299,5 +299,5 @@ decodes the opening clip as a recognition probe.
 
 **Configuration**
 - `~/.charliebot/config.yaml` holds structure in sections (`server`, `paths`, `backends`, `accounts`, `voice`, `code_server`, `ui`, `slack`, `publish`, `telegram`); `~/.charliebot/credentials.yaml` holds every secret as section → key and is the single source of truth for API keys — no environment variables
-- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version (the id rule: the `BackendsConfig` comment in `src/core/config.py`)
+- `backends.options`: configurable list of LLM backends (see that file for the current list); an option id names the model family, never a version (the id rule: the `BackendsConfig` comment in `src/infra/config.py`)
 - `backends.preference`: ordered list of backend IDs for cross-backend reviewer selection; server startup (`require_backends`) refuses a preference entry or cron task backend that names no option id

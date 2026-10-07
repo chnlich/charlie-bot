@@ -7,22 +7,22 @@ string, and land that edit in the same PR. Entries anchor each symbol by name an
 code_health.md Step 1 bans coordinate citations, so no line numbers appear here.
 
 Known-alive symbols:
-- `kill_tmux_session` (`src/agents/backends/pty_common.py`; re-exported with `# noqa` by
-  `src/agents/backends/tui.py`) — reached by string: `TUI_KILL_TMUX_SESSION_PATCH_TARGET`
-  (`tests/conftest.py`) names the `src.agents.backends.tui` path, so the re-export is the
+- `kill_tmux_session` (`src/runtime/agent_process/pty_common.py`; re-exported with `# noqa` by
+  `src/backends/tui/tui.py`) — reached by string: `TUI_KILL_TMUX_SESSION_PATCH_TARGET`
+  (`tests/conftest.py`) names the `src.backends.tui.tui` path, so the re-export is the
   path the monkeypatch resolves through.
 - `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via
   `@pytest.mark.usefixtures("_clean_ceiling_env")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_tool_item`, `_handle_file_change`,
   `_handle_mcp_tool_call`, `_handle_todo_list`, `_handle_error` — Codex backend
-  item-event handlers in `src/agents/backends/codex.py`, reached by string via the `_ITEM_HANDLERS`
+  item-event handlers in `src/backends/codex/codex.py`, reached by string via the `_ITEM_HANDLERS`
   name list and `getattr(self, handler_name)` dispatch in `_translate_item_event`.
-- `openai_compatible_messages` — FastAPI route handler in `src/api/anthropic_proxy.py`
+- `openai_compatible_messages` — FastAPI route handler in `src/backends/openai_compatible/anthropic_proxy.py`
   (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`), reached by string: the
   `cc-openai-compatible` backend registry builds that URL by f-string in
-  `src/agents/backends/registry.py`. The Python name has exactly zero whole-repo matches outside
+  `src/runtime/agent_process/registry.py`. The Python name has exactly zero whole-repo matches outside
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
-- Every FastAPI route handler in `src/api/*.py` (functions under `@router.get/post/patch/put/
+- Every FastAPI route handler in `src/runtime/api/*.py` and the feature `api.py` modules (functions under `@router.get/post/patch/put/
   delete/websocket` decorators, e.g. `get_backlog`, `list_cron_tasks`,
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
   each router with `include_router(prefix=...)` and `web/static/js/` fetches the composed paths
@@ -73,7 +73,7 @@ Known-alive symbols:
 - `session_websocket` — `@app.websocket` handler in `server.py` (`/ws/sessions/{session_id}`),
   reached by URL string: `web/static/js/websocket.js` dials `/ws/sessions/${SESSION_ID}`. The
   Python name has exactly zero whole-repo matches outside its definition, so vulture flags it as
-  an unused function. Same class as the `src/api/*.py` route handlers above, kept as its own entry
+  an unused function. Same class as the route handlers above, kept as its own entry
   because these live in `server.py` itself.
   (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
   Step 3 grep finds it.)
@@ -82,19 +82,19 @@ Known-alive symbols:
   transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
   asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused function. Same class as the `session_websocket`
-  entry above. The recording and upload endpoints themselves are `src/api/voice.py` route
-  handlers, covered by the `src/api/*.py` entry.
+  entry above. The recording and upload endpoints themselves are `src/features/voice/api.py` route
+  handlers, covered by the route-handler entry.
 - `slack_listener_task`, `slack_backfill_task` — `app.state` task handles assigned in the root
   `server.py` lifespan and read by string: the shutdown loop iterates
   `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via
   `getattr(app.state, attr, None)`. Vulture flags the `slack_backfill_task` assignment as an unused
   attribute; the names appear only at the write and inside the string tuple.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
-  in `src/core/config.py`, registered with pydantic at class-definition time and invoked during
+  in `src/infra/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `seed_default_cron_tasks` (`src/core/init_seed.py`) — production-scope vulture (`src/ server.py`)
+- `seed_default_cron_tasks` (`src/runtime/init_seed.py`) — production-scope vulture (`src/ server.py`)
   flags it as an unused function because its only production caller is the Python heredoc embedded
   in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
   server-start path is deliberate: seeding belongs to the explicitly invoked setup command, and
@@ -102,7 +102,7 @@ Known-alive symbols:
   `init_charliebot_home.__code__.co_names`.
 - `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
   `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the
-  sherpa-onnx `VadModelConfig` in `src/agents/transcriber.py` (`_get_model_bundle`). The vendor
+  sherpa-onnx `VadModelConfig` in `src/features/voice/transcriber.py` (`_get_model_bundle`). The vendor
   C++ binding reads them when the VAD runs; nothing in the repo reads them back, so vulture
   flags the writes as unused attributes. `min_silence_duration`, `min_speech_duration`, and
   `max_speech_duration` each have exactly one whole-repo match (the write site), so they sit
@@ -135,11 +135,11 @@ Known-alive symbols:
   coroutine), as each site's inline comment states. The condition is the point; nothing to
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
-  `BaseModel` classes of `src/core/backend_models.py`, `src/core/config.py`, `src/core/models.py`,
-  `src/api/diag.py`, and `src/api/cron.py`) — `ModelMetaclass`
+  `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
+  `src/features/diag/api.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
   consumes it by attribute name at class-definition time. Every assignment pins
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
-  `TaskCreate` in `src/api/cron.py`, which pins
+  `TaskCreate` in `src/features/cron/api.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
   loader's forbid task model, as the comment above the assignment states. Vulture flags each
   production assignment as an unused variable.
@@ -154,7 +154,7 @@ Known-alive symbols:
   `AsyncMock(return_value=...)`/`patch(..., side_effect=...)` keyword arguments, which vulture
   does not flag.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data` (`_TreeBuilder`
-  in `src/core/artifact_check.py`) — template-method overrides of stdlib
+  in `src/features/artifacts/artifact_check.py`) — template-method overrides of stdlib
   `html.parser.HTMLParser`: `feed()` drives the base class's scanner, which invokes these
   on `self` under their contract-fixed names while `_parse_dom` builds the DOM. Nothing in
   the repo calls them, each name has exactly zero whole-repo matches outside its own
@@ -163,7 +163,7 @@ Known-alive symbols:
   virtual dispatch in place of stdlib string dispatch.
 - `dir_path` (the `create_provider(provider, label, dir_path)` stubs in
   `tests/test_ext_usage.py`, installed for `ext_usage_mod._create_provider` via
-  `monkeypatch.setattr`) — the real `_create_provider` (src/api/ext_usage.py) is called
+  `monkeypatch.setattr`) — the real `_create_provider` (src/features/usage/ext_usage.py) is called
   with three positional arguments, so the stubs' replaced
   signature fixes the arity and `dir_path` must stay to receive it; deleting the parameter
   makes each stub raise TypeError when the poll loop calls it. Vulture flags it at 100%
@@ -210,9 +210,9 @@ Known-alive symbols:
   `diff_comments.js` and `artifact-comments.js` call it as a bare identifier resolved
   through the page's script-tag global scope, each page loading the file before the
   widget (`web/templates/diff.html`, and the `_inject_artifact_ui` tags in
-  `src/api/files.py` for artifact pages). A per-file dead-function scan finds only the
+  `src/features/files/api.py` for artifact pages). A per-file dead-function scan finds only the
   definition, so it flags the function as unused.
-- `render` (`FastJsonResponse` in `src/api/responses.py`) — template-method override of
+- `render` (`FastJsonResponse` in `src/infra/responses.py`) — template-method override of
   starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`
   by that name when FastAPI serializes a response. As a Python identifier the name has zero
   matches outside its definition, so a Python-scoped dead-method scan (vulture) flags it as
@@ -222,7 +222,7 @@ Known-alive symbols:
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
   `handle_charref` (`_Parser` — all six — and `handle_starttag`/`handle_startendtag`/
-  `handle_endtag` on `_BoundaryParser`, both in `src/core/plan_diff.py`) — template-method
+  `handle_endtag` on `_BoundaryParser`, both in `src/features/artifacts/plan_diff.py`) — template-method
   overrides of stdlib `html.parser.HTMLParser`,
   same class as the `_TreeBuilder` entry above; `feed()` drives the base scanner, which
   invokes these under their contract-fixed names while each parser builds its DOM. The
@@ -233,7 +233,7 @@ Known-alive symbols:
   the only overrides of that pair — fire there; parsers without the pair either pin
   `convert_charrefs=True` (`_TreeBuilder`), under which the stdlib folds
   references into `handle_data`, or inherit the stdlib no-op defaults (`_BoundaryParser`).
-- `isolation_level` (`src/core/storage_cool.py`) — attribute write on a stdlib
+- `isolation_level` (`src/features/storage/storage_cool.py`) — attribute write on a stdlib
   `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
   (`None` switches the connection to per-statement autocommit transactions, which the
   inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in
@@ -245,12 +245,12 @@ Known-alive symbols:
   the parameter, so vulture flags it as an unused variable at that request site. Same
   fixture-name-discovery class as the autouse block above.
 - `cli_katex` (`tests/core/test_artifact_wrap.py`) — pytest fixture (monkeypatches
-  `src.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
+  `src.runtime.cli.common.get_config` so the wrap verb's config home lands under the pytest tmp tree
   instead of the host profile), requested by name in three tests' parameter lists; the bodies
   never reference the parameter, so vulture flags it as an unused variable at each request site.
   Same fixture-name-discovery class as `isolated_config` above.
 - `uri` (`tests/core/test_headless_render.py`, the lambda stubbed for `_WarmRenderer._render_once`)
-  — the real `_render_once(self, probe_uri)` (src/core/headless_render.py) is called with one
+  — the real `_render_once(self, probe_uri)` (src/features/artifacts/headless_render.py) is called with one
   positional argument from `render_height`, so the stub's replaced two-parameter signature fixes
   the arity and `uri` must stay; deleting it makes the stub raise TypeError. Vulture flags it at
   100% confidence as an unused variable. Same arity-fixed stub-parameter class as the
@@ -265,14 +265,14 @@ Known-alive symbols:
   pinning the codex resolver's default home under tmp_path so the seeded rollout tree
   resolves there. Vulture flags it as an unused function. Same autouse class as
   `_reset_config_caches` above.
-- `require_model` (`src/core/backend_models.py`) — pydantic `@model_validator(mode='after')`
+- `require_model` (`src/infra/backend_models.py`) — pydantic `@model_validator(mode='after')`
   method on `BackendBase`, registered with pydantic at class-definition time and invoked during
   model validation: it rejects a backend config entry whose type requires a `model` but declares
   none. The only exact-name matches outside the definition are this list and the
-  `option_default_model` docstring's reference (`src/core/backend_models.py`), so vulture
+  `option_default_model` docstring's reference (`src/infra/backend_models.py`), so vulture
   flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `_expand_tilde` (`src/core/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
+- `_expand_tilde` (`src/infra/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
   section's path settings against the process HOME. The method name has exactly zero
@@ -281,12 +281,12 @@ Known-alive symbols:
   above.
 - `drain`, `wait_closed` (the stdin mocks of `stub_subprocess_spawn` in `tests/conftest.py`)
   — attribute writes on the MagicMock asyncio subprocess the helper installs on a spawn
-  patch target: `AgentBackend._write_stdin_prompt` (src/agents/backends/base.py) awaits
+  patch target: `AgentBackend._write_stdin_prompt` (src/runtime/agent_process/base.py) awaits
   them by attribute read when a backend feeds a prompt over stdin, so nothing in the repo
   reads the names statically. Vulture flags each write as an unused attribute: the only
   reader is the runtime attribute access on the double, which static analysis cannot tie
   back to this write site.
-- `search_sessions` (the `SessionManager` method in `src/core/sessions.py`) — deliberately
+- `search_sessions` (the `SessionManager` method in `src/runtime/sessions.py`) — deliberately
   retained two-tier search API, not an orphan. The `/api/sessions/search` route serves
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
   wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
@@ -294,82 +294,82 @@ Known-alive symbols:
   same rows, and the archived-pagination tests plus `docs/perf_baseline.md@5175adf09`'s search benchmark
   drive the wrapper as the semantics reference. A src-only vulture scan flags it as an unused
   method; a whole-repo grep finds only that test file, one docstring cross-reference, the
-  same-named route handler in `src/api/sessions.py`, and the perf doc.
-- `ClientConnection` (`src/core/slack_listener.py`, the `TYPE_CHECKING`-guarded
+  same-named route handler in `src/runtime/api/sessions.py`, and the perf doc.
+- `ClientConnection` (`src/features/slack/slack_listener.py`, the `TYPE_CHECKING`-guarded
   `websockets.asyncio.client` import) — reached by string: `_expect_hello`'s parameter is
   annotated `"ClientConnection"`, and that import is what resolves the forward reference
   for type checkers and IDEs. No type checker runs in CI, so a deletion stays suite-green
   while leaving the annotation unresolved. Current vulture reads the annotation as a use and
   no longer flags the import; the no-type-checker fact is what keeps a deletion suite-green,
   so the guard stays.
-- `__getattr__` (`src/core/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
-  delegate to the shared `deferred_module_getattr` (`src/core/deferred.py`), which serves
-  `load_requests`. (The former `src/cli/common.py` hook left with the phase-separated
+- `__getattr__` (`src/features/artifacts/artifact_wrap.py`) — the PEP 562 lazy-`requests` hook, a one-line
+  delegate to the shared `deferred_module_getattr` (`src/infra/deferred.py`), which serves
+  `load_requests`. (The former `src/runtime/cli/common.py` hook left with the phase-separated
   http.client transport; its conftest patch targets now name the `_request_post`/`_request_get`
   adapters directly.)
-  Reached by string: the patch target `src.core.artifact_wrap.requests.get`
+  Reached by string: the patch target `src.features.artifacts.artifact_wrap.requests.get`
   (`tests/core/test_artifact_wrap.py`) resolves the module attribute through the hook.
   Vulture flags it as an unused function at 60% confidence.
-- `split_sse_lines` (`src/core/sse.py`) — kept deliberately as the SSE framing oracle. The
+- `split_sse_lines` (`src/infra/sse.py`) — kept deliberately as the SSE framing oracle. The
   tests in `tests/test_sse.py` drive it directly (the trailing-CR hold, the CRLF straddle, the
   final flush) and pin the production reader's byte mode against its str mode on every two-way
   split; the byte framer's docstring (`_ChunkedFramer`, same module) names it the semantics
   home. No production code calls it, so a production-scope vulture scan flags it as an unused
   function.
-- `__getattr__` (`src/agents/backends/opencode.py`, `src/agents/worker.py`, `src/api/chat.py`,
-  `src/core/master_trigger.py`)
-  — the PEP 562 lazy-import hooks; same class as the `src/core/artifact_wrap.py` hook entry
+- `__getattr__` (`src/backends/opencode/opencode.py`, `src/runtime/worker.py`, `src/runtime/api/chat.py`,
+  `src/runtime/master_trigger.py`)
+  — the PEP 562 lazy-import hooks; same class as the `src/features/artifacts/artifact_wrap.py` hook entry
   above. All but the opencode hook are one-line delegates to the shared `deferred_module_getattr`
-  (`src/core/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
+  (`src/infra/deferred.py`); the opencode hook writes the same match-or-AttributeError shape
   inline (`if name == "httpx": import httpx`) because it binds one import rather than a loader.
-  Each serves one external string patch target: `src.agents.backends.opencode.httpx.*`
+  Each serves one external string patch target: `src.backends.opencode.opencode.httpx.*`
   (`tests/test_opencode_backend.py`), the `WORKER_BUILD_BACKEND_PATCH_TARGET` spelling
-  `src.agents.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
-  spelling `src.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in
+  `src.runtime.worker.build_backend` (`tests/conftest.py`), the `CHAT_CANCEL_MASTER_PATCH_TARGET`
+  spelling `src.runtime.api.chat.cancel_master` (`tests/test_chat_cancel.py`, constant defined in
   `tests/conftest.py`), and the `MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET` spelling
-  `src.core.master_trigger.run_message` (`tests/test_spawner_trigger_master_resume_recovery.py`,
+  `src.runtime.master_trigger.run_message` (`tests/test_spawner_trigger_master_resume_recovery.py`,
   constant defined in `tests/conftest.py`).
   Vulture flags each hook as an unused function at 60% confidence.
 - `open_connection`, `post_message`, `add_reaction`, `get_permalink`, `get_thread_replies` (the
   Slack-client double `FakeSlackClient` in `tests/conftest.py`, shared by
   `tests/test_slack_listener.py`, `tests/test_slack_delivery.py`, and
   `tests/core/test_slack_thread_follow.py`) — the summon, reply, follow, and ack paths in
-  `src/core/slack_listener.py` dispatch every Slack Web API call on the injected client
+  `src/features/slack/slack_listener.py` dispatch every Slack Web API call on the injected client
   (`client.post_message(...)`, `client.get_permalink(...)`, `client.get_thread_replies(...)`,
   `client.add_reaction(...)`, `client.open_connection()`), so each method is reached
   only through that dynamic dispatch. The double's docstring pins the surface ("implements only
   what the listener paths may call"), so a missing method fails with an AttributeError by
   construction, never silently. Vulture flags each method as unused (60% confidence); the names
-  match only the double and the real `SlackClient` in `src/core/slack_listener.py`.
+  match only the double and the real `SlackClient` in `src/features/slack/slack_listener.py`.
 - `raise_for_status`, `aclose`, `aiter_bytes` (the httpx response doubles: `FakeChunkedResponse`
   in `tests/conftest.py`, `_FakeDelayedStreamResponse`/`_StubHttpResponse`/
   `_StubEventStreamResponse` in `tests/test_opencode_backend.py`, `_FakeResponse` in
   `tests/test_ext_usage.py`) — production reads each through the duck-typed
-  response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/core/sse.py`), the
+  response surface: the SSE consumers iterate `response.aiter_bytes()` (`src/infra/sse.py`), the
   fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
   `response.aclose()`. Each double name matches only its own definition, so vulture flags the
   methods as unused.
 - `resize` (the pty attachment double `ScriptedTtyAttachment` in
   `tests/test_tui_task_completion.py`) — the resize path calls `attachment.resize(cols, rows)`
-  (`src/agents/backends/pty_common.py`), dispatching on the injected double. Vulture flags the
+  (`src/runtime/agent_process/pty_common.py`), dispatching on the injected double. Vulture flags the
   method as unused.
 - `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
-  (`src/core/headless_render.py`); the fake installs them by attribute write, which vulture
+  (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture
   flags as an unused attribute.
 - `_sleep` (`tests/test_opencode_backend.py`, installed as `backend._sleep = _record_sleep`) —
   the opencode lock-retry loop awaits `self._sleep(_LOCK_RETRY_BACKOFF_SECONDS)`
-  (`src/agents/backends/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
+  (`src/backends/opencode/opencode.py`); the write replaces the instance's `asyncio.sleep` seam
   with a recorder, and vulture flags the write as an unused attribute.
 - `cgroup_exit_report` (the backend doubles `ScriptedRelayBackend` and `TerminateFlagBackend`
   in `tests/conftest.py`) — the worker finalize path
-  (`self._backend.cgroup_exit_report()`, `src/agents/worker.py`) and the master round's error
-  path (`backend.cgroup_exit_report()`, `src/agents/master_cc_run.py`) read the session
+  (`self._backend.cgroup_exit_report()`, `src/runtime/worker.py`) and the master round's error
+  path (`backend.cgroup_exit_report()`, `src/runtime/master_cc_run.py`) read the session
   memory-cap attribution off whatever backend the test installed. Both doubles return `None`
   (doubles never run inside a cgroup). Vulture flags the methods as unused.
 - `_cron_snapshot` — a production module-global cache reset through a bare module-attribute
   write inside test setup (`core_config._cron_snapshot = core_config._CronSnapshot()` in
-  `tests/conftest.py`). The read lives in `src/core/config.py`, so vulture flags the write as an
+  `tests/conftest.py`). The read lives in `src/infra/config.py`, so vulture flags the write as an
   unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture wrapper.
 - `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,
@@ -377,10 +377,10 @@ Known-alive symbols:
   Vulture flags it as an unused function (60% confidence). Same autouse class as
   `_codex_home_under_tmp` above.
 - `_round_running` (the reset writes in `tests/test_host_auth.py`'s `_reset_api_round_state`) —
-  a production module-global write from test setup, read in `src/api/host_auth.py`. A tests-only
+  a production module-global write from test setup, read in `src/features/host_auth/api.py`. A tests-only
   vulture scan flags the write as an unused attribute; the combined src+tests scan sees the read
   and stays silent. Same class as the `_cron_snapshot` entry above.
-- `history` (the `MessageProjection` property in `src/core/message_projection.py`) — kept
+- `history` (the `MessageProjection` property in `src/runtime/message_projection.py`) — kept
   deliberately as the projection's semantics oracle, not an orphan. No production reader consumes
   it: the pagination paths read `tail`/`slice_before`/`cached_page_body`/`pending_draft` and the
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`
@@ -391,7 +391,7 @@ Known-alive symbols:
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
-- `_get_close_waiter` (and its `stream` parameter) (`src/agents/backends/spawn.py`) — reached by
+- `_get_close_waiter` (and its `stream` parameter) (`src/runtime/agent_process/spawn.py`) — reached by
   the stdlib's duck-typed close contract: `asyncio.StreamWriter.wait_closed()` resolves
   `self._protocol._get_close_waiter(self)` (CPython 3.12.3 `asyncio.streams`), and
   `_StdinPipeProtocol` is the protocol `_wire_writer` hands `connect_write_pipe` for every piped
@@ -401,37 +401,37 @@ Known-alive symbols:
   Vulture flags the method as an unused method (60% confidence) and `stream` as an
   unused variable (100% confidence); a whole-repo grep finds only the definition. Never delete
   it on that evidence.
-- `_unprobed_verdict_stays_idle` (`src/api/sessions.py`, on `SessionDetailResponse`) — pydantic
+- `_unprobed_verdict_stays_idle` (`src/runtime/api/sessions.py`, on `SessionDetailResponse`) — pydantic
   `@field_validator` method, registered with pydantic at class-definition time and invoked
   during model validation: it keeps a never-probed row's response `work_state` at the literal
   `'idle'` instead of `null`. The name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `_load_legacy_single_event_id` (`src/core/models.py`, on `MasterRunRecord`) — pydantic
+- `_load_legacy_single_event_id` (`src/infra/models.py`, on `MasterRunRecord`) — pydantic
   `@model_validator(mode='before')` method: it loads a pre-batching record's single
   `user_event_id` as a one-element `user_event_ids`, so an interrupted turn written by the old
   schema still feeds the restart-replay exclusion set. The name has exactly zero whole-repo
   matches outside its definition, so vulture flags it as an unused method. Same
   framework-registered class as the `check_sources_and_mode` entry above; deleting it would not
   fail validation, it would silently drop the legacy record's replay exclusion.
-- `_default_backend_is_registered` (`src/core/config.py`, on `VoiceConfig`) — pydantic
+- `_default_backend_is_registered` (`src/infra/config.py`, on `VoiceConfig`) — pydantic
   `@model_validator(mode='after')` method: it rejects a `default_backend` typo against the
   registry's ids at startup. The name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `voice_setup` (the module `src/core/voice_setup.py`) — reached by string:
-  `scripts/setup.sh` runs `python -m src.core.voice_setup enable` on GPU hosts, so the module
+- `voice_setup` (the module `src/features/voice/voice_setup.py`) — reached by string:
+  `scripts/setup.sh` runs `python -m src.features.voice.voice_setup enable` on GPU hosts, so the module
   has no import-site reference anywhere in Python; a reference scan restricted to `.py`/`.js`
   sources reads it as an unreferenced module.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
-  `src/cli/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
+  `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /
   `self._decolor`), so the two assignments are what the stock `_set_color` would have
   installed and the piped arm's help render depends on them: a formatter whose `_set_color`
   installs neither attribute raises AttributeError on the first help render. Vulture flags
   each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
   delete them on that evidence.
-- `_reject_legacy_allow_list` (`src/core/config.py`, on `DiscordConfig`) — pydantic
+- `_reject_legacy_allow_list` (`src/infra/config.py`, on `DiscordConfig`) — pydantic
   `@model_validator(mode="before")` classmethod: it rejects the retired
   `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
   successor. The name has exactly zero whole-repo matches outside its definition, so
@@ -440,11 +440,11 @@ Known-alive symbols:
   (`DiscordConfig` sets `extra='forbid'`, so the retired key dies as an unknown
   field), but the error would no longer name `allowed_users`, the successor the
   operator must move each id into.
-- `cancel_master` (`src/agents/master_cc_queue.py`) — reached by string: `src/api/chat.py`'s
-  deferred loader `deferred_import_loader("cancel_master", "src.agents.master_cc_queue")`
+- `cancel_master` (`src/runtime/master_cc_queue.py`) — reached by string: `src/runtime/api/chat.py`'s
+  deferred loader `deferred_import_loader("cancel_master", "src.runtime.master_cc_queue")`
   imports the part module and reads the attribute on first use; the production cancel path
   (`cancel_master_agent`) calls the loader's binding directly, and the
-  `CHAT_CANCEL_MASTER_PATCH_TARGET` spelling `src.api.chat.cancel_master` resolves through
+  `CHAT_CANCEL_MASTER_PATCH_TARGET` spelling `src.runtime.api.chat.cancel_master` resolves through
   the same loader (the `__getattr__` PEP 562 entry above covers the hook; this entry covers
   the resolution target the hook's loader names). A static grep finds no
   `master_cc_queue.cancel_master` attribute read and no import-form use — every

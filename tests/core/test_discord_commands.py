@@ -1,4 +1,4 @@
-"""Unit tests for the Discord server-side commands (src.core.discord_commands).
+"""Unit tests for the Discord server-side commands (src.features.discord.discord_commands).
 
 Every test drives read_thread / check_setup (and, for the HTTP refusals, the
 internal endpoints) against a recording fake client handed to
@@ -15,7 +15,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, discord_client, discord_commands, discord_listener, models, sessions
+from src.features.discord import discord_client, discord_commands, discord_listener
+from src.infra import config, models
+from src.runtime import sessions
 
 _GUILD = "800000000000000001"
 _PARENT = "800000000000000002"

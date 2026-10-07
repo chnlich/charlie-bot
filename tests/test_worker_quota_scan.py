@@ -11,8 +11,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents import worker
-from src.core import event_types as ET
+from src.infra import event_types as ET
+from src.runtime import worker
 
 
 @pytest.mark.asyncio

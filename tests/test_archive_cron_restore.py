@@ -15,10 +15,10 @@ from conftest import (
     write_nightly_task,
 )
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionStatus
-from src.core.scheduler import Scheduler
+from src.features.cron.scheduler import Scheduler
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import SessionStatus
 from tests.test_cron_auto_bind import _read_task_yaml
 from tests.test_cron_backend import _patch_cron_d
 
@@ -33,8 +33,8 @@ def cron_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
+  from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   from conftest import bind_deps_managers
@@ -50,7 +50,7 @@ async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> 
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   # Bind, then let the user archive the node (its cron task stops with it).
-  from src.core.scheduled_sessions import write_cron_key
+  from src.runtime.scheduled_sessions import write_cron_key
   write_cron_key("nightly", "session_id", node.id)
   await tree.archive_subtree(node.id, caller=OPERATOR)
   assert tree.task_state(node.id) == "archived"
@@ -99,7 +99,7 @@ async def test_auto_bind_restore_leaves_the_legacy_status_branch_alone(cron_env)
   assert tree.task_state(node.id) == "open"
 
   scheduler = Scheduler(cfg, session_mgr)
-  from src.core.config import ScheduledTaskConfig
+  from src.infra.config import ScheduledTaskConfig
 
   task_cfg = ScheduledTaskConfig(
       name="nightly", cron="0 3 * * *", prompt="run nightly", enabled=True, timezone="America/Los_Angeles")

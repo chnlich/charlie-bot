@@ -1,4 +1,4 @@
-"""Unit tests for the Discord REST client (src.core.discord_client).
+"""Unit tests for the Discord REST client (src.features.discord.discord_client).
 
 Every test drives DiscordClient through httpx.MockTransport: the request the
 client would put on the wire is captured and asserted, no real network. Ids
@@ -13,7 +13,7 @@ from unittest import mock
 import httpx
 import pytest
 
-from src.core import discord_client
+from src.features.discord import discord_client
 
 _TOKEN = "synthetic-token-not-a-secret"
 
@@ -66,7 +66,7 @@ async def test_rate_limit_retries_once_with_reported_wait():
 
   seen: dict = {"count": 0}
   sleep = mock.AsyncMock()
-  with mock.patch("src.core.discord_client.asyncio.sleep", new=sleep):
+  with mock.patch("src.features.discord.discord_client.asyncio.sleep", new=sleep):
     result = await _client(handler).get_gateway_url()
   assert result == "wss://gateway.example/synthetic"
   assert seen["count"] == 2
@@ -83,7 +83,7 @@ async def test_rate_limit_three_times_raises():
 
   seen: dict = {"count": 0}
   sleep = mock.AsyncMock()
-  with mock.patch("src.core.discord_client.asyncio.sleep",
+  with mock.patch("src.features.discord.discord_client.asyncio.sleep",
                   new=sleep), pytest.raises(discord_client.DiscordAPIError) as exc_info:
     await _client(handler).get_current_user()
   error = exc_info.value

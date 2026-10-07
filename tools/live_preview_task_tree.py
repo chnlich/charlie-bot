@@ -172,7 +172,7 @@ def block_sources(snapshot: dict) -> list[tuple[str, str]]:
 async def run_harness(args: argparse.Namespace) -> None:
   import yaml
 
-  from src.core.constants import INHERITED_IDENTITY_ENV_VARS
+  from src.infra.constants import INHERITED_IDENTITY_ENV_VARS
   from tools.browser_harness_session_tree_preview import (
       build_source_home,
       preview_instance_env,
@@ -199,7 +199,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   (independent / "workspaces").mkdir(parents=True)
   (independent / "state").mkdir(parents=True)
   (independent / "state" / "independent_sentinel.json").write_text('{"independent": true}')
-  from src.core.home_writer_fence import acquire_home_writer_fence, probe_writer_fence
+  from src.runtime.home_writer_fence import acquire_home_writer_fence, probe_writer_fence
 
   independent_fence = acquire_home_writer_fence(independent, purpose="independent service")
 

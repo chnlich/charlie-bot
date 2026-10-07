@@ -17,21 +17,17 @@ from conftest import (
     write_nightly_prompt,
 )
 
-from src.api import cron as cron_api
-from src.core.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    _load_cron_file,
-)
-from src.core.sessions import SessionManager
+from src.features.cron import api as cron_api
+from src.infra.config import CharlieBotConfig, ScheduledTaskConfig, _load_cron_file
+from src.runtime.sessions import SessionManager
 
 
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
   """Redirect the cron API's host-file IO at *cron_dir*.
 
-  src.api.cron binds cron_dir and cron_path as separate module globals, so
+  src.features.cron.api binds cron_dir and cron_path as separate module globals, so
   both must move; patching cron_dir alone leaves cron_path resolving the real
-  profile directory through src.core.config.
+  profile directory through src.infra.config.
   """
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")
@@ -69,7 +65,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   """A bound task's node follows the task config: the tick's alignment switches
   the node's backend in place and leaves the scheduler bookkeeping untouched."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.core.task_sessions import TaskTreeManager
+  from src.runtime.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
@@ -105,7 +101,7 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   preserves its last_scheduled_run: the next fire is computed from the true last
   occurrence, not from a rotated generation's empty bookkeeping."""
   cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.core.task_sessions import TaskTreeManager
+  from src.runtime.task_sessions import TaskTreeManager
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)

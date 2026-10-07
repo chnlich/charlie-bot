@@ -3,7 +3,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import models, sessions
+from src.infra import models
+from src.runtime import sessions
 
 
 @pytest.mark.asyncio

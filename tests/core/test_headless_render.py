@@ -6,7 +6,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from src.core import artifact_check, headless_render
+from src.features.artifacts import artifact_check, headless_render
 
 
 @pytest.fixture(autouse=True)
@@ -36,7 +36,7 @@ def test_render_height_launches_once_and_serves_warm(tmp_path: pathlib.Path, mon
 
 @pytest.mark.local_only
 def test_warm_renderer_measures_real_page_height(tmp_path: pathlib.Path) -> None:
-  from src.core import config
+  from src.infra import config
 
   chrome = config.load_config().headless_chrome_bin
   if not chrome or not pathlib.Path(chrome).exists():

@@ -21,8 +21,8 @@ import pytest
 import yaml
 from fastapi import WebSocket
 
-import src.core.session_tree_preview as preview_module
-from src.core.session_tree_preview import (
+import src.features.session_tree_preview.session_tree_preview as preview_module
+from src.features.session_tree_preview.session_tree_preview import (
     PreviewRefusedError,
     PreviewUnavailableGate,
     PreviewWorkspaceError,
@@ -143,7 +143,7 @@ def test_read_source_backend_refuses_unisolated_backend_types(tmp_path: Path, mo
 
 
 def test_workspace_guard_refuses_outside_and_accepts_inside(tmp_path: Path) -> None:
-  from src.core.config import CharlieBotConfig
+  from src.infra.config import CharlieBotConfig
 
   home = tmp_path / "trial-home"
   cfg = CharlieBotConfig(
@@ -264,7 +264,7 @@ def _run_cli(
     strip_launcher: bool = False,
     launcher_dir: Path | None = None) -> subprocess.CompletedProcess:
   return subprocess.run(
-      [sys.executable, "-m", "src.cli.main", "session-tree", "preview", *args],
+      [sys.executable, "-m", "src.app.main", "session-tree", "preview", *args],
       cwd=str(REPO_ROOT),
       env=_cli_env(source, strip_launcher=strip_launcher, launcher_dir=launcher_dir),
       capture_output=True,

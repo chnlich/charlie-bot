@@ -23,10 +23,10 @@ from typing import cast
 
 import pytest
 
-from src.agents.transcription.base import TranscriptionRejected
-from src.agents.transcription.gemini_aigw import GeminiAigwTranscriptionBackend
-from src.core.config import CharlieBotConfig
-from src.core.credentials import Credentials
+from src.features.voice.transcription.base import TranscriptionRejected
+from src.features.voice.transcription.gemini_aigw import GeminiAigwTranscriptionBackend
+from src.infra.config import CharlieBotConfig
+from src.infra.credentials import Credentials
 
 API_KEY = "test-aigw-key"
 SAMPLES = 160  # 10 ms of PCM16
@@ -104,7 +104,7 @@ async def _one_chunk_audio() -> AsyncIterator[bytes]:
 def _patch_credentials(monkeypatch: pytest.MonkeyPatch, api_key: str | None) -> None:
   sections = {} if api_key is None else {"aigw": {"api_key": api_key}}
   monkeypatch.setattr(
-      "src.agents.transcription.gemini_aigw.get_credentials",
+      "src.features.voice.transcription.gemini_aigw.get_credentials",
       lambda: Credentials(path=Path("/tmp/fake-credentials.yaml"), sections=sections))
 
 

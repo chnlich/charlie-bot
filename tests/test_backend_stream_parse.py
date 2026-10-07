@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 from conftest import _async_wait_for, cancel_and_drain
 
-from src.agents.backends.base import (
+from src.runtime.agent_process.base import (
     _TORN_TAIL_WINDOW_BYTES,
     DEFAULT_BUFFER_LIMIT,
     _tail_region_has_content,
@@ -131,7 +131,7 @@ async def test_tail_follow_events_checkpoints_cursor_at_consumed_offset() -> Non
   """A mount with a cursor file leaves it at the consumed byte offset —
   including the skipped lines' bytes (blank and malformed consume index), so
   a re-attach at the recorded offset replays nothing already delivered."""
-  from src.core import runs
+  from src.runtime import runs
 
   raw_bytes = b"".join(_LINES)
   with tempfile.TemporaryDirectory() as work:

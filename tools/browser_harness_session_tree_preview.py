@@ -70,7 +70,7 @@ import traceback  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
@@ -363,7 +363,7 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     """
   import yaml
 
-  from src.core.config import CharlieBotConfig, charliebot_home_dir, load_credentials
+  from src.infra.config import CharlieBotConfig, charliebot_home_dir, load_credentials
 
   config_path = charliebot_home_dir() / "config.yaml"
   raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
@@ -428,7 +428,7 @@ def preview_invocation(home: Path, port: int, backend: str, extra_backends: list
     arrives as a further ``--add-backend``.
     """
   invocation = [
-      sys.executable, "-m", "src.cli.main", "session-tree", "preview", "--home",
+      sys.executable, "-m", "src.app.main", "session-tree", "preview", "--home",
       str(home), "--port",
       str(port), "--backend", backend
   ]
@@ -599,7 +599,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       finally:
         stop_child(chrome_proc, grace_s=15, kill_reap_s=10)
     finally:
-      from src.core.home_writer_fence import probe_writer_fence
+      from src.runtime.home_writer_fence import probe_writer_fence
 
       stop_child(proc, grace_s=60, kill_reap_s=30)
       holder = probe_writer_fence(home)

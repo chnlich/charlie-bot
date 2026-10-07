@@ -1,4 +1,4 @@
-"""Off-loop spawn contracts for src/agents/backends/spawn.py.
+"""Off-loop spawn contracts for src/runtime/agent_process/spawn.py.
 
 The backend launch family (master turns, workers, one-shots) spawns through
 ``spawn_subprocess``: the fork+exec handshake parks on a worker thread so the
@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-from src.agents.backends import spawn
+from src.runtime.agent_process import spawn
 
 LIMIT = 1024 * 1024
 
@@ -67,7 +67,7 @@ async def test_killed_child_reports_signal_exit() -> None:
 _VFK_SPAWNER = (
     "import asyncio, os, sys"
     "; sys.path.insert(0, sys.argv[1])"
-    "; from src.agents.backends.spawn import spawn_subprocess"
+    "; from src.runtime.agent_process.spawn import spawn_subprocess"
     "; proc = asyncio.run(spawn_subprocess("
     "'/bin/sleep', '30', cwd='/tmp', env=dict(os.environ),"
     "stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE,"

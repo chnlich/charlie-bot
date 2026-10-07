@@ -36,13 +36,8 @@ import pytest
 from conftest import run_git
 from structlog import testing
 
-from src.core import git, timeouts
-from src.core.git import (
-    BaseBranchResolutionError,
-    BaseResolution,
-    git_create_worktree,
-    git_current_branch,
-)
+from src.infra import git, timeouts
+from src.infra.git import BaseBranchResolutionError, BaseResolution, git_create_worktree, git_current_branch
 
 
 def _commit(cwd: Path, filename: str, content: str, message: str) -> str:
@@ -139,7 +134,7 @@ async def test_merge_base_unexpected_exit_code_raises(
   """A merge-base answer that is neither 0 nor 1 (a corrupt repo's exit 128, a
   killed process's 2) is a hard error naming the command and its stderr — the
   resolution never guesses from a broken probe."""
-  from src.core import git as git_mod
+  from src.infra import git as git_mod
 
   seed = repo_setup["seed"]
   main_checkout = repo_setup["main_checkout"]
@@ -172,7 +167,7 @@ async def test_worktree_add_retries_a_transient_config_lock(
     repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A lock-class failure from a concurrent worktree add is retried: the second
   attempt's result is the one used, and the worktree exists."""
-  from src.core import git as git_mod
+  from src.infra import git as git_mod
 
   main_checkout = repo_setup["main_checkout"]
   expected = run_git(main_checkout, "rev-parse", "feature")
@@ -209,7 +204,7 @@ async def test_worktree_add_persistent_lock_error_raises_after_three_retries(
     repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A lock that never clears fails loudly on the last attempt with git's own
   error text, after the full 100ms/200ms/400ms backoff schedule."""
-  from src.core import git as git_mod
+  from src.infra import git as git_mod
 
   main_checkout = repo_setup["main_checkout"]
   wt_path = repo_setup["tmp_path"] / "wt-locked"
@@ -243,7 +238,7 @@ async def test_worktree_add_non_lock_failure_raises_immediately(
     repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
   """A failure outside the lock class is not retried: it raises on the first
   attempt carrying git's real error."""
-  from src.core import git as git_mod
+  from src.infra import git as git_mod
 
   main_checkout = repo_setup["main_checkout"]
   wt_path = repo_setup["tmp_path"] / "wt-bad-object"

@@ -191,22 +191,25 @@ def _entry_body(text: str) -> list[str]:
   return []
 
 
-def _bullets(body: list[str]) -> list[str]:
-  """Each bullet's text: its ``- `` (or nested ``  - ``) line plus its continuation lines.
+def _prose_units(body: list[str]) -> list[str]:
+  """The text of each unit the prose check reads: the lead, then each bullet.
 
-  A continuation line is any body line that does not start its own bullet; the parts join
-  with one space, and the base-verbatim comparison in :func:`_prose_violations` reads this
-  same joined text.
+  The lead is the run of body lines before the first bullet, and an entry without bullets
+  is all lead. A bullet is its ``- `` (or nested ``  - ``) line plus its continuation lines,
+  any body lines that do not start their own bullet. A unit's lines join with one space,
+  and the base-verbatim comparison in :func:`_prose_violations` reads this same joined text.
   """
-  texts: list[str] = []
+  units: list[str] = []
   for line in body:
     if line.startswith("- "):
-      texts.append(line[2:])
+      units.append(line[2:])
     elif line.startswith("  - "):
-      texts.append(line[4:])
-    elif texts:
-      texts[-1] += " " + line.strip()
-  return texts
+      units.append(line[4:])
+    elif units:
+      units[-1] += " " + line.strip()
+    else:
+      units.append(line.strip())
+  return units
 
 
 def _mask_backticks(text: str) -> tuple[str, list[int]]:
@@ -233,16 +236,16 @@ def _mask_backticks(text: str) -> tuple[str, list[int]]:
   return "".join(masked), mapping
 
 
-def _sentences(bullet: str) -> list[str]:
-  """The bullet's sentences: split at a period followed by whitespace, with backticked spans
-  masked first so their punctuation never splits; the bullet's end also ends a sentence."""
-  masked, mapping = _mask_backticks(bullet)
+def _sentences(unit: str) -> list[str]:
+  """The unit's sentences: split at a period followed by whitespace, with backticked spans
+  masked first so their punctuation never splits; the unit's end also ends a sentence."""
+  masked, mapping = _mask_backticks(unit)
   out: list[str] = []
   start = 0
   i = 0
   while i < len(masked):
     if masked[i] == "." and i + 1 < len(masked) and masked[i + 1].isspace():
-      out.append(bullet[mapping[start]:mapping[i] + 1])
+      out.append(unit[mapping[start]:mapping[i] + 1])
       i += 1
       while i < len(masked) and masked[i].isspace():
         i += 1
@@ -250,24 +253,24 @@ def _sentences(bullet: str) -> list[str]:
     else:
       i += 1
   if start < len(masked) and masked[start:].strip():
-    out.append(bullet[mapping[start]:])
+    out.append(unit[mapping[start]:])
   return out
 
 
 def _prose_violations(text: str, base_text: str | None) -> list[str]:
   """The writing-rule violations of *text* over the same file's base version.
 
-  A bullet that the base version already holds verbatim escapes the sentence checks — old
-  entries take the rules at their next edit — while the body line limit binds every committed
-  entry, whatever the base version's line count.
+  A unit (see :func:`_prose_units`) that the base version already holds verbatim escapes the
+  sentence checks — old entries take the rules at their next edit — while the body line limit
+  binds every committed entry, whatever the base version's line count.
   """
   body = _entry_body(text)
   violations: list[str] = []
-  base_bullets = set(_bullets(_entry_body(base_text))) if base_text is not None else set()
-  for bullet in _bullets(body):
-    if bullet in base_bullets:
+  base_units = set(_prose_units(_entry_body(base_text))) if base_text is not None else set()
+  for unit in _prose_units(body):
+    if unit in base_units:
       continue
-    for sentence in _sentences(bullet):
+    for sentence in _sentences(unit):
       masked, _ = _mask_backticks(sentence)
       words = len(masked.split())
       if words > _SENTENCE_WORD_LIMIT:

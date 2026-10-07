@@ -1,39 +1,37 @@
 """External tool usage poller and API route (Claude Code, Codex)."""
 
 import asyncio
+import datetime
 import json
 import os
+import pathlib
 import re
 import subprocess
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter
+import fastapi
 
-from src.core import claude_accounts
-from src.core.codex_pricing import calculate_codex_usage_cost_usd
-from src.core.codex_usage import CODEX_TURN_CONTEXT, DEFAULT_CODEX_HOME, codex_token_count_payload
-from src.core.config import get_config
-from src.core.home import CREDENTIALS_FILE, default_claude_dir
-from src.core.http import get_http_client
-from src.core.json_utils import write_json_atomically
-from src.core.log_once import LazyStructlogLogger, WarnOnceRegistry
-from src.core.memo import StatSignatureMemo
-from src.core.models import ClaudeAccount, utc_now_iso
-from src.core.streaming import SIDEBAR_CHANNEL, streaming_manager
-from src.core.tasks import SingleTaskPoller
-from src.core.timeouts import (
-    EXT_USAGE_ROUND_GAP_SECONDS,
-    EXT_USAGE_VERSION_PROBE_TIMEOUT,
-    HTTP_OAUTH_TIMEOUT,
+from src.core import (
+    claude_accounts,
+    codex_pricing,
+    codex_usage,
+    config,
+    home,
+    http,
+    json_utils,
+    log_once,
+    memo,
+    models,
+    streaming,
+    tasks,
+    timeouts,
 )
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
-router = APIRouter()
+router = fastapi.APIRouter()
 
 # ---------------------------------------------------------------------------
 # Cached usage data (module-level, keyed by "<provider>:<account>")
@@ -71,8 +69,8 @@ USER_AGENT_FALLBACK = "claude-code/2.1.219"
 # The default Claude login dir is the home derivation src.core.home owns (the
 # M98 owner module); reading it through token_tally would pull the tally stack
 # onto the M99 server import floor.
-CLAUDE_DEFAULT_DIR = str(default_claude_dir())
-CODEX_DEFAULT_DIR = str(DEFAULT_CODEX_HOME)
+CLAUDE_DEFAULT_DIR = str(home.default_claude_dir())
+CODEX_DEFAULT_DIR = str(codex_usage.DEFAULT_CODEX_HOME)
 
 # ---------------------------------------------------------------------------
 # Account-set derivation (no registry): run at the start of every poll cycle.
@@ -115,7 +113,7 @@ def _derive_provider_accounts(
 
 def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
   """Derive the full account set for both providers from the live config."""
-  cfg = get_config()
+  cfg = config.get_config()
   claude_pool = [(account.label, account.config_dir) for account in cfg.accounts.claude]
   return {
       "pool": {
@@ -134,9 +132,9 @@ def _derive_accounts() -> dict[str, list[tuple[str, str]]]:
 class ClaudeUsageProvider:
   """Fetches usage data from the Anthropic OAuth usage endpoint for one account."""
 
-  def __init__(self, label: str, credentials_path: Path) -> None:
+  def __init__(self, label: str, credentials_path: pathlib.Path) -> None:
     self.label = label
-    self.credentials_path = Path(credentials_path)
+    self.credentials_path = pathlib.Path(credentials_path)
     self._backoff_seconds = 0.0
     self._backoff_until = 0.0
     self.last_error = "no data"
@@ -181,8 +179,8 @@ class ClaudeUsageProvider:
     return _transform_response(resp.json(), account=self.label)
 
   async def _get_usage(self, access_token: str) -> Any:
-    client = get_http_client()
-    return await client.get(USAGE_URL, headers=await _oauth_headers(access_token), timeout=HTTP_OAUTH_TIMEOUT)
+    client = http.get_http_client()
+    return await client.get(USAGE_URL, headers=await _oauth_headers(access_token), timeout=timeouts.HTTP_OAUTH_TIMEOUT)
 
   async def _reauthenticate(self, failed_token: str) -> str | None:
     """Return a usable access token after a 401, yielding to whoever renewed first.
@@ -229,10 +227,11 @@ class CodexUsageProvider:
 
   def __init__(self, label: str, home_dir: str) -> None:
     self.label = label
-    self.sessions_dir = Path(home_dir) / "sessions"
+    self.sessions_dir = pathlib.Path(home_dir) / "sessions"
     self.last_error = "no sessions found"
-    self._spend_cache: StatSignatureMemo[Path, list[_SpendEvent]] = StatSignatureMemo(_SPEND_CACHE_LIMIT)
-    self._usage_cache: dict[Path, tuple[int, int, dict[str, Any] | None]] = {}
+    self._spend_cache: memo.StatSignatureMemo[pathlib.Path,
+                                              list[_SpendEvent]] = memo.StatSignatureMemo(_SPEND_CACHE_LIMIT)
+    self._usage_cache: dict[pathlib.Path, tuple[int, int, dict[str, Any] | None]] = {}
 
   async def fetch(self) -> dict[str, Any] | None:
     rollout_paths = await asyncio.to_thread(_list_rollout_files, self.sessions_dir)
@@ -254,7 +253,7 @@ class CodexUsageProvider:
     usage["spend"] = spend
     return usage
 
-  def _fetch_usage(self, rollout_paths: list[Path]) -> dict[str, Any] | None:
+  def _fetch_usage(self, rollout_paths: list[pathlib.Path]) -> dict[str, Any] | None:
     """Return the newest plan-pool quota reading across the recently-written rollouts.
 
     The scan set is every file with an mtime inside the last
@@ -265,7 +264,7 @@ class CodexUsageProvider:
     the max timestamp. A scan set with no plan-pool event is a no-reading state
     (None with ``last_error`` set), never an empty-windows payload.
     """
-    stats: dict[Path, os.stat_result] = {}
+    stats: dict[pathlib.Path, os.stat_result] = {}
     for path in rollout_paths:
       try:
         stats[path] = path.stat()
@@ -299,14 +298,14 @@ class CodexUsageProvider:
       self.last_error = f"no plan-quota reading in {_CODEX_USAGE_SCAN_WINDOW_HOURS}h"
       return None
     chosen = max(events, key=lambda event: _parse_codex_timestamp(event["timestamp"]))
-    return _transform_codex_response(chosen, fetched_at=utc_now_iso(), account=self.label)
+    return _transform_codex_response(chosen, fetched_at=models.utc_now_iso(), account=self.label)
 
-  def _compute_spend(self, rollout_paths: list[Path]) -> dict[str, float]:
+  def _compute_spend(self, rollout_paths: list[pathlib.Path]) -> dict[str, float]:
     # A changed file is re-read from the start, never tail-only: a token_count
     # event's model comes from the turn_context line above it.
-    now = datetime.now(UTC)
-    min_mtime = (now - timedelta(days=7)).timestamp()
-    live: set[Path] = set()
+    now = datetime.datetime.now(datetime.UTC)
+    min_mtime = (now - datetime.timedelta(days=7)).timestamp()
+    live: set[pathlib.Path] = set()
     events_by_file = []
     for path in rollout_paths:
       try:
@@ -330,7 +329,7 @@ class CodexUsageProvider:
     return _sum_codex_spend_events(events_by_file, now=now)
 
 
-def _list_rollout_files(sessions_dir: Path) -> list[Path]:
+def _list_rollout_files(sessions_dir: pathlib.Path) -> list[pathlib.Path]:
   """List every rollout log under one account's sessions dir.
 
   A single walk feeds both readers: the usage scrape applies its own scan-set
@@ -360,7 +359,7 @@ class _UsageInstance:
 
 def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsageProvider | CodexUsageProvider:
   if provider == "claude":
-    return ClaudeUsageProvider(label, Path(dir_path) / CREDENTIALS_FILE)
+    return ClaudeUsageProvider(label, pathlib.Path(dir_path) / home.CREDENTIALS_FILE)
   if provider == "codex":
     return CodexUsageProvider(label, dir_path)
   raise ValueError(f"unknown usage provider: {provider!r}")
@@ -374,10 +373,10 @@ def _create_provider(provider: str, label: str, dir_path: str) -> ClaudeUsagePro
 # missing or tokenless file is the whole alarm; every later round in the same
 # broken streak repeats a fired alarm. A read that returns a token re-arms the
 # path: a relapse after it is a new onset, not a repeat.
-_CREDENTIAL_READ_WARNINGS_SEEN = WarnOnceRegistry()
+_CREDENTIAL_READ_WARNINGS_SEEN = log_once.WarnOnceRegistry()
 
 
-def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
+def _warn_credential_read_once(event: str, credentials_path: pathlib.Path) -> None:
   """Log one *event* per credentials path until a read of it returns a token.
 
   A caller relies on at most one line per (event, path) per broken streak: the
@@ -388,7 +387,7 @@ def _warn_credential_read_once(event: str, credentials_path: Path) -> None:
   _CREDENTIAL_READ_WARNINGS_SEEN.log(log.warning, event, (event, path), path=path)
 
 
-def _read_credentials(credentials_path: Path) -> dict[str, Any] | None:
+def _read_credentials(credentials_path: pathlib.Path) -> dict[str, Any] | None:
   """Read OAuth credentials from a Claude account's .credentials.json."""
   if not credentials_path.exists():
     _warn_credential_read_once("ext_usage_credentials_not_found", credentials_path)
@@ -440,7 +439,7 @@ def _latest_token_count_event(
       event = json.loads(line)
     except json.JSONDecodeError:
       continue
-    if codex_token_count_payload(event) is None:
+    if codex_usage.codex_token_count_payload(event) is None:
       continue
     if match is not None and not match(event):
       continue
@@ -449,7 +448,7 @@ def _latest_token_count_event(
 
 
 def _read_latest_token_count_event(
-    path: Path,
+    path: pathlib.Path,
     size: int,
     match: Callable[[dict[str, Any]], bool],
 ) -> dict[str, Any] | None:
@@ -472,13 +471,13 @@ def _read_latest_token_count_event(
   return _latest_token_count_event(path.read_text().splitlines(), match)
 
 
-def _parse_codex_timestamp(timestamp: Any) -> datetime:
+def _parse_codex_timestamp(timestamp: Any) -> datetime.datetime:
   if not isinstance(timestamp, str):
     raise ValueError(f"expected string timestamp, got {type(timestamp).__name__}")
-  parsed = datetime.fromisoformat(timestamp)
+  parsed = datetime.datetime.fromisoformat(timestamp)
   if parsed.tzinfo is None:
     raise ValueError(f"Codex timestamp is missing timezone: {timestamp}")
-  return parsed.astimezone(UTC)
+  return parsed.astimezone(datetime.UTC)
 
 
 def _new_token_usage_bucket() -> dict[str, int]:
@@ -499,13 +498,13 @@ def _add_token_usage(accumulator: dict[str, dict[str, int]], model: str, usage: 
 def _sum_codex_spend(accumulator: dict[str, dict[str, int]]) -> float:
   total = 0.0
   for model, usage in accumulator.items():
-    cost = calculate_codex_usage_cost_usd(model, usage)
+    cost = codex_pricing.calculate_codex_usage_cost_usd(model, usage)
     if cost is not None:
       total += cost
   return total
 
 
-def _log_codex_spend_row_skip(path: Path, line_number: int, error: Exception | str) -> None:
+def _log_codex_spend_row_skip(path: pathlib.Path, line_number: int, error: Exception | str) -> None:
   log.warning(
       "ext_usage_codex_spend_row_skipped",
       path=str(path),
@@ -515,10 +514,10 @@ def _log_codex_spend_row_skip(path: Path, line_number: int, error: Exception | s
 
 
 # One spend event from a rollout log: (observed_at, model, token_usage).
-_SpendEvent = tuple[datetime, str, dict[str, int]]
+_SpendEvent = tuple[datetime.datetime, str, dict[str, int]]
 
 
-def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
+def _extract_codex_spend_events(path: pathlib.Path) -> list[_SpendEvent] | None:
   # Model attribution is positional (a turn_context line applies to the token_count
   # events after it), so it is resolved here during the single pass. None means the
   # file could not be read (a warning was logged); event lists may be cached, None not.
@@ -537,12 +536,12 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
         payload = event.get("payload") or {}
         if not isinstance(payload, dict):
           raise ValueError(f"payload must be an object, got {type(payload).__name__}")
-        if event_type == CODEX_TURN_CONTEXT:
+        if event_type == codex_usage.CODEX_TURN_CONTEXT:
           model = payload.get("model")
           if isinstance(model, str):
             current_model = model
           continue
-        if codex_token_count_payload(event) is None:
+        if codex_usage.codex_token_count_payload(event) is None:
           continue
 
         info = payload.get("info") or {}
@@ -571,12 +570,12 @@ def _extract_codex_spend_events(path: Path) -> list[_SpendEvent] | None:
   return events
 
 
-def _sum_codex_spend_events(events_by_file: list[list[_SpendEvent]], *, now: datetime) -> dict[str, float]:
+def _sum_codex_spend_events(events_by_file: list[list[_SpendEvent]], *, now: datetime.datetime) -> dict[str, float]:
   if now.tzinfo is None:
     raise ValueError("now must be timezone-aware")
-  effective_now = now.astimezone(UTC)
-  one_day_ago = effective_now - timedelta(days=1)
-  seven_days_ago = effective_now - timedelta(days=7)
+  effective_now = now.astimezone(datetime.UTC)
+  one_day_ago = effective_now - datetime.timedelta(days=1)
+  seven_days_ago = effective_now - datetime.timedelta(days=7)
 
   last_24h_by_model: dict[str, dict[str, int]] = {}
   last_7d_by_model: dict[str, dict[str, int]] = {}
@@ -608,7 +607,7 @@ LIMIT_GROUP_WINDOW_MINUTES = {"session": 300, "weekly": 10080}
 
 # The poller re-transforms an unchanged response every round, so one sighting of
 # an unmapped shape is the whole alarm; every later round repeats a fired alarm.
-_UNKNOWN_LIMIT_SHAPES_SEEN = WarnOnceRegistry()
+_UNKNOWN_LIMIT_SHAPES_SEEN = log_once.WarnOnceRegistry()
 
 
 def _warn_unknown_limit_shape(*, provider: str, account: str, slot: str | int, reason: str) -> None:
@@ -668,7 +667,7 @@ def _codex_windows(rate_limits: dict[str, Any], *, account: str) -> list[dict[st
             claude_accounts.PANEL_UTILIZATION:
                 utilization,
             claude_accounts.PANEL_RESETS_AT:
-                datetime.fromtimestamp(resets_at, tz=UTC).isoformat()
+                datetime.datetime.fromtimestamp(resets_at, tz=datetime.UTC).isoformat()
                 if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) else "",
         })
   windows.sort(key=lambda w: w[claude_accounts.PANEL_WINDOW_MINUTES])
@@ -756,7 +755,7 @@ async def _probe_user_agent() -> tuple[str, str]:
   """
   try:
     proc = await asyncio.to_thread(
-        subprocess.run, ["claude", "--version"], capture_output=True, timeout=EXT_USAGE_VERSION_PROBE_TIMEOUT)
+        subprocess.run, ["claude", "--version"], capture_output=True, timeout=timeouts.EXT_USAGE_VERSION_PROBE_TIMEOUT)
   except (OSError, subprocess.SubprocessError):
     return USER_AGENT_FALLBACK, "fallback"
   if proc.returncode != 0:
@@ -822,19 +821,19 @@ def _expires_at_ms(token_data: dict[str, Any]) -> int | None:
   return None
 
 
-def _write_credentials_atomically(path: Path, value: dict[str, Any]) -> None:
+def _write_credentials_atomically(path: pathlib.Path, value: dict[str, Any]) -> None:
   """Replace a credentials file in one step, never exposing a half-written token."""
-  write_json_atomically(path, value, indent=2, private=True)
+  json_utils.write_json_atomically(path, value, indent=2, private=True)
 
 
-async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> str | None:
+async def _refresh_access_token(credentials_path: pathlib.Path, refresh_token: str) -> str | None:
   """Renew the OAuth access token and save new credentials to the account's file.
 
   A failure returns None after logging the token endpoint's status and a
   truncated response-body prefix. Only the error response body is logged —
   never a request body, an access token, or a refresh token.
   """
-  client = get_http_client()
+  client = http.get_http_client()
   try:
     resp = await client.post(
         TOKEN_REFRESH_URL,
@@ -844,7 +843,7 @@ async def _refresh_access_token(credentials_path: Path, refresh_token: str) -> s
             "client_id": CLIENT_ID,
         },
         headers={"User-Agent": await _user_agent()},
-        timeout=HTTP_OAUTH_TIMEOUT,
+        timeout=timeouts.HTTP_OAUTH_TIMEOUT,
     )
   except Exception:
     log.exception("ext_usage_token_refresh_failed", path=str(credentials_path))
@@ -932,7 +931,7 @@ def _transform_response(raw: dict[str, Any], *, account: str) -> dict[str, Any]:
   Claude reports its two windows under fixed field names, so their lengths are
   known here; everything downstream still reads them off ``window_minutes``.
   """
-  now = utc_now_iso()
+  now = models.utc_now_iso()
 
   windows: list[dict[str, Any]] = []
   for camel, snake, window_minutes in CLAUDE_WINDOW_FIELDS:
@@ -1019,7 +1018,7 @@ async def _poll_loop() -> None:
           }
 
       if not cycle:
-        await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
+        await asyncio.sleep(timeouts.EXT_USAGE_ROUND_GAP_SECONDS)
         continue
 
       for inst in cycle:
@@ -1047,20 +1046,24 @@ async def _poll_loop() -> None:
                 "error": inst.last_error,
             }
         if inst.provider == "claude" and inst.label in pool_dirs:
-          _annotate_login_state(cache_key, ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
+          _annotate_login_state(cache_key, models.ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
         if _cached_usage:
-          await streaming_manager.broadcast(SIDEBAR_CHANNEL, {"type": "ext_usage", "providers": _annotated_providers()})
+          await streaming.streaming_manager.broadcast(
+              streaming.SIDEBAR_CHANNEL, {
+                  "type": "ext_usage",
+                  "providers": _annotated_providers()
+              })
           log.info("ext_usage_fetched", providers=list(_cached_usage.keys()))
-        await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
+        await asyncio.sleep(timeouts.EXT_USAGE_ROUND_GAP_SECONDS)
     except Exception:
       log.exception("ext_usage_poll_error")
       # The except path must yield too: an exception raised before the loop's
       # own sleeps (e.g. from _derive_accounts()) would otherwise re-loop with
       # no await point and busy-spin the event loop instead of backing off.
-      await asyncio.sleep(EXT_USAGE_ROUND_GAP_SECONDS)
+      await asyncio.sleep(timeouts.EXT_USAGE_ROUND_GAP_SECONDS)
 
 
-def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:
+def _annotate_login_state(cache_key: str, account: models.ClaudeAccount) -> None:
   """Mark a pool account's panel entry with the login directory while it needs a new login.
 
   The pool is the judge (empty credential store or a recent authentication
@@ -1076,7 +1079,7 @@ def _annotate_login_state(cache_key: str, account: ClaudeAccount) -> None:
     entry["login_required"] = account.config_dir
 
 
-def _annotated_providers(now: datetime | None = None) -> dict[str, dict[str, Any]]:
+def _annotated_providers(now: datetime.datetime | None = None) -> dict[str, dict[str, Any]]:
   """The cached snapshot with each claude window's expiry judged at emit time.
 
   Windows the shared ``claude_accounts.panel_window_expired`` rule marks
@@ -1120,6 +1123,6 @@ async def get_ext_usage() -> dict[str, Any]:
 # Startup integration
 # ---------------------------------------------------------------------------
 
-_poller = SingleTaskPoller(_poll_loop, log, "ext_usage_poller_started", "ext_usage_poller_stopped")
+_poller = tasks.SingleTaskPoller(_poll_loop, log, "ext_usage_poller_started", "ext_usage_poller_stopped")
 start_poller = _poller.start
 stop_poller = _poller.stop

@@ -2157,8 +2157,8 @@ def inject_chat_append_fault(
     propagation path. Returns one bool per matching append — True when that
     append raised — in order.
     """
-  import src.core.chat_events as chat_events_module
-  real = chat_events_module.append_ndjson
+  from src.core import ndjson
+  real = ndjson.append_ndjson
   state = {"raised": 0}
   hits: list[bool] = []
 
@@ -2174,7 +2174,7 @@ def inject_chat_append_fault(
       hits.append(False)
     return await real(path, data)
 
-  monkeypatch.setattr(chat_events_module, "append_ndjson", flaky)
+  monkeypatch.setattr(ndjson, "append_ndjson", flaky)
   return hits
 
 

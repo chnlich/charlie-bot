@@ -3,7 +3,7 @@
 The aggregation pipeline's input half: ``src.core.message_aggregator`` and
 ``src.core.message_projection`` import from this module at module level, so it
 must not import the aggregator back. The event-construction twins
-(``build_user_event`` and friends) and the session-view assembly stay in
+(``build_agent_message_event`` and friends) and the session-view assembly stay in
 ``src.api.message_utils``.
 """
 

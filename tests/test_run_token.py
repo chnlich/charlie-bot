@@ -2,25 +2,14 @@
 
 from __future__ import annotations
 
+import datetime
 import json
-from datetime import UTC, datetime, timedelta
 
+import conftest
 import pytest
-from conftest import (
-    _ok_asgi_downstream,
-    asgi_downstream_called,
-    run_through_asgi_middleware,
-    stub_credentials,
-)
 
-from src.api.auth import AuthMiddleware
-from src.core.run_token import (
-    RunTokenClaims,
-    RunTokenError,
-    sign_run_token,
-    verify_run_token,
-)
-from src.core.takeoff_gate import check_takeoff_gate_for_task
+from src.api import auth
+from src.core import run_token, takeoff_gate
 
 
 def _scope(headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> dict:
@@ -36,7 +25,7 @@ def _status(sent: list[dict]) -> int:
   return next(m for m in sent if m["type"] == "http.response.start")["status"]
 
 
-CLAIMS = RunTokenClaims(session_id="s-1", run_id="r-1", agent="worker-alpha")
+CLAIMS = run_token.RunTokenClaims(session_id="s-1", run_id="r-1", agent="worker-alpha")
 
 # ---------------------------------------------------------------------------
 # Token mechanics
@@ -44,25 +33,25 @@ CLAIMS = RunTokenClaims(session_id="s-1", run_id="r-1", agent="worker-alpha")
 
 
 def test_sign_and_verify_round_trip() -> None:
-  token = sign_run_token(CLAIMS, "op-secret")
-  assert verify_run_token(token, "op-secret") == CLAIMS
+  token = run_token.sign_run_token(CLAIMS, "op-secret")
+  assert run_token.verify_run_token(token, "op-secret") == CLAIMS
   # Every claim is bound: another session/run/agent cannot reuse it.
-  with pytest.raises(RunTokenError):
-    verify_run_token(token, "other-key")
+  with pytest.raises(run_token.RunTokenError):
+    run_token.verify_run_token(token, "other-key")
   payload_b64, sig = token.split(".", 1)
   import base64
   payload = json.loads(base64.urlsafe_b64decode(payload_b64 + "=" * (-len(payload_b64) % 4)))
   payload["run_id"] = "r-2"
   forged_payload = base64.urlsafe_b64encode(json.dumps(payload).encode()).rstrip(b"=").decode()
-  with pytest.raises(RunTokenError):
-    verify_run_token(f"{forged_payload}.{sig}", "op-secret")
+  with pytest.raises(run_token.RunTokenError):
+    run_token.verify_run_token(f"{forged_payload}.{sig}", "op-secret")
 
 
 def test_missing_signing_key_is_an_explicit_error() -> None:
-  with pytest.raises(RunTokenError, match="without a configured"):
-    sign_run_token(CLAIMS, "")
-  with pytest.raises(RunTokenError, match="no signing key"):
-    verify_run_token("a.b", "")
+  with pytest.raises(run_token.RunTokenError, match="without a configured"):
+    run_token.sign_run_token(CLAIMS, "")
+  with pytest.raises(run_token.RunTokenError, match="no signing key"):
+    run_token.verify_run_token("a.b", "")
 
 
 # ---------------------------------------------------------------------------
@@ -72,12 +61,12 @@ def test_missing_signing_key_is_an_explicit_error() -> None:
 
 @pytest.mark.asyncio
 async def test_invalid_run_bearer_never_falls_back_to_operator_cookie() -> None:
-  stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  mw = AuthMiddleware(app=_ok_asgi_downstream)
-  sent = await run_through_asgi_middleware(
+  conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
+  mw = auth.AuthMiddleware(app=conftest._ok_asgi_downstream)
+  sent = await conftest.run_through_asgi_middleware(
       mw, _scope(headers={"Authorization": "Bearer forged"}, cookies={"charliebot_access_key": "op-secret"}))
   assert _status(sent) == 401
-  assert not asgi_downstream_called()
+  assert not conftest.asgi_downstream_called()
 
 
 # ---------------------------------------------------------------------------
@@ -101,18 +90,21 @@ def _gate_env(
   return load_events, meta_of, state_of
 
 
-def _user(content: str, at: datetime) -> dict:
+def _user(content: str, at: datetime.datetime) -> dict:
   return {"id": content, "type": "user", "timestamp": at.isoformat(), "actor": "user", "content": content}
 
 
-NOW = datetime.now(UTC)
+NOW = datetime.datetime.now(datetime.UTC)
 
 
 def test_task_gate_borrows_from_the_nearest_user_ancestor() -> None:
   # root holds a valid take off; child has nothing; grandchild only agent chatter.
   events = {
-      "root": [_user("plan the thing", NOW - timedelta(hours=1)),
-               _user("take off", NOW - timedelta(minutes=5))],
+      "root":
+          [
+              _user("plan the thing", NOW - datetime.timedelta(hours=1)),
+              _user("take off", NOW - datetime.timedelta(minutes=5))
+          ],
       "child": [{
           "type": "agent_message",
           "content": "progress",
@@ -122,5 +114,5 @@ def test_task_gate_borrows_from_the_nearest_user_ancestor() -> None:
   parents = {"root": None, "child": "root", "grandchild": "child"}
   profiles = {"root": "manager", "child": "manager", "grandchild": "manager"}
   load_events, meta_of, state_of = _gate_env(events, parents, profiles, {})
-  assert check_takeoff_gate_for_task(
+  assert takeoff_gate.check_takeoff_gate_for_task(
       "grandchild", load_events=load_events, task_meta_of=meta_of, task_state_of=state_of) == "root"

@@ -119,8 +119,8 @@ def test_main_session_instructions_carry_every_manager_section() -> None:
   assert out is not None
   master_headings = _repo_section_headings("master.md")
   workflow_headings = _repo_section_headings("manager_workflows.md")
-  # 15 + 6: the split neither lost nor duplicated a section.
-  assert len(master_headings) + len(workflow_headings) == 21
+  # 16 + 6: the split neither lost nor duplicated a section.
+  assert len(master_headings) + len(workflow_headings) == 22
   assert not set(master_headings) & set(workflow_headings)
   for heading in master_headings + workflow_headings:
     assert f"## {heading}" in out

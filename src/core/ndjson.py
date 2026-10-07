@@ -1,20 +1,19 @@
 """NDJSON (newline-delimited JSON) file utilities."""
 
+import contextlib
+import itertools
 import json
 import mmap
 import os
+import pathlib
 from collections.abc import Callable, Iterable, Iterator
-from contextlib import contextmanager
-from itertools import islice
-from pathlib import Path
 from typing import Any, BinaryIO
 
 import orjson
 
-from src.core.log_once import LazyStructlogLogger
-from src.core.memo import StatSignatureMemo
+from src.core import log_once, memo
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _COUNT_CHUNK_SIZE = 1024 * 1024
 
@@ -35,8 +34,9 @@ _COUNT_MEMO_LIMIT = 64
 # Chat event files only append; their atomic archive rewrites replace the
 # whole file. Tail entries share their event dicts with every caller;
 # consumers must treat them as read-only.
-_count_memo: StatSignatureMemo[Path, int] = StatSignatureMemo(_COUNT_MEMO_LIMIT)
-_tail_memo: StatSignatureMemo[tuple[Path, int], tuple[list[dict], int, bool]] = StatSignatureMemo(_COUNT_MEMO_LIMIT)
+_count_memo: memo.StatSignatureMemo[pathlib.Path, int] = memo.StatSignatureMemo(_COUNT_MEMO_LIMIT)
+_tail_memo: memo.StatSignatureMemo[tuple[pathlib.Path, int], tuple[list[dict], int,
+                                                                   bool]] = memo.StatSignatureMemo(_COUNT_MEMO_LIMIT)
 
 
 def _count_lines(f: BinaryIO) -> int:
@@ -139,7 +139,7 @@ def iter_ndjson_events(lines: Iterable[str | bytes], *, log_event: str, log_fiel
       yield event
 
 
-def iter_ndjson_events_containing(path: Path, needle: bytes, *, log_event: str,
+def iter_ndjson_events_containing(path: pathlib.Path, needle: bytes, *, log_event: str,
                                   log_fields: dict[str, Any]) -> Iterator[dict]:
   """Yield parsed events whose raw line contains *needle*, in file order, lazily.
 
@@ -185,13 +185,13 @@ def iter_ndjson_events_containing(path: Path, needle: bytes, *, log_event: str,
       del view
 
 
-def parse_ndjson_file(path: Path) -> list[dict]:
+def parse_ndjson_file(path: pathlib.Path) -> list[dict]:
   """Sync read+parse an NDJSON file. Skips blank/malformed lines."""
   return parse_ndjson_events(path, log_event=PARSE_SKIP_LOG_EVENT, log_fields={})
 
 
 def parse_ndjson_events(
-    path: Path,
+    path: pathlib.Path,
     *,
     log_event: str,
     log_fields: dict[str, Any],
@@ -226,8 +226,8 @@ def parse_ndjson_events(
     ]
 
 
-@contextmanager
-def _mapped_lines(path: Path, f: BinaryIO) -> Iterator[tuple[mmap.mmap | None, int]]:
+@contextlib.contextmanager
+def _mapped_lines(path: pathlib.Path, f: BinaryIO) -> Iterator[tuple[mmap.mmap | None, int]]:
   """Map *f* read-only and yield (mapping, size), closing the mapping on exit.
 
   An empty file yields (None, 0) — mmap refuses a zero-length mapping. An
@@ -266,7 +266,7 @@ def _iter_mmap_lines(mm: mmap.mmap, size: int) -> Iterator[memoryview]:
     pos = nl + 1
 
 
-def count_ndjson_lines(path: Path) -> int:
+def count_ndjson_lines(path: pathlib.Path) -> int:
   """Return the number of persisted NDJSON lines without parsing JSON.
 
   Memoized on the file's (mtime_ns, size): a repeat call over an unchanged
@@ -286,7 +286,7 @@ def count_ndjson_lines(path: Path) -> int:
   return total
 
 
-def parse_ndjson_tail(path: Path, limit: int) -> tuple[list[dict], int, bool]:
+def parse_ndjson_tail(path: pathlib.Path, limit: int) -> tuple[list[dict], int, bool]:
   """Read the last *limit* lines from an NDJSON file using seek-from-end.
 
   Returns (events, total_line_count, has_more). The whole page memoizes on
@@ -359,7 +359,7 @@ def _parse_mapped_line(
 
 
 def iter_ndjson_events_from_end(
-    path: Path,
+    path: pathlib.Path,
     *,
     log_event: str,
     log_fields: dict[str, Any],
@@ -471,7 +471,7 @@ def type_line_filter(types: frozenset[str]) -> HeadProvableFilter:
   return HeadProvableFilter(keep)
 
 
-def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bool]:
+def parse_ndjson_range(path: pathlib.Path, start: int, end: int) -> tuple[list[dict], bool]:
   """Read NDJSON lines in range [start, end) by line index.
 
   Returns (events, has_more) where has_more is True when start > 0.
@@ -483,7 +483,7 @@ def parse_ndjson_range(path: Path, start: int, end: int) -> tuple[list[dict], bo
       return [], start > 0
     events = list(
         iter_ndjson_events(
-            islice(_iter_mmap_lines(mm, size), start, end),
+            itertools.islice(_iter_mmap_lines(mm, size), start, end),
             log_event="ndjson_range_parse_skip",
             log_fields={},
         ))
@@ -497,7 +497,7 @@ def write_all(fd: int, data: bytes) -> None:
     view = view[os.write(fd, view):]
 
 
-def _append_ndjson_sync(path: Path, line: str) -> None:
+def _append_ndjson_sync(path: pathlib.Path, line: str) -> None:
   """One open(O_APPEND)+write+close per append.
 
   The handle is opened per call on purpose: O_APPEND re-resolves the path, so
@@ -514,7 +514,7 @@ def _append_ndjson_sync(path: Path, line: str) -> None:
     os.close(fd)
 
 
-async def append_ndjson(path: Path, data: dict) -> None:
+async def append_ndjson(path: pathlib.Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
   import asyncio  # deferred: the CLI's run-token resolution reads this module sync-only
 

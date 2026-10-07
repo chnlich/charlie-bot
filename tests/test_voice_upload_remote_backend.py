@@ -19,10 +19,10 @@ import pytest
 from fastapi import UploadFile
 from structlog.testing import capture_logs
 
-from src.agents.transcription import registry as transcription_registry
-from src.agents.transcription.base import TranscriptEvent, TranscriptionBackend
-from src.api import voice
-from src.core.config import CharlieBotConfig
+from src.features.voice import api as voice
+from src.features.voice.transcription import registry as transcription_registry
+from src.features.voice.transcription.base import TranscriptEvent, TranscriptionBackend
+from src.infra.config import CharlieBotConfig
 
 SESSION_ID = "session-a"
 BACKEND_ID = "fake-remote"

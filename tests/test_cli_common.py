@@ -16,8 +16,8 @@ from conftest import (
     stub_credentials,
 )
 
-from src.cli import common
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.infra.constants import SESSION_ID_ENV_VAR
+from src.runtime.cli import common
 
 
 def _set_cwd(
@@ -168,12 +168,12 @@ def test_port_cache_hit_keeps_the_yaml_stack_out_of_the_verb_process(tmp_path: P
           "import json, sys",
           f"sys.path.insert(0, {repo_root!r})",
           f"import os; os.environ['CHARLIEBOT_HOME'] = {str(home)!r}",
-          "from src.core import home",
-          "from src.cli import common",
+          "from src.infra import home",
+          "from src.runtime.cli import common",
           "doc = {'fingerprint': [list(home.file_fingerprint('config.yaml')), list(common._config_module_fingerprint())], 'port': 49999}",
           f"(home_doc := {str(home / 'cache' / 'cli_base_url.json')!r}) and open(home_doc, 'w').write(json.dumps(doc))",
           "assert common._cached_server_port() == 49999",
-          "assert 'src.core.credentials' not in sys.modules, 'port cache hit pulled the credentials module'",
+          "assert 'src.infra.credentials' not in sys.modules, 'port cache hit pulled the credentials module'",
           "assert 'yaml' not in sys.modules, 'port cache hit pulled PyYAML'",
       ])
   proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)

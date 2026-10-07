@@ -1,4 +1,4 @@
-"""Tests for src/cli/discord.py — argv to request body, readback printing, refusal exit codes."""
+"""Tests for src/features/discord/cli.py — argv to request body, readback printing, refusal exit codes."""
 
 import json
 from pathlib import Path
@@ -14,7 +14,7 @@ from conftest import (
 )
 from conftest import setup_session_cwd as _setup_session_cwd
 
-from src.cli.discord import main
+from src.features.discord.cli import main
 
 _REPLY_READBACK = {
     "posted": True,
@@ -174,7 +174,7 @@ def test_check_exits_one_after_printing_when_ok_is_false(
 
 
 def test_help_lists_discord(capsys: pytest.CaptureFixture[str]) -> None:
-  from src.cli.main import main as cli_main
+  from src.app.main import main as cli_main
 
   cli_main(["--help"])
 

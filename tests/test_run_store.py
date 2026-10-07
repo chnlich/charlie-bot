@@ -11,8 +11,9 @@ import subprocess
 import conftest
 import pytest
 
-from src.core import chat_events, models, runs, session_aliases, sessions, task_sessions
-from src.core import event_types as ET
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import chat_events, runs, session_aliases, sessions, task_sessions
 
 
 def build_env(
@@ -260,7 +261,7 @@ async def test_readonly_store_reads_without_a_control_lock(tmp_path: pathlib.Pat
 
   # The run-scoped CLI path reads the same record without the model stack; both
   # readers agree on the fields the refusal predicate consumes, and on absence.
-  from src.core import run_identity
+  from src.runtime import run_identity
   identity = run_identity.read_run_identity_sync(store.metadata_path(session_id, run_id))
   record = store.read_run_sync(session_id, run_id)
   assert identity == (record.id, record.pid, record.pid_start)

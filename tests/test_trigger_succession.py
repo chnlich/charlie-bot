@@ -9,8 +9,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, master_trigger, models, sessions, triggers
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import master_trigger, sessions, triggers
 
 
 @pytest.mark.asyncio

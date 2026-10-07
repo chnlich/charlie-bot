@@ -8,8 +8,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import config, models, sessions
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import sessions
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:

@@ -14,9 +14,9 @@ import orjson
 import pytest
 from conftest import OPERATOR, build_env
 
-from src.core.models import RunRecord, SessionStatus
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.infra.models import RunRecord, SessionStatus
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 
 
 async def create(tree: TaskTreeManager, *, parent: str | None, request_id: str, profile: str = "manager"):

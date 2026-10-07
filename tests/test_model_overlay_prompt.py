@@ -18,11 +18,11 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents import master_cc
-from src.agents.backends import registry
-from src.core import config as core_config
-from src.core import event_types as ET
-from src.core import message_aggregator, models
+from src.infra import config as core_config
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import master_cc, message_aggregator
+from src.runtime.agent_process import registry
 
 
 def _wake_cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:

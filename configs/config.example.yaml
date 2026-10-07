@@ -51,7 +51,7 @@ backends:
   #     model: gpt-6-luna
   # Codex reasoning effort is xhigh unless the entry sets model_reasoning_effort.
   # An id names the model family, never a version: a version bump edits only the
-  # entry's model and label (the id rule: BackendsConfig in src/core/config.py).
+  # entry's model and label (the id rule: BackendsConfig in src/infra/config.py).
   options:
     - id: claude-fable
       label: "CC · Fable 5.1"

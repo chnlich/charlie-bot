@@ -12,8 +12,8 @@ import conftest
 import fastapi
 from fastapi import testclient
 
-from src.api import sessions
-from src.core import config
+from src.infra import config
+from src.runtime.api import sessions
 
 PROBE_EVENTS = "".join(
     f'{{"id":"e{i}","type":"user","message":{{"role":"user","content":"probe {i}"}},'

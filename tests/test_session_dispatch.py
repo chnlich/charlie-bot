@@ -8,16 +8,12 @@ from pathlib import Path
 import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env, create_scheduled_node, create_task, stub_credentials
 
-from src.api.message_utils import events_to_view
-from src.core import event_types as ET
-from src.core.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
-from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.core.sessions import SessionManager
-from src.core.task_sessions import (
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskTreeManager,
-)
+from src.infra import event_types as ET
+from src.infra.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
+from src.runtime.api.message_utils import events_to_view
+from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskTreeManager
 
 
 async def admit(
@@ -196,7 +192,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   fresh = TaskTreeManager(cfg, session_mgr)
 
   # While the report is undelivered, the moving-subtree reparent guard blocks.
-  from src.core.models import PatchSessionTaskRequest
+  from src.infra.models import PatchSessionTaskRequest
   other_root = await fresh.create_task(
       request_id="other-root",
       task_parent_id=None,
@@ -250,7 +246,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
   with pytest.raises(TaskForbiddenError):
     await admit(tree, worker.id, "take off now", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
   await admit(tree, worker.id, "take off (cron)", event_type=ET.SCHEDULED_TRIGGER, actor="system")
-  from src.core.takeoff_gate import DelegationBlockedError
+  from src.runtime.takeoff_gate import DelegationBlockedError
   with pytest.raises(DelegationBlockedError):
     await tree.check_task_authorization(worker.id)
 
@@ -267,7 +263,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
 
   # The closed node keeps a late machine input as history (and the machine
   # refusal never mints an authorization window).
-  from src.core.task_sessions import TaskArchivedError
+  from src.runtime.task_sessions import TaskArchivedError
   with pytest.raises(TaskArchivedError):
     await admit(
         tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)
@@ -320,7 +316,7 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
 
   executor = ScriptedExecutor(tree)
   tree.dispatch.executor = executor
-  from src.core.master_trigger import trigger_master
+  from src.runtime.master_trigger import trigger_master
   await trigger_master(manager.id, "a worker result landed", cfg, session_mgr, ET.CHILD_REPORT)
 
   events = tree.events.load_events(manager.id)
@@ -329,7 +325,7 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
   assert tree.runs.list_run_records_sync(manager.id) == []
 
   # A v1 session keeps the legacy wake path intact during the staged conversion.
-  from src.core.models import CreateSessionRequest
+  from src.infra.models import CreateSessionRequest
   v1 = await session_mgr.create_session(CreateSessionRequest(name="legacy"))
   called: list[bool] = []
 
@@ -337,7 +333,7 @@ async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> Non
     called.append(True)
     return "cc-1"
 
-  import src.core.master_trigger as master_trigger_module
+  import src.runtime.master_trigger as master_trigger_module
   original = master_trigger_module.run_message
   master_trigger_module.run_message = _fake_run_message
   try:
@@ -376,7 +372,7 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   blockers = await tree.deletion_blockers(child.id)
   assert any("child report" in b for b in blockers)
   # An origin reference from another task's saved metadata.
-  from src.core.models import EventRef
+  from src.infra.models import EventRef
   fork_meta = await session_mgr.get_session(other_root.id)
   assert fork_meta is not None
   fork_meta.origin_ref = EventRef(session_id=child.id, event_id=None)
@@ -405,11 +401,11 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  import src.api.chat as chat_api
-  import src.api.internal as internal_api
-  import src.api.sessions as sessions_api
-  from src.api.deps import get_run_store, get_session_manager, get_task_manager
-  from src.core import config
+  import src.runtime.api.chat as chat_api
+  import src.runtime.api.internal as internal_api
+  import src.runtime.api.sessions as sessions_api
+  from src.infra import config
+  from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
@@ -434,7 +430,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
     async def broadcast(self, channel: str, payload: dict) -> None:
       self.sent.append((channel, payload))
 
-  import src.core.sessions as sessions_module
+  import src.runtime.sessions as sessions_module
   original_streaming = sessions_module.streaming_manager
   fake_streaming = _StreamingManager()
   sessions_module.streaming_manager = fake_streaming  # type: ignore[assignment]
@@ -504,9 +500,9 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  import src.api.sessions as sessions_api
-  from src.api.deps import get_run_store, get_session_manager, get_task_manager
-  from src.core import config
+  import src.runtime.api.sessions as sessions_api
+  from src.infra import config
+  from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
@@ -602,7 +598,7 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   """The locked finish layer itself rejects it: a batchless run's finisher
   cannot name ids another registered non-terminal run claimed (a claim that
   lands between the dispatcher's pre-check and the locked finish still fails)."""
-  from src.core.runs import RunInputMismatchError
+  from src.runtime.runs import RunInputMismatchError
 
   _cfg, _session_mgr, tree = build_env(tmp_path)
   task = await create_task(tree, parent=None, request_id="root")

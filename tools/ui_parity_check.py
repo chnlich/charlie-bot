@@ -65,7 +65,7 @@ SCRIPT_REPO = Path(__file__).resolve().parent.parent
 if str(SCRIPT_REPO) not in sys.path:
   sys.path.insert(0, str(SCRIPT_REPO))
 
-from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
+from src.infra.constants import SESSION_ID_ENV_VAR  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     devtools_ws_url,

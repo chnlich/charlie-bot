@@ -9,12 +9,12 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.agents.backends import base
+from src.infra import config, models
+from src.runtime.agent_process import base
 
-# The tests bind a local `worker`: `from src.agents import worker` would turn
+# The tests bind a local `worker`: `from src.runtime import worker` would turn
 # the `worker.Worker(...)` calls below into an UnboundLocalError.
-from src.agents.worker import Worker
-from src.core import config, models
+from src.runtime.worker import Worker
 
 
 class _FakeBackend(base.AgentBackend):

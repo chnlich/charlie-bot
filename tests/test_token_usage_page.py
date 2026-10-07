@@ -20,9 +20,9 @@ from pathlib import Path
 import pytest
 from conftest import make_page_request
 
-from src.api import pages
-from src.core.timeouts import USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS
-from src.core.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
+from src.app import pages
+from src.features.usage.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
+from src.infra.timeouts import USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS
 
 CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
 CB = "charlie-bot"  # the ledger's stored spelling for its own-log records
@@ -91,9 +91,9 @@ def _seed(path: Path) -> None:
 
 
 def _stub_capture(monkeypatch: pytest.MonkeyPatch, ledger_path: Path, written: dict[str, int]) -> None:
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
-  monkeypatch.setattr("src.core.token_tally.capture_local", lambda ledger: written)
-  monkeypatch.setattr("src.core.token_tally.backend_registry", dict)
+  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", lambda ledger: written)
+  monkeypatch.setattr("src.features.usage.token_tally.backend_registry", dict)
 
 
 def _data_rows(body: str) -> list[dict]:
@@ -107,7 +107,7 @@ def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
   """Seed the ledger under tmp_path and point the page's ledger read at it."""
   ledger_path = tmp_path / "usage" / "ledger.sqlite3"
   _seed(ledger_path)
-  monkeypatch.setattr("src.core.usage_ledger.default_ledger_path", lambda: ledger_path)
+  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
   return ledger_path
 
 
@@ -128,7 +128,7 @@ async def _request_with_failing_capture(monkeypatch: pytest.MonkeyPatch, tmp_pat
   def boom(ledger: UsageLedger) -> dict[str, int]:
     raise RuntimeError("capture exploded")
 
-  monkeypatch.setattr("src.core.token_tally.capture_local", boom)
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", boom)
   with pytest.raises(RuntimeError, match="capture exploded"):
     await pages.token_usage_viewer(make_page_request("/token-usage"))
   return ledger_path
@@ -233,7 +233,7 @@ async def test_locked_capture_serves_the_stored_rows(monkeypatch: pytest.MonkeyP
   def locked(ledger: UsageLedger) -> dict[str, int]:
     raise sqlite3.OperationalError("database is locked")
 
-  monkeypatch.setattr("src.core.token_tally.capture_local", locked)
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", locked)
   response = await pages.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   assert {(r["model"], r["output"]) for r in _data_rows(response.body.decode("utf-8"))} == {
@@ -250,7 +250,7 @@ async def test_capture_operational_error_other_than_lock_still_fails(
   def broken(ledger: UsageLedger) -> dict[str, int]:
     raise sqlite3.OperationalError("no such table: usage")
 
-  monkeypatch.setattr("src.core.token_tally.capture_local", broken)
+  monkeypatch.setattr("src.features.usage.token_tally.capture_local", broken)
   with pytest.raises(sqlite3.OperationalError, match="no such table"):
     await pages.token_usage_viewer(make_page_request("/token-usage"))
 
@@ -431,12 +431,12 @@ def test_preload_pins_the_tally_stack_in_a_fresh_process() -> None:
       [
           "import sys",
           f"sys.path.insert(0, {repo_root!r})",
-          "from src.api import pages",
-          "assert 'src.core.token_tally' not in sys.modules, 'pages import pulled the tally stack'",
-          "assert 'src.core.usage_ledger' not in sys.modules, 'pages import pulled the ledger stack'",
+          "from src.app import pages",
+          "assert 'src.features.usage.token_tally' not in sys.modules, 'pages import pulled the tally stack'",
+          "assert 'src.features.usage.usage_ledger' not in sys.modules, 'pages import pulled the ledger stack'",
           "pages.preload_usage_tally_stack()",
-          "assert 'src.core.token_tally' in sys.modules",
-          "assert 'src.core.usage_ledger' in sys.modules",
+          "assert 'src.features.usage.token_tally' in sys.modules",
+          "assert 'src.features.usage.usage_ledger' in sys.modules",
       ])
   proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
   assert proc.returncode == 0, proc.stderr

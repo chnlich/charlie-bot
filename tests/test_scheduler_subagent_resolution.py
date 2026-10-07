@@ -1,4 +1,4 @@
-"""Tests for session/requested subagent backend resolution in src.core.spawner."""
+"""Tests for session/requested subagent backend resolution in src.runtime.spawner."""
 
 import pathlib
 from unittest import mock
@@ -6,7 +6,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, models, spawner
+from src.infra import config, models
+from src.runtime import spawner
 
 
 def _build_cfg(options: list[models.BackendOption]) -> config.CharlieBotConfig:

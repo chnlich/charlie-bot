@@ -1,6 +1,6 @@
 """The per-session pending-trigger limit: counting, rejection, concurrency, exemption.
 
-The limit lives on TriggerManager (src/core/triggers.py): a schedule-trigger
+The limit lives on TriggerManager (src/runtime/triggers.py): a schedule-trigger
 registration that would push the session past MAX_PENDING_TRIGGERS pending
 records is rejected with the fixed 422 detail, the count and the record write
 sit under one per-session lock (two concurrent registrations against four
@@ -30,15 +30,15 @@ from conftest import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api.deps import get_session_manager, get_trigger_manager
-from src.api.internal import router as internal_router
-from src.cli import schedule_trigger as cli_module
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest, PendingTrigger, TriggerStatus
-from src.core.sessions import SessionManager
-from src.core.slack_listener import SLACK, SlackThreadAdapter
-from src.core.thread_entry import arm_follow_trigger
-from src.core.triggers import MAX_PENDING_TRIGGERS, PendingTriggerLimitError, TriggerManager
+from src.features.chat_threads.thread_entry import arm_follow_trigger
+from src.features.slack.slack_listener import SLACK, SlackThreadAdapter
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest, PendingTrigger, TriggerStatus
+from src.runtime.api.deps import get_session_manager, get_trigger_manager
+from src.runtime.api.internal import router as internal_router
+from src.runtime.cli import schedule_trigger as cli_module
+from src.runtime.sessions import SessionManager
+from src.runtime.triggers import MAX_PENDING_TRIGGERS, PendingTriggerLimitError, TriggerManager
 
 
 def _limit_detail(session_id: str, count: int) -> str:

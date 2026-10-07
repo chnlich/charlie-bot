@@ -1,4 +1,4 @@
-"""Tests for the memory store's PR flow (src/core/memory_proposal.py).
+"""Tests for the memory store's PR flow (src/features/memory/memory_proposal.py).
 
 Each case runs the ``charliebot memory proposal`` CLI against a temporary
 charliebot home whose live store is a git repo shaped like the real one
@@ -15,7 +15,7 @@ from conftest import CLI_MEMORY_HOME_PATCH_TARGET, legacy_memory_entry_text, run
 from conftest import write_memory_entry as _write_entry
 from conftest import write_memory_topics as _write_topics
 
-from src.core import memory_proposal
+from src.features.memory import memory_proposal
 
 
 def _build_store(home: Path) -> Path:
@@ -45,7 +45,7 @@ def store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _run_cli(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture, *argv: str):
   """Run the memory CLI; return (exit code, stdout, stderr)."""
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", *argv])
   try:
     cli.main()

@@ -14,13 +14,13 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.agents import master_cc
-from src.agents.backends import base as backend_base
-from src.agents.backends.registry import build_backend as real_build_backend
-from src.core import config as core_config
-from src.core import models
-from src.core.constants import SESSION_ID_ENV_VAR
-from src.core.thread_sessions import THREAD_CONTEXT_WINDOW
+from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW
+from src.infra import config as core_config
+from src.infra import models
+from src.infra.constants import SESSION_ID_ENV_VAR
+from src.runtime import master_cc
+from src.runtime.agent_process import base as backend_base
+from src.runtime.agent_process.registry import build_backend as real_build_backend
 
 
 def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:

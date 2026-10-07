@@ -1,6 +1,6 @@
-"""Tests for src/core/artifact_check.py and the ``charliebot artifact check`` CLI.
+"""Tests for src/features/artifacts/artifact_check.py and the ``charliebot artifact check`` CLI.
 
-The goal-length and page-height measurements moved here from src/core/plans.py with their
+The goal-length and page-height measurements moved here from src/features/artifacts/plans.py with their
 budgets unchanged; the DOM assertions are the new mechanical half of each genre's GRAMMAR.
 Renderer work and the probe's model call are doubled out — no headless chrome, no backend
 subprocess, no HTTP.
@@ -22,10 +22,11 @@ from conftest import (
     write_stub_chrome,
 )
 
-from src.cli.artifact import main as artifact_main
-from src.core import artifact_check, artifact_shared, timeouts
-from src.core.artifact_check import run_assertions
-from src.core.config import CharlieBotConfig
+from src.features.artifacts import artifact_check, artifact_shared
+from src.features.artifacts.artifact_check import run_assertions
+from src.features.artifacts.cli import main as artifact_main
+from src.infra import timeouts
+from src.infra.config import CharlieBotConfig
 
 
 def _genre_doc(genre: str, body: str) -> str:

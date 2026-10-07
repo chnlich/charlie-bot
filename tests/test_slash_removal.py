@@ -18,9 +18,9 @@ import pytest
 import yaml
 from conftest import OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.scheduler import TASK_HANDLERS, Scheduler
+from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
 
 
 def _write_handler_task(home: pathlib.Path, name: str, session_id: str, handler: str = "probe") -> None:
@@ -43,8 +43,8 @@ def _cron_app(cfg: CharlieBotConfig, session_mgr, tree, scheduler):
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  from src.api import cron as cron_api
-  from src.api.deps import get_config_on_loop, get_session_manager, get_task_manager
+  from src.features.cron import api as cron_api
+  from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_task_manager
 
   app = FastAPI()
   app.include_router(cron_api.router, prefix="/api/cron")
@@ -79,7 +79,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The manual run takes the scheduled path and leaves the node's pending
   inputs empty: no `user` event, nothing for a following dispatch to launch."""
-  from src.core import sessions, task_sessions
+  from src.runtime import sessions, task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -123,7 +123,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
 @pytest.mark.asyncio
 async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A task name the loader does not know answers 404."""
-  from src.core import sessions, task_sessions
+  from src.runtime import sessions, task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -151,9 +151,9 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  from src.api import chat as chat_api
-  from src.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-  from src.core import sessions, task_sessions
+  from src.runtime import sessions, task_sessions
+  from src.runtime.api import chat as chat_api
+  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()

@@ -200,7 +200,7 @@ itself, and follow it.
 
 ## Your Capabilities
 
-You have these built-in features. If unsure how one works, read `src/core/`.
+You have these built-in features. If unsure how one works, read `src/features/` and `src/runtime/`.
 
 See `charliebot --help` for CLI subcommands.
 

@@ -1,0 +1,1247 @@
+"""Delayed trigger (session self-wake) manager."""
+
+import asyncio
+import contextlib
+import json
+import os
+import random
+import shutil
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import aiofiles
+
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig, get_config
+from src.infra.json_utils import write_model_json_atomically
+from src.infra.log_once import LazyStructlogLogger
+from src.infra.memo import BoundedMemo, StatSignatureMemo
+from src.infra.models import (
+    LocalPid,
+    PendingTrigger,
+    RemotePid,
+    SessionStatus,
+    SlurmJob,
+    TriggerStatus,
+    WatchKind,
+    WatchTarget,
+)
+from src.infra.ssh import ssh_cmd
+from src.infra.tasks import create_logged_task
+from src.infra.timeouts import SSH_OVERALL_TIMEOUT
+from src.runtime.api.message_utils import build_scheduled_trigger_event
+from src.runtime.master_trigger import trigger_master
+from src.runtime.sessions import SessionManager
+from src.runtime.sidebar_state import mark_sidebar_dirty
+
+log = LazyStructlogLogger()
+
+_SYS_pidfd_open = {"x86_64": 434, "aarch64": 434}
+
+# Backoff intervals (seconds) for the remote ssh probe loop.
+_REMOTE_PROBE_INTERVALS = [10, 20, 40, 80, 160, 320]
+_REMOTE_PROBE_PLATEAU = 600
+_REMOTE_PROBE_NOISE_MAX = 10  # uniform random 0..10s added to each interval
+
+# SLURM watch (sacct polling).
+_SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
+# A remote sacct host that answers nothing for this long is treated as unobservable: the
+# group stops waiting and reports itself so the master wakes up instead of going blind.
+_REMOTE_SACCT_UNREACHABLE_GRACE = 900  # seconds
+# Non-terminal job states: the job is still in flight, keep polling.
+_SLURM_ACTIVE_STATES = frozenset(
+    {
+        "PENDING",
+        "RUNNING",
+        "CONFIGURING",
+        "COMPLETING",
+        "REQUEUED",
+        "RESIZING",
+        "SUSPENDED",
+    })
+# Terminal job states: the job has stopped, capture State + ExitCode. Any state
+# string in neither set is unknown (logged, treated as not-finished).
+_SLURM_TERMINAL_STATES = frozenset(
+    {
+        "COMPLETED",
+        "FAILED",
+        "CANCELLED",
+        "TIMEOUT",
+        "OUT_OF_MEMORY",
+        "NODE_FAIL",
+        "BOOT_FAIL",
+        "DEADLINE",
+        "PREEMPTED",
+        "REVOKED",
+        "SPECIAL_EXIT",
+    })
+
+# LRU cap on list_triggers memos, in sessions: the pending-triggers tray endpoint exercises at
+# most a handful of sessions at a time, and a fired-then-pruned session must not pin its files'
+# parsed records for the process lifetime.
+_TRIGGER_LIST_MEMO_SESSION_LIMIT = 32
+
+# How often a waiting trigger's watchdog re-checks the dormancy predicate: an archive must
+# stop the trigger's probes within about a minute, and the poll reads only session
+# metadata, so a faster cadence buys nothing. Tests shrink this constant to drive the clock.
+_DORMANCY_CHECK_SECONDS = 60
+
+# A session holds at most this many pending triggers. One trigger can watch
+# every parallel job through repeated --watch specs, so the bound only caps
+# genuine wake debt; it lives in code, not config, because there is one user
+# and one value.
+MAX_PENDING_TRIGGERS = 5
+
+
+class RemoteVerifyError(Exception):
+  """Raised when verify-on-create fails for a remote watch target."""
+
+
+class PendingTriggerLimitError(Exception):
+  """Raised when a schedule-trigger registration would push a session past MAX_PENDING_TRIGGERS."""
+
+
+class ArchivedSessionError(Exception):
+  """Raised when create_trigger targets a session archived without a successor."""
+
+
+def _detect_pidfd() -> tuple[Callable[[int, int], int], Callable[[int, int], object | None]] | tuple[None, None]:
+  """Return (pidfd_open_callable, waitid_pidfd_callable) or (None, None).
+
+  pidfd_open_callable(pid, flags=0) -> int, raises ProcessLookupError on ESRCH.
+  waitid_pidfd_callable(fd, options) -> object with .si_pid/.si_status/.si_code
+    (or None on WNOHANG no-event), raises ChildProcessError on ECHILD.
+  """
+  if hasattr(os, "pidfd_open") and hasattr(os, "P_PIDFD"):
+
+    def _stdlib_pidfd_open(pid: int, flags: int = 0) -> int:
+      return os.pidfd_open(pid, flags)
+
+    def _stdlib_waitid_pidfd(fd: int, options: int) -> object | None:
+      return os.waitid(os.P_PIDFD, fd, options)
+
+    return _stdlib_pidfd_open, _stdlib_waitid_pidfd
+
+  import ctypes
+  import ctypes.util
+  import platform
+
+  if platform.system() != "Linux":
+    return None, None
+  machine = platform.machine()
+  if machine not in _SYS_pidfd_open:
+    return None, None
+  libc_path = ctypes.util.find_library("c")
+  if libc_path is None:
+    return None, None
+  try:
+    libc = ctypes.CDLL(libc_path, use_errno=True)
+  except OSError:
+    return None, None
+  syscall_no = _SYS_pidfd_open[machine]
+
+  # Probe: ensure kernel actually implements pidfd_open
+  ctypes.set_errno(0)
+  probe_fd = libc.syscall(syscall_no, os.getpid(), 0)
+  if probe_fd < 0:
+    return None, None
+  os.close(probe_fd)
+
+  def _ctypes_pidfd_open(pid: int, flags: int = 0) -> int:
+    ctypes.set_errno(0)
+    fd = libc.syscall(syscall_no, pid, flags)
+    if fd < 0:
+      errno = ctypes.get_errno()
+      if errno == 3:
+        raise ProcessLookupError(errno, "no such process", pid)
+      raise OSError(errno, os.strerror(errno))
+    return fd
+
+  class _Siginfo(ctypes.Structure):
+    _fields_ = [
+        ("si_signo", ctypes.c_int),
+        ("si_errno", ctypes.c_int),
+        ("si_code", ctypes.c_int),
+        ("si_pid", ctypes.c_int),
+        ("si_uid", ctypes.c_uint),
+        ("si_status", ctypes.c_int),
+        ("_pad", ctypes.c_byte * 100),
+    ]
+
+  class _WaitidResult:
+
+    def __init__(self, si: _Siginfo) -> None:
+      self.si_pid = si.si_pid
+      self.si_uid = si.si_uid
+      self.si_signo = si.si_signo
+      self.si_status = si.si_status
+      self.si_code = si.si_code
+
+  p_pidfd_const = 3
+
+  def _ctypes_waitid_pidfd(fd: int, options: int) -> object | None:
+    si = _Siginfo()
+    ctypes.set_errno(0)
+    rc = libc.waitid(p_pidfd_const, fd, ctypes.byref(si), options)
+    if rc < 0:
+      errno = ctypes.get_errno()
+      if errno == 10:
+        raise ChildProcessError(errno, os.strerror(errno))
+      raise OSError(errno, os.strerror(errno))
+    if si.si_pid == 0:
+      return None
+    return _WaitidResult(si)
+
+  return _ctypes_pidfd_open, _ctypes_waitid_pidfd
+
+
+_pidfd_open, _waitid_pidfd = _detect_pidfd()
+_PIDFD_SUPPORTED = _pidfd_open is not None
+
+# Probed once at import; stdlib-only and must not raise on slurm-less hosts.
+_SACCT_AVAILABLE = shutil.which("sacct") is not None
+
+
+# ---------------------------------------------------------------------------
+# Probe subprocess plumbing (remote probes go over ssh; local sacct does not)
+# ---------------------------------------------------------------------------
+async def _run_probe_cmd(
+    cmd: list[str],
+    *,
+    timeout: float | None,
+    kill_wait_log_event: str,
+    **kill_wait_ctx: Any,
+) -> tuple[bytes, bytes, int | None] | str:
+  """Spawn ``cmd`` capturing stdout/stderr; return ``(stdout, stderr, returncode)``, or an error string.
+
+  ``timeout=None`` waits without a deadline (local probes only); a timed-out
+  probe is killed and awaited so no half-hung ssh is left behind.
+  """
+  try:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+  except OSError as e:
+    return f"spawn failed: {e}"
+
+  if timeout is None:
+    stdout_b, stderr_b = await proc.communicate()
+  else:
+    try:
+      stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except TimeoutError:
+      proc.kill()
+      try:
+        await proc.wait()
+      except Exception as e:
+        log.debug(kill_wait_log_event, error=str(e), **kill_wait_ctx)
+      return f"ssh timeout after {timeout}s"
+  return stdout_b, stderr_b, proc.returncode
+
+
+# ---------------------------------------------------------------------------
+# Remote probe via ssh
+# ---------------------------------------------------------------------------
+async def _ssh_probe_pid(host: str, pid: int) -> tuple[str, str]:
+  """Probe a single (host, pid) via ssh `kill -0`.
+
+  Returns (status, raw_output) where status is one of:
+    - "ALIVE": pid exists on host
+    - "DEAD": pid does not exist on host
+    - "ERROR": ssh failed / timed out / unexpected output (transient)
+  """
+  run = await _run_probe_cmd(
+      ssh_cmd(host, f"kill -0 {pid} 2>&1 && echo ALIVE || echo DEAD"),
+      timeout=SSH_OVERALL_TIMEOUT,
+      kill_wait_log_event="ssh_probe_wait_after_kill_failed",
+      host=host,
+      pid=pid,
+  )
+  if isinstance(run, str):
+    return "ERROR", run
+  stdout_b, stderr_b, returncode = run
+
+  stdout = stdout_b.decode("utf-8", errors="replace")
+  stderr = stderr_b.decode("utf-8", errors="replace")
+  raw = stdout + stderr
+  last_line = stdout.strip().splitlines()[-1].strip() if stdout.strip() else ""
+  if last_line == "ALIVE":
+    return "ALIVE", raw
+  if last_line == "DEAD":
+    return "DEAD", raw
+  combined = (stdout + stderr).strip() or f"ssh exit {returncode}"
+  return "ERROR", combined
+
+
+async def _probe_remaining_remote_pids(
+    remaining: dict[str, set[int]],
+    trigger_id: str,
+) -> list[str]:
+  """Probe every (host, pid) in ``remaining`` concurrently via ssh.
+
+  Mutates ``remaining`` in place: DEAD pids are discarded and hosts whose set
+  goes empty are dropped. Returns ``host:pid`` labels for newly-exited pids;
+  transient probe errors are logged and the pid stays under observation.
+  """
+  probes = [(host, pid) for host, pids in remaining.items() for pid in pids]
+  results = await asyncio.gather(*[_ssh_probe_pid(h, p) for h, p in probes])
+  newly_exited: list[str] = []
+  for (host, pid), (status, raw) in zip(probes, results, strict=True):
+    if status == "DEAD":
+      remaining[host].discard(pid)
+      if not remaining[host]:
+        del remaining[host]
+      newly_exited.append(f"{host}:{pid}")
+    elif status == "ALIVE":
+      continue
+    else:
+      # transient error / timeout — keep watching
+      log.debug(
+          "remote_probe_transient_error",
+          trigger_id=trigger_id,
+          host=host,
+          pid=pid,
+          raw=raw.strip(),
+      )
+  return newly_exited
+
+
+# ---------------------------------------------------------------------------
+# SLURM probe via sacct
+# ---------------------------------------------------------------------------
+async def _probe_sacct(
+    job_ids: list[int],
+    trigger_id: str,
+    host: str | None,
+) -> tuple[dict[int, tuple[str, str]], str | None]:
+  """Run ``sacct`` once for the given job ids, locally or over ssh.
+
+  Returns ``(states, error)``. ``states`` maps ``job_id -> (state, exit_code)`` for
+  every row sacct reported; jobs absent from the output (slurmdbd accounting lag, job
+  id not yet registered) are simply omitted — callers keep polling them rather than
+  treating the gap as terminal. ``error`` is None on a successful probe, else a short
+  description of why the probe itself failed (spawn error, ssh timeout, non-zero exit),
+  with ``states`` empty.
+  """
+  ids = ",".join(str(j) for j in job_ids)
+  sacct_args = ["sacct", "-j", ids, "-X", "-n", "-P", "--format=JobID,State,ExitCode"]
+  # Remote probes get a deadline: ssh to a dead host would otherwise hang
+  # forever. A local sacct goes bare; a wedged local slurmdbd is not a failure
+  # mode this watcher bounds.
+  if host is None:
+    cmd = sacct_args
+    timeout = None
+  else:
+    cmd = ssh_cmd(host, " ".join(sacct_args))
+    timeout = SSH_OVERALL_TIMEOUT
+
+  run = await _run_probe_cmd(
+      cmd,
+      timeout=timeout,
+      kill_wait_log_event="sacct_probe_wait_after_kill_failed",
+      trigger_id=trigger_id,
+      host=host,
+  )
+  if isinstance(run, str):
+    return {}, run
+  stdout_b, stderr_b, returncode = run
+
+  if returncode != 0:
+    stderr = stderr_b.decode("utf-8", errors="replace").strip()
+    log.warning(
+        "sacct_probe_nonzero",
+        trigger_id=trigger_id,
+        host=host,
+        returncode=returncode,
+        stderr=stderr,
+    )
+    return {}, f"sacct exit {returncode}: {stderr}"
+
+  states: dict[int, tuple[str, str]] = {}
+  for line in stdout_b.decode("utf-8", errors="replace").splitlines():
+    fields = line.strip().split("|")
+    if len(fields) < 3:
+      continue
+    # Step rows (`123.batch`), array tasks (`123_4`) and heterogeneous components
+    # (`123+0`) are not the allocation we asked about. `int()` accepts underscores as
+    # digit separators, so `123_4` must be rejected by shape before conversion.
+    if not fields[0].isdigit():
+      continue
+    states[int(fields[0])] = (fields[1].strip(), fields[2].strip())
+  return states, None
+
+
+def _slurm_label(host: str | None, job_id: int) -> str:
+  """Watch label for a SLURM job: bare when local, host-prefixed when remote."""
+  return f"slurm:{job_id}" if host is None else f"{host}:slurm:{job_id}"
+
+
+# ---------------------------------------------------------------------------
+# Schema migration: legacy `watch_pids: list[int]` -> `watch_targets: list[WatchTarget]`
+# ---------------------------------------------------------------------------
+
+
+def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
+  """Parse a trigger JSON string, upgrading legacy watch fields in-memory.
+
+  Two legacy shapes are converged here (the single migration point):
+    - the original `watch_pids: list[int]` -> `watch_targets` of local pids;
+    - pre-discriminator `watch_targets` whose entries lack `kind` -> backfill
+      LOCAL_PID when host is None, REMOTE_PID when a host is set.
+
+  Returns (trigger, migrated). When `migrated` is True, the caller rewrites the
+  file once in the new schema.
+  """
+  data = json.loads(raw_text)
+  migrated = False
+  if "watch_pids" in data:
+    legacy = data.pop("watch_pids")
+    if "watch_targets" not in data:
+      data["watch_targets"] = [{"host": None, "pid": int(p)} for p in legacy] if legacy else []
+    migrated = True
+  for target in data.get("watch_targets") or []:
+    if "kind" not in target:
+      target["kind"] = (WatchKind.REMOTE_PID if target.get("host") is not None else WatchKind.LOCAL_PID).value
+      migrated = True
+  return PendingTrigger.model_validate(data), migrated
+
+
+def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat_result]]:
+  """(path, stat) pairs for the regular ``*.json`` trigger files under *triggers_dir*.
+
+  The one scandir+stat walk every trigger read shares: this module's list memo,
+  the sidebar probe's verdict scan (src.runtime.sessions), and the threads-list
+  body's freshness signature (src.runtime.api.threads). Raises OSError when
+  *triggers_dir* itself cannot be scanned — that verdict belongs to the caller.
+  A file that vanishes between scandir and stat is skipped, the same "nothing
+  to read" verdict every stat failure earns. Paths are scandir's plain strings,
+  and the stat rides ``DirEntry.stat`` — this scan runs per poll.
+  """
+  pairs: list[tuple[str, os.stat_result]] = []
+  with os.scandir(triggers_dir) as entries:
+    for entry in entries:
+      if not entry.name.endswith(".json") or not entry.is_file():
+        continue
+      try:
+        st = entry.stat()
+      except OSError:
+        continue  # vanished between scandir and stat — nothing to read
+      pairs.append((entry.path, st))
+  return pairs
+
+
+class TriggerManager:
+  """Manages delayed one-shot triggers that wake the master CC."""
+
+  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+    self._cfg = cfg
+    self._session_mgr = session_mgr
+    self._tasks: dict[str, asyncio.Task] = {}
+    # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
+    self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
+                                                      PendingTrigger]]] = BoundedMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    # list_triggers' directory verdict: session id -> sorted list, signed on the
+    # directory's (mtime_ns, size) (StatSignatureMemo). The rename-publish ground
+    # that makes the directory signature a sound verdict is stated in
+    # list_triggers' docstring.
+    self._list_verdicts: StatSignatureMemo[str,
+                                           list[PendingTrigger]] = StatSignatureMemo(_TRIGGER_LIST_MEMO_SESSION_LIMIT)
+    # Per-session create lock: the pending-count check and the record write run
+    # under one lock, so two concurrent registrations cannot both cross the
+    # limit. The lock never spans a network probe -- probes run before it.
+    self._create_locks: dict[str, asyncio.Lock] = {}
+
+  async def create_trigger(
+      self,
+      session_id: str,
+      delay_seconds: int,
+      message: str,
+      watch_targets: list[WatchTarget] | None = None,
+      probe_out: dict[str, str] | None = None,
+      created_at: datetime | None = None,
+      enforce_pending_limit: bool = True,
+  ) -> PendingTrigger:
+    """Create a pending trigger, persist to disk, and start the sleep task.
+
+    Raises ``ArchivedSessionError`` when the target must not be woken — a task
+    node whose state is not open, or a legacy session's succession chain that
+    ends archived with no successor (the single rejection funnel for both
+    callers: the internal API and the Slack thread-follow re-arm) — and
+    ``PendingTriggerLimitError`` when a ``schedule-trigger`` registration would
+    push the session past MAX_PENDING_TRIGGERS pending records.
+
+    ``enforce_pending_limit`` is False only on the Slack thread-follow re-arm:
+    it cancels its own record and creates the replacement, and a thread's new
+    message must never silently stop waking its session, so the re-arm is
+    never rejected (its record still counts toward the limit).
+
+    ``probe_out``, when given, is filled with ``label -> observed state`` for every
+    remote SLURM target probed at create time, so the caller can report what was
+    actually seen without probing twice. ``created_at``, when given, stamps the
+    record with the caller's timestamp instead of now; the Slack thread-follow
+    path uses it to inherit a chain's original start across cancel-then-create
+    re-arms, keeping the follow chain's flush cap anchored (src/features/slack/slack_listener.py).
+    """
+    targets = list(watch_targets or [])
+    kinds = {t.kind for t in targets}
+
+    # Single rejection funnel for both callers (the internal API and the Slack
+    # thread-follow re-arm): a dormant target — an archived task node, or a
+    # legacy chain end archived with no successor — is the user's explicit
+    # "no more wakes" signal and must not gain a new wake. The reason names
+    # which dormancy answered.
+    dormancy = await self._dormancy_reason(session_id)
+    if dormancy is not None:
+      raise ArchivedSessionError(f"session {session_id} is archived ({dormancy}); trigger rejected")
+
+    if WatchKind.LOCAL_PID in kinds and not _PIDFD_SUPPORTED:
+      raise RuntimeError("pidfd_open unavailable: need Linux 5.3+ with kernel pidfd_open support")
+    if any(t.kind == WatchKind.SLURM_JOB and t.host is None for t in targets) and not _SACCT_AVAILABLE:
+      raise RuntimeError("sacct unavailable: cannot watch a SLURM job on a host without slurm")
+
+    if WatchKind.REMOTE_PID in kinds:
+      await self._verify_remote_targets([t for t in targets if t.kind == WatchKind.REMOTE_PID])
+
+    remote_slurm = [t for t in targets if t.kind == WatchKind.SLURM_JOB and t.host is not None]
+    if remote_slurm:
+      observed = await self._verify_remote_slurm_targets(remote_slurm)
+      if probe_out is not None:
+        probe_out.update(observed)
+
+    fire_at = datetime.now(UTC) + timedelta(seconds=delay_seconds)
+    # Count-and-write under one per-session lock: the probes above stayed
+    # outside it (never hold a lock across network I/O), so two concurrent
+    # registrations serialize here and exactly one can cross the limit.
+    async with self._create_locks.setdefault(session_id, asyncio.Lock()):
+      if enforce_pending_limit:
+        pending_count = sum(1 for t in await self.list_triggers(session_id) if t.status is TriggerStatus.PENDING)
+        if pending_count + 1 > MAX_PENDING_TRIGGERS:
+          raise PendingTriggerLimitError(
+              f"session {session_id} has {pending_count} pending triggers (limit {MAX_PENDING_TRIGGERS}); "
+              "watch several targets with one trigger: --watch A --watch B")
+      stamp: dict[str, Any] = {}
+      if created_at is not None:
+        stamp["created_at"] = created_at
+      trigger = PendingTrigger(
+          session_id=session_id,
+          fire_at=fire_at,
+          message=message,
+          watch_targets=targets,
+          **stamp,
+      )
+      await self._save_trigger(trigger)
+      self._start_task(trigger)
+    log.info(
+        "trigger_created",
+        trigger_id=trigger.id,
+        session=session_id,
+        fire_at=fire_at.isoformat(),
+        watch_targets=[t.model_dump() for t in targets],
+    )
+    return trigger
+
+  async def _verify_remote_targets(self, targets: list[RemotePid]) -> None:
+    """Probe each remote target once before persisting; reject if any not ALIVE."""
+    results = await asyncio.gather(*[_ssh_probe_pid(t.host, t.pid) for t in targets])
+    bad: list[str] = []
+    for t, (status, raw) in zip(targets, results, strict=True):
+      if status != "ALIVE":
+        bad.append(f"{t.host}:{t.pid} -> {status} ({raw.strip()!r})")
+    if bad:
+      raise RemoteVerifyError("verify-on-create failed for remote watch target(s): " + "; ".join(bad))
+
+  async def _verify_remote_slurm_targets(self, targets: list[SlurmJob]) -> dict[str, str]:
+    """Probe each remote SLURM host once before persisting; reject if a probe failed.
+
+    Returns ``label -> observed state``, using ``not-yet-registered`` when the probe
+    worked but slurmdbd has no row for the job yet — accounting lag is normal right
+    after ``sbatch`` and must not fail creation. Only a failed probe (ssh down, sacct
+    missing, non-zero exit, timeout) is fatal, because that is the case where the
+    trigger would silently degrade to a pure delay.
+    """
+    by_host: dict[str, list[int]] = {}
+    for t in targets:
+      by_host.setdefault(t.host, []).append(t.job_id)
+
+    hosts = sorted(by_host)
+    results = await asyncio.gather(*[_probe_sacct(sorted(by_host[h]), "verify-on-create", host=h) for h in hosts])
+
+    observed: dict[str, str] = {}
+    bad: list[str] = []
+    for host, (states, error) in zip(hosts, results, strict=True):
+      if error is not None:
+        bad.append(f"{host} -> {error}")
+        continue
+      for job_id in sorted(by_host[host]):
+        row = states.get(job_id)
+        observed[_slurm_label(host, job_id)] = row[0] if row is not None else "not-yet-registered"
+    if bad:
+      raise RemoteVerifyError("verify-on-create failed for remote SLURM host(s): " + "; ".join(bad))
+    return observed
+
+  @staticmethod
+  def _stat_trigger_files(triggers_dir: Path) -> dict[str, tuple[int, int]]:
+    """One scandir snapshot of the session's trigger files: name -> (mtime_ns, size)."""
+    return {os.path.basename(path): (st.st_mtime_ns, st.st_size) for path, st in iter_trigger_file_stats(triggers_dir)}
+
+  async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
+    """Read all triggers for a session from disk, memoized per file.
+
+    Steady state (the pending-triggers tray endpoint, GET
+    /api/sessions/{id}/pending-triggers) pays one directory stat per call: every
+    trigger-file write goes through ``write_model_json_atomically``, whose rename into the triggers directory moves the
+    directory's own mtime_ns whether it creates, replaces, or removes an entry, so an
+    unchanged (mtime_ns, size) of the directory proves the stored sorted list current and
+    serves it without the per-file stat walk or its executor round-trip. Within one proved
+    directory state, a file whose (mtime_ns, size) matches its memo entry reuses the parsed
+    record; a file edited in place (no rename) would move only its own mtime and evade the
+    directory proof — every writer here publishes through the atomic rename, the same ground
+    the per-file memo's key already stands on. Files that fail to parse stay out of the
+    memo: within one proved directory state the verdict carries their single warning, and a
+    directory-state change re-reads and re-warns once for that state.
+    """
+    triggers_dir = self._triggers_dir(session_id)
+    try:
+      st = triggers_dir.stat()
+    except FileNotFoundError:
+      self._list_memo.drop(session_id)
+      self._list_verdicts.drop(session_id)
+      return []
+    verdict = self._list_verdicts.fresh(session_id, st)
+    if verdict is not None:
+      return list(verdict)
+    stats = await asyncio.to_thread(self._stat_trigger_files, triggers_dir)
+
+    memo = self._list_memo.get(session_id)
+    if memo is None:
+      memo = {}
+      self._list_memo.store(session_id, memo)
+
+    triggers: list[PendingTrigger] = []
+    stale = []
+    for name in memo.keys() - stats.keys():
+      del memo[name]
+    for name, sig in stats.items():
+      entry = memo.get(name)
+      if entry is not None and entry[0] == sig[0] and entry[1] == sig[1]:
+        triggers.append(entry[2])
+      else:
+        stale.append(name)
+
+    if stale:
+
+      def _read_stale() -> list[tuple[str, PendingTrigger]]:
+        parsed = []
+        for name in stale:
+          path = triggers_dir / name
+          try:
+            trigger, _ = _migrate_legacy_watch_pids(path.read_text(encoding="utf-8"))
+          except Exception as e:
+            log.warning("trigger_load_failed", path=str(path), error=str(e))
+            continue
+          parsed.append((name, trigger))
+        return parsed
+
+      loaded = await asyncio.to_thread(_read_stale)
+      for name, trigger in loaded:
+        memo[name] = (*stats[name], trigger)
+        triggers.append(trigger)
+
+    triggers.sort(key=lambda t: t.created_at, reverse=True)
+    self._list_verdicts.record(session_id, st, triggers)
+    return list(triggers)
+
+  async def cancel_trigger(self, session_id: str, trigger_id: str) -> None:
+    """Mark a trigger as cancelled and cancel its asyncio task."""
+    trigger = await self._load_trigger(session_id, trigger_id)
+    if trigger.status != TriggerStatus.PENDING:
+      return
+    trigger.status = TriggerStatus.CANCELLED
+    await self._save_trigger(trigger)
+    task = self._tasks.pop(trigger_id, None)
+    if task and not task.done():
+      task.cancel()
+    log.info("trigger_cancelled", trigger_id=trigger_id, session=session_id)
+
+  async def recover_pending(self) -> None:
+    """On startup, scan all sessions for pending triggers and restart their sleep tasks."""
+    sessions_dir = self._cfg.sessions_dir
+    if not sessions_dir.exists():
+      return
+    session_dirs = await asyncio.to_thread(lambda: [d for d in sessions_dir.iterdir() if d.is_dir()])
+    for session_dir in session_dirs:
+      triggers_dir = session_dir / "triggers"
+      if not triggers_dir.exists():
+        continue
+      files = await asyncio.to_thread(lambda td=triggers_dir: list(td.glob("*.json")))
+      for f in files:
+        try:
+          raw = await asyncio.to_thread(f.read_text, "utf-8")
+          trigger, migrated = _migrate_legacy_watch_pids(raw)
+        except Exception as e:
+          log.warning("trigger_recovery_load_failed", path=str(f), error=str(e))
+          continue
+        if migrated:
+          # Rewrite the legacy file once with the new schema.
+          await write_model_json_atomically(f, trigger)
+          log.info("trigger_schema_migrated", path=str(f), trigger_id=trigger.id)
+        if trigger.status == TriggerStatus.PENDING:
+          self._start_task(trigger)
+          log.info("trigger_recovered", trigger_id=trigger.id, session=trigger.session_id)
+
+  def _start_task(self, trigger: PendingTrigger) -> None:
+    """Start the asyncio sleep task for a trigger."""
+    task = create_logged_task(self._wait_and_fire(trigger), name=f"trigger-{trigger.id[:8]}")
+    self._tasks[trigger.id] = task
+
+  async def _dormancy_reason(self, session_id: str) -> str | None:
+    """The one dormancy judgment for every reader in this module — create-time
+    rejection, the wait watchdog, and the fire-time backstop. A task node is
+    dormant exactly when its task state is not open: the close fact is the
+    user's "no more wakes" signal for the whole archived subtree. A session
+    without a profile keeps the legacy check — the succession chain's end is
+    ARCHIVED with no successor. Returns the cancel reason when the target must
+    not be woken, None otherwise; a missing chain end is not a dormancy answer
+    and reads None (the fire-time path reports it as metadata_unavailable
+    instead).
+    """
+    task_mgr = self._task_tree_provider()
+    meta = await task_mgr.load_meta(session_id)
+    if meta is not None and meta.profile is not None:
+      if task_mgr.task_state(session_id) != "open":
+        return "target task is archived"
+      return None
+    resolved_tail = await self._session_mgr.resolve_successor_chain(session_id)
+    if resolved_tail is None:
+      return None
+    if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
+      return "archived"
+    return None
+
+  async def _is_dormant_target(self, session_id: str) -> bool:
+    """The dormancy predicate over :meth:`_dormancy_reason` (create-time rejection)."""
+    return await self._dormancy_reason(session_id) is not None
+
+  async def _watch_dormancy(self, trigger: PendingTrigger) -> str:
+    """Watchdog racer: poll the dormancy predicate every ``_DORMANCY_CHECK_SECONDS``.
+
+    Returns — and so wins the race against the delivery wait — once the target
+    has gone dormant, carrying the dormancy reason the winner cancels with; it
+    never fires anything itself. The winner's handling lives in
+    ``_wait_and_fire``.
+    """
+    while True:
+      await asyncio.sleep(_DORMANCY_CHECK_SECONDS)
+      reason = await self._dormancy_reason(trigger.session_id)
+      if reason is not None:
+        return reason
+
+  async def _reload_pending(self, trigger: PendingTrigger) -> PendingTrigger | None:
+    """Re-read a trigger after a wait. None when the file vanished mid-wait (logged) or
+    another path already moved it off PENDING — either way the caller must not re-stamp."""
+    try:
+      fresh = await self._load_trigger(trigger.session_id, trigger.id)
+    except FileNotFoundError:
+      log.warning("trigger_file_missing_after_sleep", trigger_id=trigger.id)
+      return None
+    if fresh.status != TriggerStatus.PENDING:
+      return None
+    return fresh
+
+  async def _cancel_undeliverable(self, fresh: PendingTrigger, reason: str) -> None:
+    """Every _wait_and_fire exit where the event cannot be delivered ends the same
+    way: stamp CANCELLED with the path's reason, persist, drop the in-memory
+    task handle, log the path."""
+    fresh.status = TriggerStatus.CANCELLED
+    fresh.fire_reason = reason
+    await self._save_trigger(fresh)
+    self._tasks.pop(fresh.id, None)
+    log.info(
+        "trigger_cancelled_archived_session",
+        trigger_id=fresh.id,
+        session=fresh.session_id,
+        reason=reason,
+    )
+
+  async def _wait_and_fire(self, trigger: PendingTrigger) -> None:
+    """Wait until every watch group finishes (or fire_at), then trigger the master agent.
+
+    Targets are grouped by kind and each group's sub-waiter runs concurrently
+    against the shared ``fire_at`` deadline. The reason is 'completed' when all
+    groups finish, 'timeout' if the deadline arrives with anything still alive;
+    a trigger with no watch targets has nothing to wait on and fires as
+    'timeout' at fire_at.
+    The wait races a dormancy watchdog, so a session archived without a
+    successor mid-wait cancels the trigger instead of firing.
+    """
+    groups: dict[WatchKind, list[WatchTarget]] = {}
+    for t in trigger.watch_targets:
+      groups.setdefault(t.kind, []).append(t)
+
+    async def _existing_wait() -> tuple[str, list[str], list[str]]:
+      if groups:
+        sub_waiters = []
+        for kind, group in groups.items():
+          if kind == WatchKind.LOCAL_PID:
+            sub_waiters.append(self._wait_with_pidfd(trigger, group))
+          elif kind == WatchKind.REMOTE_PID:
+            sub_waiters.append(self._wait_with_remote_probe(trigger, group))
+          elif kind == WatchKind.SLURM_JOB:
+            sub_waiters.append(self._wait_with_sacct(trigger, group))
+          elif kind == WatchKind.UNKNOWN:
+            raise RuntimeError("WatchKind.UNKNOWN is a fail-loud sentinel and must never be watched")
+          else:
+            raise RuntimeError(f"unhandled WatchKind in dispatch: {kind!r}")
+        results = await asyncio.gather(*sub_waiters)
+        finished = [label for group_finished, _ in results for label in group_finished]
+        still_alive = [label for _, group_alive in results for label in group_alive]
+        reason = "timeout" if still_alive else "completed"
+      else:
+        now = datetime.now(UTC)
+        remaining = (trigger.fire_at - now).total_seconds()
+        if remaining > 0:
+          await asyncio.sleep(remaining)
+        reason = "timeout"
+        finished = []
+        still_alive = []
+      return reason, finished, still_alive
+
+    wait_task = asyncio.create_task(_existing_wait())
+    watchdog_task = asyncio.create_task(self._watch_dormancy(trigger))
+    try:
+      done, _ = await asyncio.wait({wait_task, watchdog_task}, return_when=asyncio.FIRST_COMPLETED)
+    except BaseException:
+      # An outer cancellation (the trigger was cancelled mid-wait) must not
+      # orphan the two racers.
+      for task in (wait_task, watchdog_task):
+        task.cancel()
+      raise
+    for task in (wait_task, watchdog_task):
+      if task not in done:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    # A racer that failed surfaces its exception instead of counting as a win.
+    for task in (watchdog_task, wait_task):
+      if task.done() and not task.cancelled():
+        exc = task.exception()
+        if exc is not None:
+          raise exc
+
+    if watchdog_task in done:
+      # Watchdog win: the target went dormant mid-wait (an archived task node
+      # or a legacy archived chain end). Same re-read as the fire-time backstop
+      # below, so a trigger cancelled while we waited is not re-stamped.
+      fresh = await self._reload_pending(trigger)
+      if fresh is None:
+        return
+      await self._cancel_undeliverable(fresh, reason=watchdog_task.result())
+      return
+
+    reason, finished, still_alive = wait_task.result()
+
+    # Re-load to check for cancellation during sleep
+    fresh = await self._reload_pending(trigger)
+    if fresh is None:
+      return
+
+    if fresh.watch_targets:
+      suffix = _format_suffix(reason, finished, still_alive)
+      trigger_message = f"[Scheduled trigger fired | {reason}] {fresh.message}{suffix}"
+    else:
+      trigger_message = f"[Scheduled trigger fired] {fresh.message}"
+
+    # Established aliases resolve to the canonical task without changing its
+    # ownership: a trigger recorded against a pre-tree (imported) session id
+    # delivers to the same node. The trigger file stays where it was written;
+    # only the delivery target resolves.
+    deliver_to = self._tree_alias_target(fresh.session_id) or fresh.session_id
+
+    # Fresh chain read, and the fire path's missing-metadata guard: a
+    # metadata.json deleted or blanked mid-wait cancels here instead of
+    # delivering into a vanished session. The archived-no-successor call and
+    # the redirect live below (_is_dormant_target, deliver_to_successor).
+    resolved_tail = await self._session_mgr.resolve_successor_chain(deliver_to)
+    if resolved_tail is None:
+      await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
+      return
+
+    # Race backstop: the watchdog covers the wait, so this fire-time re-check of
+    # the same predicate catches an archive landing in the final stretch.
+    dormancy_reason = await self._dormancy_reason(deliver_to)
+    if dormancy_reason is not None:
+      await self._cancel_undeliverable(fresh, reason=dormancy_reason)
+      return
+
+    # A v2 task-tree node takes the durable dispatcher route: the trigger's
+    # own id is the input's stable identity, so a crash after the durable
+    # admission but before the FIRED stamp replays into the SAME input (a
+    # recovered trigger re-fires, admission dedups, FIRED lands) instead of
+    # duplicating the task input or its process. No second append/wake path
+    # exists on this route.
+    if await self._fire_task_tree(fresh, trigger_message, deliver_to):
+      await self._stamp_fired(fresh, reason)
+      return
+
+    # Deliver the scheduled-trigger event through the succession-aware primitive:
+    # it persists into the chain end (stamping origin_session_id when redirected)
+    # and returns None only when the chain end no longer exists. The wake event
+    # is the delivery: its injected id is what the woken turn answers, so a
+    # restart reconcile excludes exactly this event from replay.
+    wake_event = build_scheduled_trigger_event(trigger_message)
+    delivered = await self._session_mgr.deliver_to_successor(deliver_to, wake_event)
+    if delivered is None:
+      await self._cancel_undeliverable(fresh, reason="chain_end_missing")
+      return
+
+    # FIRED on delivery: the record leaves pending the moment its wake lands in
+    # the chat log, before the woken turn is even enqueued -- pending means
+    # "not yet delivered", so the tray and the limit count stop carrying a wake
+    # the session is already about to answer. Crash between this stamp and the
+    # enqueue below costs one replayed wake (the event is unanswered), which
+    # merges into the next turn.
+    await self._stamp_fired(fresh, reason)
+
+    # Wake the master CC, declared as SCHEDULED_TRIGGER input so it batches
+    # with whatever else is queued. The trigger's task no longer waits for the
+    # woken turn to finish: the record is already terminal, and trigger_master
+    # handles its own failures (it persists an ERROR event and logs). Re-read
+    # the config here rather than using the snapshot captured at construction:
+    # backends added to or renamed in config.yaml after server start are
+    # invisible to that snapshot. Timed wake: never pull an archived session
+    # back -- the dormancy checks above cancel that case; this opt-out also
+    # covers the window between the last watchdog poll and this call.
+    create_logged_task(
+        trigger_master(
+            deliver_to,
+            trigger_message,
+            get_config(),
+            self._session_mgr,
+            ET.SCHEDULED_TRIGGER,
+            user_event_id=wake_event.get("id"),
+            pull_back=False,
+        ),
+        name=f"trigger-wake-{trigger.id[:8]}",
+    )
+
+  async def _stamp_fired(self, fresh: PendingTrigger, reason: str) -> None:
+    """Stamp a delivered trigger FIRED, persist it, and retire its waiter.
+
+    Both delivery routes end here: the stamp, the persist, the waiter's
+    retirement, and the fired log move together, so a route that stamps
+    FIRED without the other four leaves a live waiter on a terminal record.
+    """
+    fresh.status = TriggerStatus.FIRED
+    fresh.fired_at = datetime.now(UTC)
+    fresh.fire_reason = reason
+    await self._save_trigger(fresh)
+    self._tasks.pop(fresh.id, None)
+    log.info("trigger_fired", trigger_id=fresh.id, session=fresh.session_id, reason=reason)
+
+  def _tree_alias_target(self, session_id: str) -> str | None:
+    """The canonical task id an established alias maps to, or None."""
+    try:
+      return self._task_tree_provider().aliases.resolve_session(session_id)
+    except Exception:
+      log.exception("trigger_alias_resolution_failed", session=session_id)
+      return None
+
+  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str, session_id: str | None = None) -> bool:
+    """The v2 delivery: durable scheduled input to the stable node + dispatch.
+
+    Returns False when the target is not a task-tree node (the legacy route
+    serves it). *session_id* is the alias-resolved delivery target. A missing
+    canonical node is a visible refusal, not a legacy fallback.
+    """
+    from src.runtime.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
+
+    task_mgr = self._task_tree_provider()
+    session_id = session_id or trigger.session_id
+    meta = await task_mgr.load_meta(session_id)
+    if meta is None or meta.profile is None:
+      if session_id != trigger.session_id:
+        # An alias resolved but its node is gone: refuse visibly, never fall
+        # back to writing a legacy wake against a dead mapping.
+        log.error("trigger_task_tree_target_missing", trigger_id=trigger.id, session=session_id)
+        await self._cancel_undeliverable(trigger, reason="task_tree_target_missing")
+        return True
+      return False
+    try:
+      await task_mgr.dispatch.admit_input(
+          session_id,
+          event_type=ET.SCHEDULED_TRIGGER,
+          content=trigger_message,
+          actor="system",
+          input_id=trigger.id,
+      )
+      await task_mgr.dispatch.dispatch_pending(session_id)
+    except TaskArchivedError as e:
+      # The archive landed in the sliver between the dormancy backstop and the
+      # admission: the refusal is the delivery outcome, and the waiter must
+      # retire instead of lingering on a pending record.
+      log.info("trigger_cancelled_archived_target", trigger_id=trigger.id, session=session_id, error=str(e))
+      await self._cancel_undeliverable(trigger, reason="target task is archived")
+      return True
+    except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
+      log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
+      raise
+    log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
+    return True
+
+  def _task_tree_provider(self):
+    """The task-tree owner singleton (lazy import keeps the API layering)."""
+    from src.runtime.api.deps import task_manager
+    return task_manager()
+
+  async def _wait_with_pidfd(
+      self,
+      trigger: PendingTrigger,
+      targets: list[LocalPid],
+  ) -> tuple[list[str], list[str]]:
+    """Event-driven wait on local pidfds. Returns (finished, still_alive) labels.
+
+    A pid that has already exited at start counts as finished (labelled "gone at
+    start") and the wait continues for the rest — per-target, AND-correct. pidfd
+    readiness cannot reap an arbitrary (non-child) pid, so finished labels carry
+    no exit code.
+    """
+    loop = asyncio.get_running_loop()
+    pidfds: dict[int, int] = {}  # fd -> pid
+    finished: list[str] = []
+
+    for t in targets:
+      try:
+        fd = _pidfd_open(t.pid)
+      except ProcessLookupError:
+        finished.append(f"{t.pid} (gone at start)")
+        continue
+      pidfds[fd] = t.pid
+
+    if not pidfds:
+      return finished, []
+
+    done = asyncio.Event()
+
+    def on_ready(fd: int) -> None:
+      pid = pidfds.pop(fd, None)
+      if pid is None:
+        return
+      with contextlib.suppress(Exception):
+        loop.remove_reader(fd)
+      # Reaps only when the watched pid is our child; waitid on a non-child
+      # raises ChildProcessError and there is nothing to reap.
+      with contextlib.suppress(ChildProcessError, OSError):
+        _waitid_pidfd(fd, os.WEXITED | os.WNOHANG)
+      with contextlib.suppress(OSError):
+        os.close(fd)
+      finished.append(str(pid))
+      if not pidfds:
+        done.set()
+
+    for fd in list(pidfds):
+      loop.add_reader(fd, on_ready, fd)
+
+    now = datetime.now(UTC)
+    remaining = (trigger.fire_at - now).total_seconds()
+    try:
+      await asyncio.wait_for(done.wait(), timeout=max(0.0, remaining))
+    except TimeoutError:
+      pass
+    finally:
+      # Cleanup any remaining fds (e.g. timeout case, or cancellation)
+      for fd in list(pidfds):
+        with contextlib.suppress(Exception):
+          loop.remove_reader(fd)
+        with contextlib.suppress(OSError):
+          os.close(fd)
+
+    still_alive = [str(p) for p in pidfds.values()]
+    return finished, still_alive
+
+  async def _wait_with_remote_probe(
+      self,
+      trigger: PendingTrigger,
+      targets: list[RemotePid],
+  ) -> tuple[list[str], list[str]]:
+    """Polling wait via ssh probes with backoff. Returns (finished, still_alive).
+
+    Labels use ``host:pid``. Verify-on-create has already confirmed every PID was
+    ALIVE at create time.
+    """
+    remaining: dict[str, set[int]] = {}
+    for t in targets:
+      remaining.setdefault(t.host, set()).add(t.pid)
+
+    finished: list[str] = []
+    step = 0
+
+    while True:
+      now = datetime.now(UTC)
+      time_to_fire = (trigger.fire_at - now).total_seconds()
+      if time_to_fire <= 0:
+        break
+
+      base = _REMOTE_PROBE_INTERVALS[step] if step < len(_REMOTE_PROBE_INTERVALS) else _REMOTE_PROBE_PLATEAU
+      sleep_for = base + random.uniform(0, _REMOTE_PROBE_NOISE_MAX)
+      await asyncio.sleep(min(sleep_for, time_to_fire))
+
+      now = datetime.now(UTC)
+      if (trigger.fire_at - now).total_seconds() <= 0:
+        break
+
+      finished.extend(await _probe_remaining_remote_pids(remaining, trigger.id))
+
+      step += 1
+      if not remaining:
+        break
+
+    still_alive = [f"{host}:{pid}" for host, pids in remaining.items() for pid in pids]
+    return finished, still_alive
+
+  async def _wait_with_sacct(
+      self,
+      trigger: PendingTrigger,
+      targets: list[SlurmJob],
+  ) -> tuple[list[str], list[str]]:
+    """Polling wait via ``sacct`` for SLURM jobs, local and remote.
+
+    Targets are grouped by ``host`` (``None`` = the trigger-server host); each group
+    runs its own probe loop concurrently, with one batched ``sacct`` per round.
+    """
+    groups: dict[str | None, set[int]] = {}
+    for t in targets:
+      groups.setdefault(t.host, set()).add(t.job_id)
+
+    results = await asyncio.gather(*[self._wait_sacct_group(trigger, host, ids) for host, ids in groups.items()])
+    finished = [label for group_finished, _ in results for label in group_finished]
+    still_alive = [label for _, group_alive in results for label in group_alive]
+    return finished, still_alive
+
+  async def _wait_sacct_group(
+      self,
+      trigger: PendingTrigger,
+      host: str | None,
+      job_ids: set[int],
+  ) -> tuple[list[str], list[str]]:
+    """Probe one host's SLURM jobs until all are terminal or ``fire_at`` arrives.
+
+    Finished labels carry the authoritative State + ExitCode; still-alive labels are
+    bare. The local group polls at a fixed interval; remote groups use the ssh backoff
+    ladder because each probe costs an ssh round trip. On a host without sacct the
+    local group skips polling and waits out the deadline rather than spinning on a
+    missing binary; remote groups are unaffected. A remote group that has answered
+    nothing for ``_REMOTE_SACCT_UNREACHABLE_GRACE`` stops waiting and reports its
+    targets as unreachable so the trigger fires instead of going blind.
+    """
+    remaining = set(job_ids)
+
+    if host is None and not _SACCT_AVAILABLE:
+      log.warning("slurm_watch_no_sacct_skip", trigger_id=trigger.id, job_ids=sorted(remaining))
+      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
+      if time_to_fire > 0:
+        await asyncio.sleep(time_to_fire)
+      return [], [_slurm_label(host, j) for j in sorted(remaining)]
+
+    finished: list[str] = []
+    step = 0
+    last_success = datetime.now(UTC)
+    while True:
+      states, error = await _probe_sacct(sorted(remaining), trigger.id, host=host)
+      if error is None:
+        last_success = datetime.now(UTC)
+      else:
+        log.debug("sacct_probe_transient_error", trigger_id=trigger.id, host=host, error=error)
+        dark_for = (datetime.now(UTC) - last_success).total_seconds()
+        if host is not None and dark_for >= _REMOTE_SACCT_UNREACHABLE_GRACE:
+          log.warning(
+              "slurm_watch_host_unreachable",
+              trigger_id=trigger.id,
+              host=host,
+              dark_seconds=int(dark_for),
+              error=error,
+          )
+          note = error.splitlines()[0][:120]
+          still_alive = [
+              f"{_slurm_label(host, j)} (unreachable {int(dark_for // 60)}m: {note})" for j in sorted(remaining)
+          ]
+          return finished, still_alive
+      for job_id in sorted(remaining):
+        row = states.get(job_id)
+        if row is None:
+          continue  # accounting lag / not yet registered — keep polling
+        state, exit_code = row
+        state_key = state.split()[0] if state else ""
+        if state_key in _SLURM_ACTIVE_STATES:
+          continue
+        if state_key not in _SLURM_TERMINAL_STATES:
+          log.warning("slurm_unknown_state", trigger_id=trigger.id, job_id=job_id, state=state)
+          continue
+        finished.append(f"{_slurm_label(host, job_id)}: {state} {exit_code}")
+        remaining.discard(job_id)
+
+      if not remaining:
+        break
+      time_to_fire = (trigger.fire_at - datetime.now(UTC)).total_seconds()
+      if time_to_fire <= 0:
+        break
+      if host is None:
+        sleep_for = float(_SACCT_POLL_INTERVAL)
+      else:
+        base = _REMOTE_PROBE_INTERVALS[step] if step < len(_REMOTE_PROBE_INTERVALS) else _REMOTE_PROBE_PLATEAU
+        sleep_for = base + random.uniform(0, _REMOTE_PROBE_NOISE_MAX)
+      step += 1
+      await asyncio.sleep(min(sleep_for, time_to_fire))
+
+    still_alive = [_slurm_label(host, j) for j in sorted(remaining)]
+    return finished, still_alive
+
+  def _triggers_dir(self, session_id: str) -> Path:
+    return self._cfg.sessions_dir / session_id / "triggers"
+
+  def _trigger_path(self, session_id: str, trigger_id: str) -> Path:
+    return self._triggers_dir(session_id) / f"{trigger_id}.json"
+
+  async def _save_trigger(self, trigger: PendingTrigger) -> None:
+    # list_triggers and the sidebar probe read this file from executor threads
+    # with no coordination, so the write must stay atomic (a JSON parse
+    # failure drops the trigger from one poll).
+    await write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
+    # Schedule, cancel, and undeliverable all move a session's pending count through
+    # this method, so the sidebar snapshot is told here. recover_pending's schema
+    # migration writes trigger files directly and preserves each trigger's status,
+    # so the pending count cannot change there and no dirty mark is owed. The
+    # mark stays path-less: a trigger save is user-action rare, and the status
+    # re-probe it schedules refreshes the pending-trigger snapshot the sidebar
+    # bell and the pending-triggers tray read.
+    mark_sidebar_dirty(trigger.session_id)
+
+  async def _load_trigger(self, session_id: str, trigger_id: str) -> PendingTrigger:
+    path = self._trigger_path(session_id, trigger_id)
+    async with aiofiles.open(path) as f:
+      raw = await f.read()
+    trigger, _ = _migrate_legacy_watch_pids(raw)
+    return trigger
+
+
+def _format_suffix(
+    reason: str,
+    finished: list[str],
+    still_alive: list[str],
+) -> str:
+  """Build the message suffix describing watch outcomes for a fired trigger.
+
+  Labels are pre-formatted by each sub-waiter: `"1234"` (local pid, possibly
+  "gone at start"), `"host:5678"` (remote pid), `"slurm:42: COMPLETED 0:0"`
+  (slurm job).
+  """
+  finished_part = ", ".join(finished)
+  if reason == "completed":
+    return f" (finished: {finished_part})"
+  # timeout
+  alive_part = ", ".join(still_alive)
+  if finished_part:
+    return f" (finished: {finished_part}; still alive: {alive_part})"
+  return f" (still alive: {alive_part})"

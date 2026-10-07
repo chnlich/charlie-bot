@@ -19,8 +19,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, task_sessions, thinking_state
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import task_sessions, thinking_state
 from tests import test_task_execution
 
 
@@ -148,7 +149,7 @@ async def test_failed_run_header_reads_failed_with_its_error(
   refusal precedes any spawn, and a registered Run carries none) heads its
   segment as "launch failed" with the error text in full, exactly once: the
   chosen error event's own chat row leaves the projection."""
-  from src.core import worker_transcript
+  from src.runtime import worker_transcript
 
   _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: worktree preparation failed: task/x differs from origin/main"
@@ -190,7 +191,7 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
   """A Run that started (its launch recorded) and then failed still reads plain
   "failed" — launch_failed is false — and its launch prompt link points at the
   assembled file. Its error text also lands in the header exactly once."""
-  from src.core import task_prompts, worker_transcript
+  from src.runtime import task_prompts, worker_transcript
 
   _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
@@ -231,7 +232,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
   """A running Run's error event is an ordinary row; once the Run finishes
   failed, a poll carrying the previous revision answers reset (the client
   re-renders) and the error text lives only in the header's error field."""
-  import src.core.runs as runs_mod
+  import src.runtime.runs as runs_mod
 
   cfg, session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"

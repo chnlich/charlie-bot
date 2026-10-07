@@ -16,22 +16,18 @@ from conftest import (
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
-from src.api import internal
-from src.core import event_types as ET
-from src.core import spawner_backends
-from src.core.config import CharlieBotConfig
-from src.core.models import (
-    DelegateRequest,
-    SessionMetadata,
-    TaskType,
-)
-from src.core.takeoff_gate import DelegationBlockedError, check_takeoff_gate
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import DelegateRequest, SessionMetadata, TaskType
+from src.runtime import spawner_backends
+from src.runtime.api import internal
+from src.runtime.takeoff_gate import DelegationBlockedError, check_takeoff_gate
 
 
 def _stub_task_manager():
   """A task-tree manager over the test's session manager (v1 sessions never
   reach its authorization path; the signature keeps one owner for both)."""
-  from src.core.task_sessions import TaskTreeManager
+  from src.runtime.task_sessions import TaskTreeManager
   return TaskTreeManager(CharlieBotConfig(charliebot_home=Path("/tmp/delegate-takeoff-stub")), _LastSessionManager())
 
 

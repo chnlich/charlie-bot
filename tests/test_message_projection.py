@@ -18,9 +18,9 @@ from conftest import (
 from conftest import assistant_event as _assistant_event
 from conftest import queued_user_reorder_events as _reorder_events
 
-from src.api.message_utils import events_to_messages
-from src.core import event_types as ET
-from src.core.message_projection import MessageProjection
+from src.infra import event_types as ET
+from src.runtime.api.message_utils import events_to_messages
+from src.runtime.message_projection import MessageProjection
 
 # ---------------------------------------------------------------------------
 # Fixture event builders
@@ -187,7 +187,7 @@ async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
 
 def test_paging_path_does_not_call_parse_ndjson_range(monkeypatch: pytest.MonkeyPatch) -> None:
   """slice_before on an already-built projection must not read files."""
-  from src.core import ndjson
+  from src.infra import ndjson
 
   def _boom(*args: object, **kwargs: object) -> None:
     raise AssertionError("parse_ndjson_range must not be called on the paging path")

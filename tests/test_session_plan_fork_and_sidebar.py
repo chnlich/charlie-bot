@@ -10,7 +10,7 @@ import conftest
 import pytest
 from structlog import testing
 
-from src.core import config, models
+from src.infra import config, models
 
 _PLAN_V1_REL = "artifacts/plan_01.html"
 _PLAN_V2_REL = "artifacts/plan_02.html"

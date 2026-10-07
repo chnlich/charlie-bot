@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from src.api import responses
-from src.core import streaming
+from src.infra import responses
+from src.runtime import streaming
 
 WINDOW = 0.05
 

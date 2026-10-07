@@ -1,4 +1,4 @@
-"""Tests for src/cli/plan.py — argument validation, session resolution, stdout/stderr shape."""
+"""Tests for src/features/artifacts/plan_cli.py — argument validation, session resolution, stdout/stderr shape."""
 
 import contextlib
 import json
@@ -9,8 +9,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.cli import plan
-from src.core import plan_diff
+from src.features.artifacts import plan_cli as plan
+from src.features.artifacts import plan_diff
 
 
 @contextlib.contextmanager

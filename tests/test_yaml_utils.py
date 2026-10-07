@@ -4,7 +4,7 @@ pure-Python safe pair, and the load/save behaviors every caller relies on."""
 import pytest
 import yaml
 
-from src.core import yaml_utils
+from src.infra import yaml_utils
 
 
 def test_malformed_document_raises_yaml_error() -> None:

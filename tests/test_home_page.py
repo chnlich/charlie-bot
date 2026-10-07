@@ -8,8 +8,9 @@ import re
 import conftest
 import pytest
 
-from src.api import auth, pages
-from src.core import config
+from src.app import pages
+from src.infra import config
+from src.runtime.api import auth
 
 
 def _cfg(home: pathlib.Path, services: list[dict[str, str]]) -> config.CharlieBotConfig:

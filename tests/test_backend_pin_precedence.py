@@ -13,10 +13,10 @@ from collections.abc import Awaitable, Callable
 import conftest
 import pytest
 
-from src.agents import master_cc
-from src.api import chat
-from src.core import config, master_trigger, models, sessions
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import master_cc, master_trigger, sessions
+from src.runtime.api import chat
 
 
 def _assistant_errors(session_mgr: sessions.SessionManager, session_id: str) -> list[dict]:

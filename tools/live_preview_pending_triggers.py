@@ -3,7 +3,7 @@
 Starts the real server entry point (``server.py``) on a fresh temporary
 CharlieBot home and a free port — not the session-tree preview, whose request
 gate refuses ``/api/internal/schedule-trigger`` by design (that trial does not
-run the mechanisms, src/core/session_tree_preview.py) while this one has to
+run the mechanisms, src/features/session_tree_preview/session_tree_preview.py) while this one has to
 register real triggers through ``charliebot schedule-trigger``. The harness
 creates one chat session, registers its delayed triggers through that CLI, and
 drives the real UI in headless Chrome over CDP while the tray renders them:
@@ -49,7 +49,7 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     evaluate,
     open_evidence_dir,
@@ -155,7 +155,7 @@ def schedule_trigger_cli(home: Path, session_id: str, *args: str) -> dict:
   env["CHARLIEBOT_HOME"] = str(home)
   env["PYTHONUNBUFFERED"] = "1"
   proc = subprocess.run(
-      [sys.executable, "-m", "src.cli.main", "schedule-trigger", "--session", session_id, *args],
+      [sys.executable, "-m", "src.app.main", "schedule-trigger", "--session", session_id, *args],
       cwd=REPO_ROOT,
       env=env,
       capture_output=True,

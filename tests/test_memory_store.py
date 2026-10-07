@@ -1,4 +1,4 @@
-"""Tests for the labeled-entry memory store library (src/core/memory.py).
+"""Tests for the labeled-entry memory store library (src/features/memory/memory.py).
 
 Fixtures are entry format v2 (frontmatter ``title``, comma-list ``audience``,
 no ``created``/``source``, heading-free body); ``legacy_memory_entry_text``
@@ -14,7 +14,7 @@ from collections.abc import Callable
 import conftest
 import pytest
 
-from src.core import memory
+from src.features.memory import memory
 
 # --- parse_entry: v2 ----------------------------------------------------------
 
@@ -143,7 +143,7 @@ def test_cli_add_creates_one_staging_file(tmp_path: pathlib.Path, monkeypatch: p
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n"
   monkeypatch.setattr("sys.stdin", io.StringIO(body))
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
   cli.main()
   staging = cfg.memory_dir / "staging"
@@ -163,7 +163,7 @@ def test_cli_query_audience_filter_is_membership(
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   conftest.write_memory_entry(cfg.memory_dir, "profile", "for-master", audience="master", body="mbody\n")
   conftest.write_memory_entry(cfg.memory_dir, "profile", "for-both", audience="master, worker", body="bbody\n")
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--audience", "worker"])
   cli.main()
   out = capsys.readouterr().out
@@ -178,7 +178,7 @@ def test_cli_lint_dir_reads_given_root(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   """Without --dir lint reads the live store; with --dir it reads the given root."""
   _patch_cli_cfg(monkeypatch, tmp_path)
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "lint"])
   cli.main()
   assert capsys.readouterr().out.strip() == "clean"
@@ -204,7 +204,7 @@ def test_cli_query_dir_reads_given_root(
   other = tmp_path / "memory-proposal"
   conftest.write_memory_topics(other)
   conftest.write_memory_entry(other, "profile", "pr-only", body="pr body\n")
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--dir", str(other)])
   cli.main()
   out = capsys.readouterr().out

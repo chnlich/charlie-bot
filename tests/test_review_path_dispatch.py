@@ -13,8 +13,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import git, models
+from src.infra import event_types as ET
+from src.infra import git, models
 from tests import test_task_execution
 
 

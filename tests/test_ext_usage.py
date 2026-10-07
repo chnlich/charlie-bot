@@ -9,8 +9,8 @@ from typing import Any
 import pytest
 from conftest import codex_token_count_event, fresh_state_fixture
 
-from src.api import ext_usage as ext_usage_mod
-from src.api.ext_usage import (
+from src.features.usage import ext_usage as ext_usage_mod
+from src.features.usage.ext_usage import (
     ClaudeUsageProvider,
     _derive_accounts,
     _extract_codex_spend_events,
@@ -19,8 +19,8 @@ from src.api.ext_usage import (
     _sum_codex_spend_events,
     _transform_codex_response,
 )
-from src.core.config import CharlieBotConfig
-from src.core.models import ClaudeAccount
+from src.infra.config import CharlieBotConfig
+from src.infra.models import ClaudeAccount
 
 _fresh_unknown_limit_shape_registry = fresh_state_fixture(ext_usage_mod._UNKNOWN_LIMIT_SHAPES_SEEN.clear)
 _fresh_credential_read_warning_registry = fresh_state_fixture(ext_usage_mod._CREDENTIAL_READ_WARNINGS_SEEN.clear)
@@ -213,7 +213,7 @@ def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.Monk
                   ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
               ]
       })
-  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
+  monkeypatch.setattr("src.infra.config.get_config", lambda: cfg)
 
   labels = [label for label, _ in _derive_accounts()["claude"]]
 
@@ -273,7 +273,7 @@ def _run_poll_cycles(
     state["payloads"].append(event)
 
   monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
-  monkeypatch.setattr("src.core.streaming.streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
+  monkeypatch.setattr("src.runtime.streaming.streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
   monkeypatch.setattr(ext_usage_mod, "_derive_accounts", accounts_fn)
   monkeypatch.setattr(ext_usage_mod, "_create_provider", create_provider)
   ext_usage_mod._cached_usage.clear()
@@ -406,7 +406,7 @@ def _claude_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeUsageProvider:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
-  monkeypatch.setattr("src.core.http.get_http_client", lambda: fake)
+  monkeypatch.setattr("src.infra.http.get_http_client", lambda: fake)
   return ClaudeUsageProvider("ext-test", credentials_path)
 
 

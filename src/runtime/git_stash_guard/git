@@ -1,0 +1,527 @@
+#!/bin/sh
+# git - stash-write guard for CharlieBot's worker and reviewer agents.
+#
+# Worker.run (src/runtime/worker.py) puts this directory first on the PATH of
+# every agent child. The script refuses the git stash write forms - every
+# worktree of a repository shares one stash stack (refs/stash lives in the
+# common .git directory), so one task's `git stash pop` can take another
+# task's entry - and hands every other command to real git unchanged.
+#
+# Behavior contract (plan 3 v3, sections 3 and 4.1):
+#   - Skip git's global options to find the subcommand: every global option
+#     git 2.43 accepts per `git help git`, in `--opt=value` and `--opt value`
+#     forms where git takes them, including -C and -c.
+#   - When the resolved subcommand is stash, `list` and `show` run normally;
+#     every other form - bare `git stash` included - prints the notice below
+#     to stderr and exits 2 without touching git state. The first stash
+#     argument comes from the alias expansion when stash was reached through
+#     one, so `alias.x = stash list` still reads while `alias.x = stash push`
+#     is refused.
+#   - Aliases resolve in git 2.43's order: a builtin wins over a same-named
+#     alias, a dashed external git-<name> wins over an alias, then
+#     alias.<name> (from -c or from config, looked up with the same global
+#     options), expanded repeatedly. An alias loop hands the original argv to
+#     real git, which reports its own alias-loop error.
+#   - A `!` shell alias runs here, with this directory still first on PATH, so
+#     an inner `git stash` reaches this script again (real git prepends its
+#     exec-path to the child PATH, which would let the inner call bypass the
+#     guard). The invocation reproduces what git does for shell aliases: the
+#     working directory at the worktree top level, GIT_PREFIX, argument
+#     passing as `sh -c '<body> "$@"' <body> <args...>`, and -c/--config-env
+#     config propagation via GIT_CONFIG_PARAMETERS.
+#
+# Known deviation, deliberate: the shell-alias child PATH keeps this directory
+# first instead of git's exec-path - that substitution is the guard's point.
+
+set -u
+
+NOTICE=$(cat <<'EOF'
+CharlieBot worker runs refuse git stash writes: every worktree of this
+repository shares one stash stack, so a pop can take another task's entry.
+Set changes aside by committing them on the task branch.
+Compare against a clean tree in a separate snapshot:
+  git worktree add --detach "$(mktemp -d)" HEAD
+  (remove it afterwards with: git worktree remove <dir>)
+EOF
+)
+
+# cd must not reroute or print: the -C replication and repo discovery below
+# need plain chdir semantics.
+unset CDPATH
+
+# Unset PATH is treated as empty: the guard then fails loudly below instead of
+# emulating execvp's confstr fallback.
+PATH=${PATH:-}
+
+self_dir=$(cd -- "$(dirname -- "$0")" && pwd -P)
+
+# Drop this directory from PATH everywhere it appears, preserving the entry
+# structure otherwise: empty entries name the current directory and stay
+# empty. The guard execs real git by absolute path, so it never calls itself
+# through PATH; the shell-alias runner below puts the directory back first.
+path_rest=$PATH
+new_path=''
+path_sep=''
+while :; do
+  case $path_rest in
+    *:*)
+      path_entry=${path_rest%%:*}
+      path_rest=${path_rest#*:}
+      path_more=1
+      ;;
+    *)
+      path_entry=$path_rest
+      path_more=0
+      ;;
+  esac
+  if [ "$path_entry" != "$self_dir" ]; then
+    new_path=$new_path$path_sep$path_entry
+    path_sep=:
+  fi
+  [ "$path_more" = 1 ] || break
+done
+PATH=$new_path
+export PATH
+guard_path=$self_dir
+[ -n "$new_path" ] && guard_path=$self_dir:$new_path
+
+# Search PATH for an executable and print the path found. Relative entries
+# resolve against the current directory, like execvp.
+find_on_path() {
+  find_name=$1
+  find_rest=$PATH
+  while :; do
+    case $find_rest in
+      *:*)
+        find_dir=${find_rest%%:*}
+        find_rest=${find_rest#*:}
+        find_more=1
+        ;;
+      *)
+        find_dir=$find_rest
+        find_more=0
+        ;;
+    esac
+    if [ -z "$find_dir" ]; then
+      find_dir=.
+    fi
+    case $find_dir in
+      /*) ;;
+      *) find_dir=$PWD/$find_dir ;;
+    esac
+    if [ -x "$find_dir/$find_name" ]; then
+      printf '%s\n' "$find_dir/$find_name"
+      return 0
+    fi
+    [ "$find_more" = 1 ] || return 1
+  done
+}
+
+real_git=$(find_on_path git)
+if [ -z "$real_git" ]; then
+  printf 'git-stash-guard: no real git found on PATH\n' >&2
+  exit 127
+fi
+# Belt against a PATH entry that spells this directory differently than
+# self_dir (e.g. '.'): never exec this script itself.
+if [ "$real_git" = "$0" ]; then
+  printf "git-stash-guard: '%s' is this guard, not real git; fix PATH\n" "$0" >&2
+  exit 127
+fi
+
+# Character class matching git's prepare_shell_cmd metacharacter set: a body
+# containing any of these runs under /bin/sh, everything else is exec'd
+# directly.
+META_CHARS='[|&;<>()$`\\"'"'"'[:space:]*?[#~=%]'
+
+# git's sq_quote_buf for GIT_CONFIG_PARAMETERS entries: wrap in single quotes,
+# escaping ' as '\'' and ! as '\!'.
+sq_quote() {
+  sq_out="'"
+  sq_rest=$1
+  while [ -n "$sq_rest" ]; do
+    sq_c=${sq_rest%"${sq_rest#?}"}
+    sq_rest=${sq_rest#?}
+    case $sq_c in
+      "'"|'!') sq_out=$sq_out\'\\$sq_c\' ;;
+      *) sq_out=$sq_out$sq_c ;;
+    esac
+  done
+  printf '%s' "$sq_out'"
+}
+
+# git's split_cmdline, one word per call, for alias values: space, tab and
+# newline separate words; quotes group without word-breaking and concatenate;
+# a backslash outside quotes or inside double quotes escapes the next
+# character; single quotes are fully literal. A leading whitespace run yields
+# an empty first word, matching git (it then fails with "'' is not a git
+# command"); runs inside the string collapse; a trailing run yields one empty
+# word. Unterminated quotes or a trailing lone backslash make git abort with
+# a "bad alias" fatal - signaled by a nonzero return so the caller hands the
+# original argv to real git. NW_IN is the remaining string (consumed by the
+# call), NW_WORD the word extracted, NW_LEAD 1 before the first word of a
+# value and 0 afterwards.
+TAB=$(printf 'a\tb')
+TAB=${TAB#a}
+TAB=${TAB%b}
+NL='
+'
+NW_IN=''
+NW_WORD=''
+BS="\\"
+NW_LEAD=0
+split_next_word() {
+  nw_word=''
+  nw_quote=''
+  while :; do
+    if [ -z "$NW_IN" ]; then
+      if [ -n "$nw_quote" ]; then
+        return 2
+      fi
+      NW_WORD=$nw_word
+      return 0
+    fi
+    nw_c=${NW_IN%"${NW_IN#?}"}
+    NW_IN=${NW_IN#?}
+    case $nw_quote in
+      "'")
+        if [ "$nw_c" = "'" ]; then
+          nw_quote=''
+        else
+          nw_word=$nw_word$nw_c
+        fi
+        ;;
+      '"')
+        if [ "$nw_c" = '"' ]; then
+          nw_quote=''
+        elif [ "$nw_c" = "$BS" ]; then
+          if [ -z "$NW_IN" ]; then
+            return 3
+          fi
+          nw_word=$nw_word${NW_IN%"${NW_IN#?}"}
+          NW_IN=${NW_IN#?}
+        else
+          nw_word=$nw_word$nw_c
+        fi
+        ;;
+      '')
+        case $nw_c in
+          ' '|"$TAB"|"$NL")
+            if [ "$NW_LEAD" = 1 ]; then
+              NW_WORD=''
+              return 0
+            fi
+            if [ -n "$nw_word" ]; then
+              NW_WORD=$nw_word
+              return 0
+            fi
+            ;;  # a whitespace run inside the string collapses
+          *)
+            NW_LEAD=0
+            case $nw_c in
+              "'")
+                nw_quote="'"
+                ;;
+              '"')
+                nw_quote='"'
+                ;;
+              "$BS")
+                if [ -z "$NW_IN" ]; then
+                  return 3
+                fi
+                nw_word=$nw_word${NW_IN%"${NW_IN#?}"}
+                NW_IN=${NW_IN#?}
+                ;;
+              *)
+                nw_word=$nw_word$nw_c
+                ;;
+            esac
+            ;;
+        esac
+        ;;
+    esac
+  done
+}
+
+# git's two-line failure when the alias body cannot run at all: a PATH
+# lookup fails with "error: cannot run", a slash-carrying body (exec'd
+# directly) with "fatal: cannot exec".
+cannot_run() {
+  if [ -e "$1" ]; then
+    run_reason='Permission denied'
+  else
+    run_reason='No such file or directory'
+  fi
+  if [ "$2" = exec ]; then
+    printf "fatal: cannot exec '%s': %s\n" "$1" "$run_reason" >&2
+  else
+    printf 'error: cannot run %s: %s\n' "$1" "$run_reason" >&2
+  fi
+  printf "fatal: while expanding alias '%s': '%s': %s\n" "$alias_name" "$1" "$run_reason" >&2
+  exit 128
+}
+
+# One --config-env=<name>=<envvar> entry: git splits at the last '=', reads
+# the variable from the environment, and dies when it is missing.
+config_env_entry() {
+  ce_name=${1%=*}
+  ce_var=${1##*=}
+  case $ce_var in
+    *[!A-Za-z0-9_]*)
+      printf "fatal: missing environment variable '%s' for configuration '%s'\n" "$ce_var" "$ce_name" >&2
+      exit 128
+      ;;
+  esac
+  if eval '[ "${'"$ce_var"'+x}" '; then
+    ce_value=$(eval 'printf %s "$'"$ce_var"'"')
+  else
+    printf "fatal: missing environment variable '%s' for configuration '%s'\n" "$ce_var" "$ce_name" >&2
+    exit 128
+  fi
+  cfg_params=$cfg_params$cfg_sep$(sq_quote "$ce_name")=$(sq_quote "$ce_value")
+  cfg_sep=' '
+}
+
+# Walk the global options to find where the subcommand sits. sc_i is the
+# 1-based index of the subcommand argument, 0 when argv carries no
+# subcommand, and -1 when an early-exit global option or a truncated value
+# option means git exits before any subcommand could run - in every such case
+# real git gets the original argv and produces its own output.
+argc=$#
+i=1
+sc_i=0
+while [ "$i" -le "$argc" ]; do
+  arg=$(eval 'printf %s "$'"$i"'"')
+  case $arg in
+    # git prints or acts on these and exits before any subcommand.
+    -v|--version|-h|--help|--html-path|--man-path|--info-path|--exec-path)
+      sc_i=-1
+      break
+      ;;
+    # Value options. git 2.43 takes -C/-c in space form only; the rest in
+    # both = and space forms. A truncated value makes git exit with its own
+    # usage error, which the pass-through reproduces.
+    -C|-c)
+      if [ "$i" -ge "$argc" ]; then
+        sc_i=-1
+        break
+      fi
+      i=$((i + 2))
+      ;;
+    --config-env=*)
+      i=$((i + 1))
+      ;;
+    --config-env)
+      if [ "$i" -ge "$argc" ]; then
+        sc_i=-1
+        break
+      fi
+      i=$((i + 2))
+      ;;
+    --git-dir=*|--work-tree=*|--namespace=*|--attr-source=*|--exec-path=*)
+      i=$((i + 1))
+      ;;
+    --git-dir|--work-tree|--namespace|--attr-source)
+      if [ "$i" -ge "$argc" ]; then
+        sc_i=-1
+        break
+      fi
+      i=$((i + 2))
+      ;;
+    # Valueless options.
+    --bare|--no-replace-objects|-p|-P|--paginate|--no-pager|--literal-pathspecs|\
+--glob-pathspecs|--noglob-pathspecs|--icase-pathspecs|--no-optional-locks)
+      i=$((i + 1))
+      ;;
+    *)
+      # Anything else - including an option git itself rejects - is where the
+      # subcommand would sit; git's own handling follows via pass-through.
+      sc_i=$i
+      break
+      ;;
+  esac
+done
+
+if [ "$sc_i" -le 0 ]; then
+  exec "$real_git" "$@"
+fi
+
+subcmd=$(eval 'printf %s "$'"$sc_i"'"')
+
+# Alias resolution, mirroring git's run_argv loop: builtin first, dashed
+# external second, alias last - expanded repeatedly until a builtin is
+# reached. The stash policy applies to every resolved form, direct or
+# expanded, because stash is a builtin and wins over a same-named alias.
+# seen names the expansion chain; a repeat hands the original argv to real
+# git, whose own alias-loop error matches byte for byte.
+seen=' '
+stash_arg2=''
+while :; do
+  if [ "$subcmd" = 'stash' ]; then
+    # The stash command's first argument: the expansion's second word when
+    # stash was reached through an alias, else the original argv's next
+    # argument.
+    stash_next=$stash_arg2
+    if [ -z "$stash_next" ] && [ "$sc_i" -lt "$argc" ]; then
+      stash_next=$(eval 'printf %s "$'"$((sc_i + 1))"'"')
+    fi
+    case $stash_next in
+      list|show)
+        exec "$real_git" "$@"
+        ;;
+      *)
+        printf '%s\n' "$NOTICE" >&2
+        exit 2
+        ;;
+    esac
+  fi
+  case $seen in
+    *" $subcmd "*) exec "$real_git" "$@" ;;
+  esac
+  # alias.<name> with the same global options, so -c transients and the repo
+  # at -C both count. A failed or empty lookup means no alias: real git
+  # handles the word (builtin, dashed external, or its "not a git command"
+  # error) on the pass-through.
+  alias_val=$(
+    # Rebuild the global-option prefix (argv[1..sc_i-1]) and append the
+    # lookup, so -C/-c and friends steer config exactly as they steered git.
+    # The for-loop's list is the subshell's original argv, captured at loop
+    # start, so the set -- inside rebuilds positionals without disturbing the
+    # iteration.
+    lookup_j=1
+    for lookup_item do
+      if [ "$lookup_j" = 1 ]; then
+        set --
+      fi
+      if [ "$lookup_j" -lt "$sc_i" ]; then
+        set -- "$@" "$lookup_item"
+      fi
+      lookup_j=$((lookup_j + 1))
+    done
+    set -- "$@" config --get "alias.$subcmd"
+    "$real_git" "$@" 2>/dev/null
+  ) || exec "$real_git" "$@"
+  if [ -z "$alias_val" ]; then
+    exec "$real_git" "$@"
+  fi
+  if "$real_git" --list-cmds=builtins 2>/dev/null | grep -qx -- "$subcmd"; then
+    exec "$real_git" "$@"
+  fi
+  git_exec_path=$("$real_git" --exec-path 2>/dev/null)
+  find_dash_result=$(find_on_path "git-$subcmd")
+  if [ -x "$git_exec_path/git-$subcmd" ] || [ -n "$find_dash_result" ]; then
+    exec "$real_git" "$@"
+  fi
+  seen=$seen$subcmd' '
+  case $alias_val in
+    '!'*)
+      # A `!` shell alias: replicate git's handle_options effects on the
+      # global prefix (-C chdirs, --git-dir/--bare set GIT_DIR, -c and
+      # --config-env feed GIT_CONFIG_PARAMETERS), discover the repository
+      # (working directory at the worktree top level, GIT_PREFIX exported -
+      # empty outside a repo), then run the body with the alias's arguments
+      # and guard_path as the child PATH, so an inner `git stash` reaches
+      # this script again. Inline in the main shell: the walk reads the
+      # script's argv by index, which a function's own positionals would
+      # shadow.
+      alias_name=$subcmd
+      alias_body=${alias_val#?}
+      cfg_params=${GIT_CONFIG_PARAMETERS:-}
+      cfg_sep=''
+      if [ -n "$cfg_params" ]; then
+        cfg_sep=' '
+      fi
+      i=1
+      while [ "$i" -lt "$sc_i" ]; do
+        opt=$(eval 'printf %s "$'"$i"'"')
+        case $opt in
+          -C)
+            i=$((i + 1))
+            cd_dir=$(eval 'printf %s "$'"$i"'"')
+            if [ -n "$cd_dir" ]; then
+              cd -- "$cd_dir" 2>/dev/null || {
+                if [ -d "$cd_dir" ]; then
+                  cd_reason='Permission denied'
+                else
+                  cd_reason='No such file or directory'
+                fi
+                printf "fatal: cannot change to '%s': %s\n" "$cd_dir" "$cd_reason" >&2
+                exit 128
+              }
+            fi
+            ;;
+          --git-dir=*)
+            export GIT_DIR="${opt#--git-dir=}"
+            ;;
+          --git-dir)
+            i=$((i + 1))
+            gd_val=$(eval 'printf %s "$'"$i"'"')
+        export GIT_DIR="$gd_val"
+            ;;
+          --bare)
+            bare_dir=$(pwd -P)
+            export GIT_DIR="$bare_dir"
+            ;;
+          -c)
+            i=$((i + 1))
+            c_val=$(eval 'printf %s "$'"$i"'"')
+            case $c_val in
+              *=*)
+                cfg_params=$cfg_params$cfg_sep$(sq_quote "${c_val%%=*}")=$(sq_quote "${c_val#*=}")
+                ;;
+              *)
+                cfg_params=$cfg_params$cfg_sep$(sq_quote "$c_val")=
+                ;;
+            esac
+            cfg_sep=' '
+            ;;
+          --config-env=*)
+            config_env_entry "${opt#--config-env=}"
+            ;;
+          --config-env)
+            i=$((i + 1))
+            ce_spec=$(eval 'printf %s "$'"$i"'"')
+            config_env_entry "$ce_spec"
+            ;;
+        esac
+        i=$((i + 1))
+      done
+
+      # Repo discovery as git does before running an alias. GIT_DIR exported
+      # above steers rev-parse exactly as the option steered git.
+      alias_prefix=$("$real_git" rev-parse --show-prefix 2>/dev/null)
+      alias_top=$("$real_git" rev-parse --show-toplevel 2>/dev/null)
+      if [ -n "$alias_top" ]; then
+        cd -- "$alias_top" || exit 1
+      fi
+      export GIT_PREFIX="${alias_prefix:-}"
+      guard_exec_path=$("$real_git" --exec-path 2>/dev/null)
+      export GIT_EXEC_PATH="$guard_exec_path"
+      if [ -n "$cfg_params" ]; then
+        export GIT_CONFIG_PARAMETERS="$cfg_params"
+      fi
+      PATH=$guard_path
+      export PATH
+
+      # git runs a body with shell metacharacters as
+      #   /bin/sh -c '<body> "$@"' <body> <args...>
+      # and execvp's a metacharacter-free body directly; the alias's arguments
+      # are the original argv after the alias name.
+      shift "$sc_i"
+      if printf '%s' "$alias_body" | grep -q -- "$META_CHARS"; then
+        exec /bin/sh -c "$alias_body \"\$@\"" "$alias_body" "$@"
+      fi
+      case $alias_body in
+        */*) [ -x "$alias_body" ] || cannot_run "$alias_body" exec ;;
+        *) find_on_path "$alias_body" >/dev/null || cannot_run "$alias_body" path ;;
+      esac
+      exec "$alias_body" "$@"
+      ;;
+  esac
+  NW_IN=$alias_val
+  NW_LEAD=1
+  split_next_word || exec "$real_git" "$@"
+  subcmd=$NW_WORD
+  split_next_word || exec "$real_git" "$@"
+  stash_arg2=$NW_WORD
+done

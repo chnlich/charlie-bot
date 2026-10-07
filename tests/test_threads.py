@@ -7,7 +7,8 @@ import threading
 import conftest
 import pytest
 
-from src.core import models, sessions, threads
+from src.infra import models
+from src.runtime import sessions, threads
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Tests for src/cli/remote_launch.py."""
+"""Tests for src/features/remote_launch/cli.py."""
 
 import contextlib
 import json
@@ -15,8 +15,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from conftest import CLI_COMMON_SESSIONS_DIR_PATCH_TARGET, CONFIG_GET_CONFIG_PATCH_TARGET, _wait_for
 
-from src.cli.remote_launch import main
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.features.remote_launch.cli import main
+from src.infra.constants import SESSION_ID_ENV_VAR
 
 # Import-path patch target for remote_launch's subprocess seam. subprocess.run is reached
 # through the launch path's function-local `import subprocess`, which resolves the same

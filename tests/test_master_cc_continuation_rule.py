@@ -14,10 +14,10 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.agents import master_cc_run, master_cc_state
-from src.agents.backends import base as backend_base
-from src.core import config, models, sessions
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import master_cc_run, master_cc_state, sessions
+from src.runtime.agent_process import base as backend_base
 
 
 def _rule_cfg(tmp_path: pathlib.Path) -> config.CharlieBotConfig:

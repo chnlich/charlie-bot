@@ -14,9 +14,10 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents.backends import claude_code
-from src.core import config, models, runs, sessions
-from src.core import event_types as ET
+from src.backends.claude_code import claude_code
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import runs, sessions
 
 CONFIGURED = "claude-fable-5-1"
 FABLE_OPTION = conftest.backend_option(

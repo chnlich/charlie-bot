@@ -1,0 +1,72 @@
+"""CLI: reclaim storage held by cold sessions and unreferenced backend records.
+
+Usage:
+  charliebot storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]
+
+The sweep itself lives in src.features.storage.storage_cool; the scheduler's ``cool_storage``
+handler calls the same function, so the two cannot drift.
+"""
+
+import argparse
+import sys
+
+from src.infra import constants, help_formatter
+
+
+def _cmd_cool(args: argparse.Namespace) -> None:
+  # The sweep and config stacks ride the one sweep command that needs them: a
+  # deferral here keeps --help and parser errors off their import chains (the
+  # src.runtime.cli.config deferral shape).
+  from src.features.storage import storage_cool
+  from src.infra import config
+
+  try:
+    result = storage_cool.run_cool_sweep(
+        dry_run=args.dry_run,
+        min_idle_days=args.min_idle_days,
+        session_id=args.session,
+        vacuum=args.vacuum,
+        force=args.force,
+        cfg=config.get_config(),
+    )
+  except ValueError as e:
+    print(f"Error: {e}", file=sys.stderr)
+    sys.exit(1)
+  print(storage_cool.format_sweep_table(result))
+
+
+def main() -> None:
+  parser = argparse.ArgumentParser(
+      description="CharlieBot storage reclamation", formatter_class=help_formatter.CliHelpFormatter)
+  sub = parser.add_subparsers(dest="command", required=True)
+
+  cool = sub.add_parser(
+      "cool",
+      help="Delete transport logs and backend records of cold sessions",
+      formatter_class=help_formatter.CliHelpFormatter,
+      description="Delete the bytes no reader can reach again: cold sessions' raw transport files and backend "
+      "conversation stores of cold or orphaned sessions.")
+  cool.add_argument("--dry-run", action="store_true", help="Report what would be freed; write nothing, delete nothing.")
+  cool.add_argument(
+      "--min-idle-days",
+      type=int,
+      default=constants.MIN_IDLE_DAYS,
+      help=f"Idle age (days) at which an archived session counts as cold (default: {constants.MIN_IDLE_DAYS}).")
+  cool.add_argument("--session", help="Limit the whole sweep to one session; the cold rule still applies.")
+  cool.add_argument(
+      "--vacuum",
+      action="store_true",
+      help="After the sweep, VACUUM the opencode store to hand freed pages back to the "
+      "filesystem; refuses while an opencode serve writer is alive unless --force.")
+  cool.add_argument(
+      "--force",
+      action="store_true",
+      help="With --vacuum only: vacuum past live opencode writers (and an empty freelist). "
+      "Ignored without --vacuum.")
+
+  args = parser.parse_args()
+  {"cool": _cmd_cool}[args.command](args)
+
+
+if __name__ == "__main__":
+  main()

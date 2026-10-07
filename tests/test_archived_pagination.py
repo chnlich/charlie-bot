@@ -19,8 +19,8 @@ from conftest import (
     user_event,
 )
 
-from src.core.models import SessionMetadata, SessionStatus
-from src.core.sessions import SessionManager
+from src.infra.models import SessionMetadata, SessionStatus
+from src.runtime.sessions import SessionManager
 
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
@@ -168,7 +168,7 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
 @pytest.mark.asyncio
 async def test_search_match_memo_stores_nothing_after_an_errored_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.core.sessions as sessions_module
+  import src.runtime.sessions as sessions_module
 
   mgr = make_session_mgr(tmp_path)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
@@ -191,7 +191,7 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
 @pytest.mark.asyncio
 async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn_derive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.core.sessions as sessions_module
+  import src.runtime.sessions as sessions_module
 
   # One active chat file per session, the population just past the pre-4096
   # file cap (260 sessions over the 256-entry cap): a cap under the
@@ -236,7 +236,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
 
 
 def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.core.sessions as sessions_module
+  import src.runtime.sessions as sessions_module
 
   # A tiny window forces many boundary carries, so the straddle cases run for
   # real instead of riding one whole-file window.

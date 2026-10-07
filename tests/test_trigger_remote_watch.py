@@ -11,8 +11,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.cli import schedule_trigger as cli_module
-from src.core import models, triggers
+from src.infra import models
+from src.runtime import triggers
+from src.runtime.cli import schedule_trigger as cli_module
 
 # ---------------------------------------------------------------------------
 # Mock helpers

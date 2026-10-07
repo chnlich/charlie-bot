@@ -15,8 +15,8 @@ import pytest
 from conftest import OPERATOR, build_env, create_task, stub_credentials
 
 import scripts.archive_unify_migration as migration
-from src.core import event_types as ET
-from src.core.models import RunRecord
+from src.infra import event_types as ET
+from src.infra.models import RunRecord
 
 KEY = "op-secret"
 ORIGINAL_REQUEST = migration._request
@@ -41,9 +41,9 @@ class RouterDouble:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
-    from src.api import sessions as sessions_api
-    from src.api.deps import get_run_store, get_session_manager, get_task_manager
-    from src.core import config
+    from src.infra import config
+    from src.runtime.api import sessions as sessions_api
+    from src.runtime.api.deps import get_run_store, get_session_manager, get_task_manager
 
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -87,7 +87,7 @@ async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
   closed = await create_task(tree, parent=root.id, request_id="closed")
   await tree.archive_subtree(closed.id, caller=OPERATOR)  # not open: never listed
   legacy = await session_mgr.create_session(
-      __import__("src.core.models", fromlist=["CreateSessionRequest"]).CreateSessionRequest(name="Legacy"),
+      __import__("src.infra.models", fromlist=["CreateSessionRequest"]).CreateSessionRequest(name="Legacy"),
       backend="claude-opus-4.6")
   assert legacy.profile is None  # not a task node: absent from both maps
   hide_like_the_old_server(cfg, mid.id)
@@ -223,7 +223,7 @@ def test_preflight_refuses_when_the_server_does_not_answer(monkeypatch: pytest.M
 
 def test_importing_the_script_module_never_imports_the_retired_field_model() -> None:
   """The snapshot must run on raw JSON: importing the script alone pulls in no
-  src.core.models (which drops the retired field the snapshot has to read)."""
+  src.infra.models (which drops the retired field the snapshot has to read)."""
   import subprocess
 
   result = subprocess.run(
@@ -232,7 +232,7 @@ def test_importing_the_script_module_never_imports_the_retired_field_model() -> 
           (
               "import sys; sys.path.insert(0, '.'); "
               "import scripts.archive_unify_migration; "
-              "assert 'src.core.models' not in sys.modules, 'the script imported the model module'")
+              "assert 'src.infra.models' not in sys.modules, 'the script imported the model module'")
       ],
       cwd=Path(__file__).resolve().parents[1],
       capture_output=True,

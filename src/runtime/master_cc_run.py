@@ -1,0 +1,1189 @@
+"""Master CC turn execution — spawn or re-attach one backend run and stream its events."""
+
+import asyncio
+import os
+import time
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from pathlib import Path
+
+from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
+from src.backends.claude_code.claude_code import claude_supervisor_env, out_of_family_served_models
+from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW, is_thread_session
+from src.features.latex.latex import check_tex_changed, clear_snapshot
+from src.features.memory.memory import assemble_master
+from src.infra import event_types as ET
+from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, claude_config_dir
+from src.infra.constants import SESSION_ID_ENV_VAR, BackendType
+from src.infra.log_once import LazyStructlogLogger
+from src.infra.models import (
+    BackendOption,
+    ClaudeAccount,
+    MasterRunRecord,
+    SessionCallbacks,
+    SessionMetadata,
+    backend_type_allows_missing_model,
+)
+from src.infra.ndjson import type_line_filter
+from src.infra.process import kill_group_escalating
+from src.runtime import master_cc_state, runs
+from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
+from src.runtime.sessions import backend_switch_reset_reason, context_reset_note
+from src.runtime.streaming import handle_compaction_events
+
+log = LazyStructlogLogger()
+
+# Prefixed to a salvaged silent turn so the user sees the thinking the model
+# produced instead of nothing. Local chat-stream only: preserved verbatim even
+# though it is non-English, because it never leaves the session's stream.
+NOTICE = "[模型未输出正文，以下为其思考内容]"
+
+
+def _is_manual_compact_boundary(event: dict) -> bool:
+  """True for a compact_boundary system event whose trigger is exactly "manual".
+
+  Exact-string match only: an "auto" boundary is followed by mandatory model
+  output (silence there is the zero-output guard's own failure class), and
+  unknown/absent triggers fail loud — neither may exempt the turn.
+  """
+  return (
+      event.get("type") == ET.SYSTEM and event.get("subtype") == ET.COMPACT_BOUNDARY and
+      (event.get(ET.COMPACT_METADATA) or {}).get("trigger") == "manual")
+
+
+class _RunTimingTracker:
+  """Tracks monotonic timing milestones during a single _run_cc execution."""
+
+  def __init__(self, session_id: str, backend_type: str, model: str | None) -> None:
+    self._session_id = session_id
+    self._backend_type = backend_type
+    self._model = model
+    self._t_start = time.monotonic()
+    self._t_spawn: float | None = None
+    self._t_first_event: float | None = None
+    self._t_first_assistant: float | None = None
+    self._saw_first_assistant = False
+    # Per-run salvage state: accumulations with the same lifecycle as the timing
+    # fields above, created/destroyed with the tracker. Thinking text lands here
+    # when the turn never produces assistant text, so teardown can surface it;
+    # the result flag does so only for a turn the stream actually settled.
+    self._thinking_text: list[str] = []
+    self._saw_result = False
+    # Zero-output guard state (same lifecycle as the timing fields): whether a
+    # terminal result settled with all-zero usage, whether the turn ever
+    # produced thinking content or a tool_use event, and whether the turn
+    # observed a manual-compaction boundary. Used by the guard at teardown so
+    # a genuinely-empty master run fails loudly instead of silently consuming
+    # its trigger — while a manual /compact turn, whose healthy completion IS
+    # the compaction itself, stays exempt.
+    self._saw_zero_usage = False
+    self._saw_thinking = False
+    self._saw_tool_use = False
+    self._saw_manual_compact = False
+
+  async def on_spawn(self, pid: int) -> None:
+    self._t_spawn = time.monotonic()
+    log.info("master_cc_spawned", session=self._session_id, pid=pid, backend=self._backend_type, model=self._model)
+
+  def on_event(self, event: dict) -> None:
+    if self._t_first_event is None:
+      self._t_first_event = time.monotonic()
+      spawn_ref = self._t_spawn if self._t_spawn is not None else self._t_start
+      spawn_to_first_ms = int((self._t_first_event - spawn_ref) * 1000)
+      log.info(
+          "master_cc_first_event",
+          session=self._session_id,
+          event_type=event.get("type"),
+          spawn_to_first_event_ms=spawn_to_first_ms,
+      )
+      if spawn_to_first_ms > 10_000:
+        log.warning(
+            "master_cc_slow_first_event",
+            session=self._session_id,
+            spawn_to_first_event_ms=spawn_to_first_ms,
+        )
+
+    if event.get("type") == ET.RESULT:
+      self._saw_result = True
+      usage = event.get("usage")
+      if isinstance(usage, dict) and all(
+          usage.get(k, 0) == 0 for k in (ET.USAGE_INPUT_TOKENS, ET.USAGE_OUTPUT_TOKENS,
+                                         ET.USAGE_CACHE_READ_INPUT_TOKENS, ET.USAGE_CACHE_CREATION_INPUT_TOKENS)):
+        self._saw_zero_usage = True
+
+    # Fresh-path evidence channel for the manual-compaction observation (the
+    # re-attach path's whole-file projection is the other one).
+    if _is_manual_compact_boundary(event):
+      self._saw_manual_compact = True
+
+    # Standalone tool_use events (codex/gemini flat format).
+    if event.get("type") == ET.TOOL_USE:
+      self._saw_tool_use = True
+
+    # Standalone thinking events (opencode/codex deltas) carry their text in
+    # "content". Accumulated unconditionally: a turn that later speaks is
+    # untouched, and a silent turn gets the whole stream surfaced.
+    if event.get("type") == ET.THINKING and event.get("content"):
+      self._thinking_text.append(event["content"])
+      self._saw_thinking = True
+
+    if not self._saw_first_assistant and event.get("type") == ET.ASSISTANT:
+      msg = event.get("message", {})
+      content_blocks = msg.get("content") if isinstance(msg, dict) else None
+      if content_blocks:
+        for block in content_blocks:
+          if not isinstance(block, dict):
+            continue
+          # claude-family thinking blocks nest the text under "thinking".
+          if block.get("type") == "thinking" and block.get("thinking"):
+            self._thinking_text.append(block["thinking"])
+            self._saw_thinking = True
+          # Wrapped tool_use blocks (opencode/glm) live in assistant content.
+          if block.get("type") == ET.TOOL_USE:
+            self._saw_tool_use = True
+          if block.get("type") == "text" and block.get("text"):
+            self._saw_first_assistant = True
+            self._t_first_assistant = time.monotonic()
+            log.info(
+                "master_cc_first_assistant_text",
+                session=self._session_id,
+                first_assistant_ms=int((self._t_first_assistant - self._t_start) * 1000),
+            )
+            break
+
+  def note_manual_compact(self) -> None:
+    """Latch the manual-compaction observation from a whole-file projection.
+
+    Re-attach counterpart of the live-stream latch in on_event: the persisted
+    read cursor may already sit past the boundary line (a pre-restart process
+    consumed it), so the cursor-forward tail cannot be its only source.
+    """
+    self._saw_manual_compact = True
+
+  def _zero_output_guard(self) -> bool:
+    """True when this run settled with zero model output and must fail loudly.
+
+    Six-part conjunction, mirroring the salvage rule's shape: a terminal
+    result event was received, its usage is all-zero, and the turn produced no
+    assistant text, no thinking content, no tool_use events, and no manual
+    compaction boundary. The result check is the same single guard for
+    cancellation / let-go / mid-run death — none of those reach a result
+    event, so the guard stays quiet for them. The manual-compaction clause
+    exempts the /compact turn, whose output is the compaction itself; an
+    auto-compact boundary must be followed by model output, so it never
+    exempts a silent turn.
+    """
+    return (
+        self._saw_result and self._saw_zero_usage and not self._saw_first_assistant and not self._saw_thinking and
+        not self._saw_tool_use and not self._saw_manual_compact)
+
+  def build_finish_extras(self) -> dict:
+    total_ms = int((time.monotonic() - self._t_start) * 1000)
+    extras: dict = {
+        "backend": self._backend_type,
+        "model": self._model,
+        "total_ms": total_ms,
+    }
+    if self._zero_output_guard():
+      extras["zero_output"] = True
+    if self._t_first_event is not None:
+      spawn_ref = self._t_spawn if self._t_spawn is not None else self._t_start
+      extras["spawn_to_first_event_ms"] = int((self._t_first_event - spawn_ref) * 1000)
+    if self._t_first_assistant is not None:
+      extras["first_assistant_ms"] = int((self._t_first_assistant - self._t_start) * 1000)
+    if total_ms > 120_000:
+      log.warning("master_cc_slow_total", session=self._session_id, total_ms=total_ms)
+    return extras
+
+  def _salvage_thinking_text(self) -> str | None:
+    """Thinking to surface for a silent run, or None when nothing should emit.
+
+    The visibility criterion is assistant text: only a result-settled turn with
+    no assistant text and non-empty thinking warrants a salvage. The result
+    check doubles as the single guard for user cancellation, let-go handover,
+    and mid-run death — none of them reach a result event, so the stream cut
+    before it and there is nothing to surface.
+    """
+    if self._saw_result and not self._saw_first_assistant:
+      thinking = "".join(self._thinking_text)
+      if thinking.strip():
+        return thinking
+    return None
+
+
+async def _salvage_silent_turn(
+    tracker: _RunTimingTracker,
+    error_msg: str | None,
+    session_id: str,
+    persist_and_broadcast: Callable[[str, dict], Awaitable[None]],
+) -> None:
+  """Emit accumulated thinking as a visible assistant text event on a silent turn.
+
+  Shared salvage rule for both master run paths. Emits only when all four hold:
+  the run saw a terminal result event, it never spoke assistant text, the
+  thinking is non-empty, and no error event was already synthesized this turn
+  (avoids two contradicting closing messages). The result check is the single
+  guard for cancellation / let-go / mid-run death — those never reach a result
+  event, so nothing emits. Whole text, never truncated: truncation would
+  recreate the incomplete-answer symptom this rule exists to heal.
+  """
+  if error_msg:
+    return
+  thinking = tracker._salvage_thinking_text()
+  if thinking is None:
+    return
+  event = make_text_event(f"{NOTICE}\n\n{thinking}")
+  await persist_and_broadcast(session_id, event)
+  log.info("master_cc_silent_turn_salvaged", session=session_id)
+
+
+_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {BackendType.CC_CLAUDE, BackendType.CC_KIMI, BackendType.CC_OPENAI_COMPATIBLE}
+
+# The turn-end attribution's parse bound: assistant lines only. ET.ASSISTANT
+# is the raw stream's own type name here — every _CLAUDE_RESUME_FLAG_BACKEND_TYPES
+# backend runs the claude CLI and inherits the identity translate — so a raw
+# line head-proving another type cannot reach the served-model detector.
+_ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
+_NATIVE_RESUME_SESSION_BACKEND_TYPES = {
+    BackendType.CODEX, BackendType.GEMINI, BackendType.OPENCODE, BackendType.CHARLIE_CODE, BackendType.ANTIGRAVITY
+}
+# Every backend that can resume a prior session (via --resume or a native id).
+# The pre-flight anchor-missing alarm fires only for these.
+_RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES
+
+
+class _Instructions(str):
+  """Instructions string carrying the build's non-fatal read failure, when one occurred.
+
+  The builder's return must stay a plain ``str`` for every consumer, so a
+  declared overlay's read failure rides upward as this attribute instead of a
+  changed return shape. The wake path reads it to log and emit the unified
+  ``backend_overlay_inactive`` alert; it is ``None`` on every other path.
+  """
+
+  overlay_error: OSError | UnicodeDecodeError | None = None
+
+
+def _build_instructions_content(
+    session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
+  """Build master agent instructions: base prompt + second rule file + per-host override + memory store + declared overlay.
+
+  The second rule file follows the session kind
+  (:func:`src.features.chat_threads.thread_sessions.is_thread_session`): a thread session gets
+  ``prompts/thread_session.md`` (the short brief naming what it may read on
+  demand); every other session gets ``prompts/manager_workflows.md`` (the full
+  manager-workflow rules master.md no longer carries). The file is read
+  unconditionally, so a missing file raises.
+
+  The memory block is assembled from the labeled-entry store via
+  :func:`src.features.memory.memory.assemble_master` (resident topics full text + index
+  lines for the rest).
+
+  *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
+  ``.md`` suffix) whose full text is appended as the final part. The backend
+  declares it explicitly. A declared-but-unreadable file (``OSError`` /
+  ``UnicodeDecodeError``) does not raise: the overlay segment is skipped and
+  the failure rides upward on the returned string's ``overlay_error``
+  attribute — this function stays a pure builder and emits no events; the
+  caller (the wake path) owns logging and the ``backend_overlay_inactive``
+  alert. Any other exception type still propagates. ``None`` appends nothing.
+  The ``model`` string never enters this function — the overlay binding is
+  wholly driven by the declaration.
+  """
+  parts: list[str] = []
+
+  # 1. Git-shared base prompt (prompts/master.md in the repo)
+  base_prompt_file = cfg.charlie_bot_repo / "prompts" / "master.md"
+  if base_prompt_file.exists():
+    base_text = base_prompt_file.read_text(encoding="utf-8")
+    base_text = base_text.replace("{{session_id}}", session_meta.id)
+    parts.append(base_text)
+
+  # 1b. Second rule file, chosen by session kind. A thread session gets the
+  # short thread brief naming the manager workflows file it may read on demand;
+  # every other session gets those manager workflows in full. Read
+  # unconditionally: a missing file is a broken repo and raises.
+  rule_file = (
+      cfg.charlie_bot_repo / "prompts" /
+      ("thread_session.md" if is_thread_session(session_meta) else "manager_workflows.md"))
+  parts.append(rule_file.read_text(encoding="utf-8").replace("{{session_id}}", session_meta.id))
+
+  # 2. Per-host override (~/.charliebot/MASTER_AGENT_PROMPT.md)
+  host_prompt_file = cfg.claude_md_file
+  if host_prompt_file.exists():
+    host_text = host_prompt_file.read_text(encoding="utf-8")
+    host_text = host_text.replace("YOUR_SESSION_UUID", session_meta.id)
+    parts.append(host_text)
+
+  if not parts:
+    log.warning("master_prompt_files_missing", base=str(base_prompt_file), host=str(host_prompt_file))
+    return None
+
+  # 3. Memory store (resident topics full text + index lines for the rest)
+  memory_block = assemble_master(cfg.memory_dir)
+  if memory_block:
+    parts.append(memory_block)
+
+  # 4. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The read
+  # degrades, never raises for missing/unreadable files: OSError and
+  # UnicodeDecodeError skip the overlay segment and ride upward on the
+  # result's overlay_error attribute — the wake continues without a fence and
+  # _run_cc logs and emits the unified backend_overlay_inactive alert with
+  # reason="unreadable". Any other exception type still propagates.
+  overlay_error: OSError | UnicodeDecodeError | None = None
+  if prompt_overlay is not None:
+    overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{prompt_overlay}.md"
+    try:
+      parts.append(overlay_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError) as exc:
+      overlay_error = exc
+
+  content = _Instructions("\n\n".join(parts))
+  content.overlay_error = overlay_error
+  return content
+
+
+_VOICE_DISCLAIMER = (
+    "[Voice input: this message was dictated via speech transcription and may "
+    "contain recognition errors. Interpret unclear words from context; ask only "
+    "when the intent is genuinely ambiguous.]")
+
+
+def _build_prompt(user_content: str, is_voice: bool) -> str:
+  if is_voice:
+    return _VOICE_DISCLAIMER + "\n" + user_content
+  return user_content
+
+
+async def _v1_reset_reason(
+    item: master_cc_state._WorkItem,
+    option: BackendOption,
+    *,
+    fresh_by_switch: bool,
+    dropped_reason: str | None,
+) -> str | None:
+  """The v1 start note's reset reason, or None when this turn carries no note.
+
+  A v1 turn notes its context reset only when the session has a completed round
+  of its own (``has_completed_round`` scopes to the session's own log segment,
+  so a fresh clone child gets no note) and the caller did not declare the turn
+  fresh (the weekly recycle). The reason names either the cross-family
+  continuation rule — the session switched backends, and the new family starts
+  its own conversation — or the dropped-resume path (transcript or anchor
+  missing). v2 turns carry their note from the launch seam (task_execution)
+  instead, so this helper fires for ``task_run is None`` items only.
+  """
+  if item.task_run is not None or item.expect_fresh_session:
+    return None
+  if not fresh_by_switch and dropped_reason is None:
+    return None
+  if not await item.callbacks.has_completed_round(item.session_meta.id):
+    return None
+  if fresh_by_switch:
+    return backend_switch_reset_reason(item.session_meta.native_backend, option.id)
+  return "the previous conversation could not be resumed"
+
+
+def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
+  """True when *config_dir* holds a resumable transcript for *cc_session_id*."""
+  return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
+
+
+def _resolve_resume_id(
+    option: BackendOption,
+    session_meta: SessionMetadata,
+    cfg: CharlieBotConfig | None,
+) -> str | None:
+  """Return the cc_session_id to resume, or None when it is not reachable.
+
+  Each pool account has its own login directory and cannot see another's
+  conversations, so resuming an id recorded under a different account always fails.
+  A pooled option (src/backends/claude_code/claude_accounts.py) looks in the session's own account
+  first and then in every pool login, writing a hit elsewhere back onto
+  ``session_meta.claude_account``; that is how sessions created before the pool
+  migrate without a metadata rewrite. Backends with native resume ids carry no
+  local transcript and pass through.
+  """
+  cc_session_id = session_meta.cc_session_id
+  if not cc_session_id:
+    return None
+  if option.type not in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    return cc_session_id
+  if cfg is not None and claude_accounts.is_pooled(option, cfg):
+    return _resolve_pooled_resume_id(cfg, session_meta, cc_session_id)
+  config_dir = claude_config_dir()
+  if _cc_transcript_exists(config_dir, cc_session_id):
+    return cc_session_id
+  log.warning(
+      "master_cc_resume_transcript_missing",
+      session=session_meta.id,
+      cc_session_id=cc_session_id,
+      config_dir=str(config_dir),
+  )
+  return None
+
+
+def _resolve_pooled_resume_id(cfg: CharlieBotConfig, session_meta: SessionMetadata, cc_session_id: str) -> str | None:
+  """Pool half of _resolve_resume_id: own account first, then every pool login."""
+  current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
+  if current is not None and _cc_transcript_exists(Path(current.config_dir), cc_session_id):
+    return cc_session_id
+  found = claude_accounts.find_transcript_account(cfg, cc_session_id)
+  if found is not None:
+    log.info(
+        "master_cc_resume_transcript_found_in_pool",
+        session=session_meta.id,
+        cc_session_id=cc_session_id,
+        account=found.label,
+        previous_account=session_meta.claude_account,
+    )
+    session_meta.claude_account = found.label
+    return cc_session_id
+  log.warning(
+      "master_cc_resume_transcript_missing",
+      session=session_meta.id,
+      cc_session_id=cc_session_id,
+      config_dir=current.config_dir if current is not None else None,
+      pool=[account.label for account in claude_accounts.pool(cfg)],
+  )
+  return None
+
+
+def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
+  """Return CLI resume flags and native resume ID for a backend type."""
+  if not cc_session_id:
+    return [], None
+  if backend_type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    return ["--resume", cc_session_id], None
+  if backend_type in _NATIVE_RESUME_SESSION_BACKEND_TYPES:
+    return [], cc_session_id
+  return [], None
+
+
+def _build_extra_flags(
+    option: BackendOption,
+    resume_id: str | None,
+    item: master_cc_state._WorkItem,
+) -> tuple[list[str], str | None]:
+  """CLI flags and native resume id for one spawn of this turn.
+
+  Shared by the first spawn and every account relay, so a relayed process
+  resumes with exactly the flags the turn started with plus the transcript id.
+  """
+  extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
+  # Move per-machine sections (cwd, env info, memory paths, git status) out of the
+  # system prompt into the first user message. Keeps the system prompt stable across
+  # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI
+  # family supports this flag.
+  if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
+  if item.extra_claude_flags:
+    extra_flags.extend(item.extra_claude_flags)
+  return extra_flags, resume_session_id
+
+
+def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
+  """Build the environment for the master backend subprocess.
+
+  ``CHARLIEBOT_SESSION_ID`` carries this master's own session identity, so the
+  session-scoped CLIs the master runs resolve to it wherever the shell cd's to
+  (``src.runtime.cli.common.resolve_session_id``). ``claude_supervisor_env`` strips any
+  inherited value first, so a server started from inside another session's
+  environment hands down no stale id. PATH is the inherited one: it already
+  carries the ``charliebot`` shim (``src.runtime.agent_environment``), and a venv
+  bin directory on it would give uv an install target.
+  """
+  env = claude_supervisor_env(os.environ)
+  env[SESSION_ID_ENV_VAR] = session_id
+  env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
+  return env
+
+
+async def _handle_event(
+    event: dict,
+    session_id: str,
+    cc_session_id: str | None,
+    persist_and_broadcast: Callable[[str, dict], Awaitable[None]],
+) -> str | None:
+  """Process a single backend event: persist, broadcast, and handle compaction events.
+
+  Returns the cc_session_id (possibly updated from the event).
+  """
+  if not cc_session_id:
+    sid = event.get("session_id")
+    if sid:
+      cc_session_id = sid
+
+  # Persist first (injects timestamp), then broadcast with timestamp included
+  await persist_and_broadcast(session_id, event)
+
+  await handle_compaction_events(
+      event,
+      persist_and_broadcast=lambda evt: persist_and_broadcast(session_id, evt),
+      log_context={"session": session_id},
+  )
+
+  return cc_session_id
+
+
+async def _report_turn_error_and_salvage(
+    tracker: _RunTimingTracker,
+    item: master_cc_state._WorkItem,
+    error_msg: str | None,
+) -> None:
+  """Terminal event pair shared by the _run_cc and _resume_cc finally blocks.
+
+  A non-None *error_msg* becomes one ASSISTANT_ERROR event; the silent-turn
+  salvage then sees the same value and suppresses itself, so an errored turn
+  never also emits salvaged thinking.
+  """
+  session_id = item.session_meta.id
+  if error_msg:
+    err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
+    await item.callbacks.persist_and_broadcast(session_id, err_event)
+  await _salvage_silent_turn(tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
+
+
+async def _refuse_turn(item: master_cc_state._WorkItem, msg: str) -> tuple[None, int, str, dict]:
+  """Fail a turn before any backend spawn: one error event in chat, the triggering message left unread.
+
+  Returns the run's refusal shape: no cc_session_id, exit code 1, the message, no finish extras.
+  """
+  await item.callbacks.persist_and_broadcast(
+      item.session_meta.id, {
+          "type": ET.ASSISTANT_ERROR,
+          "content": f"Agent error: {msg}"
+      })
+  await item.callbacks.mark_unread(item.session_meta.id)
+  return None, 1, msg, {}
+
+
+async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+  """Execute a single CC run — spawn backend, stream events.
+
+  Manages _active_procs for cancel support.  Does NOT broadcast MASTER_DONE
+  or manage thinking state (the consumer loop handles that).
+
+  Returns (cc_session_id, exit_code, error_msg, finish_extras).
+  """
+  cfg = item.cfg
+  session_meta = item.session_meta
+  session_dir = cfg.sessions_dir / session_meta.id
+  session_dir.mkdir(parents=True, exist_ok=True)
+  cwd = str(session_dir)
+
+  from src.runtime.agent_process.registry import build_backend
+  option = item.backend_option
+  # A caller that passed no option must not silently inherit backends.options[0]:
+  # the session's own pin is the explicit choice and takes precedence.
+  if option is None and session_meta.backend:
+    option = cfg.get_backend_option(session_meta.backend)
+  if option is None:
+    if session_meta.backend:
+      # The session pins a backend id config.yaml no longer defines.
+      # lazy: spawner_backends→review→master_trigger→master_cc would close a cycle
+      # through this module if imported at top level.
+      from src.runtime.spawner_backends import unknown_backend_pin_refusal
+      fallback_id = cfg.backends.options[0].id if cfg.backends.options else "(none)"
+      msg = (f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
+             "this run did not execute.")
+      log.error(
+          "master_cc_backend_unresolved",
+          session=session_meta.id,
+          requested=session_meta.backend,
+          fallback=fallback_id,
+      )
+    else:
+      # Neither an explicit per-run option nor a session pin. Refusing the
+      # backends.options[0] fallback avoids silently running on an arbitrary
+      # backend; error and exit 1. (The sibling fallback inside
+      # _resolve_resume_option stays, deliberately out of scope.)
+      msg = (
+          "no backend option was given and this session pins none — refusing to "
+          "fall back to backends.options[0]; this run did not execute.")
+      log.error(
+          "master_cc_backend_unresolved",
+          session=session_meta.id,
+          requested="(none)",
+      )
+    return await _refuse_turn(item, msg)
+  if backend_type_allows_missing_model(option.type) and option.model is not None:
+    option = option.model_copy(update={"model": None})
+  # A thread session on the CLC backend runs the fixed thread context window in
+  # place of the option's own: the option entry is shared with main sessions
+  # and workers, so its window must keep serving them, and a thread session is
+  # born without a backend of its own to pin a narrower entry on. Only
+  # charlie-code reads a --context-window; other backend types are untouched.
+  if option.type == BackendType.CHARLIE_CODE and is_thread_session(session_meta):
+    option = option.model_copy(update={"context_window": THREAD_CONTEXT_WINDOW})
+
+  if item.task_instructions is not None:
+    # A v2 task turn delivers the context owner's committed snapshot bytes and
+    # never runs the v1 builder: no second memory injection. The
+    # overlay judgment (with its unified alert) already happened at the launch
+    # seam, so nothing is re-judged or re-alerted here.
+    instructions_content: str | None = item.task_instructions
+  else:
+    # Three-state overlay judgment on the wake path, never at config-load time
+    # (a hot reload would swallow a load-time exception as a warning and keep the
+    # old config). None (absent key or explicit YAML null) = undeclared: run
+    # without a fence and emit the unified overlay-inactive alert with
+    # reason="undeclared"; the literal string "none" = explicitly no overlay:
+    # pass None, silent, no alert; any other string names the overlay file
+    # (without ".md") under prompts/model_overlays/, read by the builder — a
+    # read failure degrades the same way as undeclared: fenceless run plus the
+    # same unified alert with reason="unreadable", never a raise.
+    prompt_overlay = option.prompt_overlay
+    if prompt_overlay is None:
+      log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.BACKEND_OVERLAY_INACTIVE,
+              "backend": option.id,
+              "reason": ET.OVERLAY_REASON_UNDECLARED,
+          })
+    elif prompt_overlay == "none":
+      prompt_overlay = None
+    # Any other string is the overlay filename (sans ".md"); pass it through.
+
+    instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
+    overlay_error = getattr(instructions_content, "overlay_error", None)
+    if overlay_error is not None:
+      log.warning(
+          "master_cc_overlay_unreadable",
+          session=session_meta.id,
+          backend=option.id,
+          overlay=prompt_overlay,
+          error=type(overlay_error).__name__,
+          detail=str(overlay_error),
+      )
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.BACKEND_OVERLAY_INACTIVE,
+              "backend": option.id,
+              "reason": ET.OVERLAY_REASON_UNREADABLE,
+              "overlay": prompt_overlay,
+              "error": type(overlay_error).__name__,
+          })
+
+  pooled = claude_accounts.is_pooled(option, cfg)
+  account: ClaudeAccount | None = None
+  context_tokens: int | None = None
+  last_request_at: datetime | None = None
+  if pooled and item.callbacks.claude_context_state is not None:
+    context_tokens, last_request_at = await item.callbacks.claude_context_state(session_meta.id, session_meta)
+  # A v2 fresh-native launch never resumes: the instruction hash or backend
+  # identity changed, so the previous conversation is not this launch's
+  # context. The adapter clears the stale anchor at spawn (after the process
+  # exists — a failed spawn leaves the usable old anchor intact).
+  fresh_native = item.task_run is not None and item.task_run.fresh_native_context
+  if fresh_native:
+    # The in-memory whole-object writes this turn may make (usage, account,
+    # thinking state) must carry the cleared anchor, not the stale one the
+    # item was enqueued with; the durable clearing itself happens at spawn.
+    session_meta.cc_session_id = None
+  # v1 continuation rule: a held native id belongs to the backend recorded in
+  # native_backend, and a backend outside its continuation domain starts its
+  # own conversation. The turn withholds the resume id (no --resume flag, no
+  # native resume id) and skips the resume pre-flight, but leaves the id on
+  # disk: the consumer persists only a truthy new id, so a round that lands one
+  # replaces the old id and native_backend together and a round that lands none
+  # leaves both for the next turn to judge again. A pre-rule session (empty
+  # native_backend) resumes as before.
+  switch_from_backend = session_meta.native_backend
+  fresh_by_switch = (
+      item.task_run is None and not fresh_native and bool(session_meta.cc_session_id) and bool(switch_from_backend) and
+      not claude_accounts.same_continuation_domain(switch_from_backend, option.id, cfg))
+  resume_id = None if (fresh_native or fresh_by_switch) else _resolve_resume_id(option, session_meta, cfg=cfg)
+  if pooled:
+    # The pool picks the login for this turn, moves the transcript to it when the
+    # account changes, and compacts a large Fable context when the cache is cold.
+    account, place_error = await master_cc_relay.place_turn(
+        cfg, item, option, resume_id, cwd, context_tokens, last_request_at)
+    if account is None:
+      log.error("master_cc_account_unavailable", session=session_meta.id, error=place_error)
+      return await _refuse_turn(item, place_error)
+    # A moved transcript is re-resolved under the chosen account. A fresh turn
+    # (v2's fresh_native, or the v1 rule's cross-family switch) placed with no
+    # resume id, so no transcript moved and the withheld id stays withheld —
+    # re-resolving would hand the old id to a backend outside its domain.
+    if not (fresh_native or fresh_by_switch):
+      resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
+  # Pre-flight: a resume-capable backend about to run with no resolved resume
+  # id, when the session already has an anchor on disk or a completed round, is
+  # about to start a zero-context conversation. Fail loudly unless the caller
+  # declared a fresh start (the scheduled-session weekly-recycle path) or the
+  # continuation rule already declared this turn fresh (a cross-domain switch).
+  dropped_reason: str | None = None
+  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session and
+      not fresh_native and not fresh_by_switch):
+    anchor_on_disk = session_meta.cc_session_id
+    if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
+      reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
+      dropped_reason = reason
+      log.error(
+          "master_cc_resume_anchor_missing",
+          session=session_meta.id,
+          backend=option.type,
+          reason=reason,
+      )
+      await item.callbacks.persist_and_broadcast(
+          session_meta.id, {
+              "type": ET.RESUME_CONTEXT_DROPPED,
+              "reason": reason,
+          })
+  extra_flags, resume_session_id = _build_extra_flags(option, resume_id, item)
+  resume_session = bool(resume_id)
+  # Gate on backend capability, not on a resume-id variable: a backend outside
+  # _RESUME_CAPABLE_BACKEND_TYPES cannot resume any prior session, so a session
+  # that carries an anchor (cc_session_id) is misconfigured regardless of
+  # whether this round resolved a reachable resume id. Keying off resume_id or
+  # resume_session_id would silence the warning whenever the id is absent (fresh
+  # start, unreachable transcript) and let the misconfiguration pass undetected.
+  if session_meta.cc_session_id and option.type not in _RESUME_CAPABLE_BACKEND_TYPES:
+    log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
+
+  env = _build_master_env(cfg, session_meta.id)
+  if item.extra_env:
+    # The v2 adapter's child identity (its own session id, signed run token,
+    # selected home) rides on top of the supervisor env.
+    env.update(item.extra_env)
+  if pooled:
+    # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
+    # never shadow it.
+    env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
+
+  prompt = _build_prompt(item.user_content, item.is_voice)
+  reset_reason = await _v1_reset_reason(item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
+  if reset_reason is not None:
+    # Only the prompt the backend receives carries the note; the persisted user
+    # event was written before the run and stays unchanged.
+    prompt = f"{context_reset_note(reset_reason)}\n\n{prompt}"
+
+  log.info(
+      "master_cc_starting",
+      session=session_meta.id,
+      backend=option.type,
+      model=option.model,
+      prompt_chars=len(prompt),
+      resume_session=resume_session,
+      cwd=cwd,
+      account=account.label if account is not None else None,
+  )
+
+  # The round's own conversation state. A fresh turn (v2's cleared snapshot, or
+  # a v1 cross-family switch) starts a new conversation, so its state starts
+  # empty: a new id from the backend is adoptable, and a round that lands none
+  # returns None, so the consumer's persist leaves the disk's old id and
+  # producer untouched for the next turn to judge again. The metadata snapshot
+  # itself stays intact for the v1 switch (only v2's spawn clears it): the
+  # dequeue refresh corrects a set snapshot from disk, and a None snapshot is
+  # never resurrected.
+  cc_session_id: str | None = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
+  exit_code = 1
+  error_msg: str | None = None
+  # Set inside _on_spawn the moment the master_run record hits disk; the cancel
+  # path lets the turn go only once a boot can find it, so this flag — not
+  # backend.pid — is the let-go precondition.
+  record_persisted = False
+  # True only on the cancel path when the turn is handed to the next boot: the
+  # finally block then skips every terminal state write.
+  let_go = False
+
+  tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
+  backend: AgentBackend | None = None
+  # Account relays this turn performed (pooled options only).
+  relays = 0
+  watch: claude_relay.RelayWatch | None = None
+
+  # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
+  # and read cursor here so a restarted server can re-attach to this exact
+  # turn from the persisted master_run record. A v2 task-tree turn pins the
+  # same files inside its Run's own directory (the Run is the execution
+  # record). A relay's fresh process gets a dir and record of its own (see
+  # _spawn_and_stream).
+  started_at = datetime.now(UTC)
+  log_dir = (
+      Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
+          cfg.sessions_dir / session_meta.id, started_at))
+  raw_log = str(log_dir / runs.RAW_LOG_NAME)
+
+  # The invocation's own translated error-event messages, in stream order — the
+  # raw material for the end-of-run error hint (runs.select_error_hint). Reset
+  # at each invocation's start, so a relayed round's error never outlives its
+  # own round.
+  error_event_messages: list[str] = []
+
+  async def _on_spawn(pid: int) -> None:
+    nonlocal record_persisted
+    await tracker.on_spawn(pid)
+    # pid_start was pinned to this exact process instance just before this
+    # callback fired — same contract as the worker path — so the pair cannot
+    # be faked by a later pid reuse.
+    assert backend is not None
+    if item.task_run is not None:
+      assert item.on_task_spawn is not None
+      # The v2 Run owns the identity: pid/pid_start land on the Run record
+      # before any call from its run credential is accepted.
+      await item.on_task_spawn(pid, backend.pid_start)
+    else:
+      record = MasterRunRecord(
+          pid=pid,
+          pid_start=backend.pid_start,
+          started_at=started_at,
+          raw_log=raw_log,
+          user_event_ids=list(item.user_event_ids),
+      )
+      await item.callbacks.persist_master_run(session_meta.id, record)
+    record_persisted = True
+
+  async def _spawn_and_stream(
+      spawn_prompt: str,
+      spawn_flags: list[str],
+      spawn_resume_id: str | None,
+  ) -> None:
+    """One process of this turn: build the backend, stream its events, record its exit."""
+    nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log
+    error_event_messages.clear()
+    if backend is not None:
+      record_persisted = False
+      started_at = datetime.now(UTC)
+      # A v2 task-tree turn keeps every relay process inside its Run's own
+      # transport dir; the v1 turn gets the per-round master_run dir.
+      log_dir = (
+          Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
+              cfg.sessions_dir / session_meta.id, started_at))
+      raw_log = str(log_dir / runs.RAW_LOG_NAME)
+    backend = build_backend(
+        option,
+        cfg,
+        claude_account=account,
+        extra_flags=spawn_flags or None,
+        buffer_limit=cfg.subprocess_buffer_limit,
+        on_spawn=_on_spawn,
+        instructions_content=instructions_content,
+        resume_session_id=spawn_resume_id,
+        log_dir=log_dir,
+        cgroup_session_id=session_meta.id,
+    )
+    master_cc_state._active_procs[session_meta.id] = backend
+
+    async for event in backend.run(spawn_prompt, cwd, env, uploaded_files=item.uploaded_files):
+      tracker.on_event(event)
+      if event.get("type") == ET.ERROR:
+        error_event_messages.append(event.get("message", ""))
+      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+      if watch is not None and watch.observe(event):
+        # Armed relay at its safe point: the tool result is on disk, stop here.
+        await backend.terminate()
+
+    exit_code = backend.exit_code
+    if backend.stderr_text:
+      log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
+
+  try:
+    spawn_prompt, spawn_flags, spawn_resume_id = prompt, extra_flags, resume_session_id
+    while True:
+      watch = claude_relay.RelayWatch(account.label, option.model) if account is not None else None
+      await _spawn_and_stream(spawn_prompt, spawn_flags, spawn_resume_id)
+      assert backend is not None
+      decision = watch.decision(exit_code, backend.stderr_text) if watch is not None else None
+      if decision is None:
+        if exit_code != 0 and not backend.terminated:
+          # The invocation's own structured error event outranks the stderr
+          # help banner (runs.select_error_hint); an explicit user stop keeps
+          # today's no-hint behavior, and the cgroup report below still wins
+          # over both channels.
+          error_msg = runs.select_error_hint(error_event_messages, backend.stderr_text)
+        # Session memory-cap / host-OOM attribution: the
+        # routing report supersedes a bare stderr tail ("Killed") whenever the
+        # cgroup's counters moved.
+        error_msg = backend.cgroup_exit_report() or error_msg
+        break
+      assert account is not None
+      if decision == claude_relay.LOGIN_FAILED:
+        await master_cc_relay.report_login_failure(item, account)
+      if relays >= claude_relay.MAX_RELAYS_PER_TURN:
+        error_msg = claude_relay.relay_limit_message()
+        exit_code = 1
+        break
+      next_account, relay_error, refused_holder = await master_cc_relay.prepare_relay(
+          cfg, item, option, cc_session_id, account, cwd, decision)
+      if next_account is None:
+        if refused_holder is None:
+          error_msg = relay_error
+          exit_code = 1
+          break
+        # The mid-turn move hit the newer-transcript guard: the destination
+        # holds the newer copy (the kill between a previous relay's move and
+        # its persist, or an unknown defect). Same predicate and reaction as
+        # the placement layer's self-heal -- adopt the destination, persist it
+        # through the funnel, continue the turn from it; a refusal the copy on
+        # disk already answers never fails the turn.
+        await master_cc_relay.adopt_transcript_holder(
+            item, cc_session_id, refused_holder, account.label, reason=master_cc_relay.GUARD_REFUSED_NEWER_TRANSCRIPT)
+        next_account = refused_holder
+      # Counted toward the relay cap like any other account change, so even a
+      # pathological refusal loop ends loudly at the same bound.
+      relays += 1
+      account = next_account
+      session_meta.claude_account = account.label
+      # The relay's label persist point: disk carries the new account from the
+      # moment the continuation is built, not at round end (the placement and
+      # refusal paths persist through the same funnel; an unchanged account
+      # skips the write inside it).
+      if item.callbacks.persist_claude_account is not None:
+        await item.callbacks.persist_claude_account(session_meta.id, account.label)
+      spawn_prompt = claude_relay.CONTINUATION_PROMPT
+      spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
+
+    # Turn-end model attribution: when the CLI silently served this round's
+    # visible reply with a model outside the pinned family, one synthetic
+    # notice lands after the round's own events. Detection re-reads this
+    # invocation's own raw log through the same whole-file projection the
+    # re-attach path uses (fresh translate) — no detection state accumulates
+    # in the stream loop. In-family rounds and non-cc backends emit nothing.
+    if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+      raw_path = Path(raw_log)
+      if not raw_path.is_file():
+        # A live cc round always has one (run() creates the raw log before
+        # spawn); the guard mirrors the re-attach path's and keeps backend
+        # doubles that model only the event stream from failing the turn.
+        # Fail open with a warning — the notice is advisory.
+        log.warning("master_cc_fallback_notice_raw_log_missing", session=session_meta.id, raw_log=raw_log)
+      else:
+        # The projection is a full read of the turn's raw log (tens of ms on a
+        # multi-MB turn) — off the loop it stops freezing every concurrent
+        # request and WebSocket at turn end, the same shape as the git-diff
+        # hop. The parse bounds itself to the assistant lines the detector
+        # reads: the claude-family raw stream leads every line with its type
+        # and the family's translate is the identity, so the echoed user
+        # context (~98% of a multi-MB round's bytes) never parses; a head the
+        # filter cannot read parses anyway, keeping a foreign raw shape on
+        # the whole-file projection.
+        turn_events = await asyncio.to_thread(
+            runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option), _ASSISTANT_LINE_FILTER)
+        await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
+
+  except asyncio.CancelledError:
+    # Only live trigger: event-loop shutdown (graceful restart). Same let-go
+    # rule as the worker path (spawner.py): a covered transport whose
+    # master_run record is already persisted keeps running on its own raw-log
+    # fds, and the next boot's reconcile re-attaches for the real result.
+    # Uncovered transports die with their transport process, and a process
+    # whose record never hit disk can never be found by a boot, so both are
+    # still terminated.
+    let_go = (backend is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES and record_persisted)
+    log.warning(
+        "master_cc_cancelled",
+        session=session_meta.id,
+        transport=option.type,
+        action="let_go" if let_go else "terminate",
+    )
+    if backend:
+      if let_go:
+        backend.detach()
+      else:
+        await backend.terminate()
+    master_cc_state._active_procs.pop(session_meta.id, None)
+    raise
+  except Exception as e:
+    log.exception("master_cc_crashed", session=session_meta.id)
+    error_msg = str(e)
+
+  finally:
+    master_cc_state._active_procs.pop(session_meta.id, None)
+    finish_extras = tracker.build_finish_extras()
+    # The backend id this round actually ran on, for the consumer's round-end
+    # anchor persist (the option resolved above, never the request's hint).
+    finish_extras["native_backend"] = option.id
+    if relays:
+      finish_extras["account_relays"] = relays
+
+    # The pair runs before the let-go branch below: a let-go turn still gets
+    # its error event and silent-turn salvage; only the terminal state writes
+    # (unread marker, tex snapshot, finished log) would lie about a turn that
+    # keeps running in another process.
+    await _report_turn_error_and_salvage(tracker, item, error_msg)
+
+    # On the let-go path the turn is still running in another process: writing
+    # any terminal state (unread marker, tex snapshot, finished log) would lie
+    # about it. The next boot's reconcile owns the outcome of this turn.
+    if not let_go:
+      await item.callbacks.mark_unread(session_meta.id)
+
+      if item.should_check_tex:
+        proposal = await asyncio.to_thread(check_tex_changed)
+        if proposal:
+          tex_event = {'type': ET.TEX_EDIT_PROPOSED}
+          await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
+          log.info(ET.TEX_EDIT_PROPOSED, session=session_meta.id)
+        else:
+          clear_snapshot()
+
+      log.info(
+          "master_cc_finished",
+          session=session_meta.id,
+          exit_code=exit_code,
+          **(finish_extras or {}),
+      )
+
+  return cc_session_id, exit_code, error_msg, finish_extras
+
+
+def _resolve_resume_option(
+    cfg: CharlieBotConfig,
+    session_meta: SessionMetadata,
+    backend_option: BackendOption | None,
+) -> BackendOption | None:
+  """Pick the backend option a resume follows with (translate ownership only)."""
+  if backend_option is not None:
+    return backend_option
+  if session_meta.backend:
+    option = cfg.get_backend_option(session_meta.backend)
+    if option is not None:
+      return option
+    log.warning("master_cc_resume_backend_unresolved", session=session_meta.id, backend=session_meta.backend)
+  return cfg.backends.options[0] if cfg.backends.options else None
+
+
+def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) -> Callable[[dict], list[dict]]:
+  """A fresh translate_event callable for one scan/stream.
+
+  Stateful translates (codex text buffering, gemini) require one instance per
+  stream. A missing/unbuildable option degrades to the identity translate (raw
+  claude shape) instead of failing the re-attach — same rule as the worker
+  side's reconcile translate.
+  """
+  if option is None:
+    return lambda event: [event]
+  try:
+    from src.runtime.agent_process.registry import build_backend
+    return build_backend(option, cfg).translate_event
+  except Exception as e:
+    log.warning("master_cc_resume_translate_unresolved", backend=option.id, error=str(e))
+    return lambda event: [event]
+
+
+async def _emit_model_fallback_notice(
+    callbacks: SessionCallbacks,
+    session_meta: SessionMetadata,
+    option: BackendOption,
+    events: list[dict],
+) -> None:
+  """Persist and broadcast the turn-end served-model notice when the round's visible reply came
+  from models outside the configured model's family. Emits nothing for in-family rounds."""
+  served_models = out_of_family_served_models(events, option.model)
+  if served_models:
+    await callbacks.persist_and_broadcast(
+        session_meta.id, {
+            "type": ET.MODEL_FALLBACK_NOTICE,
+            "backend": option.id,
+            "configured_model": option.model,
+            "served_models": served_models,
+        })
+
+
+async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
+  """Re-attach to a recorded live master turn: follow its raw log to the end.
+
+  Consumer-side mirror of _run_cc with no spawn: the same per-event handling,
+  the same finish logging. Only the truth source differs — liveness comes from
+  the caller's (pid, pid_start) closure instead of an in-process handle, and
+  the exit code is derived from the raw log's trailing result event (a
+  detached process's real exit code is unreachable). Managed by the same
+  per-session consumer, so the re-attach drains before any queued turn spawns.
+  """
+  cfg = item.cfg
+  session_meta = item.session_meta
+  record = item.resume_record
+  assert record is not None and item.resume_is_alive is not None
+  is_alive = item.resume_is_alive
+
+  raw_path = Path(record.raw_log)
+  log_dir = raw_path.parent
+  cursor_path = log_dir / runs.CURSOR_NAME
+  stderr_path = log_dir / runs.STDERR_LOG_NAME
+
+  option = _resolve_resume_option(cfg, session_meta, item.backend_option)
+  log.info("master_cc_resuming", session=session_meta.id, pid=record.pid, raw_log=record.raw_log)
+
+  cc_session_id: str | None = session_meta.cc_session_id
+  exit_code = -1
+  error_msg: str | None = None
+  tracker = _RunTimingTracker(session_meta.id, option.type if option else "unknown", option.model if option else None)
+
+  try:
+    stream_translate = _build_fresh_translate(cfg, option)
+    async for event in tail_follow_events(
+        raw_path,
+        translate=stream_translate,
+        is_alive=is_alive,
+        cursor=cursor_path,
+        start_offset=runs.read_raw_cursor(cursor_path),
+        post_result_timeout=AgentBackend._POST_RESULT_TIMEOUT,
+        buffer_limit=cfg.subprocess_buffer_limit,
+    ):
+      tracker.on_event(event)
+      cc_session_id = await _handle_event(event, session_meta.id, cc_session_id, item.callbacks.persist_and_broadcast)
+
+    events, _, exit_code = await asyncio.to_thread(runs.scan_result_exit, raw_path, _build_fresh_translate(cfg, option))
+    # Recover the manual-compaction observation from the same whole-file
+    # projection the result summary uses (zero new I/O): the persisted cursor
+    # may already sit past the boundary line, so the cursor-forward tail above
+    # cannot be the observation's only evidence channel.
+    if any(_is_manual_compact_boundary(event) for event in events):
+      tracker.note_manual_compact()
+
+    stderr_text = await asyncio.to_thread(_read_stderr_tail, stderr_path)
+    if stderr_text:
+      log.warning("master_cc_stderr", session=session_meta.id, stderr=stderr_text)
+    if exit_code != 0:
+      # Same selection rule as the live path, fed from the whole-file
+      # projection above (zero new I/O): an error event sitting before the
+      # persisted cursor is still found — the manual-compaction recovery
+      # pattern in this block. The stderr tail is only the fallback.
+      error_msg = runs.select_error_hint(
+          [event.get("message", "") for event in events if event.get("type") == ET.ERROR], stderr_text)
+
+    # Same turn-end model attribution on the re-attach path: the whole-round
+    # projection above is reused (zero new I/O) and the identical notice is
+    # emitted. One turn's lifecycle takes exactly one of the two completion
+    # paths (a completed live turn clears its master_run record, so a
+    # re-attach implies the live path never completed), so no double emit.
+    if option is not None and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+      await _emit_model_fallback_notice(item.callbacks, session_meta, option, events)
+
+    # The loop ended on the post-result timeout: same contract as the live
+    # path's cleanup — SIGTERM the recorded process group, escalate to
+    # SIGKILL. An irreversible kill is authorized only by the record's own
+    # liveness proof (is_run_alive); the follower's is_alive probe stays the
+    # stream's liveness input and is constant-true for an unpinned record,
+    # which must never authorize a kill.
+    if record.pid is not None:
+      host_boot = await asyncio.to_thread(runs.read_host_boot_time)
+      alive = runs.run_alive_probe(record.pid, record.pid_start, record.started_at, host_boot)
+      if alive():
+        log.warning("master_cc_resumed_run_hung_after_result", session=session_meta.id, pid=record.pid)
+        await kill_group_escalating(record.pid, alive)
+
+  except asyncio.CancelledError:
+    log.warning("master_cc_resume_cancelled", session=session_meta.id)
+    raise
+  except Exception as e:
+    log.exception("master_cc_resume_crashed", session=session_meta.id)
+    cc_session_id = None
+    error_msg = str(e)
+
+  finally:
+    finish_extras = tracker.build_finish_extras()
+    await _report_turn_error_and_salvage(tracker, item, error_msg)
+    await item.callbacks.mark_unread(session_meta.id)
+    log.info(
+        "master_cc_resume_finished",
+        session=session_meta.id,
+        exit_code=exit_code,
+        **(finish_extras or {}),
+    )
+
+  return cc_session_id, exit_code, error_msg, finish_extras

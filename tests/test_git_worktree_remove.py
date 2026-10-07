@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from src.core import git as git_module
+from src.infra import git as git_module
 
 
 class _FakeProc:

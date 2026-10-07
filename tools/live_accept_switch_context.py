@@ -75,9 +75,9 @@ import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
-from src.core import event_types as ET  # noqa: E402
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
-from src.core.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
+from src.infra import event_types as ET  # noqa: E402
+from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,
@@ -131,17 +131,17 @@ def preflight() -> None:
     (production) config and credentials only; the production server is never
     contacted.
     """
-  from src.core.claude_accounts import credentials_present
-  from src.core.config import claude_config_dir, load_config, load_credentials
-  from src.core.home import CREDENTIALS_FILE
-  from src.core.models import ClaudeAccount
+  from src.backends.claude_code.claude_accounts import credentials_present
+  from src.infra.config import claude_config_dir, load_config, load_credentials
+  from src.infra.home import CREDENTIALS_FILE
+  from src.infra.models import ClaudeAccount
 
   cfg = load_config()
   for backend_id in BACKEND_IDS:
     if cfg.get_backend_option(backend_id) is None:
       fail(f"backend option {backend_id!r} missing from the source config; "
            f"the switch legs cannot be built")
-  from src.agents.backends.base import USER_LOCAL_BIN, resolve_binary
+  from src.runtime.agent_process.base import USER_LOCAL_BIN, resolve_binary
   binaries: dict[str, str] = {}
   for name in ("claude", "codex", "charlie-code"):
     try:
@@ -174,7 +174,7 @@ def preflight() -> None:
 
 def load_source_entries() -> dict[str, dict]:
   """Read the four backend entries from the source config, redacting endpoints."""
-  from src.core.config import load_config
+  from src.infra.config import load_config
   cfg = load_config()
   entries: dict[str, dict] = {}
   for backend_id in BACKEND_IDS:
@@ -201,7 +201,7 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
     """
   port = pick_free_port()
   (home / "clc-sessions").mkdir(parents=True, exist_ok=True)
-  from src.core.session_tree_preview import install_native_session_isolation
+  from src.features.session_tree_preview.session_tree_preview import install_native_session_isolation
   install_native_session_isolation(home / "clc-sessions")
   config = {
       "server": {
@@ -227,7 +227,7 @@ def build_synthetic_home(home: Path, entries: dict[str, dict]) -> tuple[int, str
 
 def read_chat_events(home: Path, session_id: str) -> list[dict]:
   """The trial session's persisted chat events, oldest first."""
-  from src.core.chat_events import chat_events_path
+  from src.runtime.chat_events import chat_events_path
   path = chat_events_path(home / "sessions" / session_id)
   if not path.is_file():
     return []
@@ -363,8 +363,8 @@ def codex_user_prompts(native_id: str) -> list[str]:
 
 def claude_transcript_path(native_id: str) -> Path | None:
   """The Claude transcript for *native_id* under the login directory's projects tree."""
-  from src.core.claude_accounts import transcript_matches
-  from src.core.config import claude_config_dir
+  from src.backends.claude_code.claude_accounts import transcript_matches
+  from src.infra.config import claude_config_dir
   matches = transcript_matches(claude_config_dir(), native_id)
   return matches[0] if matches else None
 
@@ -635,7 +635,7 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path, natives: list[
 
 def cleanup_native_files(natives: list[NativeRecord], results: dict) -> None:
   """Delete the recorded native files only, verifying every target first."""
-  from src.core.config import claude_config_dir
+  from src.infra.config import claude_config_dir
 
   codex_root = Path.home() / ".codex" / "sessions"
   projects_root = Path(claude_config_dir()).expanduser() / "projects"
@@ -656,7 +656,7 @@ def cleanup_native_files(natives: list[NativeRecord], results: dict) -> None:
       else:
         entry.cleanup = "codex sessions directory absent; nothing to delete"
     elif entry.family == "claude":
-      from src.core.claude_accounts import transcript_matches
+      from src.backends.claude_code.claude_accounts import transcript_matches
       matches = transcript_matches(claude_config_dir(), entry.native_id)
       if not matches:
         entry.cleanup = "transcript not found; nothing to delete"

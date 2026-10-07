@@ -1,4 +1,4 @@
-"""Tests for src/cli/session.py's dialog verb — block format, backward paging, bootstrap cursor."""
+"""Tests for src/runtime/cli/session.py's dialog verb — block format, backward paging, bootstrap cursor."""
 
 import contextlib
 from collections.abc import Iterator
@@ -7,7 +7,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.cli import session
+from src.runtime.cli import session
 
 
 @contextlib.contextmanager

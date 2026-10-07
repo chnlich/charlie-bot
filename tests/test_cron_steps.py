@@ -1,4 +1,4 @@
-"""Tests for the ``steps`` cron prompt source (src/core/config.py).
+"""Tests for the ``steps`` cron prompt source (src/infra/config.py).
 
 A ``steps`` cron file loads with each step's resolved body and preserved
 pointer, colliding prompt sources are load errors naming the key, and duplicate
@@ -12,7 +12,7 @@ import conftest
 import pytest
 import yaml
 
-from src.core import config
+from src.infra import config
 
 # --- (a) loader --------------------------------------------------------------
 
@@ -189,7 +189,7 @@ def test_load_cron_file_accepts_distinct_written_backends(tmp_path: pathlib.Path
 
 def test_load_cron_file_accepts_unset_backends_with_distinct_backend_from(tmp_path: pathlib.Path) -> None:
   """An effective backend left unset loads: the repo default names no host-local
-  backend ids, and the firing-time check (src/core/cron_sequence.py) covers the
+  backend ids, and the firing-time check (src/features/cron/cron_sequence.py) covers the
   unset case by resolving what each step actually runs."""
   yaml_path = _write_chained(
       tmp_path, [{

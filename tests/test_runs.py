@@ -1,4 +1,4 @@
-"""Unit tests for src/core/runs.py (run truth from disk)."""
+"""Unit tests for src/runtime/runs.py (run truth from disk)."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from src.core import runs
-from src.core.ndjson import parse_ndjson_events, type_line_filter
+from src.infra.ndjson import parse_ndjson_events, type_line_filter
+from src.runtime import runs
 
 HOST_BOOT = runs.read_host_boot_time()
 NOW = datetime.now(UTC)
@@ -101,7 +101,7 @@ def test_project_raw_file_line_filter_serves_the_detector_whole(tmp_path: Path) 
   nothing the detector reads — a claude-family result event leads with its
   duration field, not "type", so its head proves nothing and it rides along;
   the detector skips it, which is what makes the bounded scan safe."""
-  from src.agents.backends.claude_code import out_of_family_served_models
+  from src.backends.claude_code.claude_code import out_of_family_served_models
 
   lines = [
       '{"type": "user", "content": "echo"}',

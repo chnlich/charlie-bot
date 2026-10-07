@@ -8,8 +8,8 @@ cd "$repo_root"
 # leak guard scans these four from birth. The list is literal on purpose -- the
 # panel's tests assert it, and adding a file here is a review-visible act.
 host_auth_scan=(
-  "src/core/host_auth.py"
-  "src/api/host_auth.py"
+  "src/features/host_auth/host_auth.py"
+  "src/features/host_auth/api.py"
   "web/templates/host_auth.html"
   "tests/test_host_auth.py"
 )

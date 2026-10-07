@@ -12,7 +12,8 @@ import subprocess
 import conftest
 import pytest
 
-from src.core import constants, models, run_token, sessions, task_sessions
+from src.infra import constants, models
+from src.runtime import run_token, sessions, task_sessions
 
 pytestmark = pytest.mark.asyncio
 
@@ -34,7 +35,7 @@ def _write_store(cfg) -> None:
 async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *,
                         profile: str) -> tuple[object, task_sessions.TaskTreeManager, str, str, str]:
   cfg = conftest.make_home_config(tmp_path)
-  import src.core.config as core_config
+  import src.infra.config as core_config
   # The CLI's store root is charliebot_home_dir() / "memory" (env-resolved, config-free):
   # pin CHARLIEBOT_HOME to this config's home so the seeded store and every reader
   # (CLI verbs, run-token audience resolution) see one home.
@@ -58,7 +59,7 @@ async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
   run_id = "query-run"
   await tree.runs.register_run(models.RunRecord(id=run_id, session_id=meta.id, kind="work"))
   proc = subprocess.Popen(["/bin/sleep", "60"])
-  from src.core import runs
+  from src.runtime import runs
   pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
   await tree.runs.record_launch(meta.id, run_id, pid=proc.pid, pid_start=pair[0])
@@ -68,7 +69,7 @@ async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
 
 
 def _run_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str], token: str | None) -> tuple[str, str, int]:
-  import src.cli.memory as cli
+  from src.features.memory import cli
   monkeypatch.setattr("sys.argv", ["charliebot", *argv])
   if token is None:
     monkeypatch.delenv(constants.RUN_TOKEN_ENV, raising=False)

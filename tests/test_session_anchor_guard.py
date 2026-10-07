@@ -9,7 +9,8 @@ import conftest
 import pytest
 from structlog import testing
 
-from src.core import models, sessions, task_sessions
+from src.infra import models
+from src.runtime import sessions, task_sessions
 
 
 def _corrections(logs: list[dict]) -> list[dict]:

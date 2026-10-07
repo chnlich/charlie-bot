@@ -107,7 +107,7 @@ def write_credentials_yaml(home: Path, access_key: str) -> None:
   """Seed the trial home's credentials.yaml with its operator key.
 
   The body is the ``charliebot.access_key`` secret shape the credentials
-  loader reads (src/core/credentials.py).
+  loader reads (src/infra/credentials.py).
   """
   (home / "credentials.yaml").write_text(f"charliebot:\n  access_key: {access_key}\n", encoding="utf-8")
 
@@ -254,18 +254,12 @@ async def seed_scenario(home: Path) -> dict:
     task_sessions owner the APIs serve, in-process only.
     """
   os.environ["CHARLIEBOT_HOME"] = str(home)
-  from src.core import event_types as ET
-  from src.core.config import get_config
-  from src.core.models import (
-      CreateSessionRequest,
-      PatchSessionTaskRequest,
-      RunRecord,
-      TaskSpec,
-      ThreadMetadata,
-  )
-  from src.core.run_token import CallerIdentity
-  from src.core.sessions import SessionManager
-  from src.core.task_sessions import TaskTreeManager
+  from src.infra import event_types as ET
+  from src.infra.config import get_config
+  from src.infra.models import CreateSessionRequest, PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
+  from src.runtime.run_token import CallerIdentity
+  from src.runtime.sessions import SessionManager
+  from src.runtime.task_sessions import TaskTreeManager
 
   cfg = get_config()
   session_mgr = SessionManager(cfg)
@@ -398,8 +392,8 @@ async def seed_scenario(home: Path) -> dict:
     # distinguishable (generation 0001..0150), plus never-launched
     # reservations. The current-run Context selection must show generation
     # 0150 — the whole-history latest launch — not the first page's tail.
-    from src.core.control_events import sha256_hex
-    from src.core.task_prompts import PromptBlock, PromptSnapshot, PromptSource
+    from src.runtime.control_events import sha256_hex
+    from src.runtime.task_prompts import PromptBlock, PromptSnapshot, PromptSource
     long_worker = await tree.create_task(
         request_id="seed-long",
         task_parent_id=feature.id,
@@ -438,7 +432,7 @@ async def seed_scenario(home: Path) -> dict:
       await tree.runs.register_run(RunRecord(id=q, session_id=long_worker.id, kind="work"))
     # An active Run identity on the root manager: the seeded agent caller's
     # run token must bind a launched, non-terminal Run (run_identity_refusal).
-    from src.core.runs import read_pid_stat
+    from src.runtime.runs import read_pid_stat
     pid_start, _state = read_pid_stat(os.getpid())
     await tree.runs.register_run(
         RunRecord(id="agent-auth-run", session_id=root.id, kind="manager_turn", pid=os.getpid(), pid_start=pid_start))
@@ -568,8 +562,8 @@ async def seed_scenario(home: Path) -> dict:
     # the events file grows on a real thread while the browser scenario
     # watches the transcript stream. The display backend differs from the
     # inherited metadata.backend, so a correct page shows the Run's backend.
-    from src.core.control_events import build_control_event
-    from src.core.runs import read_pid_stat
+    from src.runtime.control_events import build_control_event
+    from src.runtime.runs import read_pid_stat
 
     # The live worker's own delegating manager: an otherwise idle parent,
     # so its collapsed row's stand-in shows the gear. (The root's own
@@ -769,7 +763,7 @@ async def seed_scenario(home: Path) -> dict:
         run_id="run-withheld",
         reason=withheld_reason)
     await tree.events.append(withhold_worker.id, withheld_event)
-    from src.core.control_events import ACTOR_SYSTEM
+    from src.runtime.control_events import ACTOR_SYSTEM
     await tree.dispatch.deliver_child_report(
         withhold_worker.id,
         source_event=withheld_event,
@@ -828,7 +822,7 @@ async def seed_scenario(home: Path) -> dict:
     # One discord-origin session in the group named for its channel, with
     # one delegated child: Workspace lists neither, the Threads pill lists
     # the pair nested, and no group-header plus button renders there.
-    from src.core.models import DiscordOrigin
+    from src.infra.models import DiscordOrigin
     discord_thread = await session_mgr.create_session(
         CreateSessionRequest(
             name="Discord #general 2026",
@@ -912,7 +906,7 @@ async def seed_scenario(home: Path) -> dict:
     # allow_failure makes the row carry the "(review needed)" suffix, the
     # longest the Last line renders. The enabled bound node stays
     # unseeded, so its row keeps carrying no Last line.
-    from src.core.models import LastRunStatus
+    from src.infra.models import LastRunStatus
     await tree.record_scheduled_fire(
         paused_node.id,
         last_scheduled_run=(base + timedelta(minutes=1500)).isoformat(),
@@ -1783,7 +1777,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       # ---- S14: agent-scoped creation reaches the observer --------------
       try:
         log("  s14: scoped-agent creation")
-        from src.core.run_token import RunTokenClaims, sign_run_token
+        from src.runtime.run_token import RunTokenClaims, sign_run_token
         agent_token = sign_run_token(
             RunTokenClaims(session_id=ids["root"], run_id="agent-auth-run", agent="harness-agent"), access_key)
         status, worker = await asyncio.to_thread(
@@ -1887,8 +1881,8 @@ async def run_harness(args: argparse.Namespace) -> None:
       live = ids["live"]
       live_run = ids["live_run"]
       handles = ids["_live_handles"]
-      from src.core import event_types as ET
-      from src.core.control_events import build_control_event
+      from src.infra import event_types as ET
+      from src.runtime.control_events import build_control_event
       try:
         log("  s21: live worker transcript")
         # (a) parent page: worker spinner, the parent's gear in both
@@ -2059,7 +2053,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         # warmed the app-side caches long ago, and an append through
         # them would land on disk without advancing the caches the
         # APIs read.
-        from src.api.deps import task_manager as serving_tree
+        from src.runtime.api.deps import task_manager as serving_tree
         serving = serving_tree()
         await serving.events.append(
             live,

@@ -8,9 +8,9 @@ from pathlib import Path
 import pytest
 from conftest import make_parent as _make_parent
 
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionStatus
-from src.core.sessions import SessionManager
+from src.infra.config import CharlieBotConfig
+from src.infra.models import SessionStatus
+from src.runtime.sessions import SessionManager
 
 
 @pytest.mark.asyncio

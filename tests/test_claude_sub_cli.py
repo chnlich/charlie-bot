@@ -8,12 +8,9 @@ from pathlib import Path
 
 import pytest
 
-from src.agents.backends import pty_common
-from src.cli import claude_sub
-from src.cli.claude_sub_bridge import (
-    HookProtocolError,
-    HookTurnState,
-)
+from src.backends.claude_sub import claude_sub
+from src.backends.claude_sub.claude_sub_bridge import HookProtocolError, HookTurnState
+from src.runtime.agent_process import pty_common
 
 SESSION_ID = "session-id"
 WORKING_DIRECTORY = "/tmp/claude-sub-test"

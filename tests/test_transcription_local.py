@@ -16,8 +16,8 @@ import time
 import numpy as np
 import pytest
 
-from src.agents import transcriber
-from src.agents.transcriber import _SpeechModelBundle
+from src.features.voice import transcriber
+from src.features.voice.transcriber import _SpeechModelBundle
 
 
 class _StubStream:

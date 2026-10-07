@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from src.api.pages import _build_direct_pass_gzip
-from src.core import direct_pass_child
-from src.core.trace_merge import NotATraceError
+from src.app.pages import _build_direct_pass_gzip
+from src.features.trace import direct_pass_child
+from src.features.trace.trace_merge import NotATraceError
 
 
 def _write_trace(path: Path, events: list[dict]) -> None:
@@ -73,7 +73,7 @@ def test_pretty_trace_splits_at_element_lines_and_every_chunk_parses(tmp_path: P
   assert bounds == sorted(bounds)
   import orjson
 
-  from src.core.trace_merge import _trace_events_or_raise
+  from src.features.trace.trace_merge import _trace_events_or_raise
   for index in range(len(bounds) - 1):
     wrapped = direct_pass_child._chunk_parse_input(
         trace, bounds[index], bounds[index + 1], index,

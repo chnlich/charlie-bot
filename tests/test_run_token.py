@@ -8,8 +8,8 @@ import json
 import conftest
 import pytest
 
-from src.api import auth
-from src.core import run_token, takeoff_gate
+from src.runtime import run_token, takeoff_gate
+from src.runtime.api import auth
 
 
 def _scope(headers: dict[str, str] | None = None, cookies: dict[str, str] | None = None) -> dict:

@@ -13,7 +13,7 @@ Run from the repo root so uv picks the project environment (sherpa-onnx);
 
 Raw 16 kHz mono s16 PCM files (*.pcm, *.s16) decode without the av import.
 The script also locates the checkout from any cwd: it walks its own parents
-and the cwd for src/agents/transcriber.py, then honors CHARLIEBOT_REPO.
+and the cwd for src/features/voice/transcriber.py, then honors CHARLIEBOT_REPO.
 """
 
 from __future__ import annotations
@@ -28,10 +28,10 @@ PCM_SUFFIXES = {".pcm", ".s16"}
 def repo_root() -> Path:
   """Locate the checkout: script parents and cwd first, CHARLIEBOT_REPO last."""
   for base in [*Path(__file__).resolve().parents, Path.cwd()]:
-    if (base / "src/agents/transcriber.py").is_file():
+    if (base / "src/features/voice/transcriber.py").is_file():
       return base
   override = Path(os.environ.get("CHARLIEBOT_REPO", ""))
-  if (override / "src/agents/transcriber.py").is_file():
+  if (override / "src/features/voice/transcriber.py").is_file():
     return override
   sys.exit("repo checkout not found: run from the repo root or set CHARLIEBOT_REPO")
 
@@ -58,8 +58,8 @@ def main() -> int:
   root = repo_root()
   if str(root) not in sys.path:
     sys.path.insert(0, str(root))
-  from src.agents.transcriber import ensure_models_cached, get_transcription_bundle, transcribe_pcm_offline
-  from src.core.config import get_config
+  from src.features.voice.transcriber import ensure_models_cached, get_transcription_bundle, transcribe_pcm_offline
+  from src.infra.config import get_config
 
   cfg = get_config()
   ensure_models_cached(cfg)

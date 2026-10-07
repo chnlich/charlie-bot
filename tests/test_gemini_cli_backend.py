@@ -1,8 +1,8 @@
 import conftest
 import pytest
 
-from src.agents.backends import gemini_cli
-from src.core import event_types as ET
+from src.backends.gemini import gemini_cli
+from src.infra import event_types as ET
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: object) -> gemini_cli.GeminiCliBackend:

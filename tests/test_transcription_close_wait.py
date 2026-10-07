@@ -20,12 +20,12 @@ from typing import Any
 import pytest
 from conftest import assert_transcribe_cancel_honors_close_timeout
 
-from src.agents.transcription import muse
-from src.agents.transcription.gemini import GeminiTranscriptionBackend
-from src.agents.transcription.muse import MuseTranscriptionBackend
-from src.core import credentials
-from src.core.config import CharlieBotConfig
-from src.core.credentials import Credentials
+from src.features.voice.transcription import muse
+from src.features.voice.transcription.gemini import GeminiTranscriptionBackend
+from src.features.voice.transcription.muse import MuseTranscriptionBackend
+from src.infra import credentials
+from src.infra.config import CharlieBotConfig
+from src.infra.credentials import Credentials
 
 # The credentials section shape and the handshake reply are each backend's own
 # wire contract; the sections dict is what the patched get_credentials() serves.
@@ -45,7 +45,7 @@ async def test_transcribe_cancel_waits_only_the_configured_close_timeout(
     handshake_reply: list[dict]) -> None:
   """Cancelling a transcription in progress waits WS_CLIENT_CLOSE_TIMEOUT for the
   peer's close frame, not websockets' 10 s default (synthetic credentials only)."""
-  from src.core import timeouts
+  from src.infra import timeouts
 
   monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
   monkeypatch.setattr(

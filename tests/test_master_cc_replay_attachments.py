@@ -8,9 +8,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.agents import master_cc_queue
-from src.core import config, models
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import master_cc_queue
 
 _FILES = [{"filename": "pic.png", "path": "/uploads/pic.png", "size": 3}]
 

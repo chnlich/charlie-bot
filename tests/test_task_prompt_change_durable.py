@@ -10,8 +10,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, task_sessions
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import task_sessions
 
 pytestmark = pytest.mark.asyncio
 
@@ -98,7 +99,7 @@ async def test_recovery_sweep_is_idempotent_and_does_not_duplicate(
     await tree.patch_task(sid, models.PatchSessionTaskRequest(subtree_prompt="rule"), caller=conftest.OPERATOR)
   monkeypatch.setattr(tree, "_ensure_prompt_changed_fact", real_ensure)
   # Repeated recovery (the startup sweep) lands the fact once, then no-ops.
-  from src.core import task_recovery
+  from src.runtime import task_recovery
   await task_recovery.reconcile_task_tree(cfg, tree)
   first = prompt_facts(tree, sid)
   assert len(first) == 1

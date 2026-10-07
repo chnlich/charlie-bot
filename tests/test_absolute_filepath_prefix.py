@@ -25,9 +25,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import server
-from src.api import auth, pages
-from src.api import files as files_api
-from src.core import config
+from src.app import pages
+from src.features.files import api as files_api
+from src.infra import config
+from src.runtime.api import auth
 
 
 def _mounted_prefixes() -> list[str]:

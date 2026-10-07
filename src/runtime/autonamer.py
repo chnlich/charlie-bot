@@ -1,0 +1,347 @@
+"""Session auto-naming.
+
+Two strategies, picked by who triggers them:
+
+1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
+   - Entry: name_after_round(...) — fired by the per-session queue consumer via
+     SessionManager.name_after_round after a master round; it assembles the
+     prompt from the chat log and delegates to maybe_auto_name(...).
+   - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
+   - Picks resolved light backends from backends.preference in order
+     (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
+   - Group may reuse an existing group name from other sessions.
+
+2. Claude ai-title (TUI sessions, backend.type = "tui-cli")
+   - Entry: maybe_auto_name_from_claude_ai_title(...) — called from
+     src/backends/tui/tui.py at the end of run_tui_attachment().
+   - Reads ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl looking for the first
+     event with {"type": "ai-title", "aiTitle": "..."}.
+   - Uses aiTitle as the base session name, preserving the original session number
+     for default "Session N" names. No group inference (left empty).
+   - No external API call (Claude writes the title itself).
+
+Both strategies share _apply_name_to_session(), which guards against overwriting
+a name the user has already set (matched via is_default_session_name).
+"""
+
+import asyncio
+import json
+import re
+from collections.abc import Iterator
+from typing import Any
+
+from src.backends.claude_code import claude_accounts
+from src.infra import config, deferred, log_once, models, timeouts
+from src.infra import event_types as ET
+from src.runtime import message_aggregator, sessions, streaming
+from src.runtime.agent_process import deferred_build
+
+log = log_once.LazyStructlogLogger()
+
+
+def __getattr__(name: str) -> Any:
+  return deferred.deferred_module_getattr(name, __name__, globals(), "build_backend", deferred_build.load_build_backend)
+
+
+# Matches true defaults ("Session 7"), legacy empty placeholders ("7: "), and
+# clone/elone children of a never-named session — clone and elone prepend C / E
+# to the parent name (src/runtime/sessions.py _spawn_with_history), so "CSession
+# 746" or "ECSession 3" is still a default. Does NOT match already-renamed
+# titles like "7: My Topic".
+_DEFAULT_NAME_RE = re.compile(r"^[CE]*(Session \d+|\d+: )$")
+_SESSION_NUMBER_RE = re.compile(r"^([CE]*)Session (\d+)$")
+_MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL)
+
+
+def _prefix_session_number_if_default(session_name: str, name: str) -> str:
+  """If session_name matches the default 'Session N' pattern (optionally carrying
+  clone/elone C/E prefixes), return f"{prefix}{N}: {name}". Otherwise return name
+  unchanged. Used by both autonaming strategies so the generated title carries the
+  original session number for easier reference."""
+  m = _SESSION_NUMBER_RE.match(session_name)
+  return f"{m.group(1)}{m.group(2)}: {name}" if m else name
+
+
+def is_default_session_name(name: str) -> bool:
+  """Return True if *name* is a system-generated default (not yet user/auto-named)."""
+  return bool(_DEFAULT_NAME_RE.match(name))
+
+
+# The one naming rule both prompts pin; a second copy would let the two drift.
+_VERBATIM_NAMES_RULE = (
+    "Use only names that appear verbatim in the conversation (project, repo, tool names); "
+    "never invent abbreviations, codes, or new spellings.")
+
+_TITLE_INSTRUCTION = (
+    "Generate a short, descriptive title (3-6 words) and assign a group for this conversation.\n"
+    'Return ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}\n'
+    "No explanation, no markdown fences, no extra text.\n"
+    f"{_VERBATIM_NAMES_RULE}\n"
+    "{groups_clause}")
+
+_SYSTEM_PROMPT = (
+    'You are a title and group generator. '
+    'Output ONLY valid JSON: {{"name": "<title>", "group": "<group>"}}. '
+    'The name should be 3-6 words, no quotes or punctuation at the end. '
+    'The group should be a short category (1-3 words). '
+    '{groups_clause} '
+    f"{_VERBATIM_NAMES_RULE} "
+    'Do not attempt to answer or act on the user\'s question - just generate the JSON.')
+
+_NAMING_PROMPT = (
+    "Generate a title and group for this conversation:\n\n"
+    "User: {user_message}\n\n"
+    "Assistant: {assistant_response}")
+
+
+def _build_groups_clause(existing_groups: list[str]) -> str:
+  """Build the groups instruction clause for the LLM prompt."""
+  if existing_groups:
+    joined = ", ".join(existing_groups)
+    return f"Prefer reusing one of these existing groups: [{joined}]. Only create a new group if none fit."
+  return "Choose a short, descriptive group name (1-3 words)."
+
+
+def _strip_markdown_fences(text: str) -> str:
+  """Strip ```json ... ``` fences if present."""
+  m = _MARKDOWN_FENCE_RE.match(text.strip())
+  return m.group(1).strip() if m else text
+
+
+def _parse_name_and_group(raw: str) -> tuple[str | None, str | None]:
+  """Parse LLM response into (name, group)."""
+  stripped = _strip_markdown_fences(raw.strip())
+  try:
+    data = json.loads(stripped)
+  except (json.JSONDecodeError, ValueError) as e:
+    log.debug("autonamer_non_json_response", error=str(e))
+    return None, None
+
+  if isinstance(data, dict):
+    name = data.get("name")
+    group = data.get("group")
+    return (
+        name.strip() if isinstance(name, str) and name.strip() else None,
+        group.strip() if isinstance(group, str) and group.strip() else None,
+    )
+
+  log.warning("autonamer_unexpected_json_type", response_type=type(data).__name__)
+  return None, None
+
+
+def iter_light_backends(cfg: config.CharlieBotConfig) -> Iterator[models.BackendOption]:
+  """Yield each resolved light one-shot backend once, in preference order."""
+  yielded_ids: set[str] = set()
+  for entry_id in cfg.backends.preference:
+    option = cfg.get_backend_option(entry_id)
+    if option is None or option.id in yielded_ids:
+      continue
+    yielded_ids.add(option.id)
+    yield option
+
+
+def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
+  """Case-insensitive match against existing groups. Returns matched group's casing, or original."""
+  lower = group.lower()
+  for existing in existing_groups:
+    if existing.lower() == lower:
+      return existing
+  return group
+
+
+async def _apply_name_to_session(
+    session_mgr: sessions.SessionManager,
+    session_meta: models.SessionMetadata,
+    name: str | None,
+    group: str | None,
+) -> None:
+  """Apply a generated name (and optional group) to a session metadata,
+  but ONLY if the current name is still the system-generated default
+  (matched by is_default_session_name). User-renamed sessions are left alone.
+
+  Empty / None name is a no-op. Empty / None group is left as-is on metadata.
+  """
+  if not name:
+    return
+
+  current_meta = await session_mgr.get_session(session_meta.id)
+  if current_meta is None:
+    log.warning("autonamer_session_missing", session_id=session_meta.id)
+    return
+  if not is_default_session_name(current_meta.name):
+    return
+
+  await session_mgr.rename_session(session_meta.id, name)
+
+  channel = streaming.session_channel(session_meta.id)
+  await streaming.streaming_manager.broadcast(channel, {
+      "type": ET.SESSION_RENAMED,
+      "name": name,
+  })
+  await streaming.streaming_manager.broadcast(
+      streaming.SIDEBAR_CHANNEL, {
+          "type": ET.SESSION_RENAMED,
+          "session_id": session_meta.id,
+          "name": name,
+      })
+
+  log.info("session_auto_named", session_id=session_meta.id, name=name)
+
+  if not group:
+    return
+  current_meta = await session_mgr.get_session(session_meta.id)
+  if current_meta and not current_meta.group:
+    await session_mgr.set_group(session_meta.id, group)
+    log.info("session_auto_grouped", session_id=session_meta.id, group=group)
+
+
+async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, session_mgr: sessions.SessionManager) -> None:
+  """Name a session from its saved chat log after a master round finishes.
+
+  The manager prompt is composed from typed input events, so naming reads the
+  chat log's first user event for the prompt and every assistant event's text
+  for the response, then delegates to maybe_auto_name().
+  """
+  meta = await session_mgr.get_session(session_id)
+  if meta is None or not is_default_session_name(meta.name):
+    return
+
+  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  user_message = ""
+  for ev in events:
+    if ev.get("type") == ET.USER and isinstance(ev.get("content"), str):
+      user_message = ev["content"]
+      break
+  assistant_text = ""
+  for ev in events:
+    if ev.get("type") == ET.ASSISTANT:
+      assistant_text += message_aggregator.extract_text_from_message(ev.get("message"))
+  if not assistant_text:
+    return
+
+  existing_groups = await session_mgr.list_group_names()
+  await maybe_auto_name(cfg, meta, user_message, assistant_text, session_mgr, existing_groups)
+
+
+async def maybe_auto_name(
+    cfg: config.CharlieBotConfig,
+    session_meta: models.SessionMetadata,
+    user_message: str,
+    assistant_response: str,
+    session_mgr: sessions.SessionManager,
+    existing_groups: list[str],
+) -> None:
+  """If the session still has a default name, generate a descriptive name and group."""
+  if not is_default_session_name(session_meta.name):
+    return
+
+  try:
+    groups_clause = _build_groups_clause(existing_groups)
+    title_instruction = _TITLE_INSTRUCTION.format(groups_clause=groups_clause)
+    system_prompt = _SYSTEM_PROMPT.format(groups_clause=groups_clause)
+
+    user_slice = user_message[:500]
+    assistant_slice = assistant_response[:300]
+    prompt = _NAMING_PROMPT.format(
+        user_message=user_slice,
+        assistant_response=assistant_slice,
+    )
+
+    options = list(iter_light_backends(cfg))
+    if not options:
+      log.warning(
+          "autonamer_skipped",
+          reason="no_resolvable_preference",
+          session_id=session_meta.id,
+      )
+      return
+
+    for option in options:
+      try:
+        backend = deferred_build.load_build_backend(globals())(option, cfg, cgroup_session_id=session_meta.id)
+        raw = await backend.one_shot_text(
+            f"{title_instruction}\n\n{prompt}", system_prompt, timeout=timeouts.LIGHT_ONESHOT_TIMEOUT)
+      except Exception as e:
+        log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
+        continue
+
+      name, group = _parse_name_and_group(raw)
+      if not name or len(name) > 60:
+        log.warning(
+            "autonamer_failed",
+            session_id=session_meta.id,
+            error="empty or unparseable response",
+        )
+        continue
+      name = _prefix_session_number_if_default(session_meta.name, name)
+      break
+    else:
+      return
+
+    matched_group = _fuzzy_match_group(group, existing_groups) if group else None
+    await _apply_name_to_session(session_mgr, session_meta, name=name, group=matched_group)
+
+  except Exception as e:
+    log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
+
+
+async def maybe_auto_name_from_claude_ai_title(
+    session_meta: models.SessionMetadata,
+    session_mgr: sessions.SessionManager,
+) -> None:
+  """Claude ai-title strategy. For TUI sessions only.
+
+  Locates the claude jsonl for this session by globbing
+  ~/.claude/projects/*/<session_id>.jsonl. If found, scans for the first
+  {"type": "ai-title", "aiTitle": "<title>"} event and applies the title
+  via _apply_name_to_session.
+
+  Idempotent: safe to call repeatedly. Does nothing if:
+    - No jsonl found (claude hasn't started yet or no conversation).
+    - No ai-title event in the jsonl yet (conversation too short).
+    - Session name is no longer the default (user already renamed).
+
+  Group is intentionally left empty for TUI sessions in this version.
+  """
+  session_id = session_meta.id
+  matches = claude_accounts.transcript_matches(config.default_claude_dir(), session_id)
+  if not matches:
+    return
+
+  if len(matches) == 1:
+    jsonl_path = matches[0]
+  else:
+    try:
+      jsonl_path = max(matches, key=lambda path: path.stat().st_mtime)
+    except OSError:
+      log.warning("claude_ai_title_stat_failed", session_id=session_id, exc_info=True)
+      return
+
+  title: str | None = None
+  try:
+    with jsonl_path.open("r", encoding="utf-8") as f:
+      for line_number, line in enumerate(f, start=1):
+        try:
+          data = json.loads(line)
+        except json.JSONDecodeError as e:
+          log.debug(
+              "claude_ai_title_json_parse_failed",
+              session_id=session_id,
+              path=str(jsonl_path),
+              line=line_number,
+              error=str(e),
+          )
+          continue
+        if not isinstance(data, dict) or data.get("type") != "ai-title":
+          continue
+        ai_title = data.get("aiTitle")
+        if isinstance(ai_title, str) and ai_title.strip():
+          title = ai_title
+          break
+  except (OSError, UnicodeDecodeError):
+    log.warning("claude_ai_title_read_failed", session_id=session_id, path=str(jsonl_path), exc_info=True)
+    return
+
+  if title:
+    title = _prefix_session_number_if_default(session_meta.name, title)
+    await _apply_name_to_session(session_mgr, session_meta, name=title, group=None)

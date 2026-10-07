@@ -17,19 +17,10 @@ import conftest
 import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
-from src.core.memory import (
-    assemble_master,
-    select_master_memory,
-    select_worker_memory,
-)
-from src.core.models import PatchSessionTaskRequest, TaskSpec, TaskType
-from src.core.task_prompts import (
-    PromptSnapshot,
-    assemble_snapshot,
-    build_segments,
-    prompt_task_type,
-)
-from src.core.task_sessions import TaskTreeManager
+from src.features.memory.memory import assemble_master, select_master_memory, select_worker_memory
+from src.infra.models import PatchSessionTaskRequest, TaskSpec, TaskType
+from src.runtime.task_prompts import PromptSnapshot, assemble_snapshot, build_segments, prompt_task_type
+from src.runtime.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
 
@@ -163,7 +154,7 @@ async def test_worker_kinds_get_their_applicable_contracts(tmp_path: Path, kind:
   refs = [s[1] for s in sources_of(snapshot)]
   assert "prompts/task_base.md" in refs
   if kind == "review":
-    assert any(ref.startswith("src/core/review.py") for ref in refs)
+    assert any(ref.startswith("src/runtime/review.py") for ref in refs)
   elif meta.task.task_type == "implement" or kind != "work":
     assert "prompts/worker.md" in refs
   assert "prompts/verify.md" not in refs  # a verify contract only on verify tasks
@@ -208,7 +199,7 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
   async def snapshot_for(label: str, kind: str = "manager_turn") -> PromptSnapshot:
     meta = await mgr.load_meta(ids[label])
     index = await mgr._get_index()
-    from src.core.task_execution import capture_prompt_chain
+    from src.runtime.task_execution import capture_prompt_chain
     chain, node_ref = capture_prompt_chain(mgr, index, meta)
     segments, _err = build_segments(cfg, meta, kind, chain=chain, node_ref=node_ref, overlay=None)
     return assemble_snapshot(segments)

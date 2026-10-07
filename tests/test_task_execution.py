@@ -44,18 +44,14 @@ from conftest import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-import src.core.task_execution as task_execution_module
-from src.core import claude_accounts, claude_relay
-from src.core import event_types as ET
-from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.core.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
-from src.core.runs import RAW_LOG_NAME
-from src.core.sessions import (
-    CONTEXT_RESET_INSTRUCTION,
-    HISTORY_LOCATION_NOTE,
-    SessionManager,
-)
-from src.core.task_sessions import TaskTreeManager
+import src.runtime.task_execution as task_execution_module
+from src.backends.claude_code import claude_accounts, claude_relay
+from src.infra import event_types as ET
+from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
+from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.runtime.runs import RAW_LOG_NAME
+from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE, SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
 # pass it as headers=. It is not a caller identity; conftest's OPERATOR (CallerIdentity)
@@ -67,7 +63,7 @@ def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Make the synthetic home the one spawned children sign against: seed its
     access key and pin CHARLIEBOT_HOME at it, so every child environment signs
     its run token against the synthetic home (never operator credentials)."""
-  import src.core.config as core_config
+  import src.infra.config as core_config
   core_config._credentials_cache.seed(
       core_config.Credentials(
           path=home / "credentials.yaml", sections={"charliebot": {
@@ -81,7 +77,7 @@ def build_spawning_env(
   """(cfg, SessionManager, TaskTreeManager) over one synthetic home under tmp_path:
     the given backend options, worktree_dir inside the home, and the seeded access
     key every child environment signs against (seed_signing_home)."""
-  from src.core.config import CharlieBotConfig
+  from src.infra.config import CharlieBotConfig
   home = tmp_path / "charliebot-home"
   backends: dict = {"options": options}
   if preference is not None:
@@ -170,7 +166,7 @@ class SpawningScriptedBackend:
 
 def result_event(text: str) -> dict:
   """A result event carrying real usage and text (the zero-output guard reads both)."""
-  from src.agents.backends import base as backend_base
+  from src.runtime.agent_process import base as backend_base
   event = backend_base.make_result_event(input_tokens=10, output_tokens=5)
   event["result"] = text
   return event
@@ -212,11 +208,11 @@ def make_pm_build(text: str, pm_builds: list | None = None):
 
 
 def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
-  from src.api import internal as internal_api
-  from src.api import sessions as sessions_api
-  from src.api import threads as threads_api
-  from src.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-  from src.core import config
+  from src.infra import config
+  from src.runtime.api import internal as internal_api
+  from src.runtime.api import sessions as sessions_api
+  from src.runtime.api import threads as threads_api
+  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 
   app = FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -345,8 +341,8 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   # finished run's is not.
   from fastapi import HTTPException
 
-  from src.api.deps import require_caller
-  from src.core.run_token import RunTokenClaims
+  from src.runtime.api.deps import require_caller
+  from src.runtime.run_token import RunTokenClaims
   queued_claims = RunTokenClaims(session_id=manager.id, run_id="run-queued", agent=manager.name or "m")
   await tree.runs.register_run(RunRecord(id="run-queued", session_id=manager.id, kind="manager_turn"))
   with pytest.raises(HTTPException, match="has not launched"):
@@ -368,8 +364,8 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
 
 def _bearer(claims):
   """A signed run-token request against the synthetic home's seeded key."""
-  import src.core.config as core_config
-  from src.core.run_token import sign_run_token
+  import src.infra.config as core_config
+  from src.runtime.run_token import sign_run_token
   key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
   token = sign_run_token(claims, key)
   # Lowercase key: the real Header object is case-insensitive; the plain
@@ -378,8 +374,8 @@ def _bearer(claims):
 
 
 def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
-  from src.core import streaming
-  from src.core.task_execution import TaskExecutionAdapter
+  from src.runtime import streaming
+  from src.runtime.task_execution import TaskExecutionAdapter
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", _async_noop)
   return TaskExecutionAdapter(cfg, session_mgr, tree)
 
@@ -567,7 +563,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # needs a real user message with the takeoff phrase.
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  from src.api import internal as internal_api
+  from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
   with make_api_client(cfg, session_mgr, tree) as client:
     payload = {
@@ -639,7 +635,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     # contract) resolves to the child's Run — not to a run on the parent.
     resolved = tree.aliases.resolve_thread(manager.id, run_id)
     assert resolved == {"session_id": child_id, "run_id": run_id}
-    from src.api import deps
+    from src.runtime.api import deps
     monkeypatch.setattr(deps, "_task_manager", tree)
     row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OP_HEADERS)
     assert row.status_code == 200, row.text
@@ -953,7 +949,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
 
   # The header the worker page projects for the launched Run: plain success,
   # both refs pointing at the files the launch produced.
-  from src.core import worker_transcript
+  from src.runtime import worker_transcript
   entry = worker_transcript.load_worker_transcript(tree, worker.id)
   work_header = next(
       m for m in entry.projection.committed if m.get("kind") == ET.RUN_HEADER and m.get("run_id") == "run-work")
@@ -1029,7 +1025,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
   assert local_tip[:12] in error_text
   assert "fast-forward" not in error_text
 
-  from src.core import worker_transcript
+  from src.runtime import worker_transcript
   entry = worker_transcript.load_worker_transcript(tree, worker.id)
   messages = entry.projection.committed
   header = messages[0]
@@ -1201,7 +1197,7 @@ async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkey
 
 
 def _task_spec(tree: TaskTreeManager, spec: dict):
-  from src.core.models import TaskType
+  from src.infra.models import TaskType
   return TaskSpec(
       goal=spec["goal"],
       context_refs=[],
@@ -1219,7 +1215,7 @@ def _task_spec(tree: TaskTreeManager, spec: dict):
 
 @pytest.mark.asyncio
 async def test_landing_verification_negative_cases(tmp_path: Path) -> None:
-  from src.core.git import git_verify_commit_landed
+  from src.infra.git import git_verify_commit_landed
 
   repo, _origin = init_repo_with_origin(tmp_path)
   base_sha = run_git(repo, "rev-parse", "HEAD")
@@ -1245,7 +1241,7 @@ async def test_landing_verification_negative_cases(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_manual_complete_with_forged_landing_ref_stays_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.core.task_completion import CompletionEvidence
+  from src.runtime.task_completion import CompletionEvidence
 
   _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
@@ -1295,7 +1291,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
       result_refs=["run:run-work", f"landed:main@{unlanded}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"])
-  from src.core.task_sessions import TaskConflictError as TCE
+  from src.runtime.task_sessions import TaskConflictError as TCE
   with pytest.raises(TCE, match="landing evidence unverified"):
     await tree.completion.complete_task(worker.id, request_id="manual-1", evidence=evidence, caller="operator")
   assert tree.task_state(worker.id) == "open"
@@ -1648,7 +1644,7 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
   ctx_resp_snapshot = _snapshot_of(run)
   assert ctx_resp_snapshot == stored
   # The history endpoint serves the stored object without touching live sources.
-  from src.core.task_prompts import PromptSnapshot
+  from src.runtime.task_prompts import PromptSnapshot
   restored = PromptSnapshot.from_json_dict(stored)
   assert "original rule" in restored.instructions_text
   # An explicit retry is a new Run with current sources: restoring the body
@@ -1667,7 +1663,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
   _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
-  from src.core import json_utils
+  from src.infra import json_utils
   real_atomic = json_utils.atomic_write_text
   calls = {"n": 0}
 
@@ -1677,7 +1673,7 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
       raise OSError("injected snapshot publish failure")
     return real_atomic(path, text)
 
-  monkeypatch.setattr("src.core.json_utils.atomic_write_text", failing_atomic)
+  monkeypatch.setattr("src.infra.json_utils.atomic_write_text", failing_atomic)
   admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
@@ -1718,8 +1714,8 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
   assert "program-wide rule" in joined
 
   # Hash/snapshot parity: the preview API's assembly equals the committed bytes.
-  from src.core.task_execution import capture_prompt_chain
-  from src.core.task_prompts import assemble_snapshot, build_segments
+  from src.runtime.task_execution import capture_prompt_chain
+  from src.runtime.task_prompts import assemble_snapshot, build_segments
   meta = await tree.load_meta(manager.id)
   index = await tree._get_index()
   chain, node_ref = capture_prompt_chain(tree, index, meta)
@@ -1824,7 +1820,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
-  from src.api import internal as internal_api
+  from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
   # The client context stays open across the waits: the launches are tasks on
   # the client's portal loop, alive exactly while the block stands.
@@ -1889,7 +1885,7 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
   def explode(cfg, backend: str | None, model: str | None):
     raise ValueError(f"backend {backend!r} is not configured")
 
-  monkeypatch.setattr("src.core.task_execution.resolve_backend_option", explode)
+  monkeypatch.setattr("src.runtime.task_execution.resolve_backend_option", explode)
 
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -1938,7 +1934,7 @@ def build_pooled_env(
 class WorkerAccountRecorder:
   """The Worker-constructor spy: records every claude_account= the adapter passes.
 
-    A subclass stands in for src.core.task_execution.Worker, so the real Worker —
+    A subclass stands in for src.runtime.task_execution.Worker, so the real Worker —
     its relay loop included — still runs every recorded launch.
     """
 
@@ -2157,7 +2153,7 @@ def inject_chat_append_fault(
     propagation path. Returns one bool per matching append — True when that
     append raised — in order.
     """
-  from src.core import ndjson
+  from src.infra import ndjson
   real = ndjson.append_ndjson
   state = {"raised": 0}
   hits: list[bool] = []
@@ -2194,7 +2190,7 @@ def inject_run_record_write_fault(
     write, the one that carries ``ended_at``. Returns one bool per matching
     write — True when that write raised — in order.
     """
-  from src.core.runs import RunStore
+  from src.runtime.runs import RunStore
   real = RunStore.write_record
   state = {"raised": 0}
   hits: list[bool] = []
@@ -2306,7 +2302,7 @@ def child_reports(tree: TaskTreeManager, session_id: str) -> list[dict]:
 
 def test_is_out_of_space_error_walks_cause_and_context_chain() -> None:
   """Only ENOSPC/EDQUOT enter the retry, wherever they sit on the chain."""
-  from src.core.task_execution import is_out_of_space_error
+  from src.runtime.task_execution import is_out_of_space_error
   enospc = OSError(errno.ENOSPC, "No space left on device")
   edquot = OSError(errno.EDQUOT, "Disk quota exceeded")
   assert is_out_of_space_error(enospc)
@@ -2338,7 +2334,7 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
   """(a) The run_finished write raises ENOSPC, the retry drains the dead run
     from its raw log and lands the end record; the parent gets exactly one
     report and no second process ever starts."""
-  from src.core.thinking_state import busy_since
+  from src.runtime.thinking_state import busy_since
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
@@ -2449,7 +2445,7 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(d) A drained run's ended_at is the raw log's last write time; a live
     exit's ended_at stays the observed-exit write time."""
-  from src.core.task_recovery import reconcile_task_tree
+  from src.runtime.task_recovery import reconcile_task_tree
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter

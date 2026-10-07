@@ -5,8 +5,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.agents.backends import charlie_code
-from src.core import event_types as ET
+from src.backends.charlie_code import charlie_code
+from src.infra import event_types as ET
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> charlie_code.CharlieCodeBackend:

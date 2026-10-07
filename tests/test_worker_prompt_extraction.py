@@ -12,8 +12,8 @@ import pytest
 from conftest import build_worker_prompt
 from conftest import cfg_with_repo as _cfg_with_repo
 
-from src.core import spawner
-from src.core.config import CharlieBotConfig
+from src.infra.config import CharlieBotConfig
+from src.runtime import spawner
 
 # --- Fail-loud loader semantics -----------------------------------------------
 

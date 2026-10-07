@@ -33,13 +33,13 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.core import claude_accounts
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
-from src.core.control_events import stable_run_id
-from src.core.models import RunRecord, TaskSpec
-from src.core.scheduler import Scheduler
-from src.core.task_sessions import TaskTreeManager
+from src.backends.claude_code import claude_accounts
+from src.features.cron.scheduler import Scheduler
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
+from src.infra.models import RunRecord, TaskSpec
+from src.runtime.control_events import stable_run_id
+from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     WorkerAccountRecorder,
@@ -190,13 +190,13 @@ async def test_bound_master_worker_spoof_cannot_forged_scheduled_input(
   run_id = stable_run_id(manager.id, "spoof:work")
   await tree.runs.register_run(RunRecord(id=run_id, session_id=manager.id, kind="work"))
   await tree.runs.record_launch(manager.id, run_id, pid=424000, pid_start="ps-1")
-  import src.core.config as core_config
-  from src.core.run_token import RunTokenClaims, sign_run_token
+  import src.infra.config as core_config
+  from src.runtime.run_token import RunTokenClaims, sign_run_token
   key = str(core_config.get_credentials().get("charliebot", "access_key") or "")
   claims = RunTokenClaims(session_id=manager.id, run_id=run_id, agent="Manager")
   token = sign_run_token(claims, key)
   request = type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
-  from src.api.deps import require_caller
+  from src.runtime.api.deps import require_caller
   identity = await require_caller(request, tree.runs)
   assert identity.is_operator is False
   # The verified agent caller relays only agent messages; a scheduled input's
@@ -248,7 +248,7 @@ async def test_bound_steps_failure_stops_chain_and_reports_failed(bound_env, mon
 @pytest.mark.asyncio
 async def test_missing_binding_fails_visibly_without_creating_a_session(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.core.cron_sequence import ScheduledBindingError
+  from src.features.cron.cron_sequence import ScheduledBindingError
   cfg, session_mgr, tree = bound_env
   await make_manager(tree)
   task_cfg = _bound_task("ghost", str(uuid.uuid4()), prompt="Nobody home.")
@@ -262,10 +262,10 @@ async def test_missing_binding_fails_visibly_without_creating_a_session(
 
 @pytest.mark.asyncio
 async def test_legacy_session_binding_refuses_the_v2_path(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.core.cron_sequence import ScheduledBindingError
+  from src.features.cron.cron_sequence import ScheduledBindingError
   cfg, session_mgr, tree = bound_env
   await make_manager(tree)
-  from src.core.models import CreateSessionRequest
+  from src.infra.models import CreateSessionRequest
   legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy session"), backend=OPUS_BACKEND_ID)
   task_cfg = _bound_task("legacy-bound", legacy.id, prompt="wake")
   scheduler = Scheduler(cfg, session_mgr)
@@ -275,11 +275,11 @@ async def test_legacy_session_binding_refuses_the_v2_path(bound_env, monkeypatch
 
 @pytest.mark.asyncio
 async def test_closed_bound_node_generates_no_new_execution(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.core.cron_sequence import ScheduledBindingError
+  from src.features.cron.cron_sequence import ScheduledBindingError
   cfg, session_mgr, tree = bound_env
   manager = await make_manager(tree)
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("x")])], BUILD_BACKEND_PATCH_TARGET)
-  from src.core.task_completion import CompletionEvidence
+  from src.runtime.task_completion import CompletionEvidence
   close_run = stable_run_id(manager.id, "close:evidence")
   await tree.runs.register_run(RunRecord(id=close_run, session_id=manager.id, kind="manager_turn"))
   await tree.runs.record_launch(manager.id, close_run, pid=424001, pid_start="ps-1")
@@ -321,7 +321,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   Fresh recovery must launch the next position through the same launch checks,
   complete the leaf, and deliver exactly ONE completed boundary report; a
   repeated recovery pass creates no extra step, close, or report."""
-  from src.core.task_recovery import reconcile_task_tree
+  from src.runtime.task_recovery import reconcile_task_tree
   cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   # Step 1 rides a scripted worker process; the manager's report-consuming
@@ -336,7 +336,7 @@ async def test_recovery_redrives_a_mid_chain_firing_from_durable_facts(
   # The durable mid-chain facts of a stopped process: the firing's leaf with
   # step 0's Run terminally successful (exit 0 — the frontier's advance
   # evidence), and nothing else.
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "chained steps")
   leaf_id = leaf.id
@@ -438,8 +438,8 @@ async def test_withheld_step_launch_settles_the_chain_without_hanging(
           StepConfig(name="first", prompt="Do the first thing."),
           StepConfig(name="second", prompt="Do the second thing.")
       ])
-  from src.core import cron_sequence
-  from src.core.tasks import create_logged_task
+  from src.features.cron import cron_sequence
+  from src.infra.tasks import create_logged_task
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, f"{task_cfg.name} steps")
   await cancel_task_node(tree, leaf.id, "withhold-leaf")
@@ -480,7 +480,7 @@ async def test_steps_admission_failure_does_not_consume_the_occurrence(
   install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   task_cfg = _bound_task("flaky-steps", manager.id, steps=[StepConfig(name="only", prompt="Do it.")])
   scheduler = Scheduler(cfg, session_mgr)
-  from src.core import cron_sequence as cs
+  from src.features.cron import cron_sequence as cs
   original = cs.register_leaf_run
 
   async def flaky_register(*args, **kwargs):
@@ -524,7 +524,7 @@ async def _successful_two_step_leaf(bound_env, monkeypatch: pytest.MonkeyPatch):
       manager.id,
       steps=[StepConfig(name="zero", prompt="Zero."),
              StepConfig(name="one", prompt="One.")])
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "recovered boundary steps")
   leaf_meta = await tree.load_meta(leaf.id)
@@ -553,7 +553,7 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
       from_session=manager.id,
       from_session_name="Manager")
 
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
@@ -594,7 +594,7 @@ async def test_recovered_final_step_boundary_settles_without_a_new_tick(
   ONE report land in the same pass, with no scheduler tick or restart."""
   _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   assert tree.task_state(leaf.id) == "completed"
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
@@ -610,7 +610,7 @@ async def test_simultaneous_fresh_and_recovery_followup_produce_no_duplicate(
   one next step, one process, one close, one report."""
   _cfg, _session_mgr, tree, manager, task_cfg, meta, leaf, _leaf_meta = (
       await _successful_two_step_leaf(bound_env, monkeypatch))
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   await asyncio.gather(
       cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id),
       cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id),
@@ -639,7 +639,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
       await _successful_two_step_leaf(bound_env, monkeypatch))
   # The parent wake fails exactly once, after the close and its report landed:
   # the executor raises before reserving, so the pending batch stays pending.
-  from src.core.task_execution import TaskExecutionAdapter
+  from src.runtime.task_execution import TaskExecutionAdapter
   orig_call = TaskExecutionAdapter.__call__
   calls = {"n": 0}
 
@@ -649,7 +649,7 @@ async def test_completed_close_survives_a_failing_parent_wake_without_a_blocked_
     raise RuntimeError("dispatch reserved run x against a batch that vanished within one lock hold")
 
   monkeypatch.setattr(TaskExecutionAdapter, "__call__", failing_call)
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   await cron_sequence.reconcile_bound_firings(task_cfg, meta, tree, FIRING, leaf.id)
   assert calls["n"] == 1
   # The close landed and the boundary product is exactly ONE completed report.
@@ -689,7 +689,7 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
           "max_pending": 3
       })
   scheduler = Scheduler(cfg, session_mgr)
-  from src.core import backlog_loop
+  from src.features.backlog import backlog_loop
 
   async def noop_action(*args, **kwargs):
     return "noop", ""
@@ -935,7 +935,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
     bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """The same check fires on the recovery path: a mid-chain firing whose next
   launch now resolves to a shared backend stops before that launch and reports."""
-  from src.core.task_recovery import reconcile_task_tree
+  from src.runtime.task_recovery import reconcile_task_tree
   cfg, _session_mgr, tree = bound_env
   manager = await make_manager(tree)
   install_backends(
@@ -978,7 +978,7 @@ async def test_recovery_launch_with_same_resolved_backend_stops_and_reports(
           }),
       encoding="utf-8")
   # The durable mid-chain facts: step 0 terminally successful, nothing after.
-  from src.core import cron_sequence
+  from src.features.cron import cron_sequence
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "distinct steps")
   leaf_id = leaf.id
@@ -1065,8 +1065,8 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
       manager.id,
       backend=POOLED_FABLE_ID,
       steps=[StepConfig(name="only", prompt="Do the single thing.")])
-  from src.core import cron_sequence
-  from src.core.tasks import create_logged_task
+  from src.features.cron import cron_sequence
+  from src.infra.tasks import create_logged_task
   meta = await tree.load_meta(manager.id)
   leaf = await cron_sequence.ensure_firing_leaf(task_cfg, meta, tree, FIRING, "pooled steps")
   handle = create_logged_task(

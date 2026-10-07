@@ -1,4 +1,4 @@
-"""Acceptance tests for the Slack summon listener (src.core.slack_listener)."""
+"""Acceptance tests for the Slack summon listener (src.features.slack.slack_listener)."""
 
 from __future__ import annotations
 
@@ -17,16 +17,16 @@ from conftest import (
     mention_seam,
 )
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
-from src.core.slack_listener import (
+from src.features.slack.slack_listener import (
     _REPLY_COMMAND,
     _build_follow_wake_message,
     handle_app_mention,
     summon_session_id,
 )
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import CreateSessionRequest
+from src.runtime.sessions import SessionManager
 
 _TS = "1700000000.000100"
 
@@ -223,7 +223,7 @@ async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_
 
 @pytest.mark.asyncio
 async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
-  from src.core import master_trigger
+  from src.runtime import master_trigger
 
   cfg, session_mgr, _ = _rig(tmp_path)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
@@ -254,7 +254,7 @@ async def _run_listener_against(
     stand_in: WsServerNeverAnswersClose, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> asyncio.Task:
   """Start the stand-in and run the real run_listener with its Slack Web API side
   pointed at it; the caller stops the stand-in when the listener task is done."""
-  from src.core import slack_listener
+  from src.features.slack import slack_listener
 
   cfg, session_mgr, _ = _rig(tmp_path)
   url = await stand_in.start()
@@ -286,7 +286,7 @@ async def _await_listener_cancel(task: asyncio.Task) -> float:
 async def test_listener_cancel_skips_the_close_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Cancelling the listener aborts the transport instead of waiting out
   WS_CLIENT_CLOSE_TIMEOUT for the close frame the stand-in never answers."""
-  from src.core import timeouts
+  from src.infra import timeouts
 
   monkeypatch.setattr(timeouts, "WS_CLIENT_CLOSE_TIMEOUT", 0.2)
   stand_in = WsServerNeverAnswersClose(_WS_HELLO)

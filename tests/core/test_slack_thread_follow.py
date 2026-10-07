@@ -9,8 +9,10 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, sessions, slack_listener, triggers
+from src.features.slack import slack_listener
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import sessions, triggers
 
 _TEAM = "T_TEST"
 _CHANNEL = "C_TEST"

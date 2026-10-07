@@ -225,41 +225,41 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
 
 # Imports must follow the sys.path bootstrap above.
-import src.core.config as core_config  # noqa: E402,I001
-from src.agents import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
-from src.agents.backends import base as backend_base  # noqa: E402
-from src.agents.backends.antigravity_cli import AntigravityCliBackend  # noqa: E402
-from src.agents.backends.charlie_code import CharlieCodeBackend  # noqa: E402
-from src.agents.backends.codex import CodexBackend  # noqa: E402
-from src.agents.backends.gemini_cli import GeminiCliBackend  # noqa: E402
-from src.agents.backends.opencode import OpenCodeBackend  # noqa: E402
-from src.agents.worker import Worker  # noqa: E402
-from src.api.cron import router as cron_router  # noqa: E402
-from src.api.deps import get_session_manager, get_task_manager, get_thread_manager  # noqa: E402
-from src.api.internal import router as internal_router  # noqa: E402
-from src.api.pages import router as pages_router  # noqa: E402
-from src.api.sessions import router as sessions_router  # noqa: E402
-from src.core import event_types as ET  # noqa: E402
-from src.core import runs  # noqa: E402
-from src.core import thinking_state  # noqa: E402
-from src.core import init_worker_recovery as worker_recovery_module  # noqa: E402
-from src.core import models  # noqa: E402
-from src.core import streaming  # noqa: E402
-from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
-from src.api.deps import get_config_on_loop  # noqa: E402
-from src.core.config import CharlieBotConfig, get_config  # noqa: E402
-from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
-from src.core.home import CREDENTIALS_FILE  # noqa: E402
-from src.core.plans import PlanRegistryManager  # noqa: E402
-from src.core.scheduler import Scheduler  # noqa: E402
-from src.core.sessions import SessionManager  # noqa: E402
-from src.core.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
-from src.core.task_sessions import TaskTreeManager  # noqa: E402
-from src.core import spawner  # noqa: E402
-from src.core.threads import ThreadManager  # noqa: E402
-from src.core.triggers import TriggerManager  # noqa: E402
+import src.infra.config as core_config  # noqa: E402,I001
+from src.runtime import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
+from src.runtime.agent_process import base as backend_base  # noqa: E402
+from src.backends.antigravity.antigravity_cli import AntigravityCliBackend  # noqa: E402
+from src.backends.charlie_code.charlie_code import CharlieCodeBackend  # noqa: E402
+from src.backends.codex.codex import CodexBackend  # noqa: E402
+from src.backends.gemini.gemini_cli import GeminiCliBackend  # noqa: E402
+from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
+from src.runtime.worker import Worker  # noqa: E402
+from src.features.cron.api import router as cron_router  # noqa: E402
+from src.runtime.api.deps import get_session_manager, get_task_manager, get_thread_manager  # noqa: E402
+from src.runtime.api.internal import router as internal_router  # noqa: E402
+from src.app.pages import router as pages_router  # noqa: E402
+from src.runtime.api.sessions import router as sessions_router  # noqa: E402
+from src.infra import event_types as ET  # noqa: E402
+from src.runtime import runs  # noqa: E402
+from src.runtime import thinking_state  # noqa: E402
+from src.runtime import init_worker_recovery as worker_recovery_module  # noqa: E402
+from src.infra import models  # noqa: E402
+from src.runtime import streaming  # noqa: E402
+from src.runtime.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
+from src.runtime.api.deps import get_config_on_loop  # noqa: E402
+from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
+from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
+from src.infra.home import CREDENTIALS_FILE  # noqa: E402
+from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
+from src.features.cron.scheduler import Scheduler  # noqa: E402
+from src.runtime.sessions import SessionManager  # noqa: E402
+from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
+from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
+from src.runtime import spawner  # noqa: E402
+from src.runtime.threads import ThreadManager  # noqa: E402
+from src.runtime.triggers import TriggerManager  # noqa: E402
 
-from src.core import headless_render  # noqa: E402
+from src.features.artifacts import headless_render  # noqa: E402
 
 # The pytester fixture: the budget mechanism's own test drives inner pytest
 # sessions (tests/test_pytest_budget.py).
@@ -841,7 +841,7 @@ def make_sessions_dir_config(tmp_path: Path) -> MagicMock:
 
 def setup_session_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid: str) -> MagicMock:
   """Build a session dir tree at <tmp_path>/sessions/<sid> and chdir into it; the returned mock cfg is
-  what the tests patch into src.cli.common.get_config (the readback/diff readers). The sessions
+  what the tests patch into src.runtime.cli.common.get_config (the readback/diff readers). The sessions
   root itself rides the light seam resolve_session_id reads, so the cwd derivation answers from
   the built tree."""
   cfg = MagicMock()
@@ -896,7 +896,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   leaves deps.session_manager() free to build a second SessionManager over the
   same home, whose private chat-event cache never sees the tree's rounds.
   """
-  from src.api import deps
+  from src.runtime.api import deps
   monkeypatch.setattr(deps, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
 
@@ -940,7 +940,7 @@ async def create_scheduled_node(tree: TaskTreeManager, *, name: str, backend: st
   """The manager node one ScheduledTaskConfig binds to, created the auto-bind way.
 
   request_id rides the scheduler's auto-bind prefix over the task name alone
-  (``_AUTO_BIND_REQUEST_PREFIX`` in src/core/scheduler.py: a re-created task
+  (``_AUTO_BIND_REQUEST_PREFIX`` in src/features/cron/scheduler.py: a re-created task
   replays into the same node), and the caller is the scheduler's ``"system"``
   sentinel — actor ``system`` on the task_created fact, no agent authorization.
   """
@@ -1345,33 +1345,33 @@ PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
-# Mock resolves the route through the src.core.sessions namespace (src/core/sessions.py imports
+# Mock resolves the route through the src.runtime.sessions namespace (src/runtime/sessions.py imports
 # the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
-# sessions-side import updates this one string. src.core.autonamer and src.agents.worker import
+# sessions-side import updates this one string. src.runtime.autonamer and src.runtime.worker import
 # the same singleton, so their routes reach the same attribute.
-BROADCAST_PATCH_TARGET = "src.core.sessions.streaming_manager.broadcast"
+BROADCAST_PATCH_TARGET = "src.runtime.sessions.streaming_manager.broadcast"
 
 # Import-path patch target shared by every test that stubs the workers-running probe the master
 # consumer's teardown runs. master_cc_queue resolves the class through a call-time local
-# import of the src.core.sessions module, so mock and monkeypatch.setattr land the stand-in on
-# the src.core.sessions module attribute and the teardown's sessions.SessionManager(...)
+# import of the src.runtime.sessions module, so mock and monkeypatch.setattr land the stand-in on
+# the src.runtime.sessions module attribute and the teardown's sessions.SessionManager(...)
 # construction resolves it at call time.
-SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.core.sessions.SessionManager"
+SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.runtime.sessions.SessionManager"
 
 # Import-path patch target shared by every test that silences or spies on the master wake a
-# trigger fires. src/core/triggers.py binds the name with `from src.core.master_trigger import
-# trigger_master`, so mock resolves the route to the src.core.triggers namespace and setattr's
+# trigger fires. src/runtime/triggers.py binds the name with `from src.runtime.master_trigger import
+# trigger_master`, so mock resolves the route to the src.runtime.triggers namespace and setattr's
 # the AsyncMock on that module attribute; _wait_and_fire's own call site then reaches the
 # stand-in. Other modules bind the same function in their own namespaces, so their wakes keep
-# their own routes; grep `from src.core.master_trigger import trigger_master` for the full set.
-TRIGGER_MASTER_PATCH_TARGET = "src.core.triggers.trigger_master"
+# their own routes; grep `from src.runtime.master_trigger import trigger_master` for the full set.
+TRIGGER_MASTER_PATCH_TARGET = "src.runtime.triggers.trigger_master"
 
 # The defining-module route of the same wake: callers that import trigger_master inside the
-# firing function (src/core/session_dispatch.py's legacy parent wake) read the
-# src.core.master_trigger module attribute at call time, so monkeypatch.setattr lands the
+# firing function (src/runtime/session_dispatch.py's legacy parent wake) read the
+# src.runtime.master_trigger module attribute at call time, so monkeypatch.setattr lands the
 # stand-in on the defining module itself; the import-time binders above read their own
 # namespaces instead, so this route and theirs do not reach each other's wakes.
-MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET = "src.core.master_trigger.trigger_master"
+MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 
 # Import-path patch target for the wake's inner run. Every wake fires through trigger_master,
 # whose body reads run_message_with_resume_recovery as a module global of its defining module,
@@ -1379,162 +1379,162 @@ MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET = "src.core.master_trigger.trigger_ma
 # fired the wake; the other *TRIGGER_MASTER_PATCH_TARGET constants in this block name the
 # outer seam, not this inner one.
 MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = (
-    "src.core.master_trigger.run_message_with_resume_recovery")
+    "src.runtime.master_trigger.run_message_with_resume_recovery")
 
 # The resume-free sibling of the inner run above: trigger_master's resume path reads run_message
 # as the same defining module's global, so the stand-in lands on the same module attribute and
 # the note above's interception argument carries over.
-MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET = "src.core.master_trigger.run_message"
+MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET = "src.runtime.master_trigger.run_message"
 
 # Import-path patch target for the config re-read a firing trigger passes to the master wake.
-# src/core/triggers.py binds the name at import scope (`from src.core.config import get_config`),
-# so mock setattrs the stand-in on the src.core.triggers module attribute and _wait_and_fire's
+# src/runtime/triggers.py binds the name at import scope (`from src.infra.config import get_config`),
+# so mock setattrs the stand-in on the src.runtime.triggers module attribute and _wait_and_fire's
 # wake path reads it at call time. Sibling modules binding get_config in their own namespaces
 # keep their own routes.
-TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.core.triggers.get_config"
+TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.runtime.triggers.get_config"
 
 # Import-path patch target for the subprocess spawn the trigger watchers probe through.
-# src/core/triggers.py binds the library with module-scope `import asyncio`, and its
+# src/runtime/triggers.py binds the library with module-scope `import asyncio`, and its
 # watch paths read asyncio.create_subprocess_exec at call time, so mock lands the
-# stand-in on the asyncio module through the src.core.triggers route.
-TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.core.triggers.asyncio.create_subprocess_exec"
+# stand-in on the asyncio module through the src.runtime.triggers route.
+TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET = "src.runtime.triggers.asyncio.create_subprocess_exec"
 
 # Import-path patch target for the host capability probe the slurm watchers read.
-# src/core/triggers.py runs the probe once at import scope (`_SACCT_AVAILABLE =
+# src/runtime/triggers.py runs the probe once at import scope (`_SACCT_AVAILABLE =
 # shutil.which("sacct") is not None`), and create_trigger's local-slurm guard and
 # _wait_sacct_group's no-sacct skip read the module attribute at call time, so mock
-# patch setattrs the stand-in on the src.core.triggers module attribute.
-TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.core.triggers._SACCT_AVAILABLE"
+# patch setattrs the stand-in on the src.runtime.triggers module attribute.
+TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET = "src.runtime.triggers._SACCT_AVAILABLE"
 
-# Import-path patch target for the CLI HTTP layer's config read. src/cli/common.py defines a
+# Import-path patch target for the CLI HTTP layer's config read. src/runtime/cli/common.py defines a
 # get_config forwarder (config's module imports lazily on first call, the M92 floor rule), so
-# mock setattrs the stand-in on the src.cli.common module attribute and every helper defined
+# mock setattrs the stand-in on the src.runtime.cli.common module attribute and every helper defined
 # there reads it as a module global at call time. The request path itself reads only the
 # server port through the fingerprint-keyed document (_internal_base_url), so the transport
 # harness patches the base-url seam below and this target covers the remaining direct readers
 # (the sent-but-lost readback, plan diff's version files).
-CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.cli.common.get_config"
+CLI_COMMON_GET_CONFIG_PATCH_TARGET = "src.runtime.cli.common.get_config"
 
 # Import-path patch target for the config read itself. Verbs that defer the import into the
-# call (`from src.core.config import get_config` at call scope) read the src.core.config
-# module attribute at call time, so the stand-in lands there. src.cli.common's forwarder
+# call (`from src.infra.config import get_config` at call scope) read the src.infra.config
+# module attribute at call time, so the stand-in lands there. src.runtime.cli.common's forwarder
 # (CLI_COMMON_GET_CONFIG_PATCH_TARGET above) defer-imports the same attribute per call, so a
 # stand-in set here flows through its callers too; the reverse does not hold — a stand-in on
 # common's module global leaves this attribute real for every deferred import.
-CONFIG_GET_CONFIG_PATCH_TARGET = "src.core.config.get_config"
+CONFIG_GET_CONFIG_PATCH_TARGET = "src.infra.config.get_config"
 
-# Import-path patch target for the CLI request path's server base URL. src/cli/common.py
+# Import-path patch target for the CLI request path's server base URL. src/runtime/cli/common.py
 # resolves it through the fingerprint-keyed port document (_internal_base_url; a hit keeps
 # config's model stack out of the verb process), so mock setattrs the stand-in on the
-# src.cli.common module attribute and _request_with_contract reads it as a module global.
-CLI_COMMON_BASE_URL_PATCH_TARGET = "src.cli.common._internal_base_url"
+# src.runtime.cli.common module attribute and _request_with_contract reads it as a module global.
+CLI_COMMON_BASE_URL_PATCH_TARGET = "src.runtime.cli.common._internal_base_url"
 
-# Import-path patch target for the CLI's sessions root. src/cli/common.py derives it from the
+# Import-path patch target for the CLI's sessions root. src/runtime/cli/common.py derives it from the
 # env-resolved home (_sessions_dir, the M102 wrap-verb light path), so mock setattrs the
-# stand-in on the src.cli.common module attribute and resolve_session_id reads it as a module
+# stand-in on the src.runtime.cli.common module attribute and resolve_session_id reads it as a module
 # global at call time.
-CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.cli.common._sessions_dir"
+CLI_COMMON_SESSIONS_DIR_PATCH_TARGET = "src.runtime.cli.common._sessions_dir"
 
-# Import-path patch target for the version-skew hint the CLI error paths append. src/cli/common.py
+# Import-path patch target for the version-skew hint the CLI error paths append. src/runtime/cli/common.py
 # defines _maybe_version_skew_hint and _exit_server_rejection reads it as a module global at call
-# time, so mock setattrs the stand-in on the src.cli.common module attribute.
-CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.cli.common._maybe_version_skew_hint"
+# time, so mock setattrs the stand-in on the src.runtime.cli.common module attribute.
+CLI_COMMON_MAYBE_VERSION_SKEW_HINT_PATCH_TARGET = "src.runtime.cli.common._maybe_version_skew_hint"
 
-# Import-path patch target for the CLI connect-retry budget. src/cli/common.py binds the name
-# at import scope (`from src.core.timeouts import CLI_CONNECT_TOTAL_TIMEOUT`), so mock setattrs
-# the test budget on the src.cli.common module attribute and post_internal_api's retry loop
+# Import-path patch target for the CLI connect-retry budget. src/runtime/cli/common.py binds the name
+# at import scope (`from src.infra.timeouts import CLI_CONNECT_TOTAL_TIMEOUT`), so mock setattrs
+# the test budget on the src.runtime.cli.common module attribute and post_internal_api's retry loop
 # reads it as a module global at call time; the source value stays the timeouts module's own.
-CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
+CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET = "src.runtime.cli.common.CLI_CONNECT_TOTAL_TIMEOUT"
 
 # Import-path patch target for the logged-task spawner the shared thread core
-# (src/core/thread_entry.py) fires: the round side's ack-clear and nudge tasks
+# (src/features/chat_threads/thread_entry.py) fires: the round side's ack-clear and nudge tasks
 # are created there once the round side moves into the core, so mock setattrs
-# the stand-in on the src.core.thread_entry module attribute.
-THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.core.thread_entry.create_logged_task"
+# the stand-in on the src.features.chat_threads.thread_entry module attribute.
+THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET = "src.features.chat_threads.thread_entry.create_logged_task"
 
 # Import-path patch target for the master wake the shared thread core's round-end
-# audit fires (the nudge): once the audit moves into src/core/thread_entry.py, mock
-# setattrs the stand-in on the src.core.thread_entry module attribute.
-THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.core.thread_entry.trigger_master"
+# audit fires (the nudge): once the audit moves into src/features/chat_threads/thread_entry.py, mock
+# setattrs the stand-in on the src.features.chat_threads.thread_entry module attribute.
+THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET = "src.features.chat_threads.thread_entry.trigger_master"
 
 # Import-path patch targets for the platform client factories every listener outbound path
-# posts through. src/core/slack_listener.py and src/core/discord_listener.py each define
+# posts through. src/features/slack/slack_listener.py and src/features/discord/discord_listener.py each define
 # _bot_client at module scope, and their handlers and reply/backfill helpers resolve the
 # name at call time, so mock setattrs each stand-in on that listener module's own attribute.
-SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.slack_listener._bot_client"
-DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.core.discord_listener._bot_client"
+SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot_client"
+DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
-# Import-path patch targets for the scheduler's config reads. src/core/scheduler.py binds
-# both names at import scope (`from src.core.config import get_config, get_scheduled_tasks`),
-# so monkeypatch.setattr lands the stand-in on the src.core.scheduler module attribute and
+# Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py binds
+# both names at import scope (`from src.infra.config import get_config, get_scheduled_tasks`),
+# so monkeypatch.setattr lands the stand-in on the src.features.cron.scheduler module attribute and
 # _maybe_run/_reload_config resolve it at call time.
-SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.core.scheduler.get_config"
-SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.core.scheduler.get_scheduled_tasks"
+SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.get_config"
+SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
 
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
-# src/api/chat.py defines run_and_finalize itself and binds create_logged_task
-# (`from src.core.tasks import create_logged_task`) at import scope; cancel_master
+# src/runtime/api/chat.py defines run_and_finalize itself and binds create_logged_task
+# (`from src.infra.tasks import create_logged_task`) at import scope; cancel_master
 # binds lazily (PEP 562 __getattr__ + _load_cancel_master's globals-first loader,
 # the M99 server import floor), and the module attribute stays the seam either way —
-# mock and monkeypatch.setattr land the stand-ins on the src.api.chat module
+# mock and monkeypatch.setattr land the stand-ins on the src.runtime.api.chat module
 # attributes and send_message's fire-and-forget bootstrap, run_and_finalize's
 # auto-name task, and cancel_master_agent read them at call time.
-# src/api/sessions.py re-imports run_and_finalize at call time, so both reach the
-# same src.api.chat namespace attributes; src.core.tasks.create_logged_task stays
+# src/runtime/api/sessions.py re-imports run_and_finalize at call time, so both reach the
+# same src.runtime.api.chat namespace attributes; src.infra.tasks.create_logged_task stays
 # a separate route.
-CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.api.chat.run_and_finalize"
-CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.api.chat.create_logged_task"
-CHAT_CANCEL_MASTER_PATCH_TARGET = "src.api.chat.cancel_master"
+CHAT_RUN_AND_FINALIZE_PATCH_TARGET = "src.runtime.api.chat.run_and_finalize"
+CHAT_CREATE_LOGGED_TASK_PATCH_TARGET = "src.runtime.api.chat.create_logged_task"
+CHAT_CANCEL_MASTER_PATCH_TARGET = "src.runtime.api.chat.cancel_master"
 
-# Import-path patch targets for the CLI HTTP layer's transport. src/cli/common.py exposes one
+# Import-path patch targets for the CLI HTTP layer's transport. src/runtime/cli/common.py exposes one
 # adapter per verb (`_request_post`/`_request_get`, both over the phase-separated client
 # `_send_request`), and `_request_with_contract` reads the adapter as a module global at
-# call time, so mock and monkeypatch.setattr land the stand-in on the src.cli.common module
+# call time, so mock and monkeypatch.setattr land the stand-in on the src.runtime.cli.common module
 # attribute and every helper defined there picks it up at call time.
-CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.cli.common._request_post"
-CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.cli.common._request_get"
+CLI_COMMON_TRANSPORT_POST_PATCH_TARGET = "src.runtime.cli.common._request_post"
+CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
 
-# Import-path patch target for the memory CLI's home read. src/cli/memory.py binds the
-# name at import scope (`from src.core.home import charliebot_home_dir`), so mock and
-# monkeypatch.setattr land the stand-in on the src.cli.memory module attribute and the
+# Import-path patch target for the memory CLI's home read. src/features/memory/cli.py binds the
+# name at import scope (`from src.infra.home import charliebot_home_dir`), so mock and
+# monkeypatch.setattr land the stand-in on the src.features.memory.cli module attribute and the
 # CLI's entry points read it at call time.
-CLI_MEMORY_HOME_PATCH_TARGET = "src.cli.memory.charliebot_home_dir"
+CLI_MEMORY_HOME_PATCH_TARGET = "src.features.memory.cli.charliebot_home_dir"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
-# runs under. src/agents/master_cc_run.py binds the factory with call-time `from
-# src.agents.backends.registry import build_backend` inside its run/resume helpers, so
+# runs under. src/runtime/master_cc_run.py binds the factory with call-time `from
+# src.runtime.agent_process.registry import build_backend` inside its run/resume helpers, so
 # monkeypatch.setattr on the registry module attribute lands the stand-in where those imports
 # resolve. The lazy carriers (worker.py, autonamer.py, recap.py — each deferring through the
-# shared load_build_backend in src/agents/backends/deferred_build.py, which returns an existing
+# shared load_build_backend in src/runtime/agent_process/deferred_build.py, which returns an existing
 # module binding untouched) resolve the same registry function at first
 # build, so a patch applied before that first build reaches them too; a patch applied after
 # binds their module attribute directly.
-BUILD_BACKEND_PATCH_TARGET = "src.agents.backends.registry.build_backend"
+BUILD_BACKEND_PATCH_TARGET = "src.runtime.agent_process.registry.build_backend"
 # The worker builds through the shared lazy loader it binds at import scope
-# (src/agents/backends/deferred_build.py load_build_backend),
+# (src/runtime/agent_process/deferred_build.py load_build_backend),
 # so the worker path's stand-in binds here — an existing binding is returned untouched,
 # exactly the semantics the master-cc registry route relies on.
-WORKER_BUILD_BACKEND_PATCH_TARGET = "src.agents.worker.build_backend"
+WORKER_BUILD_BACKEND_PATCH_TARGET = "src.runtime.worker.build_backend"
 
-# Import-path patch target for the worker's default-backend fallback. src/agents/worker.py
-# binds the class at import scope (`from src.agents.backends.claude_code import
+# Import-path patch target for the worker's default-backend fallback. src/runtime/worker.py
+# binds the class at import scope (`from src.backends.claude_code.claude_code import
 # ClaudeCodeBackend, claude_supervisor_env`), and _build_backend's fallback return — reached
 # when no backend_option is set or a translate-only build fails — reads it as a module global
-# at call time, so tests that drive that fallback set the stand-in on the src.agents.worker
+# at call time, so tests that drive that fallback set the stand-in on the src.runtime.worker
 # module attribute.
-WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.agents.worker.ClaudeCodeBackend"
+WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.runtime.worker.ClaudeCodeBackend"
 
-# Import-path patch target for the /proc stat read the backend start contract pins. src/core/runs.py
-# defines read_pid_stat; src/agents/backends/base.py binds the module (`from src.core import runs`)
+# Import-path patch target for the /proc stat read the backend start contract pins. src/runtime/runs.py
+# defines read_pid_stat; src/runtime/agent_process/base.py binds the module (`from src.runtime import runs`)
 # and reads runs.read_pid_stat at call time, so monkeypatch.setattr lands the stand-in on the
-# src.core.runs module attribute where that read resolves.
-RUNS_READ_PID_STAT_PATCH_TARGET = "src.core.runs.read_pid_stat"
+# src.runtime.runs module attribute where that read resolves.
+RUNS_READ_PID_STAT_PATCH_TARGET = "src.runtime.runs.read_pid_stat"
 
 # Patch targets for request_stop's exit-wait loop. runs.py defines both timings as module
 # globals and the stop path reads them at call time, so monkeypatch.setattr lands the
-# shortened waits on the src.core.runs module attribute; the pair travels together because
+# shortened waits on the src.runtime.runs module attribute; the pair travels together because
 # the loop's deadline and its poll step share one mechanism.
-RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS"
+RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.runtime.runs.STOP_EXIT_WAIT_SECONDS"
 
 # The backend-construction seams, stated once for every constant below: the CLI
 # backends all read resolve_binary through the base module at call time
@@ -1542,47 +1542,47 @@ RUNS_STOP_EXIT_WAIT_SECONDS_PATCH_TARGET = "src.core.runs.STOP_EXIT_WAIT_SECONDS
 # ``*_RESOLVE_BINARY_PATCH_TARGET`` is the shared base attribute, where
 # monkeypatch.setattr lands the stand-in and the __init__ reads the helper at
 # call time and never probes PATH. The backend start contract spawns through the
-# off-loop spawn seam (src/agents/backends/spawn.py), which base.py imports and reads
+# off-loop spawn seam (src/runtime/agent_process/spawn.py), which base.py imports and reads
 # as a module global at call time, so both ``*_SPAWN_SUBPROCESS_PATCH_TARGET`` spellings
 # land the stand-in on that one shared attribute; the caller-qualified form records
 # which backend's spawn a test drives.
-BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
-OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
-OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.agents.backends.base.spawn_subprocess"
-CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
-ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
-CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
-GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.agents.backends.base.resolve_binary"
+BASE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.base.spawn_subprocess"
+OPENCODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+OPENCODE_SPAWN_SUBPROCESS_PATCH_TARGET = "src.runtime.agent_process.base.spawn_subprocess"
+CODEX_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
+GEMINI_RESOLVE_BINARY_PATCH_TARGET = "src.runtime.agent_process.base.resolve_binary"
 
-# Import-path patch target for the improve loop's commit step. src/core/backlog_loop.py binds
-# the git module at import scope (`from src.core import git`) and its stale-item handler reads
+# Import-path patch target for the improve loop's commit step. src/features/backlog/backlog_loop.py binds
+# the git module at import scope (`from src.infra import git`) and its stale-item handler reads
 # the commit function off that binding at call time, so mock setattrs the stand-in on the
-# src.core.backlog_loop.git module attribute -- the shared src.core.git module object, restored
+# src.features.backlog.backlog_loop.git module attribute -- the shared src.infra.git module object, restored
 # by monkeypatch after the test.
-BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.core.backlog_loop.git.git_add_commit_push"
+BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.features.backlog.backlog_loop.git.git_add_commit_push"
 
-# Patch target for the atomic-write swap hook. src/core/json_utils.py publishes each staged
+# Patch target for the atomic-write swap hook. src/infra/json_utils.py publishes each staged
 # payload with an ``os.replace`` attribute lookup on its module-scope ``import os`` binding, and
 # atomic_write_stream's docstring pins that lookup as the test hook, so mock setattrs the
 # stand-in on the shared os module through this route for the patch window and the write side's
 # call-time read picks it up.
-JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.core.json_utils.os.replace"
+JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.infra.json_utils.os.replace"
 
 # Import-path patch targets for the tmux seams the TUI session handlers read. The handlers
-# bind the names with call-time `from src.agents.backends.tui import ...`
-# (src/api/sessions.py's tui status/stop handlers, src/core/sessions.py's delete path). The
-# import resolves the src.agents.backends.tui module attribute at call time, so
+# bind the names with call-time `from src.backends.tui.tui import ...`
+# (src/runtime/api/sessions.py's tui status/stop handlers, src/runtime/sessions.py's delete path). The
+# import resolves the src.backends.tui.tui module attribute at call time, so
 # monkeypatch.setattr lands the stand-in exactly there. kill_tmux_session and
 # tmux_session_exists are pty_common re-exports on that namespace; _claude_jsonl_busy is
-# defined in tui.py itself. src/api/threads.py binds tmux_session_exists at import scope and
+# defined in tui.py itself. src/runtime/api/threads.py binds tmux_session_exists at import scope and
 # keeps its own route.
-TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.agents.backends.tui.kill_tmux_session"
+TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.backends.tui.tui.kill_tmux_session"
 
-# Patch target for the ssh control-master directory. src/core/ssh.py derives it from the
+# Patch target for the ssh control-master directory. src/infra/ssh.py derives it from the
 # operator's home at import scope and the argv builder reads the module global at call time,
-# so monkeypatch.setattr redirects the dir onto the src.core.ssh module attribute and keeps
+# so monkeypatch.setattr redirects the dir onto the src.infra.ssh module attribute and keeps
 # the suite off the real ~/.ssh/controlmasters.
-SSH_CONTROL_DIR_PATCH_TARGET = "src.core.ssh._CONTROL_DIR"
+SSH_CONTROL_DIR_PATCH_TARGET = "src.infra.ssh._CONTROL_DIR"
 
 
 def build_cli_backend(
@@ -1719,7 +1719,7 @@ def build_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
 def build_slack_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig for slack tests: the home dir lives under tmp_path so each test owns its own tree, and the
   stubbed test tokens plus the single allowed user id wire the delivery and listener paths under
-  src.core.slack_listener."""
+  src.features.slack.slack_listener."""
   stub_credentials({"slack": {"bot_token": "test-bot-token", "app_token": "test-app-token"}})
   return CharlieBotConfig(
       charliebot_home=tmp_path / "home",
@@ -1814,7 +1814,7 @@ async def assert_transcribe_cancel_honors_close_timeout(
   transcribe() consumes `_PendingAudio`; the caller stubs the backend's
   credentials seam and pins WS_CLIENT_CLOSE_TIMEOUT before calling.
   """
-  from src.core import timeouts
+  from src.infra import timeouts
 
   stand_in = WsServerNeverAnswersClose(handshake_reply)
   url = await stand_in.start()
@@ -2126,7 +2126,7 @@ async def no_sleep(_seconds: float) -> None:
 @pytest.fixture
 def pidfd_open_available() -> None:
   """Skip when the production pidfd helpers are not supported on this host."""
-  from src.core.triggers import _PIDFD_SUPPORTED
+  from src.runtime.triggers import _PIDFD_SUPPORTED
   if not _PIDFD_SUPPORTED:
     pytest.skip("pidfd not supported on this host (not even via syscall)")
 
@@ -2176,7 +2176,7 @@ def run_reply_stdin_case(
     readback: dict[str, Any]) -> None:
   """Drive one platform reply CLI's ``--file -`` arm with the reply piped on stdin.
 
-  The reply mains share their transport (src.cli.common's read_reply_text and
+  The reply mains share their transport (src.runtime.cli.common's read_reply_text and
   post_internal_api, the one-JSON-line readback print), so the stdin contract
   is asserted once here per verb: the piped text is the body's ``text``, the
   readback prints unmodified, and the post names the platform's endpoint.
@@ -2184,7 +2184,7 @@ def run_reply_stdin_case(
   cfg = setup_session_cwd(tmp_path, monkeypatch, "abc")
   monkeypatch.setattr("sys.stdin", io.StringIO("piped reply\n"))
   with patched_cli_post(cfg, [verb, "reply", "--file", "-"], return_value=make_json_response(readback)) as post_mock:
-    importlib.import_module(f"src.cli.{verb}").main()
+    importlib.import_module(f"src.features.{verb}.cli").main()
   assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
   assert post_mock.call_args.kwargs["json"]["text"] == "piped reply\n"
   assert json.loads(capsys.readouterr().out) == readback
@@ -2195,7 +2195,7 @@ def run_reply_file_case(
     readback: dict[str, Any]) -> None:
   """Drive one platform reply CLI's ``--file <path>`` arm with the reply text on disk.
 
-  The reply mains share their transport (src.cli.common's read_reply_text and
+  The reply mains share their transport (src.runtime.cli.common's read_reply_text and
   post_internal_api, the one-JSON-line readback print), so the file contract
   is asserted once here per verb: the file's text rides the body's ``text``
   beside the resolved session id, the readback prints as one JSON line, and
@@ -2206,7 +2206,7 @@ def run_reply_file_case(
   reply_file.write_text("the answer", encoding="utf-8")
   with patched_cli_post(cfg, [verb, "reply", "--file", str(reply_file)],
                         return_value=make_json_response(readback)) as post_mock:
-    importlib.import_module(f"src.cli.{verb}").main()
+    importlib.import_module(f"src.features.{verb}.cli").main()
   assert post_mock.call_args.args[0].endswith(f"/api/internal/{verb}/reply")
   assert post_mock.call_args.kwargs["json"] == {"session_id": "abc", "text": "the answer"}
   out = capsys.readouterr().out
@@ -2250,7 +2250,7 @@ def dump_yaml(body: Any) -> str:
 
 
 def reset_config_caches() -> None:
-  """Clear src.core.config's module-level caches so the next read reloads from disk.
+  """Clear src.infra.config's module-level caches so the next read reloads from disk.
 
   The config cache and the cron snapshot both key freshness on a fingerprint,
   so an instance cached under an earlier test's profile would answer for the
@@ -2260,7 +2260,7 @@ def reset_config_caches() -> None:
   """
   core_config._config_cache.reset()
   core_config._credentials_cache.reset()
-  from src.core import home as core_home
+  from src.infra import home as core_home
   core_home._home_cache.clear()
   core_config._cron_snapshot = core_config._CronSnapshot()
 
@@ -2309,7 +2309,7 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   # next (a mark_busy setdefault keeps the earlier start; a finish closes only
   # the interval its own Run opened) and a recovered node can read as still
   # running.
-  from src.core import thinking_state as _thinking_state
+  from src.runtime import thinking_state as _thinking_state
   _thinking_state.reset_run_state_for_tests()
   reset_config_caches()
   yield
@@ -2321,7 +2321,7 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
 def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point HOME at a temp dir and reset the config/cron module-level caches.
 
-  ``CHARLIEBOT_HOME`` wins over ``HOME`` in ``src.core.config.charliebot_home_dir`` when both
+  ``CHARLIEBOT_HOME`` wins over ``HOME`` in ``src.infra.config.charliebot_home_dir`` when both
   are set, so the fixture deletes it: a shell exported with a real profile must not leak that
   profile's config.d into a test run.
   """
@@ -2632,8 +2632,8 @@ def install_scripted_backends(
 
   *patch_target* is the dotted import path of the build_backend binding the
   tested path reads: the master-cc run path re-imports through
-  src.agents.backends.registry on every call (BUILD_BACKEND_PATCH_TARGET),
-  while the worker path reads src.agents.worker's module binding
+  src.runtime.agent_process.registry on every call (BUILD_BACKEND_PATCH_TARGET),
+  while the worker path reads src.runtime.worker's module binding
   (WORKER_BUILD_BACKEND_PATCH_TARGET). Returns the build records (option,
   kwargs, backend) in build order.
   """
@@ -2784,7 +2784,7 @@ def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncM
 
   *scripted* maps ``(host, job_id)`` to that probe's sacct stdout payloads; each call pops the
   next entry, and the last entry repeats indefinitely. The factory identifies the probe from the
-  argv the production caller builds (``src/core/triggers.py``): a remote ssh call keeps the host
+  argv the production caller builds (``src/runtime/triggers.py``): a remote ssh call keeps the host
   in its second-to-last word and the quoted ``sacct -j ID ...`` command last; a local call is
   ``sacct -j ID ...`` with the id third.
   """
@@ -2819,7 +2819,7 @@ def patch_trigger_fire(
     patches.append(patch(TRIGGERS_SACCT_AVAILABLE_PATCH_TARGET, sacct_available))
   patches.append(patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=subprocess_mock))
   if sleep_mock is not None:
-    patches.append(patch("src.core.triggers.asyncio.sleep", new=sleep_mock))
+    patches.append(patch("src.runtime.triggers.asyncio.sleep", new=sleep_mock))
   patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))
   master_patch = patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock())
   with contextlib.ExitStack() as stack:
@@ -2874,7 +2874,7 @@ def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[
 
   "has-session" exits rc 1 so the patched session-setup path takes its create branch;
   every other tmux invocation exits rc 0 with empty stderr. The signature mirrors
-  src.agents.backends.pty_common._run_tmux so the monkeypatched attribute stays a
+  src.runtime.agent_process.pty_common._run_tmux so the monkeypatched attribute stays a
   drop-in replacement.
   """
 
@@ -3006,7 +3006,7 @@ async def cancel_and_drain(task: asyncio.Task) -> None:
   """Cancel *task*, then await it under a suppressed CancelledError so the task's
   own finally block finishes before the caller continues.
 
-  Deliberately no None-guard, unlike src.core.tasks.cancel_and_wait: shutdown's
+  Deliberately no None-guard, unlike src.infra.tasks.cancel_and_wait: shutdown's
   optional task is legitimately quiet, while a test teardown holding None where
   a task was expected is a bug to fail loudly on. An already-finished task's
   pending exception still surfaces here — the suppressed await re-raises it.

@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core.home_writer_fence import (
+from src.runtime.home_writer_fence import (
     HomeWriterActiveError,
     acquire_home_writer_fence,
     fence_identity_path,
@@ -89,7 +89,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   the lifespan itself (and therefore its fence acquisition) is the real one.
   """
   import server as server_module
-  from src.core.config import CharlieBotConfig
+  from src.infra.config import CharlieBotConfig
 
   home = tmp_path / "home"
   (home / "sessions").mkdir(parents=True)
@@ -111,7 +111,7 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setattr(server_module.streaming_manager, "close_all", _AsyncStub())
   monkeypatch.setattr(server_module.ext_usage, "start_poller", _AsyncStub())
   monkeypatch.setattr(server_module.ext_usage, "stop_poller", _AsyncStub())
-  from src.core import task_recovery
+  from src.runtime import task_recovery
   monkeypatch.setattr(task_recovery, "reconcile_task_tree", _AsyncStub(return_value={}))
   return server_module
 
@@ -125,7 +125,7 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
 
   from fastapi import FastAPI
 
-  import src.api.pages as pages_module
+  import src.app.pages as pages_module
   server_module = lifespan_env
   calls: list[int] = []
   monkeypatch.setattr(pages_module, "preload_usage_tally_stack", lambda: calls.append(1))
@@ -162,7 +162,7 @@ async def test_server_startup_refuses_while_apply_holds_fence(lifespan_env) -> N
 def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
   """A symlinked state directory, lock, or identity record refuses acquisition
   and probing instead of placing or reading the exclusion outside the home."""
-  from src.core.home_writer_fence import FencePathRefusalError
+  from src.runtime.home_writer_fence import FencePathRefusalError
   outside = tmp_path / "outside"
   outside.mkdir()
   # (a) state itself is a symlink.

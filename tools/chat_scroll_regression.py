@@ -601,10 +601,10 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   model. Returns (main session id, second session id, bootstrap messages,
   session manager).
   """
-  from src.api.message_utils import build_session_bootstrap_data
-  from src.core.config import get_config
-  from src.core.models import CreateSessionRequest
-  from src.core.sessions import SessionManager
+  from src.infra.config import get_config
+  from src.infra.models import CreateSessionRequest
+  from src.runtime.api.message_utils import build_session_bootstrap_data
+  from src.runtime.sessions import SessionManager
 
   cfg = get_config()
   session_mgr = SessionManager(cfg)
@@ -672,7 +672,7 @@ async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
   The transcript-reset payload must carry what the view now holds (the seeded
   history plus the live messages the scenarios broadcast).
   """
-  from src.api.message_utils import build_session_bootstrap_data
+  from src.runtime.api.message_utils import build_session_bootstrap_data
   bootstrap = await build_session_bootstrap_data(sid, session_mgr)
   return bootstrap.messages
 
@@ -1210,7 +1210,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   # The browser binary is host-local, so the synthetic home inherits the host
   # config's headless_chrome_bin — read through the existing config entry
   # BEFORE the env override (both caches hot-reload per file fingerprint).
-  from src.core.config import get_config as read_host_config
+  from src.infra.config import get_config as read_host_config
   host_chrome_bin = str(read_host_config().headless_chrome_bin or "")
 
   home = tmp_path / "charliebot-home"
@@ -1249,8 +1249,8 @@ async def run_harness(args: argparse.Namespace) -> None:
 
   # The existing config entry provides the credential the browser will use,
   # and the config's own headless-chrome entry is the first browser candidate.
-  from src.core.config import get_config
-  from src.core.credentials import configured_access_key
+  from src.infra.config import get_config
+  from src.infra.credentials import configured_access_key
   key = configured_access_key()
   if not key:
     fail("configured_access_key() returned nothing for the synthetic home")

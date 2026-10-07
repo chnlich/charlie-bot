@@ -1,4 +1,4 @@
-"""The environment the server hands every agent process (src/core/agent_environment.py).
+"""The environment the server hands every agent process (src/runtime/agent_environment.py).
 
 The server runs under `uv run`, whose venv activation every agent process
 would copy; uv then installs into the server venv from any checkout. These
@@ -17,7 +17,8 @@ import pytest
 import uvicorn
 
 import server
-from src.core import agent_environment, constants
+from src.infra import constants
+from src.runtime import agent_environment
 
 
 def _launcher_env(tmp_path: pathlib.Path) -> tuple[dict[str, str], pathlib.Path, list[str]]:

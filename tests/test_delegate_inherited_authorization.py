@@ -19,8 +19,9 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, run_token
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import run_token
 from tests import test_task_execution
 
 
@@ -33,7 +34,7 @@ async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
-  from src.api import internal as internal_api
+  from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
   root = await tree.create_task(
       request_id="root",
@@ -190,7 +191,7 @@ async def test_foreign_run_token_cannot_delegate(
   await tree.runs.register_run(models.RunRecord(id="agent-run", session_id=agents_child.id, kind="work"))
   import subprocess
 
-  from src.core import runs
+  from src.runtime import runs
   proc = subprocess.Popen(["/bin/sleep", "30"])
   pair = runs.read_pid_stat(proc.pid)
   await tree.runs.record_launch(agents_child.id, "agent-run", pid=proc.pid, pid_start=pair[0])

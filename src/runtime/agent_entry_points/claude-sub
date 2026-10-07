@@ -1,0 +1,7 @@
+#!/bin/sh
+# claude-sub - entry-point shim on the PATH of CharlieBot's agent processes.
+#
+# src/runtime/agent_environment.py puts this directory on PATH in place of the
+# server venv's bin directory, so no venv interpreter is on an agent's PATH
+# for uv to install into, while this command still resolves by name.
+exec "${CHARLIEBOT_VENV_BIN:?is unset; the CharlieBot server sets it for agent processes}/claude-sub" "$@"

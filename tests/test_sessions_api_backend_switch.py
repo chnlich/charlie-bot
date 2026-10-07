@@ -16,7 +16,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import config, models, sessions
+from src.infra import config, models
+from src.runtime import sessions
 
 
 def _build_cfg(tmp_path: pathlib.Path) -> tuple[config.CharlieBotConfig, pathlib.Path]:
@@ -128,7 +129,7 @@ async def test_switch_bound_node_cross_family_is_400(
   session_id), never a scheduled_task stamp."""
   cfg, _config_a = _build_cfg(tmp_path)
   session_mgr = sessions.SessionManager(cfg)
-  from src.core import task_sessions
+  from src.runtime import task_sessions
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   rl = await conftest.create_scheduled_node(tree, name="nightly", backend="claude-opus-5")

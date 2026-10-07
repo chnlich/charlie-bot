@@ -10,7 +10,7 @@ pin, death is unprovable and every restart judges the dead turn alive
 and through the same ``runs.read_pid_stat`` attribute call (the attribute
 form is what keeps the pin monkeypatchable here — it is load-bearing).
 
-Enumeration is package-driven (pkgutil walk of ``src.agents.backends``), never
+Enumeration is package-driven (pkgutil walk of ``src.backends`` and ``src.runtime.agent_process``), never
 a hardcoded class list, and the fail-loud test below requires the enumerated
 subclass set to equal the harness-key set EXACTLY: adding a concrete
 AgentBackend subclass without a harness entry turns this file RED, so no
@@ -39,16 +39,17 @@ from conftest import (
     stub_subprocess_spawn,
 )
 
-import src.agents.backends as backends_package
-from src.agents.backends.antigravity_cli import AntigravityCliBackend
-from src.agents.backends.base import AgentBackend
-from src.agents.backends.charlie_code import CharlieCodeBackend
-from src.agents.backends.claude_code import AnthropicEndpointBackend, ClaudeCodeBackend
-from src.agents.backends.codex import CodexBackend
-from src.agents.backends.gemini_cli import GeminiCliBackend
-from src.agents.backends.kimi import KimiBackend
-from src.agents.backends.openai_compatible_claude import OpenAICompatibleClaudeBackend
-from src.agents.backends.opencode import OpenCodeBackend
+import src.backends as backends_package
+import src.runtime.agent_process as agent_process_package
+from src.backends.antigravity.antigravity_cli import AntigravityCliBackend
+from src.backends.charlie_code.charlie_code import CharlieCodeBackend
+from src.backends.claude_code.claude_code import AnthropicEndpointBackend, ClaudeCodeBackend
+from src.backends.codex.codex import CodexBackend
+from src.backends.gemini.gemini_cli import GeminiCliBackend
+from src.backends.kimi.kimi import KimiBackend
+from src.backends.openai_compatible.openai_compatible_claude import OpenAICompatibleClaudeBackend
+from src.backends.opencode.opencode import OpenCodeBackend
+from src.runtime.agent_process.base import AgentBackend
 
 # (start_time_field, state) 2-tuple in read_pid_stat's shape; [0] must land on
 # backend.pid_start and [1] must not leak into it.
@@ -95,10 +96,15 @@ class _SpawnObservedError(Exception):
 
 
 def _enumerate_backend_classes() -> set[type[AgentBackend]]:
-  """Every concrete AgentBackend subclass defined under src/agents/backends."""
+  """Every concrete AgentBackend subclass defined under src/backends and src/runtime/agent_process."""
   classes: set[type[AgentBackend]] = set()
-  for module_info in pkgutil.iter_modules(backends_package.__path__):
-    module = importlib.import_module(f"src.agents.backends.{module_info.name}")
+  module_names = [
+      module_info.name
+      for package in (backends_package, agent_process_package)
+      for module_info in pkgutil.walk_packages(package.__path__, f"{package.__name__}.")
+  ]
+  for module_name in module_names:
+    module = importlib.import_module(module_name)
     for _, cls in inspect.getmembers(module, inspect.isclass):
       if cls is AgentBackend or not issubclass(cls, AgentBackend) or inspect.isabstract(cls):
         continue

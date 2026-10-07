@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from src.api import pages
-from src.core import trace_merge, trace_merge_child
-from src.core.trace_merge import NotATraceError, merge_traces
+from src.app import pages
+from src.features.trace import trace_merge, trace_merge_child
+from src.features.trace.trace_merge import NotATraceError, merge_traces
 from tests.core.test_multi_trace_merge import _write_pretty_trace
 
 REPO_ROOT = str(Path(pages.__file__).resolve().parents[2])

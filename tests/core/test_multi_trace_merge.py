@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.core import trace_merge
+from src.features.trace import trace_merge
 
 
 def _write_trace(path: Path, rank: int, events: int) -> None:

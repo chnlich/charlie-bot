@@ -20,9 +20,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.agents import master_cc_queue, master_cc_run, master_cc_state
-from src.core import event_types as ET
-from src.core import models, session_dispatch
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import master_cc_queue, master_cc_run, master_cc_state, session_dispatch
 
 
 def _meta(session_id: str) -> models.SessionMetadata:
@@ -123,7 +123,7 @@ async def test_full_backlog_runs_as_one_turn_in_arrival_order() -> None:
 
 
 def build_cfg():
-  from src.core import config
+  from src.infra import config
 
   return config.CharlieBotConfig(
       charliebot_home=pathlib.Path("/tmp/charliebot-batching"),
@@ -428,7 +428,8 @@ async def test_backlog_through_the_real_funnels_persists_user_events_separately(
   turn runs: every entry point declares its input type, the chat log keeps the
   two user messages as separate events, and the following turn runs the whole
   backlog once with all 27 futures resolved."""
-  from src.core import config, master_trigger, sessions
+  from src.infra import config
+  from src.runtime import master_trigger, sessions
 
   cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "home",

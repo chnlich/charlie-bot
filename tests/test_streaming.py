@@ -3,8 +3,8 @@
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import streaming
+from src.infra import event_types as ET
+from src.runtime import streaming
 
 
 async def _record(persisted: list[dict], event: dict) -> None:

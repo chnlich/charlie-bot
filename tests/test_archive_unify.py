@@ -22,11 +22,11 @@ from unittest import mock
 import pytest
 from conftest import OPERATOR, build_env, create_task
 
-from src.core import event_types as ET
-from src.core.models import CreateSessionRequest, RunRecord, SessionStatus
-from src.core.run_token import CallerIdentity, RunTokenClaims
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskArchivedError, TaskConflictError, TaskTreeManager
+from src.infra import event_types as ET
+from src.infra.models import CreateSessionRequest, RunRecord, SessionStatus
+from src.runtime.run_token import CallerIdentity, RunTokenClaims
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskArchivedError, TaskConflictError, TaskTreeManager
 
 OPUS_BACKEND_ID = "claude-opus-test"
 OPUS_BACKEND_OPTION = {
@@ -179,7 +179,7 @@ async def test_cascade_archive_refuses_an_unfinished_run_and_writes_nothing(tmp_
   root, mid, leaf, _completed = await build_tree(tree)
   import subprocess
 
-  from src.core.runs import read_pid_stat
+  from src.runtime.runs import read_pid_stat
   proc = subprocess.Popen(["/bin/sleep", "30"])
   try:
     pid_start, _state = read_pid_stat(proc.pid)
@@ -250,7 +250,7 @@ async def test_restore_of_an_open_node_is_a_no_op_and_operator_only(tmp_path: Pa
   root, _mid, _leaf, _completed = await build_tree(tree)
   assert await tree.completion.restore_chain(root.id, request_id="r-1", reason="sidebar unarchive") == []
   agent = CallerIdentity(kind="agent", claims=RunTokenClaims(run_id="run-1", session_id=root.id, agent="a"))
-  from src.core.task_sessions import TaskForbiddenError
+  from src.runtime.task_sessions import TaskForbiddenError
   with pytest.raises(TaskForbiddenError):
     await tree.completion.restore_task(root.id, request_id="r-2", reason="x", caller=agent)
 

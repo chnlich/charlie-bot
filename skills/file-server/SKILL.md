@@ -127,6 +127,6 @@ charliebot artifact check <page-file> --genre <plan|understanding|sitrep|debug|e
 `--assertions-only` runs the assertions alone and mirrors the plan registration gate.
 
 The seven-question prompt, the backend order, and the timeout live in
-`src/core/artifact_check.py`; the command prints each tried backend's failure, then the
+`src/features/artifacts/artifact_check.py`; the command prints each tried backend's failure, then the
 answering backend's id and the seven answers verbatim. Exit 0 means every assertion
 passed; judging the answers stays with the reader of this gate.

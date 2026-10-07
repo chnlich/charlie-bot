@@ -1,0 +1,77 @@
+"""CLI verbs for a session's own Slack thread, callable from a Slack-summoned session.
+
+  charliebot slack reply --file <path>            (``-`` reads the reply from stdin)
+  charliebot slack ack --message-id <ts> [...]
+
+``reply`` posts the file's text to the thread the session was summoned from,
+through the internal slack/reply endpoint, and prints the server's readback as
+one JSON line: ``posted``, ``text`` (what actually went out — the text posts
+exactly as written), ``operator_only_note`` (one line naming the
+application-route links that stay as written and reach the operator alone, null
+when there are none), ``chars``, ``chunks``, ``over_budget`` (past the
+500-character reply budget) and ``answers`` (the summon event id the reply
+answers, or null for a round no summon started). A refusal (unread eligible
+thread messages → the 412 ``stale_thread`` payload, no Slack thread, blank
+text or a CharlieBot file-server link → 422 naming the link and the
+``charliebot publish`` command that produces the URL to write instead, Slack
+rejected the post) exits non-zero with a JSON error on stderr and persists
+nothing — no chunk of the reply posts. ``ack`` marks the given thread messages (Slack ts) as read,
+advancing the session's read watermark, and prints the readback JSON
+(``acked``, ``watermark_ts``); every read message's id must be passed — none
+may be skipped. The session resolves per ``resolve_session_id``;
+the reply-format contract is prompts/thread_reply_format.md.
+"""
+
+import argparse
+import json
+
+from src.infra.help_formatter import CliHelpFormatter
+from src.runtime.cli.common import add_session_arg, post_internal_api, read_reply_text, resolve_session_id
+
+
+def _build_parser() -> argparse.ArgumentParser:
+  parser = argparse.ArgumentParser(description="CharlieBot Slack thread verbs", formatter_class=CliHelpFormatter)
+  sub = parser.add_subparsers(dest="slack_command", required=True)
+
+  reply = sub.add_parser("reply", help="Post a reply to this session's Slack thread", formatter_class=CliHelpFormatter)
+  reply.add_argument("--file", required=True, help="File holding the reply text; - reads stdin")
+  add_session_arg(reply)
+
+  ack = sub.add_parser(
+      "ack", help="Mark read thread messages, advancing the read watermark", formatter_class=CliHelpFormatter)
+  ack.add_argument(
+      "--message-id",
+      nargs="+",
+      required=True,
+      metavar="TS",
+      help="Slack ts of each read message; every read id at or below the newest must be included")
+  add_session_arg(ack)
+  return parser
+
+
+def _cmd_reply(args: argparse.Namespace) -> None:
+  session_id = resolve_session_id(args.session)
+  text = read_reply_text(args.file)
+  result = post_internal_api("/api/internal/slack/reply", {"session_id": session_id, "text": text})
+  print(json.dumps(result))
+
+
+def _cmd_ack(args: argparse.Namespace) -> None:
+  session_id = resolve_session_id(args.session)
+  result = post_internal_api("/api/internal/slack/ack", {"session_id": session_id, "message_ids": args.message_id})
+  print(json.dumps(result))
+
+
+def main() -> None:
+  parser = _build_parser()
+  args = parser.parse_args()
+  if args.slack_command == "reply":
+    _cmd_reply(args)
+  elif args.slack_command == "ack":
+    _cmd_ack(args)
+  else:
+    parser.error(f"unknown slack command: {args.slack_command}")
+
+
+if __name__ == "__main__":
+  main()

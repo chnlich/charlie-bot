@@ -16,21 +16,17 @@ from conftest import (
     create_task,
 )
 
-from src.core import event_types as ET
-from src.core.models import CreateSessionRequest, RunRecord, TaskSpec
-from src.core.run_token import CallerIdentity, RunTokenClaims
-from src.core.task_completion import CompletionEvidence, LandingEvidence
-from src.core.task_sessions import (
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskTreeManager,
-)
+from src.infra import event_types as ET
+from src.infra.models import CreateSessionRequest, RunRecord, TaskSpec
+from src.runtime.run_token import CallerIdentity, RunTokenClaims
+from src.runtime.task_completion import CompletionEvidence, LandingEvidence
+from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskTreeManager
 
 
 def live_identity() -> tuple[int, str, datetime]:
   """An owned, isolated live process identity (never a zombie or a fake)."""
   proc = subprocess.Popen(["/bin/sleep", "30"])
-  from src.core.runs import read_pid_stat
+  from src.runtime.runs import read_pid_stat
   pair = read_pid_stat(proc.pid)
   assert pair is not None
   return proc.pid, pair[0], datetime.now(UTC)
@@ -311,7 +307,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   the close after that Run succeeds. The requester gets one wake input naming
   the request and its blockers — never a user event — and a recovery replay of
   the same request adds no second notice."""
-  from src.core.task_recovery import reconcile_task_tree
+  from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, _session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")

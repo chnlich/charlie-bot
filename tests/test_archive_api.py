@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env, create_task
 
-from src.core import event_types as ET
-from src.core import models
-from src.core.models import RunRecord
-from src.core.run_token import RunTokenClaims, sign_run_token
+from src.infra import event_types as ET
+from src.infra import models
+from src.infra.models import RunRecord
+from src.runtime.run_token import RunTokenClaims, sign_run_token
 
 
 @pytest.mark.asyncio
@@ -56,10 +56,10 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  from src.api import chat as chat_api
-  from src.api import internal as internal_api
-  from src.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-  from src.core import config
+  from src.infra import config
+  from src.runtime.api import chat as chat_api
+  from src.runtime.api import internal as internal_api
+  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
 
   cfg, session_mgr, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")

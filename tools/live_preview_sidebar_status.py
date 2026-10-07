@@ -43,7 +43,7 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
-from src.core.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,

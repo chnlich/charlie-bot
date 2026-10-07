@@ -1,4 +1,4 @@
-"""Tests for the SQLite usage ledger (src/core/usage_ledger.py).
+"""Tests for the SQLite usage ledger (src/features/usage/usage_ledger.py).
 
 Every id, path, host and name here is synthetic and each ledger lives under tmp_path,
 so no test reads the real charliebot home or any captured file. Each assertion checks
@@ -16,7 +16,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.usage_ledger import (
+from src.features.usage.usage_ledger import (
     _MODEL_ROWS_SQL,
     _SCHEMA,
     LedgerRow,
@@ -385,7 +385,7 @@ def test_rewrite_within_a_shared_group_day_keeps_the_aggregate_on_the_table(tmp_
 
 def test_default_ledger_path_derives_from_the_config_home(monkeypatch, tmp_path):
   """The CLI's default ledger resolves per call from the config's charliebot home."""
-  import src.core.config as config_module
+  import src.infra.config as config_module
 
   monkeypatch.setattr(config_module, "get_config", lambda: SimpleNamespace(charliebot_home=tmp_path / "home"))
   assert default_ledger_path() == tmp_path / "home" / "usage" / "ledger.sqlite3"

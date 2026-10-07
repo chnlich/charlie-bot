@@ -1,6 +1,6 @@
 import pytest
 
-from src.agents.backends import kimi
+from src.backends.kimi import kimi
 
 
 def test_prepare_env_routes_api_key_to_moonshot_endpoint() -> None:

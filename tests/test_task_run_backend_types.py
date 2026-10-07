@@ -17,13 +17,14 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import backend_models, sessions, task_sessions
-from src.core import event_types as ET
+from src.infra import backend_models
+from src.infra import event_types as ET
+from src.runtime import sessions, task_sessions
 
 
 def build_env(tmp_path: pathlib.Path, backend_type: backend_models.BackendType):
   """One backend of the requested TYPE, configured the way the type requires."""
-  import src.core.config as core_config
+  import src.infra.config as core_config
 
   home = tmp_path / "home"
   model = None if backend_type in (
@@ -77,7 +78,7 @@ async def test_run_records_stream_identity_and_result_truth(
           test_task_execution.result_event("typed output"),
       ])
   test_task_execution.install_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
-  from src.core import task_execution
+  from src.runtime import task_execution
   tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
 
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
@@ -115,10 +116,10 @@ async def test_zero_output_and_error_results_fail_across_types(
   # A tui-cli manager never reaches this: its turns are the terminal's, so
   # the dispatcher refuses before any Run exists (no headless failure, the
   # input stays pending).
-  from src.agents.backends import base as backend_base
+  from src.runtime.agent_process import base as backend_base
   empty = test_task_execution.SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
   test_task_execution.install_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
-  from src.core import task_execution
+  from src.runtime import task_execution
   tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Stay silent.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)

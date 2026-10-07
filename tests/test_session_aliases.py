@@ -3,8 +3,8 @@
 import json
 from pathlib import Path
 
-import src.core.session_aliases as sa
-from src.core.session_aliases import SessionAliasStore, alias_thread_key
+import src.runtime.session_aliases as sa
+from src.runtime.session_aliases import SessionAliasStore, alias_thread_key
 
 
 def _write(

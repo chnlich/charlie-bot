@@ -6,8 +6,9 @@ import conftest
 import pydantic
 import pytest
 
-from src.core import config, message_aggregator, models
-from src.core import event_types as ET
+from src.infra import config, models
+from src.infra import event_types as ET
+from src.runtime import message_aggregator
 
 _GUILD = "100000000000000001"
 _PARENT = "100000000000000002"

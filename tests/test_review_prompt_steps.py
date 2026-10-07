@@ -10,7 +10,7 @@ numbering stay unchanged.
 
 import re
 
-from src.core import review
+from src.runtime import review
 
 _NEW_STEP_10 = (
     "10. Before the rebase, commit every change you keep and restore "

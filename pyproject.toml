@@ -43,8 +43,8 @@ gpu-voice = [
 ]
 
 [project.scripts]
-charliebot = "src.cli.main:main"
-claude-sub = "src.cli.claude_sub:main"
+charliebot = "src.app.main:main"
+claude-sub = "src.backends.claude_sub.claude_sub:main"
 
 [build-system]
 requires = ["setuptools>=80"]
@@ -84,7 +84,7 @@ max_integration_tests = 50
 #   __slots__ = () breaks them.
 # UP046/UP047 stay out: yapf's pinned lib2to3 parser rejects PEP 695 type-parameter
 #   lists, which would make the whole tree unparseable to `yapf -r`
-#   (the same constraint src/core/process.py records on its TypeVar).
+#   (the same constraint src/infra/process.py records on its TypeVar).
 select = [
     "E4", "E7", "E9", "F", "I",
     "A001", "A002",
@@ -114,12 +114,18 @@ package-dir = {"" = "."}
 [tool.setuptools.packages.find]
 include = ["src", "src.*"]
 
+# The data directories hold no Python module, so they are listed beside the package that finds them
+# through __file__: the agent PATH shims, the git stash guard, and the node math pre-render driver.
+[tool.setuptools.package-data]
+"src.runtime" = ["agent_entry_points/*", "git_stash_guard/*"]
+"src.features.artifacts" = ["prerender_math.js"]
+
 # The vfork spawn seam's child-side stub (pdeathsig, setsid, stdio dup2,
 # close-from-3, execve as pure syscalls) — a compiled module because the
 # clone(CLONE_VM|CLONE_VFORK) child may run no Python.
 [[tool.setuptools.ext-modules]]
-name = "src.agents.backends._vfkspawn"
-sources = ["src/agents/backends/_vfkspawn.c"]
+name = "src.runtime.agent_process._vfkspawn"
+sources = ["src/runtime/agent_process/_vfkspawn.c"]
 
 # Only uv-managed interpreters: they ship Python.h, so building the extension
 # above never depends on the host's python3.x-dev package.

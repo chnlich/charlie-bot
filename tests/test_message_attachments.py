@@ -8,8 +8,8 @@ import conftest
 import fastapi
 import pytest
 
-from src.api import chat
-from src.core import models
+from src.infra import models
+from src.runtime.api import chat
 
 
 @pytest.mark.asyncio

@@ -9,7 +9,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import models, task_sessions
+from src.infra import models
+from src.runtime import task_sessions
 
 
 def write_session_alias(
@@ -132,7 +133,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   fired_at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
   await session_mgr.update_thinking_state(node.id, fired_at)
 
-  # The five call shapes src/core/scheduler.py fires with, and the metadata
+  # The five call shapes src/features/cron/scheduler.py fires with, and the metadata
   # fields each must land (the scheduler's cron argument writes
   # last_scheduled_cron): cron change, overlap skip, normal fire, loop noop,
   # handler outcome.

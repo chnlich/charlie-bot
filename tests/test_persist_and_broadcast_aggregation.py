@@ -6,7 +6,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import sessions
+from src.runtime import sessions
 
 
 def _broadcast_calls(broadcast_mock: mock.AsyncMock) -> list[dict]:

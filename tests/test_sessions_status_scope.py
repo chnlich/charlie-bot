@@ -13,15 +13,10 @@ import pytest
 from conftest import build_tui_sessions_cfg
 from conftest import make_sessions_client as _build_client
 
-from src.api import sessions as sessions_api
-from src.core import sidebar_state, thinking_state
-from src.core.models import CreateSessionRequest, SessionMetadata, SessionStatus
-from src.core.sessions import (
-    SessionManager,
-    _iter_trigger_stats,
-    _listing_row_copy,
-    selective_probe_sidebar_state,
-)
+from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
+from src.runtime import sidebar_state, thinking_state
+from src.runtime.api import sessions as sessions_api
+from src.runtime.sessions import SessionManager, _iter_trigger_stats, _listing_row_copy, selective_probe_sidebar_state
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:

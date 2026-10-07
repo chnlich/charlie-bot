@@ -29,9 +29,9 @@ from conftest import (
 )
 from conftest import make_session_mgr as _make_session_mgr
 
-from src.core.memo import stat_signature
-from src.core.models import SessionMetadata
-from src.core.sessions import SessionManager
+from src.infra.memo import stat_signature
+from src.infra.models import SessionMetadata
+from src.runtime.sessions import SessionManager
 
 _REAL_REPLACE = REAL_OS_REPLACE
 

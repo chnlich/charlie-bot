@@ -18,12 +18,12 @@ from conftest import OPERATOR, make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from src.api import sessions as sessions_api
-from src.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
-from src.core import config
-from src.core.models import PatchSessionTaskRequest, RunRecord, TaskSpec
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.infra import config
+from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.runtime.api import sessions as sessions_api
+from src.runtime.api.deps import get_config_on_loop, get_run_store, get_session_manager, get_task_manager
+from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
 
@@ -70,8 +70,8 @@ async def test_run_context_returns_the_stored_snapshot(env: _TaskEnv) -> None:
   await env.tree.runs.register_run(
       RunRecord(id=run_id, session_id=ids["worker"], kind="work"), task_spec_text="pinned spec")
   # The launch seam commits the snapshot; simulate the commit the adapter does.
-  from src.core.task_execution import capture_prompt_chain
-  from src.core.task_prompts import assemble_snapshot, build_segments
+  from src.runtime.task_execution import capture_prompt_chain
+  from src.runtime.task_prompts import assemble_snapshot, build_segments
   meta = await env.tree.load_meta(ids["worker"])
   assert meta is not None
   index = await env.tree._get_index()

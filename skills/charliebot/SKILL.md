@@ -9,13 +9,13 @@ version: 1.0.0
 # CharlieBot
 
 You are CharlieBot. This skill describes your own features so you can use them correctly.
-Source code: `~/workspace/charlie-bot/src/core/`
+Source code: `~/workspace/charlie-bot/src/`
 
 ---
 
 ## Worker & Review Workflow
 
-**Source:** `src/core/spawner.py` (facade over the `spawner_<part>` modules)
+**Source:** `src/runtime/spawner.py` (facade over the `spawner_<part>` modules)
 
 1. Worker runs in isolated git worktree (`~/worktrees/`)
 2. Branch naming: `charliebot/task-{timestamp}-{id}`
@@ -94,7 +94,7 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 ## Workers & Sessions — Architecture Notes
 
 - **Propagate `repo_path` explicitly to every derived/downstream task** (review workers, retries, continuations, chained tasks) — pass it from the originating task via `ThreadMetadata.repo_path`. `discover_repos()` returns repos in non-deterministic order, so it is only safe at the top-level entry point (user delegation, CLI); downstream tasks read the propagated value instead. This is a recurring bug — always propagate repo_path explicitly.
-- Session instructions: `_build_instructions_content()` (`src/agents/master_cc_run.py`; `src/agents/master_cc.py` is a facade over the `master_cc_<part>` modules) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/core/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
+- Session instructions: `_build_instructions_content()` (`src/runtime/master_cc_run.py`; `src/runtime/master_cc.py` is a facade over the `master_cc_<part>` modules) concatenates `prompts/master.md` + `~/.charliebot/MASTER_AGENT_PROMPT.md` + the assembled memory block on every `run_message()`. The block is built by `src/features/memory/memory.py::assemble_master` — full bodies of master-audience entries in resident topics plus a `# Memory index` header line and index lines for the rest. Each backend writes the result to its own instruction file under the session dir (Claude Code `CLAUDE.md`, Codex `AGENTS.md`).
 - Worker log display: In main chat panel, only show "worker {id} started/ended" with general purpose description. Full logs belong in the worker panel only.
 - Draft preservation: User's unsubmitted message text is preserved per-session when switching sessions.
 - **Long-running remote command**:
@@ -120,18 +120,18 @@ Some proxied backends (e.g. an opencode GLM endpoint) cap generation far below t
 
 ## Claude Code Backend Context Window
 
-The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k (400k → ~367k; 1M default → ~784k), with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/agents/backends/claude_code.py` `headless_claude_env()` — the master path inherits os.environ, but `claude_sub.py`'s tmux `respawn-pane -e` path passes an allowlist only, so the variable must enter the allowlist for full coverage.
+The Claude backend defaults to a 400k window. The working knob is `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (100k–1M, lowers only: it takes `Math.min(model window, set value)`); `CLAUDE_CODE_MAX_CONTEXT_TOKENS` is a no-op for `claude-*` models in Claude Code 2.1.219. Compaction triggers at window − min(max_output, 20k) − 13k (400k → ~367k; 1M default → ~784k), with an early warmup at 0.8×; overrun compacts silently rather than erroring. charlie-bot side: `src/backends/claude_code/claude_code.py` `headless_claude_env()` — the master path inherits os.environ, but `claude_sub.py`'s tmux `respawn-pane -e` path passes an allowlist only, so the variable must enter the allowlist for full coverage.
 
 ---
 
 ## Claude Account Pool
 
-One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`src/core/claude_accounts.py` owns account state and selection; `src/core/claude_relay.py` owns the relay mechanics both the master turn and workers use).
+One Claude login carries a five-hour and a weekly window, so a long master turn or a delegated worker that crosses the line stops mid-work. The account pool keeps that work running on another login of the same subscription tier (`src/backends/claude_code/claude_accounts.py` owns account state and selection; `src/backends/claude_code/claude_relay.py` owns the relay mechanics both the master turn and workers use).
 
 - **Config**: `accounts.claude:` in `~/.charliebot/config.yaml` lists `label` + `config_dir` pairs, each directory one `CLAUDE_CONFIG_DIR` login. `accounts.claude_pools:` maps each pool name to the account labels it holds. Each `cc-claude` entry names its pool in `account_pool` when pools are defined; selection and relay stay inside that pool. One entry per model and pool.
 - **Selection**: the healthy account with the most headroom, headroom being one minus the higher of the five-hour and seven-day utilization read from `rate_limit_event` and the usage-panel poll; a rejection holds headroom at zero until its `resetsAt`. A master turn keeps its account while the prompt cache is warm (last request under 60 minutes ago) and the reading sits under 90 percent; a worker picks at launch.
-- **Relay** (master loop in `src/agents/master_cc_run.py`, worker loop in `src/agents/worker.py`): a rejected `rate_limit_event` relays after the process exits; `allowed_warning` at 90 percent or above with the reset more than 45 minutes away terminates the process at the next `tool_result` and relays; an exit naming "Failed to authenticate" marks the account unhealthy for 15 minutes, emits `claude_account_login_required`, and relays. The transcript (`<config_dir>/projects/<slug>/<uuid>.jsonl` plus its sidecar directory) is copied to the new directory — the move refuses to overwrite a strictly newer destination copy (its consumer adopts the newer holder and continues; it never fails the turn), lands through a staged atomic replace, and the account label is persisted to session metadata the moment the move lands — and Claude Code resumes the same id with a fixed continuation prompt. Redundant pool copies retire to the newest two after a sound round (`retire_transcript_copies`; failed rounds delete nothing). Three relays per turn at most; an exhausted pool (the entry's pool) ends the turn with the earliest reset time (a worker reports it as quota exhaustion, so a VERIFY still retries down `backends.preference`).
-- **Sonnet compaction** (`src/core/claude_compaction.py`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
+- **Relay** (master loop in `src/runtime/master_cc_run.py`, worker loop in `src/runtime/worker.py`): a rejected `rate_limit_event` relays after the process exits; `allowed_warning` at 90 percent or above with the reset more than 45 minutes away terminates the process at the next `tool_result` and relays; an exit naming "Failed to authenticate" marks the account unhealthy for 15 minutes, emits `claude_account_login_required`, and relays. The transcript (`<config_dir>/projects/<slug>/<uuid>.jsonl` plus its sidecar directory) is copied to the new directory — the move refuses to overwrite a strictly newer destination copy (its consumer adopts the newer holder and continues; it never fails the turn), lands through a staged atomic replace, and the account label is persisted to session metadata the moment the move lands — and Claude Code resumes the same id with a fixed continuation prompt. Redundant pool copies retire to the newest two after a sound round (`retire_transcript_copies`; failed rounds delete nothing). Three relays per turn at most; an exhausted pool (the entry's pool) ends the turn with the earliest reset time (a worker reports it as quota exhaustion, so a VERIFY still retries down `backends.preference`).
+- **Sonnet compaction** (`src/backends/claude_code/claude_compaction.py`) runs only when the cache is already cold: before a relay (Fable, 100K tokens or more) and at turn start after more than 60 minutes idle (Fable, 50K or more), never at turn end. It runs `claude -p --resume <uuid> --model claude-sonnet-5` with `/compact`; success means a new `compact_boundary` row in the transcript and a Sonnet-only `modelUsage`. Chat shows "Context compacted (manual, by Sonnet)".
 - **Login loss**: the usage panel row shows `re-login needed: <config_dir>` while the account is unhealthy or its credential file is empty; chat gets one account-free notice. Re-login on the host with `CLAUDE_CONFIG_DIR=<config_dir> claude login`.
 - **Where the account shows**: session metadata `claude_account` only (not in backend options, chat, or the panel badge); server log events `master_cc_account_chosen`, `master_cc_account_relay`, `worker_account_relay`, `claude_account_login_required`; `master_done.account_relays` counts a turn's relays.
 
@@ -177,7 +177,7 @@ to a `~/.charliebot` repo if one exists. Cross-host shared skills go in
 
 - The repo-to-host invariant (host files reference repo content; the bodies live in the repo) cuts by evolution: evolving bodies stay in the repo via pointers, while non-evolving entry skeletons (name/cron/timezone/prompt_file) may be seeded once into host files.
 - Seeding belongs to an explicitly invoked setup command; keep it out of the server-start path, where writers reorder user files and race concurrent writes.
-- `effective_scheduled_task_backend` (src/core/scheduler.py) resolves an omitted cron `backend` to `cfg.backends.options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
+- `effective_scheduled_task_backend` (src/features/cron/scheduler.py) resolves an omitted cron `backend` to `cfg.backends.options[0].id` (positional), so repo-shipped default tasks leave `backend` unset — the value is a host-local name.
 - Repo content reaching a host already depends on rerunning setup (`sync-skills.sh` symlinks skills), so "new default cron tasks need setup rerun" matches existing product rules.
 
 ---
@@ -283,18 +283,18 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 
 ## General Principle
 
-**If you don't understand how a feature works, read the source code** at `~/workspace/charlie-bot/src/core/`. Key files:
+**If you don't understand how a feature works, read the source code** at `~/workspace/charlie-bot/src/`. Key files:
 
 | Feature | Source file |
 |---------|------------|
-| Improve loop | `improve_command.py` |
-| Spawner + review | `spawner.py` |
-| Backlog state machine | `backlog_loop.py` |
-| Scheduler | `scheduler.py` |
-| Delayed triggers | `triggers.py` |
-| Sessions | `sessions.py` |
-| Config | `config.py` |
+| Improve loop | `features/improve/improve_command.py` |
+| Spawner + review | `runtime/spawner.py` |
+| Backlog state machine | `features/backlog/backlog_loop.py` |
+| Scheduler | `features/cron/scheduler.py` |
+| Delayed triggers | `runtime/triggers.py` |
+| Sessions | `runtime/sessions.py` |
+| Config | `infra/config.py` |
 
-**A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude/codex/opencode overrides, which run tool-less — claude's override even disallows Read — so any one-shot that needs file or tool access must bind the base `AgentBackend.one_shot_text` explicitly for every backend, as `src/core/explain.py` does (the `base_one_shot_text` binding).
+**A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude/codex/opencode overrides, which run tool-less — claude's override even disallows Read — so any one-shot that needs file or tool access must bind the base `AgentBackend.one_shot_text` explicitly for every backend, as `src/features/explain/explain.py` does (the `base_one_shot_text` binding).
 
 Never guess how CharlieBot works — the source code is always available.

@@ -30,17 +30,12 @@ from conftest import (
     run_session_consumer,
 )
 
-from src.agents import master_cc_queue, master_cc_run, master_cc_state
-from src.agents.backends.base import make_result_event
-from src.core import event_types as ET
-from src.core import latex, streaming, thinking_state
-from src.core.models import (
-    CreateSessionRequest,
-    MasterRunRecord,
-    SessionCallbacks,
-    SessionMetadata,
-)
-from src.core.sessions import SessionManager
+from src.features.latex import latex
+from src.infra import event_types as ET
+from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
+from src.runtime import master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
+from src.runtime.agent_process.base import make_result_event
+from src.runtime.sessions import SessionManager
 
 
 def _make_meta(session_id: str) -> SessionMetadata:

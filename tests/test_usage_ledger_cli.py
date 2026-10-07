@@ -1,4 +1,4 @@
-"""Tests for the usage-ledger CLI (src/cli/usage_ledger.py).
+"""Tests for the usage-ledger CLI (src/features/usage/cli.py).
 
 Every ledger and fixture directory lives under tmp_path and --ledger names it, so no test
 reads the real home directory or the real ledger; capture_local is monkeypatched because
@@ -14,8 +14,8 @@ import pathlib
 
 import pytest
 
-from src.cli import main as cli_main
-from src.core import token_tally, usage_ledger
+from src.app import main as cli_main
+from src.features.usage import token_tally, usage_ledger
 
 
 def _write_claude_fixture(root: pathlib.Path) -> pathlib.Path:

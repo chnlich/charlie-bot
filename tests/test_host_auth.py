@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from src.api import host_auth as api
-from src.core import host_auth as core
+from src.features.host_auth import api as api
+from src.features.host_auth import host_auth as core
 
 
 def _iso(moment: datetime.datetime) -> str:

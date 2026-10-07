@@ -1,4 +1,4 @@
-"""Tests for src/cli/delegate.py."""
+"""Tests for src/runtime/cli/delegate.py."""
 
 import json
 import pathlib
@@ -7,8 +7,8 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.cli import delegate
-from src.core import constants
+from src.infra import constants
+from src.runtime.cli import delegate
 
 
 def _repo_argv(repo: str, task_spec_file: pathlib.Path, *extra: str, session: str | None = None) -> list[str]:

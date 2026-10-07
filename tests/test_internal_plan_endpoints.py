@@ -8,9 +8,11 @@ import fastapi
 import pytest
 from fastapi import testclient
 
-from src.api import deps, internal
-from src.api import sessions as sessions_api
-from src.core import config, models, plans, sessions, threads
+from src.features.artifacts import plans
+from src.infra import config, models
+from src.runtime import sessions, threads
+from src.runtime.api import deps, internal
+from src.runtime.api import sessions as sessions_api
 
 
 def _build_app(

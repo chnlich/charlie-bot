@@ -5,7 +5,7 @@
 // ---------------------------------------------------------------------------
 // Single home of the delimiter scan both consumers run on raw text: the chat
 // markdown extension (markdown-renderer.js's math tokenizer, over marked
-// source) and the artifact-wrap pre-render driver (src/core/prerender_math.js,
+// source) and the artifact-wrap pre-render driver (src/features/artifacts/prerender_math.js,
 // over HTML fragments). index.html loads this file before
 // markdown-renderer.js; the prerender driver requires it under node. The
 // export tail is inert in the browser.

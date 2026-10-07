@@ -47,7 +47,7 @@ topic is a closed `code-health/*` pull request carrying a comment that starts
 
 Google Python Style conformance is a standing cleanup category, read from one probe:
 `tools/check-google-style.sh` lists every file YAPF would reformat and every import that
-names a symbol instead of a module (Google Python Style Guide 2.2: `from src.core import models`,
+names a symbol instead of a module (Google Python Style Guide 2.2: `from src.infra import models`,
 then `models.SessionMetadata`). While the probe reports findings, the run takes its cleanup from
 them: a file YAPF would reformat comes first, then import conversions, starting from the file
 whose last commit on `main` is oldest, since that file is the least likely to sit in another

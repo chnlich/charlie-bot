@@ -6,9 +6,9 @@ import httpx
 import pytest
 from fastapi import testclient
 
-from src.agents.backends import openai_compatible_claude, registry
-from src.api import anthropic_proxy
-from src.core import config
+from src.backends.openai_compatible import anthropic_proxy, openai_compatible_claude
+from src.infra import config
+from src.runtime.agent_process import registry
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"

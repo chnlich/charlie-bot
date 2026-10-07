@@ -8,11 +8,8 @@ from conftest import make_plan_setup as _setup
 from conftest import plan_page_html
 from conftest import write_plan_artifact as _write_artifact
 
-from src.core.config import CharlieBotConfig
-from src.core.plans import (
-    PlanRegistryManager,
-    read_plans_tolerant,
-)
+from src.features.artifacts.plans import PlanRegistryManager, read_plans_tolerant
+from src.infra.config import CharlieBotConfig
 
 
 async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConfig, meta_id: str) -> str:

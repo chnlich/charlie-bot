@@ -19,8 +19,9 @@ import conftest
 import pytest
 import pytest_asyncio
 
-from src.core import event_types as ET
-from src.core import models, task_sessions
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import task_sessions
 
 
 @pytest_asyncio.fixture

@@ -17,8 +17,9 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import models, task_execution
+from src.infra import event_types as ET
+from src.infra import models
+from src.runtime import task_execution
 
 
 async def await_wake(task: asyncio.Task | None) -> None:

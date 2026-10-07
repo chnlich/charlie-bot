@@ -1,7 +1,7 @@
 """Master prompt assembly uses the labeled-entry memory store.
 
 The master instructions now assemble from the memory store at cfg.memory_dir
-via src.core.memory.assemble_master: resident-topic entries inject in full,
+via src.features.memory.memory.assemble_master: resident-topic entries inject in full,
 non-resident master-audience entries appear as index lines only, and staging
 candidates are never injected. Fixtures are entry format v2 (title in
 frontmatter, comma-list audience, heading-free body).
@@ -12,9 +12,9 @@ import types
 
 import conftest
 
-from src.agents import master_cc
-from src.core import memory
-from src.core.models import SlackOrigin
+from src.features.memory import memory
+from src.infra.models import SlackOrigin
+from src.runtime import master_cc
 
 
 def _make_store(memory_dir: pathlib.Path) -> None:

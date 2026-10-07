@@ -16,8 +16,8 @@ import fastapi
 import pytest
 from structlog import testing
 
-from src.api import voice
-from src.core import config
+from src.features.voice import api as voice
+from src.infra import config
 
 SESSION_ID = "session-a"
 BACKEND = "local"

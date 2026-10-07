@@ -15,7 +15,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.core import init, sessions
+from src.runtime import init, sessions
 
 
 def _broadcast_patch() -> Any:

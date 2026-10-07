@@ -1,0 +1,369 @@
+"""CodexBackend — AgentBackend wrapping the `codex exec --json` CLI."""
+
+import asyncio
+import json
+import os
+from typing import ClassVar
+
+from src.backends.codex import codex_pricing
+from src.infra import event_types as ET
+from src.infra import log_once, process
+from src.runtime.agent_process import base
+
+log = log_once.LazyStructlogLogger()
+
+_MAX_ONE_SHOT_STDERR_BYTES = 4 * 1024
+
+
+class CodexBackend(base.AgentBackend):
+  """Runs a `codex exec --json` subprocess and translates NDJSON events to CC-compatible format."""
+
+  def __init__(
+      self,
+      *,
+      model: str,
+      model_reasoning_effort: str | None = None,
+      model_auto_compact_token_limit: int | None = None,
+      **kwargs: object) -> None:
+    if not model:
+      raise ValueError("codex backend requires a model (set model on its backends.options entry in config.yaml)")
+    super().__init__(model=model, **kwargs)
+    self._codex_bin = base.resolve_binary("codex", base.USER_LOCAL_BIN)
+    self._model_reasoning_effort = "xhigh" if model_reasoning_effort is None else model_reasoning_effort
+    self._model_auto_compact_token_limit = model_auto_compact_token_limit
+    # Track accumulated text per item_id for delta computation
+    self._last_agent_text: dict[str, str] = {}
+    # Track accumulated reasoning text per item_id for delta computation.
+    self._last_reasoning_text: dict[str, str] = {}
+    # Track the last rendered todo snapshot to suppress duplicate started/completed payloads.
+    self._last_todo_text: dict[str, str] = {}
+
+  # Codex auto-detects AGENTS.md in the run cwd.
+  _INSTRUCTIONS_TARGET: tuple[str, str] = ("AGENTS.md", "codex_wrote_agents_md")
+
+  def _model_config_args(self) -> list[str]:
+    args = ["--config", f'model_reasoning_effort="{self._model_reasoning_effort}"']
+    if self._model_auto_compact_token_limit is not None:
+      args.append("--config")
+      args.append(f"model_auto_compact_token_limit={self._model_auto_compact_token_limit}")
+    return args
+
+  def _exec_args(self) -> list[str]:
+    """argv shared by streaming, resume, and one-shot `codex exec` runs."""
+    return [
+        "--json",
+        "--skip-git-repo-check",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--model",
+        self._model,
+        *self._model_config_args(),
+    ]
+
+  def _exec_command_head(self) -> list[str]:
+    """The ``codex exec`` argv head shared by the streaming and one-shot paths."""
+    return [self._codex_bin, "exec", *self._exec_args()]
+
+  def _build_command(self, prompt: str) -> list[str]:
+    cmd = self._exec_command_head()
+    if self._resume_session_id:
+      # codex exec's resume form splices the subcommand after "exec" and the
+      # session id after the exec flags: `codex exec resume <flags> <session-id>`.
+      cmd.insert(2, "resume")
+      cmd.append(self._resume_session_id)
+    cmd.extend(self._extra_flags)
+    cmd.extend(["--", prompt])
+
+    self._last_agent_text.clear()
+    self._last_reasoning_text.clear()
+    self._last_todo_text.clear()
+    return cmd
+
+  def _prepare_env(self, env: dict) -> dict:
+    codex_env = {**env}
+    base.prepend_path_dir(codex_env, base.USER_LOCAL_BIN)
+    return codex_env
+
+  async def one_shot_text(self, prompt: str, system_prompt: str, *, timeout: float) -> str:
+    """Generate text via `codex exec --json` with the configured model and effort.
+
+    Codex has no system-prompt flag, so the system prompt is framed into the user
+    prompt. agent_message text is accumulated with the same cumulative-delta logic
+    as the streaming path (_handle_agent_message). The process group is killed on
+    timeout. Structured backend failures are raised instead of being mistaken for
+    non-JSON assistant text.
+    """
+    from src.runtime import message_aggregator
+
+    framed = self._frame_system_prompt(system_prompt, prompt)
+    cmd = [*self._exec_command_head(), "--", framed]
+    self._last_agent_text.clear()
+    proc = await self._spawn_one_shot_subprocess(cmd, self._prepare_env(dict(os.environ)), pdeathsig=False)
+
+    async def _read_bounded_stderr() -> bytes:
+      assert proc.stderr is not None
+      captured = bytearray()
+      while True:
+        chunk = await proc.stderr.read(8192)
+        if not chunk:
+          break
+        if len(captured) < _MAX_ONE_SHOT_STDERR_BYTES:
+          remaining = _MAX_ONE_SHOT_STDERR_BYTES - len(captured)
+          captured.extend(chunk[:remaining])
+      return bytes(captured)
+
+    async def _collect() -> tuple[str, str | None, int | None]:
+      parts: list[str] = []
+      structured_error: str | None = None
+      assert proc.stdout is not None
+      async for ev in base.iter_ndjson_events(proc.stdout):
+        for translated in self.translate_event(ev):
+          translated_type = translated.get("type")
+          if translated_type == ET.ERROR:
+            message = translated.get("message") or translated.get("content")
+            if message and structured_error is None:
+              structured_error = str(message).strip()
+            continue
+          if translated_type == ET.ASSISTANT and ev.get("item", {}).get("type") == "agent_message":
+            parts.append(message_aggregator.extract_text_from_message(translated.get("message")))
+      wait_result = await proc.wait()
+      returncode = proc.returncode if isinstance(proc.returncode, int) else wait_result
+      return "".join(parts).strip(), structured_error, returncode
+
+    stderr_task = asyncio.create_task(_read_bounded_stderr())
+
+    async def _run() -> tuple[str, str | None, int | None, bytes]:
+      text, structured_error, returncode = await _collect()
+      stderr = await stderr_task
+      return text, structured_error, returncode, stderr
+
+    text, structured_error, returncode, stderr = await process.wait_or_kill_group(
+        _run(), timeout, proc.pid, stderr_task)
+    if structured_error:
+      raise RuntimeError(f"Codex one-shot failed: {structured_error}")
+
+    stderr_text = stderr.decode("utf-8", errors="replace").strip()
+    if returncode != 0:
+      detail = f": {stderr_text}" if stderr_text else ""
+      raise RuntimeError(f"Codex one-shot failed (exit {returncode}){detail}")
+    if not text:
+      detail = f": {stderr_text}" if stderr_text else ""
+      raise RuntimeError(f"Codex one-shot returned no assistant text{detail}")
+    return text
+
+  def translate_event(self, ev: dict) -> list[dict]:
+    """Translate a single Codex NDJSON event into CC-compatible event(s)."""
+    ev_type = ev.get("type", "")
+
+    # --- thread.started ---
+    if ev_type == "thread.started":
+      return [{"type": ET.SESSION_ATTACHED, "session_id": ev.get("thread_id", "")}]
+
+    # --- turn.started ---
+    if ev_type == "turn.started":
+      return []
+
+    # --- turn.completed ---
+    if ev_type == "turn.completed":
+      usage = ev.get("usage", {})
+      cost = codex_pricing.calculate_codex_usage_cost_usd(self._model, usage)
+      return [
+          base.make_result_event(
+              input_tokens=usage.get("input_tokens", 0),
+              output_tokens=usage.get("output_tokens", 0),
+              cache_read=usage.get("cached_input_tokens", 0),
+              cost=cost,
+          )
+      ]
+
+    # --- turn.failed / top-level error ---
+    if ev_type in ("turn.failed", "error"):
+      error = ev.get("error", {})
+      msg = error.get("message") if isinstance(error, dict) else str(error)
+      if not msg:
+        msg = ev.get("message")
+      if not msg:
+        msg = f"Codex {ev_type} with no message. Full event: {json.dumps(ev, default=str)}"
+      return [base.make_error_event(msg)]
+
+    # --- item.started / item.updated / item.completed ---
+    if ev_type in ("item.started", "item.updated", "item.completed"):
+      return self._translate_item_event(ev)
+
+    log.debug("codex_event_unhandled", type=ev_type)
+    return []
+
+  # Codex items that translate one started/completed pair onto one fixed tool event:
+  # item type -> (tool name, payload field carrying the input, whether the completed
+  # output is str()-wrapped before it becomes the tool_result content). The completed
+  # output is read as aggregated_output first — codex-cli 0.157.0 emits a command's
+  # output under that key for command_execution — and falls back to output (the
+  # field older schemas emitted) only when aggregated_output is absent or None.
+  _TOOL_ITEM_SPECS: ClassVar[dict[str, tuple[str, str, bool]]] = {
+      "command_execution": ("Bash", "command", False),
+      "web_search": ("WebSearch", "query", True),
+  }
+
+  # Handler registry: each handler is called for every item event,
+  # preserving multi-fire semantics (independent ifs, not elif).
+  _ITEM_HANDLERS: ClassVar[list[str]] = [
+      "_handle_agent_message",
+      "_handle_reasoning",
+      "_handle_tool_item",
+      "_handle_file_change",
+      "_handle_mcp_tool_call",
+      "_handle_todo_list",
+      "_handle_error",
+  ]
+
+  def _translate_item_event(self, ev: dict) -> list[dict]:
+    """Translate item.started/updated/completed events."""
+    results: list[dict] = []
+    for handler_name in self._ITEM_HANDLERS:
+      results.extend(getattr(self, handler_name)(ev))
+    return results
+
+  def _handle_agent_message(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "agent_message":
+      return []
+    item_id = item.get("id", "")
+    # Newer codex schema emits item.text directly; older schema used content[].
+    full_text = item.get("text", "")
+    if not full_text:
+      content = item.get("content", [])
+      full_text = "".join(
+          part.get("text", "") for part in content if isinstance(part, dict) and part.get("type") == "text")
+    if not full_text:
+      return []
+    prev = self._last_agent_text.get(item_id, "")
+    delta = full_text[len(prev):]
+    self._last_agent_text[item_id] = full_text
+    if not delta:
+      return []
+    return [base.make_text_event(delta)]
+
+  def _handle_reasoning(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "reasoning":
+      return []
+    # Newer codex schema emits reasoning text directly; older schema used summary[].
+    text = item.get("text", "")
+    if not text:
+      summary = item.get("summary", [])
+      for part in summary:
+        if part.get("type") == "summary_text":
+          text += part.get("text", "")
+    if not text:
+      return []
+    item_id = item.get("id", "")
+    prev = self._last_reasoning_text.get(item_id, "")
+    delta = text[len(prev):]
+    self._last_reasoning_text[item_id] = text
+    if not delta:
+      return []
+    return [{"type": ET.THINKING, "content": delta}]
+
+  def _handle_tool_item(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    spec = self._TOOL_ITEM_SPECS.get(item.get("type"))
+    if spec is None:
+      return []
+    tool, payload_field, stringify_output = spec
+    if ev.get("type") == "item.started":
+      return [base.make_tool_use_event(tool, {payload_field: item.get(payload_field, "")})]
+    if ev.get("type") == "item.completed":
+      output = item.get("aggregated_output")
+      if output is None:
+        output = item.get("output", "")
+      return [base.make_tool_result_event(tool, str(output) if stringify_output else output)]
+    return []
+
+  def _handle_file_change(self, ev: dict) -> list[dict]:
+    if ev.get("type") != "item.completed":
+      return []
+    item = ev.get("item", {})
+    if item.get("type") != "file_change":
+      return []
+    events: list[dict] = []
+    for change in item["changes"]:
+      kind = change["kind"]
+      if kind not in {"add", "update"}:
+        continue
+      path = change["path"]
+      events.append({"type": ET.FILE_WRITE, "path": path})
+    return events
+
+  def _handle_mcp_tool_call(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "mcp_tool_call":
+      return []
+    server = item.get("server_label", "")
+    tool = item.get("name", "")
+    tool_name = f"mcp:{server}/{tool}" if server else f"mcp:{tool}"
+    if ev.get("type") == "item.started":
+      arguments = item.get("arguments", {})
+      if isinstance(arguments, str):
+        try:
+          arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+          log.warning("codex_malformed_tool_args", raw_arguments=arguments)
+          arguments = {"raw": arguments}
+      return [base.make_tool_use_event(tool_name, arguments)]
+    if ev.get("type") == "item.completed":
+      output = item.get("result", item.get("error", ""))
+      return [base.make_tool_result_event(tool_name, str(output))]
+    return []
+
+  def _handle_todo_list(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != "todo_list":
+      return []
+    items = item.get("items", [])
+    if not isinstance(items, list):
+      return []
+    lines = []
+    for todo in items:
+      if not isinstance(todo, dict):
+        continue
+      label = self._extract_todo_label(todo)
+      if not label:
+        continue
+      marker = self._todo_marker(todo)
+      lines.append(f"- {marker} {label}")
+    item_id = item.get("id", "")
+    if not lines:
+      if item_id:
+        self._last_todo_text.pop(item_id, None)
+      return []
+    text = "\n".join(lines)
+    if item_id:
+      previous = self._last_todo_text.get(item_id)
+      if previous == text:
+        return []
+      self._last_todo_text[item_id] = text
+    return [base.make_text_event(text)]
+
+  def _extract_todo_label(self, todo: dict) -> str:
+    """Return the first non-empty todo label across old and current Codex schemas."""
+    for key in ("text", "label", "content", "step"):
+      value = todo.get(key, "")
+      if isinstance(value, str):
+        stripped = value.strip()
+        if stripped:
+          return stripped
+    return ""
+
+  def _todo_marker(self, todo: dict) -> str:
+    status = todo.get("status")
+    if isinstance(status, str):
+      return {"completed": "[x]", "in_progress": "[~]"}.get(status, "[ ]")
+    if todo.get("completed") is True:
+      return "[x]"
+    return "[ ]"
+
+  def _handle_error(self, ev: dict) -> list[dict]:
+    item = ev.get("item", {})
+    if item.get("type") != ET.ERROR:
+      return []
+    msg = item.get("message") or f"Codex item error with no message. Full event: {json.dumps(ev, default=str)}"
+    return [base.make_error_event(msg)]

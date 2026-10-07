@@ -39,13 +39,13 @@ SNAPSHOT_KIND = "archive_unify_migration/snapshot/v1"
 
 def _base_url() -> str:
   """The configured server's base URL (the CLI's own resolution)."""
-  from src.cli.common import _internal_base_url
+  from src.runtime.cli.common import _internal_base_url
   return _internal_base_url()
 
 
 def _access_key() -> str:
   """The operator key every write rides; empty means the preflight fails."""
-  from src.core.credentials import configured_access_key
+  from src.infra.credentials import configured_access_key
   return configured_access_key()
 
 
@@ -162,7 +162,7 @@ def cmd_snapshot(out: Path) -> None:
 
 
 def _sessions_dir() -> Path:
-  from src.core.home import charliebot_home_dir
+  from src.infra.home import charliebot_home_dir
   path = charliebot_home_dir() / "sessions"
   if not path.is_dir():
     sys.exit(f"snapshot source missing: no sessions directory at {path}")

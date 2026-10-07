@@ -1,17 +1,20 @@
-"""Tests for src/cli/improve.py, src/cli/improve_stop.py, and the /api/internal/improve endpoints."""
+"""Tests for src/features/improve/cli.py, src/features/improve/stop_cli.py, and the /api/internal/improve endpoints."""
 import pathlib
 from unittest import mock
 
 import conftest
 import pytest
 
-from src.cli import common, improve, improve_stop
-from src.core import improve_command, models
+from src.features.improve import cli as improve
+from src.features.improve import improve_command
+from src.features.improve import stop_cli as improve_stop
+from src.infra import models
+from src.runtime.cli import common
 
-_INTERNAL_GET_CONFIG_PATCH_TARGET = "src.api.internal.get_config"
-_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.api.internal.check_takeoff_gate"
-_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.core.spawner_backends.resolve_requested_subagent_backend_model"
-_INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.api.internal.reserve_loop_state"
+_INTERNAL_GET_CONFIG_PATCH_TARGET = "src.runtime.api.internal.get_config"
+_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.runtime.api.internal.check_takeoff_gate"
+_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.runtime.spawner_backends.resolve_requested_subagent_backend_model"
+_INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.runtime.api.internal.reserve_loop_state"
 
 
 def _improve_argv(session_id: str | None, repo: str, goal_file: pathlib.Path, *extra: str) -> list[str]:
@@ -98,7 +101,7 @@ async def test_improve_endpoint_returns_404_for_missing_session() -> None:
   """POST /api/internal/improve returns 404 when session doesn't exist."""
   import fastapi
 
-  from src.api import internal
+  from src.runtime.api import internal
 
   req = models.ImproveRequest(session_id="missing", repo_path="/tmp/repo", base_branch="main", iterations=1, goal="fix")
 
@@ -115,7 +118,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   """POST /api/internal/improve returns 400 when backend resolution fails."""
   import fastapi
 
-  from src.api import internal
+  from src.runtime.api import internal
 
   req = models.ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
@@ -142,8 +145,8 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   """POST /api/internal/improve returns 409 when another loop is already running."""
   import fastapi
 
-  from src.api import internal
-  from src.core import improve_command
+  from src.features.improve import improve_command
+  from src.runtime.api import internal
 
   req = models.ImproveRequest(
       session_id="s1",
@@ -210,7 +213,7 @@ def test_improve_stop_cli_exits_1_without_a_running_loop(
 @pytest.mark.asyncio
 async def test_improve_stop_endpoint_marks_loop_stopped(tmp_path: pathlib.Path) -> None:
   """POST /api/internal/improve/stop stops the running loop; the session takes a new loop."""
-  from src.api import internal
+  from src.runtime.api import internal
 
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
@@ -233,7 +236,7 @@ async def test_improve_stop_endpoint_409_without_running_loop(tmp_path: pathlib.
   """A session with no running loop answers 409 instead of pretending to stop."""
   import fastapi
 
-  from src.api import internal
+  from src.runtime.api import internal
 
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
@@ -253,7 +256,7 @@ async def test_improve_stop_endpoint_404_for_missing_session(tmp_path: pathlib.P
   """A missing session answers 404 like the other session-scoped internal routes."""
   import fastapi
 
-  from src.api import internal
+  from src.runtime.api import internal
 
   cfg = mock.MagicMock()
   session_mgr = mock.AsyncMock()
@@ -268,8 +271,8 @@ async def test_improve_stop_endpoint_404_for_missing_session(tmp_path: pathlib.P
 @pytest.mark.asyncio
 async def test_session_takes_a_new_loop_after_stop(tmp_path: pathlib.Path) -> None:
   """After a stop, the session's active lock releases (the sequence's own exit
-  step, src/core/improve_sequence.py) and a new loop reserves cleanly."""
-  from src.core import improve_command
+  step, src/features/improve/improve_sequence.py) and a new loop reserves cleanly."""
+  from src.features.improve import improve_command
 
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"

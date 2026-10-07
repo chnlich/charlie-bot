@@ -21,10 +21,7 @@ from conftest import (
     make_task_spawner,
 )
 
-from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionStatus
-from src.core.thread_entry import (
+from src.features.chat_threads.thread_entry import (
     ThreadAdapter,
     ThreadMessage,
     ThreadPlatform,
@@ -47,6 +44,9 @@ from src.core.thread_entry import (
     replied,
     unread_after,
 )
+from src.infra import event_types as ET
+from src.infra.config import CharlieBotConfig
+from src.infra.models import SessionStatus
 
 FAKECHAT = ThreadPlatform(
     name="fakechat",
@@ -560,7 +560,7 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
       # The model drops unknown fields again (extra="allow" is gone), so the
       # stand-in records the keyword arguments the shared core passes and the
       # assert reads the platform's origin field off them by name.
-      patch("src.core.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
+      patch("src.features.chat_threads.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
   ):
     sid = await accept_summon(
         adapter,

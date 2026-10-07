@@ -5,8 +5,8 @@ import pathlib
 import conftest
 import pytest
 
-from src.core import event_types as ET
-from src.core import review
+from src.infra import event_types as ET
+from src.runtime import review
 
 
 def _setup_paths(tmp_path: pathlib.Path, session_id: str, thread_id: str) -> tuple[pathlib.Path, pathlib.Path]:

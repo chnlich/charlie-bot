@@ -104,7 +104,7 @@ function taskNode(id, parent, hour, overrides = {}) {
 }
 
 // A projected legacy worker-thread leaf (_projected_thread_row in
-// src/api/sessions.py): profile worker, task_parent_id = parent id, and the
+// src/runtime/api/sessions.py): profile worker, task_parent_id = parent id, and the
 // worker_thread origin pair — no session exists behind the row id.
 function workerLeaf(id, parent, hour, overrides = {}) {
   return makeSession(id, {

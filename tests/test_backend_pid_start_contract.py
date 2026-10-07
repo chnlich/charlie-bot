@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import os
 import pkgutil
 import sys
 from collections.abc import Awaitable, Callable
@@ -230,3 +231,37 @@ def test_every_backend_subclass_has_a_harness() -> None:
 async def test_pid_start_pinned_at_spawn_notification(cls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """One run() per backend: pid_start == sentinel[0] when _on_spawn fires."""
   await HARNESSES[cls](cls, monkeypatch, tmp_path)
+
+
+class _SleeperChildBackend(AgentBackend):
+  """Concrete backend whose child is a real long-running process: a sleep no
+  subprocess stub stands in for."""
+
+  def _build_command(self, prompt: str) -> list[str]:
+    return ["/bin/sleep", "60"]
+
+
+@pytest.mark.asyncio
+async def test_on_spawn_failure_ends_the_spawned_child(tmp_path: Path) -> None:
+  """The spawned child is dead by the time the launch callback's exception leaves run().
+
+  A failed launch callback (the store refusing a stopped run's identity, or
+  any other error) must not leave the fresh child running with no owner. The
+  spawn is real: without the terminate, the sleep would still be running here.
+  """
+  observed: list[int] = []
+
+  async def on_spawn(pid: int) -> None:
+    observed.append(pid)
+    raise _SpawnObservedError
+
+  backend = _SleeperChildBackend(on_spawn=on_spawn, log_dir=tmp_path / "logs")
+  with pytest.raises(_SpawnObservedError):
+    async for _event in backend.run("contract prompt", str(tmp_path), {"PATH": "/usr/bin:/bin"}):
+      pass
+
+  assert len(observed) == 1
+  assert backend._proc is not None
+  assert backend._proc.returncode is not None, "the spawned child exited before run() raised"
+  with pytest.raises(ProcessLookupError):
+    os.kill(backend._proc.pid, 0)

@@ -11,18 +11,17 @@ raises with the failing line and leaves the config untouched.
 
 from __future__ import annotations
 
+import pathlib
 import re
 import sys
 import time
 import wave
-from pathlib import Path
 
 import numpy as np
 import structlog
 
-from src.agents.transcription.base import SAMPLE_RATE
-from src.core.config import CONFIG_FILENAME, CharlieBotConfig, load_config
-from src.core.yaml_utils import load_yaml
+from src.agents.transcription import base
+from src.core import config, yaml_utils
 
 log = structlog.get_logger()
 
@@ -40,7 +39,7 @@ PREFLIGHT_RECORDING_MAX_SECONDS = 15.0
 PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
 
 
-def write_voice_engine(home: Path) -> str:
+def write_voice_engine(home: pathlib.Path) -> str:
   """Idempotently set ``voice.engine`` in ``<home>/config.yaml``; return the action taken.
 
   Reads the file textually so comments and formatting survive: the ``engine:`` line
@@ -51,7 +50,7 @@ def write_voice_engine(home: Path) -> str:
   # The GPU enable flow pins the GPU pipeline: setup.sh runs enable only on
   # nvidia-smi hosts, so there is nothing to choose between.
   engine = "qwen3_hf"
-  config_path = home / CONFIG_FILENAME
+  config_path = home / config.CONFIG_FILENAME
   text = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
   lines = text.splitlines(keepends=True)
   voice_matches = [i for i, line in enumerate(lines) if re.match(r"^voice:\s*$", line)]
@@ -71,7 +70,7 @@ def write_voice_engine(home: Path) -> str:
     raise ValueError(f"config.yaml defines voice.engine on {len(engine_matches)} lines: {config_path}")
   # Duplicate key lines are broken yaml (safe_load last-wins); the checks above run
   # before the effective-value skip so the idempotent path never blesses them.
-  data = load_yaml(config_path, default={})
+  data = yaml_utils.load_yaml(config_path, default={})
   if not isinstance(data, dict):
     raise ValueError(f"config must be a top-level mapping: {config_path}")
   if data.get("voice", {}).get("engine") == engine:
@@ -97,13 +96,13 @@ def write_voice_engine(home: Path) -> str:
   return "appended"
 
 
-def pick_preflight_recording(sessions_dir: Path) -> Path:
+def pick_preflight_recording(sessions_dir: pathlib.Path) -> pathlib.Path:
   """Pick the real voice recording closest to 10s for the preflight decode check."""
-  candidates: list[tuple[float, Path]] = []
+  candidates: list[tuple[float, pathlib.Path]] = []
   for wav_path in sorted(sessions_dir.glob("*/voice/*.wav")):
     try:
       with wave.open(str(wav_path), "rb") as wav:
-        if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+        if wav.getframerate() != base.SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
           continue
         duration = wav.getnframes() / wav.getframerate()
     except (wave.Error, OSError):
@@ -117,15 +116,15 @@ def pick_preflight_recording(sessions_dir: Path) -> Path:
   return min(candidates)[1]
 
 
-def _load_wav_samples(path: Path) -> np.ndarray:
+def _load_wav_samples(path: pathlib.Path) -> np.ndarray:
   with wave.open(str(path), "rb") as wav:
-    if wav.getframerate() != SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
-      raise ValueError(f"preflight recording must be {SAMPLE_RATE // 1000}kHz mono int16 wav: {path}")
+    if wav.getframerate() != base.SAMPLE_RATE or wav.getnchannels() != 1 or wav.getsampwidth() != 2:
+      raise ValueError(f"preflight recording must be {base.SAMPLE_RATE // 1000}kHz mono int16 wav: {path}")
     frames = wav.readframes(wav.getnframes())
   return np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32768.0
 
 
-def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
+def run_gpu_preflight(cfg: config.CharlieBotConfig) -> dict:
   """Assert the four GPU-voice preflight conditions; raise on the first failure.
 
   (a) torch and transformers import (an ImportError is the failure); (b) the model
@@ -158,7 +157,7 @@ def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
   started = time.perf_counter()
   text = transcriber._decode_samples(bundle, samples, 0)
   decode_seconds = time.perf_counter() - started
-  audio_seconds = len(samples) / SAMPLE_RATE
+  audio_seconds = len(samples) / base.SAMPLE_RATE
   if not text:
     raise RuntimeError(f"preflight (c) failed: GPU decode of {wav_path.name} returned empty text")
   if decode_seconds >= PREFLIGHT_DECODE_THRESHOLD_SECONDS:
@@ -179,14 +178,14 @@ def run_gpu_preflight(cfg: CharlieBotConfig) -> dict:
   return report
 
 
-def enable(cfg: CharlieBotConfig | None = None) -> dict:
+def enable(cfg: config.CharlieBotConfig | None = None) -> dict:
   """Run the full GPU voice engine enable flow and flip the deployment config.
 
   Idempotent: cached weights are reused and an already-enabled config is skipped.
   Raises on any preflight failure with the config untouched.
   """
   if cfg is None:
-    cfg = load_config()
+    cfg = config.load_config()
   report = run_gpu_preflight(cfg)
   action = write_voice_engine(cfg.charliebot_home)
   report["config_write"] = action

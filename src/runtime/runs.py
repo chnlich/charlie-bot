@@ -993,21 +993,22 @@ class RunStore:
   # -- launch and observation facts ----------------------------------------
 
   async def record_launch(self, session_id: str, run_id: str, *, pid: int, pid_start: str) -> RunRecord:
-    """Persist the spawned process identity on the registered Run.
+    """Persist the identity of the Run's newest process on the registered Run.
 
     Called from the backend's on_spawn callback the moment (pid, pid_start) is
     pinned, BEFORE any call from the run's credential can be accepted: the
     caller-identity check requires both fields on the referenced Run. The
-    write takes the control lock (short metadata replace) and is idempotent —
-    a repeated callback for the same process rewrites the same pair, and a
-    pid_start change is a corrupted callback, not a recovery input.
+    identity is the newest process of the Run: an account relay replaces the
+    previous process's pair with its own, while a Run with a stop request
+    takes no new process — the write is refused and the record stays as it
+    is. The write takes the control lock (short metadata replace) and is
+    idempotent — a repeated callback for the same process rewrites the same
+    pair.
     """
     async with self._lock:
       run = self._require_run(session_id, run_id)
-      if run.pid is not None and run.pid_start is not None and (run.pid != pid or run.pid_start != pid_start):
-        raise RunIdentityConflictError(
-            f"run {run_id} already records process identity "
-            f"({run.pid}, {run.pid_start!r}); refusing to overwrite with ({pid}, {pid_start!r})")
+      if self.stop_requested(self.load_events_sync(session_id), run_id):
+        raise RuntimeError(f"run {run_id} has a stop request; refusing new process ({pid}, {pid_start!r})")
       first_launch = run.pid is None
       if run.started_at is None:
         run.started_at = utc_now()

@@ -931,7 +931,14 @@ class AgentBackend(ABC):
     stat_pair = runs.read_pid_stat(self._proc.pid)
     self.pid_start = stat_pair[0] if stat_pair else None
     if self._on_spawn is not None:
-      await self._on_spawn(self._proc.pid)
+      try:
+        await self._on_spawn(self._proc.pid)
+      except Exception:
+        # A failed launch callback leaves the freshly spawned child with no
+        # owner: end it before the exception leaves, so a launch that never
+        # completed never leaves an orphan.
+        await self.terminate()
+        raise
 
   async def run(self,
                 prompt: str,

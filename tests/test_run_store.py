@@ -230,6 +230,67 @@ async def test_identity_mismatch_returns_conflict_and_keeps_evidence(
 
 
 # ---------------------------------------------------------------------------
+# Process identity handover
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_second_record_launch_replaces_identity_and_skips_the_launched_notification(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  env = build_env(tmp_path)
+  _, _, mgr, store = env
+  session_id = await make_task(env, "t1")
+  await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
+
+  # The first launch fires the launched notification once; the relay's
+  # replacement process must not fire it again.
+  await store.record_launch(session_id, "r1", pid=111111, pid_start="1-111111")
+  first = await store.get_run(session_id, "r1")
+  assert (first.pid, first.pid_start) == (111111, "1-111111")
+  assert first.started_at is not None
+
+  spy = conftest.NotificationSpy(mgr)
+  spy.install()
+  liveness: list[bool] = []
+  orig_liveness = store.notify_liveness
+
+  async def spy_liveness(session_id: str, run: models.RunRecord, *, launched: bool) -> None:
+    liveness.append(launched)
+    await orig_liveness(session_id, run, launched=launched)
+
+  monkeypatch.setattr(store, "notify_liveness", spy_liveness)
+
+  replaced = await store.record_launch(session_id, "r1", pid=222222, pid_start="2-222222")
+  assert (replaced.pid, replaced.pid_start) == (222222, "2-222222")
+  assert replaced.started_at == first.started_at  # the first process's start time stands
+  assert spy.calls == [], "the launched tree notification fires once per Run, never on replacement"
+  assert liveness == [], "the launch liveness notification fires once per Run, never on replacement"
+
+  reread = store.read_run_sync(session_id, "r1")
+  assert (reread.pid, reread.pid_start) == (222222, "2-222222")
+
+
+@pytest.mark.asyncio
+async def test_record_launch_refused_on_a_run_with_a_stop_request(tmp_path: pathlib.Path) -> None:
+  env = build_env(tmp_path)
+  _, _, _, store = env
+  session_id = await make_task(env, "t1")
+  await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
+  await store.record_launch(session_id, "r1", pid=111111, pid_start="1-111111")
+
+  # The stop lands in the gap between two processes (the old one exited, the
+  # relay's new one not yet registered).
+  result = await store.request_stop(session_id, "r1", "stop-1")
+  assert result.stop_requested is True
+
+  with pytest.raises(RuntimeError, match=r"run r1 has a stop request.*222222.*2-222222"):
+    await store.record_launch(session_id, "r1", pid=222222, pid_start="2-222222")
+
+  still = await store.get_run(session_id, "r1")
+  assert (still.pid, still.pid_start) == (111111, "1-111111")
+
+
+# ---------------------------------------------------------------------------
 # Read-only lockless store (the CLI's run-token resolution)
 # ---------------------------------------------------------------------------
 

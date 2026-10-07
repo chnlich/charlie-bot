@@ -16,8 +16,16 @@ SUBPROCESS_GIT_READ_TIMEOUT_ASYNC = 30.0  # seconds — async subprocess via asy
 # `git diff` between two refs — may scan a large amount of history.
 SUBPROCESS_GIT_DIFF_TIMEOUT = 30  # seconds — synchronous subprocess.run
 
-# Mutating / heavier git commands (worktree add, add+commit+push).
-SUBPROCESS_GIT_WRITE_TIMEOUT = 60.0  # seconds — worktree creation, commit+push sequences
+# Mutating / heavier local git commands (worktree add, add+commit).
+SUBPROCESS_GIT_WRITE_TIMEOUT = 60.0  # seconds — worktree creation, add+commit sequences
+
+# Remote git commands (ls-remote, fetch, push) bound each attempt instead of the
+# whole operation: a hung connection to the remote never recovers, and only a
+# fresh connection gets through. A failed attempt (timeout or non-zero exit) is
+# retried at once, so the worst case reports the error after GIT_REMOTE_MAX_ATTEMPTS
+# full limits. Healthy round trips measured 3-36 s.
+SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT = 120.0  # seconds — one attempt
+GIT_REMOTE_MAX_ATTEMPTS = 3  # attempts per remote operation, the first included
 
 # Git version info used at startup (rev-parse --short HEAD, git log).
 SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks server startup

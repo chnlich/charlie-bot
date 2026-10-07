@@ -87,7 +87,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
       child.id, event_type=ET.AGENT_MESSAGE, content="one more tweak", actor="agent", from_session=manager.id)
   work_run = await tree.runs.get_run(child.id, work_run_id)
   assert work_run is not None and work_run.worktree_path
-  ok, _err = await git._run_git_cmd(
+  ok, _out, _err = await git._git_stdout(
       pathlib.Path(work_run.worktree_path),
       "commit",
       "--allow-empty",

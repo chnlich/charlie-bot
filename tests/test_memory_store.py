@@ -7,31 +7,22 @@ body opener) to cover the dual-read path.
 """
 
 import io
+import pathlib
+import types
 from collections.abc import Callable
-from pathlib import Path
-from types import SimpleNamespace
 
+import conftest
 import pytest
-from conftest import CLI_MEMORY_HOME_PATCH_TARGET, memory_entry_text
-from conftest import write_memory_entry as _write_entry
-from conftest import write_memory_topics as _write_topics
 
 from src.core import memory
-from src.core.memory import (
-    MemoryFormatError,
-    assemble_master,
-    assemble_worker,
-    load_store,
-    parse_entry,
-)
 
 # --- parse_entry: v2 ----------------------------------------------------------
 
 
-def test_parse_valid(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  p = _write_entry(tmp_path, "profile", "dark-mode")
-  e = parse_entry(p)
+def test_parse_valid(tmp_path: pathlib.Path) -> None:
+  conftest.write_memory_topics(tmp_path)
+  p = conftest.write_memory_entry(tmp_path, "profile", "dark-mode")
+  e = memory.parse_entry(p)
   assert e.topic == "profile"
   assert e.slug == "dark-mode"
   assert e.scope == "user"
@@ -49,32 +40,33 @@ def test_parse_valid(tmp_path: Path) -> None:
 # --- load_store semantic validation ------------------------------------------
 
 
-def _mismatched_dir_entry(tmp_path: Path) -> None:
+def _mismatched_dir_entry(tmp_path: pathlib.Path) -> None:
   d = tmp_path / "entries" / "wrongdir"
   d.mkdir(parents=True)
-  (d / "slug.md").write_text(memory_entry_text("profile", "slug"), encoding="utf-8")
+  (d / "slug.md").write_text(conftest.memory_entry_text("profile", "slug"), encoding="utf-8")
 
 
-def _bad_filename_entry(tmp_path: Path) -> None:
+def _bad_filename_entry(tmp_path: pathlib.Path) -> None:
   d = tmp_path / "entries" / "profile"
   d.mkdir(parents=True)
   # space is outside the slug charset
-  (d / "bad slug.md").write_text(memory_entry_text("profile", "bad slug"), encoding="utf-8")
+  (d / "bad slug.md").write_text(conftest.memory_entry_text("profile", "bad slug"), encoding="utf-8")
 
 
 _LOAD_REJECTION_CASES = [
     # (entry placement against the written topics vocabulary, the MemoryFormatError fragment
     # naming the broken field).
-    pytest.param(lambda p: _write_entry(p, "nonexistent", "x"), "not in topics vocabulary", id="unknown-topic"),
+    pytest.param(
+        lambda p: conftest.write_memory_entry(p, "nonexistent", "x"), "not in topics vocabulary", id="unknown-topic"),
     pytest.param(_mismatched_dir_entry, "directory name 'wrongdir' != topic 'profile'", id="dir-topic-mismatch"),
     pytest.param(_bad_filename_entry, "does not match slug charset", id="bad-filename"),
     pytest.param(
-        lambda p: _write_entry(p, "profile", "rev", revises="old-entry"),
+        lambda p: conftest.write_memory_entry(p, "profile", "rev", revises="old-entry"),
         "'revises' is forbidden in entries",
         id="revises-in-entries",
     ),
     pytest.param(
-        lambda p: _write_entry(p, "profile", "a", audience="master,all"),
+        lambda p: conftest.write_memory_entry(p, "profile", "a", audience="master,all"),
         "audience element 'all' not in {master, worker}",
         id="bad-audience-element",
     ),
@@ -83,23 +75,23 @@ _LOAD_REJECTION_CASES = [
 
 @pytest.mark.parametrize(("place_entry", "expected_fragment"), _LOAD_REJECTION_CASES)
 def test_load_store_rejects_invalid_entry(
-    tmp_path: Path, place_entry: Callable[[Path], None], expected_fragment: str) -> None:
+    tmp_path: pathlib.Path, place_entry: Callable[[pathlib.Path], None], expected_fragment: str) -> None:
   """An entries/ store holding one invalid entry fails the load, and the error names the broken field."""
-  _write_topics(tmp_path)
+  conftest.write_memory_topics(tmp_path)
   place_entry(tmp_path)
-  with pytest.raises(MemoryFormatError) as exc_info:
-    load_store(tmp_path)
+  with pytest.raises(memory.MemoryFormatError) as exc_info:
+    memory.load_store(tmp_path)
   assert expected_fragment in str(exc_info.value)
 
 
 # --- assemble_master ----------------------------------------------------------
 
 
-def test_assemble_master_resident_full_and_others_index(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
-  _write_entry(tmp_path, "charliebot", "cli-flags", title="CLI Flags", body="Details.\n")
-  block = assemble_master(tmp_path)
+def test_assemble_master_resident_full_and_others_index(tmp_path: pathlib.Path) -> None:
+  conftest.write_memory_topics(tmp_path)
+  conftest.write_memory_entry(tmp_path, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
+  conftest.write_memory_entry(tmp_path, "charliebot", "cli-flags", title="CLI Flags", body="Details.\n")
+  block = memory.assemble_master(tmp_path)
   assert block is not None
   # v2 resident full body: the '# {title}' heading is synthesized.
   assert "# Dark Mode\n\nUser prefers dark UI." in block
@@ -108,18 +100,18 @@ def test_assemble_master_resident_full_and_others_index(tmp_path: Path) -> None:
   assert memory.INDEX_HEADER in block
 
 
-def test_assemble_master_missing_dir_returns_none(tmp_path: Path) -> None:
-  assert assemble_master(tmp_path / "nope") is None
+def test_assemble_master_missing_dir_returns_none(tmp_path: pathlib.Path) -> None:
+  assert memory.assemble_master(tmp_path / "nope") is None
 
 
 # --- assemble_worker ----------------------------------------------------------
 
 
-def test_assemble_worker_repo_topic_match(tmp_path: Path) -> None:
-  _write_topics(tmp_path)
-  _write_entry(tmp_path, "charliebot", "cli-flags", audience="worker", title="CLI Flags", body="FBODY\n")
-  _write_entry(tmp_path, "profile", "pref", audience="worker", title="Pref", body="PBODY\n")
-  block = assemble_worker(tmp_path, "charliebot")
+def test_assemble_worker_repo_topic_match(tmp_path: pathlib.Path) -> None:
+  conftest.write_memory_topics(tmp_path)
+  conftest.write_memory_entry(tmp_path, "charliebot", "cli-flags", audience="worker", title="CLI Flags", body="FBODY\n")
+  conftest.write_memory_entry(tmp_path, "profile", "pref", audience="worker", title="Pref", body="PBODY\n")
+  block = memory.assemble_worker(tmp_path, "charliebot")
   assert block is not None
   assert "# CLI Flags\n\nFBODY" in block  # full body for matching topic, heading synthesized
   assert "profile/pref · Pref" in block  # non-matching as index line
@@ -131,22 +123,22 @@ def test_assemble_worker_repo_topic_match(tmp_path: Path) -> None:
 # --- CLI add creates exactly one staging file, never touches entries/ -------
 
 
-def _fake_cfg(tmp_path: Path) -> SimpleNamespace:
+def _fake_cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
   home = tmp_path / "home"
   home.mkdir()
   mem = home / "memory"
-  _write_topics(mem)
-  return SimpleNamespace(home=home, memory_dir=mem, sessions_dir=home / "sessions")
+  conftest.write_memory_topics(mem)
+  return types.SimpleNamespace(home=home, memory_dir=mem, sessions_dir=home / "sessions")
 
 
-def _patch_cli_cfg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> SimpleNamespace:
+def _patch_cli_cfg(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> types.SimpleNamespace:
   """Point the memory CLI's home resolution at a fresh fake store and return that config."""
   cfg = _fake_cfg(tmp_path)
-  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: cfg.home)
+  monkeypatch.setattr(conftest.CLI_MEMORY_HOME_PATCH_TARGET, lambda: cfg.home)
   return cfg
 
 
-def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_add_creates_one_staging_file(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Flag-less invocation writes exactly one staging file whose content is the body verbatim."""
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
   body = "# Prefers Dark Mode\n\nThe user prefers dark themes across all UIs.\n"
@@ -167,10 +159,10 @@ def test_cli_add_creates_one_staging_file(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_cli_query_audience_filter_is_membership(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "for-master", audience="master", body="mbody\n")
-  _write_entry(cfg.memory_dir, "profile", "for-both", audience="master, worker", body="bbody\n")
+  conftest.write_memory_entry(cfg.memory_dir, "profile", "for-master", audience="master", body="mbody\n")
+  conftest.write_memory_entry(cfg.memory_dir, "profile", "for-both", audience="master, worker", body="bbody\n")
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--audience", "worker"])
   cli.main()
@@ -183,7 +175,7 @@ def test_cli_query_audience_filter_is_membership(
 
 
 def test_cli_lint_dir_reads_given_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   """Without --dir lint reads the live store; with --dir it reads the given root."""
   _patch_cli_cfg(monkeypatch, tmp_path)
   import src.cli.memory as cli
@@ -193,8 +185,8 @@ def test_cli_lint_dir_reads_given_root(
 
   # A second store root whose entry breaks the strict v2 rules.
   other = tmp_path / "memory-proposal"
-  _write_topics(other)
-  _write_entry(other, "profile", "legacy", legacy=True)
+  conftest.write_memory_topics(other)
+  conftest.write_memory_entry(other, "profile", "legacy", legacy=True)
   monkeypatch.setattr("sys.argv", ["charliebot memory", "lint", "--dir", str(other)])
   with pytest.raises(SystemExit) as exc_info:
     cli.main()
@@ -205,13 +197,13 @@ def test_cli_lint_dir_reads_given_root(
 
 
 def test_cli_query_dir_reads_given_root(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
   """query --dir reads entries from the given root, not the live store."""
   cfg = _patch_cli_cfg(monkeypatch, tmp_path)
-  _write_entry(cfg.memory_dir, "profile", "live-only", body="live body\n")
+  conftest.write_memory_entry(cfg.memory_dir, "profile", "live-only", body="live body\n")
   other = tmp_path / "memory-proposal"
-  _write_topics(other)
-  _write_entry(other, "profile", "pr-only", body="pr body\n")
+  conftest.write_memory_topics(other)
+  conftest.write_memory_entry(other, "profile", "pr-only", body="pr body\n")
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--dir", str(other)])
   cli.main()

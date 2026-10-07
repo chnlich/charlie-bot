@@ -3,6 +3,7 @@ import atexit
 import contextlib
 import importlib
 import io
+import itertools
 import json
 import os
 import re
@@ -2585,7 +2586,15 @@ class ScriptedRelayBackend:
   after the stream ends, the prompt/env/cwd the run launched with, and the
   cancel let-go trio (detach, pid_start, hang_diagnostics) the worker cancel
   path touches.
+
+  Each instance is one process: it owns a pid (drawn one per instance from the
+  same unheld 424xxx range SpawningScriptedBackend uses) and its own pid_start,
+  and the launch callback that install_scripted_backends wires fires at run()
+  start with that pid — a relay's second process registers through the same
+  record_launch path the first one did.
   """
+
+  _pids = itertools.count(424100)
 
   def __init__(self, events: list[dict], exit_code: int, stderr_text: str = "") -> None:
     self._events = events
@@ -2593,10 +2602,15 @@ class ScriptedRelayBackend:
     self.stderr_text = stderr_text
     self.terminated = False
     self.hang_diagnostics = None
+    self.pid = next(self._pids)
     self.pid_start = "1-1"
     self.prompt: str | None = None
     self.env: dict | None = None
     self.cwd: str | None = None
+    self._on_spawn: Callable[[int], Awaitable[None]] | None = None
+
+  def set_on_spawn(self, on_spawn: Callable[[int], Awaitable[None]]) -> None:
+    self._on_spawn = on_spawn
 
   async def terminate(self) -> None:
     self.terminated = True
@@ -2617,6 +2631,9 @@ class ScriptedRelayBackend:
     self.prompt = prompt
     self.cwd = cwd
     self.env = env
+    self.pid_start = f"1-{self.pid}"
+    if self._on_spawn is not None:
+      await self._on_spawn(self.pid)
     for event in self._events:
       if self.terminated:
         return
@@ -2628,7 +2645,8 @@ def install_scripted_backends(
     backends: list[ScriptedRelayBackend],
     patch_target: str,
 ) -> list[dict]:
-  """Serve *backends* one build at a time from a patched build_backend.
+  """Serve *backends* one build at a time from a patched build_backend, wiring
+  each build's on_spawn into the double the way install_backends does.
 
   *patch_target* is the dotted import path of the build_backend binding the
   tested path reads: the master-cc run path re-imports through
@@ -2642,6 +2660,9 @@ def install_scripted_backends(
 
   def fake_build_backend(option: models.BackendOption, cfg: CharlieBotConfig, **kwargs: Any) -> ScriptedRelayBackend:
     backend = queue.pop(0)
+    on_spawn = kwargs.get("on_spawn")
+    if on_spawn is not None:
+      backend.set_on_spawn(on_spawn)
     builds.append({"option": option, "kwargs": kwargs, "backend": backend})
     return backend
 

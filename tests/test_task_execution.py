@@ -2155,7 +2155,9 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
       [
           # The id-carrying event pins the native session id the relay moves the
           # transcript under (a fresh turn lands none before its stream does).
-          {**assistant_text_event("scouting"), "session_id": cc_id},
+          {
+              **assistant_text_event("scouting"), "session_id": cc_id
+          },
           rate_limit_event("allowed_warning", 0.93),
           user_tool_result_event(),
       ],
@@ -2221,10 +2223,11 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   make_transcript(tmp_path / "claude-main", cc_id)
   first = ScriptedRelayBackend(
       [
-          {**assistant_text_event("scouting"), "session_id": cc_id},
+          {
+              **assistant_text_event("scouting"), "session_id": cc_id
+          },
           rate_limit_event("rejected", 1.0),
-      ],
-      exit_code=1)
+      ], exit_code=1)
   second = ScriptedRelayBackend([result_event("must never land")], exit_code=0)
   install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
   patch_instructions_content(monkeypatch)

@@ -7,10 +7,9 @@ section sources are shared: the common execution rules live in ``prompts/task_ba
 ``prompts/worker.md``'s, so both assemblies read one set of canonical sections.
 """
 
-from pathlib import Path
+import pathlib
 
-from src.core.config import CharlieBotConfig
-from src.core.models import SessionMetadata, TaskType
+from src.core import config, models
 
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
@@ -25,9 +24,9 @@ _PROMPT_SECTION_MARKER_SUFFIX = " -->"
 # in prompts/worker.md; script_run's body is one complete section.
 # _REQUIRED_WORKER_PROMPT_SECTIONS derives its id set from this map.
 WORKFLOW_PROMPT_SECTION = {
-    TaskType.IMPLEMENT: ("worktree_bindings", "workflow_steps", "workflow_implement"),
-    TaskType.QUICK_EDIT: ("worktree_bindings", "workflow_steps", "workflow_quick_edit"),
-    TaskType.SCRIPT_RUN: ("workflow_script_run_bindings", "workflow_script_run"),
+    models.TaskType.IMPLEMENT: ("worktree_bindings", "workflow_steps", "workflow_implement"),
+    models.TaskType.QUICK_EDIT: ("worktree_bindings", "workflow_steps", "workflow_quick_edit"),
+    models.TaskType.SCRIPT_RUN: ("workflow_script_run_bindings", "workflow_script_run"),
 }
 
 # The repo-less delegation's section selection (no repo: the Run directory is
@@ -36,14 +35,14 @@ WORKFLOW_PROMPT_SECTION = {
 # Run directory. Each entry rides the repo-less source-files rule, which names
 # host paths instead of a checkout.
 REPO_LESS_WORKFLOW_SECTION = {
-    TaskType.IMPLEMENT: ("workflow_repo_less",),
-    TaskType.QUICK_EDIT: ("workflow_repo_less",),
-    TaskType.SCRIPT_RUN: ("workflow_script_run",),
+    models.TaskType.IMPLEMENT: ("workflow_repo_less",),
+    models.TaskType.QUICK_EDIT: ("workflow_repo_less",),
+    models.TaskType.SCRIPT_RUN: ("workflow_script_run",),
 }
 REPO_LESS_SOURCE_FILES_SECTION = "task_spec_source_files_repo_less"
 
 
-def workflow_rule_section_ids(task_type: TaskType, *, repo_less: bool) -> tuple[str, ...]:
+def workflow_rule_section_ids(task_type: models.TaskType, *, repo_less: bool) -> tuple[str, ...]:
   """The persistent workflow rule sections of one work Run's task type.
 
   The repo case reads WORKFLOW_PROMPT_SECTION from element 1: element 0 is the
@@ -77,7 +76,7 @@ _REQUIRED_WORKER_PROMPT_SECTIONS = (
 )
 
 
-def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
+def _load_prompt_sections(path: pathlib.Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
   """Read a marker-sectioned prompt template fresh and return its sections.
 
   Sections are split on the template's `<!-- section: <id> -->` marker lines.
@@ -112,12 +111,12 @@ def _load_prompt_sections(path: Path, required: tuple[str, ...], *, extraction: 
   return sections
 
 
-def load_marker_sections(path: Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
+def load_marker_sections(path: pathlib.Path, required: tuple[str, ...], *, extraction: str) -> dict[str, str]:
   """The public form of the marker-section loader (shared with the v2 assembly owner)."""
   return _load_prompt_sections(path, required, extraction=extraction)
 
 
-def load_worker_prompt_sections(cfg: CharlieBotConfig) -> dict[str, str]:
+def load_worker_prompt_sections(cfg: config.CharlieBotConfig) -> dict[str, str]:
   """Read the shared section sources fresh and split them into their required sections.
 
   ``prompts/task_base.md`` (the common execution rules' single maintained home) is read
@@ -154,15 +153,15 @@ def _require_tokens_resolved(assembled: str, *, prompt: str) -> None:
     raise ValueError(prompt + " prompt assembly left an unresolved {{token}} in the output")
 
 
-def verify_contract_tokens(cfg: CharlieBotConfig) -> dict[str, str]:
+def verify_contract_tokens(cfg: config.CharlieBotConfig) -> dict[str, str]:
   """verify.md's token map: the expected result trailer and the canonical plan template's path.
 
   One home for both render paths (the v1 spawn assembly and the v2 verify rules segment):
   a token verify.md gains gets its value here once.
   """
-  from src.core.verify_trailer import VERIFY_RESULT_TRAILER_EXPECTED
+  from src.core import verify_trailer
   return {
-      "{{result_trailer_expected}}": VERIFY_RESULT_TRAILER_EXPECTED,
+      "{{result_trailer_expected}}": verify_trailer.VERIFY_RESULT_TRAILER_EXPECTED,
       "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
   }
 
@@ -198,13 +197,13 @@ def worktree_binding_tokens(
 
 def _build_worker_prompt(
     description: str,
-    repo_path: Path,
+    repo_path: pathlib.Path,
     base_branch: str,
     branch_name: str,
     wt_path: str,
-    session_meta: SessionMetadata,
-    cfg: CharlieBotConfig,
-    task_type: TaskType,
+    session_meta: models.SessionMetadata,
+    cfg: config.CharlieBotConfig,
+    task_type: models.TaskType,
     loop_dir: str | None,
     iteration_number: int | None,
     is_continuation: bool,
@@ -244,8 +243,8 @@ def _build_worker_prompt(
 
   memory_section = ""
   # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md)
-  from src.core.memory import assemble_worker
-  memory_block = assemble_worker(cfg.memory_dir, repo_path.name)
+  from src.core import memory
+  memory_block = memory.assemble_worker(cfg.memory_dir, repo_path.name)
   if memory_block:
     memory_section = "\n" + sections["memory"].replace("{{memory_block}}", memory_block)
 

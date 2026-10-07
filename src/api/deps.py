@@ -183,7 +183,7 @@ async def require_caller(
   if not key:
     raise fastapi.HTTPException(
         status_code=401,
-        detail=f"run token presented ({run_token.RUN_TOKEN_ENV}) but no signing key is configured",
+        detail=f"run token presented ({constants.RUN_TOKEN_ENV}) but no signing key is configured",
     )
   try:
     claims = run_token.verify_run_token(bearer, key)

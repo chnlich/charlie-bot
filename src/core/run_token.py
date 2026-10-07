@@ -28,7 +28,7 @@ import json
 import os
 from typing import Literal
 
-from src.core.constants import RUN_TOKEN_ENV
+from src.core import constants
 
 
 class RunTokenError(Exception):
@@ -155,5 +155,5 @@ def bearer_from_authorization(header_value: str | None) -> str:
 
 def load_run_token() -> str | None:
   """The process environment's run token, or None when absent."""
-  value = os.environ.get(RUN_TOKEN_ENV, "").strip()
+  value = os.environ.get(constants.RUN_TOKEN_ENV, "").strip()
   return value or None

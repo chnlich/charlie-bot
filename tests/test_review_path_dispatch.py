@@ -8,33 +8,19 @@ node's own dispatcher only after the review chain finishes.
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    BUILD_BACKEND_PATCH_TARGET,
-    WORKER_BUILD_BACKEND_PATCH_TARGET,
-    create_task,
-    init_repo_with_origin,
-    patch_instructions_content,
-)
 
 from src.core import event_types as ET
-from src.core import git
-from src.core.models import TaskSpec, TaskType
-from tests.test_task_execution import (
-    SpawningScriptedBackend,
-    _adapter_with_silent_broadcast,
-    build_env,
-    install_backends,
-    result_event,
-    wait_for_terminal_run,
-)
+from src.core import git, models
+from tests import test_task_execution
 
 
 @pytest.mark.asyncio
 async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An input admitted while the review Run holds the serialized slot gets
     the next permitted serialized dispatch after the review chain finishes.
 
@@ -45,42 +31,45 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
     commit on the branch, made while the review runs), so the chain reports
     "passed review but its branch did not land" and the child stays open.
     """
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  repo, _origin = init_repo_with_origin(tmp_path / "repo")
-  manager = await create_task(
-      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
-  install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
+  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  repo, _origin = conftest.init_repo_with_origin(tmp_path / "repo")
+  manager = await conftest.create_task(
+      tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
+  test_task_execution.install_backends(
+      monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")])],
+      conftest.BUILD_BACKEND_PATCH_TARGET)
+  conftest.patch_instructions_content(monkeypatch)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
-  await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+  await test_task_execution.wait_for_terminal_run(tree, manager.id, decision["run_id"])
 
   child = await tree.create_task(
       request_id="child",
       task_parent_id=manager.id,
       profile="worker",
-      task=TaskSpec(goal="do the work", repo_path=str(repo), task_type=TaskType.IMPLEMENT),
+      task=models.TaskSpec(goal="do the work", repo_path=str(repo), task_type=models.TaskType.IMPLEMENT),
       name="W",
       backend=None,
       caller="operator")
   review_gate = asyncio.Event()
-  install_backends(
+  test_task_execution.install_backends(
       monkeypatch,
       [
-          SpawningScriptedBackend([result_event("work done")]),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("work done")]),
           # The gated review: it cannot finish before the test's mid-review
           # actions below, so they are provably "during the review Run".
-          SpawningScriptedBackend([result_event("review approved")], gate=review_gate.wait),
-          SpawningScriptedBackend([result_event("tweak done")]),
+          test_task_execution.SpawningScriptedBackend(
+              [test_task_execution.result_event("review approved")], gate=review_gate.wait),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak done")]),
           # The tweak's own delivery chain spawns its review of the tweak run.
-          SpawningScriptedBackend([result_event("tweak review approved")]),
+          test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("tweak review approved")]),
       ],
-      WORKER_BUILD_BACKEND_PATCH_TARGET)
+      conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="Start the work.", actor="user")
   d1 = await tree.dispatch.dispatch_pending(child.id)
   work_run_id = d1["run_id"]
-  await wait_for_terminal_run(tree, child.id, work_run_id)
+  await test_task_execution.wait_for_terminal_run(tree, child.id, work_run_id)
 
   review_runs = [r for r in tree.runs.list_run_records_sync(child.id) if r.kind == "review"]
   assert len(review_runs) == 1
@@ -99,7 +88,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   work_run = await tree.runs.get_run(child.id, work_run_id)
   assert work_run is not None and work_run.worktree_path
   ok, _err = await git._run_git_cmd(
-      Path(work_run.worktree_path),
+      pathlib.Path(work_run.worktree_path),
       "commit",
       "--allow-empty",
       "-q",
@@ -110,7 +99,7 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   assert ok
   review_gate.set()
 
-  await wait_for_terminal_run(tree, child.id, review_run.id, timeout=10.0)
+  await test_task_execution.wait_for_terminal_run(tree, child.id, review_run.id, timeout=10.0)
 
   # The blocked report reached the parent; the child is still open...
   reports: list[dict] = []

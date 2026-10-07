@@ -19,20 +19,16 @@ rebuilds from a fresh walk, the same identity contract the usage fold's memo
 rides.
 """
 
+import datetime
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta
 
-from src.core.event_types import is_real_user_message
-from src.core.log_once import LazyStructlogLogger
-from src.core.memo import BoundedMemo
-from src.core.models import TaskSpec, TaskType
-from src.core.sessions import SessionManager
+from src.core import event_types, log_once, memo, models, sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 _PRE_TAKEOFF_PHRASE = "pre take off"
 _TAKEOFF_PHRASE = "take off"
-_PRE_TAKEOFF_WINDOW = timedelta(hours=12)
+_PRE_TAKEOFF_WINDOW = datetime.timedelta(hours=12)
 
 # session_id -> (events list, covered length, latest_user_has_takeoff,
 # latest_pre_takeoff_at, seen_any_real_user_message). Pinning the list keeps id() stable, so an identity
@@ -41,14 +37,15 @@ _PRE_TAKEOFF_WINDOW = timedelta(hours=12)
 # or wholesale replacement, and a replacement is a new object. The answers are
 # a pure function of the list content, so a list object shared by two
 # managers serves one entry safely.
-_gate_answers_memo: BoundedMemo[str, tuple[list[dict], int, bool, datetime | None, bool]] = BoundedMemo(64)
+_gate_answers_memo: memo.BoundedMemo[str, tuple[list[dict], int, bool, datetime.datetime | None,
+                                                bool]] = memo.BoundedMemo(64)
 
 
 class DelegationBlockedError(Exception):
   """Raised when the takeoff gate rejects a delegation attempt."""
 
 
-def is_verify_exempt(task: TaskSpec | TaskType | None) -> bool:
+def is_verify_exempt(task: models.TaskSpec | models.TaskType | None) -> bool:
   """Whether *task* carries the read-only verify exemption: no takeoff window.
 
   The one owner of the judgment: the delegation route's admission and
@@ -59,9 +56,9 @@ def is_verify_exempt(task: TaskSpec | TaskType | None) -> bool:
   task type or a whole task spec (a node's ``task``); no spec or no type is
   not exempt.
   """
-  if isinstance(task, TaskSpec):
-    return task.task_type == TaskType.VERIFY
-  return task == TaskType.VERIFY
+  if isinstance(task, models.TaskSpec):
+    return task.task_type == models.TaskType.VERIFY
+  return task == models.TaskType.VERIFY
 
 
 def _normalize_takeoff_content(content: str) -> str:
@@ -69,7 +66,7 @@ def _normalize_takeoff_content(content: str) -> str:
   return " ".join(content.casefold().split())
 
 
-def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | None:
+def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime.datetime | None:
   """Parse a pre-takeoff event timestamp as UTC, failing closed when it is invalid."""
   timestamp = event.get("timestamp")
   if not isinstance(timestamp, str) or not timestamp:
@@ -80,7 +77,7 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | Non
     )
     return None
   try:
-    issued_at = datetime.fromisoformat(timestamp)
+    issued_at = datetime.datetime.fromisoformat(timestamp)
   except ValueError:
     log.warning(
         "pre_takeoff_timestamp_unparseable",
@@ -97,13 +94,13 @@ def _parse_pre_takeoff_timestamp(event: dict, session_id: str) -> datetime | Non
         timestamp=timestamp,
     )
     return None
-  return issued_at.astimezone(UTC)
+  return issued_at.astimezone(datetime.UTC)
 
 
 def _backward_user_answers(
     events: list[dict],
     session_id: str,
-) -> tuple[bool, datetime | None, bool]:
+) -> tuple[bool, datetime.datetime | None, bool]:
   """Backward walk over the given span: the span-last real user message's
   takeoff phrase, the span-last parseable pre-takeoff stamp, and whether the
   span held a real user message at all.
@@ -116,10 +113,10 @@ def _backward_user_answers(
   so walking on only fills that corner and never flips a verdict.
   """
   latest_user_has_takeoff = False
-  latest_pre_takeoff_at: datetime | None = None
+  latest_pre_takeoff_at: datetime.datetime | None = None
   seen_latest_user = False
   for event in reversed(events):
-    if not is_real_user_message(event):
+    if not event_types.is_real_user_message(event):
       continue
     normalized = _normalize_takeoff_content(event.get("content"))
     if not seen_latest_user:
@@ -135,7 +132,7 @@ def _backward_user_answers(
 def _settled_user_answers(
     events: list[dict],
     session_id: str,
-) -> tuple[bool, datetime | None, bool]:
+) -> tuple[bool, datetime.datetime | None, bool]:
   """Return the two gate answers plus whether *events* holds any real user message.
 
   A cold or replaced list pays one full backward walk and stores the answers
@@ -166,15 +163,16 @@ def _settled_user_answers(
   return has_takeoff, pre_takeoff_at, seen_any_user
 
 
-def _effective_utc_now(now: datetime | None) -> datetime:
+def _effective_utc_now(now: datetime.datetime | None) -> datetime.datetime:
   """The gate's wall clock in UTC; a naive *now* is rejected, never guessed."""
-  effective = now if now is not None else datetime.now(UTC)
+  effective = now if now is not None else datetime.datetime.now(datetime.UTC)
   if effective.tzinfo is None:
     raise ValueError("authorization check time must be timezone-aware")
-  return effective.astimezone(UTC)
+  return effective.astimezone(datetime.UTC)
 
 
-def _authorization_window_open(has_takeoff: bool, pre_takeoff_at: datetime | None, effective_now: datetime) -> bool:
+def _authorization_window_open(
+    has_takeoff: bool, pre_takeoff_at: datetime.datetime | None, effective_now: datetime.datetime) -> bool:
   """The one window verdict both gates apply: the latest real user message
   carries "take off", or a "pre take off" stamp still sits inside the window."""
   pre_takeoff_active = (
@@ -192,8 +190,8 @@ def _delegation_blocked(*, task_id: str | None) -> DelegationBlockedError:
 
 def check_takeoff_gate(
     session_id: str,
-    session_mgr: SessionManager,
-    now: datetime | None = None,
+    session_mgr: sessions.SessionManager,
+    now: datetime.datetime | None = None,
 ) -> None:
   """Verify an active pre-takeoff or ordinary takeoff authorization window."""
   effective_now = _effective_utc_now(now)
@@ -216,7 +214,7 @@ def check_takeoff_gate_for_task(
     load_events: Callable[[str], list[dict]],
     task_meta_of: Callable[[str], tuple[str | None, str | None]],
     task_state_of: Callable[[str], str],
-    now: datetime | None = None,
+    now: datetime.datetime | None = None,
 ) -> str:
   """The v2 task-caller gate: nearest-real-user-ancestor lookup over the task tree.
 

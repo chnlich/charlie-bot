@@ -2,43 +2,31 @@
 from __future__ import annotations
 
 import json
+import pathlib
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
-    TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET,
-    FakeAsyncProcess,
-    fake_cli_cfg,
-    schedule_trigger_argv,
-)
-from conftest import make_trigger_setup as _make_mgr
 
 from src.cli import schedule_trigger as cli_module
-from src.core.models import RemotePid
-from src.core.triggers import (
-    RemoteVerifyError,
-    TriggerManager,
-)
+from src.core import models, triggers
 
 # ---------------------------------------------------------------------------
 # Mock helpers
 # ---------------------------------------------------------------------------
 
 
-def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock:
+def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> mock.AsyncMock:
   """Build a mock for ``asyncio.create_subprocess_exec``.
 
   ``scripted`` maps (host, pid) -> list of statuses ("ALIVE" / "DEAD"). Each
   call pops the next entry; the last entry is repeated indefinitely.
   """
 
-  async def _factory(*args: Any, **kwargs: Any) -> FakeAsyncProcess:
+  async def _factory(*args: Any, **kwargs: Any) -> conftest.FakeAsyncProcess:
     # Extract host and `kill -0 PID 2>&1 ...` payload from cmd.
     # Layout: ssh -o <pairs...> HOST "kill -0 PID ..."; the host is the last
     # bare word before the quoted remote command.
@@ -47,9 +35,9 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
     pid = int(payload.split()[2])
     queue = scripted[(host, pid)]
     status = queue[0] if len(queue) == 1 else queue.pop(0)
-    return FakeAsyncProcess(stdout=(status + "\n").encode())
+    return conftest.FakeAsyncProcess(stdout=(status + "\n").encode())
 
-  return AsyncMock(side_effect=_factory)
+  return mock.AsyncMock(side_effect=_factory)
 
 
 # ---------------------------------------------------------------------------
@@ -58,20 +46,20 @@ def _mk_subprocess_mock(scripted: dict[tuple[str, int], list[str]]) -> AsyncMock
 
 
 @pytest.mark.asyncio
-async def test_remote_create_alive_persists(tmp_path: Path) -> None:
-  cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
+async def test_remote_create_alive_persists(tmp_path: pathlib.Path) -> None:
+  cfg, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
   scripted = {("neptune", 1234): ["ALIVE"]}
 
   with (
-      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()),
-      patch.object(TriggerManager, "_start_task", lambda self, t: None),
+      mock.patch(conftest.TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
+      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch.object(triggers.TriggerManager, "_start_task", lambda self, t: None),
   ):
     trigger = await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=30,
         message="remote watch",
-        watch_targets=[RemotePid(host="neptune", pid=1234)],
+        watch_targets=[models.RemotePid(host="neptune", pid=1234)],
     )
 
   # File on disk has the new schema.
@@ -82,19 +70,19 @@ async def test_remote_create_alive_persists(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_remote_create_dead_rejects(tmp_path: Path) -> None:
-  cfg, _, trigger_mgr, session_id = await _make_mgr(tmp_path)
+async def test_remote_create_dead_rejects(tmp_path: pathlib.Path) -> None:
+  cfg, _, trigger_mgr, session_id = await conftest.make_trigger_setup(tmp_path)
   scripted = {("neptune", 1234): ["DEAD"]}
 
   with (
-      patch(TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
-      pytest.raises(RemoteVerifyError) as excinfo,
+      mock.patch(conftest.TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
+      pytest.raises(triggers.RemoteVerifyError) as excinfo,
   ):
     await trigger_mgr.create_trigger(
         session_id,
         delay_seconds=30,
         message="dead remote",
-        watch_targets=[RemotePid(host="neptune", pid=1234)],
+        watch_targets=[models.RemotePid(host="neptune", pid=1234)],
     )
 
   assert "neptune:1234" in str(excinfo.value)
@@ -130,12 +118,12 @@ def _fake_200_post(captured: dict) -> Callable[..., Any]:
 
 
 def test_cli_accepts_mixed_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
-  argv = schedule_trigger_argv("m", "--watch", "1234", "neptune:5678", "slurm:99")
+  argv = conftest.schedule_trigger_argv("m", "--watch", "1234", "neptune:5678", "slurm:99")
   captured: dict = {}
-  fake_cli_cfg(monkeypatch, Path("/nonexistent-sessions"))
+  conftest.fake_cli_cfg(monkeypatch, pathlib.Path("/nonexistent-sessions"))
 
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
-  with patch.object(sys, "argv", argv):
+  monkeypatch.setattr(conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, _fake_200_post(captured))
+  with mock.patch.object(sys, "argv", argv):
     cli_module.main()
 
   assert captured["payload"]["watch_targets"] == [

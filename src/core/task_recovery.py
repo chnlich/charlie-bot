@@ -33,33 +33,27 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from src.core import runs
-from src.core.config import CharlieBotConfig
-from src.core.log_once import LazyStructlogLogger
-from src.core.models import RunRecord, TaskType
-from src.core.thinking_state import note_run_backend
-from src.core.threads import METADATA_NAME
+from src.core import config, log_once, models, runs, thinking_state, threads
 
 if TYPE_CHECKING:
-  from src.core.task_execution import TaskExecutionAdapter
-  from src.core.task_sessions import TaskTreeManager
+  from src.core import task_execution, task_sessions
 
-log = LazyStructlogLogger()
+log = log_once.LazyStructlogLogger()
 
 
 def _is_out_of_space(exc: BaseException) -> bool:
   """The one predicate's recovery-side name: task_execution owns the definition."""
-  from src.core.task_execution import is_out_of_space_error
-  return is_out_of_space_error(exc)
+  from src.core import task_execution
+  return task_execution.is_out_of_space_error(exc)
 
 
 async def reconcile_task_tree(
-    cfg: CharlieBotConfig,
-    tree: TaskTreeManager,
-    adapter: TaskExecutionAdapter | None = None,
+    cfg: config.CharlieBotConfig,
+    tree: task_sessions.TaskTreeManager,
+    adapter: task_execution.TaskExecutionAdapter | None = None,
 ) -> dict:
   """Reconcile every v2 node this instance owns. Returns pass counters."""
-  from src.core.improve_sequence import reconcile_interrupted_sequences
+  from src.core import improve_sequence
 
   adapter = adapter if adapter is not None else tree.dispatch.executor
   counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
@@ -68,17 +62,17 @@ async def reconcile_task_tree(
 
   # The sequence controllers' honest verdicts come first: a recovered
   # "interrupted" improve state must not race the Run reconciliation below.
-  await reconcile_interrupted_sequences(cfg, tree)
+  await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
 
   for session_dir in sorted(cfg.sessions_dir.iterdir()):
     if not session_dir.is_dir():
       continue
-    meta_path = session_dir / METADATA_NAME
+    meta_path = session_dir / threads.METADATA_NAME
     if not meta_path.is_file():
       continue
     try:
-      from src.core.json_utils import load_json_meta
-      raw = load_json_meta(meta_path, "task_recovery_meta_unreadable")
+      from src.core import json_utils
+      raw = json_utils.load_json_meta(meta_path, "task_recovery_meta_unreadable")
     except Exception:
       log.exception("task_recovery_meta_read_failed", session=session_dir.name)
       continue
@@ -103,11 +97,11 @@ async def reconcile_task_tree(
 
 async def _reconcile_node(
     session_id: str,
-    tree: TaskTreeManager,
-    adapter: TaskExecutionAdapter | None,
+    tree: task_sessions.TaskTreeManager,
+    adapter: task_execution.TaskExecutionAdapter | None,
     counters: dict,
-    cfg: CharlieBotConfig,
-    is_driven: Callable[[RunRecord], bool] | None = None,
+    cfg: config.CharlieBotConfig,
+    is_driven: Callable[[models.RunRecord], bool] | None = None,
 ) -> None:
   """Reconcile one node from its durable facts.
 
@@ -128,7 +122,7 @@ async def _reconcile_node(
   # newest Run's backend (the persisted metadata.backend is never rewritten).
   newest = tree.runs.newest_run_record_sync(session_id)
   if newest is not None:
-    note_run_backend(session_id, newest.backend)
+    thinking_state.note_run_backend(session_id, newest.backend)
 
   # --- 0. an interrupted prompt edit lands its missing fact --------------
   # Idempotent: a landed fact appends nothing, so repeated recovery and
@@ -196,9 +190,9 @@ async def _reconcile_node(
 
 async def _replay_cron_firing(
     session_id: str,
-    tree: TaskTreeManager,
+    tree: task_sessions.TaskTreeManager,
     run: object,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
 ) -> None:
   """Re-drive one firing's chain/boundary through its owning module."""
   from src.core import cron_sequence
@@ -211,10 +205,10 @@ async def _replay_cron_firing(
 
 async def _replay_followups(
     session_id: str,
-    tree: TaskTreeManager,
-    adapter: TaskExecutionAdapter | None,
+    tree: task_sessions.TaskTreeManager,
+    adapter: task_execution.TaskExecutionAdapter | None,
     counters: dict,
-    cfg: CharlieBotConfig,
+    cfg: config.CharlieBotConfig,
 ) -> None:
   """Re-drive every completed Run's follow-up that its crash window lost.
 
@@ -273,7 +267,7 @@ async def _replay_followups(
         # request/close/report ids, so a crash in the finish→follow-up
         # window is repaired and a repeated pass lands nothing twice.
         await tree.completion.after_run_finished(session_id, run.id)
-        if meta.task is not None and meta.task.task_type == TaskType.IMPLEMENT and run.repo_path:
+        if meta.task is not None and meta.task.task_type == models.TaskType.IMPLEMENT and run.repo_path:
           await adapter._maybe_spawn_review(session_id, run)
       elif outcome in ("failed", "interrupted", "blocked"):
         await adapter._report_failure_to_parent(session_id, run, outcome)

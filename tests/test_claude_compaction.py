@@ -1,29 +1,27 @@
 """Sonnet compaction: the cold-cache trigger rules, the transcript judgment, and the chat events it emits."""
 
 import asyncio
+import datetime
 import json
+import pathlib
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from typing import Any
 
 import pytest
 
-from src.core import claude_compaction
+from src.core import claude_compaction, config, models
 from src.core import event_types as ET
-from src.core.config import CharlieBotConfig
-from src.core.models import ClaudeCompactionConfig
 
-NOW = datetime(2026, 9, 6, 20, 0, tzinfo=UTC)
+NOW = datetime.datetime(2026, 9, 6, 20, 0, tzinfo=datetime.UTC)
 FABLE = "claude-fable-5-1"
 SONNET = "claude-sonnet-5"
 OPUS = "claude-opus-5"
 SLUG = "-home-u--charliebot-sessions-s1"
 
 
-def _cfg(tmp_path: Path, **floors: int) -> CharlieBotConfig:
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / "home", accounts={"claude_compaction": ClaudeCompactionConfig(**floors)})
+def _cfg(tmp_path: pathlib.Path, **floors: int) -> config.CharlieBotConfig:
+  return config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home", accounts={"claude_compaction": models.ClaudeCompactionConfig(**floors)})
 
 
 def _usage(*, inp: int, out: int, cache_read: int = 0, cache_creation: int = 0) -> dict:
@@ -42,7 +40,10 @@ def _cost_state_row(model_usage: dict) -> dict:
 
 
 def _write_transcript(
-    config_dir: Path, cc_session_id: str, boundaries: int = 0, cost_states: Sequence[dict] = ()) -> Path:
+    config_dir: pathlib.Path,
+    cc_session_id: str,
+    boundaries: int = 0,
+    cost_states: Sequence[dict] = ()) -> pathlib.Path:
   transcript = config_dir / "projects" / SLUG / f"{cc_session_id}.jsonl"
   transcript.parent.mkdir(parents=True, exist_ok=True)
   rows = ['{"type":"user","message":{"role":"user","content":"hi"}}']
@@ -80,9 +81,9 @@ def _write_transcript(
     ],
 )
 def test_expired_cache_compaction_wanted(
-    tmp_path: Path, model: str, context_tokens: int | None, minutes: int, wanted: bool) -> None:
+    tmp_path: pathlib.Path, model: str, context_tokens: int | None, minutes: int, wanted: bool) -> None:
   cfg = _cfg(tmp_path)
-  last = NOW - timedelta(minutes=minutes)
+  last = NOW - datetime.timedelta(minutes=minutes)
   assert claude_compaction.expired_cache_compaction_wanted(cfg, model, context_tokens, last, now=NOW) is wanted
 
 
@@ -119,7 +120,7 @@ class _FakeProc:
     return self.returncode
 
 
-def _result_json(models: list[str], *, is_error: bool = False, model_usage: dict | None = None) -> bytes:
+def _result_json(names: list[str], *, is_error: bool = False, model_usage: dict | None = None) -> bytes:
   """The run's result JSON; ``model_usage`` replaces the default ``inputTokens: 1`` per named model."""
   return json.dumps(
       {
@@ -130,7 +131,7 @@ def _result_json(models: list[str], *, is_error: bool = False, model_usage: dict
           "modelUsage": model_usage if model_usage is not None else {
               name: {
                   "inputTokens": 1
-              } for name in models
+              } for name in names
           },
       }).encode("utf-8")
 
@@ -147,7 +148,7 @@ def _install_fake_exec(monkeypatch: pytest.MonkeyPatch, proc: _FakeProc) -> dict
   return captured
 
 
-def _append_boundary(transcript: Path, *, with_metadata: bool = True) -> None:
+def _append_boundary(transcript: pathlib.Path, *, with_metadata: bool = True) -> None:
   meta = {"trigger": "manual", "preTokens": 123456, "postTokens": 9111} if with_metadata else None
   row: dict[str, Any] = {"type": "system", "subtype": "compact_boundary"}
   if meta is not None:
@@ -157,7 +158,7 @@ def _append_boundary(transcript: Path, *, with_metadata: bool = True) -> None:
 
 
 async def _run(
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     monkeypatch: pytest.MonkeyPatch,
     proc: _FakeProc,
     *,
@@ -185,7 +186,8 @@ async def _run(
 
 
 @pytest.mark.asyncio
-async def test_fable_growth_fails_and_names_fable_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_fable_growth_fails_and_names_fable_alone(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Fable counters that grew over the baseline mean Fable served the run; the
   failure names only the models that grew, not the restored session totals."""
   baseline = {
@@ -215,14 +217,15 @@ async def test_fable_growth_fails_and_names_fable_alone(tmp_path: Path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_unparseable_stdout_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unparseable_stdout_fails_loudly(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   ok, events, _captured = await _run(tmp_path, monkeypatch, _FakeProc(returncode=0, stdout=b"not json"))
   assert ok is False
   assert "no JSON result" in events[0]["error"]
 
 
 @pytest.mark.asyncio
-async def test_timeout_kills_the_process_group_and_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_timeout_kills_the_process_group_and_fails(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   killed: list[int] = []
   monkeypatch.setattr(claude_compaction, "kill_process_group", lambda pid, *a, **k: killed.append(pid) or True)
   proc = _FakeProc(returncode=0, stdout=_result_json([SONNET]), delay=0.2)

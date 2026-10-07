@@ -9,25 +9,17 @@ projection reuse).
 from __future__ import annotations
 
 import json
-from pathlib import Path
+import pathlib
 
+import conftest
 import pytest
-from conftest import (
-    backend_option,
-    crashed_run_record,
-    patch_resume_seams,
-    run_resume_round,
-)
 
-from src.agents.backends.claude_code import out_of_family_served_models
+from src.agents.backends import claude_code
+from src.core import config, models, runs, sessions
 from src.core import event_types as ET
-from src.core import runs
-from src.core.config import CharlieBotConfig
-from src.core.models import CreateSessionRequest
-from src.core.sessions import SessionManager
 
 CONFIGURED = "claude-fable-5-1"
-FABLE_OPTION = backend_option(
+FABLE_OPTION = conftest.backend_option(
     id="claude-fable-5.1", label="Fable", type="cc-claude", model=CONFIGURED, prompt_overlay="none")
 
 
@@ -75,18 +67,18 @@ def test_healthy_fable_round_detects_nothing() -> None:
           },
       }),
   ]
-  assert out_of_family_served_models(events, CONFIGURED) == []
+  assert claude_code.out_of_family_served_models(events, CONFIGURED) == []
 
 
 def test_pure_and_mixed_out_of_family_rounds_detect_served_models() -> None:
   """(b) Pure opus rounds and fable/opus mixed rounds surface the served model."""
   pure = [_assistant("claude-opus-4-8", "a"), _assistant("claude-opus-4-8", "b"), _result()]
-  assert out_of_family_served_models(pure, CONFIGURED) == ["claude-opus-4-8"]
+  assert claude_code.out_of_family_served_models(pure, CONFIGURED) == ["claude-opus-4-8"]
 
   # Cross-kind split: fable-5-1 text and opus-4-8 text both serve the visible
   # reply in one round — exactly the out-of-family model is named.
   mixed = [_assistant("claude-fable-5-1", "start"), _assistant("claude-opus-4-8", "rest"), _result()]
-  assert out_of_family_served_models(mixed, CONFIGURED) == ["claude-opus-4-8"]
+  assert claude_code.out_of_family_served_models(mixed, CONFIGURED) == ["claude-opus-4-8"]
 
 
 # ---------------------------------------------------------------------------
@@ -96,7 +88,7 @@ def test_pure_and_mixed_out_of_family_rounds_detect_served_models() -> None:
 
 @pytest.mark.asyncio
 async def test_resume_notice_persists_exactly_once_with_full_fields(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(d) Through the real persistence layer, the round gains exactly one
   model_fallback_notice line carrying every schema field."""
   log_dir = tmp_path / "run"
@@ -108,15 +100,15 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
       encoding="utf-8")
   (log_dir / runs.CURSOR_NAME).write_text("0", encoding="utf-8")
 
-  record = crashed_run_record(raw_path)
-  cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
-  mgr = SessionManager(cfg)
-  session = await mgr.create_session(CreateSessionRequest(name="fb-persist"))
+  record = conftest.crashed_run_record(raw_path)
+  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
+  mgr = sessions.SessionManager(cfg)
+  session = await mgr.create_session(models.CreateSessionRequest(name="fb-persist"))
   meta = await mgr.get_session(session.id)
   assert meta is not None
 
-  patch_resume_seams(monkeypatch)
-  await run_resume_round(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
+  conftest.patch_resume_seams(monkeypatch)
+  await conftest.run_resume_round(cfg, meta, record, mgr.callbacks(), is_alive=lambda: False)
 
   events = mgr.load_chat_events_sync(session.id)
   notices = [e for e in events if e.get("type") == ET.MODEL_FALLBACK_NOTICE]

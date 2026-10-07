@@ -13,30 +13,24 @@ from __future__ import annotations
 
 import http.server
 import json
+import pathlib
 import sys
 import threading
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import (
-    CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET,
-    CLI_COMMON_GET_CONFIG_PATCH_TARGET,
-    CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-    CONFIG_GET_CONFIG_PATCH_TARGET,
-)
 
 from src.cli import common
 from src.cli import improve as improve_module
 from src.cli import session as session_module
-from src.core.config import CharlieBotConfig
-from src.core.control_events import stable_close_event_id
+from src.core import config, control_events
 
 
-def _cfg(tmp_path: Path, **overrides: object) -> CharlieBotConfig:
-  return CharlieBotConfig(charliebot_home=tmp_path / "home", **overrides)
+def _cfg(tmp_path: pathlib.Path, **overrides: object) -> config.CharlieBotConfig:
+  return config.CharlieBotConfig(charliebot_home=tmp_path / "home", **overrides)
 
 
-def _write_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str, **fields: object) -> None:
+def _write_thread(cfg: config.CharlieBotConfig, session_id: str, thread_id: str, **fields: object) -> None:
   thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)
   meta = {"id": thread_id, "session_id": session_id, "description": "d", "created_at": "2024-01-01T00:00:00+00:00"}
@@ -68,7 +62,7 @@ def _reset_after_send() -> common._SentButLostError:
   return common._SentButLostError("[Errno 104] Connection reset by peer")
 
 
-def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> CharlieBotConfig:
+def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> config.CharlieBotConfig:
   """Point the config reads at a fresh config, make every POST a sent-but-lost reset, and
   return the config.
 
@@ -79,10 +73,10 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Char
   adapter, which ``_request_with_contract`` reads at call time.
   """
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
-  monkeypatch.setattr(CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CONFIG_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(
-      CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
+      conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, lambda *a, **k: (_ for _ in ()).throw(_reset_after_send()))
   return cfg
 
 
@@ -92,12 +86,12 @@ def _patch_readback_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Char
 
 
 def test_connect_never_established_retries_with_backoff_then_exhausts(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _cfg(tmp_path)
-  monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
   clock = _FakeClock()
   monkeypatch.setattr(common, "time", clock)
-  monkeypatch.setattr(CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 2.0)
+  monkeypatch.setattr(conftest.CLI_COMMON_CONNECT_TOTAL_TIMEOUT_PATCH_TARGET, 2.0)
 
   call_count = 0
 
@@ -106,7 +100,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
     call_count += 1
     raise _connect_refused()
 
-  monkeypatch.setattr(CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
+  monkeypatch.setattr(conftest.CLI_COMMON_TRANSPORT_POST_PATCH_TARGET, fake_post)
 
   with pytest.raises(SystemExit) as exc_info:
     common.post_internal_api("/api/internal/x", {"a": 1})
@@ -130,7 +124,7 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 
 
 def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _patch_readback_env(monkeypatch, tmp_path)
 
   session_id = "sess-improve"
@@ -167,12 +161,12 @@ def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
 
 
 def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lost(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   cfg = _patch_readback_env(monkeypatch, tmp_path)
 
   session_id = "sess-cancel"
   request_id = "req-cancel-1"
-  closed_id = stable_close_event_id(session_id, request_id)
+  closed_id = control_events.stable_close_event_id(session_id, request_id)
   events_dir = cfg.sessions_dir / session_id / "data"
   events_dir.mkdir(parents=True)
   (events_dir / "chat_events.jsonl").write_text(
@@ -182,7 +176,7 @@ def test_session_cancel_readback_resolves_to_own_task_closed_fact_on_sent_but_lo
               # call's own stable event id may answer it.
               json.dumps(
                   {
-                      "id": stable_close_event_id(session_id, "req-earlier"),
+                      "id": control_events.stable_close_event_id(session_id, "req-earlier"),
                       "type": "task_closed",
                       "request_id": "req-earlier",
                       "outcome": "cancelled",
@@ -256,11 +250,11 @@ class _CapturePostListener(_StubListener):
 
 
 def test_post_sends_json_body_content_type_and_auth_header_over_the_real_client(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   stub = _CapturePostListener()
   try:
     cfg = _cfg(tmp_path, server={"port": stub.port})
-    monkeypatch.setattr(CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+    monkeypatch.setattr(conftest.CLI_COMMON_GET_CONFIG_PATCH_TARGET, lambda: cfg)
 
     result = common._request_with_contract(
         "POST", "/api/internal/x", payload={"a": 1}, params={"k": "v"}, unknown_effect="none")

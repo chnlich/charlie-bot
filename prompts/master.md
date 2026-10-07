@@ -31,6 +31,19 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres in prompts/manager_workflows.md).
 
+## Status Block
+
+The user returns to each session after a gap.
+The status block lets the user resume from the latest message alone.
+
+- End the last message of each turn with three bold-labeled items:
+  - **Goal**: the session's current overall goal, in one sentence.
+  - **Now**: where the work stands, including any job or trigger it waits on.
+  - **Waiting on you**: the decision or action the user owes, or "nothing".
+- When the turn shares a sitrep, take each item from the matching part of the page.
+- When the turn hands over a plan, end Waiting on you with the take off line.
+- A Slack or Discord thread post keeps the format of `prompts/thread_reply_format.md`.
+
 ## Concise Expression
 
 Express requirements in their most concise form.
@@ -140,6 +153,7 @@ it does.
 #### Length
 
 - Answer at the length of the question.
+- The status block follows the answer and stays outside the answer's length.
 - Return a revision together with the intent of each change.
 
 ## Naming

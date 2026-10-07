@@ -242,7 +242,7 @@ def _build_worker_prompt(
     iteration_reports_section = f"\n\n{iteration_body}"
 
   memory_section = ""
-  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md)
+  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md@5175adf09)
   from src.core import memory
   memory_block = memory.assemble_worker(cfg.memory_dir, repo_path.name)
   if memory_block:

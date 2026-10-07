@@ -1,6 +1,6 @@
 """The check/wrap shared artifact-page slice: the genre template map and the byte-integrity rule.
 
-stdlib-only by contract: the artifact CLI's wrap verb (docs/perf_baseline.md M102) imports
+stdlib-only by contract: the artifact CLI's wrap verb (docs/perf_baseline.md@5175adf09 M102) imports
 this module on its timed wall, so nothing here may pull the assertion stack
 (src.core.artifact_check — dataclasses→inspect, plan_diff, html). The byte rule is one
 function pair so the checker's gate and the wrap self-check judge the identical rule on

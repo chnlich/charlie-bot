@@ -367,7 +367,7 @@ class Worker:
         from_account=current.label,
         to_account=nxt.label,
         relays=self._relays + 1)
-    # lazy: keeps the compaction stack off the M99 server import floor (docs/perf_baseline.md)
+    # lazy: keeps the compaction stack off the M99 server import floor (docs/perf_baseline.md@5175adf09)
     from src.core import claude_compaction
     if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
 

@@ -188,7 +188,7 @@ def _get_git_version() -> str:
 
 
 # The two git subprocesses behind the version run only when a page renders the
-# token or the footer; the server import floor (docs/perf_baseline.md M99)
+# token or the footer; the server import floor (docs/perf_baseline.md@5175adf09 M99)
 # depends on them staying off it.
 _GIT_VERSION: str | None = None
 

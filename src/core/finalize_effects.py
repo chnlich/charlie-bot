@@ -10,7 +10,7 @@ the master triggers, so a wake keyed on "summary present" would leave a kill
 in that gap neither waking nor retrying.
 
 No production or test code calls these: the module's only reader is the
-standing M76 collector (docs/perf_baseline.md), which drives both scans in
+standing M76 collector (docs/perf_baseline.md@5175adf09), which drives both scans in
 its fold-absent fallback.
 """
 

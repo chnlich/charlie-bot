@@ -54,7 +54,7 @@ SEGMENT_DECODE_PAD_SAMPLES = 6_400
 OFFLINE_VAD_FEED_SAMPLES = 2048
 
 # The CPU decode pool's shape on this host (8 logical CPUs, the M113 protocol in
-# docs/perf_baseline.md, the worst on-disk recording): four recognizers at two ONNX
+# docs/perf_baseline.md@5175adf09, the worst on-disk recording): four recognizers at two ONNX
 # threads each decode the 102 s corpus in 18.3 s quiet / 23.5 s contended where one
 # recognizer at four threads reads 22.9 / 36.3 s, because the autoregressive decoder
 # steps interleave across instances where one session's intra-op barriers stall. The

@@ -538,7 +538,7 @@ async def _connect(url: str) -> ClientConnection:
   """Open one gateway websocket; the seam tests patch instead of the network.
 
   websockets rides first use — only ``run_listener`` reaches here — because
-  the server import-time floor (docs/perf_baseline.md) depends on it staying
+  the server import-time floor (docs/perf_baseline.md@5175adf09) depends on it staying
   out of the import chain.
   """
   import websockets

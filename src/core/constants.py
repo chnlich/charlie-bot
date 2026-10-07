@@ -1,6 +1,6 @@
 """Cross-layer constants shared by the CLI, server, and model layers.
 
-stdlib-only by contract: the CLI import floor (docs/perf_baseline.md M92) loads
+stdlib-only by contract: the CLI import floor (docs/perf_baseline.md@5175adf09 M92) loads
 this module on every ``charliebot`` invocation, so nothing here may import
 pydantic, config, or any other server stack.
 """

@@ -2,7 +2,7 @@
 
 Adding a backend is one subclass module plus one line in ``_FACTORIES``. The map
 holds factories whose bodies do the imports, so importing this module loads
-neither numpy nor websockets (the server import floor, docs/perf_baseline.md
+neither numpy nor websockets (the server import floor, docs/perf_baseline.md@5175adf09
 M99): a backend's heavy module loads when that backend is first built.
 """
 

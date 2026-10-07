@@ -283,7 +283,7 @@ def _provision_speech_models(cfg: CharlieBotConfig) -> None:
 
   src.agents.transcriber carries the numpy import (~90 ms), so the module loads
   here instead of the event loop's startup path: the M99 import floor
-  (docs/perf_baseline.md) prices the import's wall, and this thread's span is
+  (docs/perf_baseline.md@5175adf09) prices the import's wall, and this thread's span is
   exactly the cost the metric does not see.
 
   After provisioning opens readiness, the same thread builds the resident bundle

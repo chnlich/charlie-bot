@@ -542,7 +542,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
   """Socket Mode connect/receive/reconnect loop; never returns."""
   # websockets (~13 ms with its asyncio client) rides first use: the import
   # path never opens the Socket Mode connection, and the M99 server import
-  # floor (docs/perf_baseline.md) depends on it staying out of the chain.
+  # floor (docs/perf_baseline.md@5175adf09) depends on it staying out of the chain.
   import websockets
 
   http = get_http_client()

@@ -34,7 +34,7 @@ from src.core.timeouts import (
 
 # The pty/tui helpers, asyncio, pathlib, the home stack, the hook bridge, and
 # the atomic-json writer ride their call sites, not this import block: the M108
-# launch floor (docs/perf_baseline.md) is the wall from process start to the
+# launch floor (docs/perf_baseline.md@5175adf09) is the wall from process start to the
 # argv parse, and the argv-parse probe reaches none of them. src.core.home
 # carries pathlib's import chain, so the two defer together. Same rule as the
 # src.core.process import inside _terminate_foreground, and as shutil/tempfile
@@ -759,7 +759,7 @@ async def _respawn_claude(
 
 async def _terminate_foreground(session_id: str) -> None:
   # The terminate path is the launch chain's only src.core.process reader; the
-  # import rides this call so the M108 launch floor (docs/perf_baseline.md)
+  # import rides this call so the M108 launch floor (docs/perf_baseline.md@5175adf09)
   # builds no ctypes machinery the argv-parse probe never reaches.
   import asyncio
 

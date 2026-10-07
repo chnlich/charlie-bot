@@ -40,12 +40,13 @@ from conftest import (
     rate_limit_event,
     run_git,
     stub_credentials,
+    user_tool_result_event,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import src.runtime.task_execution as task_execution_module
-from src.backends.claude_code import claude_accounts, claude_relay
+from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
@@ -2112,23 +2113,153 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
   # the relay moves exists before the first process is rejected.
   monkeypatch.setattr(task_execution_module.uuid, "uuid4", lambda: uuid.UUID(cc_id))
   make_transcript(tmp_path / "claude-main", cc_id)
-  builds = install_scripted_backends(
-      monkeypatch, [
-          ScriptedRelayBackend(
-              [assistant_text_event("halfway"), rate_limit_event("rejected", 1.0)], exit_code=1),
-          ScriptedRelayBackend([result_event("done after relay")], exit_code=0),
-      ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  first = ScriptedRelayBackend([assistant_text_event("halfway"), rate_limit_event("rejected", 1.0)], exit_code=1)
+  second = ScriptedRelayBackend([result_event("done after relay")], exit_code=0)
+  builds = install_scripted_backends(monkeypatch, [first, second], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
   await _register_work_run(tree, worker.id, "run-relay", POOLED_FABLE_ID, FABLE_MODEL)
   tree.dispatch.executor.launch(worker.id, "run-relay")
   run, outcome = await wait_for_terminal_run(tree, worker.id, "run-relay", timeout=20)
   assert outcome == "success"
   assert run.exit_code == 0
+  # Both processes registered through the launch callback; the Run's identity
+  # is the relay's second process's.
+  assert (run.pid, run.pid_start) == (second.pid, second.pid_start)
 
   assert [b["kwargs"]["claude_account"].label for b in builds] == ["main", "ext-1"]
   # The transcript moved with the run: the resumed process finds it on the
   # new account under the same session id.
   assert (tmp_path / "claude-ext-1" / "projects" / "slug" / f"{cc_id}.jsonl").is_file()
+
+
+# ---------------------------------------------------------------------------
+# Manager-turn account relay: the second process registers through the launch callback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_manager_turn_relay_registers_the_second_process_through_the_launch_callback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A manager turn whose pool account relay starts a second process (the Oct 6
+    failed-turn scenario: a far warning reading, then a tool result) lands the
+    turn: the second process registers through the real launch callback, the
+    Run's identity follows it, started_at stays the first process's, and chat
+    holds the second process's reply."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cc_id = "8b6fd8ac-6f0e-4af2-9d0e-1c2f47ab5311"
+  make_transcript(tmp_path / "claude-main", cc_id)
+  first = ScriptedRelayBackend(
+      [
+          # The id-carrying event pins the native session id the relay moves the
+          # transcript under (a fresh turn lands none before its stream does).
+          {**assistant_text_event("scouting"), "session_id": cc_id},
+          rate_limit_event("allowed_warning", 0.93),
+          user_tool_result_event(),
+      ],
+      exit_code=0)
+  second = ScriptedRelayBackend([result_event("reply after relay")], exit_code=0)
+  builds = install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
+
+  # record_launch is the registration seam: snapshot each launch's (pid,
+  # pid_start, started_at) so the second launch's overwrite — and started_at's
+  # survival — is observed, not inferred from the end record alone.
+  real_record_launch = tree.runs.record_launch
+  launches: list[tuple[int, str, datetime | None]] = []
+
+  async def recording_launch(session_id: str, launch_run_id: str, *, pid: int, pid_start: str) -> RunRecord:
+    run = await real_record_launch(session_id, launch_run_id, pid=pid, pid_start=pid_start)
+    launches.append((pid, pid_start, run.started_at))
+    return run
+
+  monkeypatch.setattr(tree.runs, "record_launch", recording_launch)
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  run_id = decision["run_id"]
+  assert run_id is not None
+
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  from conftest import drain_session_consumer
+  await drain_session_consumer(manager.id, timeout=5)
+
+  assert outcome == "success"
+  assert len(builds) == 2
+  # Each process registered through the launch callback, in stream order.
+  assert [(pid, pid_start) for pid, pid_start, _ in launches] == [
+      (first.pid, first.pid_start),
+      (second.pid, second.pid_start),
+  ]
+  # The Run's identity is the second process's; started_at is still the
+  # first process's.
+  assert (run.pid, run.pid_start) == (second.pid, second.pid_start)
+  assert launches[0][2] is not None and launches[0][2] == launches[1][2]
+  assert run.started_at == launches[0][2]
+  # The relayed turn's reply is the second process's.
+  events = tree.events.load_events(manager.id)
+  assert [e.get("result") for e in events if e.get("type") == ET.RESULT] == ["reply after relay"]
+
+
+@pytest.mark.asyncio
+async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_the_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A stop request landing in the relay gap (the first process's stream has
+    ended, the second has not registered yet): the second process's registration
+    through the real launch callback is refused because of the stop, the turn
+    ends with that one error line, and the Run keeps the first process's
+    identity under an interrupted outcome."""
+  claude_accounts.reset_for_tests()
+  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cc_id = "9c7fe9bd-7f1e-5f3a-be1f-2d3f58bc6422"
+  make_transcript(tmp_path / "claude-main", cc_id)
+  first = ScriptedRelayBackend(
+      [
+          {**assistant_text_event("scouting"), "session_id": cc_id},
+          rate_limit_event("rejected", 1.0),
+      ],
+      exit_code=1)
+  second = ScriptedRelayBackend([result_event("must never land")], exit_code=0)
+  install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
+  patch_instructions_content(monkeypatch)
+
+  # The stop rides the relay seam: prepare_relay runs after the first process's
+  # stream ended (its rejected reading is the relay reason) and before the
+  # second process builds and registers. The wrapper stops the Run first, then
+  # hands over to the real relay.
+  real_prepare_relay = master_cc_relay.prepare_relay
+
+  async def stop_then_relay(cfg_, item, option, cc_session_id, current, cwd, reason):
+    await tree.runs.request_stop(manager.id, item.task_run.run_id, "stop-in-relay-gap")
+    return await real_prepare_relay(cfg_, item, option, cc_session_id, current, cwd, reason)
+
+  monkeypatch.setattr(master_cc_relay, "prepare_relay", stop_then_relay)
+
+  await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision["launch"] is True
+  run_id = decision["run_id"]
+  assert run_id is not None
+
+  run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
+  from conftest import drain_session_consumer
+  await drain_session_consumer(manager.id, timeout=5)
+
+  assert outcome == "interrupted"
+  # The second process never registered: the Run keeps the first process's
+  # identity.
+  assert (run.pid, run.pid_start) == (first.pid, first.pid_start)
+  events = tree.events.load_events(manager.id)
+  assert [e for e in events if e.get("type") == ET.RESULT] == []
+  # The turn ends with the one error line naming the refusal reason.
+  errors = [e for e in events if e.get("type") == ET.ASSISTANT_ERROR]
+  assert len(errors) == 1 and "stop request" in errors[0]["content"]
 
 
 # ---------------------------------------------------------------------------

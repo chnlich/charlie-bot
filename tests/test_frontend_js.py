@@ -1,15 +1,15 @@
 """Pytest entry for the node --test frontend suites: one case per JS suite file on disk."""
 
+import pathlib
 import shutil
 import subprocess
-from pathlib import Path
 
 import pytest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
-def run_node_js_test(node_test: Path, skip_reason: str) -> None:
+def run_node_js_test(node_test: pathlib.Path, skip_reason: str) -> None:
   """Run one node --test file; hosts without node skip rather than fail, and cwd=ROOT keeps repo-relative asset
   loads working."""
   node = shutil.which('node')
@@ -50,7 +50,8 @@ _INTEGRATION_SUITES = {
 # One case per node suite on disk: the glob is the single source, so a suite file that
 # lands runs in the bridge without a registration edit; sorted() pins the case order
 # across hosts.
-_NODE_TESTS = sorted(p.name for pattern in ("*.test.js", "*.test.mjs") for p in Path(__file__).parent.glob(pattern))
+_NODE_TESTS = sorted(
+    p.name for pattern in ("*.test.js", "*.test.mjs") for p in pathlib.Path(__file__).parent.glob(pattern))
 
 
 @pytest.mark.parametrize(
@@ -59,4 +60,4 @@ _NODE_TESTS = sorted(p.name for pattern in ("*.test.js", "*.test.mjs") for p in 
         for name in _NODE_TESTS
     ])
 def test_frontend_js(js_name: str) -> None:
-  run_node_js_test(Path(__file__).parent / js_name, "node is required for the frontend JS tests")
+  run_node_js_test(pathlib.Path(__file__).parent / js_name, "node is required for the frontend JS tests")

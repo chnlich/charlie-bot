@@ -13,7 +13,8 @@ store contract.
   charliebot memory add [--file F]
   charliebot memory lint [--dir D]
 
-  charliebot memory proposal open | status | commit <path> --message-file F | land <sha>
+  charliebot memory proposal open | status | land <sha>
+  charliebot memory proposal commit <path> --message-file F [--replace-pr-lines]
 
 The ``proposal`` verbs drive the store's PR flow (``src/core/memory_proposal.py``):
 the ``proposal`` branch, worked in the sibling ``memory-proposal`` worktree,
@@ -91,6 +92,11 @@ def main() -> None:
       "commit", help="Commit exactly one store-relative path on the proposal branch", formatter_class=CliHelpFormatter)
   p_pcommit.add_argument("path", help="Store-relative path: an entry file or topics")
   p_pcommit.add_argument("--message-file", required=True, help="File holding the commit message")
+  p_pcommit.add_argument(
+      "--replace-pr-lines",
+      action="store_true",
+      help="Commit even when lines the PR already added are rewritten or gone; the commit "
+      "message lists each replaced line under 'Replaced PR lines:'")
   p_pland = proposal_sub.add_parser(
       "land", help="Fast-forward the live checkout to one approved proposal commit", formatter_class=CliHelpFormatter)
   p_pland.add_argument("sha", help="The approved proposal commit SHA")
@@ -251,7 +257,8 @@ def _cmd_proposal(args: argparse.Namespace) -> None:
     elif args.proposal_command == "status":
       fields = memory_proposal.status(live)
     elif args.proposal_command == "commit":
-      sha = memory_proposal.commit(live, args.path, Path(args.message_file).expanduser())
+      sha = memory_proposal.commit(
+          live, args.path, Path(args.message_file).expanduser(), replace_pr_lines=args.replace_pr_lines)
       fields = {"committed": sha}
     else:
       fields = memory_proposal.land(live, args.sha)

@@ -64,6 +64,7 @@ English):
 - Give each concept one name, and use that name every time. Each word keeps one meaning.
 - Before you name a new concept, find the name that the existing text uses.
 - Write one fact or one instruction in each sentence.
+- A sentence runs to its period. A colon or a semicolon joins clauses inside one sentence.
 - Write each instruction in the imperative, and put its condition first.
 - Use the active voice. Keep the subject, the verb, and the connecting words.
 - In English, an instruction has at most 20 words, and a description has at most 25 words.
@@ -71,12 +72,12 @@ English):
 - Count one unit for each Han character, English word, number, URL, and backticked span.
 - Use at most three nouns in a noun string.
 - Put three or more parallel items in a vertical list.
-- State each rule as the action to take or the standing reality.
+- State each rule as the action to take or the standing reality. When a rule forbids an action, name the action to take in its place.
 - Show only the practice itself in examples. Contrasting examples belong to pages for the user.
 - A statement of current system state describes what the system does. It states an absent
   feature by what serves in its place.
 
-Text that predates these rules takes them at its next edit.
+These rules are the only style reference for new text. Text that predates them takes them at its next edit.
 
 ### Explaining to the user
 

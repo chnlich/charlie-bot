@@ -7,6 +7,7 @@ Every refusal must exit 1 with the reason on stderr and leave the live
 checkout, the branch, and the worktree exactly as they were.
 """
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -315,6 +316,136 @@ def test_commit_refuses_deleted_pr_created_entry(store: Path, monkeypatch, capsy
       monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "delete")))
   assert code == 1
   assert "keep me" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
+
+
+def _long_sentence() -> str:
+  """One 29-word sentence: over the 25-word cap the prose check enforces."""
+  return (
+      "The curator drafts each entry inside the proposal worktree so the diff against the base branch "
+      "shows exactly the lines awaiting the user's approval before anything reaches the store.")
+
+
+def test_commit_refuses_a_new_sentence_over_25_words(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/long-sentence.md")
+  sentence = _long_sentence()
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("long-sentence", f"- {sentence}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert "prose check failed:" in err
+  assert f"sentence over 25 words (29): {sentence}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_ignores_an_unchanged_long_sentence_in_an_old_entry(store: Path, monkeypatch, capsys) -> None:
+  """A bullet the base already holds verbatim escapes the sentence checks, so old long
+  sentences never block a commit that edits other lines of their entry."""
+  rel = Path("entries/profile/legacy-long.md")
+  base_text = _entry_text("legacy-long", f"- {_long_sentence()}\n")
+  _live_commit(store, rel, base_text, "base holds the long sentence")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text + "- Short added line.\n", encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "append")))
+  assert code == 0, err
+  assert "Short added line" in (worktree / rel).read_text(encoding="utf-8")
+
+
+def test_commit_refuses_a_new_sentence_with_a_semicolon(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/semicolon.md")
+  bullet = "The curator drafts the entry; the reviewer commits it."
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("semicolon", f"- {bullet}\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 1
+  assert f"semicolon joins clauses: {bullet}" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_allows_a_semicolon_inside_backticks(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/backtick-semicolon.md")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).parent.mkdir(parents=True, exist_ok=True)
+  (worktree / rel).write_text(_entry_text("backtick-semicolon", "- Run `a; b` twice.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "admit")))
+  assert code == 0, err
+  assert "prose check" not in err
+
+
+def test_commit_refuses_a_body_grown_past_12_lines(store: Path, monkeypatch, capsys) -> None:
+  rel = Path("entries/profile/grown.md")
+  base_text = _entry_text("grown", "".join(f"- Legacy line {i} stands.\n" for i in range(1, 12)))
+  _live_commit(store, rel, base_text, "base body of 11 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(base_text + "- New line one stands.\n- New line two stands.\n", encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "grow")))
+  assert code == 1
+  assert "body has 13 lines (limit 12)" in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_refuses_a_15_line_body_that_stays_at_15_lines(store: Path, monkeypatch, capsys) -> None:
+  """The body limit binds every committed entry, so rewriting inside a 15-line body refuses
+  even though the line count never grows."""
+  rel = Path("entries/profile/rewritten-long.md")
+  base_text = _entry_text("rewritten-long", "".join(f"- Legacy line {i} stands.\n" for i in range(1, 16)))
+  _live_commit(store, rel, base_text, "base body of 15 lines")
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(
+      base_text.replace("- Legacy line 7 stands.\n", "- Line seven stands rewritten.\n"), encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "rewrite")))
+  assert code == 1
+  assert "body has 15 lines (limit 12)" in err
+  assert "Line seven stands rewritten" not in err
+  assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 0
+
+
+def test_commit_replace_pr_lines_commits_and_lists_the_replaced_lines(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/replaced.md")
+  text = _entry_text("replaced", "alpha bravo\n")
+  _pr_commit(store, rel, text, "first")
+  worktree = memory_proposal.proposal_worktree(store)
+  (worktree / rel).write_text(text.replace("alpha bravo", "alpha CHARLIE"), encoding="utf-8")
+  code, out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "replace")),
+      "--replace-pr-lines")
+  assert code == 0, err
+  assert _fields(out)["committed"] == run_git(store, "rev-parse", "proposal").strip()
+  message = subprocess.run(
+      ["git", "log", "-1", "--format=%B"], cwd=str(worktree), capture_output=True, text=True, check=True).stdout
+  # %B prints the stored message (one trailing newline) plus git log's entry terminator.
+  assert message == "replace\nReplaced PR lines:\n  alpha bravo\n\n"
+
+
+def test_commit_refuses_a_prose_violation_even_with_replace_pr_lines(store: Path, monkeypatch, capsys) -> None:
+  _run_cli(monkeypatch, capsys, "proposal", "open")
+  rel = Path("entries/profile/flagged.md")
+  text = _entry_text("flagged", "alpha bravo\n")
+  _pr_commit(store, rel, text, "first")
+  worktree = memory_proposal.proposal_worktree(store)
+  rewritten = _entry_text("flagged", f"alpha CHARLIE\n- {_long_sentence()}\n")
+  (worktree / rel).write_text(rewritten, encoding="utf-8")
+  code, _out, err = _run_cli(
+      monkeypatch, capsys, "proposal", "commit", rel.as_posix(), "--message-file", str(_message_file(store, "replace")),
+      "--replace-pr-lines")
+  assert code == 1
+  assert "prose check failed:" in err
+  assert "sentence over 25 words" in err
   assert len(run_git(store, "rev-list", "main..proposal").splitlines()) == 1
 
 

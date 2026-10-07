@@ -17,6 +17,7 @@ and the live checkout exactly as they were.
 
 import collections
 import pathlib
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -25,6 +26,9 @@ from src.core import memory
 
 PROPOSAL_BRANCH = "proposal"
 _WORKTREE_SUFFIX = "-proposal"
+_SENTENCE_WORD_LIMIT = 25
+_BODY_LINE_LIMIT = 12
+_BACKTICKED = re.compile(r"`[^`]*`")
 
 
 class ProposalRefusalError(Exception):
@@ -158,15 +162,121 @@ def status(memory_dir: pathlib.Path) -> dict[str, str]:
   }
 
 
-def _rev_lines(memory_dir: pathlib.Path, rev: str, path: str) -> collections.Counter:
-  """The non-blank lines of ``<rev>:<path>``; an absent file counts as empty."""
+def _rev_text(memory_dir: pathlib.Path, rev: str, path: str) -> str | None:
+  """The text of ``<rev>:<path>``; ``None`` when the revision holds no such file."""
   listing = _run(memory_dir, "ls-tree", rev, "--", path)
   if listing.returncode != 0:
     raise ProposalRefusalError(f"git ls-tree {rev} -- {path} failed in {memory_dir}: {listing.stderr.strip()}")
   if not listing.stdout.strip():
+    return None
+  return _git(memory_dir, "show", f"{rev}:{path}")
+
+
+def _rev_lines(memory_dir: pathlib.Path, rev: str, path: str) -> collections.Counter:
+  """The non-blank lines of ``<rev>:<path>``; an absent file counts as empty."""
+  text = _rev_text(memory_dir, rev, path)
+  if text is None:
     return collections.Counter()
-  text = _git(memory_dir, "show", f"{rev}:{path}")
   return collections.Counter(line for line in text.split("\n") if line.strip())
+
+
+def _entry_body(text: str) -> list[str]:
+  """The entry's body: the non-blank lines after the front matter's closing ``---``."""
+  lines = text.split("\n")
+  if not lines or lines[0].strip() != "---":
+    return [line for line in lines if line.strip()]
+  for i in range(1, len(lines)):
+    if lines[i].strip() == "---":
+      return [line for line in lines[i + 1:] if line.strip()]
+  return []
+
+
+def _bullets(body: list[str]) -> list[str]:
+  """Each bullet's text: its ``- `` (or nested ``  - ``) line plus its continuation lines.
+
+  A continuation line is any body line that does not start its own bullet; the parts join
+  with one space, and the base-verbatim comparison in :func:`_prose_violations` reads this
+  same joined text.
+  """
+  texts: list[str] = []
+  for line in body:
+    if line.startswith("- "):
+      texts.append(line[2:])
+    elif line.startswith("  - "):
+      texts.append(line[4:])
+    elif texts:
+      texts[-1] += " " + line.strip()
+  return texts
+
+
+def _mask_backticks(text: str) -> tuple[str, list[int]]:
+  """``text`` with every backticked span replaced by ``CODE``, plus the masked index that
+  each masked character reads from in the original (backticked spans read from their start)."""
+  masked: list[str] = []
+  mapping: list[int] = []
+  i = 0
+  while i < len(text):
+    if text[i] == "`":
+      end = text.find("`", i + 1)
+      if end == -1:
+        masked.append(text[i])
+        mapping.append(i)
+        i += 1
+        continue
+      masked.extend("CODE")
+      mapping.extend([i] * len("CODE"))
+      i = end + 1
+    else:
+      masked.append(text[i])
+      mapping.append(i)
+      i += 1
+  return "".join(masked), mapping
+
+
+def _sentences(bullet: str) -> list[str]:
+  """The bullet's sentences: split at a period followed by whitespace, with backticked spans
+  masked first so their punctuation never splits; the bullet's end also ends a sentence."""
+  masked, mapping = _mask_backticks(bullet)
+  out: list[str] = []
+  start = 0
+  i = 0
+  while i < len(masked):
+    if masked[i] == "." and i + 1 < len(masked) and masked[i + 1].isspace():
+      out.append(bullet[mapping[start]:mapping[i] + 1])
+      i += 1
+      while i < len(masked) and masked[i].isspace():
+        i += 1
+      start = i
+    else:
+      i += 1
+  if start < len(masked) and masked[start:].strip():
+    out.append(bullet[mapping[start]:])
+  return out
+
+
+def _prose_violations(text: str, base_text: str | None) -> list[str]:
+  """The writing-rule violations of *text* over the same file's base version.
+
+  A bullet that the base version already holds verbatim escapes the sentence checks — old
+  entries take the rules at their next edit — while the body line limit binds every committed
+  entry, whatever the base version's line count.
+  """
+  body = _entry_body(text)
+  violations: list[str] = []
+  base_bullets = set(_bullets(_entry_body(base_text))) if base_text is not None else set()
+  for bullet in _bullets(body):
+    if bullet in base_bullets:
+      continue
+    for sentence in _sentences(bullet):
+      masked, _ = _mask_backticks(sentence)
+      words = len(masked.split())
+      if words > _SENTENCE_WORD_LIMIT:
+        violations.append(f"sentence over 25 words ({words}): {sentence}")
+      if ";" in masked:
+        violations.append(f"semicolon joins clauses: {sentence}")
+  if len(body) > _BODY_LINE_LIMIT:
+    violations.append(f"body has {len(body)} lines (limit {_BODY_LINE_LIMIT})")
+  return violations
 
 
 def _store_path(path: str) -> pathlib.PurePosixPath:
@@ -177,14 +287,22 @@ def _store_path(path: str) -> pathlib.PurePosixPath:
   return rel
 
 
-def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path) -> str:
+def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path, replace_pr_lines: bool = False) -> str:
   """Commit exactly one store-relative path on the proposal branch; return the new SHA.
 
   The guard: every non-blank line the PR already added to this file (the
   multiset ``proposal:<path> - <base>:<path>``) must still be present in the
   worktree's file, so an approved line never silently moves under the
   reviewer's feet. Additions, edits and deletions of the named path commit
-  alike; anything else in the worktree stays uncommitted.
+  alike; anything else in the worktree stays uncommitted. With
+  *replace_pr_lines* the guard passes and every replaced PR line is appended
+  to the commit message under ``Replaced PR lines:``, so the rewrite stays
+  visible in the PR's history.
+
+  The prose check then refuses an entry whose added or rewritten sentences
+  break the "Text a model reads" rules (a sentence over 25 words, a semicolon
+  joining clauses) or whose body exceeds 12 lines; the ``topics`` vocabulary
+  file is exempt.
 
   *message_file* resolves against the caller's working directory here: the
   git subprocess runs inside the worktree, so a relative path would otherwise
@@ -199,19 +317,38 @@ def commit(memory_dir: pathlib.Path, path: str, message_file: pathlib.Path) -> s
   base = _base_branch(memory_dir)
   added = _rev_lines(memory_dir, PROPOSAL_BRANCH, path) - _rev_lines(memory_dir, base, path)
   current_file = worktree / pathlib.Path(*rel.parts)
+  current_text = current_file.read_text(encoding="utf-8") if current_file.is_file() else None
   current = collections.Counter()
-  if current_file.is_file():
-    current = collections.Counter(line for line in current_file.read_text(encoding="utf-8").split("\n") if line.strip())
+  if current_text is not None:
+    current = collections.Counter(line for line in current_text.split("\n") if line.strip())
   missing = added - current
   if missing:
     listed = "\n".join(f"  {line}" for line, count in sorted(missing.items()) for _ in range(count))
-    raise ProposalRefusalError(
-        f"{path}: lines the PR already added are gone from the worktree; restore them "
-        f"or resolve the conflict in the report:\n{listed}")
-  _git(worktree, "add", "--", path)
-  result = _run(worktree, "commit", "--only", "-F", str(message_file), "--", path)
-  if result.returncode != 0:
-    raise ProposalRefusalError(f"committing {path} failed: {result.stderr.strip()}")
+    if not replace_pr_lines:
+      raise ProposalRefusalError(
+          f"{path}: lines the PR already added are gone from the worktree; restore them "
+          f"or resolve the conflict in the report:\n{listed}")
+    replaced = [line for line, count in sorted(missing.items()) for _ in range(count)]
+  else:
+    replaced = []
+  if current_text is not None and rel != pathlib.PurePosixPath("topics"):
+    violations = _prose_violations(current_text, _rev_text(memory_dir, base, path))
+    if violations:
+      raise ProposalRefusalError(f"{path}: prose check failed:\n" + "\n".join(f"  {v}" for v in violations))
+  with tempfile.TemporaryDirectory() as tmp:
+    commit_message = pathlib.Path(tmp) / "message"
+    if replaced:
+      message = message_file.read_text(encoding="utf-8")
+      if message and not message.endswith("\n"):
+        message += "\n"
+      message += "Replaced PR lines:\n" + "".join(f"  {line}\n" for line in replaced)
+      commit_message.write_text(message, encoding="utf-8")
+    else:
+      commit_message.write_bytes(message_file.read_bytes())
+    _git(worktree, "add", "--", path)
+    result = _run(worktree, "commit", "--only", "-F", str(commit_message), "--", path)
+    if result.returncode != 0:
+      raise ProposalRefusalError(f"committing {path} failed: {result.stderr.strip()}")
   return _git(worktree, "rev-parse", "HEAD").strip()
 
 

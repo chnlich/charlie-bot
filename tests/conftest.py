@@ -248,8 +248,7 @@ from src.core import streaming  # noqa: E402
 from src.core.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.api.deps import get_config_on_loop  # noqa: E402
 from src.core.config import CharlieBotConfig, get_config  # noqa: E402
-from src.core.constants import SESSION_ID_ENV_VAR  # noqa: E402
-from src.core.run_token import RUN_TOKEN_ENV  # noqa: E402
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from src.core.home import CREDENTIALS_FILE  # noqa: E402
 from src.core.plans import PlanRegistryManager  # noqa: E402
 from src.core.scheduler import Scheduler  # noqa: E402

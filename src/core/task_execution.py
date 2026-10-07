@@ -53,7 +53,7 @@ from src.core import claude_accounts, claude_relay, git, review, runs, task_prom
 from src.core import event_types as ET
 from src.core.chat_events import chat_events_path
 from src.core.config import CharlieBotConfig, configured_access_key
-from src.core.constants import SESSION_ID_ENV_VAR, BackendType
+from src.core.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR, BackendType
 from src.core.control_events import (
     ACTOR_SYSTEM,
     build_control_event,
@@ -70,7 +70,7 @@ from src.core.models import (
     TaskType,
     utc_now_iso,
 )
-from src.core.run_token import RUN_TOKEN_ENV, RunTokenClaims, sign_run_token
+from src.core.run_token import RunTokenClaims, sign_run_token
 from src.core.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.core.session_dispatch import child_report_text
 from src.core.sessions import SessionManager, backend_switch_reset_reason, context_reset_note

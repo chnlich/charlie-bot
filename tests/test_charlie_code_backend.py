@@ -1,22 +1,16 @@
-from pathlib import Path
+import pathlib
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest import mock
 
+import conftest
 import pytest
-from conftest import (
-    BASE_SPAWN_SUBPROCESS_PATCH_TARGET,
-    CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
-    FLAG_LIKE_PROMPT,
-    RUNS_READ_PID_STAT_PATCH_TARGET,
-    build_cli_backend_rig,
-)
 
-from src.agents.backends.charlie_code import CharlieCodeBackend
+from src.agents.backends import charlie_code
 from src.core import event_types as ET
 
 
-def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CharlieCodeBackend:
-  return build_cli_backend_rig(monkeypatch, CharlieCodeBackend, **kwargs)
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> charlie_code.CharlieCodeBackend:
+  return conftest.build_cli_backend_rig(monkeypatch, charlie_code.CharlieCodeBackend, **kwargs)
 
 
 def test_translate_success_stream_preserves_tool_pair_ids_and_usage(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,14 +92,14 @@ def test_translate_failure_stream_preserves_error_message(monkeypatch: pytest.Mo
   ]
 
 
-def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   backend = _build_backend(monkeypatch, instructions_content="Use concise answers.")
   session_cwd = tmp_path / "cwd"
   session_cwd.mkdir()
   backend._prepare_cwd(str(session_cwd))
   backend._prepare_transport(tmp_path)
 
-  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+  cmd = backend._build_command(conftest.FLAG_LIKE_PROMPT)
 
   assert cmd[:6] == [
       "/usr/bin/charlie-code",
@@ -125,10 +119,10 @@ def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatc
   assert agents_md.read_bytes() == b"Use concise answers."
   # task.md carries the bare prompt: no <system-instructions> frame anywhere.
   task_md = tmp_path / "task.md"
-  assert task_md.read_bytes() == FLAG_LIKE_PROMPT.encode("utf-8")
+  assert task_md.read_bytes() == conftest.FLAG_LIKE_PROMPT.encode("utf-8")
   assert b"<system-instructions>" not in task_md.read_bytes()
   # The task text never rides argv.
-  assert not any(FLAG_LIKE_PROMPT in arg for arg in cmd)
+  assert not any(conftest.FLAG_LIKE_PROMPT in arg for arg in cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -138,12 +132,12 @@ def test_build_command_writes_task_file_and_flags(monkeypatch: pytest.MonkeyPatc
 
 def test_api_base_required(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
-      CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
+      conftest.CHARLIE_CODE_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/charlie-code",
   )
 
   with pytest.raises(ValueError, match="api_base"):
-    CharlieCodeBackend(model="charlie-code-test-model")
+    charlie_code.CharlieCodeBackend(model="charlie-code-test-model")
 
 
 # ---------------------------------------------------------------------------
@@ -152,16 +146,17 @@ def test_api_base_required(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_refuses_images_with_image_input_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+async def test_run_refuses_images_with_image_input_false(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
   """image_input: false + an image ref: exactly one error event, no spawn, no result."""
   backend = _build_backend(monkeypatch, image_input=False, log_dir=tmp_path / "logs")
-  monkeypatch.setattr(RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("refusal-test-start", "R"))
-  process = MagicMock()
+  monkeypatch.setattr(conftest.RUNS_READ_PID_STAT_PATCH_TARGET, lambda pid: ("refusal-test-start", "R"))
+  process = mock.MagicMock()
   process.pid = 4242
   # A locally built AsyncMock (per the conftest stub's own docstring) so the test holds
   # the call reference `await_args` reads.
-  spawn = AsyncMock(return_value=process)
-  monkeypatch.setattr(BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
+  spawn = mock.AsyncMock(return_value=process)
+  monkeypatch.setattr(conftest.BASE_SPAWN_SUBPROCESS_PATCH_TARGET, spawn)
 
   events = [
       event async for event in backend.run(

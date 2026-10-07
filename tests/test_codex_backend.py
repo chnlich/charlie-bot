@@ -1,18 +1,15 @@
-from pathlib import Path
+import pathlib
 from typing import Any
 
+import conftest
 import pytest
-from conftest import (
-    FLAG_LIKE_PROMPT,
-    build_cli_backend_rig,
-)
 
-from src.agents.backends.codex import CodexBackend
+from src.agents.backends import codex
 from src.core import event_types as ET
 
 
-def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> CodexBackend:
-  return build_cli_backend_rig(monkeypatch, CodexBackend, **kwargs)
+def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> codex.CodexBackend:
+  return conftest.build_cli_backend_rig(monkeypatch, codex.CodexBackend, **kwargs)
 
 
 @pytest.mark.parametrize("resume_session_id", [
@@ -23,9 +20,9 @@ def test_build_command_uses_double_dash_separator_for_prompt(
     monkeypatch: pytest.MonkeyPatch, resume_session_id: str | None) -> None:
   backend = _build_backend(monkeypatch, model="codex-test-model", resume_session_id=resume_session_id)
 
-  cmd = backend._build_command(FLAG_LIKE_PROMPT)
+  cmd = backend._build_command(conftest.FLAG_LIKE_PROMPT)
 
-  assert cmd[-2:] == ["--", FLAG_LIKE_PROMPT]
+  assert cmd[-2:] == ["--", conftest.FLAG_LIKE_PROMPT]
   if resume_session_id is not None:
     assert resume_session_id in cmd
 
@@ -138,7 +135,7 @@ _FILE_CHANGE_ROWS = [
 @pytest.mark.parametrize(("files", "changes", "event_type", "status", "expected_paths"), _FILE_CHANGE_ROWS)
 def test_file_change_translation(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
+    tmp_path: pathlib.Path,
     files: dict[str, str],
     changes: list[tuple[str, str]],
     event_type: str,

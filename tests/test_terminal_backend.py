@@ -1,8 +1,8 @@
+import fastapi
 import pytest
-from fastapi import WebSocket
 
 from src.agents.backends import pty_common
-from src.core.constants import SESSION_ID_ENV_VAR
+from src.core import constants
 
 # Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
 # and its websocket handlers read it as a module global at call time, and the terminal handler
@@ -25,7 +25,7 @@ class _AcceptingWebSocket:
 @pytest.mark.asyncio
 async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> None:
   captured: dict[str, dict[str, str]] = {}
-  monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
+  monkeypatch.setenv(constants.SESSION_ID_ENV_VAR, "stale-session")
   monkeypatch.setattr(pty_common, "_tmux_binary", lambda: "/usr/bin/tmux")
 
   class FakeProcess:
@@ -44,30 +44,30 @@ async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> N
 
   assert rc == 0
   assert stderr == ""
-  assert SESSION_ID_ENV_VAR not in captured["env"]
+  assert constants.SESSION_ID_ENV_VAR not in captured["env"]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("auth_ok", [True, False], ids=["accepts", "rejects"])
 async def test_terminal_websocket_ws_auth_gate(monkeypatch: pytest.MonkeyPatch, auth_ok: bool) -> None:
   """The attach runs only behind one auth check: a failed check neither accepts the socket nor attaches."""
-  from server import terminal_websocket
+  import server
 
   ws = _AcceptingWebSocket()
   checked = []
   attached = []
 
-  async def fake_check_ws_auth(websocket: WebSocket) -> bool:
+  async def fake_check_ws_auth(websocket: fastapi.WebSocket) -> bool:
     checked.append(websocket)
     return auth_ok
 
-  async def fake_run_terminal_attachment(websocket: WebSocket) -> None:
+  async def fake_run_terminal_attachment(websocket: fastapi.WebSocket) -> None:
     attached.append(websocket)
 
   monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
   monkeypatch.setattr(TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET, fake_run_terminal_attachment)
 
-  await terminal_websocket(ws)
+  await server.terminal_websocket(ws)
 
   assert checked == [ws]
   assert ws.accepted is auth_ok

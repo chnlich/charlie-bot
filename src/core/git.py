@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.core import timeouts
 from src.core.log_once import LazyStructlogLogger
 from src.core.timeouts import (
     SUBPROCESS_GIT_READ_TIMEOUT_ASYNC,
@@ -181,14 +182,13 @@ async def git_remote_default_branch_and_tip(repo_path: Path) -> tuple[str, str |
   listing names a default branch without listing its ref — an inconsistent
   remote the caller's base resolution then reports through its own probe.
   """
-  ok, out, err = await _git_stdout(
+  ok, out, err = await _git_remote(
       repo_path,
       *_PROBE_LS_REMOTE_ARGS,
       "ls-remote",
       "--symref",
       "origin",
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git ls-remote",
+      label="git ls-remote",
   )
   if not ok:
     raise BaseBranchResolutionError(f"cannot read origin's default branch in {repo_path} via git ls-remote: {err}")
@@ -263,14 +263,13 @@ async def resolve_base_branch(repo_path: Path, base_branch: str, *, remote_tip: 
   else:
     origin_configured = True
   if origin_configured and remote_tip is None:
-    ok, out, ls_err = await _git_stdout(
+    ok, out, ls_err = await _git_remote(
         repo_path,
         *_PROBE_LS_REMOTE_ARGS,
         "ls-remote",
         "origin",
         _heads_ref(branch),
-        timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-        timeout_label="git ls-remote",
+        label="git ls-remote",
     )
     if not ok:
       raise BaseBranchResolutionError(
@@ -685,15 +684,31 @@ async def git_worktree_prune(repo_path: str, thread_id: str) -> None:
     log.warning("worktree_prune_timeout", thread_id=thread_id)
 
 
-async def _run_git_cmd(
-    repo_path: Path,
-    *args: str,
-    timeout: int,
-    timeout_label: str,
-) -> tuple[bool, str]:
-  """Run a git command with timeout. Returns (success, stderr)."""
-  ok, _, stderr = await _git_stdout(repo_path, *args, timeout=timeout, timeout_label=timeout_label)
-  return ok, stderr
+async def _git_remote(repo_path: Path, *args: str, label: str) -> tuple[bool, str, str]:
+  """Run a git command that talks to a remote (ls-remote, fetch, push), retrying failed attempts.
+
+  Each attempt runs under SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT. A timeout or a
+  non-zero exit logs one warning with the attempt number and the error output,
+  and the next attempt starts at once: a hung connection never recovers, so a
+  wait before the retry buys nothing. Returns _git_stdout's (success, stdout,
+  stderr) from the first attempt that succeeds, or from the last attempt when
+  all GIT_REMOTE_MAX_ATTEMPTS fail.
+  """
+  max_attempts = timeouts.GIT_REMOTE_MAX_ATTEMPTS
+  for attempt in range(1, max_attempts + 1):
+    ok, out, err = await _git_stdout(
+        repo_path, *args, timeout=timeouts.SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT, timeout_label=label)
+    if ok:
+      break
+    log.warning(
+        "git_remote_attempt_failed",
+        repo=str(repo_path),
+        command=label,
+        attempt=attempt,
+        max_attempts=max_attempts,
+        error=err,
+    )
+  return ok, out, err
 
 
 async def git_rev_parse(repo_path: Path, rev: str) -> str | None:
@@ -761,26 +776,14 @@ async def git_verify_commit_landed(repo_path: Path, branch: str, commit: str) ->
 
 async def git_fetch(repo_path: Path, remote: str, branch: str) -> tuple[bool, str]:
   """Run git fetch <remote> <branch>. Returns (success, stderr)."""
-  return await _run_git_cmd(
-      repo_path,
-      "fetch",
-      remote,
-      branch,
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git fetch",
-  )
+  ok, _, err = await _git_remote(repo_path, "fetch", remote, branch, label="git fetch")
+  return ok, err
 
 
 async def git_push_branch(repo_path: Path, branch: str) -> tuple[bool, str]:
   """Run git push origin <branch>. Returns (success, stderr)."""
-  return await _run_git_cmd(
-      repo_path,
-      "push",
-      "origin",
-      branch,
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git push",
-  )
+  ok, _, err = await _git_remote(repo_path, "push", "origin", branch, label="git push")
+  return ok, err
 
 
 async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: str) -> tuple[bool, str]:
@@ -788,14 +791,9 @@ async def git_push_refspec(repo_path: Path, local_branch: str, remote_branch: st
 
   Git rejects non-fast-forward pushes by default, so this is implicitly an FF-only push.
   """
-  return await _run_git_cmd(
-      repo_path,
-      "push",
-      "origin",
-      f"{local_branch}:{_heads_ref(remote_branch)}",
-      timeout=SUBPROCESS_GIT_WRITE_TIMEOUT,
-      timeout_label="git push refspec",
-  )
+  ok, _, err = await _git_remote(
+      repo_path, "push", "origin", f"{local_branch}:{_heads_ref(remote_branch)}", label="git push refspec")
+  return ok, err
 
 
 async def git_add_commit_push(
@@ -803,11 +801,11 @@ async def git_add_commit_push(
     files: list[str],
     message: str,
 ) -> None:
-  """Git add, commit, and push with subprocess timeouts.
+  """Git add, commit, and push, logging a failure as a warning rather than propagating it.
 
-  Runs each git command in a thread-pool worker with a per-command timeout.
-  Catches CalledProcessError and TimeoutExpired consistently, logging warnings
-  rather than propagating.
+  add and commit run in a thread-pool worker, each under
+  SUBPROCESS_GIT_WRITE_TIMEOUT; a failure there skips the push. The push goes
+  through _git_remote's per-attempt limit and retries.
 
   Args:
     repo_path: Working directory for git commands.
@@ -815,7 +813,7 @@ async def git_add_commit_push(
     message: Commit message.
   """
 
-  def _run() -> None:
+  def _commit() -> None:
     subprocess.run(
         ['git', 'add', *files], cwd=repo_path, check=True, capture_output=True, timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
     subprocess.run(
@@ -824,14 +822,18 @@ async def git_add_commit_push(
         check=True,
         capture_output=True,
         timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
-    subprocess.run(
-        ['git', 'push'], cwd=repo_path, check=True, capture_output=True, timeout=SUBPROCESS_GIT_WRITE_TIMEOUT)
 
   try:
-    await asyncio.to_thread(_run)
+    await asyncio.to_thread(_commit)
   except subprocess.CalledProcessError as e:
     log.warning('git_commit_push_failed', cmd=e.cmd, stderr=e.stderr.decode(errors='replace'))
+    return
   except subprocess.TimeoutExpired as e:
     log.warning('git_commit_push_timeout', cmd=e.cmd, timeout=e.timeout)
+    return
   except Exception as e:
     log.warning('git_commit_push_error', error=str(e))
+    return
+  ok, _, err = await _git_remote(repo_path, 'push', label='git push')
+  if not ok:
+    log.warning('git_commit_push_failed', cmd=['git', 'push'], stderr=err)

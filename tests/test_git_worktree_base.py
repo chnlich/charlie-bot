@@ -18,15 +18,25 @@ Plus the resolution's probe-fed forms:
     equal to the remote-tracking ref skips the no-op fetch
   - git_remote_default_branch_and_tip returns the default branch and its tip
     from one ls-remote
+
+Plus the remote operations' per-attempt limit:
+  - a hung attempt is killed at the limit and the next attempt starts at once
+  - when every attempt fails the caller gets the error one attempt returned
+    before, after one warning per attempt
+  - local operations keep the 60 s limit
 """
 
 import asyncio
+import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from conftest import run_git
+from structlog import testing
 
+from src.core import git, timeouts
 from src.core.git import (
     BaseBranchResolutionError,
     BaseResolution,
@@ -329,6 +339,143 @@ async def test_baseless_launch_starts_at_remote_default_tip(remote_default_repo:
     pass
   else:
     assert _worktree_head(old_wt) != origin_tip
+
+
+# --- remote operations: a per-attempt limit, retried at once on failure ------------
+
+# Counts its invocations in $FAKE_GIT_CALLS. The first $FAKE_GIT_FAILURES fail:
+# "hang" execs a long sleep (exec, so the timeout's kill lands on the sleeping
+# process), anything else exits 128 with an attempt-numbered stderr line. Later
+# invocations print $FAKE_GIT_STDOUT and exit 0.
+_FAKE_GIT_SCRIPT = """#!/bin/sh
+n=$(( $(cat "$FAKE_GIT_CALLS" 2>/dev/null || echo 0) + 1 ))
+echo "$n" > "$FAKE_GIT_CALLS"
+if [ "$n" -le "$FAKE_GIT_FAILURES" ]; then
+  if [ "$FAKE_GIT_FAILURE" = hang ]; then
+    exec sleep 30
+  fi
+  echo "fatal: unable to access remote (attempt $n)" >&2
+  exit 128
+fi
+printf '%s' "$FAKE_GIT_STDOUT"
+"""
+
+_FAKE_REMOTE_ATTEMPT_TIMEOUT = 0.3  # seconds; each hung attempt costs the test this much
+
+
+@pytest.fixture
+def fake_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+  """Put the fake git first on PATH, shrink the per-attempt limit, and return the call-count file."""
+  bin_dir = tmp_path / "bin"
+  bin_dir.mkdir()
+  script = bin_dir / "git"
+  script.write_text(_FAKE_GIT_SCRIPT, encoding="utf-8")
+  script.chmod(0o755)
+  calls = tmp_path / "fake_git_calls"
+  monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+  monkeypatch.setenv("FAKE_GIT_CALLS", str(calls))
+  monkeypatch.setenv("FAKE_GIT_STDOUT", "")
+  monkeypatch.setattr(timeouts, "SUBPROCESS_GIT_REMOTE_ATTEMPT_TIMEOUT", _FAKE_REMOTE_ATTEMPT_TIMEOUT)
+  return calls
+
+
+@pytest.mark.asyncio
+async def test_remote_op_hung_first_attempt_succeeds_on_retry(
+    fake_git: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A hung first ls-remote is killed at the per-attempt limit; the second
+  attempt's answer is the result, and one warning names attempt 1."""
+  sha = "a" * 40
+  monkeypatch.setenv("FAKE_GIT_FAILURES", "1")
+  monkeypatch.setenv("FAKE_GIT_FAILURE", "hang")
+  monkeypatch.setenv("FAKE_GIT_STDOUT", f"ref: refs/heads/main\tHEAD\n{sha}\tHEAD\n{sha}\trefs/heads/main\n")
+
+  with testing.capture_logs() as logs:
+    result = await git.git_remote_default_branch_and_tip(tmp_path)
+
+  assert result == ("main", sha)
+  assert fake_git.read_text(encoding="utf-8").strip() == "2"
+  warnings = [entry for entry in logs if entry["log_level"] == "warning"]
+  assert len(warnings) == 1
+  assert warnings[0]["event"] == "git_remote_attempt_failed"
+  assert warnings[0]["attempt"] == 1
+  assert warnings[0]["error"] == f"git ls-remote timed out after {_FAKE_REMOTE_ATTEMPT_TIMEOUT}s"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_error"),
+    [
+        ("hang", f"git fetch timed out after {_FAKE_REMOTE_ATTEMPT_TIMEOUT}s"),
+        ("exit", f"fatal: unable to access remote (attempt {timeouts.GIT_REMOTE_MAX_ATTEMPTS})"),
+    ],
+)
+async def test_remote_op_failing_every_attempt_returns_single_attempt_error(
+    fake_git: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure: str, expected_error: str) -> None:
+  """When every attempt fails, the caller gets the error one attempt returned
+  before the retries existed — the timeout message, or the last attempt's
+  stderr — after one warning per attempt and no wait between attempts."""
+  monkeypatch.setenv("FAKE_GIT_FAILURES", "99")
+  monkeypatch.setenv("FAKE_GIT_FAILURE", failure)
+
+  async def _no_sleep(seconds: float) -> None:
+    raise AssertionError("remote retries must not wait between attempts")
+
+  monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+  with testing.capture_logs() as logs:
+    result = await git.git_fetch(tmp_path, "origin", "main")
+
+  attempts = timeouts.GIT_REMOTE_MAX_ATTEMPTS
+  assert result == (False, expected_error)
+  assert fake_git.read_text(encoding="utf-8").strip() == str(attempts)
+  warnings = [entry for entry in logs if entry["log_level"] == "warning"]
+  assert [warning["attempt"] for warning in warnings] == list(range(1, attempts + 1))
+  assert warnings[-1]["error"] == expected_error
+
+
+@pytest.mark.asyncio
+async def test_local_git_ops_keep_write_limit_while_remote_ops_take_attempt_limit(
+    repo_setup: dict[str, Path], monkeypatch: pytest.MonkeyPatch) -> None:
+  """worktree add, add and commit keep the 60 s local limit; ls-remote, fetch
+  and push each run under the 120 s per-attempt limit."""
+  origin = repo_setup["origin"]
+  seed = repo_setup["seed"]
+  main_checkout = repo_setup["main_checkout"]
+  _commit(seed, "advance.txt", "advance\n", "advance origin")
+  run_git(seed, "push", "origin", "feature")  # local feature is now behind: the resolution fetches
+  (seed / "note.txt").write_text("note\n", encoding="utf-8")
+
+  seen: list[tuple[tuple[str, ...], float]] = []
+  real_proc_bytes = git._git_proc_bytes
+  real_run = subprocess.run
+
+  async def _recording_proc_bytes(repo_path, *args, timeout):
+    seen.append((args, timeout))
+    return await real_proc_bytes(repo_path, *args, timeout=timeout)
+
+  def _recording_run(cmd, **kwargs):
+    seen.append((tuple(cmd[1:]), kwargs["timeout"]))
+    return real_run(cmd, **kwargs)
+
+  monkeypatch.setattr(git, "_git_proc_bytes", _recording_proc_bytes)
+  monkeypatch.setattr(subprocess, "run", _recording_run)
+
+  await git_create_worktree(main_checkout, "feature", "charliebot/task-limits", repo_setup["tmp_path"] / "wt-limits")
+  await git.git_add_commit_push(seed, ["note.txt"], "add note")
+
+  monkeypatch.undo()
+  assert run_git(origin, "rev-parse", "feature") == run_git(seed, "rev-parse", "HEAD")  # the push landed
+  verbs = ("worktree", "add", "commit", "ls-remote", "fetch", "push")
+  assert {
+      verb: {timeout for args, timeout in seen if verb in args} for verb in verbs
+  } == {
+      "worktree": {60.0},
+      "add": {60.0},
+      "commit": {60.0},
+      "ls-remote": {120.0},
+      "fetch": {120.0},
+      "push": {120.0},
+  }
 
 
 # --- probe-fed resolution: the ls-remote answer replaces the duplicate probe + no-op fetch ---

@@ -23,14 +23,14 @@ from conftest import (
 )
 
 from src.cli.artifact import main as artifact_main
-from src.core import artifact_check
+from src.core import artifact_check, artifact_shared, timeouts
 from src.core.artifact_check import run_assertions
 from src.core.config import CharlieBotConfig
 
 
 def _genre_doc(genre: str, body: str) -> str:
   """Full HTML document for *genre*: its template's <style> block verbatim plus *body*."""
-  template = (ROOT / "prompts" / artifact_check._GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
+  template = (ROOT / "prompts" / artifact_shared.GENRE_TEMPLATES[genre]).read_text(encoding="utf-8")
   style = re.search(r"<style>.*?</style>", template, re.DOTALL).group(0)
   return f"<html><head>{style}</head><body>{body}</body></html>"
 
@@ -175,7 +175,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   assert '"where are we?"' in prompt
   assert "(7) Read as an engineer who knows the domain" in prompt
   assert "<trigger message verbatim>" not in prompt
-  assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
+  assert backends["beta"].calls[0]["timeout"] == timeouts.ARTIFACT_PROBE_TIMEOUT == 300.0
 
 
 def test_cli_unknown_genre_is_usage_error() -> None:

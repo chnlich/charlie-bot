@@ -538,6 +538,34 @@ async function switchSession(sessionId) {
   scheduleLazySessionDataLoad();
 }
 
+// The open paths' mount choice in one function: first load, session switch
+// and new-session bootstrap all render through renderSessionView. An idle
+// master session with a committed reply mounts anchored at that reply's top
+// edge, so the reply's opening block is on the first screen. Every other
+// open keeps the bottom-pinned default; null means default. THINKING_SINCE
+// is the page global every open path sets from its payload before rendering.
+function openMountOptions(session, data, messages) {
+  if (session.profile === 'worker') return null;
+  if (data.thread_view) return null;
+  if (THINKING_SINCE) return null;
+  if (data.pending_draft && (data.pending_draft.content || data.pending_draft.thinking)) return null;
+  const lastAssistant = messages.filter((msg) => msg.role === 'assistant').pop();
+  if (!lastAssistant) return null;
+  return {pinned: false, readingAnchor: {kind: 'message', id: lastAssistant.id, offset: 0}};
+}
+
+// An anchor mount clamps its restore write to the maximum scroll, so a reply
+// that fits the viewport lands at the bottom without the follow pin. mount()
+// restored the anchor synchronously before returning, so this read sees the
+// restored position, not the seed estimate; within 1 px of the bottom means
+// the clamp fired, and the pin comes back so a short reply follows new turns
+// exactly as the default mount does.
+function rearmBottomPinIfAtBottom(engine, container) {
+  if (container.scrollHeight - container.scrollTop - container.clientHeight <= 1) {
+    engine.jumpToBottom();
+  }
+}
+
 // A worker leaf's closing line in its own chat projection: the close event
 // projects to the system message "Task <outcome>: <summary>", and the leaf's
 // delivery banner shows that summary.
@@ -582,10 +610,12 @@ function renderSessionView(data) {
   // supports it; every session switch tears the previous engine down with it.
   const container = document.getElementById('messages');
   if (!container) return;
+  const mountOptions = openMountOptions(session, data, messages);
   const turnEngine = globalThis.Chat && Chat.TurnEngine
-    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id)
+    ? Chat.TurnEngine.mountIfAvailable(container, messages, session.id, mountOptions || undefined)
     : null;
   if (!turnEngine) renderMessagesIntoContainer(container, messages, session.id);
+  else if (mountOptions) rearmBottomPinIfAtBottom(turnEngine, container);
 
   if (sessionHasMore) ensureSentinel(container, 'idle');
 
@@ -597,7 +627,8 @@ function renderSessionView(data) {
     hideStreaming();
   }
 
-  // Scroll to bottom — the engine already pinned its projection at mount.
+  // Scroll to bottom — the engine positions itself at mount (bottom pin, or
+  // reading anchor); only the legacy render still needs this write.
   if (!turnEngine) container.scrollTop = container.scrollHeight;
 
   // A worker node renders its Run transcript through the main chat column
@@ -1054,6 +1085,7 @@ const API = {
   scheduleLazySessionDataLoad,
   switchSession,
   renderSessionView,
+  openMountOptions,
   setWorkerTranscriptMode,
   setInputAreaVisible,
   transcriptTarget,

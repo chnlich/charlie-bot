@@ -24,9 +24,13 @@ document.addEventListener('DOMContentLoaded', () => {
   // Belt-and-suspenders: helper already formats these; catch anything Jinja still emits.
   postProcessRenderedMessages(document);
 
-  // Scroll to bottom of messages (in case JS render hasn't fired yet)
+  // Scroll to bottom of messages (in case JS render hasn't fired yet). A turn
+  // engine owns the position instead — its mount pinned the bottom or
+  // restored the reading anchor, and this write would undo the anchor.
   const msgs = document.getElementById('messages');
-  if (msgs) msgs.scrollTop = msgs.scrollHeight;
+  const mountedEngine = globalThis.Chat && Chat.TurnEngine
+    ? Chat.TurnEngine.activeFor(msgs) : null;
+  if (msgs && !mountedEngine) msgs.scrollTop = msgs.scrollHeight;
 
   // Restore draft message from localStorage
   if (DRAFT_KEY) {

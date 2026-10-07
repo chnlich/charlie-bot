@@ -1,13 +1,13 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 
-from src.agents.backends.base import make_master_done_event, make_text_event
+from src.agents.backends.base import make_master_done_event
 from src.api.deps import (
     get_config_on_loop,
     get_session_manager,
@@ -16,10 +16,7 @@ from src.api.deps import (
     require_found,
     require_session,
 )
-from src.api.message_utils import (
-    build_agent_input_content,
-    build_user_event,
-)
+from src.api.message_utils import build_agent_input_content
 from src.core import event_types as ET
 from src.core.config import CharlieBotConfig
 from src.core.constants import BackendType
@@ -37,9 +34,6 @@ from src.core.session_dispatch import agent_provenance, input_event_type_for_cal
 from src.core.sessions import SessionManager
 from src.core.task_sessions import TaskTreeManager
 from src.core.tasks import create_logged_task
-
-if TYPE_CHECKING:
-  from src.core.slash_commands import SlashDispatchResult
 
 log = LazyStructlogLogger()
 
@@ -138,63 +132,20 @@ async def send_message(
         })
 
   # The only content path that does not go through trigger_master: unarchive an
-  # archived target here, before dispatching, so the slash-command branch and
-  # the ordinary branch below share the pull-back step.
+  # archived target here, before dispatching, so the dispatch below sees the
+  # restored session.
   if meta.status == SessionStatus.ARCHIVED:
     meta = require_found(await session_mgr.unarchive_session(session_id))
 
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
   content = build_agent_input_content(req.content, uploaded_files)
 
-  is_slash = req.content.startswith('/')
   log.info(
       "send_message",
       session=session_id,
       content_chars=len(content),
       uploaded_files_count=len(uploaded_files),
-      is_slash=is_slash,
   )
-
-  # Slash command interception
-  if is_slash:
-    # The slash stack (M99 server import floor) loads at the first slash-form
-    # message; servers whose traffic never dispatches a slash command skip the
-    # module's pydantic command-model construction entirely.
-    from src.core.slash_commands import SlashDispatchKind, dispatch_slash_command
-
-    space_idx = req.content.find(' ')
-    name = req.content[1:space_idx] if space_idx != -1 else req.content[1:]
-    args = req.content[space_idx + 1:].strip() if space_idx != -1 else ''
-
-    dispatch = await dispatch_slash_command(name, args, session_dir=str(cfg.sessions_dir / session_id))
-
-    if dispatch.kind != SlashDispatchKind.NOT_FOUND:
-      await session_mgr.persist_and_broadcast(session_id, build_user_event(req.content, uploaded_files))
-
-      if dispatch.kind == SlashDispatchKind.PROMPT:
-        launch_prompt_dispatch(cfg, meta, dispatch, session_mgr, req.content, uploaded_files)
-        return JSONResponse(status_code=202, content={"status": "accepted"})
-
-      if dispatch.kind == SlashDispatchKind.ERROR:
-        error_text = dispatch.error or f'Failed to dispatch /{name}'
-        asst_event = make_text_event(error_text)
-        await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = make_master_done_event(1, still_thinking=False)
-        await session_mgr.persist_and_broadcast(session_id, done_event)
-        return JSONResponse(status_code=202, content={"status": "accepted"})
-
-      if dispatch.kind == SlashDispatchKind.SHELL_RESULT:
-        result = dispatch.shell_result
-        out = result['stderr'] if result['exit_code'] != 0 and result['stderr'] else (
-            result['stdout'] or result['stderr'] or '(no output)')
-        md_out = '```\n' + out + '\n```'
-        asst_event = make_text_event(md_out)
-        await session_mgr.persist_and_broadcast(session_id, asst_event)
-        done_event = make_master_done_event(0, still_thinking=False)
-        await session_mgr.persist_and_broadcast(session_id, done_event)
-        return JSONResponse(status_code=202, content={"status": "accepted"})
-
-    # Unknown /xxx — fall through to normal run_and_finalize (e.g. /compact)
 
   # Fire-and-forget: spawn master CC in a background task
   create_logged_task(
@@ -268,7 +219,6 @@ async def run_and_finalize(
     content: str,
     session_mgr: SessionManager,
     *,
-    extra_claude_flags: list[str] | None = None,
     skip_user_event: bool = False,
     display_content: str | None = None,
     uploaded_files: list[dict] | None = None,
@@ -289,7 +239,6 @@ async def run_and_finalize(
         ET.USER,
         skip_user_event=skip_user_event,
         backend_option=backend_option,
-        extra_claude_flags=extra_claude_flags,
         display_content=display_content,
         uploaded_files=uploaded_files,
         is_voice=is_voice,
@@ -304,28 +253,3 @@ async def run_and_finalize(
     done_event = make_master_done_event(1, still_thinking=False)
     await session_mgr.persist_and_broadcast(meta.id, error_event)
     await session_mgr.persist_and_broadcast(meta.id, done_event)
-
-
-def launch_prompt_dispatch(
-    cfg: CharlieBotConfig,
-    meta: SessionMetadata,
-    dispatch: SlashDispatchResult,
-    session_mgr: SessionManager,
-    display_content: str,
-    uploaded_files: list[dict],
-) -> None:
-  """Fire a prompt-scope slash dispatch as a background master-CC run.
-
-  The caller persists the user's slash-form message first; the run carries the
-  substituted prompt and skips its own user event, displaying display_content instead.
-  """
-  create_logged_task(
-      run_and_finalize(
-          cfg,
-          meta,
-          build_agent_input_content(dispatch.substituted_prompt, uploaded_files),
-          session_mgr,
-          extra_claude_flags=dispatch.claude_code_flags,
-          skip_user_event=True,
-          display_content=display_content,
-          uploaded_files=uploaded_files))

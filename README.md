@@ -15,9 +15,9 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 ### Automation
 
 - Cron scheduled tasks in prompt, handler, loop, and task-chain (`steps`) modes
+- Manual run of a scheduled task: `POST /api/cron/tasks/{name}/run` fires it once through the scheduled path
 - Delayed triggers (`charliebot schedule-trigger`) watching local/remote PIDs and SLURM jobs; one trigger can watch many targets
 - `charliebot remote-launch` for long-running remote commands
-- Slash commands hot-reloaded from YAML
 
 ### Knowledge
 
@@ -29,7 +29,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 
 - Streaming chat over WebSockets
 - Sessions sidebar with groups, filters, and search; star / archive / fork sessions
-- Worker (thread), plan, backlog, and context panels
+- Worker (thread), plan, and backlog panels
 - HTML artifact viewer with line-anchored comments
 - GitHub-style diff viewer with diff comments
 - Perfetto and NCU trace viewers
@@ -83,6 +83,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot delegate` — delegate a task to a worker agent
 - `charliebot discord` — reply to or read the Discord thread a session was summoned from, and check the bot setup
 - `charliebot improve` — start an iterative improvement loop
+- `charliebot improve-stop` — stop this session's running improvement loop after the current iteration
 - `charliebot memory` — query and lint the store; `add` stages a capture
 - `charliebot plan` — present (register), amend, approve, close, diff, and list a session's plans
 - `charliebot publish` — publish an artifact to the URL readers beyond the operator's devices open

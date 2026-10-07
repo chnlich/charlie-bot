@@ -10,7 +10,6 @@ const { escapeHtml } = require('./escape_html_stub');
 const { makeAnchor, makeProseRoot } = require('./chat_prose_stub');
 
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
-const SLASH_COMMANDS_JS = readStatic('slash-commands.js');
 
 class FakeElement {
   constructor() {
@@ -135,65 +134,6 @@ function loadFileUploadScript(fetchImpl) {
   return {context, fileChips, sendButton};
 }
 
-function loadSlashCommandsScript(fetchImpl, uploadsInFlight = 0) {
-  const messages = [];
-  const toasts = [];
-  const clearedIds = [];
-  const input = {
-    value: '/help',
-    style: {height: '42px'},
-    // file-upload.js's load-time initPasteUpload attaches a paste listener.
-    addEventListener() {},
-  };
-  const localStorage = {
-    removed: [],
-    removeItem(key) {
-      this.removed.push(key);
-    },
-  };
-  const context = {
-    SESSION_ID: 'session-a',
-    DRAFT_KEY: 'draft-session-a',
-    pendingUserEchoes: 0,
-    console: {error: () => {}},
-    // This harness skips config.js: stand in for its shared header literal.
-    JSON_HEADERS: {'Content-Type': 'application/json'},
-    fetch: fetchImpl,
-    localStorage,
-    showToast: (message, isError) => {
-      toasts.push({message, isError: !!isError});
-    },
-    appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
-      messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles});
-    },
-    bumpCurrentSessionToTop: () => {},
-    startThinking: () => {},
-    escapeHtml,
-    document: {
-      getElementById(id) {
-        if (id === 'msg-input') return input;
-        return null;
-      },
-      createElement: createEscapingElement,
-    },
-  };
-
-  vm.createContext(context);
-  // The real file-upload.js supplies the send gate blockIfUploadsInFlight.
-  // Its top-level function declarations overwrite same-named context
-  // properties, so the upload-store doubles are installed after it runs.
-  vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
-  context.getUploadedFilesForPayload = () => [];
-  context.clearSentUploadedFiles = (ids) => {
-    clearedIds.push(ids);
-  };
-  vm.runInContext(SLASH_COMMANDS_JS, context, {filename: 'slash-commands.js'});
-  // uploadsInFlight is file-upload.js's top-level `let`: a context property
-  // written from outside cannot reach it, only code run in the context can.
-  vm.runInContext('uploadsInFlight = ' + Number(uploadsInFlight) + ';', context);
-  return {context, messages, toasts, clearedIds, input, localStorage};
-}
-
 test('normalizeUserMessage strips legacy attachment footers and keeps file names for rendering', () => {
   const context = loadChatScript();
 
@@ -248,59 +188,8 @@ test('uploadFile marks successful uploads as sendable', async () => {
   assert.equal(sendButton.hasAttribute('disabled'), false);
 });
 
-test('executeSlashCommand marks a pending user message before the request resolves', async () => {
-  let resolveFetch;
-  const fetchPromise = new Promise((resolve) => {
-    resolveFetch = resolve;
-  });
-  const {context, messages, clearedIds} = loadSlashCommandsScript(() => fetchPromise);
 
-  const uploadedFiles = [{id: 7, filename: 'report.pdf', path: '/tmp/report.pdf', size: 12}];
-  const commandPromise = context.executeSlashCommand('help', '', {displayText: '/help', uploadedFiles});
 
-  assert.equal(context.pendingUserEchoes, 1);
-
-  resolveFetch({
-    async json() {
-      return {type: 'help', commands: []};
-    },
-  });
-  await commandPromise;
-
-  assert.equal(messages[0].role, 'user');
-  assert.equal(JSON.stringify(messages[0].uploadedFiles), JSON.stringify([
-    {filename: 'report.pdf', path: '/tmp/report.pdf', size: 12},
-  ]));
-  assert.deepEqual(clearedIds, [[7]]);
-});
-
-test('executeSlashCommand settles pendingUserEchoes when the server returns an error', async () => {
-  const {context, messages, toasts} = loadSlashCommandsScript(async () => ({
-    async json() {
-      return {error: 'bad command'};
-    },
-  }));
-
-  await context.executeSlashCommand('bad', '');
-
-  assert.equal(context.pendingUserEchoes, 0);
-  assert.equal(messages.length, 0);
-  assert.deepEqual(toasts, [{message: 'bad command', isError: true}]);
-});
-
-test('executeSlashCommand blocks submission while uploads are still in flight', async () => {
-  let fetchCalls = 0;
-  const {context, toasts} = loadSlashCommandsScript(async () => {
-    fetchCalls += 1;
-    return {async json() { return {type: 'help', commands: []}; }};
-  }, 1);
-
-  await context.executeSlashCommand('help', '');
-
-  assert.equal(fetchCalls, 0);
-  assert.equal(context.pendingUserEchoes, 0);
-  assert.deepEqual(toasts, [{message: 'Please wait for the attachment upload to finish', isError: true}]);
-});
 
 test('resolveHtmlArtifactLink accepts raw URL strings and anchor elements', () => {
   const context = loadChatScript();

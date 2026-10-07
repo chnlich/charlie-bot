@@ -661,13 +661,6 @@ async def create_session(
   return await session_mgr.create_session(req, backend=backend)
 
 
-@router.get("/projects")
-async def list_projects() -> list[dict[str, str]]:
-  """Return git repos discovered from configured workspace_dirs."""
-  cfg = get_config()
-  return await asyncio.to_thread(cfg.discover_repos)
-
-
 class ArchivedGroupCount(BaseModel):
   group: str | None
   total: int

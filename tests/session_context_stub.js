@@ -62,7 +62,6 @@ function baseSessionContext(overrides = {}) {
     cancelReconnect: () => {},
     resetVoiceState: () => {},
     renderFileChips: () => {},
-    hideSlashPopup: () => {},
     hideStreaming: () => {},
     showStreaming: () => {},
     updateSidebarHighlight: () => {},

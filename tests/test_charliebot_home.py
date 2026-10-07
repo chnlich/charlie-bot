@@ -95,7 +95,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   from src.cli import claude_sub
   from src.core import backup as core_backup
   from src.core import init as core_init
-  from src.core import slash_commands
 
   asyncio.run(core_init.init_seed.init_charliebot_home())
 
@@ -104,7 +103,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   api_cron.cron_dir().mkdir(parents=True, exist_ok=True)
   api_cron._write_cron_yaml("probe", {"cron": "* * * * *", "prompt": "p"})
   assert api_cron._read_cron_yaml("probe") == {"cron": "* * * * *", "prompt": "p"}
-  slash_commands.load_slash_commands()
 
   owned = [
       cfg.charliebot_home,
@@ -114,7 +112,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       cfg.memory_dir,
       cfg.claude_md_file,
       api_cron.cron_dir(),
-      slash_commands._slash_commands_file(),
       api_pages._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),
       claude_sub._session_marker_dir(),

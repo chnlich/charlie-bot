@@ -252,7 +252,6 @@ function buildAppContext() {
     initSidebarResize: noop('initSidebarResize'),
     initLatexResize: noop('initLatexResize'),
     initBacklogResize: noop('initBacklogResize'),
-    fetchSlashCommands: noop('fetchSlashCommands'),
     startTuiStatusPolling: noop('startTuiStatusPolling'),
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
     updateRelativeTimes: noop('updateRelativeTimes'),

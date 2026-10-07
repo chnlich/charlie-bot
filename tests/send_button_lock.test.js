@@ -21,7 +21,6 @@ const {
   createChatSidebarContext,
 } = require('./session_context_stub');
 
-const SLASH_COMMANDS_JS = readStatic('slash-commands.js');
 const FILE_UPLOAD_JS = readStatic('file-upload.js');
 const WEBSOCKET_JS = readStatic('websocket.js');
 const VOICE_INPUT_JS = readStatic('voice-input.js');
@@ -86,10 +85,9 @@ function buildLockHarness() {
 
   const {context} = baseSessionContext({elements});
   context.console = {error() {}, warn() {}, log() {}};
-  // Call-time refs the page loads from config.js / context-panel.js, plus the
-  // event cursor the inline bootstrap owns: none of them ride the modules.
+  // Call-time refs the page loads from config.js, plus the event cursor the
+  // inline bootstrap owns: none of them ride the modules.
   context.saveDraft = () => {};
-  context.applyWorkingContext = (content) => content;
   context.eventCursor = 0;
   context.window = Object.assign(context.window, {removeEventListener() {}});
   context.XMLHttpRequest = FakeVoiceXhr;
@@ -117,7 +115,6 @@ function buildLockHarness() {
   // Page-order tail: the gate/lock file lands before voice-input.js, whose
   // transcription windows report into it; every cross-file read here happens
   // at call time, so the load order only mirrors the page's dependency.
-  vm.runInContext(SLASH_COMMANDS_JS, context, {filename: 'slash-commands.js'});
   vm.runInContext(FILE_UPLOAD_JS, context, {filename: 'file-upload.js'});
   vm.runInContext(WEBSOCKET_JS, context, {filename: 'websocket.js'});
   vm.runInContext(VOICE_INPUT_JS, context, {filename: 'voice-input.js'});
@@ -164,16 +161,6 @@ test('sending a message starts a thinking round but never locks the send button'
   assert.equal(sendLocked(h), false);
 });
 
-test('a slash dispatch starts thinking without locking the send button', async () => {
-  const h = buildLockHarness();
-  h.fetchImpl = async () => ({ok: true, json: async () => ({type: 'prompt_dispatched'})});
-
-  await h.context.executeSlashCommand('prompt', 'write a haiku');
-
-  assert.equal(h.context.masterThinking, true, 'the dispatched prompt is thinking');
-  assert.equal(sendLocked(h), false);
-  assert.equal(sendGreyed(h), false);
-});
 
 // ---------------------------------------------------------------------------
 // 2. Each in-flight kind locks; the combined count unlocks only at zero.

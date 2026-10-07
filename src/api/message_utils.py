@@ -21,7 +21,6 @@ __all__ = [
     "build_agent_message_event",
     "build_scheduled_trigger_event",
     "build_session_bootstrap_data",
-    "build_user_event",
     "events_to_messages",
     "events_to_view",
     "get_message_projection_fast",
@@ -37,24 +36,12 @@ def build_agent_input_content(content: str, uploaded_files: list[dict]) -> str:
   return content + _ATTACHED_FILES_MARKER + "\n".join(f"- {path}" for path in paths)
 
 
-def build_user_event(content: str, uploaded_files: list[dict]) -> dict:
-  """Build the persisted user event payload for chat history and websocket updates."""
-  event = {
-      "type": ET.USER,
-      "content": content,
-      "timestamp": utc_now_iso(),
-  }
-  if uploaded_files:
-    event["uploaded_files"] = uploaded_files
-  return event
-
-
 def build_scheduled_trigger_event(content: str) -> dict:
   """Build the persisted scheduled-trigger auto-wake event.
 
-  Parallel to ``build_user_event`` but carries the dedicated ``ET.SCHEDULED_TRIGGER``
-  type and never accepts attachments or voice flags -- scheduled-trigger events
-  are system self-wakes, not real user messages.
+  Carries the dedicated ``ET.SCHEDULED_TRIGGER`` type and never accepts
+  attachments or voice flags -- scheduled-trigger events are system self-wakes,
+  not real user messages.
   """
   return {
       "type": ET.SCHEDULED_TRIGGER,

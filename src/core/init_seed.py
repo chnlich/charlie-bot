@@ -29,34 +29,6 @@ DEFAULT_MEMORY_TOPICS = (
 
 DEFAULT_MEMORY_GITIGNORE = "staging/\n"
 
-DEFAULT_SLASH_COMMANDS = """\
-commands:
-  # Initially empty — /help is built-in, not defined here.
-  #
-  # Example shell command:
-  # git:
-  #   scope: shell
-  #   description: "Run git command"
-  #   args: "<git args>"
-  #   command: "git {args}"
-  #   cwd: "/path/to/repo"
-  #   timeout: 10
-  #
-  # Example prompt command:
-  # summarize:
-  #   scope: prompt
-  #   description: "Summarize conversation"
-  #   prompt: "Summarize our conversation in bullet points."
-  #
-  # Example prompt command with claude_code_flags (runs in plan-only mode):
-  # plan:
-  #   scope: prompt
-  #   description: 'Plan without implementing'
-  #   args: '<what to plan>'
-  #   prompt: '{args}'
-  #   claude_code_flags: ['--permission-mode', 'plan']
-"""
-
 
 async def init_charliebot_home() -> None:
   """Ensure ~/.charliebot/ directory structure exists and seed default files."""
@@ -73,7 +45,6 @@ async def init_charliebot_home() -> None:
 
   # Seed the memory store scaffold (git repo + topics vocabulary + .gitignore)
   _seed_memory_scaffold(cfg)
-  _seed_if_missing(cfg.charliebot_home / 'slash_commands.yaml', DEFAULT_SLASH_COMMANDS)
 
   # Seed config.yaml from the committed template if missing
   if not cfg.config_file.exists():

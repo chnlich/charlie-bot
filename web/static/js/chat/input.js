@@ -51,14 +51,6 @@ async function sendMessage() {
   const content = input.value.trim();
   const uploadedFilesForPayload = getUploadedFilesForPayload();
   if ((!content && !uploadedFilesForPayload.length) || !SESSION_ID) return;
-  if (content.startsWith('/')) {
-    const spaceIdx = content.indexOf(' ');
-    const name = spaceIdx === -1 ? content.slice(1) : content.slice(1, spaceIdx);
-    const args = spaceIdx === -1 ? '' : content.slice(spaceIdx + 1).trim();
-    await executeSlashCommand(name, args, {displayText: content, uploadedFiles: uploadedFilesForPayload});
-    return;
-  }
-  const contentWithCtx = applyWorkingContext(content);
   const payloadFiles = toPayloadFiles(uploadedFilesForPayload);
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
@@ -78,7 +70,7 @@ async function sendMessage() {
   startThinking({keepSendEnabled: true});
 
   try {
-    const res = await postChatMessage(contentWithCtx, { uploaded_files: payloadFiles, is_voice: isVoice });
+    const res = await postChatMessage(content, { uploaded_files: payloadFiles, is_voice: isVoice });
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
     console.error('Send failed:', err);

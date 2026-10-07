@@ -230,13 +230,6 @@ SSH_OVERALL_TIMEOUT = 60.0  # seconds — asyncio.wait_for timeout wrapping the 
 SUBPROCESS_DIAG_CAPTURE_TIMEOUT = 2.0  # seconds
 
 # ---------------------------------------------------------------------------
-# Slash commands
-# ---------------------------------------------------------------------------
-
-# Default timeout for user-defined slash commands (shell scope).
-SLASH_COMMAND_DEFAULT_TIMEOUT = 10  # seconds — overridable per-command in YAML config
-
-# ---------------------------------------------------------------------------
 # Polling intervals
 # ---------------------------------------------------------------------------
 

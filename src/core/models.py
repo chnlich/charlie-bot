@@ -735,6 +735,13 @@ class ImproveRequest(BaseModel):
   merge_back: bool = False
 
 
+class ImproveStopRequest(BaseModel):
+  """Request body for the internal improve-stop endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+
+
 class ScheduleTriggerRequest(BaseModel):
   """Request body for the internal schedule-trigger endpoint."""
   model_config = ConfigDict(extra="forbid")

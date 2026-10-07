@@ -200,12 +200,12 @@ TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"
 
-# -- Slash command responses -------------------------------------------------
-HELP = "help"
+# -- Improve loop / scheduled-task runs ---------------------------------------
+# IMPROVE_STOPPED names the improve_sequence outcome where a stop request ended
+# the loop (src/core/improve_sequence.py). TASK_TRIGGERED is the manual
+# scheduled-task run endpoint's response type (src/api/cron.py).
 IMPROVE_STOPPED = "improve_stopped"
 TASK_TRIGGERED = "task_triggered"
-SHELL_RESULT = "shell_result"
-PROMPT_DISPATCHED = "prompt_dispatched"
 
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"

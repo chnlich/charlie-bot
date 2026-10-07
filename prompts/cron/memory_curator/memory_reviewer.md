@@ -31,16 +31,11 @@ a. Align admission to canonical homes:
 b. Distill to category-level conclusions:
    Condense drafts into concise category-level conclusions, bounded to one to three lines per
    bullet. Retain the essential mechanism while pruning background narratives, incident
-   timelines, and intermediate deductions.
+   timelines, and intermediate deductions. When an entry that you edit has more than 12 body
+   lines, trim the whole entry.
 
-c. Apply the "Text a model reads" subsection of the master prompt's Writing Style section.
-   Check every line that the PR adds or rewrites against that subsection:
-   - Plain words and the established terms of the field name things.
-   - Each concept has one name, the name that the existing entries use.
-   - Each sentence holds one fact or one instruction.
-   - Each instruction is imperative and starts with its condition.
-   - Each sentence uses the active voice and stays within its length limit.
-   Rewrite each line that falls short.
+c. Check each sentence that the PR adds or rewrites against the "Text a model reads" subsection.
+   Apply its bullets one at a time. Rewrite each sentence that falls short.
 
 Record every substantive condensation, routing restoration, disposition reversal, and phrasing
 rewrite as a row in your report with its reason.
@@ -55,9 +50,9 @@ Write each commit message to a file and run
 changed file. The subject follows the store's convention as the skill's "Commit message
 prefixes" chapter words it (`admit:` / `revise:` / `migrate:` / `remove:` / `scaffold:`),
 and the body holds the entry's three proof lines plus one `Staging: <file>` line per consumed
-candidate. When the command refuses, restore the lines it lists to the PR's wording, record the
-conflict as a report row for the user (the candidate's intent beside the PR line it meets), and
-run the commit again.
+candidate. When the command lists PR lines that the worktree lost, restore their PR wording. Record the
+conflict as a report row: the candidate's intent beside the PR line it meets. When the command
+reports a prose violation, fix the listed text. Then run the commit again.
 
 Step 4: render the PR page.
 Render the page from `~/workspace/charlie-bot/prompts/memory_report_template.html`: copy it,

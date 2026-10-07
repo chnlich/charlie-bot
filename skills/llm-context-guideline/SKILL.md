@@ -134,16 +134,15 @@ Every entry carries `scope`, `topic`, `audience`, and `title` in its front matte
 One coherent fact or rule set per entry. The title lives in frontmatter; the body is pure
 content. Timeless phrasing: state the standing reality. Dates, session ids, commit hashes,
 quoted rulings, event history, and case enumerations belong in `LESSONS.md`.
-Said once, in Chinese, lines 120 columns or fewer; code, paths, identifiers, and commands stay
-verbatim. Entry prose follows the Writing Style section of prompts/master.md, its "Text a model
-reads" subsection included. Apply the
-admission test line by line as well as entry by entry. Keep each line whose removal changes what a
-capable model does.
-Brevity is part of the admission bar: lead with the action and keep the mechanism the action
-is unintelligible without; session reports and run dirs hold the receipts, verification notes,
-and secondary effects. Hold a
-bullet to about three lines and an entry body to about a dozen; a merge that would grow past that
-re-trims the whole entry by the same test.
+Say each fact once. Write entry prose in English. Keep each line at 120 columns or fewer. Keep
+code, paths, identifiers, and commands verbatim. When a semicolon joins two clauses, write them as
+two sentences. Entry prose follows the Writing Style section of prompts/master.md, its "Text a
+model reads" subsection included. Apply the admission test line by line as well as entry by entry.
+Keep each line whose removal changes what a capable model does.
+Brevity is part of the admission bar: lead with the action and keep the mechanism the action is
+unintelligible without; session reports and run dirs hold the receipts, verification notes, and
+secondary effects. Hold a bullet to three lines or fewer, and an entry body to 12 lines or fewer.
+When an edit leaves a body over 12 lines, trim the whole entry by the same test.
 A measured figure lives in its canonical source (run dir, canon table, ticket); an entry states
 the rule and points there.
 Environment composition and version facts (package pins, toolchain and interpreter versions,
@@ -191,6 +190,7 @@ the reply, and collect the user's approval of that version.
 rebase voids earlier SHAs, so the session re-links the current head after every `open`.
 A diff-page comment fix is a delegated worker's edit: the worker edits only the commented lines
 in the PR worktree and commits one entry per commit.
+When a user-directed fix rewrites lines that the PR added, commit it with --replace-pr-lines.
 Every adjudication round ends by re-linking the current version in the reply.
 Each user comment on a proposal is evidence of a rule gap. After applying the comment, check
 whether the rules above would have kept the commented content out of the store on their own; a

@@ -443,7 +443,7 @@ def memory_selection_for(meta: SessionMetadata, kind: str, cfg: CharlieBotConfig
   The selection (filtering and formatting) stays owned by :mod:`src.core.memory`.
   Repo-less workers get the worker index only — never a guessed project.
   """
-  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md)
+  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md@5175adf09)
   from src.core.memory import select_master_memory, select_worker_memory
 
   if kind in MANAGER_KINDS:

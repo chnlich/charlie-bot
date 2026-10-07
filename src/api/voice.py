@@ -116,7 +116,7 @@ async def upload_voice_recording(
     # The server decoded this recording, so the local backend produced the
     # persisted text; its id comes from the class, not a fresh literal. Lazy
     # import: the speech stack stays off `import server`'s startup path
-    # (the M99 import floor, docs/perf_baseline.md).
+    # (the M99 import floor, docs/perf_baseline.md@5175adf09).
     from src.agents.transcription.local import LocalTranscriptionBackend
 
     produced_by = LocalTranscriptionBackend.id

@@ -291,7 +291,7 @@ Known-alive symbols:
   `search_sessions_readonly` (the cap before per-row work, shared cache references), so the
   wrapper's owned-copy + sidebar-state-fold form has zero production callers since that
   switch — but the same change added a cross-check test pinning that the wrapper serves the
-  same rows, and the archived-pagination tests plus `docs/perf_baseline.md`'s search benchmark
+  same rows, and the archived-pagination tests plus `docs/perf_baseline.md@5175adf09`'s search benchmark
   drive the wrapper as the semantics reference. A src-only vulture scan flags it as an unused
   method; a whole-repo grep finds only that test file, one docstring cross-reference, the
   same-named route handler in `src/api/sessions.py`, and the perf doc.
@@ -387,7 +387,7 @@ Known-alive symbols:
   (`test_projection_history_equals_events_to_messages`, parametrized): `history` must equal
   `events_to_messages(all_events)` because it feeds the same reference path, and that module's
   page-walk and draft-identity tests read it as that reference. `tests/test_scheduler_shared_session_manager.py`
-  reads its length once, and `docs/perf_baseline.md`'s projection-parity collector digests it. A
+  reads its length once, and `docs/perf_baseline.md@5175adf09`'s projection-parity collector digests it. A
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.
@@ -431,14 +431,6 @@ Known-alive symbols:
   installs neither attribute raises AttributeError on the first help render. Vulture flags
   each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
   delete them on that evidence.
-- `terminal_summary_present`, `master_woke_after_summary` (and their private predicates
-  `_is_terminal_worker_summary`, `_MASTER_OUTPUT_TYPES`) in `src/core/finalize_effects.py` —
-  the finalize chain that ran these judgments per worker/reviewer completion is gone (the
-  task-execution refactor deleted its call sites with the spawner finalize path), but the
-  standing M76 collector (`docs/perf_baseline.md`) drives both scans as its fold-absent
-  fallback (`if hasattr(mgr, "finalize_summary_present")` ... else the scans verbatim), so
-  the module has no import-site caller and vulture flags both functions as unused. Never
-  delete the module on static evidence alone.
 - `_reject_legacy_allow_list` (`src/core/config.py`, on `DiscordConfig`) — pydantic
   `@model_validator(mode="before")` classmethod: it rejects the retired
   `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
@@ -461,34 +453,3 @@ Known-alive symbols:
   Never delete on that evidence: the cancel tests' `patch(CHAT_CANCEL_MASTER_PATCH_TARGET, ...)`
   resolves the attribute through the loader and raises AttributeError, and the chat cancel
   endpoint breaks on its first production call.
-- `model_rows` (`src/core/usage_ledger.py`, on `UsageLedger`) — reached by the perf sweep's
-  doc-embedded collectors: `tools/perf_sweep.py` executes `docs/perf_baseline.md`'s
-  collector blocks verbatim, and the standing M7 (token-usage page) and M80 (changed round
-  under append churn) collectors call `ledger.model_rows()` for the rows digest and the timed
-  row read. Inside the Python tree the only callers are the ledger tests, which reach the
-  served path through the delegation (`model_rows` is exactly
-  `model_rows_with_native_starts()[0]`), so vulture flags the method as an unused method and a
-  Python-only reference scan reads it as a test-only wrapper. Never delete it on that
-  evidence: the sweep rounds that digest rows die with AttributeError (the collector-failure
-  class the ledger refactor's 2026-09-29 history row documents).
-- `list_threads`, `get_thread`, `get_thread_events` (`src/api/threads.py`, the
-  `/{session_id}/list`, `/{session_id}/threads/{thread_id}` and
-  `.../events` routes under `server.py`'s `/api/threads` prefix) and the row
-  shapes they serve (`description_full_len`, the attach pair
-  `build_attach_command`/`_attach_available` build) — reached by the perf
-  sweep's doc-embedded collectors: `tools/perf_sweep.py` executes
-  `docs/perf_baseline.md`'s collector blocks verbatim, and the standing M36/M68
-  (list poll, its `?etag=` conditional and the marked rebuild), M59 (detail
-  row, full and `?attach=1`, asserting the two-key attach body) and M34
-  (events fetch, the `after=` envelope) collectors drive exactly these routes
-  through an in-process ASGI app mounting this router, the live smoke harness
-  GETs the detail route's alias resolution
-  (`/api/threads/{owner}/threads/{run}` in `tools/live_smoke_task_tree.py`),
-  and the routes' own tests fetch all three. The web UI's workers panel — the
-  routes' original browser client — is gone (its JS files were deleted), so a
-  `web/` + `src/cli/` grep finds no fetch of the three GET paths, and the zero
-  browser reads can read as a deletable surface. Never delete them on that
-  evidence: the collectors' contract assertions then fail on the 404 body
-  ("attach-mode contract changed", the collector-failure class the baseline
-  doc's history rows document), the smoke harness's alias check fails, and the
-  tests lose their routes.

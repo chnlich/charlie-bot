@@ -158,7 +158,7 @@ class _LeanLineRenderer:
 
   ConsoleRenderer's pad/repr machinery prices ~43 us per request log line —
   73% of the raw-ASGI 401 floor the M3 sub-reading prices in
-  docs/perf_baseline.md — while the common line is a timestamp, a level, the
+  docs/perf_baseline.md@5175adf09 — while the common line is a timestamp, a level, the
   event, and sorted key=value fields. Exception, stack, and logger-name lines
   keep the dev renderer, whose output this class mirrors byte for byte.
   """

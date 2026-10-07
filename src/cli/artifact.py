@@ -61,7 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
 def _run_check(args: argparse.Namespace) -> int:
   # The assertion stack (dataclasses→inspect, plan_diff, html, ~23 ms) serves only this
-  # verb; the wrap verb's import floor (docs/perf_baseline.md M102) must not pay it.
+  # verb; the wrap verb's import floor (docs/perf_baseline.md@5175adf09 M102) must not pay it.
   from src.core import artifact_check
 
   if args.trigger is None and not args.assertions_only:

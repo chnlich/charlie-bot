@@ -1,7 +1,7 @@
 """Claude CLI launch vocabulary: permission flags, argv assembly, headless env.
 
 Stdlib-only by contract: the claude-sub worker binary imports this module on
-every launch (the M108 floor, docs/perf_baseline.md), so nothing here may
+every launch (the M108 floor, docs/perf_baseline.md@5175adf09), so nothing here may
 reach the backend ABC, the config model stack, or pydantic. Consumers read
 these names from two homes: base (src.agents.backends.base) re-exports the
 two permission flags for its established import path, and every other reader

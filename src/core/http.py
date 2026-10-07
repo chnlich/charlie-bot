@@ -2,7 +2,7 @@
 requests loader.
 
 Both third-party imports defer to first use: no import floor (server M99, CLI
-M92 in docs/perf_baseline.md) pays an HTTP library's chain for paths that never
+M92 in docs/perf_baseline.md@5175adf09) pays an HTTP library's chain for paths that never
 send a request (~60 ms httpx with rich, ~100 ms requests via urllib3 +
 charset_normalizer).
 """

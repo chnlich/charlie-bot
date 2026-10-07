@@ -160,7 +160,7 @@ def _annotated_diff_page(base_path: pathlib.Path, page_path: pathlib.Path, sessi
     raise fastapi.HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
   page_text = page_path.read_text(encoding="utf-8")
   # plan_diff drags html.parser and difflib and serves only this compare view;
-  # the server import floor (docs/perf_baseline.md M99) depends on it staying
+  # the server import floor (docs/perf_baseline.md@5175adf09 M99) depends on it staying
   # off the module import.
   from src.core import plan_diff
   page = plan_diff.annotate(base_text, page_text)

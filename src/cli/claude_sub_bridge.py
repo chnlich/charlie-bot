@@ -18,7 +18,7 @@ from src.core import event_types as ET
 
 # asyncio rides the methods that use it, not this import block: the bridge's
 # importers defer it to their own call sites (claude_sub's M108 launch floor,
-# docs/perf_baseline.md, is the wall from process start to the argv parse the
+# docs/perf_baseline.md@5175adf09, is the wall from process start to the argv parse the
 # bridge never reaches), so importing this module must not pull asyncio either.
 # The TYPE_CHECKING import covers the lazy method hints.
 if TYPE_CHECKING:
@@ -135,7 +135,7 @@ class HookTurnState:
   """In-memory state machine for one Claude Code turn.
 
   A plain class, not a dataclass: the bridge is src.cli.claude_sub's
-  module-level import, the M108 launch floor (docs/perf_baseline.md) pays that
+  module-level import, the M108 launch floor (docs/perf_baseline.md@5175adf09) pays that
   import in every fresh worker process, and the dataclasses import pulls
   inspect for machinery no consumer calls.
   """
@@ -403,7 +403,7 @@ class HookTurnState:
     # it wraps them into the same two-field payload make_compact_boundary_event
     # produces for the opencode and charlie-code backends.
     # The event builder's home is the backend ABC; the import rides this call so
-    # the M108 launch floor (docs/perf_baseline.md) keeps the ABC out of the
+    # the M108 launch floor (docs/perf_baseline.md@5175adf09) keeps the ABC out of the
     # worker binary's import.
     from src.agents.backends.base import make_context_compacted_event
 

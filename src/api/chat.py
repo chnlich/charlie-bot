@@ -228,7 +228,7 @@ async def run_and_finalize(
   log.info("run_and_finalize_start", session=meta.id, backend=meta.backend)
   backend_id = meta.backend
   backend_option = cfg.get_backend_option(backend_id)
-  # lazy: keeps the master-turn chain off the M99 server import floor (docs/perf_baseline.md)
+  # lazy: keeps the master-turn chain off the M99 server import floor (docs/perf_baseline.md@5175adf09)
   from src.agents import master_cc_queue
   try:
     await master_cc_queue.run_message(

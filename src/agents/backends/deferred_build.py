@@ -1,7 +1,7 @@
 """The deferred build_backend loader shared by the carriers that build one backend.
 
 The registry stack (src.agents.backends.registry and every backend module it
-imports, ~35 ms of the M99 server import floor in docs/perf_baseline.md) must
+imports, ~35 ms of the M99 server import floor in docs/perf_baseline.md@5175adf09) must
 stay off the server import chain, so each carrier resolves the builder at its
 one build site; this module imports the registry only inside that call.
 """

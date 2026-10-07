@@ -4,19 +4,15 @@ visibly instead of falling back to operator CLI behavior."""
 
 from __future__ import annotations
 
+import contextlib
 import io
+import pathlib
 import subprocess
-from contextlib import redirect_stderr, redirect_stdout
-from pathlib import Path
 
+import conftest
 import pytest
-from conftest import OPERATOR, make_home_config
 
-from src.core.constants import RUN_TOKEN_ENV
-from src.core.models import RunRecord, TaskSpec
-from src.core.run_token import RunTokenClaims, sign_run_token
-from src.core.sessions import SessionManager
-from src.core.task_sessions import TaskTreeManager
+from src.core import constants, models, run_token, sessions, task_sessions
 
 pytestmark = pytest.mark.asyncio
 
@@ -35,9 +31,9 @@ def _write_store(cfg) -> None:
     (entry_dir / f"{slug}.md").write_text(front + body, encoding="utf-8")
 
 
-async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
-                        profile: str) -> tuple[object, TaskTreeManager, str, str, str]:
-  cfg = make_home_config(tmp_path)
+async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, *,
+                        profile: str) -> tuple[object, task_sessions.TaskTreeManager, str, str, str]:
+  cfg = conftest.make_home_config(tmp_path)
   import src.core.config as core_config
   # The CLI's store root is charliebot_home_dir() / "memory" (env-resolved, config-free):
   # pin CHARLIEBOT_HOME to this config's home so the seeded store and every reader
@@ -49,24 +45,25 @@ async def _launched_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *,
               "access_key": "query-op-key"
           }}))
   _write_store(cfg)
-  session_mgr = SessionManager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+  session_mgr = sessions.SessionManager(cfg)
+  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   meta = await tree.create_task(
       request_id="r",
       task_parent_id=None,
       profile=profile,
-      task=TaskSpec(goal="g"),
+      task=models.TaskSpec(goal="g"),
       name="N",
       backend=None,
-      caller=OPERATOR)
+      caller=conftest.OPERATOR)
   run_id = "query-run"
-  await tree.runs.register_run(RunRecord(id=run_id, session_id=meta.id, kind="work"))
+  await tree.runs.register_run(models.RunRecord(id=run_id, session_id=meta.id, kind="work"))
   proc = subprocess.Popen(["/bin/sleep", "60"])
-  from src.core.runs import read_pid_stat
-  pair = read_pid_stat(proc.pid)
+  from src.core import runs
+  pair = runs.read_pid_stat(proc.pid)
   assert pair is not None
   await tree.runs.record_launch(meta.id, run_id, pid=proc.pid, pid_start=pair[0])
-  token = sign_run_token(RunTokenClaims(session_id=meta.id, run_id=run_id, agent="worker"), "query-op-key")
+  token = run_token.sign_run_token(
+      run_token.RunTokenClaims(session_id=meta.id, run_id=run_id, agent="worker"), "query-op-key")
   return cfg, tree, meta.id, run_id, token, proc
 
 
@@ -74,20 +71,20 @@ def _run_cli(monkeypatch: pytest.MonkeyPatch, argv: list[str], token: str | None
   import src.cli.memory as cli
   monkeypatch.setattr("sys.argv", ["charliebot", *argv])
   if token is None:
-    monkeypatch.delenv(RUN_TOKEN_ENV, raising=False)
+    monkeypatch.delenv(constants.RUN_TOKEN_ENV, raising=False)
   else:
-    monkeypatch.setenv(RUN_TOKEN_ENV, token)
+    monkeypatch.setenv(constants.RUN_TOKEN_ENV, token)
   out, err = io.StringIO(), io.StringIO()
   code = 0
   try:
-    with redirect_stdout(out), redirect_stderr(err):
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
       cli.main()
   except SystemExit as e:
     code = int(e.code or 0)
   return out.getvalue(), err.getvalue(), code
 
 
-async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_active_run_token_fixes_the_audience(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _tree, _session_id, _run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # No --audience: the worker run's token filters to the worker audience.
@@ -107,14 +104,15 @@ async def test_active_run_token_fixes_the_audience(tmp_path: Path, monkeypatch: 
     proc.terminate()
 
 
-async def test_unlaunched_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_unlaunched_run_token_refuses(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     # A fresh Run whose launch identity is never pinned: registered but not
     # launched, the refusal names the missing pin, not an unknown run.
     run_id = run_id + "-unlaunched"
-    await tree.runs.register_run(RunRecord(id=run_id, session_id=session_id, kind="work"))
-    token = sign_run_token(RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "query-op-key")
+    await tree.runs.register_run(models.RunRecord(id=run_id, session_id=session_id, kind="work"))
+    token = run_token.sign_run_token(
+        run_token.RunTokenClaims(session_id=session_id, run_id=run_id, agent="worker"), "query-op-key")
     out, err, code = _run_cli(monkeypatch, ["query", "--topic", "beta"], token)
     assert code == 1
     assert "has not launched" in err
@@ -123,7 +121,7 @@ async def test_unlaunched_run_token_refuses(tmp_path: Path, monkeypatch: pytest.
     proc.terminate()
 
 
-async def test_ended_run_token_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_ended_run_token_refuses(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, tree, session_id, run_id, token, proc = await _launched_run(tmp_path, monkeypatch, profile="worker")
   try:
     await tree.runs.record_finish(session_id, run_id, "completed", input_event_ids=[])

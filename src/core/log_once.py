@@ -193,9 +193,9 @@ class _LeanLineRenderer:
   def _dev_renderer(self) -> Any:
     # structlog.dev carries rich and pygments; only the fallback shapes pay it.
     if self._dev is None:
-      from structlog.dev import ConsoleRenderer
+      from structlog import dev
 
-      self._dev = ConsoleRenderer(colors=self._colors)
+      self._dev = dev.ConsoleRenderer(colors=self._colors)
     return self._dev
 
 

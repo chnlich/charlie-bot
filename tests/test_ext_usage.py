@@ -213,7 +213,7 @@ def test_derive_accounts_label_collision_skip_fail_loud(monkeypatch: pytest.Monk
                   ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1"),
               ]
       })
-  monkeypatch.setattr(ext_usage_mod, "get_config", lambda: cfg)
+  monkeypatch.setattr("src.core.config.get_config", lambda: cfg)
 
   labels = [label for label, _ in _derive_accounts()["claude"]]
 
@@ -273,7 +273,7 @@ def _run_poll_cycles(
     state["payloads"].append(event)
 
   monkeypatch.setattr(asyncio, "sleep", _fake_sleep)
-  monkeypatch.setattr(ext_usage_mod, "streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
+  monkeypatch.setattr("src.core.streaming.streaming_manager", types.SimpleNamespace(broadcast=_track_broadcast))
   monkeypatch.setattr(ext_usage_mod, "_derive_accounts", accounts_fn)
   monkeypatch.setattr(ext_usage_mod, "_create_provider", create_provider)
   ext_usage_mod._cached_usage.clear()
@@ -406,7 +406,7 @@ def _claude_provider(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeUsageHTTP, **creds: Any) -> ClaudeUsageProvider:
   credentials_path = tmp_path / ".credentials.json"
   _write_credentials(credentials_path, **creds)
-  monkeypatch.setattr(ext_usage_mod, "get_http_client", lambda: fake)
+  monkeypatch.setattr("src.core.http.get_http_client", lambda: fake)
   return ClaudeUsageProvider("ext-test", credentials_path)
 
 

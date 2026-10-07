@@ -18,7 +18,7 @@ import sys
 
 import pytest
 
-from src.agents.backends.spawn import SpawnedProcess, spawn_subprocess
+from src.agents.backends import spawn
 
 LIMIT = 1024 * 1024
 
@@ -28,7 +28,7 @@ _PY_PRINT = (
     "; sys.stderr.write('err-one\\n'); sys.stderr.flush()")
 
 
-async def _spawn(*args: str, **kwargs: object) -> SpawnedProcess:
+async def _spawn(*args: str, **kwargs: object) -> spawn.SpawnedProcess:
   defaults: dict = {
       "cwd": "/tmp",
       "env": dict(os.environ),
@@ -40,7 +40,7 @@ async def _spawn(*args: str, **kwargs: object) -> SpawnedProcess:
       "preexec_fn": None,
   }
   defaults.update(kwargs)
-  return await spawn_subprocess(*args, **defaults)
+  return await spawn.spawn_subprocess(*args, **defaults)
 
 
 @pytest.mark.asyncio

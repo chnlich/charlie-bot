@@ -10,7 +10,9 @@ import pytest
 import yaml
 from conftest import (
     OPUS_BACKEND_ID,
-    bind_deps_managers,
+    SessionBlocks,
+    bind_deps_blocks,
+    build_task_tree,
     create_scheduled_node,
     make_cron_client,
     make_scheduler_setup,
@@ -21,7 +23,6 @@ from src.features.cron import api as cron_api
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.loader import _load_cron_file
 from src.infra.config import CharlieBotConfig
-from src.runtime.sessions import SessionManager
 
 
 def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
@@ -43,13 +44,13 @@ def _cron_api_rig(
     monkeypatch: pytest.MonkeyPatch,
     *,
     preseed_backend: str | None = None,
-) -> tuple[Path, CharlieBotConfig, SessionManager, Path]:
+) -> tuple[Path, CharlieBotConfig, SessionBlocks, Path]:
   """Stage the cron API world: a cron.d dir, the nightly prompt source, the
   patched cron-dir bindings, and the real scheduler trio.
 
   ``preseed_backend`` also seeds nightly.yaml carrying that backend; without
   it the host file is absent, as before the task's first create. Returns
-  (cron_dir, cfg, session_mgr, md_path).
+  (cron_dir, cfg, session_blocks, md_path).
   """
   cron_dir = tmp_path / "cron.d"
   cron_dir.mkdir(parents=True, exist_ok=True)
@@ -58,22 +59,21 @@ def _cron_api_rig(
   else:
     _yaml_path, md_path, _md_content = _seed_prompt_file_task(cron_dir, tmp_path, backend=preseed_backend)
   _patch_cron_d(monkeypatch, cron_dir)
-  cfg, session_mgr, _ = make_scheduler_setup(tmp_path)
-  return cron_dir, cfg, session_mgr, md_path
+  cfg, session_blocks, _ = make_scheduler_setup(tmp_path)
+  return cron_dir, cfg, session_blocks, md_path
 
 
 @pytest.mark.asyncio
 async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A bound task's node follows the task config: the tick's alignment switches
   the node's backend in place and leaves the scheduler bookkeeping untouched."""
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.runtime.task_sessions import TaskTreeManager
-  tree = TaskTreeManager(cfg, session_mgr)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, scheduler = make_scheduler_setup(tmp_path)
+  tree = build_task_tree(cfg, session_blocks)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   node.last_scheduled_run = "2026-06-07T09:00:00+00:00"
   node.last_scheduled_cron = "0 2 * * *"
-  await session_mgr.store.save_metadata(node)
+  await session_blocks.store.save_metadata(node)
 
   task_cfg = ScheduledTaskConfig(
       name="nightly",
@@ -84,7 +84,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   )
   await scheduler._align_bound_backend(task_cfg, cfg)
 
-  fresh = await session_mgr.store.get_session(node.id)
+  fresh = await session_blocks.store.get_session(node.id)
   assert fresh is not None
   assert fresh.backend == "codex-o3"
   assert fresh.scheduled_task is None  # the node is a task-tree node, never re-stamped
@@ -92,7 +92,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   assert fresh.last_scheduled_cron == "0 2 * * *"
   # Idempotent: a second alignment on the now-current backend writes nothing.
   await scheduler._align_bound_backend(task_cfg, cfg)
-  sessions = await session_mgr.listing.list_sessions()
+  sessions = await session_blocks.listing.list_sessions()
   assert len(sessions) == 1
 
 
@@ -102,10 +102,9 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   """A hand-edited yaml backend seen by the tick switches the node in place and
   preserves its last_scheduled_run: the next fire is computed from the true last
   occurrence, not from a rotated generation's empty bookkeeping."""
-  cfg, session_mgr, scheduler = make_scheduler_setup(tmp_path)
-  from src.runtime.task_sessions import TaskTreeManager
-  tree = TaskTreeManager(cfg, session_mgr)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, scheduler = make_scheduler_setup(tmp_path)
+  tree = build_task_tree(cfg, session_blocks)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
   await tree.update_slot_fields(node.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron="* * * * *")
@@ -120,10 +119,10 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   scheduler._execute_task = execute_task
 
   await scheduler._align_bound_backend(task_cfg, cfg)
-  await scheduler._maybe_run(task_cfg, session_mgr.events, {}, cfg)
+  await scheduler._maybe_run(task_cfg, session_blocks.events, {}, cfg)
 
   execute_task.assert_not_awaited()
-  fresh = await session_mgr.store.get_session(node.id)
+  fresh = await session_blocks.store.get_session(node.id)
   assert fresh is not None
   assert fresh.backend == "codex-o3"
   assert fresh.last_scheduled_run == now.isoformat()
@@ -134,13 +133,13 @@ def test_cron_api_persists_and_clears_backend(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir, cfg, session_mgr, md_path = _cron_api_rig(tmp_path, monkeypatch)
+  cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
   nightly_path = cron_dir / "nightly.yaml"
 
   def _read_backend() -> str:
     return yaml.safe_load(nightly_path.read_text(encoding="utf-8")).get("backend")
 
-  with make_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_blocks) as client:
     create_response = client.post(
         "/api/cron/tasks",
         json={
@@ -172,9 +171,9 @@ def test_cron_api_rejects_invalid_backend_on_create(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-  cron_dir, cfg, session_mgr, md_path = _cron_api_rig(tmp_path, monkeypatch)
+  cron_dir, cfg, session_blocks, md_path = _cron_api_rig(tmp_path, monkeypatch)
 
-  with make_cron_client(cfg, session_mgr) as client:
+  with make_cron_client(cfg, session_blocks) as client:
     response = client.post(
         "/api/cron/tasks",
         json={

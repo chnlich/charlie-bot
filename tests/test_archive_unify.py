@@ -10,7 +10,7 @@ chain restore (topmost ancestor down to the target, siblings and descendants
 untouched, no round started), and the input table (the user's message restores;
 machine input is refused with the one archived sentence; a child report is
 history that wakes nobody). Every test drives the real TaskTreeManager and
-SessionManager over a temp home.
+session blocks over a temp home.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ async def build_tree(tree: TaskTreeManager, *, with_old_input: bool = False):
 
 @pytest.mark.asyncio
 async def test_close_clears_candidates_and_reopen_opens_a_fresh_boundary(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, _completed = await build_tree(tree, with_old_input=True)
 
   # The archive is the boundary that closes: the old pending input is history.
@@ -126,7 +126,7 @@ async def test_close_clears_candidates_and_reopen_opens_a_fresh_boundary(tmp_pat
 
 @pytest.mark.asyncio
 async def test_cascade_archive_writes_one_fact_per_open_node_with_archived_with(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, completed = await build_tree(tree)
 
   archived = await tree.archive_subtree(root.id, caller=OPERATOR)
@@ -167,7 +167,7 @@ async def test_cascade_archive_writes_one_fact_per_open_node_with_archived_with(
 
 @pytest.mark.asyncio
 async def test_cascade_archive_refuses_an_unfinished_run_and_writes_nothing(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, _completed = await build_tree(tree)
   import subprocess
 
@@ -205,7 +205,7 @@ async def test_cascade_archive_refuses_an_unfinished_run_and_writes_nothing(tmp_
 
 @pytest.mark.asyncio
 async def test_restore_brings_the_archived_ancestor_chain_and_leaves_the_rest(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, completed = await build_tree(tree)
   other_leaf = await create_task(tree, parent=mid.id, request_id="sib", profile="worker", name="Sib")
   await tree.archive_subtree(root.id, caller=OPERATOR)
@@ -238,7 +238,7 @@ async def test_restore_brings_the_archived_ancestor_chain_and_leaves_the_rest(tm
 
 @pytest.mark.asyncio
 async def test_restore_of_an_open_node_is_a_no_op_and_operator_only(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, _mid, _leaf, _completed = await build_tree(tree)
   assert await tree.completion.restore_chain(root.id, request_id="r-1", reason="sidebar unarchive") == []
   agent = CallerIdentity(kind="agent", claims=RunTokenClaims(run_id="run-1", session_id=root.id, agent="a"))
@@ -254,7 +254,7 @@ async def test_restore_of_an_open_node_is_a_no_op_and_operator_only(tmp_path: Pa
 
 @pytest.mark.asyncio
 async def test_user_message_restores_and_is_the_rounds_only_input(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, _completed = await build_tree(tree, with_old_input=True)
   await tree.archive_subtree(root.id, caller=OPERATOR)
 
@@ -284,12 +284,12 @@ async def test_user_message_announces_every_restored_node(tmp_path: Path) -> Non
   """The restore the user message rides announces one reopened fact per
   restored node from its own node, after the control lock releases — the
   same after-lock announcement restore_chain makes on the sidebar path."""
-  _cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, _completed = await build_tree(tree)
   await tree.archive_subtree(root.id, caller=OPERATOR)
 
   announce = mock.AsyncMock()
-  with mock.patch.object(session_mgr.events, "announce_appended_event", new=announce):
+  with mock.patch.object(session_blocks.events, "announce_appended_event", new=announce):
     await tree.dispatch.admit_input(leaf.id, event_type=ET.USER, content="resume", actor="user")
 
   announced = [(call.args[0], call.args[1]["type"]) for call in announce.await_args_list]
@@ -309,7 +309,7 @@ async def test_user_message_announces_every_restored_node(tmp_path: Path) -> Non
 
 @pytest.mark.asyncio
 async def test_agent_message_to_an_archived_node_is_refused_with_the_archived_sentence(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, leaf, _completed = await build_tree(tree)
   await tree.archive_subtree(root.id, caller=OPERATOR)
 
@@ -324,7 +324,7 @@ async def test_agent_message_to_an_archived_node_is_refused_with_the_archived_se
 
 @pytest.mark.asyncio
 async def test_child_report_into_an_archived_parent_is_history_and_wakes_nobody(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root, mid, _leaf, _completed = await build_tree(tree)
   await tree.archive_subtree(root.id, caller=OPERATOR)
 

@@ -16,7 +16,6 @@ import pytest
 from src.features.slack.slack_listener import handle_app_mention, summon_session_id
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
-from src.runtime import task_sessions
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
@@ -43,9 +42,9 @@ def _assert_manager_root(cfg: config.CharlieBotConfig, session_id: str) -> list[
 async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   launches: list[tuple[str, int]] = []
 
   async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
@@ -66,13 +65,14 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
 
   # The wake runs for real: the summon's round must start on the new root.
   with patch(conftest.THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.make_task_spawner(tasks)):
-    session_id = await handle_app_mention(event, cfg, session_mgr, conftest.FakeSlackClient())
+    session_id = await handle_app_mention(
+        event, cfg, *conftest.thread_blocks(session_blocks), conftest.FakeSlackClient())
     await asyncio.gather(*tasks)
 
   assert session_id == summon_session_id("T_TEST", "C_TEST", "1700000000.000100")
   assert launches == [(session_id, 1)]
   _assert_manager_root(cfg, session_id)
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await session_blocks.store.get_session(session_id)
   assert meta is not None
   origin = metadata_slots.fields_of(meta, "slack").slack_origin
   assert origin is not None
@@ -111,10 +111,12 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_operator_create_opens_a_manager_root_with_name_group_and_backend(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+async def test_operator_create_opens_a_manager_root_with_name_group_and_backend(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)  # require_caller reads the run store off the tree
 
-  with conftest.make_cron_sessions_client(cfg, session_mgr, tree) as client:
+  with conftest.make_cron_sessions_client(cfg, session_blocks, tree) as client:
     response = client.post("/api/sessions/", json={"name": "From the sidebar", "group": "Pinned"})
 
   assert response.status_code == 200

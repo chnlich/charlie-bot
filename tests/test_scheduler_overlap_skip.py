@@ -23,7 +23,7 @@ import pytest
 from src.features.cron import config
 from src.features.cron import scheduler as scheduler_module
 from src.infra import models
-from src.runtime import sessions, task_sessions
+from src.runtime import task_sessions
 
 
 class _Clock:
@@ -118,19 +118,19 @@ def install_pending_executor(
 async def _tick(
     scheduler: scheduler_module.Scheduler,
     task_cfg: config.ScheduledTaskConfig,
-    session_mgr: sessions.SessionManager,
+    session_blocks: conftest.SessionBlocks,
     clock: _Clock,
     minute: int,
     second: int = 0,
 ) -> None:
   clock.set(datetime.datetime(2026, 6, 1, 0, minute, second, tzinfo=datetime.UTC))
-  await scheduler._maybe_run(task_cfg, session_mgr.events, {}, None)
+  await scheduler._maybe_run(task_cfg, session_blocks.events, {}, None)
 
 
-def _skip_events_since(session_mgr: sessions.SessionManager, since: int) -> int:
+def _skip_events_since(session_blocks: conftest.SessionBlocks, since: int) -> int:
   """Count scheduled_run_skipped events emitted since ``since`` (len-based cursor)."""
   count = 0
-  for call in session_mgr.events.persist_and_broadcast.await_args_list[since:]:
+  for call in session_blocks.events.persist_and_broadcast.await_args_list[since:]:
     e = call.args[1]
     if e.get("type") == "scheduled_run_skipped":
       count += 1
@@ -140,35 +140,35 @@ def _skip_events_since(session_mgr: sessions.SessionManager, since: int) -> int:
 async def _bound_rig_tree(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
-) -> tuple[sessions.SessionManager, task_sessions.TaskTreeManager, models.SessionMetadata]:
+) -> tuple[conftest.SessionBlocks, task_sessions.TaskTreeManager, models.SessionMetadata]:
   """One synthetic home with the tree wired as the scheduler's deps singleton,
   plus the task's manager node carrying the clock's instant as its anchor."""
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   session = await conftest.create_scheduled_node(tree, name="code-health", backend=None)
-  return session_mgr, tree, session
+  return session_blocks, tree, session
 
 
 async def _pending_rig(
     monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path
-) -> tuple[_Clock, scheduler_module.Scheduler, models.SessionMetadata, sessions.SessionManager,
+) -> tuple[_Clock, scheduler_module.Scheduler, models.SessionMetadata, conftest.SessionBlocks,
            task_sessions.TaskTreeManager, _PendingRound, config.ScheduledTaskConfig]:
   """Rig for the scheduled-path tests: clock parked at 2026-06-01 00:00 UTC, one
   pending in-flight round, node anchored at that instant, one-minute-cadence task."""
   clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
+  session_blocks, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
   await tree.update_slot_fields(session.id, "cron", last_scheduled_run=clock.now().isoformat())  # 00:00
-  scheduler = scheduler_module.Scheduler(cfg, session_mgr)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
   pending = _PendingRound(session)
   install_pending_executor(scheduler, clock, pending, tree)
   # The skip event's count reads the broadcast spy, not the real broadcaster.
-  monkeypatch.setattr(session_mgr.events, "persist_and_broadcast", mock.AsyncMock())
+  monkeypatch.setattr(session_blocks.events, "persist_and_broadcast", mock.AsyncMock())
   task_cfg = _task(session_id=session.id)
-  return clock, scheduler, session, session_mgr, tree, pending, task_cfg
+  return clock, scheduler, session, session_blocks, tree, pending, task_cfg
 
 
 # ---------------------------------------------------------------------------
@@ -181,12 +181,12 @@ async def test_at_most_one_round_in_flight(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: pathlib.Path,
 ) -> None:
-  clock, scheduler, _session, session_mgr, _tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
+  clock, scheduler, _session, session_blocks, _tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
 
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=1)
   await asyncio.sleep(0)  # let the birthed round become the in-flight handle
   for minute in (2, 3, 4, 5):
-    await _tick(scheduler, task_cfg, session_mgr, clock, minute=minute)
+    await _tick(scheduler, task_cfg, session_blocks, clock, minute=minute)
 
   # Several due ticks arrived while the first round was still pending; the
   # pending round was never joined by a second one.
@@ -206,15 +206,15 @@ async def test_one_skip_consuming_delayed_occurrences(
     tmp_path: pathlib.Path,
 ) -> None:
   """A tick delayed past several occurrences yields one record that consumes them."""
-  clock, scheduler, session, session_mgr, tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
+  clock, scheduler, session, session_blocks, tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
 
   # One fire births the round; then a single delayed tick arrives at 00:04.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
-  cursor = len(session_mgr.events.persist_and_broadcast.await_args_list)
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=4)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=1)
+  cursor = len(session_blocks.events.persist_and_broadcast.await_args_list)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=4)
 
   # Exactly one record consumed occurrences 00:02, 00:03 and 00:04.
-  assert _skip_events_since(session_mgr, cursor) == 1
+  assert _skip_events_since(session_blocks, cursor) == 1
   anchored = await tree.load_meta(session.id)
   assert anchored is not None
   assert models.parse_utc_datetime(anchored.last_scheduled_run) == datetime.datetime(
@@ -236,10 +236,10 @@ async def test_no_fire_on_completion_moment(
   """After the pending round finishes, further fires land on the cron grid, never
   at the completion moment. Failing the skip or firing on completion makes the
   mid-minute tick below birth a round, which this asserts does not happen."""
-  clock, scheduler, session, session_mgr, tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
+  clock, scheduler, session, session_blocks, tree, pending, task_cfg = await _pending_rig(monkeypatch, tmp_path)
 
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)  # birth the round
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=2)  # skip while pending
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=1)  # birth the round
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=2)  # skip while pending
 
   # The pending round finishes; the tick immediately after completion lands at
   # a mid-minute moment (00:02:30), which is not on the cron grid.
@@ -247,7 +247,7 @@ async def test_no_fire_on_completion_moment(
   await asyncio.sleep(0)
   assert pending.handle.done()
   fires_at_completion = pending.fires
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=2, second=30)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=2, second=30)
 
   # No fire happened at the completion moment: the executor never ran there, so
   # an implementation that refires on completion would trip this assertion.
@@ -255,7 +255,7 @@ async def test_no_fire_on_completion_moment(
 
   # The next fire lands on 00:03:00, the next cron occurrence from the anchor
   # (00:02:00) that the last skip left.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=3)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=3)
   await asyncio.sleep(0)  # let the birthed round count its start
   assert pending.fires == fires_at_completion + 1
   anchored = await tree.load_meta(session.id)
@@ -281,8 +281,8 @@ async def test_fire_ignores_stuck_running_disk_state(
   clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
-  scheduler = scheduler_module.Scheduler(cfg, session_mgr)
+  session_blocks, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
+  scheduler = conftest.build_scheduler(cfg, session_blocks)
 
   # Stuck on-disk signals: a thread record whose status says running with a pid
   # that no longer exists, and node bookkeeping stuck at running.
@@ -304,7 +304,7 @@ async def test_fire_ignores_stuck_running_disk_state(
 
   # No handle is in flight for this task (registry is empty), so despite the
   # running state on disk the due fire at 00:01 proceeds.
-  await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
+  await _tick(scheduler, task_cfg, session_blocks, clock, minute=1)
 
   fired.assert_awaited()
 
@@ -324,7 +324,7 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   clock = _Clock(datetime.datetime(2026, 6, 1, 0, 0, 0, tzinfo=datetime.UTC))
   _install_clock(monkeypatch, clock)
   cfg = conftest.make_home_config(tmp_path)
-  scheduler = scheduler_module.Scheduler(cfg, mock.AsyncMock())
+  scheduler = scheduler_module.Scheduler(cfg, mock.AsyncMock(), mock.AsyncMock(), mock.AsyncMock(), mock.AsyncMock())
 
   # A scheduled round is in flight.
   async def _never() -> None:

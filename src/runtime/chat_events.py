@@ -308,8 +308,8 @@ class ChatEventStore:
   def read_archive_offset_sync(self, session_id: str) -> int:
     """Synchronously read the archive_offset from metadata.json.
 
-    Used by sync read paths (``load_chat_events_range`` and SessionManager's
-    aggregator seed / projection guard) so they don't have to go async just to
+    Used by sync read paths (``load_chat_events_range`` and the session events
+    block's aggregator seed / projection guard) so they don't have to go async just to
     learn the live/archive split. Falls back to 0 if the metadata file is
     missing or unreadable.
     """

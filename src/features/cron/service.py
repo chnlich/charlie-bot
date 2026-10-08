@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from src.runtime import session_events, session_lifecycle, session_listing, session_store
 from src.runtime.hooks import wiring
 
 if TYPE_CHECKING:
@@ -17,7 +18,8 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
   global _scheduler
   from src.features.cron import scheduler as scheduler_module
 
-  _scheduler = scheduler_module.Scheduler(ctx.cfg, ctx.session_mgr)
+  _scheduler = scheduler_module.Scheduler(
+      ctx.cfg, session_store.store(), session_events.events(), session_listing.listing(), session_lifecycle.lifecycle())
   ctx.app.state.scheduler = _scheduler
   await _scheduler.start()
 

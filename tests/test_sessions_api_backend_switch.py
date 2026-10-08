@@ -17,7 +17,6 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import sessions
 
 
 def _build_cfg(tmp_path: pathlib.Path) -> tuple[config.CharlieBotConfig, pathlib.Path]:
@@ -47,16 +46,16 @@ def _build_cfg(tmp_path: pathlib.Path) -> tuple[config.CharlieBotConfig, pathlib
 # ---------------------------------------------------------------------------
 
 
-async def _seed(session_mgr: sessions.SessionManager, *, backend: str) -> str:
-  meta = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="t"), backend=backend)
+async def _seed(session_blocks: conftest.SessionBlocks, *, backend: str) -> str:
+  meta = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="t"), backend=backend)
   return meta.id
 
 
-def _capture_persisted_events(monkeypatch: pytest.MonkeyPatch, session_mgr: sessions.SessionManager) -> list[dict]:
+def _capture_persisted_events(monkeypatch: pytest.MonkeyPatch, session_blocks: conftest.SessionBlocks) -> list[dict]:
   """Swap in a capturing mock.AsyncMock for ``persist_and_broadcast``; return the events it captured."""
   captured: list[dict] = []
   monkeypatch.setattr(
-      session_mgr.events, "persist_and_broadcast",
+      session_blocks.events, "persist_and_broadcast",
       mock.AsyncMock(side_effect=lambda _sid, event: captured.append(event) or None))
   return captured
 
@@ -67,12 +66,12 @@ async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg, _config_a = _build_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  sid = await _seed(session_mgr, backend="claude-opus-5")
+  session_blocks = conftest.build_session_blocks(cfg)
+  sid = await _seed(session_blocks, backend="claude-opus-5")
 
-  captured = _capture_persisted_events(monkeypatch, session_mgr)
+  captured = _capture_persisted_events(monkeypatch, session_blocks)
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "claude-fable-5"})
 
   assert response.status_code == 200
@@ -86,7 +85,7 @@ async def test_switch_same_domain_returns_updated_meta_and_persists_audit(
           "previous_native_session_id": None,
       }
   ]
-  on_disk = await session_mgr.store.get_session(sid)
+  on_disk = await session_blocks.store.get_session(sid)
   assert on_disk.backend == "claude-fable-5"
 
 
@@ -96,12 +95,12 @@ async def test_switch_cross_family_switches_in_place(tmp_path: pathlib.Path, mon
   disk, and the audit event carries exactly the two previous-native fields (a
   session holding no native id records none)."""
   cfg, _config_a = _build_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  sid = await _seed(session_mgr, backend="claude-opus-5")
+  session_blocks = conftest.build_session_blocks(cfg)
+  sid = await _seed(session_blocks, backend="claude-opus-5")
 
-  captured = _capture_persisted_events(monkeypatch, session_mgr)
+  captured = _capture_persisted_events(monkeypatch, session_blocks)
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post(f"/api/sessions/{sid}/backend", json={"backend": "codex-o3"})
 
   assert response.status_code == 200
@@ -115,7 +114,7 @@ async def test_switch_cross_family_switches_in_place(tmp_path: pathlib.Path, mon
           "previous_native_session_id": None,
       }
   ]
-  on_disk = await session_mgr.store.get_session(sid)
+  on_disk = await session_blocks.store.get_session(sid)
   assert on_disk is not None
   assert on_disk.backend == "codex-o3"
 
@@ -128,10 +127,9 @@ async def test_switch_bound_node_cross_family_is_400(
   unchanged. The judgment reads the binding (the loaded task configs'
   session_id), never a scheduled_task stamp."""
   cfg, _config_a = _build_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  from src.runtime import task_sessions
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   rl = await conftest.create_scheduled_node(tree, name="nightly", backend="claude-opus-5")
   # temp_home points HOME (and so cron_dir()) at tmp_path: the binding file the
   # loaded task configs read lives under the same synthetic home.
@@ -154,9 +152,9 @@ async def test_switch_bound_node_cross_family_is_400(
           }),
       encoding="utf-8")
 
-  captured = _capture_persisted_events(monkeypatch, session_mgr)
+  captured = _capture_persisted_events(monkeypatch, session_blocks)
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post(f"/api/sessions/{rl.id}/backend", json={"backend": "codex-o3"})
 
   assert response.status_code == 400
@@ -164,7 +162,7 @@ async def test_switch_bound_node_cross_family_is_400(
   assert "cron" in detail
   assert "codex-o3" in detail
   assert not captured
-  on_disk = await session_mgr.store.get_session(rl.id)
+  on_disk = await session_blocks.store.get_session(rl.id)
   assert on_disk is not None
   assert on_disk.backend == "claude-opus-5"
 
@@ -172,9 +170,9 @@ async def test_switch_bound_node_cross_family_is_400(
 @pytest.mark.asyncio
 async def test_switch_missing_session_returns_404(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg, _config_a = _build_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  captured = _capture_persisted_events(monkeypatch, session_mgr)
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  session_blocks = conftest.build_session_blocks(cfg)
+  captured = _capture_persisted_events(monkeypatch, session_blocks)
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post("/api/sessions/does-not-exist/backend", json={"backend": "claude-fable-5"})
   assert response.status_code == 404
   assert not captured

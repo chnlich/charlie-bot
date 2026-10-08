@@ -21,10 +21,9 @@ import pytest
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import session_events as session_events_module
-from src.runtime import sessions as sessions_module
 
 
-async def _seed_session(mgr: sessions_module.SessionManager) -> str:
+async def _seed_session(mgr: conftest.SessionBlocks) -> str:
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="catchup"))
   await mgr.events.save_chat_event(
       session.id, {
@@ -47,7 +46,7 @@ async def _seed_session(mgr: sessions_module.SessionManager) -> str:
 @pytest.mark.asyncio
 async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   sid = await _seed_session(mgr)
 
   aggregator = await mgr.events._get_or_init_aggregator(sid)
@@ -67,7 +66,7 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path:
 @pytest.mark.asyncio
 async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   sid = await _seed_session(mgr)
 
   inits = 0
@@ -94,7 +93,7 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -
 @pytest.mark.asyncio
 async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   sid = await _seed_session(mgr)
 
   real_aggregator = session_events_module.MessageAggregator

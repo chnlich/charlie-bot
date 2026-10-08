@@ -51,8 +51,8 @@ from tests.test_task_execution import (
 
 async def _takeoff_manager(tmp_path, monkeypatch):
   """One manager with its take-off turn already consumed (scripted backend)."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="root",
@@ -66,11 +66,11 @@ async def _takeoff_manager(tmp_path, monkeypatch):
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision["launch"] is True
   await wait_for_terminal_run(tree, manager.id, decision["run_id"])
-  return cfg, session_mgr, tree, manager
+  return cfg, session_blocks, tree, manager
 
 
 async def _manager_and_worker(tmp_path, monkeypatch, task_type=None, repo=None):
-  cfg, session_mgr, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, manager = await _takeoff_manager(tmp_path, monkeypatch)
   child_task = TaskSpec(goal="do the work", repo_path=repo, task_type=task_type)
   worker = await tree.create_task(
       request_id="child",
@@ -80,7 +80,7 @@ async def _manager_and_worker(tmp_path, monkeypatch, task_type=None, repo=None):
       name="W",
       backend=None,
       caller="operator")
-  return cfg, session_mgr, tree, manager, worker
+  return cfg, session_blocks, tree, manager, worker
 
 
 @pytest.mark.asyncio
@@ -89,7 +89,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
   """A run registered (reservation) but never launched: recovery dispatches it
     through the executor — one process, the exact registered provenance."""
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("recovered work")])
   builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
   admitted = await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
@@ -116,7 +116,7 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
 async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A recorded live (pid, pid_start) process is followed, never relaunched."""
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   gate = asyncio.Event()
   backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
   builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
@@ -151,7 +151,7 @@ async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monk
 @pytest.mark.asyncio
 async def test_stop_request_wins_over_launch_and_recovery(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("x")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   run_id = "run-stopped"
@@ -180,7 +180,7 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
     (landing recheck) stays idempotent."""
   from src.infra.models import PatchSessionTaskRequest
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path / "repo")
   await tree.patch_task(
       worker.id,
@@ -255,7 +255,7 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
     replay. The worktree is already gone from disk, as a delivered task's is."""
   from conftest import run_git
 
-  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+  cfg, session_blocks, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
   repo, _origin = init_repo_with_origin(tmp_path / "repo")
   # The reviewer's landing: the reviewed branch fast-forwards origin's base.
@@ -291,7 +291,7 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
           backend="fake",
           model="fake-model"))
   await tree.dispatch.finish_run(worker.id, review_run_id, outcome="success", exit_code=0)
-  return cfg, session_mgr, tree, manager, worker
+  return cfg, session_blocks, tree, manager, worker
 
 
 @pytest.mark.asyncio
@@ -301,7 +301,7 @@ async def test_recovery_closed_task_skips_landing(tmp_path: Path, monkeypatch: p
     its parent, and leave the state completed."""
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
   # The warm pass replays the follow-up on the still-open task: the landing
   # proof runs once, the automatic close lands, and the parent report's own
   # turn settles before the counted passes start.
@@ -327,7 +327,7 @@ async def test_recovery_reopened_task_reproves_landing(tmp_path: Path, monkeypat
     runs the full landing proof (the counter observes git_verify_commit_landed)."""
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
   await reconcile_task_tree(cfg, tree)
   assert tree.task_state(worker.id) == "completed"
   await _settle_parent(tree, manager, timeout=5.0, poll=0.02)
@@ -346,7 +346,7 @@ async def test_recovery_open_task_landing_unchanged(tmp_path: Path, monkeypatch:
     exactly as the closed-task skip left it."""
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, _session_mgr, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, manager, worker = await _reviewed_implement_task(tmp_path, monkeypatch)
   counts = _count_landing_git(monkeypatch)
   await reconcile_task_tree(cfg, tree)
   assert counts["git_verify_commit_landed"] >= 1, counts
@@ -366,7 +366,7 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
 
   from src.infra.models import PatchSessionTaskRequest
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   # Two reviewer entries beyond the worker's own backend: a failed first
   # attempt must move to the second one.
   cfg.backends.options.extend(
@@ -435,10 +435,10 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
     """
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  manager = await create_root_session(session_mgr, CreateSessionRequest(name="Manager"), backend="fake")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  manager = await create_root_session(session_blocks, CreateSessionRequest(name="Manager"), backend="fake")
   worker = await tree.create_task(
       request_id="w",
       task_parent_id=manager.id,
@@ -506,8 +506,8 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
     boot reconcile fills them too — from the drain rule's values, once."""
   from src.runtime.task_recovery import reconcile_task_tree
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
@@ -539,8 +539,8 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
 
   # A boot reconcile repairs the same shape too: a staged fact with empty
   # metadata and a past-stamped raw log.
-  cfg2, session_mgr2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
-  tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_mgr2, tree2, monkeypatch)
+  cfg2, session_blocks2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
+  tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_blocks2, tree2, monkeypatch)
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
   boot_run_id = "run-half-written"
   await tree2.runs.register_run(
@@ -565,8 +565,8 @@ async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkey
     the retry entry; the retry's own round delivers the parent report."""
   from src.runtime.task_recovery import reconcile_task_tree
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
   await tree.runs.register_run(
@@ -594,9 +594,9 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     follows, or a manager-turn follow queued in the master queue; replayed
     delivery starts no second review process."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
+  cfg, session_blocks, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))

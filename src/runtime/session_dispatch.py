@@ -50,7 +50,9 @@ from src.runtime.task_errors import (
 if TYPE_CHECKING:
   from src.runtime.control_sink import ControlEventSink
   from src.runtime.runs import RunStore
-  from src.runtime.sessions import SessionManager
+  from src.runtime.session_anchors import SessionAnchors
+  from src.runtime.session_events import SessionEvents
+  from src.runtime.session_store import SessionStore
 
 log = LazyStructlogLogger()
 
@@ -87,10 +89,9 @@ class DispatchTree(Protocol):
   events: ControlEventSink
   runs: RunStore
   completion: DispatchCompletion
-
-  @property
-  def sessions(self) -> SessionManager:
-    ...
+  session_store: SessionStore
+  session_events: SessionEvents
+  session_anchors: SessionAnchors
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
     ...
@@ -267,9 +268,9 @@ class TaskInputDispatcher:
             break
           chain.append(ancestor)
         for node in chain:
-          current = await tree.sessions.store.get_session(node.id)
+          current = await tree.session_store.get_session(node.id)
           if when > current.updated_at:
-            await tree.sessions.anchors.update_thinking_state(node.id, when)
+            await tree.session_anchors.update_thinking_state(node.id, when)
         tree.invalidate_tree_index()
     # The restore's per-node announcements ride the same after-lock window as
     # restore_chain's: each reopened fact reaches the page from its own node

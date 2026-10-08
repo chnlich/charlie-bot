@@ -14,7 +14,7 @@ backfill, and the round side (``post_reply``, ``assert_thread_fresh``,
 describes Discord to the core with the ``DISCORD`` platform and keeps the
 public Discord-named wrappers (``post_reply``, ``assert_thread_fresh``,
 ``ack_messages``, ``deliver_done``, ``backfill_lost_summons``) that the CLI,
-the server endpoint, and the session-manager wiring import.
+the server endpoint, and the turn-contribution and service wiring import.
 The gateway connect/receive/reconnect loop (``run_listener`` below) calls
 ``handle_message_create`` per payload and ``_backfill_followed_threads`` per
 (re)connection; the server starts it next to the Slack listener whenever the
@@ -97,7 +97,7 @@ from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
 from src.runtime.session_successor import SessionSuccessor
-from src.runtime.sessions import SessionManager
+from src.runtime.task_execution import task_manager
 from src.runtime.triggers import TriggerManager
 
 if TYPE_CHECKING:
@@ -438,7 +438,7 @@ async def handle_message_create(
 
 
 # ---------------------------------------------------------------------------
-# Round side: the wrappers the CLI, the endpoint, and the session manager call
+# Round side: the wrappers the CLI, the endpoint, and the turn contribution call
 # ---------------------------------------------------------------------------
 
 
@@ -670,7 +670,14 @@ async def _run_connection(
   raise _DroppedError("gateway connection closed", saw_ready=saw_ready)
 
 
-async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+async def run_listener(
+    cfg: CharlieBotConfig,
+    listing: SessionListing,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    events: SessionEvents,
+    successor: SessionSuccessor,
+) -> None:
   """Discord gateway connect/receive/reconnect loop; returns only on a stop close code.
 
   One connection at a time; every (re)connection identifies afresh and
@@ -679,7 +686,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
   connection proved itself.
   """
   client = _bot_client()
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, task_manager())
   token = str(get_credentials().require("discord", "bot_token"))
   if not await _preflight(client):
     return
@@ -700,9 +707,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
       backoff = min(backoff * 2, 30.0)
       continue
     try:
-      await _run_connection(
-          ws, token, cfg, session_mgr.listing, session_mgr.store, session_mgr.lifecycle, session_mgr.events,
-          session_mgr.successor, client, trigger_mgr)
+      await _run_connection(ws, token, cfg, listing, store, lifecycle, events, successor, client, trigger_mgr)
     except _StopCloseError as stop:
       logger.error("discord_listener_stopped", code=stop.code, reason=_STOP_CLOSE_CODES[stop.code])
       return

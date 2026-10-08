@@ -51,7 +51,21 @@ from src.infra.config import CharlieBotConfig, configured_access_key, get_config
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
-from src.runtime import review, runs, task_prompts, thinking_state
+from src.runtime import (
+    master_cc_queue,
+    review,
+    runs,
+    session_anchors,
+    session_events,
+    session_fork,
+    session_lifecycle,
+    session_listing,
+    session_sidebar,
+    session_store,
+    session_successor,
+    task_prompts,
+    thinking_state,
+)
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import (
     ACTOR_SYSTEM,
@@ -66,7 +80,6 @@ from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.runtime.session_anchors import backend_switch_reset_reason, context_reset_note
 from src.runtime.session_dispatch import child_report_text
-from src.runtime.sessions import SessionManager, session_manager
 from src.runtime.spawner_backends import resolve_backend_option
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,
@@ -289,25 +302,33 @@ async def assemble_coherent_snapshot(
   return snapshot, overlay_error, declared
 
 
-async def apply_sequence_wake_duties(
-    session_mgr: SessionManager,
-    meta: SessionMetadata,
-    input_events: list[dict],
-) -> str | None:
+async def apply_sequence_wake_duties(meta: SessionMetadata, input_events: list[dict]) -> str | None:
   """Run the registered sequence binding's wake duties, if the node has one."""
   binding = binding_for(meta.id)
   if binding is None:
     return None
-  return await binding.on_wake(meta, input_events, sessions=session_mgr)
+  return await binding.on_wake(meta, input_events)
 
 
 class TaskExecutionAdapter:
   """Binds registered Runs to the existing master/worker execution harnesses."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> None:
+  def __init__(
+      self,
+      cfg: CharlieBotConfig,
+      successor: session_successor.SessionSuccessor,
+      events: session_events.SessionEvents,
+      lifecycle: session_lifecycle.SessionLifecycle,
+      anchors: session_anchors.SessionAnchors,
+      sidebar: session_sidebar.SessionSidebar,
+      tree: TaskTreeManager,
+  ) -> None:
     self._cfg = cfg
-    self._sessions = session_mgr
-    self._successor = session_mgr.successor
+    self._successor = successor
+    self._events = events
+    self._lifecycle = lifecycle
+    self._anchors = anchors
+    self._sidebar = sidebar
     self._tree = tree
     # In-process launch guard: one execute task per run per process. The
     # durable (pid, pid_start) identity write is the cross-restart
@@ -983,7 +1004,8 @@ class TaskExecutionAdapter:
     """The unified fenceless-run alert (undeclared or unreadable overlay)."""
     reason = "unreadable" if overlay_error is not None else "undeclared"
     log.warning("task_overlay_inactive", session_id=session_id, backend=option.id, reason=reason)
-    await self._sessions.callbacks().persist_and_broadcast(
+    callbacks = master_cc_queue.session_callbacks(self._events, self._lifecycle, self._anchors, self._sidebar)
+    await callbacks.persist_and_broadcast(
         session_id, {
             "type":
                 ET.BACKEND_OVERLAY_INACTIVE,
@@ -1077,7 +1099,6 @@ class TaskExecutionAdapter:
         notice (the task summary and where the earlier history lives), while an
         input-only change keeps the conversation.
         """
-    from src.runtime import master_cc_queue
     from src.runtime.master_cc_state import TaskRunBinding
 
     session_id, run_id = meta.id, run.id
@@ -1091,7 +1112,7 @@ class TaskExecutionAdapter:
     # The dispatched wake carries the cron session's duties (weekly recycle,
     # firing-report prefix) here. The recycle may clear the node's anchor in
     # place, so the fresh-conversation judgment below reads the post-recycle state.
-    sequence_prefix = await apply_sequence_wake_duties(self._sessions, meta, batch_events)
+    sequence_prefix = await apply_sequence_wake_duties(meta, batch_events)
     if sequence_prefix:
       content = f"{sequence_prefix}{content}"
 
@@ -1144,7 +1165,7 @@ class TaskExecutionAdapter:
         self._cfg,
         meta,
         prompt,
-        self._sessions.callbacks(),
+        master_cc_queue.session_callbacks(self._events, self._lifecycle, self._anchors, self._sidebar),
         user_event_ids=list(run.input_event_ids),
         auto_trigger=any(e.get("type") == ET.SCHEDULED_TRIGGER for e in batch_events),
         backend_option=option,
@@ -1706,7 +1727,6 @@ class TaskExecutionAdapter:
         has returned.
         """
     from src.infra import models
-    from src.runtime import master_cc_queue
     from src.runtime.master_cc_state import TaskRunBinding
 
     transport_dir = self._tree.runs.run_dir(meta.id, run.id)
@@ -1726,7 +1746,7 @@ class TaskExecutionAdapter:
         self._cfg,
         meta,
         record,
-        self._sessions.callbacks(),
+        master_cc_queue.session_callbacks(self._events, self._lifecycle, self._anchors, self._sidebar),
         is_alive=is_alive,
         task_run=TaskRunBinding(session_id=meta.id, run_id=run.id, transport_dir=str(transport_dir)),
         on_task_spawn=on_task_spawn,
@@ -2101,8 +2121,26 @@ def task_manager() -> TaskTreeManager:
   """
   global _task_manager
   if _task_manager is None:
-    _task_manager = TaskTreeManager(get_config(), session_manager())
-    _task_manager.dispatch.executor = TaskExecutionAdapter(get_config(), session_manager(), _task_manager)
+    _task_manager = TaskTreeManager(
+        get_config(),
+        session_store.store(),
+        session_events.events(),
+        session_sidebar.sidebar(),
+        session_listing.listing(),
+        session_lifecycle.lifecycle(),
+        session_fork.fork(),
+        session_anchors.anchors(),
+        session_successor.successor(),
+    )
+    _task_manager.dispatch.executor = TaskExecutionAdapter(
+        get_config(),
+        session_successor.successor(),
+        session_events.events(),
+        session_lifecycle.lifecycle(),
+        session_anchors.anchors(),
+        session_sidebar.sidebar(),
+        _task_manager,
+    )
   return _task_manager
 
 

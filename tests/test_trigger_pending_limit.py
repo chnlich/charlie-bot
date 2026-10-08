@@ -22,7 +22,8 @@ from conftest import (
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     TRIGGER_TASK_DELIVERY_PATCH_TARGET,
-    build_session_manager,
+    SessionBlocks,
+    build_session_blocks,
     create_root_session,
     fake_cli_cfg,
     make_home_config,
@@ -36,10 +37,9 @@ from src.features.chat_threads.thread_entry import arm_follow_trigger
 from src.features.slack.slack_listener import SLACK, SlackThreadAdapter
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, PendingTrigger, TriggerStatus
-from src.runtime.api.deps import get_session_manager, get_session_store, get_trigger_manager
+from src.runtime.api.deps import get_session_store, get_trigger_manager
 from src.runtime.api.internal import router as internal_router
 from src.runtime.cli import schedule_trigger as cli_module
-from src.runtime.sessions import SessionManager
 from src.runtime.triggers import MAX_PENDING_TRIGGERS, PendingTriggerLimitError, TriggerManager
 
 
@@ -55,11 +55,11 @@ async def _seed(
     pending: int = 0,
     fired: int = 0,
     cancelled: int = 0,
-) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
+) -> tuple[CharlieBotConfig, SessionBlocks, TriggerManager, str]:
   cfg = make_home_config(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, CreateSessionRequest(name="limit"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, CreateSessionRequest(name="limit"))
+  trigger_mgr = TriggerManager(cfg, session_blocks.tree)
   for i in range(fired):
     await trigger_mgr._save_trigger(
         PendingTrigger(
@@ -80,7 +80,7 @@ async def _seed(
         ))
   for i in range(pending):
     await trigger_mgr.create_trigger(session.id, 3600, f"pending {i}")
-  return cfg, session_mgr, trigger_mgr, session.id
+  return cfg, session_blocks, trigger_mgr, session.id
 
 
 async def _pending_count(trigger_mgr: TriggerManager, session_id: str) -> int:
@@ -109,7 +109,6 @@ def test_api_returns_422_with_exact_detail_and_cli_exits_2(tmp_path: Path, monke
 
   app = FastAPI()
   app.include_router(internal_router, prefix="/api/internal")
-  app.dependency_overrides[get_session_manager] = lambda: sessions
   app.dependency_overrides[get_session_store] = lambda: sessions.store
   app.dependency_overrides[get_trigger_manager] = lambda: trigger_mgr
   res = TestClient(app).post(

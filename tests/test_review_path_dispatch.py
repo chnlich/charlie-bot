@@ -31,8 +31,8 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
     commit on the branch, made while the review runs), so the chain reports
     "passed review but its branch did not land" and the child stays open.
     """
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   repo, _origin = conftest.init_repo_with_origin(tmp_path / "repo")
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")

@@ -26,7 +26,7 @@ from src.runtime import task_errors
 
 @pytest_asyncio.fixture
 async def env(tmp_path: pathlib.Path):
-  _, session_mgr, tree = conftest.build_env(tmp_path)
+  _, session_blocks, tree = conftest.build_env(tmp_path)
   root = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -35,12 +35,12 @@ async def env(tmp_path: pathlib.Path):
       name="Root",
       backend=None,
       caller=conftest.OPERATOR)
-  return tree, session_mgr, root.id
+  return tree, session_blocks, root.id
 
 
 @pytest.mark.asyncio
 async def test_create_notifies_with_the_node_readable_at_signal(env) -> None:
-  tree, _session_mgr, root_id = env
+  tree, _session_blocks, root_id = env
   spy = conftest.NotificationSpy(tree)
   spy.install()
   child = await tree.create_task(
@@ -63,7 +63,7 @@ async def test_create_notifies_with_the_node_readable_at_signal(env) -> None:
 
 @pytest.mark.asyncio
 async def test_failed_prepublication_create_emits_no_signal(env) -> None:
-  tree, _session_mgr, root_id = env
+  tree, _session_blocks, root_id = env
   spy = conftest.NotificationSpy(tree)
   spy.install()
   with pytest.raises(task_errors.TaskInvalidError):

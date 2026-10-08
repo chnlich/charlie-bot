@@ -14,9 +14,9 @@ from src.features.artifacts.plans import PlanRegistryManager
 from src.infra import config
 from src.infra.models import SessionMetadata
 from src.infra.responses import FastJsonResponse
+from src.runtime import session_events
 from src.runtime.api.deps import bad_request, get_session_store, require_found, require_session
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import session_manager
 
 internal_router = APIRouter()
 sessions_router = APIRouter()
@@ -77,7 +77,7 @@ _plan_manager: PlanRegistryManager | None = None
 def plan_manager() -> PlanRegistryManager:
   global _plan_manager
   if _plan_manager is None:
-    _plan_manager = PlanRegistryManager(config.get_config(), session_manager())
+    _plan_manager = PlanRegistryManager(config.get_config(), session_events.events())
   return _plan_manager
 
 

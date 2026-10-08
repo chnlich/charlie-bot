@@ -398,8 +398,8 @@ class FakeTree:
 
 
 class FakeSessions:
-  """The session-manager, session-store, events-block and listing-block surface the round side and the summon
-  side touch, over one in-memory metadata (``store``, ``events`` and ``listing`` are the double itself);
+  """The store, events, listing, lifecycle and successor surface the round side and the summon side touch,
+  over one in-memory metadata (each of those five attributes is the double itself);
   persisted events land in ``persisted`` for the readback asserts and the summon create/group writes land in
   ``created`` and ``groups``. A None *meta* is the no-session-yet state the summon create resolves."""
 

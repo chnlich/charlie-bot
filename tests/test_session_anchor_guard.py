@@ -10,14 +10,13 @@ import pytest
 from structlog import testing
 
 from src.infra import models
-from src.runtime import sessions, task_sessions
 
 
 def _corrections(logs: list[dict]) -> list[dict]:
   return [entry for entry in logs if entry["event"] == "session_anchor_write_corrected"]
 
 
-async def _seed_anchors(mgr: sessions.SessionManager, session_id: str, *, cc: str, label: str) -> None:
+async def _seed_anchors(mgr: conftest.SessionBlocks, session_id: str, *, cc: str, label: str) -> None:
   await mgr.anchors.persist_cc_session_id(session_id, cc)
   await mgr.anchors.persist_account_label(session_id, label)
 
@@ -27,7 +26,7 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
   """The rate_round shape: a route mutates its injected (stale) meta object and
   whole-object saves. The guard corrects the anchor back to disk on the write."""
   cfg = conftest.build_sessions_cfg(tmp_path)
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="stale-writer"))
   await _seed_anchors(mgr, session.id, cc="cc-live", label="pool-b")
 
@@ -49,7 +48,7 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   """The two funnels and the clear channel write their fields; the guard's
   reconciliation is skipped for exactly them."""
   cfg = conftest.build_sessions_cfg(tmp_path)
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="channels"))
 
   read_back = await mgr.anchors.persist_cc_session_id(session.id, "cc-2")
@@ -70,7 +69,7 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   # The v2 launch's spawn-time channel writes the provenance triple in one
   # authorized save (driven here through the real TaskTreeManager channel).
   cfg = conftest.build_sessions_cfg(tmp_path)
-  tree = task_sessions.TaskTreeManager(cfg, mgr)
+  tree = conftest.build_task_tree(cfg, mgr)
   await tree.record_native_anchor(
       session.id, prompt_hash="hash-3", backend="opus", model="opus-model", reset_anchor=False)
   disk = await mgr.store.read_metadata_fresh(session.id)

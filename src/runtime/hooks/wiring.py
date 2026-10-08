@@ -31,14 +31,12 @@ _DIFF_ROOTS: list[tuple[str, str]] = []  # (module, attr)
 
 class ServiceContext:
   """What the server hands each service's start_service."""
-  __slots__ = ("app", "cfg", "recovery_task", "session_mgr")
+  __slots__ = ("app", "cfg", "recovery_task")
 
-  def __init__(self, app, cfg, session_mgr, recovery_task) -> None:
-    # app: the FastAPI app; cfg: CharlieBotConfig; session_mgr: SessionManager;
-    # recovery_task: the lifespan's crash-recovery asyncio.Task.
+  def __init__(self, app, cfg, recovery_task) -> None:
+    # app: the FastAPI app; cfg: CharlieBotConfig; recovery_task: the lifespan's crash-recovery asyncio.Task.
     self.app = app
     self.cfg = cfg
-    self.session_mgr = session_mgr
     self.recovery_task = recovery_task
 
 

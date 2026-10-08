@@ -23,8 +23,8 @@ from src.runtime.cli import session
 # ---------------------------------------------------------------------------
 
 
-class RouteSessionManager:
-  """Session-manager double for the session-message route tests; its store is itself."""
+class RouteSessionBlocks:
+  """Session-blocks double for the session-message route tests; its store is itself."""
 
   def __init__(self, by_id: dict[str, models.SessionMetadata]) -> None:
     self.sessions = by_id
@@ -41,12 +41,12 @@ def _payload() -> dict[str, str]:
 @pytest.mark.asyncio
 async def test_session_message_refuses_an_archived_task_node(tmp_path: pathlib.Path) -> None:
   """Agent relays do not restore archived task nodes."""
-  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
   caller = await conftest.create_task(tree, parent=None, request_id="caller", name="Caller")
   target = await conftest.create_task(tree, parent=None, request_id="target", name="Target")
   await tree.archive_subtree(target.id, caller=conftest.OPERATOR)
 
-  with conftest.make_internal_router_client(cfg, session_mgr, tree) as client:
+  with conftest.make_internal_router_client(cfg, session_blocks, tree) as client:
     response = client.post(
         "/api/internal/session-message",
         json={
@@ -62,7 +62,7 @@ async def test_session_message_refuses_an_archived_task_node(tmp_path: pathlib.P
 
 
 def test_session_message_relay_admits_and_dispatches_a_task_input() -> None:
-  session_mgr = RouteSessionManager(
+  session_blocks = RouteSessionBlocks(
       {
           "caller": models.SessionMetadata(profile="manager", id="caller", name="Caller PM"),
           "target": models.SessionMetadata(profile="manager", id="target", name="Target Task"),
@@ -71,7 +71,7 @@ def test_session_message_relay_admits_and_dispatches_a_task_input() -> None:
   task_mgr.dispatch.admit_input = mock.AsyncMock()
   task_mgr.dispatch.dispatch_pending = mock.AsyncMock()
 
-  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr, task_mgr) as client:
+  with conftest.make_internal_router_client(mock.MagicMock(), session_blocks, task_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
 
   assert resp.status_code == 200
@@ -88,8 +88,8 @@ def test_session_message_relay_admits_and_dispatches_a_task_input() -> None:
 
 
 def test_session_message_request_rejects_extra_fields() -> None:
-  session_mgr = RouteSessionManager({})
-  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr, mock.MagicMock()) as client:
+  session_blocks = RouteSessionBlocks({})
+  with conftest.make_internal_router_client(mock.MagicMock(), session_blocks, mock.MagicMock()) as client:
     resp = client.post(
         "/api/internal/session-message",
         json={

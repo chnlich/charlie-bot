@@ -330,7 +330,7 @@ class _SessionsListMemos:
     # The changed round's per-row render: row id -> (overlay state, schedule
     # state, row, final payload dict). The slot holds the row, and a live
     # reference pins its id(), so an id hit is that row and only that row; the
-    # manager's fresh check moves a row's identity exactly when its content
+    # store's fresh check moves a row's identity exactly when its content
     # moves, so a slot can never serve a stale row's fields, and the two state
     # tuples in the slot re-state the render's remaining inputs. Payload dicts
     # are handed to the JSON renderer uncopied and never mutated after the

@@ -272,7 +272,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       wait_for_worktree,
   )
 
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -283,7 +283,7 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
       "keep_worktree": False,
   }
   worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", []))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(

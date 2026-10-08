@@ -10,7 +10,6 @@ import pytest
 
 from src.infra import config, models
 from src.infra import event_types as ET
-from src.runtime import sessions
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
@@ -23,7 +22,7 @@ def _parent_side_files(cfg: config.CharlieBotConfig) -> list[pathlib.Path]:
 
 
 def _assert_child_log_is_parent_prefix_marker_and_creation(
-    mgr: sessions.SessionManager, parent_id: str, child_id: str, end: int) -> list[dict]:
+    mgr: conftest.SessionBlocks, parent_id: str, child_id: str, end: int) -> list[dict]:
   """The child log holds the parent's events [0, end), one clone_start marker, then the task_created fact.
 
   The parent side drops any in-memory event_index stamp (persist_and_broadcast
@@ -48,7 +47,7 @@ def _assert_child_log_is_parent_prefix_marker_and_creation(
 @pytest.mark.asyncio
 async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   parent = await conftest.make_parent(mgr)
   # A third event past the fork point proves the copied prefix truncates there.
   conftest.append_events(mgr.events.get_chat_events_path(parent), [conftest.user_event("e2")])
@@ -62,7 +61,7 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
 @pytest.mark.asyncio
 async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   parent = await conftest.create_root_session(
       mgr, models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.events.get_chat_events_path(parent.id)
@@ -81,7 +80,7 @@ async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) 
 @pytest.mark.asyncio
 async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   parent = await conftest.create_root_session(
       mgr, models.CreateSessionRequest(name="Parent"), backend=conftest.OPUS_BACKEND_ID)
   events_path = mgr.events.get_chat_events_path(parent.id)

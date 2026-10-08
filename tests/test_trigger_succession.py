@@ -28,7 +28,7 @@ def _record_launches(tree) -> list[tuple[str, list[str]]]:
 async def test_trigger_master_dispatches_the_input_a_task_node_already_holds(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, mgr, tree = conftest.build_env(tmp_path)
-  conftest.bind_deps_managers(monkeypatch, tree, mgr)
+  conftest.bind_deps_blocks(monkeypatch, tree, mgr)
   launches = _record_launches(tree)
   root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   persisted = build_agent_message_event("summon prompt", from_session=root.id, from_session_name="Slack")

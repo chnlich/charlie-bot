@@ -4,6 +4,7 @@ import asyncio
 
 from src.features.chat_threads import backfill
 from src.infra import config, log_once, tasks
+from src.runtime import session_events, session_lifecycle, session_listing, session_store, session_successor
 from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
@@ -19,12 +20,14 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
   if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and ctx.cfg.slack.allowed_user_ids:
     from src.features.slack import slack_listener  # lazy: avoids import cycle at module scope
 
+    listing, store, lifecycle = session_listing.listing(), session_store.store(), session_lifecycle.lifecycle()
+    events, successor = session_events.events(), session_successor.successor()
     _listener_task = tasks.create_logged_task(
-        slack_listener.run_listener(ctx.cfg, ctx.session_mgr), name="slack-listener")
+        slack_listener.run_listener(ctx.cfg, listing, store, lifecycle, events, successor), name="slack-listener")
     _backfill_task = tasks.create_logged_task(
         backfill.run_backfill(
-            ctx.cfg, ctx.session_mgr.listing, ctx.session_mgr.store, ctx.session_mgr.lifecycle, ctx.session_mgr.events,
-            ctx.session_mgr.successor, ctx.recovery_task, slack_listener.backfill_lost_summons, "slack"),
+            ctx.cfg, listing, store, lifecycle, events, successor, ctx.recovery_task,
+            slack_listener.backfill_lost_summons, "slack"),
         name="slack-backfill")
     log.info("slack_entrypoint_started")
   else:

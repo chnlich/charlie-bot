@@ -3,17 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
 
 from src.features.latex import latex
 from src.features.latex.event_types import TEX_EDIT_PROPOSED
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
+from src.runtime import session_events
 from src.runtime.hooks import turn_contributions
-
-if TYPE_CHECKING:
-  from src.runtime.sessions import SessionManager
 
 log = LazyStructlogLogger()
 
@@ -30,13 +27,12 @@ class LatexTurnContribution(turn_contributions.TurnContribution):
     if latex.get_tex_path().exists():
       await asyncio.to_thread(latex.snapshot_tex)
 
-  async def after_turn(
-      self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig, sessions: SessionManager) -> None:
+  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig) -> None:
     if not latex.has_snapshot():
       return
     proposal = await asyncio.to_thread(latex.check_tex_changed)
     if proposal:
-      await sessions.events.persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
+      await session_events.events().persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
       log.info(TEX_EDIT_PROPOSED, session=meta.id)
     else:
       latex.clear_snapshot()

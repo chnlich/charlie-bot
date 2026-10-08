@@ -46,7 +46,6 @@ with gc_off(collect=False):
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
   from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
-  from src.runtime.sessions import session_manager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
   from src.runtime.task_execution import task_manager
   from src.runtime.triggers import TriggerManager, set_trigger_manager
@@ -271,9 +270,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb)
     sweep_stale_session_cgroups()
 
-    session_mgr = session_manager()
     app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_manager()))
-    service_ctx = wiring.ServiceContext(app, cfg, session_mgr, app.state.recovery_task)
+    service_ctx = wiring.ServiceContext(app, cfg, app.state.recovery_task)
     for _, start_service in wiring.service_starts("early"):
       await start_service(service_ctx)
 
@@ -281,7 +279,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # compete with a recorded Run.
     await app.state.recovery_task
 
-    trigger_mgr = TriggerManager(cfg, session_mgr)
+    trigger_mgr = TriggerManager(cfg, task_manager())
     set_trigger_manager(trigger_mgr)
     app.state.trigger_mgr = trigger_mgr
     await trigger_mgr.recover_pending()

@@ -22,6 +22,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     ScriptedRelayBackend,
+    SessionBlocks,
     build_master_cc_cfg,
     fresh_master_state,
     install_scripted_backends,
@@ -39,10 +40,9 @@ from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, SessionMetadata
-from src.runtime import master_cc_queue, master_cc_run, master_cc_state, message_aggregator, streaming
+from src.runtime import master_cc_queue, master_cc_run, master_cc_state, message_aggregator, session_events, streaming
 from src.runtime.agent_process.base import make_result_event
 from src.runtime.hooks import turn_contributions
-from src.runtime.sessions import SessionManager
 from src.runtime.task_prompts import build_segments
 
 SLACK_ORIGIN = SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")
@@ -281,7 +281,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
         conftest.write_memory_topics(memory_dir(cfg), ["profile resident"])
         conftest.write_memory_entry(
             memory_dir(cfg), "profile", "resident-note", audience="master", body="resident memory")
-        manager = conftest.build_session_manager(cfg)
+        manager = conftest.build_session_blocks(cfg)
         tasks = []
 
         def schedule(coro, *, name):
@@ -345,7 +345,7 @@ def test_reply_events_render_as_system_rows(event_type: str, content: str, rende
 
 class _Raises(turn_contributions.TurnContribution):
 
-  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg, sessions) -> None:
+  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg) -> None:
     raise RuntimeError("after_turn failed")
 
 
@@ -353,8 +353,9 @@ class _Raises(turn_contributions.TurnContribution):
 async def test_one_master_done_calls_each_platforms_deliver_done_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   meta = await conftest.create_root_session(mgr, CreateSessionRequest(name="both"))
+  conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   # A failing contribution in front of the real ones must not stop them or the append.
   real = turn_contributions.turn_contributions()
@@ -397,14 +398,15 @@ async def run_turn(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     turn: conftest.ConsumerRound,
-) -> tuple[SessionManager, str, list[asyncio.Task]]:
+) -> tuple[SessionBlocks, str, list[asyncio.Task]]:
   """Queue one turn through the real run_message and consumer, with _run_cc replaced by *turn*.
 
   Returns the manager, the session id and the after_turn tasks the funnel spawned.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="tex"))
+  conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   tasks: list[asyncio.Task] = []
   monkeypatch.setattr(master_cc_run, "_run_cc", turn)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
@@ -448,16 +450,17 @@ async def test_an_unchanged_tex_file_appends_nothing_and_clears_the_snapshot(
 
 @pytest.mark.asyncio
 async def test_latex_after_turn_skips_the_check_without_a_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
-  sessions = SimpleNamespace(persist_and_broadcast=AsyncMock())
+  events = SimpleNamespace(persist_and_broadcast=AsyncMock())
+  monkeypatch.setattr(session_events, "_events", events)
   contribution = LatexTurnContribution()
   meta = SessionMetadata(profile="manager", id="no-snapshot", name="no-snapshot")
   monkeypatch.setattr(latex, "has_snapshot", lambda: False)
 
   with patch("src.features.latex.turn_contribution.asyncio.to_thread", new=AsyncMock()) as to_thread:
-    await contribution.after_turn(meta, {"type": ET.MASTER_DONE}, cfg=SimpleNamespace(), sessions=sessions)
+    await contribution.after_turn(meta, {"type": ET.MASTER_DONE}, cfg=SimpleNamespace())
 
   to_thread.assert_not_awaited()
-  sessions.persist_and_broadcast.assert_not_awaited()
+  events.persist_and_broadcast.assert_not_awaited()
 
 
 class _LetGoBackend(ScriptedRelayBackend):
@@ -480,8 +483,9 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   """A turn left running in another process ends in CancelledError: the consumer appends no MASTER_DONE,
   so no after_turn runs, and the agent's edit stays on disk for the next boot's re-attach to settle."""
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
+  conftest.bind_deps_blocks(monkeypatch, mgr.tree, mgr)
   tasks: list[asyncio.Task] = []
   install_scripted_backends(monkeypatch, [_LetGoBackend(tex_file)], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())

@@ -4,6 +4,7 @@ import asyncio
 
 from src.features.chat_threads import backfill
 from src.infra import config, log_once, tasks
+from src.runtime import session_events, session_lifecycle, session_listing, session_store, session_successor
 from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
@@ -19,12 +20,14 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
   if creds.get("discord", "bot_token") and ctx.cfg.discord.allowed_users:
     from src.features.discord import discord_listener  # lazy: avoids import cycle at module scope
 
+    listing, store, lifecycle = session_listing.listing(), session_store.store(), session_lifecycle.lifecycle()
+    events, successor = session_events.events(), session_successor.successor()
     _listener_task = tasks.create_logged_task(
-        discord_listener.run_listener(ctx.cfg, ctx.session_mgr), name="discord-listener")
+        discord_listener.run_listener(ctx.cfg, listing, store, lifecycle, events, successor), name="discord-listener")
     _backfill_task = tasks.create_logged_task(
         backfill.run_backfill(
-            ctx.cfg, ctx.session_mgr.listing, ctx.session_mgr.store, ctx.session_mgr.lifecycle, ctx.session_mgr.events,
-            ctx.session_mgr.successor, ctx.recovery_task, discord_listener.backfill_lost_summons, "discord"),
+            ctx.cfg, listing, store, lifecycle, events, successor, ctx.recovery_task,
+            discord_listener.backfill_lost_summons, "discord"),
         name="discord-backfill")
     log.info("discord_entrypoint_started")
   else:

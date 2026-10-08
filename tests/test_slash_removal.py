@@ -16,10 +16,9 @@ from unittest import mock
 import conftest
 import pytest
 import yaml
-from conftest import OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
+from conftest import OPUS_BACKEND_ID, OPUS_BACKEND_OPTION, build_scheduler, build_task_tree
 
 from src.features.cron import event_types as cron_event_types
-from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 
@@ -39,20 +38,19 @@ def _write_handler_task(home: pathlib.Path, name: str, session_id: str, handler:
       encoding="utf-8")
 
 
-def _cron_app(cfg: CharlieBotConfig, session_mgr, tree, scheduler):
+def _cron_app(cfg: CharlieBotConfig, session_blocks, tree, scheduler):
   """TestClient over the cron router with the scheduler on app.state (the server's wiring)."""
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
   from src.features.cron import api as cron_api
-  from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store, get_task_manager
+  from src.runtime.api.deps import get_config_on_loop, get_session_store, get_task_manager
 
   app = FastAPI()
   app.include_router(cron_api.router, prefix="/api/cron")
   app.state.scheduler = scheduler
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -81,7 +79,6 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The manual run takes the scheduled path and leaves the node's pending
   inputs empty: no `user` event, nothing for a following dispatch to launch."""
-  from src.runtime import task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -89,17 +86,17 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
-  scheduler = Scheduler(cfg, session_mgr)
+  scheduler = build_scheduler(cfg, session_blocks)
 
   meta = await conftest.create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   _write_handler_task(tmp_path, "nightly", meta.id)
 
   handler = mock.AsyncMock(return_value="done")
-  client = _cron_app(cfg, session_mgr, tree, scheduler)
+  client = _cron_app(cfg, session_blocks, tree, scheduler)
   with conftest.registered_cron_handler("probe", handler):
     resp = client.post("/api/cron/tasks/nightly/run")
   assert resp.status_code == 202
@@ -111,7 +108,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
   }
   handler.assert_awaited_once()
 
-  events = session_mgr.events.load_chat_events_sync(meta.id)
+  events = session_blocks.events.load_chat_events_sync(meta.id)
   assert not [e for e in events if e["type"] == ET.USER], "the run writes no chat request"
   assert [e["type"] for e in events if e["type"] == ET.HANDLER_RESULT] == [ET.HANDLER_RESULT]
 
@@ -125,7 +122,6 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
 @pytest.mark.asyncio
 async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A task name the loader does not know answers 404."""
-  from src.runtime import task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -133,13 +129,13 @@ async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypa
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
-  scheduler = Scheduler(cfg, session_mgr)
+  scheduler = build_scheduler(cfg, session_blocks)
 
-  client = _cron_app(cfg, session_mgr, tree, scheduler)
+  client = _cron_app(cfg, session_blocks, tree, scheduler)
   resp = client.post("/api/cron/tasks/nope/run")
   assert resp.status_code == 404
   assert "nope" in resp.json()["detail"]
@@ -153,12 +149,10 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  from src.runtime import task_sessions
   from src.runtime.api import chat as chat_api
   from src.runtime.api.deps import (
       get_config_on_loop,
       get_run_store,
-      get_session_manager,
       get_session_store,
       get_task_manager,
   )
@@ -169,9 +163,9 @@ async def test_slash_prefix_message_is_ordinary_task_input(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
 
   meta = await conftest.create_scheduled_node(tree, name="backup", backend=OPUS_BACKEND_ID)
   _write_handler_task(tmp_path, "backup", meta.id, handler="untouched")
@@ -179,8 +173,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   app = FastAPI()
   app.include_router(chat_api.router, prefix="/api/chat")
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 

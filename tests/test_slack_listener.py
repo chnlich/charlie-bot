@@ -12,12 +12,15 @@ import pytest
 from conftest import (
     ROOT,
     FakeSlackClient,
+    SessionBlocks,
     WsServerNeverAnswersClose,
-    bind_deps_managers,
-    build_session_manager,
+    bind_deps_blocks,
+    build_session_blocks,
     build_slack_cfg,
+    build_task_tree,
     create_root_session,
     mention_seam,
+    thread_blocks,
 )
 
 from src.features.slack.slack_listener import (
@@ -30,8 +33,6 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
-from src.runtime.sessions import SessionManager
-from src.runtime.task_sessions import TaskTreeManager
 
 _TS = "1700000000.000100"
 
@@ -78,32 +79,32 @@ def _sid(event: dict) -> str:
   return summon_session_id(event["team"], event["channel"], _thread_ts(event))
 
 
-def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
-  """Summon rig: cfg and session manager rooted at tmp_path, plus the recording fake client.
+def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotConfig, SessionBlocks, FakeSlackClient]:
+  """Summon rig: cfg and session blocks rooted at tmp_path, plus the recording fake client.
 
   The summon creates its manager root through the deps task-tree singleton, so the rig binds a tree over the
-  same session manager.
+  same session blocks.
   """
   cfg = build_slack_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  bind_deps_managers(monkeypatch, TaskTreeManager(cfg, session_mgr), session_mgr)
-  return cfg, session_mgr, FakeSlackClient()
+  session_blocks = build_session_blocks(cfg)
+  bind_deps_blocks(monkeypatch, build_task_tree(cfg, session_blocks), session_blocks)
+  return cfg, session_blocks, FakeSlackClient()
 
 
 @pytest.mark.asyncio
 async def test_allowed_user_creates_session_and_persists_agent_message(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
   with mention_seam(tasks) as trigger:
-    sid = await handle_app_mention(event, cfg, session_mgr, client)
+    sid = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
     await asyncio.gather(*tasks)
 
   assert sid == _sid(event)
 
-  meta = await session_mgr.store.get_session(sid)
+  meta = await session_blocks.store.get_session(sid)
   assert meta is not None
   origin = metadata_slots.fields_of(meta, "slack").slack_origin
   assert origin is not None
@@ -131,7 +132,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
   # mention, and nothing else Slack-derived beyond the citation boundary.
   expected_url = f"https://fake.slack.test/archives/C_TEST/p{_TS}"
 
-  events = session_mgr.events.load_chat_events_sync(sid)
+  events = session_blocks.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert len(agent_messages) == 1
   assert agent_messages[0]["slack"] == {
@@ -149,15 +150,15 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
 
 @pytest.mark.asyncio
 async def test_summon_prompt_carries_the_platform_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
   with mention_seam(tasks):
-    await handle_app_mention(event, cfg, session_mgr, client)
+    await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
     await asyncio.gather(*tasks)
 
-  events = session_mgr.events.load_chat_events_sync(_sid(event))
+  events = session_blocks.events.load_chat_events_sync(_sid(event))
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   content = agent_messages[0]["content"]
   # The platform line sits between the fetch hint and the citation boundary
@@ -176,15 +177,15 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path, monkeypat
 async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Slack's citation-boundary and summoner-PII sentences survive verbatim in the scope-doc slot."""
-  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
   with mention_seam(tasks):
-    await handle_app_mention(event, cfg, session_mgr, client)
+    await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
     await asyncio.gather(*tasks)
 
-  events = session_mgr.events.load_chat_events_sync(_sid(event))
+  events = session_blocks.events.load_chat_events_sync(_sid(event))
   content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
   assert ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
           "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。") in content
@@ -202,15 +203,15 @@ def test_follow_wake_message_names_thread_reply_docs_and_reply_command() -> None
 
 @pytest.mark.asyncio
 async def test_same_thread_twice_reuses_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
 
   with mention_seam():
-    first = await handle_app_mention(event, cfg, session_mgr, client)
-    second = await handle_app_mention(event, cfg, session_mgr, client)
+    first = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
+    second = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
 
   assert first == second
-  sessions = await session_mgr.listing.list_sessions()
+  sessions = await session_blocks.listing.list_sessions()
   assert len(sessions) == 1
   assert sessions[0].id == first
 
@@ -225,15 +226,15 @@ _DROP_ROWS = [
 @pytest.mark.parametrize(("event_overrides",), _DROP_ROWS)
 async def test_unhandled_event_drops_with_no_side_effects(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_overrides: dict) -> None:
-  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, client = _rig(tmp_path, monkeypatch)
   event = _make_event(**event_overrides)
 
   with mention_seam():
-    result = await handle_app_mention(event, cfg, session_mgr, client)
+    result = await handle_app_mention(event, cfg, *thread_blocks(session_blocks), client)
 
   assert result is None
   assert not client.calls
-  assert await session_mgr.store.get_session(_sid(event)) is None
+  assert await session_blocks.store.get_session(_sid(event)) is None
 
 
 @pytest.mark.asyncio
@@ -241,20 +242,25 @@ async def test_trigger_master_forwards_input_id_to_the_task_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
-  cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
-  meta = await create_root_session(session_mgr, CreateSessionRequest(name="t"))
+  cfg, session_blocks, _ = _rig(tmp_path, monkeypatch)
+  meta = await create_root_session(session_blocks, CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:
     await master_trigger.trigger_master(
         meta.id,
         "s",
-        session_mgr.store,
-        session_mgr.successor,
-        session_mgr.lifecycle,
+        session_blocks.store,
+        session_blocks.successor,
+        session_blocks.lifecycle,
         event_type=ET.AGENT_MESSAGE,
         input_id="evt-1")
     await master_trigger.trigger_master(
-        meta.id, "s", session_mgr.store, session_mgr.successor, session_mgr.lifecycle, event_type=ET.CHILD_REPORT)
+        meta.id,
+        "s",
+        session_blocks.store,
+        session_blocks.successor,
+        session_blocks.lifecycle,
+        event_type=ET.CHILD_REPORT)
 
   assert wake_mock.await_count == 2
   assert wake_mock.await_args_list[0].kwargs["input_id"] == "evt-1"
@@ -280,7 +286,7 @@ async def _run_listener_against(
   pointed at it; the caller stops the stand-in when the listener task is done."""
   from src.features.slack import slack_listener
 
-  cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
+  cfg, session_blocks, _ = _rig(tmp_path, monkeypatch)
   url = await stand_in.start()
 
   async def open_stand_in(self: object) -> str:
@@ -294,7 +300,9 @@ async def _run_listener_against(
   # The listener never issues an HTTP request once open_connection is the seam
   # under stub; keep it off the shared httpx client other tests may have faked.
   monkeypatch.setattr(slack_listener, "get_http_client", lambda: object())
-  return asyncio.create_task(slack_listener.run_listener(cfg, session_mgr), name="slack-listener-under-test")
+  return asyncio.create_task(
+      slack_listener.run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)),
+      name="slack-listener-under-test")
 
 
 async def _await_listener_cancel(task: asyncio.Task) -> float:

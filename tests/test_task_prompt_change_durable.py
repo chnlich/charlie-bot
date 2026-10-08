@@ -22,7 +22,7 @@ def prompt_facts(tree: task_sessions.TaskTreeManager, session_id: str) -> list[d
 
 
 async def _leaf(tmp_path: pathlib.Path):
-  cfg, _session_mgr, tree = conftest.build_env(tmp_path)
+  cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   meta = await tree.create_task(
       request_id="leaf",
       task_parent_id=None,

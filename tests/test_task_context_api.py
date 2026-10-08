@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, build_session_manager, make_home_config
+from conftest import OPERATOR, build_session_blocks, build_task_tree, make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -24,11 +24,9 @@ from src.runtime.api import sessions as sessions_api
 from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
-    get_session_manager,
     get_session_store,
     get_task_manager,
 )
-from src.runtime.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
 
@@ -37,14 +35,13 @@ class _TaskEnv:
 
   def __init__(self, tmp_path: Path) -> None:
     self.cfg = make_home_config(tmp_path)
-    self.session_mgr = build_session_manager(self.cfg)
-    self.tree = TaskTreeManager(self.cfg, self.session_mgr)
+    self.session_blocks = build_session_blocks(self.cfg)
+    self.tree = build_task_tree(self.cfg, self.session_blocks)
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
     app.dependency_overrides[config.get_config] = lambda: self.cfg
     app.dependency_overrides[get_config_on_loop] = lambda: self.cfg
-    app.dependency_overrides[get_session_manager] = lambda: self.session_mgr
-    app.dependency_overrides[get_session_store] = lambda: self.session_mgr.store
+    app.dependency_overrides[get_session_store] = lambda: self.session_blocks.store
     app.dependency_overrides[get_task_manager] = lambda: self.tree
     app.dependency_overrides[get_run_store] = lambda: self.tree.runs
     self.client = TestClient(app)

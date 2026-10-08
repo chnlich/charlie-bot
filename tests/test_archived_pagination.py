@@ -14,20 +14,20 @@ from pathlib import Path
 
 import pytest
 from conftest import (
-    build_session_manager,
+    SessionBlocks,
+    build_session_blocks,
     count_path_read_text,
-    make_session_mgr,
+    make_session_blocks,
     user_event,
 )
 
 from src.infra.models import SessionMetadata, SessionStatus
-from src.runtime.sessions import SessionManager
 
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
 
 
 async def _add_session(
-    mgr: SessionManager,
+    mgr: SessionBlocks,
     name: str,
     *,
     status: SessionStatus = SessionStatus.ARCHIVED,
@@ -51,7 +51,7 @@ def _count_session_metadata_reads(monkeypatch: pytest.MonkeyPatch, sessions_dir:
 
 @pytest.mark.asyncio
 async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   ordered = [await _add_session(mgr, f"s{i}", minutes=i) for i in range(5)]
 
   first = await mgr.listing.list_archived_page(limit=2)
@@ -74,7 +74,7 @@ async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   await _add_session(mgr, "s0")
 
   with pytest.raises(ValueError, match="not-a-timestamp"):
@@ -87,14 +87,14 @@ async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   for i in range(3):
     await _add_session(mgr, f"arch{i}", minutes=i)
   await _add_session(mgr, "live-alpha", status=SessionStatus.ACTIVE, minutes=10)
 
   await mgr.listing.list_sessions()  # warm every entry
 
-  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
+  reads = _count_session_metadata_reads(monkeypatch, mgr.cfg.sessions_dir)
   await mgr.listing.list_archived_page(limit=2)
   await mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
   await mgr.search.search_sessions("alpha")
@@ -104,7 +104,7 @@ async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypa
 @pytest.mark.asyncio
 async def test_archived_entries_survive_ttl_active_entries_expire(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   archived = await _add_session(mgr, "old", minutes=0)
   active = await _add_session(mgr, "live", status=SessionStatus.ACTIVE, minutes=1)
 
@@ -113,7 +113,7 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
   for sid, (meta, _ts, _sig) in list(mgr.store.metadata_cache.items()):
     mgr.store.metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
 
-  reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
+  reads = _count_session_metadata_reads(monkeypatch, mgr.cfg.sessions_dir)
   listed = await mgr.listing.list_sessions()
   assert {s.id for s in listed} == {archived.id, active.id}
   assert [p.parent.name for p in reads] == [active.id]
@@ -121,7 +121,7 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
 
 @pytest.mark.asyncio
 async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   for i in range(200):
     await _add_session(mgr, f"needle-{i:03d}", minutes=i)
   above = await _add_session(mgr, "unrelated-a", status=SessionStatus.ACTIVE, minutes=1000)
@@ -144,7 +144,7 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
 
 @pytest.mark.asyncio
 async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   await _add_session(mgr, "quiet", status=SessionStatus.ACTIVE, minutes=1)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=2)
 
@@ -174,7 +174,7 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   import src.runtime.session_search as session_search_module
 
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
   await mgr.events.save_chat_event(carrier.id, user_event("nothing relevant here"))
 
@@ -202,7 +202,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   # candidate population evicts roots the corpus outgrew, and the next
   # churn derive re-reads every evicted file from byte 0 instead of the
   # appended tail alone.
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   carriers = [await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(260)]
   for meta in carriers:
     await mgr.events.save_chat_event(meta.id, user_event("filler line\n"))
@@ -269,11 +269,11 @@ def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch:
 
 @pytest.mark.asyncio
 async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
-  mgr = make_session_mgr(tmp_path)
+  mgr = make_session_blocks(tmp_path)
   archived = await _add_session(mgr, "cold-archived", minutes=0)
   active = await _add_session(mgr, "cold-active", status=SessionStatus.ACTIVE, minutes=1)
 
-  rebooted = build_session_manager(mgr._cfg)
+  rebooted = build_session_blocks(mgr.cfg)
   listed = rebooted.store.list_active_session_metas()
 
   assert [s.id for s in listed] == [active.id]

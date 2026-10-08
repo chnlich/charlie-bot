@@ -14,7 +14,7 @@ from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra import metadata_slots, models
-from src.runtime import sessions, triggers
+from src.runtime import triggers
 from src.runtime.session_store import SessionStore
 
 _TEAM = "T_TEST"
@@ -54,25 +54,26 @@ def _thread_message(seq: int, text: str, user: str = "U_ALLOWED", bot: bool = Fa
 def _rig(tmp_path: pathlib.Path) -> tuple:
   """Slack rig: cfg and managers rooted at tmp_path, a recording fake client."""
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  return cfg, session_mgr, triggers.TriggerManager(cfg, session_mgr), conftest.FakeSlackClient()
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  return cfg, session_blocks, triggers.TriggerManager(cfg, tree), conftest.FakeSlackClient()
 
 
 async def _make_session(
-    session_mgr: sessions.SessionManager,
+    session_blocks: conftest.SessionBlocks,
     watermark: str | None = _MENTION_ERA_WATERMARK,
     thread_ts: str = _ROOT,
 ) -> models.SessionMetadata:
   """Create one Slack thread's deterministic session and (unless None) stamp its watermark."""
   meta = await conftest.create_root_session(
-      session_mgr,
+      session_blocks,
       models.CreateSessionRequest(
           session_id=slack_listener.summon_session_id(_TEAM, _CHANNEL, thread_ts),
           name="slack session",
           slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
   if watermark is not None:
     metadata_slots.set_fields(meta, "slack", slack_watermark_ts=watermark)
-    await session_mgr.store.save_metadata(meta)
+    await session_blocks.store.save_metadata(meta)
   return meta
 
 
@@ -90,8 +91,8 @@ async def _armed(trigger_mgr: triggers.TriggerManager, session_id: str) -> list[
 
 @pytest.mark.asyncio
 async def test_watermark_persists_through_metadata_json(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
+  cfg, session_blocks, _trigger_mgr, _client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
   assert metadata_slots.fields_of(meta, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
   reloaded = await SessionStore(cfg).get_session(meta.id)
   assert reloaded is not None
@@ -114,8 +115,8 @@ async def test_watermark_persists_through_metadata_json(tmp_path: pathlib.Path) 
         "below_watermark",
     ])
 async def test_thread_message_guard_chain_drops(tmp_path: pathlib.Path, case: str) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
+  cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
   overrides: dict = {"ts": _ts(150)}
   if case == "edit_subtype":
     overrides["subtype"] = "message_changed"
@@ -131,7 +132,7 @@ async def test_thread_message_guard_chain_drops(tmp_path: pathlib.Path, case: st
     overrides["ts"] = _ts(40)
 
   sid = await slack_listener.handle_thread_message(
-      _message_event(**overrides), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client,
+      _message_event(**overrides), cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events, client,
       trigger_mgr)
 
   assert sid is None
@@ -144,15 +145,15 @@ async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: p
   """An archived thread session's eligible follow message revives it: the unarchive
   precedes the arm, the session is ACTIVE again, and the follow trigger is armed
   exactly as for an active session (the message lands on the Threads view)."""
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
-  await session_mgr.lifecycle.archive_session(meta.id)
+  cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
+  await session_blocks.lifecycle.archive_session(meta.id)
 
   sid = await slack_listener.handle_thread_message(
-      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+      _message_event(), cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events, client, trigger_mgr)
 
   assert sid == meta.id
-  revived = await session_mgr.store.get_session(meta.id)
+  revived = await session_blocks.store.get_session(meta.id)
   assert revived is not None and revived.status == models.SessionStatus.ACTIVE
   armed = await _armed(trigger_mgr, meta.id)
   assert len(armed) == 1
@@ -163,11 +164,11 @@ async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: p
 @pytest.mark.asyncio
 @pytest.mark.parametrize("watermark", [None, _MENTION_ERA_WATERMARK])
 async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: pathlib.Path, watermark: str | None) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr, watermark=watermark)
+  cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks, watermark=watermark)
 
   sid = await slack_listener.handle_thread_message(
-      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+      _message_event(), cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events, client, trigger_mgr)
 
   assert sid == meta.id
   armed = await _armed(trigger_mgr, meta.id)
@@ -198,15 +199,15 @@ def _seed_gate_thread(client: conftest.FakeSlackClient) -> None:
 
 @pytest.mark.asyncio
 async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
+  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
   _seed_gate_thread(client)
 
   with (
       mock.patch(conftest.SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(slack_listener.SlackReplyError) as excinfo,
   ):
-    await slack_listener.assert_thread_fresh(meta.id, cfg, session_mgr.store)
+    await slack_listener.assert_thread_fresh(meta.id, cfg, session_blocks.store)
 
   assert excinfo.value.status == 412
   payload = excinfo.value.detail
@@ -215,18 +216,18 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   assert [m["ts"] for m in payload["new_messages"]] == [_ts(110), _ts(130)]
   assert payload["new_messages"][0] == {"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
   assert client.posts == []
-  assert not [ev for ev in session_mgr.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
+  assert not [ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
 
 
 @pytest.mark.asyncio
 async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, _trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
+  cfg, session_blocks, _trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
   _seed_gate_thread(client)
 
   with (
       mock.patch(conftest.SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
-      conftest.make_internal_router_client(cfg, session_mgr) as http,
+      conftest.make_internal_router_client(cfg, session_blocks) as http,
   ):
     resp = http.post("/api/internal/slack/reply", json={"session_id": meta.id, "text": "the answer"})
     assert resp.status_code == 412
@@ -244,7 +245,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
     assert resp.json()["posted"] is True
 
   assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len([ev for ev in session_mgr.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
+  assert len([ev for ev in session_blocks.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -254,10 +255,10 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
 
 @pytest.mark.asyncio
 async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
-  meta = await _make_session(session_mgr)
+  cfg, session_blocks, trigger_mgr, client = _rig(tmp_path)
+  meta = await _make_session(session_blocks)
   await slack_listener.handle_thread_message(
-      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+      _message_event(), cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events, client, trigger_mgr)
   armed = (await _armed(trigger_mgr, meta.id))[0]
 
   # The process dies: in-memory sleep tasks vanish; the record stays PENDING.
@@ -267,7 +268,7 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   # the outage, so the rehydrated task fires without sleeping.
   armed.fire_at = models.utc_now()
   await trigger_mgr._save_trigger(armed)
-  boot_mgr = triggers.TriggerManager(cfg, session_mgr)
+  boot_mgr = triggers.TriggerManager(cfg, session_blocks.tree)
   with (mock.patch(conftest.TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()) as mock_delivery,):
     await boot_mgr.recover_pending()
     tasks = list(boot_mgr._tasks.values())

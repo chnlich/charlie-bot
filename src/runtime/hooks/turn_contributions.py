@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Protocol, TypeVar
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
   from src.infra.models import SessionMetadata
-  from src.runtime.sessions import SessionManager
 
 DEFAULT_WORKFLOW_RULES_FILE = "manager_workflows.md"
 
@@ -59,12 +58,8 @@ class TurnContribution:
     """Runs when a turn's input is queued, before the user event is appended."""
     return
 
-  async def after_turn(
-      self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig, sessions: SessionManager) -> None:
-    """Runs as its own logged task after ``done_event`` (a MASTER_DONE) is appended and broadcast.
-
-    ``sessions`` appends further events to the session.
-    """
+  async def after_turn(self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig) -> None:
+    """Runs as its own logged task after ``done_event`` (a MASTER_DONE) is appended and broadcast."""
     return
 
   def context_window(self, meta: SessionMetadata) -> int | None:

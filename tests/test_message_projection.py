@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
+    bind_session_blocks,
     make_home_session,
     recycle_archive_cutoff_events,
 )
@@ -152,9 +153,10 @@ def test_lossless_backwards_walk_returns_full_id_set(limit: int) -> None:
 
 
 @pytest.mark.asyncio
-async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
+async def test_first_paint_surfaces_are_disjoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The bubble list and the streaming preview never carry the same message."""
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
+  bind_session_blocks(monkeypatch, mgr)  # the MASTER_DONE below runs every contribution's after_turn
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
     await mgr.events.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})

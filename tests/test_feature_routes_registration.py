@@ -19,7 +19,6 @@ from starlette.routing import Match
 import server
 from src.features.artifacts import api as artifacts_api
 from src.infra.config import CharlieBotConfig
-from src.runtime import task_sessions
 from src.runtime.api import deps
 
 ACCESS_KEY = "op-secret"
@@ -97,11 +96,11 @@ def _send(client: TestClient, route: MovedRoute, headers: dict[str, str]) -> Any
 
 @pytest.fixture
 def keyed_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> TestClient:
-  """The real app under an access key, over a session manager that knows no session."""
+  """The real app under an access key, over session blocks that know no session."""
   conftest.stub_credentials({"charliebot": {"access_key": ACCESS_KEY}})
   cfg = CharlieBotConfig(charliebot_home=tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  conftest.bind_deps_managers(monkeypatch, task_sessions.TaskTreeManager(cfg, session_mgr), session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  conftest.bind_deps_blocks(monkeypatch, conftest.build_task_tree(cfg, session_blocks), session_blocks)
   monkeypatch.setattr(artifacts_api, "_plan_manager", None)
   return TestClient(server.app)
 

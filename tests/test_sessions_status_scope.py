@@ -10,19 +10,24 @@ from pathlib import Path
 
 import orjson
 import pytest
-from conftest import build_session_manager, build_two_backend_cfg, create_root_session, make_sessions_listing_client
+from conftest import (
+    SessionBlocks,
+    build_session_blocks,
+    build_task_tree,
+    build_two_backend_cfg,
+    create_root_session,
+    make_sessions_listing_client,
+)
 
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.runtime import sidebar_state, thinking_state
 from src.runtime.api import sessions as sessions_api
 from src.runtime.session_listing import SessionListing, _listing_row_copy
 from src.runtime.session_sidebar import _iter_trigger_stats
-from src.runtime.sessions import SessionManager
-from src.runtime.task_sessions import TaskTreeManager
 
 
-def _build_client(cfg, session_mgr: SessionManager):
-  return make_sessions_listing_client(cfg, session_mgr, TaskTreeManager(cfg, session_mgr))
+def _build_client(cfg, session_blocks: SessionBlocks):
+  return make_sessions_listing_client(cfg, session_blocks, build_task_tree(cfg, session_blocks))
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -40,12 +45,12 @@ async def test_status_returns_exactly_the_requested_ids(
     tmp_path: Path,
 ) -> None:
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  wanted = await create_root_session(session_mgr, CreateSessionRequest(name="Sidebar"))
-  other = await create_root_session(session_mgr, CreateSessionRequest(name="Off screen"))
+  session_blocks = build_session_blocks(cfg)
+  wanted = await create_root_session(session_blocks, CreateSessionRequest(name="Sidebar"))
+  other = await create_root_session(session_blocks, CreateSessionRequest(name="Off screen"))
   _forbid_list_sessions(monkeypatch)
 
-  with _build_client(cfg, session_mgr) as client:
+  with _build_client(cfg, session_blocks) as client:
     response = client.get(f"/api/sessions/status?ids={wanted.id}")
 
   assert response.status_code == 200
@@ -75,8 +80,8 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, CreateSessionRequest(name="Memo"))
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, CreateSessionRequest(name="Memo"))
   flags = {
       "include_running_status": True,
       "include_pending_trigger_status": True,
@@ -85,13 +90,13 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
 
   # The probe round's own stores bump the generation past its key, so the
   # first clean re-derive is the one the next poll serves whole.
-  await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
-  second = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
-  third = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
+  await session_blocks.sidebar.resolve_sidebar_state([session], **flags)
+  second = await session_blocks.sidebar.resolve_sidebar_state([session], **flags)
+  third = await session_blocks.sidebar.resolve_sidebar_state([session], **flags)
   assert third is second  # unchanged generation: the stored map serves whole
 
   sidebar_state.mark_sidebar_dirty(session.id)
-  fourth = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
+  fourth = await session_blocks.sidebar.resolve_sidebar_state([session], **flags)
   assert fourth is not second
 
   sidebar_state.store_snapshot_entry(
@@ -101,7 +106,7 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
           sidebar_state.NEXT_TRIGGER_AT: None,
           sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
       })
-  fifth = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
+  fifth = await session_blocks.sidebar.resolve_sidebar_state([session], **flags)
   assert fifth is not fourth
 
 
@@ -119,8 +124,8 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, CreateSessionRequest(name="Body memo"))
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, CreateSessionRequest(name="Body memo"))
   renders: list[object] = []
 
   def count_render(content: object) -> bytes:
@@ -129,7 +134,7 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
 
   monkeypatch.setattr(sessions_api, "fast_json_bytes", count_render)
 
-  with _build_client(cfg, session_mgr) as client:
+  with _build_client(cfg, session_blocks) as client:
     first = client.get(f"/api/sessions/status?ids={session.id}")
     assert first.status_code == 200
     assert first.json()[session.id]["thinking_since"] is None
@@ -169,12 +174,12 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  kept = await create_root_session(session_mgr, CreateSessionRequest(name="Survivor"))
-  gone = await create_root_session(session_mgr, CreateSessionRequest(name="Deleted"))
+  session_blocks = build_session_blocks(cfg)
+  kept = await create_root_session(session_blocks, CreateSessionRequest(name="Survivor"))
+  gone = await create_root_session(session_blocks, CreateSessionRequest(name="Deleted"))
   ids = f"{kept.id},{gone.id}"
 
-  with _build_client(cfg, session_mgr) as client:
+  with _build_client(cfg, session_blocks) as client:
     first = client.get(f"/api/sessions/status?ids={ids}")
     assert first.status_code == 200
     assert set(first.json()) == {kept.id, gone.id}
@@ -185,7 +190,7 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
     assert second.status_code == 200
     assert set(second.json()) == {kept.id, gone.id}
 
-    await session_mgr.lifecycle.delete_session_permanently(gone.id)
+    await session_blocks.lifecycle.delete_session_permanently(gone.id)
 
     third = client.get(f"/api/sessions/status?ids={ids}")
     assert third.status_code == 200
@@ -204,22 +209,22 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   """
   sidebar_state.reset_for_tests()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, CreateSessionRequest(name="Stamped"))
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, CreateSessionRequest(name="Stamped"))
   thinking_state.mark_busy(session.id)
   flags = {
       "include_running_status": True,
       "include_pending_trigger_status": True,
       "include_pending_plan_approval": True,
   }
-  rows = await session_mgr.listing.list_sessions(**flags)
+  rows = await session_blocks.listing.list_sessions(**flags)
   row = next(r for r in rows if r.id == session.id)
   assert row.thinking_since == thinking_state.busy_since(session.id) is not None
   assert row.has_running_tasks is False  # no Run is live; thinking_since is the separate busy stamp
   assert row.has_pending_trigger is False
   assert row.has_pending_plan_approval is False
   row.has_unread = True  # a caller mutation must never reach the shared cache
-  assert (await session_mgr.listing.list_sessions(**flags))[0].has_unread is False
+  assert (await session_blocks.listing.list_sessions(**flags))[0].has_unread is False
 
   # The fast copy bakes in SessionMetadata's model config: the copy carries the
   # extras dict and writes None private state, which holds only while the model
@@ -236,7 +241,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
       "has_running_tasks": True,
       "status": SessionStatus.ARCHIVED,
   }
-  for meta in await session_mgr.store.load_session_metas():
+  for meta in await session_blocks.store.load_session_metas():
     meta.unregistered_key = "kept"  # an extra key rides the copy
     fast = _listing_row_copy(meta, update)
     reference = meta.model_copy(update=update)
@@ -264,10 +269,10 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
   cfg = build_two_backend_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  await create_root_session(session_mgr, CreateSessionRequest(name="Steady"))
-  mover = await create_root_session(session_mgr, CreateSessionRequest(name="Churning"))
-  leaving = await create_root_session(session_mgr, CreateSessionRequest(name="Departing"))
+  session_blocks = build_session_blocks(cfg)
+  await create_root_session(session_blocks, CreateSessionRequest(name="Steady"))
+  mover = await create_root_session(session_blocks, CreateSessionRequest(name="Churning"))
+  leaving = await create_root_session(session_blocks, CreateSessionRequest(name="Departing"))
   counts = {"dump": 0}
   real_dump = SessionMetadata.model_dump
 
@@ -277,7 +282,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
 
   monkeypatch.setattr(SessionMetadata, "model_dump", counted_dump)
 
-  with _build_client(cfg, session_mgr) as client:
+  with _build_client(cfg, session_blocks) as client:
     full = client.get("/api/sessions/")
     assert full.status_code == 200
     full_dumps = counts["dump"]
@@ -300,7 +305,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
     assert counts["dump"] == full_dumps
 
     # a row that left the projection drops its slot with it
-    await session_mgr.lifecycle.archive_session(leaving.id)
+    await session_blocks.lifecycle.archive_session(leaving.id)
     thinking_state.clear_busy(mover.id)
     after = client.get("/api/sessions/")
     assert after.status_code == 200

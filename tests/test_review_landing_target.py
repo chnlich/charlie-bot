@@ -32,9 +32,9 @@ async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   does, which moves origin's main and leaves the clone's local main behind.
   Returns once the review Run's delivery chain has reported to the manager.
   """
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   repo, _origin = conftest.init_repo_with_origin(tmp_path)
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   worker = await conftest.create_task(
       tree,
@@ -128,8 +128,8 @@ async def test_commit_on_neither_base_ref_reports_blocked_with_the_git_reason(
 @pytest.mark.asyncio
 async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   manager = await conftest.create_task(tree, parent=None, request_id="root")
   child = await conftest.create_task(
       tree, parent=manager.id, request_id="child", profile="worker", task=models.TaskSpec(goal="work"))

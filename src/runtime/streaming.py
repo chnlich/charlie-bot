@@ -24,9 +24,9 @@ from src.infra import log_once, tasks
 if TYPE_CHECKING:
   import fastapi
 
-# Fresh non-server processes reach this module through src.runtime.sessions (the
-# memory CLI's run-token audience resolution) and pay every module-level import
-# per process; the server-only dependencies ride their call sites below.
+# Fresh non-server processes reach this module through the session events block
+# (session_events imports it) and pay every module-level import per process; the
+# server-only dependencies ride their call sites below.
 
 log = log_once.LazyStructlogLogger()
 
@@ -42,7 +42,7 @@ _STREAM_COALESCE_INTERVAL = 0.2  # seconds
 _PREVIEW_HIDING_TYPES = frozenset({"message", ET.ASSISTANT_ERROR, ET.ERROR})
 
 # Channel vocabulary: the two named topic forms the fan-out routes on. The
-# websocket subscriber (server.py) and every publisher (sessions, autonamer,
+# websocket subscriber (server.py) and every publisher (session_events, autonamer,
 # ext_usage, master_cc_queue) name their channels through these; the
 # per-session wire shape is pinned by the broadcast assertions in
 # tests/test_delayed_trigger_delivery.py.

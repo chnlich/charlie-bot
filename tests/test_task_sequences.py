@@ -60,11 +60,11 @@ async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> Non
 
 
 async def _start_loop(
-    cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
+    cfg, session_blocks, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
@@ -77,7 +77,7 @@ async def _start_loop(
       "work_branch": "improve/test-branch",
   }
   payload.update(payload_overrides or {})
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -103,7 +103,7 @@ async def _start_loop(
 async def test_two_iterations_stay_one_child_with_ordered_runs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """Two iterations: ONE child, two ordered iteration Runs, one final report."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
@@ -113,7 +113,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
   async def _wait_done(client, body):
     await _wait_for_iterations_settled(tree, body["child_session_id"], manager.id, timeout=30.0)
 
-  body, child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
+  body, child_id = await _start_loop(cfg, session_blocks, tree, manager, repo, monkeypatch, wait_effect=_wait_done)
 
   records = tree.runs.list_run_records_sync(child_id)
   assert [r.kind for r in records] == ["iteration", "iteration"]
@@ -155,7 +155,7 @@ async def test_two_iterations_stay_one_child_with_ordered_runs(
 async def test_live_goal_change_affects_next_iteration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """The controller re-reads goal.md every iteration: a mid-loop edit steers the next one."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
 
@@ -171,13 +171,13 @@ async def test_live_goal_change_affects_next_iteration(
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: queue.pop(0))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The final report's wake dispatches the manager's report-consuming turn;
   # script it through the registry builder so no external process starts.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/improve",
         json={
@@ -205,7 +205,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
   """No take-off anywhere in the chain: 403 with the gate's reason, never a
   500, and nothing reserved."""
   from src.features.improve.improve_command import _active_loop_path, _loops_dir, find_running_loop
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -217,7 +217,7 @@ async def test_improve_without_authorization_is_forbidden_not_a_server_error(
       "repo_path": str(repo),
       "base_branch": "main",
   }
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post("/api/internal/improve", json=payload, headers=OP_HEADERS)
   assert resp.status_code == 403, resp.text
   assert "take off" in str(resp.json()["detail"]).lower() or "authorization" in str(resp.json()["detail"]).lower()
@@ -298,7 +298,7 @@ async def _pooled_pm_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
   and its root PM manager node. The pooled-account tests script their own
   backends and wake recording on top of this stage."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -307,7 +307,7 @@ async def _pooled_pm_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
       name="PM",
       backend=None,
       caller=OPERATOR)
-  return cfg, session_mgr, tree, manager
+  return cfg, session_blocks, tree, manager
 
 
 @pytest.mark.asyncio
@@ -317,7 +317,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
   non-empty pool and a cc-claude backend, each lifecycle selects the account
   claude_accounts.select returned, and the relay loop is armed (the backend
   build receives the same account)."""
-  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   await _admit_takeoff(tree, manager)
@@ -327,7 +327,7 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
     # controller's portal loop is still alive.
     await _wait_for_iterations_settled(tree, body["child_session_id"], manager.id, timeout=30.0)
 
-  body, _child_id = await _start_loop(cfg, session_mgr, tree, manager, repo, monkeypatch, wait_effect=wait_done)
+  body, _child_id = await _start_loop(cfg, session_blocks, tree, manager, repo, monkeypatch, wait_effect=wait_done)
 
   report = await _wait_for_final_report(tree, manager.id)
   assert report["outcome"] in ("completed", "blocked", "cancelled", "failed")
@@ -346,7 +346,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   its events log carries the pool-exhausted error (with the earliest reset
   time); the loop classifies it as a quota blocker and ends at that iteration
   failed — no second iteration — and the parent is woken once."""
-  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   # An empty build queue: a spawned process would pop from it and fail loudly.
   builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
@@ -357,7 +357,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   await _admit_takeoff(tree, manager)
   body, child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -412,14 +412,14 @@ async def test_loop_end_wakes_its_parent_exactly_once_and_a_replay_never_wakes(
   """The delivered final report is the parent's new durable input: the delivery
   entry wakes the parent exactly once per loop, whichever way it ends; a
   replayed delivery of the same report (created False) wakes nobody."""
-  cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
   _worker_backends(monkeypatch, ["iter one words", "iter two words"])
   wakes = _count_manager_wakes(monkeypatch, tree, manager.id)
 
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -465,7 +465,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   the iteration's own run_finished event, so the final report (the raw latest
   run_finished) is never deduplicated away."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words", "iter three words"])
@@ -474,7 +474,7 @@ async def test_three_iterations_deliver_three_reports_and_wake_the_parent_four_t
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -518,7 +518,7 @@ async def test_iteration_report_header_carries_the_judgment(
   the reason "no report file" (decided before the controller's fallback file
   is written); an iteration with a well-formed report is valid."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   loop_dir = cfg.sessions_dir / manager.id / "loops" / "1"
@@ -537,13 +537,13 @@ async def test_iteration_report_header_carries_the_judgment(
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, _child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -581,7 +581,7 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   continues: only a quota blocker or a withheld launch skips the delivery
   point."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   failed = result_event("the build broke")
@@ -593,13 +593,13 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report noted"))
 
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -627,7 +627,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   """A per-iteration report re-delivered under the same source id dedups: no
   second event lands in the parent's log and nobody is woken."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
   _worker_backends(monkeypatch, ["iter one words"])
@@ -636,7 +636,7 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   await _admit_takeoff(tree, manager)
   _body, child_id = await _start_loop(
       cfg,
-      session_mgr,
+      session_blocks,
       tree,
       manager,
       repo,
@@ -681,7 +681,7 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
   from src.runtime.hooks.sequence_controllers import sequence_controllers
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
@@ -739,7 +739,7 @@ async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
   )
   from src.runtime.task_execution import _replay_sequence_firing
 
-  cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   manager = await create_task(
       tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")

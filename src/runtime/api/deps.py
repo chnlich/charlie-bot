@@ -15,15 +15,10 @@ from src.runtime import (
     session_sidebar,
     session_store,
     session_successor,
-    sessions,
     task_execution,
     task_sessions,
     triggers,
 )
-
-
-def get_session_manager() -> sessions.SessionManager:
-  return sessions.session_manager()
 
 
 async def get_session_store() -> session_store.SessionStore:

@@ -28,10 +28,10 @@ from tests import test_task_execution
 async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager + child manager under it, plus the
     API client and the scripted executor, with no user input anywhere yet."""
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
   from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
@@ -51,7 +51,7 @@ async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
       name="Feature",
       backend=None,
       caller="operator")
-  return cfg, session_mgr, tree, root, child
+  return cfg, session_blocks, tree, root, child
 
 
 @pytest.mark.asyncio
@@ -61,13 +61,13 @@ async def test_authorized_ancestor_delegates_without_a_local_takeoff(
   """The real route from a child manager with NO local user message and an
     authorized ancestor creates one leaf and one launched Run; a replay returns
     the same child/Run and never spawns a second process."""
-  cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     payload = conftest.delegate_payload(child.id, repo)
     first = client.post("/api/internal/delegate", json=payload, headers=test_task_execution.OP_HEADERS)
     assert first.status_code == 200, first.text
@@ -106,12 +106,12 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
   """A local real user instruction without a take-off shadows the authorized
     ancestor: the nearest node with a real user instruction is where the gate
     applies, and it fails there."""
-  cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   await tree.dispatch.admit_input(child.id, event_type=ET.USER, content="please look into this", actor="user")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(child.id, repo),
@@ -125,7 +125,7 @@ async def test_shadowing_local_instruction_blocks_inherited_delegation(
 @pytest.mark.asyncio
 async def test_expired_pre_takeoff_on_the_ancestor_blocks(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
-  cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The established matching: the ordinary "take off" phrase is judged on the
   # FILE-LAST real user message, so an expiring window needs a later ordinary
@@ -134,7 +134,7 @@ async def test_expired_pre_takeoff_on_the_ancestor_blocks(
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="pre take off", actor="user", timestamp=issued)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="carry on with the plan", actor="user")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(child.id, repo),
@@ -149,7 +149,7 @@ async def test_worker_caller_cannot_delegate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """Delegating FROM a worker node is refused: agents run only under a
     manager task."""
-  cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   worker = await tree.create_task(
       request_id="w",
@@ -161,7 +161,7 @@ async def test_worker_caller_cannot_delegate(
       caller="operator")
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(worker.id, repo),
@@ -176,7 +176,7 @@ async def test_foreign_run_token_cannot_delegate(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """A run token bound to one node cannot create a worker under a different
     node: the worker-leaf constraint refuses the foreign identity."""
-  cfg, session_mgr, tree, root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   agents_child = await tree.create_task(
@@ -196,7 +196,7 @@ async def test_foreign_run_token_cannot_delegate(
   await tree.runs.record_launch(agents_child.id, "agent-run", pid=proc.pid, pid_start=pair[0])
   token = run_token.sign_run_token(
       run_token.RunTokenClaims(session_id=agents_child.id, run_id="agent-run", agent="worker"), "op-secret")
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(child.id, repo),
@@ -213,12 +213,12 @@ async def test_verify_exemption_on_the_v2_route_and_launch(
   """A read-only verify delegation needs no authorization window on the real
     v2 route and still launches (and runs) with no user instruction anywhere —
     while a repo task type under the same tree stays blocked."""
-  cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, _root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: no")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     verify = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(child.id, repo, task_type="verify"),
@@ -257,13 +257,13 @@ async def test_agent_run_token_delegates_verify_without_a_takeoff(
     returns 200, creates a repo-less verify child, and its run launches and
     settles (the agent-creation check reads the same verify exemption the
     route and the launch read)."""
-  cfg, session_mgr, tree, _root, child = await make_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, _root, child = await make_tree(tmp_path, monkeypatch)
   builds = test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: yes")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   await register_active_run(tree, child.id, "child-run")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     verify = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(child.id, repo, task_type="verify"),

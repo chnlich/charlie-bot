@@ -18,7 +18,6 @@ if TYPE_CHECKING:
 
   from src.infra.config import CharlieBotConfig
   from src.infra.models import RunRecord, SessionMetadata
-  from src.runtime.sessions import SessionManager
 
 
 class SequenceBinding(Protocol):
@@ -31,13 +30,7 @@ class SequenceBinding(Protocol):
     """The 400 detail when a backend switch is refused."""
     ...
 
-  async def on_wake(
-      self,
-      meta: SessionMetadata,
-      input_events: list[dict],
-      *,
-      sessions: SessionManager,
-  ) -> str | None:
+  async def on_wake(self, meta: SessionMetadata, input_events: list[dict]) -> str | None:
     """Run the node's wake duties and return an optional turn-input prefix."""
     ...
 

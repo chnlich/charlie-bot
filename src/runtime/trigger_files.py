@@ -12,7 +12,7 @@ def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat
   """(path, stat) pairs for the regular ``*.json`` trigger files under *triggers_dir*.
 
   The one scandir+stat walk every trigger read shares: the list memo of ``TriggerManager``
-  and the sidebar probe's verdict scan (src.runtime.sessions). Raises OSError when
+  and the sidebar probe's verdict scan (``session_sidebar``). Raises OSError when
   *triggers_dir* itself cannot be scanned — that verdict belongs to the caller.
   A file that vanishes between scandir and stat is skipped, the same "nothing
   to read" verdict every stat failure earns. Paths are scandir's plain strings,

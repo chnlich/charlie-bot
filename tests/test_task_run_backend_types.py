@@ -19,7 +19,6 @@ import pytest
 
 from src.infra import backend_models, config_registry
 from src.infra import event_types as ET
-from src.runtime import task_sessions
 
 
 def build_env(tmp_path: pathlib.Path, backend_type: str):
@@ -46,8 +45,8 @@ def build_env(tmp_path: pathlib.Path, backend_type: str):
       core_config.Credentials(path=home / "credentials.yaml", sections={"charliebot": {
           "access_key": "key-type"
       }}))
-  session_mgr = conftest.build_session_manager(cfg)
-  return cfg, session_mgr, task_sessions.TaskTreeManager(cfg, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  return cfg, session_blocks, conftest.build_task_tree(cfg, session_blocks)
 
 
 def session_attached_event(native_id: str) -> dict:
@@ -63,7 +62,8 @@ async def test_run_records_stream_identity_and_result_truth(
     tmp_path: pathlib.Path, backend_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
   from tests import test_task_execution
 
-  cfg, session_mgr, tree = build_env(tmp_path, backend_type)
+  cfg, session_blocks, tree = build_env(tmp_path, backend_type)
+  conftest.bind_session_blocks(monkeypatch, session_blocks)  # MASTER_DONE runs every contribution's after_turn
   root = await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="M", backend=None, caller="operator")
   backend = test_task_execution.SpawningScriptedBackend(
@@ -72,8 +72,7 @@ async def test_run_records_stream_identity_and_result_truth(
           test_task_execution.result_event("typed output"),
       ])
   test_task_execution.install_backends(monkeypatch, [backend], conftest.BUILD_BACKEND_PATCH_TARGET)
-  from src.runtime import task_execution
-  tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
+  tree.dispatch.executor = conftest.build_execution_adapter(cfg, session_blocks, tree)
 
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Answer.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
@@ -100,7 +99,8 @@ async def test_zero_output_and_error_results_fail_across_types(
     tmp_path: pathlib.Path, backend_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
   from tests import test_task_execution
 
-  cfg, session_mgr, tree = build_env(tmp_path, backend_type)
+  cfg, session_blocks, tree = build_env(tmp_path, backend_type)
+  conftest.bind_session_blocks(monkeypatch, session_blocks)  # MASTER_DONE runs every contribution's after_turn
   root = await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="M", backend=None, caller="operator")
 
@@ -110,8 +110,7 @@ async def test_zero_output_and_error_results_fail_across_types(
   from src.runtime.agent_process import base as backend_base
   empty = test_task_execution.SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
   test_task_execution.install_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
-  from src.runtime import task_execution
-  tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
+  tree.dispatch.executor = conftest.build_execution_adapter(cfg, session_blocks, tree)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Stay silent.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
   run_id = decision["run_id"]

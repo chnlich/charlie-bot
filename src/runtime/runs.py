@@ -838,7 +838,7 @@ class RunStore:
       return self._fact_history_loader(session_id)
     if self._events is not None:
       return self._events.load_events(session_id)
-    # Read-only store: the same live log the sink's SessionManager read serves,
+    # Read-only store: the same live log the sink's session events read serves,
     # through the shared parse.
     return parse_ndjson_file(chat_events_path(self._sessions_dir / session_id))
 

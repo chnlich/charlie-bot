@@ -13,6 +13,7 @@ from src.features.cron.cron_files import write_cron_key
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
+from src.runtime import session_anchors, session_lifecycle
 from src.runtime.hooks.sequence_controllers import SequenceController
 
 if TYPE_CHECKING:
@@ -20,7 +21,6 @@ if TYPE_CHECKING:
 
   from src.infra.config import CharlieBotConfig
   from src.infra.models import SessionMetadata
-  from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
@@ -76,13 +76,7 @@ class CronBinding:
         "scheduler re-aligns the node to that config on every tick. Edit the task's config in the "
         "cron editor, or clone/fork the session with the target backend instead.")
 
-  async def on_wake(
-      self,
-      meta: SessionMetadata,
-      input_events: list[dict],
-      *,
-      sessions: SessionManager,
-  ) -> str | None:
+  async def on_wake(self, meta: SessionMetadata, input_events: list[dict]) -> str | None:
     """Recycle old history and prefix a firing report on the node's fresh turn."""
     if meta.cc_session_id and meta.cc_session_started_at:
       last_sat_1am_utc = _last_saturday_1am_utc(datetime.now(UTC))
@@ -94,11 +88,11 @@ class CronBinding:
         # would silently do nothing behind its suppressed next-round alarm.
         # The in-memory copy mirrors the cleared anchor for the caller's
         # fresh-conversation judgment below.
-        await sessions.anchors.clear_cc_session_anchor(meta.id)
+        await session_anchors.anchors().clear_cc_session_anchor(meta.id)
         meta.cc_session_id = None
         meta.cc_session_started_at = None
         try:
-          result = await sessions.lifecycle.recycle_history_before(meta.id, last_sat_1am_utc)
+          result = await session_lifecycle.lifecycle().recycle_history_before(meta.id, last_sat_1am_utc)
           log.info('scheduled_session_recycled', session=meta.id, **result)
         except Exception:
           log.exception('scheduled_session_recycle_failed', session=meta.id)

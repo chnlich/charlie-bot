@@ -31,12 +31,14 @@ from conftest import (
     _settle_parent,
     assistant_text_event,
     backend_option,
-    build_session_manager,
+    build_execution_adapter,
+    build_session_blocks,
+    build_task_tree,
     create_task,
     init_repo_with_origin,
     install_scripted_backends,
     make_transcript,
-    override_session_manager,
+    override_session_blocks,
     pool_cfg,
     rate_limit_event,
     run_git,
@@ -77,7 +79,7 @@ def seed_signing_home(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def build_spawning_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, options: list, preference: list[str] | None = None):
-  """(cfg, SessionManager, TaskTreeManager) over one synthetic home under tmp_path:
+  """(cfg, session blocks, TaskTreeManager) over one synthetic home under tmp_path:
     the given backend options, worktree_dir inside the home, and the seeded access
     key every child environment signs against (seed_signing_home)."""
   from src.infra.config import CharlieBotConfig
@@ -87,8 +89,8 @@ def build_spawning_env(
     backends["preference"] = preference
   cfg = CharlieBotConfig(charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
   seed_signing_home(home, monkeypatch)
-  session_mgr = build_session_manager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  session_blocks = build_session_blocks(cfg)
+  return cfg, session_blocks, build_task_tree(cfg, session_blocks)
 
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend_ids: list[str] | None = None):
@@ -210,7 +212,7 @@ def make_pm_build(text: str, pm_builds: list | None = None):
   return pm_build
 
 
-def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
+def make_api_client(cfg, session_blocks, task_mgr) -> TestClient:
   from src.features.improve import api as improve_api
   from src.infra import config
   from src.runtime.api import internal as internal_api
@@ -225,7 +227,7 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
   app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  override_session_manager(app, session_mgr)
+  override_session_blocks(app, session_blocks)
   app.dependency_overrides[get_task_manager] = lambda: task_mgr
   app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
   return TestClient(app)
@@ -308,7 +310,7 @@ def implement_marker_commit(tree: TaskTreeManager, worker_id: str) -> None:
 @pytest.mark.asyncio
 async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
   builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
@@ -377,18 +379,17 @@ def _bearer(claims):
   return type("R", (), {"headers": {"authorization": f"Bearer {token}"}})()
 
 
-def _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch):
+def _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch):
   from src.runtime import streaming
-  from src.runtime.task_execution import TaskExecutionAdapter
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", _async_noop)
-  return TaskExecutionAdapter(cfg, session_mgr, tree)
+  return build_execution_adapter(cfg, session_blocks, tree)
 
 
 async def _async_noop(*args, **kwargs) -> None:
   return None
 
 
-async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, content) -> list:
+async def _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, content) -> list:
   """The launch rig the implement and quick-edit tests share: silent-broadcast
     executor, the parent-manager build double, the instructions patch, the
     operator credentials, and the user takeoff message through admit_input.
@@ -397,7 +398,7 @@ async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, con
     dispatches, and the build double before the manager turn builds. Returns
     the pm_builds list for tests that assert the parent turn built one.
     """
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   pm_builds = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -414,7 +415,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
     the user's first message through the normal durable input path: the message
     is admitted, one manager_turn Run claims exactly that batch, and the turn
     executes — no Goal-required obstacle anywhere in the dispatch."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(
       tree,
       parent=None,
@@ -423,7 +424,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
       task=TaskSpec(goal="", acceptance=[], context_refs=[]),
       name=None)
   assert manager.task is not None and manager.task.goal == ""
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
   install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
@@ -445,7 +446,7 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
 
 @pytest.mark.asyncio
 async def test_concurrent_dispatch_starts_one_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("one")])
   builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
@@ -489,7 +490,7 @@ class _SpawnFirstBackend(SpawningScriptedBackend):
 async def test_input_admitted_during_active_run_dispatches_after_its_finish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The later input is consumed by the next serialized turn without a second dispatch call."""
-  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   gate_release = asyncio.Event()
   first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
   second = _SpawnFirstBackend([result_event("second")])
@@ -544,7 +545,7 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
 async def test_delegate_creates_one_child_and_replays_are_stable(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -556,7 +557,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
       [backend,
        SpawningScriptedBackend([result_event("phrase")]),
        SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path / "delegate-work")
 
   # The nearest-user authorization gate re-judges at delegation: the manager
@@ -565,7 +566,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
       manager.id, event_type=ET.USER, content="Take off and delegate the phrase task.", actor="user")
   from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     payload = {
         "session_id": manager.id,
         "description": "## Goal\n\nsay the phrase\n",
@@ -676,7 +677,7 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 @pytest.mark.asyncio
 async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
 
   # A manager round claims its batch and fails. The failed round counts as
   # handled whatever its outcome: its batch never reappears as pending, and
@@ -731,7 +732,7 @@ async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launch
 
 @pytest.mark.asyncio
 async def test_first_terminal_fact_wins_governs_followups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(tree, parent=root.id, request_id="w", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-w", session_id=worker.id, kind="work"))
@@ -755,7 +756,7 @@ async def test_first_terminal_fact_wins_governs_followups(tmp_path: Path, monkey
 @pytest.mark.asyncio
 async def test_implement_delivery_requires_review_and_real_landing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -768,7 +769,7 @@ async def test_implement_delivery_requires_review_and_real_landing(
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   pm_builds = await _launch_manager_turn(
-      cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
+      cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
   # The work run holds until the test has committed the implementation into
   # the isolated worktree (the fake backend writes no commits itself).
@@ -896,7 +897,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   """The bare-branch base form when the shared checkout's local branch is only
     behind origin (the 2026-09-26 incident shape): the Run launches anyway, its
     work branch starts at the origin tip, and the local main ref is untouched."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -908,7 +909,7 @@ async def test_bare_branch_base_behind_starts_from_origin_tip(tmp_path: Path, mo
   }
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
-  await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
   # Origin gains a commit from a second clone while the fixture repo's local
   # main stays put: local main is strictly behind origin/main.
@@ -970,7 +971,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
     commits absent from origin. The real launch path lands the durable failure,
     and the worker page's header reads "launch failed" with the error text
     exactly once, a recorded task spec, and no launch prompt."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
@@ -982,7 +983,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
   }
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
-  await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and implement the marker file.")
+  await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and implement the marker file.")
 
   # One unpushed commit on the fixture repo's local main: origin does not
   # have it, so the base check fails closed.
@@ -1047,7 +1048,7 @@ async def test_bare_branch_base_with_unpushed_local_commit_launch_fails(
 @pytest.mark.asyncio
 async def test_repo_less_implement_delivers_after_review_passes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {
       "goal": "## Goal\n\nrefresh the host lint config\n\n## Acceptance Tests\n- config parses\n",
@@ -1056,7 +1057,7 @@ async def test_repo_less_implement_delivers_after_review_passes(
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   pm_builds = await _launch_manager_turn(
-      cfg, session_mgr, tree, monkeypatch, manager, "Take off and refresh the host lint config.")
+      cfg, session_blocks, tree, monkeypatch, manager, "Take off and refresh the host lint config.")
 
   report = (
       "Created: /tmp/lint/ruff.toml\n"
@@ -1119,12 +1120,12 @@ async def test_repo_less_implement_delivers_after_review_passes(
 @pytest.mark.asyncio
 async def test_repo_less_implement_review_failure_takes_the_failure_report(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "fix the host script", "task_type": "implement"}
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
@@ -1155,12 +1156,12 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
 
 @pytest.mark.asyncio
 async def test_repo_less_quick_edit_closes_without_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   task_spec = {"goal": "bump the host cron schedule line", "task_type": "quick-edit"}
   worker = await create_task(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
-  pm_builds = await _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, "Take off and bump it.")
+  pm_builds = await _launch_manager_turn(cfg, session_blocks, tree, monkeypatch, manager, "Take off and bump it.")
 
   work_backend = SpawningScriptedBackend([result_event("modified /etc/cron.d/sweep")])
   install_backends(monkeypatch, [work_backend], WORKER_BUILD_BACKEND_PATCH_TARGET)
@@ -1234,7 +1235,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime.task_completion import CompletionEvidence
 
-  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   worker = await create_task(
       tree,
@@ -1299,9 +1300,9 @@ def _snapshot_of(run: RunRecord) -> dict:
   return json.loads(Path(run.prompt_snapshot_ref).read_text(encoding="utf-8"))
 
 
-def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_mgr, *,
+def _manager_backend(monkeypatch: pytest.MonkeyPatch, tree, cfg, session_blocks, *,
                      events: list[dict]) -> tuple[list[SpawningScriptedBackend], list[dict]]:
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend(events)
   builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
   return [backend], builds
@@ -1319,10 +1320,11 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(tmp_path: Path, m
   """The real CLI/API execution path uses the assembler: the backend receives
     exactly the committed snapshot's joined instruction bytes and the composed
     input, and the Run carries the snapshot/hash/char_count evidence."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the node rule"), caller=OPERATOR)
-  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("manager turn done")])
+  _backends, builds = _manager_backend(
+      monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
 
   run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
   await wait_for_terminal_run(tree, manager.id, run_id)
@@ -1355,7 +1357,7 @@ async def test_worker_run_kinds_deliver_snapshot_bytes_and_task_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Work, review, verify, iteration and scheduled-step launches ride the same
     assembler with their applicable contracts and separate task/input context."""
-  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   worker = await create_task(
       tree,
@@ -1420,7 +1422,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
   """Same rules and backend ⇒ the anchor's conversation continues; a rule
     change starts a fresh native context carrying a reset notice; an
     input-only change does not reset anything."""
-  _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
   third = SpawningScriptedBackend([result_event("turn three")])
@@ -1440,7 +1442,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
   # The conversation anchor changes only through its authorized channel: a
   # whole-object save's anchor reconciliation would correct it back to disk.
-  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor_id)
+  await session_blocks.anchors.persist_cc_session_id(manager.id, anchor_id)
 
   # Turn 2 (input-only change): same instructions ⇒ the conversation continues
   # (no reset notice, anchor untouched).
@@ -1485,7 +1487,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
 @pytest.mark.asyncio
 async def test_backend_identity_change_starts_a_fresh_native_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   first = SpawningScriptedBackend([result_event("one")])
   second = SpawningScriptedBackend([result_event("two")])
   install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
@@ -1496,12 +1498,12 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
   await tree.record_native_anchor(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
   # The conversation anchor changes only through its authorized channel.
-  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor)
+  await session_blocks.anchors.persist_cc_session_id(manager.id, anchor)
   # The anchor's recorded identity no longer matches (a backend switch
   # happened): the next turn cannot claim continuity over it. The identity
   # changes only through its authorized anchor channel — native_backend is an
   # anchor field now, so a whole-object save would be corrected back to disk.
-  await session_mgr.anchors.persist_native_backend(manager.id, "some-other-backend")
+  await session_blocks.anchors.persist_native_backend(manager.id, "some-other-backend")
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision.get("launch") is True
@@ -1530,9 +1532,9 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
     message — never resets the anchor: the recorded producer still names the
     current backend, so turn 2 continues turn 1's native conversation and the
     launch prompt carries no reset note."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch, backend_ids=["fake", "fake-2"])
   manager = await create_task(tree, parent=None, request_id="root")
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   first = SpawningScriptedBackend([result_event("turn one")])
   second = SpawningScriptedBackend([result_event("turn two")])
   install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
@@ -1543,11 +1545,11 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
   anchor = "native-anchor-mis-click"
   await tree.record_native_anchor(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
-  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor)
+  await session_blocks.anchors.persist_cc_session_id(manager.id, anchor)
 
   # The mis-click: switch away and back before the next message goes out.
-  await session_mgr.lifecycle.switch_backend(manager.id, "fake-2")
-  await session_mgr.lifecycle.switch_backend(manager.id, "fake")
+  await session_blocks.lifecycle.switch_backend(manager.id, "fake-2")
+  await session_blocks.lifecycle.switch_backend(manager.id, "fake")
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -1564,13 +1566,13 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
 @pytest.mark.asyncio
 async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
   body.unlink()  # the rule vanished before the launch
-  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
   admitted = await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   run_id = decision["run_id"]
@@ -1601,13 +1603,13 @@ async def test_missing_rule_fails_before_launch_and_leaves_input_unconsumed(
 @pytest.mark.asyncio
 async def test_corrupt_rule_fails_before_launch_with_the_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="needed rule"), caller=OPERATOR)
   meta = await tree.load_meta(manager.id)
   body = cfg.charliebot_home / "prompt_bodies" / f"{meta.node_prompt_ref}.md"
   body.write_text("tampered bytes", encoding="utf-8")
-  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="launch me", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   observation = await tree.dispatch.executor.launch_and_settle(manager.id, decision["run_id"])
@@ -1621,10 +1623,10 @@ async def test_recovery_after_rule_deletion_uses_the_original_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Process recovery replays the Run's own saved snapshot/anchor — it never
     recomposes from current memory/templates; an explicit retry uses current sources."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="original rule"), caller=OPERATOR)
-  _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("turn")])
+  _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("turn")])
   run_id = await _admit_and_dispatch(tree, manager.id, "go", "in-1")
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
   assert outcome == "success"
@@ -1650,10 +1652,10 @@ async def test_snapshot_publish_failure_is_a_definitely_unlaunched_preparation_f
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The snapshot's durable write is part of preparation: a failure there is a
     withheld verdict (no backend invocation, no Run process, input unconsumed)."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(node_prompt="the rule"), caller=OPERATOR)
-  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("never")])
+  _backends, builds = _manager_backend(monkeypatch, tree, cfg, session_blocks, events=[result_event("never")])
   from src.infra import json_utils
   real_atomic = json_utils.atomic_write_text
   calls = {"n": 0}
@@ -1688,11 +1690,12 @@ async def test_own_subtree_rule_launch_parity_and_edit_boundary(
     rule. Editing that rule changes the node's AND a descendant's next-start
     preview while the current Run's stored snapshot stays fixed.
     """
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=manager.id, request_id="child")
   await tree.patch_task(manager.id, PatchSessionTaskRequest(subtree_prompt="program-wide rule"), caller=OPERATOR)
-  _backends, _builds = _manager_backend(monkeypatch, tree, cfg, session_mgr, events=[result_event("manager turn done")])
+  _backends, _builds = _manager_backend(
+      monkeypatch, tree, cfg, session_blocks, events=[result_event("manager turn done")])
 
   run_id = await _admit_and_dispatch(tree, manager.id, "Take off.", "in-1")
   await wait_for_terminal_run(tree, manager.id, run_id)
@@ -1794,14 +1797,14 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
     Run was admitted. That Run lands its durable failed fact, keeps the actual
     error as readable evidence in its own events log, and the worker's parent
     receives a failure report naming the error and is woken."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("failure noted"))
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("phrase")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
 
   repo, _origin = init_repo_with_origin(tmp_path / "prep-fail")
   # The failure's exact shape: the local base branch diverges from origin.
@@ -1815,7 +1818,7 @@ async def test_worktree_preparation_failure_lands_failed_run_and_reports_to_pare
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
   # The client context stays open across the waits: the launches are tasks on
   # the client's portal loop, alive exactly while the block stands.
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     resp = client.post(
         "/api/internal/delegate",
         json={
@@ -1870,7 +1873,7 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
   """A manager turn gets the same guarantee: backend resolution is the first
     post-admission act, and its failure lands the Run's durable failed fact
     with the error as evidence — never a queued run stranded without a fact."""
-  _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
 
   def explode(cfg, backend: str | None, model: str | None):
     raise ValueError(f"backend {backend!r} is not configured")
@@ -1917,8 +1920,8 @@ def build_pooled_env(
   cfg = pool_cfg(
       tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels, claude_pools=claude_pools)
   seed_signing_home(home, monkeypatch)
-  session_mgr = build_session_manager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  session_blocks = build_session_blocks(cfg)
+  return cfg, session_blocks, build_task_tree(cfg, session_blocks)
 
 
 async def _register_work_run(tree: TaskTreeManager, worker_id: str, run_id: str, backend: str, model: str) -> None:
@@ -1934,12 +1937,12 @@ async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
     that account). The iteration and scheduled-step kinds launch through their
     controllers and are pinned in the sequence suites."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   # An implement task: the work Run's success spawns its review, the second
   # fresh launch this test pins.
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="implement"))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("work done; modified /tmp/x.sh")]),
@@ -1974,14 +1977,14 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
   """With pools defined, the launch picks an account of the option's pool: beta's
     untouched accounts, holding more headroom than every alpha member, stay unused."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(
+  cfg, session_blocks, tree = build_pooled_env(
       tmp_path, monkeypatch, claude_pools={
           "alpha": ["main"],
           "beta": ["ext-1", "ext-2"]
       })
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # main sits at half a window; across all accounts an untouched beta account wins.
@@ -2009,10 +2012,10 @@ async def test_unpooled_fresh_worker_launch_carries_no_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env_builder, backend_id: str) -> None:
   """An empty pool and a non-Claude backend both build with no claude_account key: the
     worker runs on its default login exactly as before this change."""
-  cfg, session_mgr, tree = env_builder(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = env_builder(tmp_path, monkeypatch)
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -2031,9 +2034,9 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
     log carries the pool-exhausted error with the earliest reset time, and the
     improve quota classification reads that text as a quota blocker."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it"))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # An empty build queue: any process spawn would pop from it and fail loudly.
   builds = install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
   for label in ("main", "ext-1", "ext-2"):
@@ -2068,10 +2071,10 @@ async def test_rejected_first_process_relays_to_another_pool_account_and_succeed
     with the most headroom (same session id, scripted relay backend) and the Run
     ends success."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "11111111-2222-3333-4444-555555555555"
   # The fresh launch binds a new Claude session id; pin it so the transcript
   # the relay moves exists before the first process is rejected.
@@ -2110,9 +2113,9 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
     Run's identity follows it, started_at stays the first process's, and chat
     holds the second process's reply."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "8b6fd8ac-6f0e-4af2-9d0e-1c2f47ab5311"
   make_transcript(tmp_path / "claude-main", cc_id)
   first = ScriptedRelayBackend(
@@ -2179,9 +2182,9 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
     ends with that one error line, and the Run keeps the first process's
     identity under an interrupted outcome."""
   claude_accounts.reset_for_tests()
-  cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_pooled_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   cc_id = "9c7fe9bd-7f1e-5f3a-be1f-2d3f58bc6422"
   make_transcript(tmp_path / "claude-main", cc_id)
   first = ScriptedRelayBackend(
@@ -2330,19 +2333,19 @@ def write_raw_result(run_dir: Path, text: str, *, age_seconds: float = 0.0) -> t
 
 
 async def _wired_root_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-  """(cfg, session_mgr, tree, manager): a root manager task over build_env's home, its
+  """(cfg, session_blocks, tree, manager): a root manager task over build_env's home, its
     dispatch wired to the silent-broadcast adapter — the rig prefix the manager-turn tests
     share. Each site unpacks the names it uses."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  return cfg, session_mgr, tree, manager
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  return cfg, session_blocks, tree, manager
 
 
 async def _manager_with_worker_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, task_type: str | None = None):
-  """(cfg, session_mgr, tree, manager, worker): a manager node with one
+  """(cfg, session_blocks, tree, manager, worker): a manager node with one
     worker child, the shape the end-landing tests report against."""
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(
       tree,
@@ -2350,7 +2353,7 @@ async def _manager_with_worker_child(tmp_path: Path, monkeypatch: pytest.MonkeyP
       request_id="child",
       profile="worker",
       task=TaskSpec(goal="do the work", task_type=task_type))
-  return cfg, session_mgr, tree, manager, worker
+  return cfg, session_blocks, tree, manager, worker
 
 
 class _IdentityTranslator:
@@ -2435,8 +2438,8 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
     report and no second process ever starts."""
   from src.runtime.thinking_state import busy_since
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   worker_builds = install_worker_launch_and_resume_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
@@ -2471,9 +2474,9 @@ async def test_manager_turn_master_done_enospc_retries_through_master_queue(
     future's done-callback releases the follow pair) and lands the end record
     with the raw log's last write time."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
   manager = await create_task(tree, parent=None, request_id="root")
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
@@ -2510,8 +2513,8 @@ async def test_parent_report_enospc_retry_delivers_report_once(tmp_path: Path, m
     exactly once (never a failed report), and the run's live ended_at survives
     the retry untouched."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
@@ -2542,8 +2545,8 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   """(d) A drained run's ended_at is the raw log's last write time; a live
     exit's ended_at stays the observed-exit write time."""
   from src.runtime.task_recovery import reconcile_task_tree
-  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("drained work")])])
 
@@ -2579,9 +2582,9 @@ async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """(e) Below the threshold a worker-class run stays queued with one blocked
     report; a manager turn still launches; threshold 0 skips the check."""
-  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   worker_builds = install_worker_launch_and_resume_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
@@ -2632,8 +2635,8 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
     immediately (as today) and starts no retry; a success fact that hits
     OSError(EIO) during delivery sends no failed report."""
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
-  cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
-  adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  cfg, session_blocks, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
+  adapter = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   tree.dispatch.executor = adapter
   install_worker_launch_and_resume_backends(
       monkeypatch,
@@ -2673,7 +2676,7 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
 async def test_repeat_finish_fills_only_empty_end_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """finish_run's repeat path fills empty ended_at/exit_code from the passed
     values and never moves values already written."""
-  _cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   worker = await create_task(tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="g"))
   run_id = "run-half"
   await tree.runs.register_run(RunRecord(id=run_id, session_id=worker.id, kind="work"))

@@ -47,8 +47,8 @@ async def _launched_run(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch,
               "access_key": "query-op-key"
           }}))
   _write_store(cfg)
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
   meta = await tree.create_task(
       request_id="r",
       task_parent_id=None,

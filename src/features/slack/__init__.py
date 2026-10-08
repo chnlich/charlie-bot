@@ -1,12 +1,10 @@
-from src.infra import config_registry
+from src.infra import config_registry, metadata_slot_registration
 from src.runtime.hooks import turn_contributions, wiring
 
 OWNER = "slack"
 
 
 def register() -> None:
-  from src.infra import metadata_slots
-
   wiring.register_command("slack", "src.features.slack.cli")
   wiring.register_service("slack", "src.features.slack.service")
   wiring.register_router("src.features.slack.api", prefix="/api/internal", tags=("internal",))
@@ -20,9 +18,9 @@ def register() -> None:
           config_registry.CREDENTIALS_PREFIX + "slack_user_token": "slack.user_token",
       },
   )
-  metadata_slots.register_metadata_fields(
+  metadata_slot_registration.register_metadata_fields(
       OWNER,
       "src.features.slack.metadata:SlackSessionFields",
-      on=metadata_slots.ON_SESSION,
+      on=metadata_slot_registration.ON_SESSION,
       after="successor_session_id")
   turn_contributions.register_turn_contribution("slack", "src.features.slack.turn_contribution:CONTRIBUTION")

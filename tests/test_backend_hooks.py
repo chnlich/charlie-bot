@@ -39,7 +39,7 @@ from src.infra import identity_env
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata, ThreadMetadata
 from src.runtime import master_cc_run
-from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types
 from src.runtime.worker import Worker
 
 CC_ID = "11111111-2222-3333-4444-555555555555"
@@ -68,7 +68,7 @@ def test_registering_a_type_twice_raises() -> None:
   traits = backend_types.traits_for("codex")
 
   with pytest.raises(ValueError, match="already registered"):
-    backend_types.register_backend_type(
+    backend_type_registration.register_backend_type(
         "codex",
         options="src.backends.codex.options:CodexBackend",
         factory="src.backends.codex.factory:build",
@@ -98,9 +98,9 @@ def test_registering_the_packages_imports_no_backend_module() -> None:
           "import sys",
           "from src.app import registrations",
           "registrations.register_all()",
-          "from src.runtime.hooks import backend_lifecycle, backend_types",
-          "from src.runtime.hooks.backend_types import _registry",
-          "factory_modules = sorted({r.factory.partition(':')[0] for r in _registry.values()})",
+          "from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types",
+          "registry = backend_type_registration.registrations()",
+          "factory_modules = sorted({r.factory.partition(':')[0] for r in registry.values()})",
           "loaded = [m for m in factory_modules if m in sys.modules]",
           "backend_modules = sorted(m for m in sys.modules if m.startswith('src.backends.') and m.count('.') >= 3)",
           "print(len(factory_modules), loaded, backend_modules)",

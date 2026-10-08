@@ -49,7 +49,7 @@ from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.memo import BoundedMemo
 from src.infra.models import SessionMetadata
-from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks import backend_lifecycle_registration, backend_types
 
 
 def _prompt_token_sum(usage: dict) -> int:
@@ -256,7 +256,7 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   if facts.chosen_prompt_tokens <= 0:
     return None
   context_tokens = (facts.post_compact_tokens if facts.post_compact_tokens is not None else facts.chosen_prompt_tokens)
-  limits = backend_lifecycle.reading_limits(_READING_CLAUDE)
+  limits = backend_lifecycle_registration.reading_limits(_READING_CLAUDE)
   if limits is None:
     return _usage_dict(context_tokens, None, None, facts.chosen_model, facts.cost)
   if facts.chosen_model and facts.chosen_model in facts.model_windows:
@@ -293,7 +293,7 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   context_context = limit.get("context")
   if isinstance(context_input, int) and isinstance(context_output, int):
     context_full = context_input
-    limits = backend_lifecycle.reading_limits(_READING_SNAPSHOT)
+    limits = backend_lifecycle_registration.reading_limits(_READING_SNAPSHOT)
     if limits is None or limits.compact_reserve is None:
       context_compact_at = None
     else:
@@ -430,7 +430,7 @@ class SessionUsageResolver:
     if backend_type is None:
       return None
     if backend_type not in self._usage_resolvers:
-      cls = backend_lifecycle.usage_resolver_for(backend_type)
+      cls = backend_lifecycle_registration.usage_resolver_for(backend_type)
       self._usage_resolvers[backend_type] = (
           None if cls is None else cls(self._cfg, self._events_cache, self._chat_events_path_fn))
     return self._usage_resolvers[backend_type]

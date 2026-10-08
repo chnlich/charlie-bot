@@ -9,7 +9,7 @@ in the collector, so every read or parse failure raises instead of noting and co
 usage page reads the ledger alone and shows when the last capture finished.
 
 Sources, all local logs (no vendor usage API is called):
-  every registered usage source with a module (src/runtime/hooks/usage_sources.py): the module's
+  every registered usage source with a module (src/runtime/hooks/usage_source_registration.py): the module's
       ``logs()`` lists the files and its ``read()`` turns one file into records, so this module
       names no backend;
   charlie-bot  the sessions tree: thread result events (``threads/*/data/events.jsonl``),
@@ -66,7 +66,7 @@ from src.features.usage import CHARLIE_BOT_SOURCE, usage_ledger
 from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime import runs
-from src.runtime.hooks import usage_sources
+from src.runtime.hooks import usage_source_registration, usage_sources
 
 # Account label for a master-run capture whose context model matches no run_logs_only backend
 # in config.yaml (a retired backend's master runs, or an ad-hoc model).
@@ -88,7 +88,7 @@ def backend_registry() -> dict[str, object]:
   return {opt.id: opt for opt in config.get_config().backends.options}
 
 
-def backend_source(backend: str, registry: dict) -> usage_sources.UsageSource | None:
+def backend_source(backend: str, registry: dict) -> usage_source_registration.UsageSource | None:
   """The usage source one backend id attributes to, or None when it has none.
 
   A registered id reads its config type; an id that left config reads the id prefix the id rule
@@ -96,8 +96,8 @@ def backend_source(backend: str, registry: dict) -> usage_sources.UsageSource | 
   """
   opt = registry.get(backend)
   if opt is not None:
-    return usage_sources.source_for(str(opt.type))
-  return next((s for s in usage_sources.sources() if backend.startswith(s.id_prefixes)), None)
+    return usage_source_registration.source_for(str(opt.type))
+  return next((s for s in usage_source_registration.sources() if backend.startswith(s.id_prefixes)), None)
 
 
 def backend_page_source(backend: str, registry: dict) -> str:
@@ -107,7 +107,7 @@ def backend_page_source(backend: str, registry: dict) -> str:
   source raises: a backend with no collection rule must not land silently under a wrong CLI.
   """
   if backend == _CLC_MASTER_ACCOUNT:
-    source = next((s for s in usage_sources.sources() if s.run_logs_only), None)
+    source = next((s for s in usage_source_registration.sources() if s.run_logs_only), None)
   else:
     source = backend_source(backend, registry)
   if source is None:
@@ -117,11 +117,11 @@ def backend_page_source(backend: str, registry: dict) -> str:
 
 def _run_logs_only(option: object) -> bool:
   """Whether a backend option's usage lives only in CharlieBot's own logs."""
-  source = usage_sources.source_for(str(option.type))
+  source = usage_source_registration.source_for(str(option.type))
   return source is not None and source.run_logs_only
 
 
-def _verdict(source: usage_sources.UsageSource) -> _Verdict:
+def _verdict(source: usage_source_registration.UsageSource) -> _Verdict:
   if source.run_logs_only:
     return _Verdict.NATIVE
   if source.module is not None and hasattr(usage_sources.implementation(source), "live_cli_sessions"):
@@ -129,7 +129,7 @@ def _verdict(source: usage_sources.UsageSource) -> _Verdict:
   return _Verdict.FALLBACK
 
 
-def _backend_verdict(backend: str, registry: dict) -> tuple[_Verdict, usage_sources.UsageSource] | None:
+def _backend_verdict(backend: str, registry: dict) -> tuple[_Verdict, usage_source_registration.UsageSource] | None:
   """The verdict and source of one backend id, or None when the id has no usage source."""
   source = backend_source(backend, registry)
   return None if source is None else (_verdict(source), source)
@@ -142,13 +142,14 @@ class _LiveSessions:
   def __init__(self) -> None:
     self._by_source: dict[str, set[str]] = {}
 
-  def of(self, source: usage_sources.UsageSource) -> set[str]:
+  def of(self, source: usage_source_registration.UsageSource) -> set[str]:
     if source.name not in self._by_source:
       self._by_source[source.name] = usage_sources.implementation(source).live_cli_sessions()
     return self._by_source[source.name]
 
 
-def _admitted(verdict: _Verdict, source: usage_sources.UsageSource, ids: set[str], live: _LiveSessions) -> bool:
+def _admitted(
+    verdict: _Verdict, source: usage_source_registration.UsageSource, ids: set[str], live: _LiveSessions) -> bool:
   """Whether a thread or run with these session ids contributes records.
 
   A NATIVE one always does. A FALLBACK one needs at least one id to key the any-match exclusion,
@@ -184,7 +185,7 @@ def _thread_row_model(meta: dict, registry: dict) -> str:
   opt = registry.get(backend)
   if opt is not None and opt.model:
     return _bare_model(opt.model)
-  prefix = next((p for s in usage_sources.sources() for p in s.id_prefixes if backend.startswith(p)), "")
+  prefix = next((p for s in usage_source_registration.sources() for p in s.id_prefixes if backend.startswith(p)), "")
   return backend.removeprefix(prefix)
 
 
@@ -590,7 +591,8 @@ def capture_runs(
 
 
 def _capture_source(
-    ledger: usage_ledger.UsageLedger, host: str, source: usage_sources.UsageSource, captured: dict[str, str]) -> int:
+    ledger: usage_ledger.UsageLedger, host: str, source: usage_source_registration.UsageSource,
+    captured: dict[str, str]) -> int:
   """Copy one registered source's logs into the ledger; returns the records written.
 
   A file whose signature is its stat pair is skipped while the stored signature equals the
@@ -625,12 +627,12 @@ def capture_usage(ledger: usage_ledger.UsageLedger, *, host: str, sessions_dir: 
   Returns the records written per source name; the charlie-bot label sums the thread, master
   and Run captures, whose records carry that source.
   """
-  if not usage_sources.sources():
+  if not usage_source_registration.sources():
     raise RuntimeError("no usage source is registered: the entry point must call registrations.register_all()")
   captured = ledger.captured_sigs(host)
   written: dict[str, int] = {}
   with ledger.batch():
-    for source in usage_sources.sources():
+    for source in usage_source_registration.sources():
       if source.module is not None:
         written[source.name] = _capture_source(ledger, host, source, captured)
     written[CHARLIE_BOT_SOURCE] = (

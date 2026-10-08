@@ -23,7 +23,7 @@ from src.backends.codex import usage_logs as codex_logs
 from src.features.usage import token_tally as tt
 from src.features.usage.usage_ledger import UsageLedger
 from src.infra import config, home, ndjson
-from src.runtime.hooks import usage_sources
+from src.runtime.hooks import usage_source_registration, usage_sources
 
 NAME = "claude-model"
 
@@ -1470,7 +1470,7 @@ def test_a_finished_capture_stamps_last_capture_at_and_a_failed_one_does_not(tmp
 def test_capture_without_a_registered_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An entry point that skipped ``registrations.register_all()`` fails the capture instead of
   capturing only the charlie-bot logs and stamping the ledger as current."""
-  monkeypatch.setattr(usage_sources, "_sources", {})
+  monkeypatch.setattr(usage_source_registration, "_sources", {})
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(RuntimeError, match="register_all"):
     _capture(ledger)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:

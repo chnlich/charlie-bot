@@ -2,7 +2,7 @@
 
 A capture (src/features/usage/token_tally.py: the cron handler, the cold-storage sweep, ``charliebot
 usage-ledger capture``) writes the ledger; loading this page never captures. The page shows the ledger
-as of the last capture. Its cards are the registered usage sources (src/runtime/hooks/usage_sources.py)
+as of the last capture. Its cards are the registered usage sources (src/runtime/hooks/usage_source_registration.py)
 in registration order, followed by the sources whose usage lives only in CharlieBot's own run logs.
 """
 
@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse
 from src.features.usage import CHARLIE_BOT_SOURCE
 from src.infra import log_once, tasks
 from src.runtime import templating
-from src.runtime.hooks import usage_sources, wiring
+from src.runtime.hooks import usage_source_registration, usage_sources, wiring
 
 if TYPE_CHECKING:
   from src.features.usage import usage_ledger
@@ -44,7 +44,7 @@ def preload_usage_tally_stack() -> None:
   import sqlite3  # noqa: F401  -- the pin is the import itself
 
   from src.features.usage import token_tally, usage_ledger  # noqa: F401
-  for source in usage_sources.sources():
+  for source in usage_source_registration.sources():
     if source.module is not None:
       usage_sources.implementation(source)
   log.info("usage_tally_stack_preloaded", duration_ms=round((time.monotonic() - started) * 1000))
@@ -110,18 +110,18 @@ def _model_leaf(model: str) -> str:
   return _MODEL_LEAF_SUFFIX.sub("", model.rsplit("/", 1)[-1])
 
 
-def _cards() -> tuple[usage_sources.UsageSource, ...]:
+def _cards() -> tuple[usage_source_registration.UsageSource, ...]:
   """The usage sources in card order: registration order, then the sources whose usage lives
   only in CharlieBot's own logs. The per-source tiles iterate it, and each row's slot number sent
   to the charts is its position here (from 1). A charlie-bot row's accounts attribute to the CLI
   that ran the call (see ``_account_source``), so the ledger's own charlie-bot spelling never
   reaches the page."""
-  registered = usage_sources.sources()
+  registered = usage_source_registration.sources()
   return (*(s for s in registered if not s.run_logs_only), *(s for s in registered if s.run_logs_only))
 
 
 def _account_source(
-    row: usage_ledger.LedgerRow, account: str, registry: dict, cards: tuple[usage_sources.UsageSource,
+    row: usage_ledger.LedgerRow, account: str, registry: dict, cards: tuple[usage_source_registration.UsageSource,
                                                                             ...]) -> tuple[str, bool]:
   """(card name, fallback mark) for one ledger account.
 
@@ -142,7 +142,8 @@ def _account_source(
 
 
 def _merge_ledger_rows(
-    rows: list[usage_ledger.LedgerRow], registry: dict, cards: tuple[usage_sources.UsageSource, ...]) -> list[dict]:
+    rows: list[usage_ledger.LedgerRow], registry: dict, cards: tuple[usage_source_registration.UsageSource,
+                                                                     ...]) -> list[dict]:
   """Fold the ledger's per-(source, model) rows into one page row per model.
 
   Sources spell one model differently — opencode `zai-org/GLM-5.3-Flash`, charlie-bot

@@ -2,8 +2,8 @@
 
 ``SessionMetadata`` and ``ThreadMetadata`` declare only the fields the core runtime owns. A package that
 needs keys of its own in ``metadata.json`` registers a pydantic model whose fields are those keys
-(``register_metadata_fields``) and reads and writes them through this module (``fields_of``,
-``set_fields``). Deleting the package then leaves no field name in infra.
+(``register_metadata_fields`` in ``src/infra/metadata_slot_registration.py``) and reads and writes them
+through this module (``fields_of``, ``set_fields``). Deleting the package then leaves no field name in infra.
 
 Vocabulary:
 
@@ -18,25 +18,28 @@ not an error: a deleted package leaves inert keys. The saved file lists a slot's
 declared field named by ``after``, and lists a key that the file lacks with its default, which is
 where and how a declared field was saved.
 
-This module imports pydantic only, so ``src.infra.models`` imports it; it imports the metadata
-models on first use.
+A registration stores strings only. The first call of any public function below resolves every registration
+that is still pending: it imports the model, makes the checks that need it and builds the slot. A
+registration made after that resolves on the next call.
+
+``src.infra.models`` imports this module, and this module imports the metadata models on first use.
 """
 
 from __future__ import annotations
 
 import copy
 import dataclasses
-import importlib
+import threading
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, SerializationInfo, ValidationError
 
+from src.infra import metadata_slot_registration
+from src.infra.deferred import import_attr
+from src.infra.metadata_slot_registration import FILES, ON_SESSION, ON_THREAD
+
 if TYPE_CHECKING:
   from src.infra.models import SessionMetadata, ThreadMetadata
-
-ON_SESSION = "session"
-ON_THREAD = "thread"
-_FILES = (ON_SESSION, ON_THREAD)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -53,14 +56,11 @@ class _Slot:
 
 
 # file ("session" | "thread") -> owner -> slot, in registration order
-_slots: dict[str, dict[str, _Slot]] = {on: {} for on in _FILES}
-
-
-def _import_attr(path: str) -> Any:
-  module_name, separator, attr = path.partition(":")
-  if not separator or not module_name or not attr:
-    raise ValueError(f"{path!r} is not a 'module:Class' string")
-  return getattr(importlib.import_module(module_name), attr)
+_slots: dict[str, dict[str, _Slot]] = {on: {} for on in FILES}
+# How many registrations (``metadata_slot_registration.registered()``) the slots cover. A registration that fails to
+# resolve stays uncounted, so every later call raises its error again.
+_resolved = 0
+_resolve_lock = threading.Lock()
 
 
 def _metadata_class(on: str) -> type[BaseModel]:
@@ -70,7 +70,7 @@ def _metadata_class(on: str) -> type[BaseModel]:
     return models.SessionMetadata
   if on == ON_THREAD:
     return models.ThreadMetadata
-  raise ValueError(f"on must be one of {_FILES}, got {on!r}")
+  raise ValueError(f"on must be one of {FILES}, got {on!r}")
 
 
 def _file_of(meta: BaseModel) -> str:
@@ -83,20 +83,13 @@ def _file_of(meta: BaseModel) -> str:
   raise TypeError(f"{type(meta).__name__} is neither SessionMetadata nor ThreadMetadata")
 
 
-def register_metadata_fields(owner: str, model: str, *, on: str = ON_SESSION, after: str | None = None) -> None:
-  """Register ``model``, a "module:Class" string, as the top-level keys that ``owner`` holds in the ``on`` file.
-
-  ``model`` is a pydantic model whose fields are those keys, each with a default. ``after`` names the declared
-  field of the metadata model whose position the keys take in the saved file; None puts them after the declared
-  fields. A field name that collides with the metadata model's own field or with another owner's field raises
-  ValueError, and so does a second registration of one owner on one file.
-  """
+def _resolve(registration: metadata_slot_registration.Registration) -> _Slot:
+  """The slot of one registration; ValueError when its model collides with a field or its ``after`` is undeclared."""
+  owner, on, after = registration.owner, registration.on, registration.after
   metadata = _metadata_class(on)
-  if owner in _slots[on]:
-    raise ValueError(f"{owner!r} already registered fields on {on} metadata")
   if after is not None and after not in metadata.model_fields:
     raise ValueError(f"{after!r} is not a declared field of {metadata.__name__}")
-  model_cls = _import_attr(model)
+  model_cls = import_attr(registration.model)
   for name in model_cls.model_fields:
     if name in metadata.model_fields:
       raise ValueError(f"{owner!r} field {name!r} collides with a field of {metadata.__name__}")
@@ -104,12 +97,27 @@ def register_metadata_fields(owner: str, model: str, *, on: str = ON_SESSION, af
       if name in other.model.model_fields:
         raise ValueError(f"{owner!r} field {name!r} collides with a field of {other.owner!r}")
   defaults = model_cls()
-  _slots[on][owner] = _Slot(
+  return _Slot(
       owner=owner,
       model=model_cls,
       after=after,
       defaults_python=defaults.model_dump(),
       defaults_json=defaults.model_dump(mode="json"))
+
+
+def _resolve_pending() -> None:
+  """Resolve every registration made since the last call; with none pending this is one comparison.
+
+  The lock lets concurrent first calls resolve each registration once: the thread that waits finds
+  nothing pending.
+  """
+  global _resolved
+  if _resolved == len(metadata_slot_registration.registered()):
+    return
+  with _resolve_lock:
+    for registration in metadata_slot_registration.registered()[_resolved:]:
+      _slots[registration.on][registration.owner] = _resolve(registration)
+      _resolved += 1
 
 
 def _slot(meta: BaseModel, owner: str) -> _Slot:
@@ -130,6 +138,7 @@ def fields_of(meta: SessionMetadata | ThreadMetadata, owner: str) -> BaseModel:
 
   A stored value of the wrong type raises ValidationError.
   """
+  _resolve_pending()
   slot = _slot(meta, owner)
   return slot.model.model_validate(_held(meta, slot))
 
@@ -140,6 +149,7 @@ def set_fields(meta: SessionMetadata | ThreadMetadata, owner: str, **values: Any
   A name that is not a field of the owner's model raises ValueError; a value of the wrong type raises
   ValidationError. Nothing is written when either raises.
   """
+  _resolve_pending()
   slot = _slot(meta, owner)
   unknown = sorted(set(values) - set(slot.names))
   if unknown:
@@ -172,6 +182,7 @@ def set_registered(meta: SessionMetadata | ThreadMetadata, values: dict[str, Any
 
   A key that no owner registers raises ValueError.
   """
+  _resolve_pending()
   owned = _owned_names(_file_of(meta))
   unknown = sorted(set(values) - set(owned))
   if unknown:
@@ -185,6 +196,7 @@ def set_registered(meta: SessionMetadata | ThreadMetadata, values: dict[str, Any
 
 def check_registered(on: str, values: dict[str, Any]) -> None:
   """Raise ValueError when ``values`` holds a key no owner registered on the ``on`` file or a value of the wrong type."""
+  _resolve_pending()
   owned = _owned_names(on)
   unknown = sorted(set(values) - set(owned))
   if unknown:
@@ -205,6 +217,7 @@ def arrange(on: str, declared: dict[str, Any], data: dict[str, Any], info: Seria
   extras and take their place after the slot's ``after`` field, a missing one filled with its default; the
   unregistered extras stay last. Keys that ``info`` excludes stay out.
   """
+  _resolve_pending()
   slots = _slots[on]
   if not slots:
     return data

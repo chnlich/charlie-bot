@@ -6,12 +6,15 @@ owner registers survives load and save, and a create request carries only regist
 
 import json
 import pathlib
+import threading
+import time
 
 import conftest
 import pytest
 from pydantic import BaseModel, ValidationError
 
-from src.infra import metadata_slots, models
+from src.app import registrations
+from src.infra import metadata_slot_registration, metadata_slots, models
 from src.runtime import sessions, task_sessions
 
 DATA = pathlib.Path(__file__).parent / "data"
@@ -34,36 +37,101 @@ class FieldOfAnotherOwner(BaseModel):
   probe_note: str | None = None
 
 
+class LateSessionFields(BaseModel):
+  late_note: str | None = None
+
+
 def _probe(name: str) -> str:
   return f"{__name__}:{name}"
+
+
+def _resolve_pending() -> None:
+  """Any ``metadata_slots`` call resolves every pending registration; this one reads nothing else."""
+  metadata_slots.check_registered(metadata_slots.ON_SESSION, {})
 
 
 @pytest.fixture
 def probe_slots(monkeypatch: pytest.MonkeyPatch) -> None:
   """A private registry holding the production owners plus a probe owner on both files."""
+  monkeypatch.setattr(metadata_slot_registration, "_registered", list(metadata_slot_registration.registered()))
   monkeypatch.setattr(metadata_slots, "_slots", {on: dict(owners) for on, owners in metadata_slots._slots.items()})
-  metadata_slots.register_metadata_fields("probe", _probe("ProbeSessionFields"), after="group")
-  metadata_slots.register_metadata_fields("probe", _probe("ProbeThreadFields"), on="thread")
+  monkeypatch.setattr(metadata_slots, "_resolved", metadata_slots._resolved)  # the count of registrations _slots covers
+  metadata_slot_registration.register_metadata_fields("probe", _probe("ProbeSessionFields"), after="group")
+  metadata_slot_registration.register_metadata_fields("probe", _probe("ProbeThreadFields"), on="thread")
 
 
 @pytest.mark.usefixtures("probe_slots")
 class TestRegistration:
 
-  def test_a_field_named_like_a_field_of_the_metadata_model_raises(self) -> None:
+  def test_a_field_named_like_a_field_of_the_metadata_model_raises_at_the_first_resolution(self) -> None:
+    metadata_slot_registration.register_metadata_fields("greedy", _probe("FieldOfTheMetadataModel"))
     with pytest.raises(ValueError, match="collides with a field of SessionMetadata"):
-      metadata_slots.register_metadata_fields("greedy", _probe("FieldOfTheMetadataModel"))
+      _resolve_pending()
 
-  def test_a_field_named_like_another_owners_field_raises(self) -> None:
+  def test_a_field_named_like_another_owners_field_raises_at_the_first_resolution(self) -> None:
+    metadata_slot_registration.register_metadata_fields("copycat", _probe("FieldOfAnotherOwner"))
     with pytest.raises(ValueError, match="collides with a field of 'probe'"):
-      metadata_slots.register_metadata_fields("copycat", _probe("FieldOfAnotherOwner"))
+      _resolve_pending()
 
-  def test_a_second_registration_of_one_owner_raises(self) -> None:
+  def test_a_second_registration_of_one_owner_raises_at_registration(self) -> None:
     with pytest.raises(ValueError, match="already registered"):
-      metadata_slots.register_metadata_fields("probe", _probe("ProbeSessionFields"))
+      metadata_slot_registration.register_metadata_fields("probe", _probe("ProbeSessionFields"))
 
-  def test_the_after_field_must_be_declared_by_the_metadata_model(self) -> None:
+  def test_the_after_field_must_be_declared_by_the_metadata_model_at_the_first_resolution(self) -> None:
+    metadata_slot_registration.register_metadata_fields("lost", _probe("FieldOfAnotherOwner"), after="no_such_field")
     with pytest.raises(ValueError, match="not a declared field"):
-      metadata_slots.register_metadata_fields("lost", _probe("FieldOfAnotherOwner"), after="no_such_field")
+      _resolve_pending()
+
+  @pytest.mark.parametrize(
+      ("model", "on", "message"), [
+          ("not-a-module-class-string", "session", "not a 'module:Class' string"),
+          ("tests.test_metadata_slots:ProbeSessionFields", "elsewhere", "on must be one of"),
+      ])
+  def test_a_malformed_model_string_or_an_unknown_file_raises_at_registration(
+      self, model: str, on: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+      metadata_slot_registration.register_metadata_fields("bad", model, on=on)
+
+  def test_a_registration_that_cannot_resolve_raises_on_every_later_call(self) -> None:
+    metadata_slot_registration.register_metadata_fields("greedy", _probe("FieldOfTheMetadataModel"))
+    for _ in range(2):
+      with pytest.raises(ValueError, match="collides with a field of SessionMetadata"):
+        _resolve_pending()
+
+
+@pytest.mark.usefixtures("probe_slots")
+def test_a_registration_made_after_a_resolution_resolves_on_the_next_call() -> None:
+  _resolve_pending()
+  metadata_slot_registration.register_metadata_fields("late", _probe("LateSessionFields"))
+
+  metadata_slots.check_registered(metadata_slots.ON_SESSION, {"late_note": "kept"})
+
+
+@pytest.mark.usefixtures("probe_slots")
+def test_concurrent_first_calls_resolve_each_registration_once(monkeypatch: pytest.MonkeyPatch) -> None:
+  pending = len(metadata_slot_registration.registered()) - metadata_slots._resolved
+  resolved: list[str] = []
+  resolve = metadata_slots._resolve
+
+  def slow_resolve(registration: metadata_slot_registration.Registration) -> object:
+    resolved.append(registration.owner)
+    time.sleep(0.05)  # holds the first caller inside the resolution while the others arrive
+    return resolve(registration)
+
+  monkeypatch.setattr(metadata_slots, "_resolve", slow_resolve)
+  start = threading.Barrier(4)
+
+  def first_call() -> None:
+    start.wait()
+    _resolve_pending()
+
+  threads = [threading.Thread(target=first_call) for _ in range(4)]
+  for thread in threads:
+    thread.start()
+  for thread in threads:
+    thread.join()
+
+  assert len(resolved) == pending
 
 
 @pytest.mark.usefixtures("probe_slots")
@@ -159,3 +227,13 @@ async def test_a_create_request_sets_registered_fields_and_refuses_unknown_keys(
 
   legacy = await session_mgr.create_session(models.CreateSessionRequest(name="legacy", probe_note="direct"))
   assert metadata_slots.fields_of(legacy, "probe").probe_note == "direct"
+
+
+def test_every_package_registration_resolves() -> None:
+  """A collision or an undeclared ``after`` in any real package fails here, naming the package's field."""
+  registrations.register_all()
+
+  _resolve_pending()
+
+  registered = {(registration.on, registration.owner) for registration in metadata_slot_registration.registered()}
+  assert registered == {(on, owner) for on, owners in metadata_slots._slots.items() for owner in owners}

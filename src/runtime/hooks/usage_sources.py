@@ -1,8 +1,9 @@
 """Usage sources: where each backend's token usage is logged, registered by the backend's own package.
 
-The usage package (src/features/usage) reads usage only through this module, so it names no backend.
-A backend package registers one ``UsageSource`` from its ``register()``; the usage package asks
-``sources()`` for the list and ``implementation()`` for the code that reads one source's logs.
+The usage package (src/features/usage) reads usage only through this module and the registry beside it
+(``usage_source_registration.py``), so it names no backend. A backend package registers one ``UsageSource``
+from its ``register()``; the usage package asks ``usage_source_registration.sources()`` for the list and
+``implementation()`` for the code that reads one source's logs.
 
 ``UsageRecord`` and ``RecordKind`` are the records an implementation returns and the ledger stores.
 
@@ -29,8 +30,8 @@ An implementation module defines only the functions its source supports:
       The function loads the sweep code on its first call, so a capture never loads it. The sweep
       runs after the ledger capture, so the usage of a log is recorded before the log goes.
 
-A backend type attributes its usage to a source with ``attribute_backend_type``, and a backend id
-that has left the config attributes through the source's ``id_prefixes``.
+A backend type attributes its usage to a source with ``usage_source_registration.attribute_backend_type``, and a
+backend id that has left the config attributes through the source's ``id_prefixes``.
 """
 
 import abc
@@ -45,6 +46,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from src.infra import log_once
+from src.runtime.hooks import usage_source_registration
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
@@ -86,22 +88,6 @@ class UsageRecord:
   def __post_init__(self) -> None:
     if self.kind == RecordKind.FALLBACK and not self.sessions:
       raise ValueError(f"fallback record {self.record_id!r} carries no sessions")
-
-
-@dataclass(frozen=True)
-class UsageSource:
-  """One place usage is logged.
-
-  ``name`` is the ledger's source value and the usage page's card title. ``id_prefixes`` name a
-  backend id that has left the config. ``run_logs_only`` means the usage lives only in CharlieBot's
-  own run logs. ``module`` is the implementation module, imported on first use; None when
-  CharlieBot's own logs are the only home.
-  """
-
-  name: str
-  id_prefixes: tuple[str, ...]
-  run_logs_only: bool
-  module: str | None
 
 
 # Keys of the quota panel payload and of one window entry in it. A source's accounts build the payload
@@ -347,48 +333,7 @@ def sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable
     yield from entries
 
 
-_sources: dict[str, UsageSource] = {}
-_type_sources: dict[str, str] = {}
-
-
-def register_source(source: UsageSource) -> None:
-  """Add *source* after the sources already registered; a repeated name or prefix raises."""
-  if source.name in _sources:
-    raise ValueError(f"usage source {source.name!r} is already registered")
-  for prefix in source.id_prefixes:
-    owner = next((s.name for s in _sources.values() if prefix in s.id_prefixes), None)
-    if owner is not None:
-      raise ValueError(f"usage source {source.name!r}: id prefix {prefix!r} already belongs to {owner!r}")
-  _sources[source.name] = source
-
-
-def attribute_backend_type(backend_type: str, source: str) -> None:
-  """Attribute the usage of backends of *backend_type* to the source named *source*.
-
-  The source may register after the attribution; ``source_for`` resolves it on lookup.
-  """
-  if backend_type in _type_sources:
-    raise ValueError(f"backend type {backend_type!r} is already attributed to {_type_sources[backend_type]!r}")
-  _type_sources[backend_type] = source
-
-
-def sources() -> tuple[UsageSource, ...]:
-  """Every registered source, in registration order."""
-  return tuple(_sources.values())
-
-
-def source_for(backend_type: str) -> UsageSource | None:
-  """The source *backend_type* is attributed to, or None for a type with no usage source."""
-  name = _type_sources.get(backend_type)
-  if name is None:
-    return None
-  source = _sources.get(name)
-  if source is None:
-    raise ValueError(f"backend type {backend_type!r} is attributed to usage source {name!r}, which is not registered")
-  return source
-
-
-def implementation(source: UsageSource) -> ModuleType:
+def implementation(source: usage_source_registration.UsageSource) -> ModuleType:
   """The module that reads *source*'s logs, imported on first use."""
   if source.module is None:
     raise ValueError(f"usage source {source.name!r} has no implementation module")
@@ -398,7 +343,7 @@ def implementation(source: UsageSource) -> ModuleType:
 def quota_accounts() -> list[QuotaAccount]:
   """The accounts of every registered source that defines ``quota_accounts()``, in source registration order."""
   accounts: list[QuotaAccount] = []
-  for source in sources():
+  for source in usage_source_registration.sources():
     if source.module is not None:
       module = implementation(source)
       if hasattr(module, "quota_accounts"):
@@ -409,7 +354,7 @@ def quota_accounts() -> list[QuotaAccount]:
 def sweep_all(scope: SweepScope) -> list[SourceSweep]:
   """The sweep of every registered source that defines ``sweep()``, in source registration order."""
   sweeps: list[SourceSweep] = []
-  for source in sources():
+  for source in usage_source_registration.sources():
     if source.module is not None:
       module = implementation(source)
       if hasattr(module, "sweep"):

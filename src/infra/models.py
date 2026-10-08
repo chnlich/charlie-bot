@@ -439,6 +439,9 @@ class SessionMetadata(BaseModel):
     return metadata_slots.arrange(metadata_slots.ON_SESSION, type(self).model_fields, handler(self), info)
 
 
+metadata_slots.provide_metadata_models(SessionMetadata, ThreadMetadata)
+
+
 def validate_session_metadata(data: Any, path: str | None = None) -> SessionMetadata:
   """Validate persisted session metadata and identify files needing conversion."""
   if isinstance(data, (str, bytes, bytearray)):

@@ -22,7 +22,9 @@ A registration stores strings only. The first call of any public function below 
 that is still pending: it imports the model, makes the checks that need it and builds the slot. A
 registration made after that resolves on the next call.
 
-``src.infra.models`` imports this module, and this module imports the metadata models on first use.
+``models.py`` (the module that defines the two metadata models) imports this module and calls
+``provide_metadata_models`` once, after it defines them. This module imports nothing from ``models.py``: every public
+function receives a metadata object or runs inside a metadata model's own method, so the models are loaded when it runs.
 """
 
 from __future__ import annotations
@@ -30,16 +32,13 @@ from __future__ import annotations
 import copy
 import dataclasses
 import threading
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel, SerializationInfo, ValidationError
 
 from src.infra import metadata_slot_registration
 from src.infra.deferred import import_attr
 from src.infra.metadata_slot_registration import FILES, ON_SESSION, ON_THREAD
-
-if TYPE_CHECKING:
-  from src.infra.models import SessionMetadata, ThreadMetadata
 
 
 @dataclasses.dataclass(frozen=True)
@@ -61,32 +60,27 @@ _slots: dict[str, dict[str, _Slot]] = {on: {} for on in FILES}
 # resolve stays uncounted, so every later call raises its error again.
 _resolved = 0
 _resolve_lock = threading.Lock()
+# file ("session" | "thread") -> the metadata model, set once by ``provide_metadata_models``
+_metadata_classes: dict[str, type[BaseModel]] = {}
 
 
-def _metadata_class(on: str) -> type[BaseModel]:
-  from src.infra import models
-
-  if on == ON_SESSION:
-    return models.SessionMetadata
-  if on == ON_THREAD:
-    return models.ThreadMetadata
-  raise ValueError(f"on must be one of {FILES}, got {on!r}")
+def provide_metadata_models(session: type[BaseModel], thread: type[BaseModel]) -> None:
+  """Receive ``SessionMetadata`` and ``ThreadMetadata`` from ``models.py``, which calls this once."""
+  _metadata_classes[ON_SESSION] = session
+  _metadata_classes[ON_THREAD] = thread
 
 
 def _file_of(meta: BaseModel) -> str:
-  from src.infra import models
-
-  if isinstance(meta, models.SessionMetadata):
-    return ON_SESSION
-  if isinstance(meta, models.ThreadMetadata):
-    return ON_THREAD
+  for on, metadata in _metadata_classes.items():
+    if isinstance(meta, metadata):
+      return on
   raise TypeError(f"{type(meta).__name__} is neither SessionMetadata nor ThreadMetadata")
 
 
 def _resolve(registration: metadata_slot_registration.Registration) -> _Slot:
   """The slot of one registration; ValueError when its model collides with a field or its ``after`` is undeclared."""
   owner, on, after = registration.owner, registration.on, registration.after
-  metadata = _metadata_class(on)
+  metadata = _metadata_classes[on]
   if after is not None and after not in metadata.model_fields:
     raise ValueError(f"{after!r} is not a declared field of {metadata.__name__}")
   model_cls = import_attr(registration.model)
@@ -133,7 +127,7 @@ def _held(meta: BaseModel, slot: _Slot) -> dict[str, Any]:
   return {name: extra[name] for name in slot.names if name in extra}
 
 
-def fields_of(meta: SessionMetadata | ThreadMetadata, owner: str) -> BaseModel:
+def fields_of(meta: BaseModel, owner: str) -> BaseModel:
   """The validated view over ``owner``'s keys in ``meta``; a key the file lacks reads as its default.
 
   A stored value of the wrong type raises ValidationError.
@@ -143,7 +137,7 @@ def fields_of(meta: SessionMetadata | ThreadMetadata, owner: str) -> BaseModel:
   return slot.model.model_validate(_held(meta, slot))
 
 
-def set_fields(meta: SessionMetadata | ThreadMetadata, owner: str, **values: Any) -> None:
+def set_fields(meta: BaseModel, owner: str, **values: Any) -> None:
   """Validate ``values`` against ``owner``'s model, then write those keys into ``meta``.
 
   A name that is not a field of the owner's model raises ValueError; a value of the wrong type raises
@@ -160,8 +154,8 @@ def set_fields(meta: SessionMetadata | ThreadMetadata, owner: str, **values: Any
 
 
 def copy_fields(
-    source: SessionMetadata | ThreadMetadata,
-    target: SessionMetadata | ThreadMetadata,
+    source: BaseModel,
+    target: BaseModel,
     owner: str,
     *,
     names: tuple[str, ...] | None = None,
@@ -177,7 +171,7 @@ def _owned_names(on: str) -> dict[str, str]:
   return {name: owner for owner, slot in _slots[on].items() for name in slot.names}
 
 
-def set_registered(meta: SessionMetadata | ThreadMetadata, values: dict[str, Any]) -> None:
+def set_registered(meta: BaseModel, values: dict[str, Any]) -> None:
   """Write ``values``, keys of any owner registered on ``meta``'s file, through ``set_fields``, one call per owner.
 
   A key that no owner registers raises ValueError.

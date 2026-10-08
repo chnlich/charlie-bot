@@ -32,7 +32,7 @@ a reply must be the published URL the round obtained by running
 event
 whose ``answers`` names the summon the running round was answering (None for a
 round no summon started). ``deliver_done`` hangs off the round's terminal
-``master_done`` event (called from ``SessionManager.persist_and_broadcast``),
+``master_done`` event (called from the Discord turn contribution's ``after_turn``),
 not off a waiting coroutine, so it survives a server restart. The eyes ack
 reaction tracks the open question: lit at the summon (the shared accept path's
 ack task), cleared when a reply answering it lands, or when the notice or the

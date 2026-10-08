@@ -14,8 +14,10 @@ Ordered managed instruction blocks (the contract the snapshot pins):
    sections for worker kinds, the reviewer rules for review, the verify
    contract for verify) and the applicable host supplement
    (``cfg.claude_md_file``) and declared model overlay;
-2. applicable memory, selected by :mod:`src.features.memory.memory` (the single filter
-   owner) — resident/repo full bodies, then the topic index;
+2. the segments of the registered turn contributions
+   (:mod:`src.runtime.hooks.turn_contributions`); the memory package contributes the applicable
+   memory, selected by :mod:`src.features.memory.memory` (the single filter owner) —
+   resident/repo full bodies, then the topic index;
 3. each subtree rule from the root through this node (the subtree scope is
    THIS NODE AND ITS DESCENDANTS, so the node's own subtree rule applies to
    its own context too);
@@ -56,15 +58,12 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, TaskSpec, TaskType
 from src.runtime.control_events import sha256_hex
-
-if TYPE_CHECKING:
-  from src.features.memory.memory import MemorySelection
+from src.runtime.hooks import turn_contributions
 
 log = LazyStructlogLogger()
 
@@ -250,19 +249,6 @@ def _overlay_segment(cfg: CharlieBotConfig, overlay: str | None) -> tuple[str | 
     return None, e
 
 
-def _memory_rule_segments(selection: MemorySelection) -> list[RuleSegment]:
-  """The memory selection's segments as ordered rule segments (scope=memory)."""
-  segments: list[RuleSegment] = []
-  for delivery, text, sources in selection.segments:
-    segments.append(
-        RuleSegment(
-            text=text,
-            sources=tuple(PromptSource(scope=SCOPE_MEMORY, source_ref=s.source_ref) for s in sources),
-            delivery=delivery,
-        ))
-  return segments
-
-
 def read_local_rule_body(prompt_bodies_dir: Path, ref: str, *, owner: str, scope: str) -> str:
   """Read one immutable local rule body and verify its fingerprint.
 
@@ -287,24 +273,27 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   """The manager contract at any depth: common rules + shared manager rules + template.
 
   Every manager depth selects the same rule set: the shared base, the full
-  shared manager rules (prompts/master.md followed by prompts/manager_workflows.md —
+  shared manager rules (prompts/master.md followed by the workflow rules file —
   one division of work for both manager kinds; master.md carries the core
-  rules, manager_workflows.md the page/delegation/improve-loop/design rules a
-  thread session reads on demand), and the task-tree manager template.
-  Project/feature differences live in the Task record and inherited rules.
+  rules, prompts/manager_workflows.md the page/delegation/improve-loop/design
+  rules), and the task-tree manager template. A turn contribution may name
+  another workflow rules file for a session (a thread session gets the short
+  brief that points at manager_workflows.md). Project/feature differences live
+  in the Task record and inherited rules.
   No PM identity, no project body, no per-layer template exists on v2.
   """
   base = _sections_text(cfg, "task_base.md", ("coding_principles", "skills_discovery", "remote_scratch"))
   shared = _read_source_file(
       cfg.charlie_bot_repo / "prompts" / "master.md", what="shared manager rules").replace("{{session_id}}", meta.id)
+  workflows_file = turn_contributions.resolve_workflow_rules_file(meta)
   workflows = _read_source_file(
-      cfg.charlie_bot_repo / "prompts" / "manager_workflows.md",
+      cfg.charlie_bot_repo / "prompts" / workflows_file,
       what="manager workflow rules").replace("{{session_id}}", meta.id)
   contract = _sections_text(cfg, "task_manager.md", ("manager_role", "manager_boundaries"))
   segments = [
       RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),)),
       RuleSegment(text=shared, sources=(PromptSource(SCOPE_BASE, "prompts/master.md"),)),
-      RuleSegment(text=workflows, sources=(PromptSource(SCOPE_BASE, "prompts/manager_workflows.md"),)),
+      RuleSegment(text=workflows, sources=(PromptSource(SCOPE_BASE, f"prompts/{workflows_file}"),)),
       RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/task_manager.md"),)),
   ]
   host = _host_supplement(cfg, meta)
@@ -437,22 +426,6 @@ def assemble_snapshot(segments: list[RuleSegment]) -> PromptSnapshot:
   return PromptSnapshot(blocks=tuple(blocks))
 
 
-def memory_selection_for(meta: SessionMetadata, kind: str, cfg: CharlieBotConfig) -> MemorySelection | None:
-  """The audience mapping: a manager maps to master; every worker-kind run to worker.
-
-  The selection (filtering and formatting) stays owned by :mod:`src.features.memory.memory`.
-  Repo-less workers get the worker index only — never a guessed project.
-  """
-  # lazy: keeps the memory store off the M99 server import floor (docs/perf_baseline.md@5175adf09)
-  from src.features.memory.memory import select_master_memory, select_worker_memory
-
-  if kind in MANAGER_KINDS:
-    return select_master_memory(cfg.memory_dir)
-  # A repo-less worker matches no repo topic: worker index only, never a guessed project.
-  repo_basename = Path(meta.task.repo_path).name if (meta.task is not None and meta.task.repo_path) else ""
-  return select_worker_memory(cfg.memory_dir, repo_basename)
-
-
 def build_segments(
     cfg: CharlieBotConfig,
     meta: SessionMetadata,
@@ -462,7 +435,7 @@ def build_segments(
     chain: tuple[tuple[str, str | None], ...],
     node_ref: str | None,
 ) -> tuple[list[RuleSegment], OSError | None]:
-  """One coherent assembly pass: rules, memory, local rules — in the contract's order."""
+  """One coherent assembly pass: rules, contributed segments, local rules — in the contract's order."""
   if kind in MANAGER_KINDS:
     segments = _manager_rule_segments(cfg, meta)
   elif kind in WORKER_KINDS:
@@ -471,9 +444,8 @@ def build_segments(
     raise TaskPromptError(f"unknown run kind {kind!r}: no managed instruction contract")
   overlay_segments, overlay_error = _overlay_rule_segments(cfg, overlay)
   segments.extend(overlay_segments)
-  selection = memory_selection_for(meta, kind, cfg)
-  if selection is not None:
-    segments.extend(_memory_rule_segments(selection))
+  for contribution in turn_contributions.turn_contributions():
+    segments.extend(contribution.instruction_segments(meta, kind, cfg))
   segments.extend(_local_rule_segments(cfg.charliebot_home / "prompt_bodies", chain, node_ref, meta.id))
   return segments, overlay_error
 

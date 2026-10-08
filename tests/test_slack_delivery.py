@@ -428,7 +428,6 @@ def _running_item(
       auto_trigger=False,
       backend_option=None,
       extra_claude_flags=None,
-      should_check_tex=False,
       future=asyncio.get_running_loop().create_future(),
       user_event_ids=[user_event_id] if user_event_id else [])
 

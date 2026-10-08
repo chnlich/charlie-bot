@@ -7,8 +7,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW, is_thread_session
-from src.features.latex.latex import check_tex_changed, clear_snapshot
 from src.features.memory.memory import assemble_master
 from src.infra import event_types as ET
 from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
@@ -24,7 +22,7 @@ from src.infra.ndjson import type_line_filter
 from src.infra.process import kill_group_escalating
 from src.runtime import launch_loop, master_cc_state, runs
 from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
-from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributions
 from src.runtime.sessions import backend_switch_reset_reason, context_reset_note
 from src.runtime.streaming import handle_compaction_events
 
@@ -258,12 +256,12 @@ def _build_instructions_content(
     session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
   """Build master agent instructions: base prompt + second rule file + per-host override + memory store + declared overlay.
 
-  The second rule file follows the session kind
-  (:func:`src.features.chat_threads.thread_sessions.is_thread_session`): a thread session gets
-  ``prompts/thread_session.md`` (the short brief naming what it may read on
-  demand); every other session gets ``prompts/manager_workflows.md`` (the full
-  manager-workflow rules master.md no longer carries). The file is read
-  unconditionally, so a missing file raises.
+  The second rule file is the workflow rules file the turn contributions name
+  for the session (:func:`src.runtime.hooks.turn_contributions.resolve_workflow_rules_file`):
+  a thread session gets ``prompts/thread_session.md`` (the short brief naming
+  what it may read on demand); every other session gets
+  ``prompts/manager_workflows.md`` (the full manager-workflow rules master.md
+  no longer carries). The file is read unconditionally, so a missing file raises.
 
   The memory block is assembled from the labeled-entry store via
   :func:`src.features.memory.memory.assemble_master` (resident topics full text + index
@@ -289,13 +287,11 @@ def _build_instructions_content(
     base_text = base_text.replace("{{session_id}}", session_meta.id)
     parts.append(base_text)
 
-  # 1b. Second rule file, chosen by session kind. A thread session gets the
+  # 1b. Second rule file, named by the turn contributions. A thread session gets the
   # short thread brief naming the manager workflows file it may read on demand;
   # every other session gets those manager workflows in full. Read
   # unconditionally: a missing file is a broken repo and raises.
-  rule_file = (
-      cfg.charlie_bot_repo / "prompts" /
-      ("thread_session.md" if is_thread_session(session_meta) else "manager_workflows.md"))
+  rule_file = cfg.charlie_bot_repo / "prompts" / turn_contributions.resolve_workflow_rules_file(session_meta)
   parts.append(rule_file.read_text(encoding="utf-8").replace("{{session_id}}", session_meta.id))
 
   # 2. Per-host override (~/.charliebot/MASTER_AGENT_PROMPT.md)
@@ -583,13 +579,16 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     return await _refuse_turn(item, msg, None)
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
-  # A thread session on the CLC backend runs the fixed thread context window in
-  # place of the option's own: the option entry is shared with main sessions
-  # and workers, so its window must keep serving them, and a thread session is
-  # born without a backend of its own to pin a narrower entry on. Only
-  # charlie-code reads a --context-window; other backend types are untouched.
-  if backend_types.traits_for(option.type).reads_context_window and is_thread_session(session_meta):
-    option = option.model_copy(update={"context_window": THREAD_CONTEXT_WINDOW})
+  # A contribution may set the session's context window in place of the option's
+  # own (a thread session runs the fixed thread window): the option entry is
+  # shared with main sessions and workers, so its window must keep serving
+  # them, and a thread session is born without a backend of its own to pin a
+  # narrower entry on. Only a backend type that reads a context window takes it;
+  # other backend types are untouched.
+  if backend_types.traits_for(option.type).reads_context_window:
+    context_window = turn_contributions.resolve_context_window(session_meta)
+    if context_window is not None:
+      option = option.model_copy(update={"context_window": context_window})
 
   if item.task_instructions is not None:
     # A v2 task turn delivers the context owner's committed snapshot bytes and
@@ -787,7 +786,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
                   "type": ET.RESUME_CONTEXT_DROPPED,
                   "reason": reason,
               })
-      reset_reason = await _v1_reset_reason(item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
+      reset_reason = await _v1_reset_reason(
+          item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
       if reset_reason is not None:
         # Only the prompt the backend receives carries the note; the persisted user event stays unchanged.
         process_prompt = f"{context_reset_note(reset_reason)}\n\n{process_prompt}"
@@ -935,24 +935,15 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
     # The pair runs before the let-go branch below: a let-go turn still gets
     # its error event and silent-turn salvage; only the terminal state writes
-    # (unread marker, tex snapshot, finished log) would lie about a turn that
+    # (unread marker, finished log) would lie about a turn that
     # keeps running in another process.
     await _report_turn_error_and_salvage(tracker, item, error_msg, quota_exhausted)
 
     # On the let-go path the turn is still running in another process: writing
-    # any terminal state (unread marker, tex snapshot, finished log) would lie
+    # any terminal state (unread marker, finished log) would lie
     # about it. The next boot's reconcile owns the outcome of this turn.
     if not let_go:
       await item.callbacks.mark_unread(session_meta.id)
-
-      if item.should_check_tex:
-        proposal = await asyncio.to_thread(check_tex_changed)
-        if proposal:
-          tex_event = {'type': ET.TEX_EDIT_PROPOSED}
-          await item.callbacks.persist_and_broadcast(session_meta.id, tex_event)
-          log.info(ET.TEX_EDIT_PROPOSED, session=session_meta.id)
-        else:
-          clear_snapshot()
 
       log.info(
           "master_cc_finished",

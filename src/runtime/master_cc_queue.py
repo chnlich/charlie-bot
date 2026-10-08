@@ -6,12 +6,11 @@ import zoneinfo
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from src.features.latex import latex
 from src.infra import config, log_once, models, process, tasks
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, master_cc_state, runs, session_dispatch, sidebar_state, streaming, thinking_state
 from src.runtime.agent_process import base
-from src.runtime.hooks import backend_types
+from src.runtime.hooks import backend_types, turn_contributions
 
 if TYPE_CHECKING:
   from src.runtime import sessions
@@ -168,11 +167,11 @@ def _merge_batch(batch: list[master_cc_state._WorkItem]) -> master_cc_state._Wor
   """One execution item for a batch of N>1; every part's future still resolves.
 
   The turn's fields merge per the batch contract: prompts joined under
-  per-part headers, attachments concatenated, tex check on when any part wants
-  it, the sidebar's machine-wake flag only when every part is one. is_voice is
-  False because the per-part disclaimers already ride inside the joined
-  prompt. The parts' own futures are resolved by the consumer; the merged
-  item's future mirrors the head's and is never resolved directly.
+  per-part headers, attachments concatenated, the sidebar's machine-wake flag
+  only when every part is one. is_voice is False because the per-part
+  disclaimers already ride inside the joined prompt. The parts' own futures
+  are resolved by the consumer; the merged item's future mirrors the head's
+  and is never resolved directly.
   """
   head = batch[0]
   return master_cc_state._WorkItem(
@@ -184,7 +183,6 @@ def _merge_batch(batch: list[master_cc_state._WorkItem]) -> master_cc_state._Wor
       auto_trigger=all(part.auto_trigger for part in batch),
       backend_option=head.backend_option,
       extra_claude_flags=head.extra_claude_flags,
-      should_check_tex=any(part.should_check_tex for part in batch),
       future=head.future,
       expect_fresh_session=head.expect_fresh_session,
       user_event_ids=[event_id for part in batch for event_id in part.user_event_ids],
@@ -497,10 +495,8 @@ async def run_message(
   session_dir = cfg.sessions_dir / session_meta.id
   session_dir.mkdir(parents=True, exist_ok=True)
 
-  tex_path = latex.get_tex_path()
-  should_check_tex = tex_path.exists()
-  if should_check_tex:
-    await asyncio.to_thread(latex.snapshot_tex)
+  for contribution in turn_contributions.turn_contributions():
+    await contribution.before_turn(session_meta, cfg)
 
   # Persist the user message so it survives page refresh (WebSocket catch-up).
   if not skip_user_event:
@@ -530,7 +526,6 @@ async def run_message(
       auto_trigger=auto_trigger,
       backend_option=backend_option,
       extra_claude_flags=extra_claude_flags,
-      should_check_tex=should_check_tex,
       future=future,
       expect_fresh_session=expect_fresh_session,
       user_event_ids=[user_event_id] if user_event_id else [],
@@ -623,7 +618,6 @@ async def enqueue_master_resume(
       auto_trigger=False,
       backend_option=None,
       extra_claude_flags=None,
-      should_check_tex=False,
       future=future,
       # The re-attached turn answers the recorded turn's whole input list, so
       # startup replay excludes exactly those events.

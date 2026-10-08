@@ -39,6 +39,11 @@ def snapshot_tex() -> None:
   _tex_snapshot = get_tex_path().read_text(encoding='utf-8')
 
 
+def has_snapshot() -> bool:
+  """True when snapshot_tex recorded a baseline for the current turn."""
+  return _tex_snapshot is not None
+
+
 def check_tex_changed() -> dict | None:
   """Compare on-disk .tex with _tex_snapshot.
 
@@ -82,7 +87,7 @@ def reject_proposal() -> bool:
 
 
 def clear_snapshot() -> None:
-  """Clear _tex_snapshot (called when no change was detected)."""
+  """Clear the baseline before a turn and after an unchanged check."""
   global _tex_snapshot
   _tex_snapshot = None
 

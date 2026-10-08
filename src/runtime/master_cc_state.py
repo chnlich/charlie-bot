@@ -49,7 +49,6 @@ class _WorkItem:
   auto_trigger: bool
   backend_option: models.BackendOption | None
   extra_claude_flags: list[str] | None
-  should_check_tex: bool
   future: asyncio.Future
   # True only on the scheduled-session weekly-recycle path that deliberately
   # clears the anchor; suppresses the resume-anchor-missing pre-flight alarm.

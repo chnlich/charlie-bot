@@ -358,11 +358,10 @@ def make_work_item(
     user_content: str = "hello",
     callbacks: models.SessionCallbacks | None = None,
     is_voice: bool = False,
-    should_check_tex: bool = False,
     user_event_id: str | None = None,
 ) -> master_cc_state._WorkItem:
   """_WorkItem with the field values the run-path tests share: non-voice round, mocked callbacks,
-  no extra flags or tex check, live-loop future. callbacks=None installs mock_session_callbacks();
+  no extra flags, live-loop future. callbacks=None installs mock_session_callbacks();
   the keyword fields carry the values the cancel/voice/consumer sites vary, and a test needing any
   other field (expect_fresh_session, resume_record) builds its own."""
   return master_cc_state._WorkItem(
@@ -374,7 +373,6 @@ def make_work_item(
       auto_trigger=False,
       backend_option=backend_option,
       extra_claude_flags=None,
-      should_check_tex=should_check_tex,
       future=asyncio.get_running_loop().create_future(),
       user_event_ids=[user_event_id] if user_event_id else [],
   )

@@ -20,7 +20,7 @@ use, so a registration costs no backend import.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra.deferred import import_attr
 from src.runtime.hooks import backend_type_registration
@@ -28,15 +28,22 @@ from src.runtime.hooks import backend_type_registration
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
   from src.infra.models import BackendOption, SessionMetadata
-  from src.runtime.agent_process.base import AgentBackend
   from src.runtime.hooks import backend_lifecycle
+
+
+class BuiltBackend(Protocol):
+  """The backend object a factory returns.
+
+  The type table hands it to the caller and reads no member of it, so the protocol lists none.
+  """
+
 
 _lifecycles: dict[str, backend_lifecycle.BackendLifecycle] = {}
 _DEFAULT_LIFECYCLE: backend_lifecycle.BackendLifecycle | None = None
 
 
-def build_backend(option: BackendOption, cfg: CharlieBotConfig, **launch_kwargs: Any) -> AgentBackend:
-  """Instantiate the AgentBackend of ``option.type``.
+def build_backend(option: BackendOption, cfg: CharlieBotConfig, **launch_kwargs: Any) -> BuiltBackend:
+  """Instantiate the backend of ``option.type``.
 
   ``launch_kwargs`` go to the factory, which forwards them to the backend constructor (for example
   extra_flags, buffer_limit, on_spawn). Raises ValueError when the type is unregistered or
@@ -45,7 +52,7 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **launch_kwargs:
   return import_attr(backend_type_registration.registration_of(option.type).factory)(option, cfg, **launch_kwargs)
 
 
-def build_translate_fallback(cfg: CharlieBotConfig, **launch_kwargs: Any) -> AgentBackend:
+def build_translate_fallback(cfg: CharlieBotConfig, **launch_kwargs: Any) -> BuiltBackend:
   """Instantiate the backend of the type that serves the binary-free translate fallback."""
   for registration in backend_type_registration.registrations().values():
     if registration.translate_fallback:

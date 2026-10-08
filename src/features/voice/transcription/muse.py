@@ -1,6 +1,6 @@
 """Muse Voice Transcribe backend: Meta's realtime ASR over a PUSH_TO_TALK session.
 
-The client moved here from tools/voice_replay_eval.py (handshake, transcript
+The client moved here from src/features/voice/replay_eval.py (handshake, transcript
 parsing, close-code handling) so exactly one implementation exists. Meta
 disconnects when received audio leads real time by more than 5 s, so audio goes
 out on an absolute schedule that leads the session clock by at most 4 s: chunks

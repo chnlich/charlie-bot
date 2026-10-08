@@ -10,6 +10,7 @@ from src.runtime.hooks import page_render, wiring
 
 
 def register() -> None:
+  wiring.register_command("voice-replay-eval", "src.features.voice.replay_eval")
   wiring.register_router("src.features.voice.api", prefix="/api/voice", tags=("voice",))
   wiring.register_router("src.features.voice.api", attr="ws_router")
   wiring.register_service("speech", "src.features.voice.service", phase="early")

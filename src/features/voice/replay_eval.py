@@ -10,7 +10,7 @@ the whole clip at once; the others receive the capture worklet's chunk cadence
 (VOICE_CHUNK_SAMPLES) on a real-time schedule, so every stop-to-final number
 measures from the recording's end.
 
-Run as ``uv run python tools/voice_replay_eval.py`` from the repository root.
+Run as ``uv run charliebot voice-replay-eval``.
 ``--dry-run`` prints recording, ground-truth, and audio-minute counts only.
 
 Results contain the user's own speech and sent messages: they are personal
@@ -35,17 +35,15 @@ from pathlib import Path
 
 import numpy as np
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT) not in sys.path:
-  sys.path.insert(0, str(_REPO_ROOT))
+# The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
-from src.app import registrations  # noqa: E402
-from src.features.voice import transcriber  # noqa: E402
-from src.features.voice.transcription import registry  # noqa: E402
-from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend  # noqa: E402
-from src.features.voice.transcription.local import LocalTranscriptionBackend  # noqa: E402
-from src.infra.config import CharlieBotConfig, load_config  # noqa: E402
-from src.infra.models import utc_now_iso  # noqa: E402
+from src.features.voice import transcriber
+from src.features.voice.transcription import registry
+from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend
+from src.features.voice.transcription.local import LocalTranscriptionBackend
+from src.infra.config import CharlieBotConfig, load_config
+from src.infra.models import utc_now_iso
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 # A voice recording pairs with the first voice-flagged user message sent within
@@ -431,7 +429,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
   args = parse_args(argv)
-  registrations.register_all()
   cfg = load_config()
   out_dir = ensure_out_dir(
       Path(args.out) if args.out else cfg.charliebot_home / "voice_eval" / datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"),

@@ -24,9 +24,32 @@ history; no state anywhere else. Only when no `code-health/*` PR is open
 does the run continue to Step 1.
 
 Step 1: pick one worthwhile cleanup.
-Scan the repo and choose the single highest-value cleanup you can land within this run: dead code
-(Step 3 defines the evidence bar), a behavior-preserving cleanup (deduplication, stale comment or
-annotation hygiene), or a stale or duplicated test. Choose from what the working tree shows today,
+Take the run's cleanup from the first category below that has a finding. The
+categories run in this order, and a later category waits while an earlier one
+has a finding.
+
+1. Structure. tests/test_package_structure.py holds the package directions and
+   the runtime layer table. Each row of tests/structure_exceptions.txt is a
+   finding: the cleanup removes the import that the row records and deletes the
+   row. A function-level src import in src/runtime or src/infra without a
+   "# deferred:" comment is a finding: the cleanup moves it to the module top
+   when the move forms no import cycle. A structure cleanup removes the
+   dependency itself: it moves code to the package that owns it, or it
+   registers through an existing hook. A string, name or path stays as it is;
+   reshaping one so that the check stops seeing a dependency is not a fix. A
+   finding whose fix needs a new hook kind or a module split is a design
+   change: the run names it in its summary, opens no PR for it, and moves
+   on to the next category.
+2. Dead code, in three kinds, each under Step 3's evidence bar: migration code
+   for a data format that no file on this host holds any longer; source that
+   only tests reference, deleted together with those tests; deletion residue,
+   a name of a deleted module, package or feature that a comment, docstring,
+   doc, skill or prompt still carries.
+3. Behavior-preserving cleanup: deduplication, stale comment or annotation
+   hygiene, a stale or duplicated test.
+4. Style: Google Python Style conformance, read from the probe below.
+
+Choose from what the working tree shows today,
 never from where recent cleanups landed. For a deduplicated literal or cloned fragment, the shared
 definition may live outside the file you started from when that module is the natural owner,
 provided the started-from copy is the anchor being merged into it and the diff stays focused on
@@ -48,15 +71,14 @@ topic is a closed `code-health/*` pull request carrying a comment that starts
 Google Python Style conformance is a standing cleanup category, read from one probe:
 `tools/check-google-style.sh` lists every file YAPF would reformat and every import that
 names a symbol instead of a module (Google Python Style Guide 2.2: `from src.infra import models`,
-then `models.SessionMetadata`). While the probe reports findings, the run takes its cleanup from
-them: a file YAPF would reformat comes first, then import conversions, starting from the file
+then `models.SessionMetadata`). Within this category, a file YAPF would reformat comes first, then import conversions, starting from the file
 whose last commit on `main` is oldest, since that file is the least likely to sit in another
 session's open work. Each style PR carries one kind of change: a formatting PR holds YAPF output
 alone, and an import PR converts imports together with their call sites and the test patch
 targets that named the old import site. The probe is the record of style work, so the
 rejected-topic ledger leaves style files in play: an abandoned style PR's comment reads
 `code-health-abandoned: google-style <path>: <reason>`, and that file waits until the probe
-reports no other file, then returns. With the probe clean, the categories above apply as written.
+reports no other file, then returns.
 
 Open no PR when nothing survives the scan; a no-PR run's summary names what you checked.
 
@@ -82,6 +104,16 @@ Second phase (user-approved 2026-08-23): a symbol whose name still has matches m
 every remaining match is itself dead — unused-import leftovers, orphaned fixtures, comment-only
 references. Quote every such match in the PR body's `## Evidence` with the reason it is itself
 dead. When any match cannot be shown dead, the phase-1 zero-match bar stands.
+
+Dead code of the three kinds in Step 1 category 2 takes its own evidence in
+place of evidence 1, evidence 2 and the zero-match bar. Evidence 3, the full
+test suite green after removal, holds for every kind:
+- Migration code: a command that counts the files in the old format in this
+  host's CharlieBot home, and its output 0.
+- Source that only tests reference: a whole-repo grep whose every match is
+  under `tests/` or in the deleted source.
+- Deletion residue: the commit that deleted the name, and a grep that lists
+  each remaining mention. The PR rewords or deletes each listed mention.
 
 `vulture` is a probe you may run to surface candidates. It is never a gate and must not be added
 to CI.

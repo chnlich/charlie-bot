@@ -185,7 +185,7 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
     assert second.status_code == 200
     assert set(second.json()) == {kept.id, gone.id}
 
-    await session_mgr.delete_session_permanently(gone.id)
+    await session_mgr.lifecycle.delete_session_permanently(gone.id)
 
     third = client.get(f"/api/sessions/status?ids={ids}")
     assert third.status_code == 200
@@ -300,7 +300,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
     assert counts["dump"] == full_dumps
 
     # a row that left the projection drops its slot with it
-    await session_mgr.archive_session(leaving.id)
+    await session_mgr.lifecycle.archive_session(leaving.id)
     thinking_state.clear_busy(mover.id)
     after = client.get("/api/sessions/")
     assert after.status_code == 200

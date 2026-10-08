@@ -98,7 +98,7 @@ class CronBinding:
         meta.cc_session_id = None
         meta.cc_session_started_at = None
         try:
-          result = await sessions.recycle_history_before(meta.id, last_sat_1am_utc)
+          result = await sessions.lifecycle.recycle_history_before(meta.id, last_sat_1am_utc)
           log.info('scheduled_session_recycled', session=meta.id, **result)
         except Exception:
           log.exception('scheduled_session_recycle_failed', session=meta.id)

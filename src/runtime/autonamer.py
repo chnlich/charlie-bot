@@ -21,8 +21,12 @@ from typing import Any
 
 from src.infra import config, deferred, log_once, models, timeouts
 from src.infra import event_types as ET
-from src.runtime import message_aggregator, sessions, streaming
+from src.runtime import message_aggregator, streaming
 from src.runtime.agent_process import deferred_build
+from src.runtime.session_events import SessionEvents
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_listing import SessionListing
+from src.runtime.session_store import SessionStore
 
 log = log_once.LazyStructlogLogger()
 
@@ -33,7 +37,7 @@ def __getattr__(name: str) -> Any:
 
 # Matches true defaults ("Session 7"), legacy empty placeholders ("7: "), and
 # clone/elone children of a never-named session — clone and elone prepend C / E
-# to the parent name (src/runtime/sessions.py _spawn_with_history), so "CSession
+# to the parent name (src/runtime/session_fork.py _spawn_with_history), so "CSession
 # 746" or "ECSession 3" is still a default. Does NOT match already-renamed
 # titles like "7: My Topic".
 _DEFAULT_NAME_RE = re.compile(r"^[CE]*(Session \d+|\d+: )$")
@@ -138,7 +142,8 @@ def _fuzzy_match_group(group: str, existing_groups: list[str]) -> str:
 
 
 async def _apply_name_to_session(
-    session_mgr: sessions.SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
     session_meta: models.SessionMetadata,
     name: str | None,
     group: str | None,
@@ -152,14 +157,14 @@ async def _apply_name_to_session(
   if not name:
     return
 
-  current_meta = await session_mgr.store.get_session(session_meta.id)
+  current_meta = await store.get_session(session_meta.id)
   if current_meta is None:
     log.warning("autonamer_session_missing", session_id=session_meta.id)
     return
   if not is_default_session_name(current_meta.name):
     return
 
-  await session_mgr.rename_session(session_meta.id, name)
+  await lifecycle.rename_session(session_meta.id, name)
 
   channel = streaming.session_channel(session_meta.id)
   await streaming.streaming_manager.broadcast(channel, {
@@ -177,24 +182,31 @@ async def _apply_name_to_session(
 
   if not group:
     return
-  current_meta = await session_mgr.store.get_session(session_meta.id)
+  current_meta = await store.get_session(session_meta.id)
   if current_meta and not current_meta.group:
-    await session_mgr.set_group(session_meta.id, group)
+    await lifecycle.set_group(session_meta.id, group)
     log.info("session_auto_grouped", session_id=session_meta.id, group=group)
 
 
-async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, session_mgr: sessions.SessionManager) -> None:
+async def name_after_round(
+    cfg: config.CharlieBotConfig,
+    session_id: str,
+    store: SessionStore,
+    session_events: SessionEvents,
+    listing: SessionListing,
+    lifecycle: SessionLifecycle,
+) -> None:
   """Name a session from its saved chat log after a master round finishes.
 
   The manager prompt is composed from typed input events, so naming reads the
   chat log's first user event for the prompt and every assistant event's text
   for the response, then delegates to maybe_auto_name().
   """
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await store.get_session(session_id)
   if meta is None or not is_default_session_name(meta.name):
     return
 
-  events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, session_id)
+  events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
   user_message = ""
   for ev in events:
     if ev.get("type") == ET.USER and isinstance(ev.get("content"), str):
@@ -207,8 +219,8 @@ async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, sessio
   if not assistant_text:
     return
 
-  existing_groups = await session_mgr.listing.list_group_names()
-  await maybe_auto_name(cfg, meta, user_message, assistant_text, session_mgr, existing_groups)
+  existing_groups = await listing.list_group_names()
+  await maybe_auto_name(cfg, meta, user_message, assistant_text, store, lifecycle, existing_groups)
 
 
 async def maybe_auto_name(
@@ -216,7 +228,8 @@ async def maybe_auto_name(
     session_meta: models.SessionMetadata,
     user_message: str,
     assistant_response: str,
-    session_mgr: sessions.SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
     existing_groups: list[str],
 ) -> None:
   """If the session still has a default name, generate a descriptive name and group."""
@@ -267,7 +280,7 @@ async def maybe_auto_name(
       return
 
     matched_group = _fuzzy_match_group(group, existing_groups) if group else None
-    await _apply_name_to_session(session_mgr, session_meta, name=name, group=matched_group)
+    await _apply_name_to_session(store, lifecycle, session_meta, name=name, group=matched_group)
 
   except Exception as e:
     log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))

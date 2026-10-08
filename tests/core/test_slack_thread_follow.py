@@ -130,7 +130,9 @@ async def test_thread_message_guard_chain_drops(tmp_path: pathlib.Path, case: st
   elif case == "below_watermark":
     overrides["ts"] = _ts(40)
 
-  sid = await slack_listener.handle_thread_message(_message_event(**overrides), cfg, session_mgr, client, trigger_mgr)
+  sid = await slack_listener.handle_thread_message(
+      _message_event(**overrides), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client,
+      trigger_mgr)
 
   assert sid is None
   assert await _armed(trigger_mgr, meta.id) == []
@@ -144,9 +146,10 @@ async def test_archived_session_revives_and_arms_on_a_follow_message(tmp_path: p
   exactly as for an active session (the message lands on the Threads view)."""
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
-  await session_mgr.archive_session(meta.id)
+  await session_mgr.lifecycle.archive_session(meta.id)
 
-  sid = await slack_listener.handle_thread_message(_message_event(), cfg, session_mgr, client, trigger_mgr)
+  sid = await slack_listener.handle_thread_message(
+      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
 
   assert sid == meta.id
   revived = await session_mgr.store.get_session(meta.id)
@@ -163,7 +166,8 @@ async def test_eligible_thread_message_arms_the_follow_trigger(tmp_path: pathlib
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr, watermark=watermark)
 
-  sid = await slack_listener.handle_thread_message(_message_event(), cfg, session_mgr, client, trigger_mgr)
+  sid = await slack_listener.handle_thread_message(
+      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
 
   assert sid == meta.id
   armed = await _armed(trigger_mgr, meta.id)
@@ -252,7 +256,8 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
 async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path: pathlib.Path) -> None:
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
-  await slack_listener.handle_thread_message(_message_event(), cfg, session_mgr, client, trigger_mgr)
+  await slack_listener.handle_thread_message(
+      _message_event(), cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
   armed = (await _armed(trigger_mgr, meta.id))[0]
 
   # The process dies: in-memory sleep tasks vanish; the record stays PENDING.

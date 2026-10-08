@@ -172,7 +172,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   assert task_mgr.activity_of(worker).work_state == "idle"
 
   cutoff = datetime.now(UTC) + timedelta(hours=1)
-  result = await session_mgr.recycle_history_before(worker, cutoff)
+  result = await session_mgr.lifecycle.recycle_history_before(worker, cutoff)
   assert result["events_archived"] > 0
   meta = await session_mgr.store.get_session(worker)
   assert meta is not None and meta.archive_offset == result["events_archived"]
@@ -279,7 +279,7 @@ async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(ta
   assert loaded is not None and loaded.id == ids["worker"]
 
   # The next save rewrites the file from the parsed model: the key is gone.
-  await session_mgr.rename_session(ids["worker"], "Renamed")
+  await session_mgr.lifecycle.rename_session(ids["worker"], "Renamed")
   saved = json.loads(metadata_path.read_text())
   assert RETIRED_PAUSE_KEY not in saved
   assert saved["name"] == "Renamed"

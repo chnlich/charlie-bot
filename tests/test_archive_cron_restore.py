@@ -93,7 +93,7 @@ async def test_auto_bind_restore_leaves_the_legacy_status_branch_alone(cron_env)
   cfg, session_mgr, tree, home = cron_env[0], cron_env[1], cron_env[2], cron_env[3]
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
-  node = await session_mgr.archive_session(node.id)
+  node = await session_mgr.lifecycle.archive_session(node.id)
   assert node is not None and node.status == SessionStatus.ARCHIVED
   # A legacy-status archived node's task state is still open (no close fact).
   assert tree.task_state(node.id) == "open"

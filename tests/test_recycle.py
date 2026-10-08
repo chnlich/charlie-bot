@@ -24,7 +24,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: pa
   live_path = mgr.events.get_chat_events_path(session.id)
   conftest.append_events(live_path, events)
 
-  result = await mgr.recycle_history_before(session.id, cutoff)
+  result = await mgr.lifecycle.recycle_history_before(session.id, cutoff)
 
   assert result["events_archived"] == 6
   archive_path = pathlib.Path(result["archive_file"])
@@ -74,7 +74,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: pathlib.Path) -> None:
   live_path = mgr.events.get_chat_events_path(session.id)
   conftest.append_events(live_path, events)
 
-  result = await mgr.recycle_history_before(session.id, cutoff)
+  result = await mgr.lifecycle.recycle_history_before(session.id, cutoff)
 
   assert result["events_archived"] == 0
   assert result["archive_file"] is None

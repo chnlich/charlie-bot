@@ -93,6 +93,8 @@ from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
 from src.features.discord.metadata import DiscordOrigin
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
@@ -385,7 +387,9 @@ async def handle_message_create(
   if not mentioned:
     return await thread_entry.follow_message(
         DiscordThreadAdapter(client),
-        session_mgr,
+        session_mgr.store,
+        session_mgr.lifecycle,
+        session_mgr.events,
         trigger_mgr,
         summon_session_id(guild_id, channel_id),
         message_id,
@@ -484,7 +488,8 @@ async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManag
 
 
 async def _backfill_followed_threads(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, client: DiscordClient, trigger_mgr: TriggerManager) -> int:
+    cfg: CharlieBotConfig, listing: SessionListing, lifecycle: SessionLifecycle, session_events: SessionEvents,
+    client: DiscordClient, trigger_mgr: TriggerManager) -> int:
   """Arm the follow trigger of every followed Discord session holding unread messages; return the count.
 
   Active and archived sessions both ride the backfill: an archived session
@@ -496,7 +501,8 @@ async def _backfill_followed_threads(
   live there. The gateway loop (``_run_connection``) calls it on every
   (re)connection.
   """
-  return await thread_entry.backfill_followed_threads(DiscordThreadAdapter(client), cfg, session_mgr, trigger_mgr)
+  return await thread_entry.backfill_followed_threads(
+      DiscordThreadAdapter(client), cfg, listing, lifecycle, session_events, trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -625,7 +631,8 @@ async def _run_connection(
         saw_ready = True
         bot_user_id = payload["d"]["user"]["id"]
         logger.info("discord_listener_connected")
-        await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)
+        await _backfill_followed_threads(
+            cfg, session_mgr.listing, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
       elif op == 0 and payload.get("t") == "MESSAGE_CREATE":
         message = payload["d"]
         try:

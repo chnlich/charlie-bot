@@ -54,6 +54,8 @@ from src.runtime.api.message_utils import build_agent_message_event, master_done
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.master_trigger import trigger_master
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import ArchivedSessionError, TriggerManager
@@ -947,7 +949,8 @@ async def consume_mention(
     logger.info(f"{platform.name}_follow_trigger_cancelled_for_mention", session=session_id, cancelled=cancelled)
 
 
-async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, session_id: str, label: str) -> None:
+async def ensure_group(
+    platform: ThreadPlatform, store: SessionStore, lifecycle: SessionLifecycle, session_id: str, label: str) -> None:
   """Group a summon session under its label, unless it already has a group.
 
   The label is resolved once by the summon path (the single resolution point)
@@ -957,11 +960,11 @@ async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, se
   swallowed, so summon, round, and reply behavior are unaffected.
   """
   try:
-    meta = await session_mgr.store.get_session(session_id)
+    meta = await store.get_session(session_id)
     if (meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None or
         meta.group):
       return
-    await session_mgr.set_group(session_id, label)
+    await lifecycle.set_group(session_id, label)
   except Exception as e:
     logger.warning(f"{platform.name}_group_assignment_failed", session=session_id, label=label, error=str(e))
 
@@ -1020,7 +1023,7 @@ async def accept_summon(
     )
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == SessionStatus.ARCHIVED:
-    await session_mgr.unarchive_session(session_id)
+    await session_mgr.lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_mention_session_unarchived", **fields, session=session_id)
     # The unarchive write alone notifies nobody: an open sidebar refetches its
     # current filter only on a task-tree notification, so the revived session
@@ -1031,7 +1034,7 @@ async def accept_summon(
 
   await consume_mention(platform, session_mgr.store, trigger_mgr, session_id, block[platform.mention_key])
 
-  await ensure_group(platform, session_mgr, session_id, label)
+  await ensure_group(platform, session_mgr.store, session_mgr.lifecycle, session_id, label)
 
   evt = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
   evt[platform.name] = block
@@ -1058,7 +1061,8 @@ async def accept_summon(
 async def revive_and_arm_follow(
     platform: ThreadPlatform,
     adapter: ThreadAdapter,
-    session_mgr: SessionManager,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
     trigger_mgr: TriggerManager,
     meta: SessionMetadata,
     *,
@@ -1079,9 +1083,9 @@ async def revive_and_arm_follow(
   directly.
   """
   if meta.status == SessionStatus.ARCHIVED:
-    await session_mgr.unarchive_session(session_id)
+    await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
-    await session_mgr.events.broadcast_task_tree_changed(session_id, "session_unarchived")
+    await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
   origin = getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field)
   link = await adapter.thread_link(origin)
   return await arm_follow_trigger(
@@ -1095,7 +1099,9 @@ async def revive_and_arm_follow(
 
 async def follow_message(
     adapter: ThreadAdapter,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
     trigger_mgr: TriggerManager,
     session_id: str,
     message_id: str,
@@ -1116,7 +1122,7 @@ async def follow_message(
   entrypoint, which reads them off the raw event.
   """
   platform = adapter.platform
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await store.get_session(session_id)
   if meta is None:
     return None
   fields = metadata_slots.fields_of(meta, platform.name)
@@ -1129,7 +1135,8 @@ async def follow_message(
   trigger = await revive_and_arm_follow(
       platform,
       adapter,
-      session_mgr,
+      lifecycle,
+      session_events,
       trigger_mgr,
       meta,
       session_id=session_id,
@@ -1139,7 +1146,8 @@ async def follow_message(
 
 
 async def backfill_followed_threads(
-    adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager, trigger_mgr: TriggerManager) -> int:
+    adapter: ThreadAdapter, cfg: CharlieBotConfig, listing: SessionListing, lifecycle: SessionLifecycle,
+    session_events: SessionEvents, trigger_mgr: TriggerManager) -> int:
   """Arm the follow trigger of every followed session holding unread messages; return the count.
 
   Runs once per successful (re)connection: one eligible read per followed
@@ -1158,8 +1166,8 @@ async def backfill_followed_threads(
   # Both status filters ride the readonly listings: the shared cached metas
   # are handed out uncopied (the backfill only reads them) and the corpus
   # outside the followed threads is never copied+stamped.
-  active, _ = await session_mgr.listing.list_sessions_readonly(status=SessionStatus.ACTIVE)
-  archived, _ = await session_mgr.listing.list_sessions_readonly(status=SessionStatus.ARCHIVED)
+  active, _ = await listing.list_sessions_readonly(status=SessionStatus.ACTIVE)
+  archived, _ = await listing.list_sessions_readonly(status=SessionStatus.ARCHIVED)
   for meta in [*active, *archived]:
     fields = metadata_slots.fields_of(meta, platform.name)
     origin = getattr(fields, platform.origin_field)
@@ -1172,7 +1180,8 @@ async def backfill_followed_threads(
       trigger = await revive_and_arm_follow(
           platform,
           adapter,
-          session_mgr,
+          lifecycle,
+          session_events,
           trigger_mgr,
           meta,
           session_id=meta.id,

@@ -64,6 +64,8 @@ from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
 from src.features.slack.metadata import SlackOrigin
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
@@ -341,7 +343,9 @@ def _build_follow_wake_message(floor_ts: str, permalink: str) -> str:
 async def handle_thread_message(
     event: dict,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
     client: SlackClient,
     trigger_mgr: TriggerManager,
 ) -> str | None:
@@ -373,7 +377,9 @@ async def handle_thread_message(
   sid = summon_session_id(team_id, channel_id, thread_ts)
   return await thread_entry.follow_message(
       SlackThreadAdapter(client),
-      session_mgr,
+      store,
+      lifecycle,
+      session_events,
       trigger_mgr,
       sid,
       ts,
@@ -383,7 +389,9 @@ async def handle_thread_message(
 
 async def _backfill_followed_threads(
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    listing: SessionListing,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
     client: SlackClient,
     trigger_mgr: TriggerManager,
 ) -> int:
@@ -398,7 +406,8 @@ async def _backfill_followed_threads(
   there. Kept as the module global ``run_listener`` calls on every
   (re)connection.
   """
-  return await thread_entry.backfill_followed_threads(SlackThreadAdapter(client), cfg, session_mgr, trigger_mgr)
+  return await thread_entry.backfill_followed_threads(
+      SlackThreadAdapter(client), cfg, listing, lifecycle, session_events, trigger_mgr)
 
 
 # ---------------------------------------------------------------------------
@@ -596,7 +605,8 @@ async def _serve_socket_mode(
   """
   await _expect_hello(ws)
   logger.info("slack_listener_connected")
-  await _backfill_followed_threads(cfg, session_mgr, client, trigger_mgr)
+  await _backfill_followed_threads(
+      cfg, session_mgr.listing, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
   async for raw in ws:
     envelope = json.loads(raw)
     envelope_id = envelope.get("envelope_id")
@@ -631,7 +641,8 @@ async def _serve_socket_mode(
             error=str(e))
     elif inner and inner.get("type") == "message":
       try:
-        await handle_thread_message(inner, cfg, session_mgr, client, trigger_mgr)
+        await handle_thread_message(
+            inner, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
       except Exception as e:
         logger.exception(
             "slack_listener_message_handle_failed",

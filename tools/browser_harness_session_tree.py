@@ -16,7 +16,7 @@ before running it. Isolation contract:
   no real model, cron or external side effects and no real data copies.
 - Synthetic data. The scenario tree (root manager → feature manager → two
   workers, run records with recorded facts, pending inputs, and one unread
-  reply on the feature manager seeded through SessionManager.mark_unread),
+  reply on the feature manager seeded through SessionLifecycle.mark_unread),
   the sidebar views' schedule fixtures (two bound nodes via cron.d
   session_id bindings, one archived firing under its bound node, one starred
   node, one broken cron file), all seeded through the same task_sessions
@@ -293,6 +293,7 @@ async def seed_scenario(home: Path) -> dict:
   from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
   from src.runtime.run_token import CallerIdentity
   from src.runtime.session_events import SessionEvents
+  from src.runtime.session_lifecycle import SessionLifecycle
   from src.runtime.session_listing import SessionListing
   from src.runtime.session_search import SessionSearch
   from src.runtime.session_sidebar import SessionSidebar
@@ -305,8 +306,10 @@ async def seed_scenario(home: Path) -> dict:
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
+  lifecycle = SessionLifecycle(cfg, store, events)
   session_mgr = SessionManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar))
+      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
+      lifecycle)
   tree = TaskTreeManager(cfg, session_mgr)
   OP = CallerIdentity(kind="operator")
 
@@ -867,7 +870,7 @@ async def seed_scenario(home: Path) -> dict:
     # The delivered run derives the archive: the worker leaves the active
     # lists and rides /api/sessions/archived under its still-active parent.
     await tree.dispatch.finish_run(archived_child.id, "run-archived-child", outcome="success")
-    await session_mgr.star_session(feature.id)
+    await lifecycle.star_session(feature.id)
 
     # --- the Threads view's chat-thread subtree (S25b) ------------------
     # One chat-origin session in the group named for its channel, with one
@@ -907,7 +910,7 @@ async def seed_scenario(home: Path) -> dict:
         name="Archived root",
         backend=None,
         caller=OP)
-    await session_mgr.archive_session(archived_root.id)
+    await lifecycle.archive_session(archived_root.id)
     grouped_root = await tree.create_task(
         request_id="seed-grouped-root",
         task_parent_id=None,
@@ -1017,7 +1020,7 @@ async def seed_scenario(home: Path) -> dict:
                 "stop": live_stop,
                 "counter": live_counter,
                 "tree": tree,
-                "session_mgr": session_mgr
+                "lifecycle": lifecycle
             },
         **bulk
     }
@@ -2223,7 +2226,7 @@ async def run_harness(args: argparse.Namespace) -> None:
 
       # ---- S23: an unread reply in a child manager (the subtree mark) --
       # The reply is seeded through the same in-process owner the scenario
-      # tree was seeded with — SessionManager.mark_unread, the master
+      # tree was seeded with — SessionLifecycle.mark_unread, the master
       # turn's own writer — never by painting the DOM. The root row shows
       # the hollow subtree-unread mark collapsed and expanded alike, the
       # child manager shows its own dot, and opening the child clears
@@ -2231,7 +2234,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       try:
         log("  s23: unread reply in a child manager")
         handles = ids["_live_handles"]
-        await handles["session_mgr"].mark_unread(ids["feature"])
+        await handles["lifecycle"].mark_unread(ids["feature"])
         # The serving app's metadata and listing caches revalidate on
         # their own clock (a 30 s TTL plus the listings sweep), so wait
         # until ITS list reports the flip: from then on the page's

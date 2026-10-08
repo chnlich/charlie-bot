@@ -641,7 +641,7 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
   aroot = await create_task(tree, parent=None, request_id="aroot", name="ARoot")
   amid = await create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
   achild = await create_task(tree, parent=amid.id, request_id="achild", name="AChild")
-  await session_mgr.archive_session(amid.id)
+  await session_mgr.lifecycle.archive_session(amid.id)
   archived_at = await updated_at_of(session_mgr, amid.id)
   root_at = await updated_at_of(session_mgr, aroot.id)
   later = (await updated_at_of(session_mgr, achild.id) + timedelta(hours=3)).isoformat()

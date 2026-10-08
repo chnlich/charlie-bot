@@ -407,6 +407,7 @@ class FakeSessions:
     self.store = self
     self.events = self
     self.listing = self
+    self.lifecycle = self
     self.chat_events: list[dict] = []
     self.persisted: list[dict] = []
     self.created: list = []
@@ -547,11 +548,20 @@ async def test_follow_message_drops_below_the_watermark_and_arms_above_it() -> N
   origin_matches = lambda origin: origin == sessions.meta.fakechat_origin  # noqa: E731  (a one-line guard shape)
 
   # Integer order: "99" sits below the "100" watermark even though the string sorts above.
-  dropped = await follow_message(adapter, sessions, triggers, "s1", "99", origin_matches=origin_matches)
+  dropped = await follow_message(
+      adapter, sessions.store, sessions.lifecycle, sessions.events, triggers, "s1", "99", origin_matches=origin_matches)
   assert dropped is None
   assert triggers.created == []
 
-  armed = await follow_message(adapter, sessions, triggers, "s1", "101", origin_matches=origin_matches)
+  armed = await follow_message(
+      adapter,
+      sessions.store,
+      sessions.lifecycle,
+      sessions.events,
+      triggers,
+      "s1",
+      "101",
+      origin_matches=origin_matches)
 
   assert armed == "s1"
   assert [rec.message for rec in triggers.created] == ["fakechat-thread-follow floor=101\nhttps://fakechat.test/t1"]
@@ -566,7 +576,15 @@ async def test_follow_message_revives_an_archived_session_and_arms_after_the_una
   triggers = FakeTriggers(order=order)
   origin_matches = lambda origin: origin == sessions.meta.fakechat_origin  # noqa: E731  (a one-line guard shape)
 
-  armed = await follow_message(adapter, sessions, triggers, "s1", "105", origin_matches=origin_matches)
+  armed = await follow_message(
+      adapter,
+      sessions.store,
+      sessions.lifecycle,
+      sessions.events,
+      triggers,
+      "s1",
+      "105",
+      origin_matches=origin_matches)
 
   assert armed == "s1"
   assert sessions.meta.status == SessionStatus.ACTIVE
@@ -640,7 +658,8 @@ async def test_backfill_revives_an_archived_session_with_unread_messages() -> No
   sessions.meta.status = SessionStatus.ARCHIVED
   triggers = FakeTriggers(order=order)
 
-  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+  armed_count = await backfill_followed_threads(
+      adapter, None, sessions.listing, sessions.lifecycle, sessions.events, triggers)
 
   assert armed_count == 1
   assert sessions.meta.status == SessionStatus.ACTIVE
@@ -660,7 +679,8 @@ async def test_backfill_arms_an_active_session_without_a_revival() -> None:
   sessions.meta.status = SessionStatus.ACTIVE
   triggers = FakeTriggers(order=order)
 
-  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+  armed_count = await backfill_followed_threads(
+      adapter, None, sessions.listing, sessions.lifecycle, sessions.events, triggers)
 
   assert armed_count == 1
   assert sessions.unarchived == [] and sessions.broadcasts == []
@@ -677,7 +697,8 @@ async def test_backfill_leaves_an_archived_session_without_unread_archived() -> 
   sessions.meta.status = SessionStatus.ARCHIVED
   triggers = FakeTriggers(order=order)
 
-  armed_count = await backfill_followed_threads(adapter, None, sessions, triggers)
+  armed_count = await backfill_followed_threads(
+      adapter, None, sessions.listing, sessions.lifecycle, sessions.events, triggers)
 
   assert armed_count == 0
   assert sessions.meta.status == SessionStatus.ARCHIVED

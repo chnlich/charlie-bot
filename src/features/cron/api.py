@@ -25,9 +25,10 @@ from src.infra.config import CharlieBotConfig, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
 from src.infra.yaml_utils import load_yaml, save_yaml
-from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager
+from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_lifecycle, get_session_store
 from src.runtime.scheduled_sessions import ScheduledSessionBusyError
-from src.runtime.sessions import SessionManager
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_store import SessionStore
 from src.runtime.thinking_state import busy_since
 
 log = LazyStructlogLogger()
@@ -97,7 +98,8 @@ async def _ensure_backend_update_session(
     cand_model: ScheduledTaskConfig,
     req: TaskUpdate,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
 ) -> SessionMetadata | None:
   """The backend change's session effect: the bound node switches in place.
 
@@ -113,14 +115,14 @@ async def _ensure_backend_update_session(
   backend = effective_scheduled_task_backend(cand_model, cfg)
   if not cand_model.session_id:
     return None
-  node = await session_mgr.store.get_session(cand_model.session_id)
+  node = await store.get_session(cand_model.session_id)
   if node is None or node.backend == backend:
     return None
   if await _scheduled_node_busy(node):
     raise ScheduledSessionBusyError(
         f"scheduled task '{name}' backend switch from '{node.backend}' to '{backend}' is blocked "
         f"because node '{node.id}' has running work; retry when it is idle")
-  return await session_mgr.switch_backend(node.id, backend)
+  return await lifecycle.switch_backend(node.id, backend)
 
 
 async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: ScheduledTaskConfig) -> None:
@@ -215,7 +217,8 @@ async def apply_task_yaml_update(
     name: str,
     req: TaskUpdate,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
 ) -> tuple[dict, SessionMetadata | None]:
   """Apply a ``TaskUpdate`` to one job's yaml: load, validate, rotate, write.
 
@@ -256,7 +259,7 @@ async def apply_task_yaml_update(
 
   rotated: SessionMetadata | None = None
   try:
-    rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, session_mgr)
+    rotated = await _ensure_backend_update_session(name, cand_model, req, cfg, store, lifecycle)
   except ScheduledSessionBusyError as e:
     # The 409 lands before any yaml write: the file keeps its current backend
     # when the node's switch cannot happen now.
@@ -272,10 +275,11 @@ async def update_cron_task(
     name: str,
     req: TaskUpdate,
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
+    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
 ) -> dict:
   _validate_cron_name(name)
-  candidate, _ = await apply_task_yaml_update(name, req, cfg, session_mgr)
+  candidate, _ = await apply_task_yaml_update(name, req, cfg, store, lifecycle)
   return candidate
 
 

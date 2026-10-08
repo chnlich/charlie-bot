@@ -260,6 +260,7 @@ from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import (  # noqa: E402
     get_config_on_loop,
     get_session_events,
+    get_session_lifecycle,
     get_session_listing,
     get_session_search,
     get_session_sidebar,
@@ -271,6 +272,7 @@ from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
 from src.runtime.session_events import SessionEvents  # noqa: E402
+from src.runtime.session_lifecycle import SessionLifecycle  # noqa: E402
 from src.runtime.session_listing import SessionListing  # noqa: E402
 from src.runtime.session_search import SessionSearch  # noqa: E402
 from src.runtime.session_sidebar import SessionSidebar  # noqa: E402
@@ -897,7 +899,7 @@ async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) ->
   backdate_task_created_event(mgr, session_id, cutoff - timedelta(days=1))
   live_path = mgr.events.get_chat_events_path(session_id)
   append_events(live_path, events)
-  await mgr.recycle_history_before(session_id, cutoff)
+  await mgr.lifecycle.recycle_history_before(session_id, cutoff)
   return cutoff, live_path
 
 
@@ -974,12 +976,13 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 
 def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events, sidebar, listing and search blocks, all built on *cfg*."""
+  """A SessionManager over its own store, events, sidebar, listing, search and lifecycle blocks, all built on *cfg*."""
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   return SessionManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar))
+      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
+      SessionLifecycle(cfg, store, events))
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -999,6 +1002,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   """
   from src.runtime import (
       session_events,
+      session_lifecycle,
       session_listing,
       session_search,
       session_sidebar,
@@ -1013,6 +1017,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   monkeypatch.setattr(session_sidebar, "_sidebar", session_mgr.sidebar)
   monkeypatch.setattr(session_listing, "_listing", session_mgr.listing)
   monkeypatch.setattr(session_search, "_search", session_mgr.search)
+  monkeypatch.setattr(session_lifecycle, "_lifecycle", session_mgr.lifecycle)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1191,6 +1196,7 @@ def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
   app.dependency_overrides[get_session_sidebar] = lambda: session_mgr.sidebar
   app.dependency_overrides[get_session_listing] = lambda: session_mgr.listing
   app.dependency_overrides[get_session_search] = lambda: session_mgr.search
+  app.dependency_overrides[get_session_lifecycle] = lambda: session_mgr.lifecycle
 
 
 def make_router_client(

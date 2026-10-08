@@ -33,6 +33,7 @@ point that reads or writes the live store (:func:`load_store`, ``memory add``, t
 :func:`lint` reports the tree as it finds it and never calls it.
 """
 
+import dataclasses
 import pathlib
 import re
 import subprocess
@@ -85,16 +86,15 @@ class MemoryFormatError(Exception):
   """
 
 
+@dataclasses.dataclass
 class Topic:
   """One vocabulary line: the topic name and whether it is resident."""
 
-  __slots__ = ("name", "resident")
-
-  def __init__(self, name: str, resident: bool) -> None:
-    self.name = name
-    self.resident = resident
+  name: str
+  resident: bool
 
 
+@dataclasses.dataclass
 class Entry:
   """One parsed entry file.
 
@@ -104,52 +104,31 @@ class Entry:
   first ``# `` line (legacy).
   """
 
-  __slots__ = (
-      "audience",
-      "audience_raw",
-      "body",
-      "created",
-      "path",
-      "revises",
-      "scope",
-      "slug",
-      "source",
-      "title",
-      "title_in_header",
-      "topic",
-  )
-
-  def __init__(
-      self, path: pathlib.Path, topic: str | None, slug: str, scope: str | None, audience: list[str] | None,
-      audience_raw: str | None, created: str | None, source: str | None, revises: str | None, title: str,
-      title_in_header: bool, body: str) -> None:
-    self.path = path
-    self.topic = topic
-    self.slug = slug
-    self.scope = scope
-    self.audience = audience
-    self.audience_raw = audience_raw
-    self.created = created
-    self.source = source
-    self.revises = revises
-    self.title = title
-    self.title_in_header = title_in_header
-    self.body = body
+  path: pathlib.Path
+  topic: str | None
+  slug: str
+  scope: str | None
+  audience: list[str] | None
+  audience_raw: str | None
+  created: str | None
+  source: str | None
+  revises: str | None
+  title: str
+  title_in_header: bool  # True when the title came from frontmatter (v2) rather than the body (legacy)
+  body: str
 
   @property
   def id(self) -> str:
     return f"{self.topic}/{self.slug}"
 
 
+@dataclasses.dataclass
 class Store:
   """One loaded store: the memory dir, the topics vocabulary, the parsed entries."""
 
-  __slots__ = ("entries", "memory_dir", "topics")
-
-  def __init__(self, memory_dir: pathlib.Path, topics: dict[str, Topic], entries: list[Entry]) -> None:
-    self.memory_dir = memory_dir
-    self.topics = topics
-    self.entries = entries
+  memory_dir: pathlib.Path
+  topics: dict[str, Topic]
+  entries: list[Entry]
 
 
 def _parse_audience(raw: str) -> list[str]:
@@ -486,6 +465,7 @@ def audience_allows(entry: Entry, audience: str) -> bool:
   return entry.audience is not None and audience in entry.audience
 
 
+@dataclasses.dataclass(frozen=True)
 class MemoryEntrySource:
   """One selected entry's provenance and contribution.
 
@@ -493,29 +473,14 @@ class MemoryEntrySource:
   identifies the entry file under ``entries/<topic>/``. ``delivery`` is the
   form actually injected: ``full`` (whole entry text) or ``index`` (its index
   line).
-
-  A value object: treat instances as immutable. A plain class, not a frozen
-  dataclass — the memory CLI verbs are fresh processes, and the
-  ``dataclasses`` import pulls ``inspect`` (~9 ms of the M98 wall) for
-  machinery no consumer calls.
   """
 
-  __slots__ = ("delivery", "source_ref", "text")
-
-  def __init__(self, source_ref: str, delivery: str, text: str) -> None:
-    self.source_ref = source_ref
-    self.delivery = delivery
-    self.text = text
-
-  def __eq__(self, other: object) -> bool:
-    if not isinstance(other, MemoryEntrySource):
-      return NotImplemented
-    return (self.source_ref, self.delivery, self.text) == (other.source_ref, other.delivery, other.text)
-
-  def __hash__(self) -> int:
-    return hash((self.source_ref, self.delivery, self.text))
+  source_ref: str
+  delivery: str  # "full" | "index"
+  text: str
 
 
+@dataclasses.dataclass(frozen=True)
 class MemorySelection:
   """The provenance-bearing memory assembly result one audience selection produced.
 
@@ -524,31 +489,13 @@ class MemorySelection:
   ordered (full-then-index) split the block is joined from, so a snapshot can
   label what the model actually received per delivery mode. ``usage_line``
   rides only on worker selections.
-
-  A value object: treat instances as immutable; same plain-class reason as
-  :class:`MemoryEntrySource`.
   """
 
-  __slots__ = ("audience", "repo_basename", "segments", "text", "usage_line")
-
-  def __init__(
-      self, audience: str, repo_basename: str | None, segments: tuple[tuple[str, str, tuple[MemoryEntrySource, ...]],
-                                                                      ...], usage_line: str | None,
-      text: str | None) -> None:
-    self.audience = audience
-    self.repo_basename = repo_basename
-    self.segments = segments  # (delivery, text, sources)
-    self.usage_line = usage_line
-    self.text = text
-
-  def __eq__(self, other: object) -> bool:
-    if not isinstance(other, MemorySelection):
-      return NotImplemented
-    return (self.audience, self.repo_basename, self.segments, self.usage_line,
-            self.text) == (other.audience, other.repo_basename, other.segments, other.usage_line, other.text)
-
-  def __hash__(self) -> int:
-    return hash((self.audience, self.repo_basename, self.segments, self.usage_line, self.text))
+  audience: str
+  repo_basename: str | None
+  segments: tuple[tuple[str, str, tuple[MemoryEntrySource, ...]], ...]  # (delivery, text, sources)
+  usage_line: str | None
+  text: str | None
 
 
 WORKER_USAGE_LINE = (

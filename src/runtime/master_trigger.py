@@ -7,12 +7,10 @@ longer has a scheduled branch — the bound node took those duties over.
 """
 
 import traceback
-from datetime import UTC, datetime, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
 
 from src.infra import event_types as ET
-from src.infra.config import HOUSE_TIMEZONE, CharlieBotConfig
+from src.infra.config import CharlieBotConfig
 from src.infra.deferred import deferred_import_loader, deferred_module_getattr
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, SessionStatus
@@ -28,73 +26,18 @@ def __getattr__(name: str) -> Any:
   return deferred_module_getattr(name, __name__, globals(), "run_message", _load_run_message)
 
 
-def scheduled_report_prefix(task_name: str) -> str:
-  """The fixed wrapper a firing's report carries on the bound node's fresh turn."""
-  return (
-      f"[Auto-triggered scheduled task result for '{task_name}']\n"
-      "Review the worker/reviewer results below. Check: was the branch merged? "
-      "Are there errors? Summarize the outcome.\n\n")
-
-
-def _last_saturday_1am_utc(now: datetime) -> datetime:
-  """The most recent Saturday 01:00 America/Los_Angeles, in UTC.
-
-  Inside Saturday 00:00-00:59 PT that grid point is the coming 01:00, still
-  ahead of *now*. The caller's window check (started before the boundary,
-  boundary already past) drops a future boundary, so the recycle waits for
-  the first wake after 01:00.
-  """
-  now_pt = now.astimezone(ZoneInfo(HOUSE_TIMEZONE))
-  days_since_sat = (now_pt.weekday() - 5) % 7
-  last_sat_1am_pt = now_pt.replace(hour=1, minute=0, second=0, microsecond=0) - timedelta(days=days_since_sat)
-  return last_sat_1am_pt.astimezone(UTC)
-
-
-async def apply_bound_wake_duties(
+async def apply_sequence_wake_duties(
     session_mgr: SessionManager,
     meta: SessionMetadata,
     input_events: list[dict],
 ) -> str | None:
-  """The two cron-session duties a task-bound node inherits on its wake.
+  """Run the registered sequence binding's wake duties, if the node has one."""
+  from src.runtime.hooks.sequence_controllers import binding_for
 
-  Both judge on the binding — the loaded task configs' ``session_id`` — never
-  on the legacy ``scheduled_task`` stamp. The weekly recycle clears the node's
-  native anchor and GCs the threads and chat events predating the last
-  Saturday 01:00 PT when the anchor started before it; the report prefix
-  returns the fixed wrapper for a fresh native conversation woken by a firing's
-  child report, which the caller prepends to the turn input. The recycle runs
-  before the prefix decision, so a recycled wake reads as the fresh conversation
-  it is.
-  """
-  from src.features.cron.cron_sequence import bound_task_name
-
-  task_name = bound_task_name(meta.id)
-  if task_name is None:
+  binding = binding_for(meta.id)
+  if binding is None:
     return None
-
-  if meta.cc_session_id and meta.cc_session_started_at:
-    last_sat_1am_utc = _last_saturday_1am_utc(datetime.now(UTC))
-    if meta.cc_session_started_at < last_sat_1am_utc < datetime.now(UTC):
-      log.info('scheduled_cc_session_expired', session=meta.id, started_at=str(meta.cc_session_started_at))
-      # The clear channel owns the disk write: anchors change only through
-      # their authorized channels, and a plain whole-object save would be
-      # corrected back to the old anchor by the save guard — the recycle
-      # would silently do nothing behind its suppressed next-round alarm.
-      # The in-memory copy mirrors the cleared anchor for the caller's
-      # fresh-conversation judgment below.
-      await session_mgr.clear_cc_session_anchor(meta.id)
-      meta.cc_session_id = None
-      meta.cc_session_started_at = None
-      try:
-        result = await session_mgr.recycle_scheduled_session(meta.id, last_sat_1am_utc)
-        log.info('scheduled_session_recycled', session=meta.id, **result)
-      except Exception:
-        log.exception('scheduled_session_recycle_failed', session=meta.id)
-
-  woken_by_firing_report = any(e.get("type") == ET.CHILD_REPORT for e in input_events)
-  if woken_by_firing_report and not meta.cc_session_id:
-    return scheduled_report_prefix(task_name)
-  return None
+  return await binding.on_wake(meta, input_events, sessions=session_mgr)
 
 
 async def run_message_with_resume_recovery(
@@ -278,9 +221,8 @@ async def trigger_master(
       await _wake_task_node(session_mgr, session_meta, requested_id=session_id, summary=summary)
       return
 
-    # The scheduled-task duties (weekly recycle, firing-report prefix) live in
-    # the bound node's dispatched wake (apply_bound_wake_duties); this legacy
-    # writer has no scheduled branch.
+    # Sequence duties run on the bound node's dispatched wake; this legacy
+    # writer has no sequence branch.
     await run_message_with_resume_recovery(
         cfg,
         session_meta,

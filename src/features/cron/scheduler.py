@@ -14,19 +14,19 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.features.cron.cron_files import write_cron_key
 from src.infra import event_types as ET
 from src.infra.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    get_config,
-    get_scheduled_tasks,
-    require_backend_option,
+  CharlieBotConfig,
+  ScheduledTaskConfig,
+  get_config,
+  get_scheduled_tasks,
+  require_backend_option,
 )
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
 from src.runtime.hooks import scheduled_handlers
-from src.runtime.scheduled_sessions import write_cron_key
 from src.runtime.sessions import SessionManager
 
 log = LazyStructlogLogger()
@@ -217,7 +217,11 @@ class Scheduler:
     # occurrence: no catch-up, no missed fire at the migration moment.
     old = await self._newest_active_cron_session(task_cfg.name, session_cache)
     if old is not None:
-      await tree.adopt_scheduled_bookkeeping(node.id, old)
+      await tree.adopt_metadata_slot(
+          node.id,
+          old,
+          "cron",
+          fields=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
     # Step 3 — write the binding back through the single-key write: only the
     # session_id key changes.
     await asyncio.to_thread(write_cron_key, task_cfg.name, "session_id", node.id)
@@ -318,7 +322,8 @@ class Scheduler:
     # Detect cron expression change — reset last_scheduled_run to now and skip tick
     if session.last_scheduled_cron is not None and session.last_scheduled_cron != task_cfg.cron:
       log.info("scheduler_cron_changed", task=task_cfg.name, old=session.last_scheduled_cron, new=task_cfg.cron)
-      await tree.record_scheduled_fire(session.id, last_scheduled_run=now.isoformat(), cron=task_cfg.cron)
+      await tree.update_slot_fields(
+          session.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron=task_cfg.cron)
       return
 
     if session.last_scheduled_run:
@@ -337,8 +342,8 @@ class Scheduler:
     if next_fire <= now:
       handle = self._handles.get(task_cfg.name)
       if handle is not None and not handle.done():
-        await tree.record_scheduled_fire(
-            session.id, last_scheduled_run=now.isoformat(), last_run_status=LastRunStatus.SKIPPED)
+        await tree.update_slot_fields(
+            session.id, "cron", last_scheduled_run=now.isoformat(), last_run_status=LastRunStatus.SKIPPED)
         event = {
             'type': ET.SCHEDULED_RUN_SKIPPED,
             'task': task_cfg.name,
@@ -474,7 +479,8 @@ class Scheduler:
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
     from src.runtime.api.deps import task_manager
-    await task_manager().record_scheduled_fire(meta.id, last_scheduled_run=now.isoformat(), cron=task_cfg.cron)
+    await task_manager().update_slot_fields(
+        meta.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron=task_cfg.cron)
 
   def _resolve_bound_backend_model(
       self,
@@ -498,7 +504,7 @@ class Scheduler:
       action_type, prompt = await scheduled_handlers.loop_action()(task_cfg)
       if prompt is None:
         from src.runtime.api.deps import task_manager
-        await task_manager().record_scheduled_fire(meta.id, last_run_status=LastRunStatus.SUCCESS)
+        await task_manager().update_slot_fields(meta.id, "cron", last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, action_type
       return prompt, action_type
@@ -584,7 +590,7 @@ class Scheduler:
           'message': str(e),
       }
       status = LastRunStatus.FAILED
-    await task_manager().record_scheduled_fire(session.id, last_run_status=status)
+    await task_manager().update_slot_fields(session.id, "cron", last_run_status=status)
     await self._session_mgr.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 

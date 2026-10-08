@@ -113,7 +113,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 
   # The cron rule beside which the walk lives keeps its results unchanged: the
   # cron child maps to its cron session, and no chat-thread row joins it.
-  cron = await fx.session_mgr.cron_subtree_roots()
+  cron = await fx.session_mgr.sequence_subtree_roots()
   assert cron[fx.cron_child.id] == fx.cron.id
   assert fx.cron.id not in cron
   assert not (set(cron) & _thread_ids(fx))
@@ -140,10 +140,10 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
   # The two routes partition the active non-cron rows, and the union is the
   # Workspace listing the cron exclusion alone produced before the split — the
   # projected legacy worker-thread leaves included.
-  cron_subtree = await fx.session_mgr.cron_subtree_roots()
+  sequence_subtree = await fx.session_mgr.sequence_subtree_roots()
   unprojected = [
       row for row in await fx.session_mgr.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
-      if row.id not in cron_subtree
+      if row.id not in sequence_subtree
   ]
   active = {row.id for row in await sessions_api.project_worker_threads(unprojected, fx.cfg, fx.thread_mgr)}
   assert not (workspace_ids & threads_ids)

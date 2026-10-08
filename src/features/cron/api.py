@@ -3,16 +3,13 @@
 import asyncio
 import copy
 import uuid
-from datetime import datetime
-from typing import Any
-from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from src.features.cron.scheduler import effective_scheduled_task_backend, load_croniter
+from src.features.cron.scheduler import effective_scheduled_task_backend
 from src.infra import event_types as ET
 from src.infra.compression import gzip_level1
 from src.infra.config import (
@@ -28,7 +25,6 @@ from src.infra.config import (
     get_scheduled_tasks,
     require_backend_option,
 )
-from src.infra.deferred import deferred_module_getattr
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
 from src.infra.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
@@ -46,30 +42,6 @@ router = APIRouter()
 # delete_cron_task) must carry the same bytes: tests/test_cron_delete.py pins
 # each one.
 _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
-
-# get_next is a pure function of (cron, timezone, now), and its answer stays
-# valid until the fire time it names: no occurrence can land between the
-# compute instant and that first next fire. Task count bounds the map.
-_NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
-
-
-def __getattr__(name: str) -> Any:
-  return deferred_module_getattr(name, __name__, globals(), "croniter", load_croniter)
-
-
-def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
-  """ISO next fire time of *cron_expr* in *timezone*, memoized until it passes."""
-  hit = _NEXT_RUN_MEMO.get((cron_expr, timezone))
-  if hit is not None and now_utc < hit[0]:
-    return hit[1]
-  if "croniter" not in globals():
-    load_croniter(globals())
-  tz = ZoneInfo(timezone)
-  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)  # noqa: F821  # bound by load_croniter
-  iso = next_run.isoformat()
-  _NEXT_RUN_MEMO[(cron_expr, timezone)] = (next_run, iso)
-  return iso
-
 
 def _read_cron_yaml(name: str) -> dict:
   return load_yaml(cron_path(name), default={})

@@ -108,7 +108,8 @@ def install_pending_executor(
     pending.handle = handle
     if record_handle:
       scheduler._handles[task_cfg.name] = handle
-    await tree.record_scheduled_fire(pending.session.id, last_scheduled_run=clock.now(datetime.UTC).isoformat())
+    await tree.update_slot_fields(
+        pending.session.id, "cron", last_scheduled_run=clock.now(datetime.UTC).isoformat())
     return {"session_id": pending.session.id, "thread_id": None}
 
   scheduler._execute_task = _execute
@@ -160,7 +161,7 @@ async def _pending_rig(
   _install_clock(monkeypatch, clock)
   cfg = conftest.make_home_config(tmp_path)
   session_mgr, tree, session = await _bound_rig_tree(monkeypatch, tmp_path)
-  await tree.record_scheduled_fire(session.id, last_scheduled_run=clock.now().isoformat())  # 00:00
+  await tree.update_slot_fields(session.id, "cron", last_scheduled_run=clock.now().isoformat())  # 00:00
   scheduler = scheduler_module.Scheduler(cfg, session_mgr)
   pending = _PendingRound(session)
   install_pending_executor(scheduler, clock, pending, tree)
@@ -293,8 +294,9 @@ async def test_fire_ignores_stuck_running_disk_state(
           "status": "running",
           "pid": 999999,
       })
-  await tree.record_scheduled_fire(
-      session.id, last_scheduled_run=clock.now().isoformat(), last_run_status=models.LastRunStatus.RUNNING)  # 00:00
+  await tree.update_slot_fields(
+      session.id, "cron", last_scheduled_run=clock.now().isoformat(),
+      last_run_status=models.LastRunStatus.RUNNING)  # 00:00
 
   fired = mock.AsyncMock()
   monkeypatch.setattr(scheduler, "_execute_task", fired)

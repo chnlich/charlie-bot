@@ -1067,21 +1067,20 @@ class TaskTreeManager:
   # Create
   # ------------------------------------------------------------------
 
-  async def adopt_scheduled_bookkeeping(self, session_id: str, old: SessionMetadata) -> SessionMetadata:
-    """Copy one old cron session's scheduler bookkeeping onto this node.
-
-    The auto-bind's migration step (src/features/cron/scheduler.py): the write re-reads
-    the node under the control lock through the tree metadata owner, and the
-    field list stays :func:`migrate_scheduler_bookkeeping`'s — the single
-    home — so what migrates is defined exactly once.
-    """
-    from src.runtime.scheduled_sessions import migrate_scheduler_bookkeeping
-
+  async def adopt_metadata_slot(
+      self,
+      session_id: str,
+      old: SessionMetadata,
+      owner: str,
+      *,
+      fields: tuple[str, ...] | None = None,
+  ) -> SessionMetadata:
+    """Copy selected fields from *owner* on *old* onto this node."""
     async with self.control_lock:
       meta = await self.load_meta(session_id)
       if meta is None:
         raise TaskNotFoundError(f"session {session_id} not found")
-      migrate_scheduler_bookkeeping(old, meta)
+      metadata_slots.copy_fields(old, meta, owner, names=fields)
       meta.updated_at = utc_now()
       await self._save_meta(meta)
       return meta
@@ -1331,45 +1330,21 @@ class TaskTreeManager:
         now=now,
     )
 
-  async def record_scheduled_fire(
-      self,
-      session_id: str,
-      *,
-      last_scheduled_run: str | None = None,
-      cron: str | None = None,
-      last_run_status: str | None = None,
-  ) -> SessionMetadata:
-    """The scheduler's per-fire bookkeeping on the firing's node.
+  async def update_slot_fields(self, session_id: str, owner: str, **values: Any) -> SessionMetadata:
+    """Write registered metadata-slot fields without refreshing the sidebar sort key.
 
-    The node is re-read under the control lock and only the scheduling fields
-    named by the caller are written, so a concurrent task edit (name, spec,
-    prompts) between the scheduler's earlier load and this write is preserved
-    instead of being overwritten by a stale SessionMetadata snapshot. This is
-    the metadata owner's single entry for cron bookkeeping. The node is a
-    bound task's stable binding, or an unbound task's cron session — a legacy
-    session (profile None) keeps parenting its firings in place, so its
-    bookkeeping lands here too.
-
-    ``updated_at`` is left as it was: it records the user's last action on the
-    row (the sidebar sorts each group on it), and a frequent cron's fire must
-    not pin its node to the top of its group. The save therefore goes through
-    ``save_metadata`` directly rather than through ``_save_meta`` (whose
-    ``updated_at`` refresh it exists for is skipped here), so the sidebar dirty
-    mark and the listing revision still land — the row's Last status
-    refreshes — and the tree index is still invalidated.
+    The node is re-read under the control lock, so a concurrent task edit
+    between the caller's earlier read and this write is preserved. Saving
+    directly leaves ``updated_at`` in place while still dirtying the sidebar,
+    bumping the listing revision and invalidating the tree index.
     """
-    if last_scheduled_run is None and cron is None and last_run_status is None:
-      raise TaskInvalidError("record_scheduled_fire requires at least one scheduling field")
+    if not values:
+      raise TaskInvalidError("update_slot_fields requires at least one field")
     async with self.control_lock:
       meta = await self.load_meta(session_id)
       if meta is None:
         raise TaskNotFoundError(f"session {session_id} not found")
-      if last_scheduled_run is not None:
-        meta.last_scheduled_run = last_scheduled_run
-      if cron is not None:
-        meta.last_scheduled_cron = cron
-      if last_run_status is not None:
-        meta.last_run_status = last_run_status
+      metadata_slots.set_fields(meta, owner, **values)
       await self._sessions.save_metadata(meta)
       self._invalidate_index()
       return meta
@@ -1717,13 +1692,11 @@ class TaskTreeManager:
     no window between the facts. Each open node's fact carries outcome
     "archived", actor "user", and an empty report_to — an archive reports to
     nobody; each descendant's fact also names the node the user archived in
-    ``archived_with``. Completed and cancelled nodes are left unchanged. The
-    bound cron task of every archived node is disabled (the single-key
-    ``enabled`` write; the binding stays). Returns the ids this call archived,
-    in parent-before-child order; an already-archived target returns [].
+    ``archived_with``. Completed and cancelled nodes are left unchanged. Each
+    archived node's sequence binding receives its archive callback. Returns
+    the ids this call archived, in parent-before-child order; an already-archived target returns [].
     """
-    from src.features.cron.cron_sequence import bound_task_name
-    from src.runtime.scheduled_sessions import write_cron_key
+    from src.runtime.hooks.sequence_controllers import binding_for
 
     require_operator(caller, "archiving a task requires operator credentials")
     tree = self
@@ -1770,12 +1743,11 @@ class TaskTreeManager:
         await tree.events.append(sid, event)
         archived.append(sid)
       tree._invalidate_index()
-      # The archived nodes' bound cron tasks stop firing (the same single-key
-      # disable the archive entry has always written; the binding stays).
+      # The archived nodes' sequence bindings run their archive duties.
       for sid in archived:
-        bound = bound_task_name(sid)
-        if bound is not None:
-          await asyncio.to_thread(write_cron_key, bound, "enabled", value=False)
+        binding = binding_for(sid)
+        if binding is not None:
+          await binding.on_archive()
       return archived
 
 

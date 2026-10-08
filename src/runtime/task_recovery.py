@@ -64,6 +64,9 @@ async def reconcile_task_tree(
   # The sequence controllers' honest verdicts come first: a recovered
   # "interrupted" improve state must not race the Run reconciliation below.
   await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
+  from src.runtime.hooks.sequence_controllers import sequence_controllers
+  for controller in sequence_controllers():
+    await controller.reconcile_interrupted(cfg, tree)
 
   for session_dir in sorted(cfg.sessions_dir.iterdir()):
     if not session_dir.is_dir():
@@ -189,19 +192,21 @@ async def _reconcile_node(
   await tree.dispatch.dispatch_pending(session_id)
 
 
-async def _replay_cron_firing(
+async def _replay_sequence_firing(
     session_id: str,
     tree: task_sessions.TaskTreeManager,
     run: object,
     cfg: config.CharlieBotConfig,
 ) -> None:
-  """Re-drive one firing's chain/boundary through its owning module."""
-  from src.features.cron import cron_sequence
+  """Re-drive one firing through the controller named by its owner reference."""
+  from src.runtime.hooks.sequence_controllers import controller_for
 
-  seq = run.sequence_ref
-  if seq is None or not seq.owner_ref.startswith("cron:"):
+  sequence = run.sequence_ref
+  if sequence is None:
     return
-  await cron_sequence.redrive_firing(session_id, tree, cfg)
+  controller = controller_for(sequence.owner_ref)
+  if controller is not None:
+    await controller.redrive(session_id, tree, cfg)
 
 
 async def _replay_followups(
@@ -244,7 +249,7 @@ async def _replay_followups(
       # stable ids; a live process is followed, never relaunched.
       if outcome is not None or run.pid is None:
         counters["followups"] += 1
-        await _replay_cron_firing(session_id, tree, run, cfg)
+        await _replay_sequence_firing(session_id, tree, run, cfg)
       continue
     if outcome is None:
       continue

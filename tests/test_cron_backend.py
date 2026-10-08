@@ -106,7 +106,8 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   bind_deps_managers(monkeypatch, tree, session_mgr)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   now = datetime.now(ZoneInfo("America/Los_Angeles"))
-  await tree.record_scheduled_fire(node.id, last_scheduled_run=now.isoformat(), cron="* * * * *")
+  await tree.update_slot_fields(
+      node.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron="* * * * *")
   task_cfg = ScheduledTaskConfig(
       name="nightly",
       cron="* * * * *",

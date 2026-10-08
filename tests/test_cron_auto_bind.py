@@ -195,7 +195,7 @@ async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -
   node = await tree.load_meta(node_id)
   assert node is not None
   # Rewind the anchor onto a past occurrence so the next tick is due.
-  await tree.record_scheduled_fire(node_id, last_scheduled_run="2026-01-01T03:00:00+00:00")
+  await tree.update_slot_fields(node_id, "cron", last_scheduled_run="2026-01-01T03:00:00+00:00")
   with registered_cron_handler("probe", AsyncMock(return_value="swept 42 bytes")):
     await scheduler._tick()
 
@@ -292,7 +292,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   with pytest.MonkeyPatch().context() as crash:
     if fail_after == "create":
       # The node exists; the bookkeeping copy never ran.
-      crash.setattr(TaskTreeManager, "adopt_scheduled_bookkeeping", _boom)
+      crash.setattr(TaskTreeManager, "adopt_metadata_slot", _boom)
     elif fail_after == "copy":
       # Node + bookkeeping exist; the write-back never ran.
       from src.features.cron import scheduler as scheduler_module
@@ -552,7 +552,7 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
   session's wake duties on the tree dispatch path: the weekly recycle clears
   the anchor predating the last Saturday 01:00 PT and GCs the old threads,
   and the fresh native conversation's turn carries the fixed report prefix."""
-  from src.runtime.master_trigger import scheduled_report_prefix
+  from src.features.cron.sequence_controller import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()  # binds; the daily task is not due
@@ -593,7 +593,7 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   """The report prefix marks a FRESH native conversation: once the node holds
   a live anchor (recorded by the previous turn) the next firing report's wake
   continues that conversation \u2014 no prefix, no reset notice, no recycle."""
-  from src.runtime.master_trigger import scheduled_report_prefix
+  from src.features.cron.sequence_controller import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()

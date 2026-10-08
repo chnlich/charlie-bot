@@ -173,7 +173,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   assert task_mgr.activity_of(worker).work_state == "idle"
 
   cutoff = datetime.now(UTC) + timedelta(hours=1)
-  result = await session_mgr.recycle_scheduled_session(worker, cutoff)
+  result = await session_mgr.recycle_history_before(worker, cutoff)
   assert result["events_archived"] > 0
   meta = await session_mgr.get_session(worker)
   assert meta is not None and meta.archive_offset == result["events_archived"]

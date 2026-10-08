@@ -180,7 +180,7 @@ async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited
 
 @pytest.mark.asyncio
 async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: pathlib.Path) -> None:
-  """Every record_scheduled_fire call shape the scheduler uses writes its
+  """Every registered-slot write shape the scheduler uses writes its
   scheduling fields and leaves updated_at as it was: a frequent cron's node
   keeps its sidebar place, while a listing read shows the new Last status."""
   _, session_mgr, tree = conftest.build_env(tmp_path)
@@ -193,7 +193,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   # last_scheduled_cron): cron change, overlap skip, normal fire, loop noop,
   # handler outcome.
   stamp = fired_at.isoformat()
-  cron_call = {"last_scheduled_run": stamp, "cron": "0 3 * * *"}
+  cron_call = {"last_scheduled_run": stamp, "last_scheduled_cron": "0 3 * * *"}
   cron_land = {"last_scheduled_run": stamp, "last_scheduled_cron": "0 3 * * *"}
   skip_call = {"last_scheduled_run": stamp, "last_run_status": models.LastRunStatus.SKIPPED}
   noop = {"last_run_status": models.LastRunStatus.SUCCESS}
@@ -206,7 +206,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
       (handler_failed, handler_failed),
   ]
   for call, landed in shapes:
-    meta = await tree.record_scheduled_fire(node.id, **call)
+    meta = await tree.update_slot_fields(node.id, "cron", **call)
     assert meta.updated_at == fired_at
     fresh = await session_mgr.get_session(node.id)
     assert fresh is not None and fresh.updated_at == fired_at

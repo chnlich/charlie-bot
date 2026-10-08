@@ -50,7 +50,7 @@ from src.runtime.hooks import backend_types, turn_contributions
 from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
-from src.runtime.scheduled_sessions import chat_thread_subtree_roots, cron_subtree_roots
+from src.runtime.scheduled_sessions import chat_thread_subtree_roots, sequence_subtree_roots
 from src.runtime.session_usage import SessionUsageResolver
 from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.runtime.thinking_state import busy_since, run_backend
@@ -1088,7 +1088,7 @@ class SessionManager:
     # until a write bumps the revision, a create/delete moves the root
     # signature, or the sweep re-walks, so the map re-derives exactly when its
     # inputs can have moved and never wider.
-    self._cron_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
+    self._sequence_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
     self._chat_thread_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
@@ -1359,9 +1359,15 @@ class SessionManager:
     among them (the caller reads :func:`busy_since` itself).
     """
     metas = await self._with_derived_archive(await self._load_session_metas(status), status)
+    if scheduled is None:
+      controllers = ()
+    else:
+      from src.runtime.hooks.sequence_controllers import sequence_controllers
+
+      controllers = sequence_controllers()
     rows = [
         meta for meta in metas if (starred is None or meta.starred == starred) and
-        (scheduled is None or bool(meta.scheduled_task) == scheduled)
+        (scheduled is None or any(controller.owns_session(meta) for controller in controllers) == scheduled)
     ]
     rows.sort(key=lambda meta: meta.updated_at, reverse=True)
     derived = await self.resolve_sidebar_state(
@@ -1380,20 +1386,14 @@ class SessionManager:
     """
     return sorted({meta.group for meta in await self._load_session_metas() if meta.group})
 
-  async def cron_subtree_roots(self) -> dict[str, str]:
-    """The cron-subtree membership map over every session's stored metadata.
-
-    See :func:`src.runtime.scheduled_sessions.cron_subtree_roots` for the rule. The
-    map reads the shared cached metas — chain and ``scheduled_task`` mark only,
-    statuses never matter — so the sidebar lists classify their rows with no
-    second read and no copy.
-    """
+  async def sequence_subtree_roots(self) -> dict[str, str]:
+    """The sequence-subtree membership map over every session's stored metadata."""
     metas = await self._load_session_metas()
-    cached = self._cron_subtree_memo
+    cached = self._sequence_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
-    roots = cron_subtree_roots(metas)
-    self._cron_subtree_memo = (metas, roots)
+    roots = sequence_subtree_roots(metas)
+    self._sequence_subtree_memo = (metas, roots)
     return roots
 
   async def chat_thread_subtree_roots(self) -> dict[str, str]:
@@ -1403,7 +1403,7 @@ class SessionManager:
     rule. The map reads the shared cached metas — chain and platform-origin
     marks only, statuses never matter — so the sidebar lists classify their
     rows with no second read and no copy, memoized on unchanged metas exactly
-    like :meth:`cron_subtree_roots` beside which it lives.
+    like :meth:`sequence_subtree_roots` beside which it lives.
     """
     metas = await self._load_session_metas()
     cached = self._chat_thread_subtree_memo
@@ -1435,20 +1435,19 @@ class SessionManager:
     (``_fresh_cached_meta``), so the warm request path reads no metadata
     files. A cursor that fails to parse raises ValueError: the caller's
     explicit cursor stops with the error instead of silently serving page 1.
-    Cron-subtree rows (every session whose ``task_parent_id`` chain reaches a
-    ``scheduled_task`` session) are excluded before aggregation and pagination;
-    the archived cron sessions themselves keep their rows.
+    Sequence-subtree rows are excluded before aggregation and pagination; the
+    owned sessions themselves keep their rows.
     """
     limit = max(1, min(500, limit))
     metas = await self._with_derived_archive(
         await self._load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
-    # Cron-subtree rows stay out of the Archived list — the projected legacy
-    # worker-thread rows under cron sessions included; the archived cron
-    # sessions themselves keep their rows. The exclusion runs before the group
+    # Sequence-subtree rows stay out of the Archived list — projected legacy
+    # worker-thread rows under owned sessions included; the owned sessions
+    # themselves keep their rows. The exclusion runs before the group
     # aggregates and the keyset slice, so both describe the rows the page can
     # actually return.
-    cron_subtree = await self.cron_subtree_roots()
-    metas = [meta for meta in metas if meta.id not in cron_subtree]
+    sequence_subtree = await self.sequence_subtree_roots()
+    metas = [meta for meta in metas if meta.id not in sequence_subtree]
 
     counts: dict[str | None, int] = {}
     for meta in metas:
@@ -2070,8 +2069,8 @@ class SessionManager:
       self.tree_index_invalidator()
     return meta
 
-  async def recycle_scheduled_session(self, session_id: str, cutoff_utc: datetime) -> dict:
-    """GC old threads and archive old chat_events for a scheduled session.
+  async def recycle_history_before(self, session_id: str, cutoff_utc: datetime) -> dict:
+    """GC old threads and archive old chat events for a session.
 
     Threads whose status is completed/failed/cancelled and whose ``completed_at``
     is earlier than ``cutoff_utc`` are removed. Chat events with timestamp

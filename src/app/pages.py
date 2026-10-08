@@ -28,11 +28,11 @@ from src.runtime.api.message_utils import build_session_bootstrap_data
 from src.runtime.api.sessions import (
     _bootstrap_payload,
     _default_backend_id,
-    apply_row_schedule,
+    apply_listing_fields,
     project_worker_threads,
-    row_schedule_fields,
 )
 from src.runtime.hooks import page_render
+from src.runtime.hooks.sequence_controllers import sequence_listing_fields
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.threads import ThreadManager
@@ -160,13 +160,13 @@ async def index(
         include_running_status=True,
         include_pending_trigger_status=True,
     )
-    # The first-paint list shares the All endpoint's membership: cron-subtree
+    # The first-paint list shares the All endpoint's membership: sequence-subtree
     # rows and the chat-thread subtree ride no listing, so a firing leaf neither
     # flattens into a top-level sidebar row, a Slack/Discord thread session
     # never paints into Workspace, and neither becomes the auto-redirect target.
-    cron_subtree = await session_mgr.cron_subtree_roots()
+    sequence_subtree = await session_mgr.sequence_subtree_roots()
     chat_threads = await session_mgr.chat_thread_subtree_roots()
-    sessions = [s for s in sessions if s.id not in cron_subtree and s.id not in chat_threads]
+    sessions = [s for s in sessions if s.id not in sequence_subtree and s.id not in chat_threads]
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []
@@ -240,11 +240,11 @@ async def index(
 
   # The first-paint sidebar list carries the legacy worker-thread leaves too;
   # projected after the redirect check so a thread row can never become the
-  # auto-redirect target. Row shape matches GET /api/sessions/: the schedule
-  # join stamps every row, so the first paint shows a scheduled node's clock.
+  # auto-redirect target. Row shape matches GET /api/sessions/: the registered
+  # controllers add their fields to every row.
   sessions = await project_worker_threads(sessions, cfg, thread_mgr)
-  schedule_fields = row_schedule_fields((s.id for s in sessions), dt.datetime.now(dt.UTC))
-  initial_sessions = [apply_row_schedule(s.model_dump(mode="json"), schedule_fields[s.id]) for s in sessions]
+  listing_fields = sequence_listing_fields((s.id for s in sessions), dt.datetime.now(dt.UTC))
+  initial_sessions = [apply_listing_fields(s.model_dump(mode="json"), listing_fields[s.id]) for s in sessions]
 
   if thread_view is not None:
     active_backend = thread_view.get("backend") or _default_backend_id(cfg)

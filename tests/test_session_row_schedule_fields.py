@@ -1,6 +1,6 @@
 """The sidebar lists' row schedule fields (plan 4.1) and the archived page's context rows.
 
-One join (``row_schedule_fields``, keyed on ``bound_task_name``) stamps every
+One controller method (keyed on the loaded task binding) stamps every
 listed row — GET /api/sessions/, /starred, /archived, and the homepage's
 server-rendered sidebar: a node a loaded task binds carries ``schedule_task``
 plus the four schedule fields computed from that task config; an unbound row
@@ -126,7 +126,9 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   """
   from datetime import UTC, datetime, timedelta
 
-  from src.runtime.api.sessions import row_schedule_fields
+  from src.features.cron.sequence_controller import CronSequenceController
+
+  controller = CronSequenceController()
 
   _cfg, _session_mgr, tree = build_env(tmp_path)
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="Bound")
@@ -135,16 +137,16 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
   ids = (bound.id, other.id)
   now = datetime.now(UTC)
 
-  first = row_schedule_fields(ids, now)
+  first = controller.listing_fields(ids, now)
   _assert_bound_row(first[bound.id], "synthetic-daily", enabled=True)
-  second = row_schedule_fields(ids, now + timedelta(seconds=1))
+  second = controller.listing_fields(ids, now + timedelta(seconds=1))
   assert second == first
   assert second[other.id] is first[other.id]  # the stored map served whole
 
-  assert set(row_schedule_fields((other.id,), now)) == {other.id}
+  assert set(controller.listing_fields((other.id,), now)) == {other.id}
 
   _write_bound_task(temp_home, "synthetic-second", other.id)
-  rebound = row_schedule_fields(ids, now + timedelta(seconds=1))
+  rebound = controller.listing_fields(ids, now + timedelta(seconds=1))
   assert rebound[other.id]["schedule_task"] == "synthetic-second"
   assert rebound[bound.id] == first[bound.id]
 
@@ -161,8 +163,8 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
     def now(cls, tz=None):
       return crossed.astimezone(tz)
 
-  monkeypatch.setattr("src.features.cron.api.datetime", _ShiftedDateTime)
-  advanced = row_schedule_fields(ids, crossed)
+  monkeypatch.setattr("src.features.cron.sequence_controller.datetime", _ShiftedDateTime)
+  advanced = controller.listing_fields(ids, crossed)
   assert datetime.fromisoformat(advanced[bound.id]["schedule_next_run"]) > fire
 
 

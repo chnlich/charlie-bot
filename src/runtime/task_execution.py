@@ -1076,10 +1076,10 @@ class TaskExecutionAdapter:
     # legacy trigger_master wake never reaches a task-tree node. The
     # recycle may clear the node's anchor in place, so the
     # fresh-conversation judgment below reads the post-recycle state.
-    from src.runtime.master_trigger import apply_bound_wake_duties
-    scheduled_prefix = await apply_bound_wake_duties(self._sessions, meta, batch_events)
-    if scheduled_prefix:
-      content = f"{scheduled_prefix}{content}"
+    from src.runtime.master_trigger import apply_sequence_wake_duties
+    sequence_prefix = await apply_sequence_wake_duties(self._sessions, meta, batch_events)
+    if sequence_prefix:
+      content = f"{sequence_prefix}{content}"
 
     anchor_continues = (
         meta.cc_session_id is not None and meta.native_prompt_hash == snapshot.prompt_hash and
@@ -1805,7 +1805,7 @@ class TaskExecutionAdapter:
         # durable finish: the next permitted step launches, or the ONE
         # boundary report re-delivers — without waiting for the next
         # tick or restart, and idempotent against a live controller.
-        await self._redrive_firing(session_id)
+        await self._redrive_firing(session_id, run)
         return
       if run.kind == "iteration":
         return
@@ -1829,11 +1829,16 @@ class TaskExecutionAdapter:
       # inputs admitted during a review Run dispatch here as well.
       await self._tree.dispatch.dispatch_pending(session_id)
 
-  async def _redrive_firing(self, session_id: str) -> None:
-    """Re-drive one scheduled firing from its leaf's durable facts."""
-    from src.features.cron.cron_sequence import redrive_firing
+  async def _redrive_firing(self, session_id: str, run: RunRecord) -> None:
+    """Re-drive the sequence referenced by the leaf's durable Run facts."""
+    from src.runtime.hooks.sequence_controllers import controller_for
 
-    await redrive_firing(session_id, self._tree, self._cfg)
+    sequence = run.sequence_ref
+    if sequence is None:
+      return
+    controller = controller_for(sequence.owner_ref)
+    if controller is not None:
+      await controller.redrive(session_id, self._tree, self._cfg)
 
   async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
     from src.runtime.task_completion import (

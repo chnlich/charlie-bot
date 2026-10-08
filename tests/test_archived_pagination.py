@@ -97,7 +97,7 @@ async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypa
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
   await mgr.listing.list_archived_page(limit=2)
   await mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
-  await mgr.search_sessions("alpha")
+  await mgr.search.search_sessions("alpha")
   assert reads == []
 
 
@@ -129,7 +129,7 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
   await mgr.events.save_chat_event(above.id, user_event("needle in the events"))
   await mgr.events.save_chat_event(below.id, user_event("needle in the events"))
 
-  rows, derived = await mgr.search_sessions_readonly(
+  rows, derived = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=True, include_pending_trigger_status=True)
   ids = [r.id for r in rows]
   assert len(rows) == 200
@@ -137,7 +137,8 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
   assert below.id not in ids  # a hit older than every match cannot enter the top rows
   assert set(derived) == set(ids)
 
-  sessions = await mgr.search_sessions("needle", include_running_status=True, include_pending_trigger_status=True)
+  sessions = await mgr.search.search_sessions(
+      "needle", include_running_status=True, include_pending_trigger_status=True)
   assert [s.id for s in sessions] == ids  # the copying wrapper serves the same rows
 
 
@@ -147,10 +148,10 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
   await _add_session(mgr, "quiet", status=SessionStatus.ACTIVE, minutes=1)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=2)
 
-  first, _ = await mgr.search_sessions_readonly(
+  first, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert first == []
-  repeat, _ = await mgr.search_sessions_readonly(
+  repeat, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert repeat is first  # the unchanged corpus serves the stored rows
 
@@ -158,12 +159,12 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
   # re-key the derivation or the new hit stays invisible until the next
   # metadata write.
   await mgr.events.save_chat_event(carrier.id, user_event("needle in the events"))
-  grown, _ = await mgr.search_sessions_readonly(
+  grown, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert [r.id for r in grown] == [carrier.id]
 
   renamed = await _add_session(mgr, "needle-name", minutes=3)
-  named, _ = await mgr.search_sessions_readonly(
+  named, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert {r.id for r in named} == {carrier.id, renamed.id}
 
@@ -171,30 +172,30 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
 @pytest.mark.asyncio
 async def test_search_match_memo_stores_nothing_after_an_errored_scan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.runtime.sessions as sessions_module
+  import src.runtime.session_search as session_search_module
 
   mgr = make_session_mgr(tmp_path)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
   await mgr.events.save_chat_event(carrier.id, user_event("nothing relevant here"))
 
-  real_scan = sessions_module._scan_content_for_hit
-  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", lambda *a, **k: None)
-  errored, _ = await mgr.search_sessions_readonly(
+  real_scan = session_search_module._scan_content_for_hit
+  monkeypatch.setattr(session_search_module, "_scan_content_for_hit", lambda *a, **k: None)
+  errored, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert errored == []  # the errored scan proves no absence, so the rows stay undetermined
-  assert mgr._search_match_memo.get("needle") is None  # an errored round stores nothing
+  assert mgr.search._search_match_memo.get("needle") is None  # an errored round stores nothing
 
-  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", real_scan)
-  retried, _ = await mgr.search_sessions_readonly(
+  monkeypatch.setattr(session_search_module, "_scan_content_for_hit", real_scan)
+  retried, _ = await mgr.search.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert retried == []  # the retry re-scans instead of serving the errored rows
-  assert mgr._search_match_memo.get("needle") is not None  # the clean round stores
+  assert mgr.search._search_match_memo.get("needle") is not None  # the clean round stores
 
 
 @pytest.mark.asyncio
 async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn_derive(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.runtime.sessions as sessions_module
+  import src.runtime.session_search as session_search_module
 
   # One active chat file per session, the population just past the pre-4096
   # file cap (260 sessions over the 256-entry cap): a cap under the
@@ -207,23 +208,23 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
     await mgr.events.save_chat_event(meta.id, user_event("filler line\n"))
 
   needle = "zzq9neverpresentneedle"
-  first, _ = await mgr.search_sessions_readonly(
+  first, _ = await mgr.search.search_sessions_readonly(
       needle, include_running_status=False, include_pending_trigger_status=False)
   assert first == []
-  assert len(list(mgr._search_miss_memo.items())) == len(carriers)
+  assert len(list(mgr.search._search_miss_memo.items())) == len(carriers)
 
   appended = carriers[0]
   await mgr.events.save_chat_event(appended.id, user_event("churn append\n"))
 
   scans: list[tuple[str, int]] = []
-  real_scan = sessions_module._scan_content_for_hit
+  real_scan = session_search_module._scan_content_for_hit
 
   def spy(path, session_id, query_lower, start):
     scans.append((session_id, start))
     return real_scan(path, session_id, query_lower, start)
 
-  monkeypatch.setattr(sessions_module, "_scan_content_for_hit", spy)
-  rows, _ = await mgr.search_sessions_readonly(
+  monkeypatch.setattr(session_search_module, "_scan_content_for_hit", spy)
+  rows, _ = await mgr.search.search_sessions_readonly(
       needle, include_running_status=False, include_pending_trigger_status=False)
   assert rows == []
   # The churn derive re-proves the appended file on its tail alone; every
@@ -232,38 +233,38 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   assert scans[0][0] == appended.id
   assert scans[0][1] > 0
 
-  ride, _ = await mgr.search_sessions_readonly(
+  ride, _ = await mgr.search.search_sessions_readonly(
       needle, include_running_status=False, include_pending_trigger_status=False)
   assert ride == []
   assert len(scans) == 1  # the derived rows serve the repeat without a read
 
 
 def test_content_scan_raw_path_matches_decoded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  import src.runtime.sessions as sessions_module
+  import src.runtime.session_search as session_search_module
 
   # A tiny window forces many boundary carries, so the straddle cases run for
   # real instead of riding one whole-file window.
-  monkeypatch.setattr(sessions_module, "_SEARCH_CHUNK_SIZE", 4)
+  monkeypatch.setattr(session_search_module, "_SEARCH_CHUNK_SIZE", 4)
   chat = tmp_path / "chat_events.jsonl"
   prefix = "xxNeeDLe\u00e9tail".encode()  # mixed-case hit; \u00e9 must not disturb it
   chat.write_bytes(prefix + ("filler" * 10).encode())
-  assert sessions_module._scan_content_for_hit(chat, "s", "needle", 0) is True
-  assert sessions_module._scan_content_for_hit(chat, "s", "zzq9absent", 0) is False
+  assert session_search_module._scan_content_for_hit(chat, "s", "needle", 0) is True
+  assert session_search_module._scan_content_for_hit(chat, "s", "zzq9absent", 0) is False
   # The rescan contract: a start offset past the only hit hides it, and an
   # append past that offset shows the new hit -- the memo's re-proof window.
-  assert sessions_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is False
+  assert session_search_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is False
   with chat.open("ab") as out:
     out.write(b"TailNeedle")
-  assert sessions_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is True
+  assert session_search_module._scan_content_for_hit(chat, "s", "needle", len(prefix)) is True
   # The documented boundary: an ASCII needle does not match U+212A (whose
   # str.lower() contains an ASCII letter); that codepoint needs the decoded
   # path, which a non-ASCII needle rides.
   kelvin = tmp_path / "kelvin.jsonl"
   kelvin.write_bytes("\u212a".encode() + b"ey")
-  assert sessions_module._scan_content_for_hit(kelvin, "s", "k", 0) is False
+  assert session_search_module._scan_content_for_hit(kelvin, "s", "k", 0) is False
   accents = tmp_path / "accents.jsonl"
   accents.write_bytes("caf\u00e9".encode())
-  assert sessions_module._scan_content_for_hit(accents, "s", "\u00e9", 0) is True
+  assert session_search_module._scan_content_for_hit(accents, "s", "\u00e9", 0) is True
 
 
 @pytest.mark.asyncio

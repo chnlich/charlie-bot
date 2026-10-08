@@ -64,6 +64,7 @@ from src.runtime.api.deps import (
     get_session_events,
     get_session_listing,
     get_session_manager,
+    get_session_search,
     get_session_sidebar,
     get_session_store,
     get_task_manager,
@@ -89,6 +90,7 @@ from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_listing import SessionListing
+from src.runtime.session_search import SessionSearch
 from src.runtime.session_sidebar import SessionSidebar
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
@@ -880,8 +882,8 @@ async def get_session_tree(
 async def search_sessions(
     request: Request,
     q: str = '',
-    session_mgr: SessionManager = Depends(get_session_manager),
     listing: SessionListing = Depends(get_session_listing),
+    search: SessionSearch = Depends(get_session_search),
 ) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
@@ -898,9 +900,9 @@ async def search_sessions(
   # The capped name-match shape (a short query) is this route's slowest
   # request: the read-only search serves cache references and the response
   # renders through FastJsonResponse with the derived fields overlaid, the
-  # same shape the /status poll took — the manager's per-row copy+populate
+  # same shape the /status poll took — the search block's per-row copy+populate
   # pass and the response-model walk both measured multi-ms on the 200-row cap.
-  rows, derived = await session_mgr.search_sessions_readonly(
+  rows, derived = await search.search_sessions_readonly(
       q.strip(),
       include_running_status=True,
       include_pending_trigger_status=True,

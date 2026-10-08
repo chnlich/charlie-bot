@@ -11,6 +11,7 @@ import pytest
 from structlog import testing
 
 from src.infra import config, models
+from src.runtime import sidebar_state
 
 _PLAN_V1_REL = "artifacts/plan_01.html"
 _PLAN_V2_REL = "artifacts/plan_02.html"
@@ -71,6 +72,39 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: pathlib
   assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).exists()
   assert (cfg.sessions_dir / child.id / _PLAN_V2_REL).exists()
   assert (cfg.sessions_dir / child.id / _PLAN_V1_REL).read_text(encoding="utf-8") == "<html>v1</html>"
+
+
+@pytest.mark.asyncio
+async def test_sidebar_plan_flag_refreshes_after_registry_write_and_skips_an_unchanged_read(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  sidebar_state.reset_for_tests()
+  cfg, mgr, session = await conftest.make_home_session(tmp_path, name="Plan flag", backend=conftest.OPUS_BACKEND_ID)
+  plans_path = cfg.sessions_dir / session.id / "plans.json"
+  read_text = pathlib.Path.read_text
+  plan_reads = 0
+
+  def count_plan_reads(path: pathlib.Path, *args, **kwargs):
+    nonlocal plan_reads
+    if path == plans_path:
+      plan_reads += 1
+    return read_text(path, *args, **kwargs)
+
+  monkeypatch.setattr(pathlib.Path, "read_text", count_plan_reads)
+  client = conftest.make_sessions_client(cfg, mgr)
+
+  before = client.get(f"/api/sessions/status?ids={session.id}").json()[session.id]
+  assert before["has_pending_plan_approval"] is False
+  assert plan_reads == 0
+
+  conftest.write_plans(cfg, session.id, {"plans": [conftest.plan_doc(1, [_make_version(1, _PLAN_V1_REL, "clean")])]})
+  sidebar_state.mark_sidebar_dirty(session.id)
+  after = client.get(f"/api/sessions/status?ids={session.id}").json()[session.id]
+  assert after["has_pending_plan_approval"] is True
+  assert plan_reads == 1
+
+  unchanged = client.get(f"/api/sessions/status?ids={session.id}").json()[session.id]
+  assert unchanged["has_pending_plan_approval"] is True
+  assert plan_reads == 1
 
 
 @pytest.mark.asyncio

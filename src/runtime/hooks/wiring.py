@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 PHASES = ("early", "ready")
 
 # Registration order is the order of the lists: routers include in it, services start in it.
-_ROUTERS: list[tuple[str, str, tuple[str, ...], str]] = []
+_ROUTERS: list[tuple[str, str, tuple[str, ...], str, bool]] = []  # (module, prefix, tags, attr, before_runtime)
 _COMMANDS: dict[str, str] = {}
 _SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
 _FILE_VIEWS: list[tuple[str, str]] = []  # (module, attr)
@@ -37,9 +37,20 @@ class ServiceContext:
     self.recovery_task = recovery_task
 
 
-def register_router(module: str, *, prefix: str = "", tags: tuple[str, ...] = (), attr: str = "router") -> None:
-  """The server includes getattr(import_module(module), attr) under prefix, in registration order."""
-  _ROUTERS.append((module, prefix, tags, attr))
+def register_router(
+    module: str,
+    *,
+    prefix: str = "",
+    tags: tuple[str, ...] = (),
+    attr: str = "router",
+    before_runtime: bool = False) -> None:
+  """The server includes getattr(import_module(module), attr) under prefix, in registration order.
+
+  A router registered with before_runtime includes ahead of the runtime's own routers, so a fixed
+  path under a runtime prefix answers before the runtime's parameterised route that would match it
+  (/api/sessions/{session_id}). The others include after them.
+  """
+  _ROUTERS.append((module, prefix, tags, attr, before_runtime))
 
 
 def register_command(name: str, module: str) -> None:
@@ -87,9 +98,9 @@ def register_startup_check(module: str, *, attr: str) -> None:
   _STARTUP_CHECKS.append((module, attr))
 
 
-def routers() -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
-  """(module, prefix, tags, attr) in registration order."""
-  return tuple(_ROUTERS)
+def routers(*, before_runtime: bool = False) -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
+  """(module, prefix, tags, attr) in registration order, for the routers registered with this before_runtime."""
+  return tuple(router[:4] for router in _ROUTERS if router[4] == before_runtime)
 
 
 def commands() -> dict[str, str]:

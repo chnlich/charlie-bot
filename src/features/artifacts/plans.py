@@ -57,7 +57,7 @@ class _DerivedState(enum.IntEnum):
 
 
 # The derived-state spelling the sidebar probe matches (has_pending_plan_approval_sync in
-# src.runtime.sessions); this module owns the state vocabulary, so the probe imports it here.
+# src.features.artifacts.sidebar); this module owns the state vocabulary, so the probe imports it here.
 AWAITING_APPROVAL_STATE = "awaiting approval"
 
 _DERIVED_STATE_STR: dict[_DerivedState, str] = {

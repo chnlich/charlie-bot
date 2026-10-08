@@ -1,5 +1,5 @@
 from src.infra import config_registry
-from src.runtime.hooks import wiring
+from src.runtime.hooks import sidebar_contributions, wiring
 
 
 def register() -> None:
@@ -19,3 +19,4 @@ def register() -> None:
           "public_base_url": "publish.public_base_url",
       },
   )
+  sidebar_contributions.register_sidebar_contribution("artifacts", "src.features.artifacts.sidebar:contribution")

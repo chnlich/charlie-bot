@@ -397,7 +397,6 @@ class _SessionsListMemos:
 
 
 _workspace_list_memos = _SessionsListMemos()
-_chat_threads_list_memos = _SessionsListMemos()
 
 
 async def _active_listing_corpus(session_mgr: SessionManager) -> tuple[list[SessionMetadata], dict[str, dict]]:
@@ -515,41 +514,17 @@ async def list_sessions(
 ) -> Response:
   """List active sessions newest first, each legacy row followed by its worker-leaf rows.
 
-  Sequence-subtree rows and the chat-thread subtree ride no listing: a firing leaf
-  whose parent chain reaches a cron session stays out, and so does every
-  Slack/Discord thread session with the descendants its ``task_parent_id``
-  chains reach (the sidebar's Threads view lists that subtree through
-  /chat-threads), so a parentless leaf never flattens into a top-level row.
+  Sequence-subtree rows and every sidebar view's subtree ride no listing: a
+  firing leaf whose parent chain reaches a sequence-owned root stays out, and
+  each view's roots and descendants ride that view's own route. A parentless
+  leaf never flattens into a top-level row.
   Every row's controller fields come from the one listing join.
   """
   rows, derived = await _active_listing_corpus(session_mgr)
   sequence_subtree = await session_mgr.sequence_subtree_roots()
-  chat_threads = await session_mgr.chat_thread_subtree_roots()
-  rows = [row for row in rows if row.id not in sequence_subtree and row.id not in chat_threads]
+  views = await session_mgr.view_subtree_roots()
+  rows = [row for row in rows if row.id not in sequence_subtree and not any(row.id in view for view in views.values())]
   return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _workspace_list_memos)
-
-
-@router.get("/chat-threads")
-async def list_chat_threads(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-) -> Response:
-  """List the active chat-thread subtree newest first: the sidebar Threads view's rows.
-
-  The complement of the Workspace root list over the same active corpus: the
-  only rows kept are the Slack/Discord thread sessions — a session carrying a
-  chat-thread origin — and every descendant their
-  ``task_parent_id`` chains reach, the projected legacy worker-thread leaves
-  included. Row shape, projection, controller listing fields, and render are the shared
-  helper's; the render memos are this route's own, so the two lists never
-  evict each other.
-  """
-  rows, derived = await _active_listing_corpus(session_mgr)
-  chat_threads = await session_mgr.chat_thread_subtree_roots()
-  rows = [row for row in rows if row.id in chat_threads]
-  return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _chat_threads_list_memos)
 
 
 @router.post("/", response_model=SessionMetadata)

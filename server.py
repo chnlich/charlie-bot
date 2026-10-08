@@ -383,6 +383,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   log.info("charliebot_shutdown", shutdown_ms=round((time.monotonic() - shutdown_started) * 1000), **step_ms)
 
 
+def _include_registered_routers(*, before_runtime: bool) -> None:
+  for router_module, router_prefix, router_tags, router_attr in wiring.routers(before_runtime=before_runtime):
+    app.include_router(
+        getattr(importlib.import_module(router_module), router_attr),
+        prefix=router_prefix,
+        tags=list(router_tags),
+    )
+
+
 # The app assembly is the import's second bulk build: FastAPI's route
 # registration analyzes every endpoint's annotations and builds the pydantic
 # response models — the same gen-2-heavy allocation shape as the import chain.
@@ -402,6 +411,9 @@ with gc_off(collect=False):
   # Added last, so starlette's insert(0)/reversed build order makes it the
   # outermost user middleware: AuthMiddleware's 401 responses are logged too.
   app.add_middleware(_RequestLogMiddleware)
+
+  # Registered routers whose fixed paths must answer before the runtime's parameterised routes
+  _include_registered_routers(before_runtime=True)
 
   # Page router (GET / — Jinja2 rendered)
   app.include_router(pages.router, tags=["pages"])
@@ -614,12 +626,7 @@ async def _replay_aggregated_catchup(
 # routes against pydantic models. The file server's catch-all routes register last, so
 # every other route answers first.
 with gc_off(collect=False):
-  for router_module, router_prefix, router_tags, router_attr in wiring.routers():
-    app.include_router(
-        getattr(importlib.import_module(router_module), router_attr),
-        prefix=router_prefix,
-        tags=list(router_tags),
-    )
+  _include_registered_routers(before_runtime=False)
 
 # ---------------------------------------------------------------------------
 # Static files (CSS, JS, images — NOT the SPA)

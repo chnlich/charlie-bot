@@ -314,7 +314,7 @@ def _threads_tree(tmp_path: Path) -> tuple[Path, Path]:
 def _probe_spec(threads_dir: Path, tmp_path: Path) -> tuple[str, Path, Path, Path]:
   """The four-field spec shape selective_probe_sidebar_state accepts per session."""
   session_dir = tmp_path / "sessions" / "sid"
-  return ("sid", threads_dir, session_dir / "triggers", session_dir / "plans.json")
+  return ("sid", threads_dir, session_dir / "triggers", session_dir)
 
 
 def _thread_entry(signature: tuple, thread_dir_name: str) -> tuple:

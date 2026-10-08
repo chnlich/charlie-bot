@@ -20,6 +20,7 @@ import pytest
 
 from src.features.discord.metadata import DiscordOrigin
 from src.features.slack.metadata import SlackOrigin
+from src.features.chat_threads import api as chat_threads_api
 from src.infra import config, models
 from src.runtime import sessions, task_sessions, threads
 from src.runtime.api import sessions as sessions_api
@@ -102,7 +103,7 @@ def _thread_ids(fx: Fixture) -> set[str]:
 @pytest.mark.asyncio
 async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  chat = await fx.session_mgr.chat_thread_subtree_roots()
+  chat = (await fx.session_mgr.view_subtree_roots())["threads"]
   # Both origin fields root a subtree, and the root itself is a member.
   assert chat[fx.thread.id] == fx.thread.id
   assert chat[fx.slack_thread.id] == fx.slack_thread.id
@@ -171,7 +172,7 @@ async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: path
   # The slots themselves are per-route: dropping one route's whole-body slot
   # forces only that route's re-render, and the bytes come back identical.
   sessions_api._workspace_list_memos.whole_body = None
-  sessions_api._chat_threads_list_memos.whole_body = None
+  chat_threads_api._chat_threads_list_memos.whole_body = None
   assert client.get("/api/sessions/").content == workspace.content
   assert client.get("/api/sessions/chat-threads").content == threads_resp.content
 

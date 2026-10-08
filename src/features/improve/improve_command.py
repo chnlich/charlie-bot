@@ -289,9 +289,9 @@ async def _iter_report_validity(
   Returns (valid, invalid_reason), invalid_reason in
   {missing_report, malformed_report, no_commit_no_verdict} or None when valid.
   """
-  if not await asyncio.to_thread(report_path.exists):
+  if not report_path.exists():
     return False, "missing_report"
-  text = await asyncio.to_thread(report_path.read_text)
+  text = report_path.read_text()
   if not re.search(rf"^## Iter {iteration}\b", text, flags=re.MULTILINE):
     return False, "malformed_report"
   if commits_added > 0 or _commits_section_first_none(text):

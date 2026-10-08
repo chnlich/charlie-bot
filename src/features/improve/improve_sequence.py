@@ -189,9 +189,8 @@ async def _iteration_blocker(
   events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
   if not events_path.is_file():
     return None, f"Iteration {iteration} {outcome} (no events log)."
-  blocker_reason, summary = await asyncio.to_thread(
-      improve_command._failed_iteration_judgments, improve_command._newest_first_events(events_path), iteration,
-      outcome)
+  blocker_reason, summary = improve_command._failed_iteration_judgments(
+      improve_command._newest_first_events(events_path), iteration, outcome)
   return blocker_reason, summary
 
 
@@ -481,19 +480,18 @@ async def _judge_iteration(
   report_path = loop_dir / f'iter_{iteration:04d}.md'
   tip_after, commits_added, diffstat = await improve_command._worktree_commit_delta(wt_path, tip_before)
   del diffstat
-  if not await asyncio.to_thread(report_path.exists):
+  if not report_path.exists():
     # The worker wrote no report: the verdict above is final (the fallback
     # below never flips it). Fall back to the worker's own closing words,
     # as the legacy controller did, and leave the same marked fallback file.
     fallback = f"Iteration {iteration} finished without a report file."
     events_path = tree.runs.run_dir(child_id, run_id) / RUN_EVENTS_NAME
     if events_path.is_file():
-      text = await asyncio.to_thread(
-          improve_command._extract_iteration_summary, improve_command._newest_first_events(events_path), iteration,
-          "finished")
+      text = improve_command._extract_iteration_summary(
+          improve_command._newest_first_events(events_path), iteration, "finished")
       if text:
         fallback = text
-    await asyncio.to_thread(report_path.write_text, improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
+    report_path.write_text(improve_command.RUNNER_FALLBACK_REPORT_MARKER + fallback)
     return IterationJudgment(
         summary=fallback,
         report_valid=False,
@@ -503,7 +501,7 @@ async def _judge_iteration(
         report_path=report_path)
   report_valid, invalid_reason = await improve_command._iter_report_validity(report_path, iteration, commits_added)
   if report_valid:
-    summary = (await asyncio.to_thread(report_path.read_text))[:500]
+    summary = report_path.read_text()[:500]
   else:
     summary = improve_command._invalid_iteration_summary(
         iteration, invalid_reason, commits_added, tip_before, tip_after, report_path)

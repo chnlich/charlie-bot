@@ -57,7 +57,7 @@ from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
+from src.runtime.session_successor import SessionSuccessor
 from src.runtime.triggers import ArchivedSessionError, TriggerManager
 
 logger = LazyStructlogLogger()
@@ -682,7 +682,8 @@ def thread_link(platform: ThreadPlatform, summon: dict | None, block: dict) -> s
 
 async def audit_round(
     adapter: ThreadAdapter, session_id: str, events: list[dict], target: dict, input_event_id: str,
-    cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+    cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle, session_events: SessionEvents,
+    successor: SessionSuccessor) -> bool:
   """Act on one finished round whose input carried a summon block; True when it acted.
 
   Reads the log for the round's summon: a reply answering it ends the audit. A
@@ -709,12 +710,14 @@ async def audit_round(
     nudge = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
     nudge[platform.name] = {key: target[key] for key in platform.block_keys if key in target}
     nudge[platform.name]["nudge_of"] = summon_id
-    await session_mgr.events.persist_and_broadcast(session_id, nudge)
+    await session_events.persist_and_broadcast(session_id, nudge)
     create_logged_task(
         trigger_master(
             session_id,
             content,
-            session_mgr,
+            store,
+            successor,
+            lifecycle,
             input_id=nudge["id"],
             event_type=ET.AGENT_MESSAGE,
             actor="agent",
@@ -735,7 +738,7 @@ async def audit_round(
   ok = await post_with_retry(adapter, target, _NO_REPLY_NOTICE, session_id=session_id)
   if not ok:
     return False  # the platform's post_gave_up log is the only trace; no marker, so the boot audit retries
-  await session_mgr.events.persist_and_broadcast(
+  await session_events.persist_and_broadcast(
       session_id, {
           "type": ET.ASSISTANT_ERROR,
           "content": _NO_REPLY_CONTENT.format(platform=platform.display_name),
@@ -749,7 +752,8 @@ async def audit_round(
 
 
 async def deliver_done(
-    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+    adapter: ThreadAdapter, session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore,
+    lifecycle: SessionLifecycle, session_events: SessionEvents, successor: SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   Called as a fire-and-forget task from ``persist_and_broadcast`` for every
@@ -759,20 +763,21 @@ async def deliver_done(
   summon block, so both leave the thread alone.
   """
   platform = adapter.platform
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await store.get_session(session_id)
   if meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     return False
   input_event_ids = master_done_input_event_ids(done)
   if not input_event_ids:
     return False
-  events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, session_id)
+  events = await asyncio.to_thread(session_events.load_chat_events_sync, session_id)
   # The round-end audit targets the same input the reply binding does: the
   # newest thread-bearing one of the batch.
   bound = newest_thread_input(platform, events, input_event_ids)
   if bound is None:
     return False
   input_event_id, target = bound
-  return await audit_round(adapter, session_id, events, target, input_event_id, cfg, session_mgr)
+  return await audit_round(
+      adapter, session_id, events, target, input_event_id, cfg, store, lifecycle, session_events, successor)
 
 
 _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处理。需要的话请重新 @ 我一次。"
@@ -780,7 +785,9 @@ _LOST_SUMMON_NOTICE = "上一次召唤在服务重启时丢失了，没有被处
 _LOST_SUMMON_CONTENT = "这条 {platform} 召唤在服务重启时还排在队列里，没有任何轮次回答它；已在对应线程里说明。"
 
 
-async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+async def backfill_lost_summons(
+    adapter: ThreadAdapter, cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore,
+    lifecycle: SessionLifecycle, session_events: SessionEvents, successor: SessionSuccessor) -> int:
   """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
@@ -795,12 +802,12 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
   platform = adapter.platform
   from src.runtime import master_cc_queue  # lazy: mirrors the spawner import's cycle guard
 
-  sessions = await session_mgr.listing.list_sessions()  # archived included: a thread can be summoned again
+  sessions = await listing.list_sessions()  # archived included: a thread can be summoned again
   reported = 0
   for meta in sessions:
     if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
       continue
-    events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, meta.id)
+    events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
     from src.runtime import master_cc_state
     lost = lost_summons(
         platform,
@@ -810,7 +817,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,
       # while posting first would re-post it on every boot until the marker landed.
-      await session_mgr.events.persist_and_broadcast(
+      await session_events.persist_and_broadcast(
           meta.id, {
               "type": ET.ASSISTANT_ERROR,
               "content": _LOST_SUMMON_CONTENT.format(platform=platform.display_name),
@@ -828,7 +835,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
           **adapter.log_fields(block),
           input_event_id=ev["id"])
     if lost:
-      events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, meta.id)
+      events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
 
     dones = [ev for ev in events if ev.get("type") == ET.MASTER_DONE and master_done_input_event_ids(ev)]
     for done in dones:
@@ -836,10 +843,11 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
       if bound is None:
         continue
       done_input_id, target = bound
-      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, session_mgr):
+      if await audit_round(adapter, meta.id, events, target, done_input_id, cfg, store, lifecycle, session_events,
+                           successor):
         reported += 1
         # The action appended an event the next done's predicates must see.
-        events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, meta.id)
+        events = await asyncio.to_thread(session_events.load_chat_events_sync, meta.id)
   return reported
 
 
@@ -980,7 +988,10 @@ def _local_time() -> str:
 async def accept_summon(
     adapter: ThreadAdapter,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
+    successor: SessionSuccessor,
     trigger_mgr: TriggerManager,
     *,
     session_id: str,
@@ -1006,7 +1017,7 @@ async def accept_summon(
   platform = adapter.platform
   fields = {**adapter.log_fields(block), f"{platform.name}_user": user}
 
-  session_meta = await session_mgr.store.get_session(session_id)
+  session_meta = await store.get_session(session_id)
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
     await task_execution.task_manager().create_task(
@@ -1023,22 +1034,22 @@ async def accept_summon(
     )
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == SessionStatus.ARCHIVED:
-    await session_mgr.lifecycle.unarchive_session(session_id)
+    await lifecycle.unarchive_session(session_id)
     logger.info(f"{platform.name}_mention_session_unarchived", **fields, session=session_id)
     # The unarchive write alone notifies nobody: an open sidebar refetches its
     # current filter only on a task-tree notification, so the revived session
     # reappears on Threads (or vanishes from Archive) without a manual refresh.
-    await session_mgr.events.broadcast_task_tree_changed(session_id, "session_unarchived")
+    await session_events.broadcast_task_tree_changed(session_id, "session_unarchived")
   else:
     logger.info(f"{platform.name}_mention_session_existing", **fields, session=session_id)
 
-  await consume_mention(platform, session_mgr.store, trigger_mgr, session_id, block[platform.mention_key])
+  await consume_mention(platform, store, trigger_mgr, session_id, block[platform.mention_key])
 
-  await ensure_group(platform, session_mgr.store, session_mgr.lifecycle, session_id, label)
+  await ensure_group(platform, store, lifecycle, session_id, label)
 
   evt = build_agent_message_event(content, from_session=session_id, from_session_name=platform.display_name)
   evt[platform.name] = block
-  await session_mgr.events.persist_and_broadcast(session_id, evt)
+  await session_events.persist_and_broadcast(session_id, evt)
   round_event_id = evt.get("id")
   logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
 
@@ -1046,7 +1057,9 @@ async def accept_summon(
       trigger_master(
           session_id,
           content,
-          session_mgr,
+          store,
+          successor,
+          lifecycle,
           input_id=round_event_id,
           event_type=ET.AGENT_MESSAGE,
           actor="agent",

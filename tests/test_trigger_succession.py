@@ -35,7 +35,13 @@ async def test_trigger_master_dispatches_the_input_a_task_node_already_holds(
   await mgr.events.persist_and_broadcast(root.id, persisted)
 
   await master_trigger.trigger_master(
-      root.id, "summon prompt", mgr, event_type=ET.AGENT_MESSAGE, input_id=persisted["id"])
+      root.id,
+      "summon prompt",
+      mgr.store,
+      mgr.successor,
+      mgr.lifecycle,
+      event_type=ET.AGENT_MESSAGE,
+      input_id=persisted["id"])
 
   assert launches == [(root.id, ["summon prompt"])]  # one input: the wake adds no second copy
   assert [e["id"] for e in tree.dispatch.pending_inputs(root.id)] == [persisted["id"]]

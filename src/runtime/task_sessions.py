@@ -359,6 +359,7 @@ class TaskTreeManager:
     self._lifecycle = session_mgr.lifecycle
     self._anchors = session_mgr.anchors
     self.session_events = session_mgr.events
+    self.session_successor = session_mgr.successor
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
     self.events = control_sink.ControlEventSink(self.session_events)
@@ -1127,7 +1128,37 @@ class TaskTreeManager:
     """
     if task is not None and task.goal.strip():
       return default_task_name(task, profile)
-    return await self._sessions._next_session_name()
+    return await self._next_session_name()
+
+  async def _next_session_name(self) -> str:
+    """Generate 'Session 0', 'Session 1', etc. using a persistent counter file.
+
+    Reads the next number from sessions_dir/.counter (O(1) instead of listing
+    all sessions). Falls back to counting directories when the counter is
+    missing, unreadable, or unparsable.
+    """
+    counter_path = self._cfg.sessions_dir / ".counter"
+
+    def _read_and_increment() -> int:
+      self._cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
+      # FileNotFoundError is an OSError, so a missing counter takes the same
+      # count-dirs fallback as an unreadable or unparsable one; an exists()
+      # pre-check would only open a check-then-read race.
+      try:
+        n = int(counter_path.read_text().strip())
+      except (ValueError, OSError):
+        n = self._count_session_dirs()
+      counter_path.write_text(str(n + 1))
+      return n
+
+    n = await asyncio.to_thread(_read_and_increment)
+    return f"Session {n}"
+
+  def _count_session_dirs(self) -> int:
+    """Count existing session directories for backward-compat counter init."""
+    if not self._cfg.sessions_dir.exists():
+      return 0
+    return sum(1 for d in self._cfg.sessions_dir.iterdir() if d.is_dir())
 
   async def _authorize_agent_creation(
       self,

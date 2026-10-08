@@ -19,6 +19,7 @@ from conftest import (
     THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET,
     make_home_config,
     make_task_spawner,
+    thread_blocks,
 )
 
 from src.features.chat_threads.thread_entry import (
@@ -408,6 +409,7 @@ class FakeSessions:
     self.events = self
     self.listing = self
     self.lifecycle = self
+    self.successor = self
     self.chat_events: list[dict] = []
     self.persisted: list[dict] = []
     self.created: list = []
@@ -502,7 +504,7 @@ async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) ->
       patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
   ):
-    acted = await deliver_done(adapter, "s1", done, cfg, sessions)
+    acted = await deliver_done(adapter, "s1", done, cfg, *thread_blocks(sessions))
     await asyncio.gather(*tasks)
 
   assert acted is True
@@ -616,7 +618,7 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
     sid = await accept_summon(
         adapter,
         None,
-        sessions,
+        *thread_blocks(sessions),
         FakeTriggers(),
         session_id="s1",
         label="Fakechat #c1",

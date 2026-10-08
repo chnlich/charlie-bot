@@ -245,8 +245,16 @@ async def test_trigger_master_forwards_input_id_to_the_task_wake(
   meta = await create_root_session(session_mgr, CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:
-    await master_trigger.trigger_master(meta.id, "s", session_mgr, event_type=ET.AGENT_MESSAGE, input_id="evt-1")
-    await master_trigger.trigger_master(meta.id, "s", session_mgr, event_type=ET.CHILD_REPORT)
+    await master_trigger.trigger_master(
+        meta.id,
+        "s",
+        session_mgr.store,
+        session_mgr.successor,
+        session_mgr.lifecycle,
+        event_type=ET.AGENT_MESSAGE,
+        input_id="evt-1")
+    await master_trigger.trigger_master(
+        meta.id, "s", session_mgr.store, session_mgr.successor, session_mgr.lifecycle, event_type=ET.CHILD_REPORT)
 
   assert wake_mock.await_count == 2
   assert wake_mock.await_args_list[0].kwargs["input_id"] == "evt-1"

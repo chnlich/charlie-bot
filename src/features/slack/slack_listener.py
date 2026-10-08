@@ -67,6 +67,7 @@ from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
+from src.runtime.session_successor import SessionSuccessor
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
@@ -301,7 +302,10 @@ async def handle_app_mention(
   return await thread_entry.accept_summon(
       SlackThreadAdapter(client),
       cfg,
-      session_mgr,
+      session_mgr.store,
+      session_mgr.lifecycle,
+      session_mgr.events,
+      session_mgr.successor,
       trigger_mgr,
       session_id=sid,
       label=label,
@@ -520,13 +524,16 @@ async def post_reply(
 # ---------------------------------------------------------------------------
 
 
-async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+async def deliver_done(
+    session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle,
+    session_events: SessionEvents, successor: SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
   the Slack adapter; the audit gate, the nudge, and the notice live there.
   """
-  return await thread_entry.deliver_done(SlackThreadAdapter(), session_id, done, cfg, session_mgr)
+  return await thread_entry.deliver_done(
+      SlackThreadAdapter(), session_id, done, cfg, store, lifecycle, session_events, successor)
 
 
 # ---------------------------------------------------------------------------
@@ -534,14 +541,17 @@ async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, sessi
 # ---------------------------------------------------------------------------
 
 
-async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+async def backfill_lost_summons(
+    cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore, lifecycle: SessionLifecycle,
+    session_events: SessionEvents, successor: SessionSuccessor) -> int:
   """Boot pass over every Slack session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
   (``thread_entry.backfill_lost_summons``) on the Slack adapter; the
   lost-summon report and the per-round audit live there.
   """
-  return await thread_entry.backfill_lost_summons(SlackThreadAdapter(), cfg, session_mgr)
+  return await thread_entry.backfill_lost_summons(
+      SlackThreadAdapter(), cfg, listing, store, lifecycle, session_events, successor)
 
 
 async def _expect_hello(ws: ClientConnection) -> None:

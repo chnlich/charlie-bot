@@ -20,6 +20,7 @@ from conftest import (
     mention_seam,
     shut_down_trigger_tasks,
     stub_credentials,
+    thread_blocks,
 )
 
 from src.features.chat_threads.thread_entry import ThreadReplyError
@@ -191,7 +192,8 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
   tasks: list[asyncio.Task] = []
 
   with mention_seam(tasks) as trigger:
-    sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        _message(), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   assert sid == summon_session_id(_GUILD, _THREAD)
@@ -251,7 +253,8 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_cit
   tasks: list[asyncio.Task] = []
 
   with mention_seam(tasks):
-    sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        _message(), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   events = session_mgr.events.load_chat_events_sync(sid)
@@ -297,7 +300,7 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
 
   with mention_seam(tasks):
     sid = await handle_message_create(
-        _message(channel_id=_THREAD), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+        _message(channel_id=_THREAD), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   assert sid == summon_session_id(_GUILD, _THREAD)
@@ -331,12 +334,15 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: 
   tasks: list[asyncio.Task] = []
 
   with mention_seam(tasks):
-    first = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    first = await handle_message_create(
+        _message(), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
-    second = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    second = await handle_message_create(
+        _message(), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
     await session_mgr.lifecycle.archive_session(first)
-    third = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    third = await handle_message_create(
+        _message(), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
   assert first == second == third
@@ -357,13 +363,18 @@ async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> 
 
   with mention_seam():
     disallowed = await handle_message_create(
-        _message(author={"id": _OTHER}), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+        _message(author={"id": _OTHER}), cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
     # A bot-flagged author drops even when its id is on the allow-list.
     bot = await handle_message_create(
         _message(author={
             "id": _USER,
             "bot": True
-        }), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+        }),
+        cfg,
+        *thread_blocks(session_mgr),
+        client,
+        trigger_mgr,
+        bot_user_id=_BOT_USER)
 
   assert disallowed is None and bot is None
   assert not client.calls
@@ -387,7 +398,8 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
   }
 
   with mention_seam():
-    sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        message, cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
 
   assert sid is None
   assert client.posts == [{"channel_id": _DM_CHANNEL, "content": _DM_NOTICE}]
@@ -413,7 +425,8 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
   message = _message(id=message_id, channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
-    sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        message, cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
 
     armed = [
         t for t in await trigger_mgr.list_triggers(meta.id)
@@ -441,7 +454,8 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
   message = _message(id="1000000000000000100", channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:
-    sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
+    sid = await handle_message_create(
+        message, cfg, *thread_blocks(session_mgr), client, trigger_mgr, bot_user_id=_BOT_USER)
 
     armed = [
         t for t in await trigger_mgr.list_triggers(meta.id)
@@ -600,5 +614,9 @@ async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: Pat
   meta = await create_root_session(session_mgr, CreateSessionRequest(name="plain"))
   events_before = session_mgr.events.load_chat_events_sync(meta.id)
 
-  assert await deliver_done(meta.id, {"type": ET.MASTER_DONE, "input_event_id": "e1"}, cfg, session_mgr) is False
+  assert await deliver_done(
+      meta.id, {
+          "type": ET.MASTER_DONE,
+          "input_event_id": "e1"
+      }, cfg, *thread_blocks(session_mgr)) is False
   assert session_mgr.events.load_chat_events_sync(meta.id) == events_before

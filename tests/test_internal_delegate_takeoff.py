@@ -37,6 +37,7 @@ class _LastSessionManager:
     self.lifecycle = self
     self.fork = self
     self.anchors = self
+    self.successor = self
 
   async def get_session(self, session_id: str):
     return None

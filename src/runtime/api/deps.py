@@ -14,6 +14,7 @@ from src.runtime import (
     session_search,
     session_sidebar,
     session_store,
+    session_successor,
     sessions,
     task_execution,
     task_sessions,
@@ -51,6 +52,10 @@ async def get_session_listing() -> session_listing.SessionListing:
 
 async def get_session_search() -> session_search.SessionSearch:
   return session_search.search()
+
+
+async def get_session_successor() -> session_successor.SessionSuccessor:
+  return session_successor.successor()
 
 
 async def get_session_sidebar() -> session_sidebar.SessionSidebar:

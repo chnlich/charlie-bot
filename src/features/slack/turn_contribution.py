@@ -29,7 +29,8 @@ class SlackTurnContribution(turn_contributions.TurnContribution):
     # lazy: slack_listener imports SessionManager from src.runtime.sessions at top level
     from src.features.slack import slack_listener
 
-    await slack_listener.deliver_done(meta.id, done_event, cfg, sessions)
+    await slack_listener.deliver_done(
+        meta.id, done_event, cfg, sessions.store, sessions.lifecycle, sessions.events, sessions.successor)
 
   def event_renderers(self) -> dict[str, Callable[[dict], dict]]:
     return {SLACK_REPLY: _slack_reply_message}

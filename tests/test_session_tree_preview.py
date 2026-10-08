@@ -134,6 +134,7 @@ def _clear_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
       session_search,
       session_sidebar,
       session_store,
+      session_successor,
       sessions,
       task_execution,
       triggers,
@@ -147,6 +148,7 @@ def _clear_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(session_lifecycle, "_lifecycle", None)
   monkeypatch.setattr(session_fork, "_fork", None)
   monkeypatch.setattr(session_anchors, "_anchors", None)
+  monkeypatch.setattr(session_successor, "_successor", None)
   monkeypatch.setattr(sessions, "_session_manager", None)
   monkeypatch.setattr(triggers, "_trigger_manager", None)
   monkeypatch.setattr(task_execution, "_task_manager", None)
@@ -167,6 +169,7 @@ def test_assert_no_bound_singletons_passes_when_none_is_bound(monkeypatch: pytes
         ("src.runtime.session_lifecycle", "_lifecycle"),
         ("src.runtime.session_fork", "_fork"),
         ("src.runtime.session_anchors", "_anchors"),
+        ("src.runtime.session_successor", "_successor"),
         ("src.runtime.sessions", "_session_manager"),
         ("src.runtime.triggers", "_trigger_manager"),
         ("src.runtime.task_execution", "_task_manager"),

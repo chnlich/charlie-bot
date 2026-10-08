@@ -30,7 +30,6 @@ from conftest import (
     patch_instructions_content,
 )
 
-from src.features.chat_threads import thread_sessions
 from src.features.discord.metadata import DiscordOrigin
 from src.features.latex import latex
 from src.features.latex.turn_contribution import LatexTurnContribution

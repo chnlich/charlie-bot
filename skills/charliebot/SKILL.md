@@ -293,7 +293,7 @@ The fired message is prefixed with the reason; per-target detail is in the suffi
 | Backlog state machine | `features/backlog/backlog_loop.py` |
 | Scheduler | `features/cron/scheduler.py` |
 | Delayed triggers | `runtime/triggers.py` |
-| Sessions | `runtime/sessions.py` |
+| Sessions | `runtime/session_events.py` and the other `runtime/session_*.py` blocks |
 | Config | `infra/config.py` |
 
 **A one-shot call dispatches to the per-backend CLI-native overrides.** `backend.one_shot_text` resolves to the claude/codex/opencode overrides, which run tool-less — claude's override even disallows Read — so any one-shot that needs file or tool access must bind the base `AgentBackend.one_shot_text` explicitly for every backend, as `src/features/explain/explain.py` does (the `base_one_shot_text` binding).

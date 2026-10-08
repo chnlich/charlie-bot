@@ -31,11 +31,12 @@ from conftest import (
     make_cron_sessions_client,
     make_legacy_cron_session,
     patch_instructions_content,
+    registered_cron_handler,
     write_nightly_prompt,
     write_nightly_task,
 )
 
-from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig, ScheduledTaskConfig
 from src.infra.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
@@ -195,8 +196,7 @@ async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -
   assert node is not None
   # Rewind the anchor onto a past occurrence so the next tick is due.
   await tree.record_scheduled_fire(node_id, last_scheduled_run="2026-01-01T03:00:00+00:00")
-  from unittest.mock import patch
-  with patch.dict(TASK_HANDLERS, {"probe": AsyncMock(return_value="swept 42 bytes")}):
+  with registered_cron_handler("probe", AsyncMock(return_value="swept 42 bytes")):
     await scheduler._tick()
 
   fresh = await tree.load_meta(node_id)

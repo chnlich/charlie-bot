@@ -18,7 +18,7 @@ import pytest
 import yaml
 from conftest import OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
 
-from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 
@@ -98,7 +98,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
 
   handler = mock.AsyncMock(return_value="done")
   client = _cron_app(cfg, session_mgr, tree, scheduler)
-  with mock.patch.dict(TASK_HANDLERS, {"probe": handler}):
+  with conftest.registered_cron_handler("probe", handler):
     resp = client.post("/api/cron/tasks/nightly/run")
   assert resp.status_code == 202
   assert resp.json() == {
@@ -177,7 +177,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
 
   client = TestClient(app)
   handler = mock.AsyncMock(return_value="done")
-  with mock.patch.dict(TASK_HANDLERS, {"untouched": handler}):
+  with conftest.registered_cron_handler("untouched", handler):
     sent = client.post(f"/api/chat/{meta.id}/message", json={"content": "/run backup"})
   assert sent.status_code == 202
 

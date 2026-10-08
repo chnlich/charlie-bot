@@ -42,6 +42,7 @@ whenever the one-time backfill has run, and prices the table directly before tha
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import sqlite3
 from collections.abc import Iterator, Sequence
@@ -51,7 +52,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
+from src.infra import log_once
 from src.infra.timeouts import USAGE_LEDGER_LOCK_WAIT_SECONDS
+
+log = log_once.LazyStructlogLogger()
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS usage (
@@ -1136,3 +1140,23 @@ class UsageLedger:
         rewrite_epoch=memo.rewrite_epoch)
     self._inserted_ids.clear()
     return rows, native_starts
+
+
+async def run_scheduled_usage_ledger() -> str:
+  """Built-in cron handler: capture this host's token usage into the usage ledger."""
+  # usage_ledger (sqlite3, token_tally) rides the handler like croniter: the
+  # registration holds this module's path and the scheduler imports it when the
+  # handler fires, so the M99 server import floor carries no ledger stack for a
+  # handler that may never fire. token_tally imports this module, so it loads here.
+  from src.features.usage.token_tally import capture_local
+
+  loop = asyncio.get_running_loop()
+
+  def capture() -> dict[str, int]:
+    with UsageLedger(default_ledger_path()) as ledger:
+      return capture_local(ledger)
+
+  written = await loop.run_in_executor(None, capture)
+  summary = "; ".join(f"{source} {count}" for source, count in written.items())
+  log.info('usage_ledger_handler_done', sources=written)
+  return summary

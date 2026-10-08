@@ -34,6 +34,8 @@ real run first captures this host's token usage into the usage ledger and aborts
 without deleting anything if that capture raises; a dry run never captures.
 """
 
+import asyncio
+import functools
 import os
 import re
 import shutil
@@ -47,7 +49,7 @@ from pathlib import Path
 
 from src.backends.codex.codex_usage import default_codex_home
 from src.features.usage.token_tally import DEFAULT_OPENCODE_DB
-from src.infra.config import CharlieBotConfig, claude_config_dir, default_claude_dir
+from src.infra.config import CharlieBotConfig, claude_config_dir, default_claude_dir, get_config
 from src.infra.constants import MIN_IDLE_DAYS
 from src.infra.json_utils import load_json_meta
 from src.infra.log_once import LazyStructlogLogger
@@ -1001,6 +1003,19 @@ def format_sweep_line(result: SweepResult) -> str:
       for category in result.categories
   ]
   return f"total {_gib(result.total_bytes):.2f} GiB ({'; '.join(parts)})"
+
+
+async def run_scheduled_cool_storage() -> str:
+  """Built-in cron handler: reclaim cold sessions' readerless bytes (real run, no dry run)."""
+  # storage_cool (sqlite3, token_tally) rides the handler like croniter: the
+  # registration holds this module's path and the scheduler imports it when the
+  # handler fires, so the M99 server import floor carries no cold-sweep stack for
+  # a handler that may never fire.
+  loop = asyncio.get_running_loop()
+  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=get_config()))
+  summary = format_sweep_line(result)
+  log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
+  return summary
 
 
 def format_sweep_table(result: SweepResult) -> str:

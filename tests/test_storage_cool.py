@@ -382,12 +382,12 @@ def test_usage_ledger_handler_summarizes_and_propagates(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The scheduler's daily capture returns one line per source and never swallows
   a capture failure."""
-  from src.features.cron import scheduler
+  from src.features.usage import usage_ledger
 
   monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: tmp_path / "ledger.sqlite3")
   monkeypatch.setattr("src.features.usage.token_tally.capture_local", lambda ledger: {"claude": 3, "opencode": 7})
 
-  summary = asyncio.run(scheduler.TASK_HANDLERS["usage_ledger"]())
+  summary = asyncio.run(usage_ledger.run_scheduled_usage_ledger())
 
   assert summary == "claude 3; opencode 7"
   assert (tmp_path / "ledger.sqlite3").exists()
@@ -397,7 +397,7 @@ def test_usage_ledger_handler_summarizes_and_propagates(
 
   monkeypatch.setattr("src.features.usage.token_tally.capture_local", failing)
   with pytest.raises(RuntimeError, match="ledger capture failed"):
-    asyncio.run(scheduler.TASK_HANDLERS["usage_ledger"]())
+    asyncio.run(usage_ledger.run_scheduled_usage_ledger())
 
 
 def test_run_reference_to_outside_path_is_ignored_not_created(cool_env: config.CharlieBotConfig) -> None:

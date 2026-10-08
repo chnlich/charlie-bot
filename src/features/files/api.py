@@ -96,37 +96,6 @@ def _format_mtime(epoch: float) -> str:
   return f"{y}-{m:02d}-{d:02d} {hh:02d}:{rem // 60:02d}"
 
 
-# Bound on _listing_memo: one browser tab lists one directory at a time, so the
-# cap covers every listing open across tabs, and one slot holds the ~240 KB
-# worst listing on this host's corpus.
-_LISTING_MEMO_LIMIT = 8
-
-# Memo key for one directory listing: the resolved directory, the URL prefix the
-# links embed, and the walk's own entry snapshot. The served HTML is a pure
-# function of that walked state, so equal walked state proves the stored page
-# equals what this walk would build — no invalidation rule is needed, and the
-# key leans on no rename-atomicity assumption the sibling (mtime_ns, size) memos
-# require. The walk itself re-runs on every request (the stat per entry is the
-# only way to read mtimes); the memo removes the sort and the per-entry row
-# build from a repeat view.
-_ListingKey = tuple[str, str, tuple[tuple[bool, str, int, float], ...]]
-
-_listing_memo: memo.BoundedMemo[_ListingKey, str] = memo.BoundedMemo(_LISTING_MEMO_LIMIT)
-
-# The gzip form of the same page, keyed and bounded alike. It lives in its own
-# memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
-_listing_gzip_memo: memo.BoundedMemo[_ListingKey, bytes] = memo.BoundedMemo(_LISTING_MEMO_LIMIT)
-
-# A row's bytes are a pure function of its key: the entry's walked tuple plus
-# the URL prefix the href embeds — the same walked-state ground the page memo's
-# key stands on. A rebuild after a corpus move re-renders only the entries whose
-# tuple moved (a metadata rename into a session dir moves exactly that dir's
-# mtime); the cap holds several listings' working sets and evicts the stale
-# mtimes such renames leave behind LRU-first.
-_ROW_MEMO_LIMIT = 8192
-_RowKey = tuple[str, bool, str, int, float]
-_row_memo: memo.BoundedMemo[_RowKey, str] = memo.BoundedMemo(_ROW_MEMO_LIMIT)
-
 # A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
 # urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
 # matching entry renders by interpolation and only the rest pay the per-entry
@@ -156,20 +125,17 @@ _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 </html>"""
 
 
-def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> tuple[str | None, _ListingKey | None]:
-  """The listing page and its memo key, or (None, None) when *dir_path* is not a directory.
+def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> str | None:
+  """The listing page, or None when *dir_path* is not a directory.
 
-  The key is the walked state the page is a pure function of; the route's gzip
-  arm memoizes the page's compressed form under it (``_listing_page_gzip``).
   Carries the route's dir contract: the unreadable-directory 403.
   One scandir pass answers is_dir from the directory record and stats each
-  entry once; a repeat view of unchanged state serves the memo and pays only
-  that walk.
+  entry once.
   """
   try:
     scandir_iter = os.scandir(os.fspath(dir_path))
   except NotADirectoryError:
-    return None, None
+    return None
   except PermissionError as e:
     raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
   entries: list[tuple[bool, str, int, float]] = []
@@ -181,10 +147,6 @@ def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> tuple[str | No
       except OSError:
         continue
       entries.append((is_dir, entry.name, stat.st_size, stat.st_mtime))
-  key: _ListingKey = (os.fspath(dir_path), url_prefix, tuple(entries))
-  hit = _listing_memo.get(key)
-  if hit is not None:
-    return hit, key
   entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
   rows = []
@@ -199,41 +161,28 @@ def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> tuple[str | No
 
   escaped_prefix = html.escape(prefix)
   for is_dir, name, size, mtime in entries:
-    row_key = (url_prefix, is_dir, name, size, mtime)
-    row = _row_memo.get(row_key)
-    if row is None:
-      icon = "📁" if is_dir else "📄"
-      name_text = name + ("/" if is_dir else "")
-      href = f"{escaped_prefix}/{name}"
-      if _SAFE_ENTRY_RE.fullmatch(name) is None:
-        name_text = html.escape(name_text)
-        href = html.escape(f"{prefix}/{parse.quote(name, safe='')}")
-      size_text = "" if is_dir else human_size.format_size(size)
-      mtime_text = _format_mtime(mtime)
-      row = (
-          f'<tr>'
-          f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
-          f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
-          f'</tr>\n')
-      _row_memo.store(row_key, row)
-    rows.append(row)
+    icon = "📁" if is_dir else "📄"
+    name_text = name + ("/" if is_dir else "")
+    href = f"{escaped_prefix}/{name}"
+    if _SAFE_ENTRY_RE.fullmatch(name) is None:
+      name_text = html.escape(name_text)
+      href = html.escape(f"{prefix}/{parse.quote(name, safe='')}")
+    size_text = "" if is_dir else human_size.format_size(size)
+    mtime_text = _format_mtime(mtime)
+    rows.append(
+        f'<tr>'
+        f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
+        f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
+        f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  listing = _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))
-  _listing_memo.store(key, listing)
-  return listing, key
+  return _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))
 
 
-def _listing_page_gzip(key: _ListingKey, listing: str) -> bytes:
-  """The listing page's gzip form, memoized beside the plain page."""
-  return responses_api.gzip_form(_listing_gzip_memo, key, lambda: listing.encode("utf-8"))
-
-
-def _resolve_and_list(path: str, url_prefix: str) -> tuple[pathlib.Path, tuple[str, _ListingKey] | None, bool]:
+def _resolve_and_list(path: str, url_prefix: str) -> tuple[pathlib.Path, str | None, bool]:
   """Resolve the request path and attempt its listing in one executor hop.
 
-  Returns ``(resolved_path, page, exists)`` where *page* is the listing page
-  and its memo key. The exists half carries the
+  Returns ``(resolved_path, listing_html, exists)``. The exists half carries the
   old two-hop ``exists()`` answer: a listing or a ``NotADirectoryError`` proves
   the path present (scandir reached it), and only the ambiguous not-a-directory
   case — a missing path whose parent is a file raises the same error as a plain
@@ -242,11 +191,11 @@ def _resolve_and_list(path: str, url_prefix: str) -> tuple[pathlib.Path, tuple[s
   """
   fs_path = (pathlib.Path("/") / path).resolve()
   try:
-    page = _dir_listing_page(fs_path, url_prefix)
+    listing = _dir_listing_page(fs_path, url_prefix)
   except FileNotFoundError:
     return fs_path, None, False
-  if page[0] is not None:
-    return fs_path, (page[0], page[1]), True
+  if listing is not None:
+    return fs_path, listing, True
   return fs_path, None, os.path.exists(fs_path)
 
 
@@ -264,14 +213,10 @@ async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
   url_prefix = f"{FILE_SERVER_MOUNTS[0]}/{path}" if path else FILE_SERVER_MOUNTS[0]
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to responses.FileResponse.
-  fs_path, page, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix)
+  fs_path, listing, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix)
   if not exists:
     raise fastapi.HTTPException(status_code=404, detail="Not found")
-  if page is not None:
-    listing, listing_key = page
-    if responses_api.request_wants_gzip(request):
-      body = await asyncio.to_thread(_listing_page_gzip, listing_key, listing)
-      return responses.Response(content=body, media_type="text/html", headers=responses_api.GZIP_RESPONSE_HEADERS)
+  if listing is not None:
     return responses.HTMLResponse(listing)
 
   # Serve the file with auto-detected MIME type. A gzip-accepting GET of a

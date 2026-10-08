@@ -987,8 +987,8 @@ def _search_row_body(meta: SessionMetadata, row_key: tuple) -> bytes:
 # gzip-accepting fetch pays the middleware's whole-body level-1 deflate in the
 # send path, the M35 events-page cost the projection fix removed there.
 # Content-Encoding set upstream is what makes that middleware skip its own
-# pass (the M72 listing mechanism). The limit covers one steady-state body per
-# open tab's id set plus the other callers'.
+# pass. The limit covers one steady-state body per open tab's id set plus the
+# other callers'.
 _SWITCH_GZIP_MEMO_LIMIT = 16
 _switch_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_SWITCH_GZIP_MEMO_LIMIT)
 

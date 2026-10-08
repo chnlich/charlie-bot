@@ -36,10 +36,13 @@ Open your first response to a new task with one or two sentences on the intent y
 The user returns to each session after a gap.
 The status block lets the user resume from the latest message alone.
 
-- Open the last message of each turn with three bold-labeled items:
+- Open the last message of each turn with the status block, a three-item markdown list:
   - **Goal**: the session's current overall goal, in one sentence.
-  - **Now**: where the work stands, including any job or trigger it waits on.
+  - **Now**: the state this turn read back, and the job or trigger it waits on.
   - **Waiting on you**: the decision or action the user owes, or "nothing".
+- Start each item's line with `- `.
+- In **Now**, apply the Evidence rule on instructions to an asynchronous system.
+- When nothing will report the next change, write that in **Now** in place of a time estimate.
 - When another rule asks for opening sentences, write them after the status block.
 - When the turn shares a sitrep, take each item from the matching part of the page.
 - A Slack or Discord thread post keeps the format of `prompts/thread_reply_format.md`.

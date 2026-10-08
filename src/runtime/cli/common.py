@@ -31,15 +31,19 @@ if TYPE_CHECKING:
   from pathlib import Path
 
   from src.infra.config import CharlieBotConfig
-  from src.infra.credentials import Credentials
 
+from src.infra import home
 from src.infra.constants import CALLER_SESSION_HEADER, SESSION_ID_ENV_VAR
+from src.infra.credentials import configured_access_key
+from src.infra.home import charliebot_home_dir
+from src.infra.json_utils import write_json_atomically
 from src.infra.timeouts import (
     CLI_CONNECT_TOTAL_TIMEOUT,
     HTTP_INTERNAL_API_TIMEOUT,
     HTTP_VERSION_SKEW_TIMEOUT,
     SUBPROCESS_GIT_SHA_TIMEOUT,
 )
+from src.runtime.run_token import load_run_token
 
 TASK_SPEC_REQUIRED_HEADINGS = (
     "Goal",
@@ -354,9 +358,6 @@ def _config_module_fingerprint() -> tuple[float, int]:
 
 def _cached_server_port() -> int | None:
   """Return the cached server port, or None when the document is absent, stale, or unreadable."""
-  from src.infra import home  # deferred: charliebot improve --help
-  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
-
   fingerprint = [list(home.file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
   try:
     from pathlib import Path
@@ -373,10 +374,6 @@ def _cached_server_port() -> int | None:
 def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
   from pathlib import Path
-
-  from src.infra import home  # deferred: charliebot improve --help
-  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
-  from src.infra.json_utils import write_json_atomically  # deferred: charliebot improve --help
 
   doc = {"fingerprint": [home.file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
   cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
@@ -403,15 +400,7 @@ def _sessions_dir() -> Path:
   carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
   (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
 
-  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
-
   return (charliebot_home_dir() / "sessions").resolve()
-
-
-def get_credentials() -> Credentials:
-  """Resolve the process credentials (the light secrets module; config's model stack stays out)."""
-  from src.infra.credentials import get_credentials  # deferred: charliebot improve --help
-  return get_credentials()
 
 
 def internal_api_auth_headers() -> dict[str, str]:
@@ -430,12 +419,9 @@ def internal_api_auth_headers() -> dict[str, str]:
   operator caller identities only (an agent's session comes from its verified
   token, never the header).
   """
-  from src.runtime.run_token import load_run_token  # deferred: charliebot improve --help
-
   run_token = load_run_token()
   if run_token:
     return _with_caller_session({"Authorization": f"Bearer {run_token}"})
-  from src.infra.credentials import configured_access_key  # deferred: charliebot improve --help
   access_key = configured_access_key()
   if access_key:
     return _with_caller_session({"Authorization": f"Bearer {access_key}"})

@@ -1,14 +1,4 @@
-"""FastAPI dependency injection helpers.
-
-Every ``get_*`` here is ``async def`` on purpose: FastAPI resolves a sync
-dependency through a threadpool handoff per request (a thread round-trip plus
-an event-loop wake per dependency per call), while a coroutine dependency is
-awaited directly on the event loop. These getters only build or return a
-process singleton, so the async form costs a dict check. The plain-name
-``*_manager()`` functions are the sync forms for direct callers (startup and
-the websocket handlers in server.py); the ``get_*`` names are the
-Depends forms.
-"""
+"""FastAPI dependency injection helpers."""
 
 import fastapi
 
@@ -28,7 +18,7 @@ def session_manager() -> sessions.SessionManager:
   return _session_manager
 
 
-async def get_session_manager() -> sessions.SessionManager:
+def get_session_manager() -> sessions.SessionManager:
   return session_manager()
 
 
@@ -74,7 +64,7 @@ def trigger_manager() -> triggers.TriggerManager:
   return _trigger_manager
 
 
-async def get_trigger_manager() -> triggers.TriggerManager:
+def get_trigger_manager() -> triggers.TriggerManager:
   return trigger_manager()
 
 
@@ -84,13 +74,8 @@ def set_trigger_manager(mgr: triggers.TriggerManager) -> None:
   _trigger_manager = mgr
 
 
-async def get_config_on_loop() -> config.CharlieBotConfig:
-  """Async config dependency for the polled routes.
-
-  ``Depends(config.get_config)`` on the sync core reader pays the threadpool handoff
-  described in the module docstring on every request; this resolves the
-  memoized instance on the event loop instead.
-  """
+def get_config_on_loop() -> config.CharlieBotConfig:
+  """The memoized config as a Depends target."""
   return config.get_config()
 
 

@@ -13,7 +13,7 @@ Step 2: mine cross-session user messages into staging.
 Run the digest script and read its output in full:
 `python3 ~/workspace/charlie-bot/prompts/cron/memory_curator/user_message_digest.py > /tmp/curator_user_digest.txt`
 Each output line is `<YYYY-MM-DD> <session-short-id> [NEW] <text>`: one user message from the
-last 7 days across all sessions, artifact comments included, slash commands excluded; NEW marks
+last 7 days across all sessions, artifact comments included, messages starting with `/` excluded; NEW marks
 messages from the last 24 hours, and the digest caps at 120K characters, oldest lines dropped
 first.
 A theme becomes a mined candidate when all three hold: it appears in user messages of at least

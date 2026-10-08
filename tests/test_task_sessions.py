@@ -187,6 +187,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
     assert meta.updated_at == fired_at
     fresh = await session_mgr.store.get_session(node.id)
     assert fresh is not None and fresh.updated_at == fired_at
-    row = next(r for r in await session_mgr.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
+    row = next(
+        r for r in await session_mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
     for name, value in landed.items():
       assert getattr(row, name) == value

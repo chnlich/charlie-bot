@@ -71,6 +71,7 @@ class Scheduler:
     self._session_mgr = session_mgr
     self._store = session_mgr.store
     self._session_events = session_mgr.events
+    self._session_listing = session_mgr.listing
     self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
@@ -118,10 +119,8 @@ class Scheduler:
     if not tasks:
       return
 
-    session_mgr = self._session_mgr
-
     # Cache the scheduled sessions once to avoid O(tasks) list_sessions() calls per tick.
-    scheduled_sessions = await session_mgr.list_sessions(scheduled=True, include_running_status=False)
+    scheduled_sessions = await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
     session_cache: dict[str, list[SessionMetadata]] = {}
     for s in scheduled_sessions:
       assert s.scheduled_task is not None
@@ -243,7 +242,7 @@ class Scheduler:
     sessions = session_cache.get(task_name) if session_cache is not None else None
     if sessions is None:
       sessions = [
-          s for s in await self._session_mgr.list_sessions(scheduled=True, include_running_status=False)
+          s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
           if s.scheduled_task == task_name
       ]
     active = sorted((s for s in sessions if s.status == SessionStatus.ACTIVE), key=lambda s: s.created_at, reverse=True)
@@ -263,7 +262,7 @@ class Scheduler:
     sessions = session_cache.get(task_name) if session_cache is not None else None
     if sessions is None:
       sessions = [
-          s for s in await self._session_mgr.list_sessions(scheduled=True, include_running_status=False)
+          s for s in await self._session_listing.list_sessions(scheduled=True, include_running_status=False)
           if s.scheduled_task == task_name
       ]
     archived: list[str] = []

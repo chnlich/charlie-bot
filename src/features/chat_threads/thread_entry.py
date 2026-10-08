@@ -793,7 +793,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
   platform = adapter.platform
   from src.runtime import master_cc_queue  # lazy: mirrors the spawner import's cycle guard
 
-  sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
+  sessions = await session_mgr.listing.list_sessions()  # archived included: a thread can be summoned again
   reported = 0
   for meta in sessions:
     if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
@@ -1158,8 +1158,8 @@ async def backfill_followed_threads(
   # Both status filters ride the readonly listings: the shared cached metas
   # are handed out uncopied (the backfill only reads them) and the corpus
   # outside the followed threads is never copied+stamped.
-  active, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
-  archived, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ARCHIVED)
+  active, _ = await session_mgr.listing.list_sessions_readonly(status=SessionStatus.ACTIVE)
+  archived, _ = await session_mgr.listing.list_sessions_readonly(status=SessionStatus.ARCHIVED)
   for meta in [*active, *archived]:
     fields = metadata_slots.fields_of(meta, platform.name)
     origin = getattr(fields, platform.origin_field)

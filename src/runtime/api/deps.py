@@ -7,6 +7,7 @@ from src.runtime import (
     run_token,
     runs,
     session_events,
+    session_listing,
     session_sidebar,
     session_store,
     sessions,
@@ -26,6 +27,10 @@ async def get_session_store() -> session_store.SessionStore:
 
 async def get_session_events() -> session_events.SessionEvents:
   return session_events.events()
+
+
+async def get_session_listing() -> session_listing.SessionListing:
+  return session_listing.listing()
 
 
 async def get_session_sidebar() -> session_sidebar.SessionSidebar:

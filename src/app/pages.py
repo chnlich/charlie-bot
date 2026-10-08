@@ -21,7 +21,7 @@ from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     get_config_on_loop,
     get_session_events,
-    get_session_manager,
+    get_session_listing,
     get_session_store,
     get_task_manager,
 )
@@ -34,8 +34,8 @@ from src.runtime.api.sessions import (
 from src.runtime.hooks import page_render
 from src.runtime.hooks.sequence_controllers import sequence_listing_fields
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
@@ -141,7 +141,7 @@ async def home_page(request: Request, cfg: CharlieBotConfig = Depends(get_config
 async def index(
     request: Request,
     session: str | None = None,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    listing: SessionListing = Depends(get_session_listing),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
@@ -154,7 +154,7 @@ async def index(
   """
   load_errors: list[str] = []
   try:
-    sessions = await session_mgr.list_sessions(
+    sessions = await listing.list_sessions(
         status=SessionStatus.ACTIVE,
         scheduled=False,
         include_running_status=True,
@@ -164,8 +164,8 @@ async def index(
     # rows and every sidebar view's subtree ride no listing, so a firing leaf neither
     # flattens into a top-level sidebar row, a chat-platform thread session
     # never paints into Workspace, and neither becomes the auto-redirect target.
-    sequence_subtree = await session_mgr.sequence_subtree_roots()
-    views = await session_mgr.view_subtree_roots()
+    sequence_subtree = await listing.sequence_subtree_roots()
+    views = await listing.view_subtree_roots()
     sessions = [
         session for session in sessions
         if session.id not in sequence_subtree and not any(session.id in view for view in views.values())

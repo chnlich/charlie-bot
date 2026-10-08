@@ -37,11 +37,11 @@ async def deliver(tree: TaskTreeManager, worker_id: str, run_id: str) -> None:
 
 
 async def active_ids(session_mgr: SessionManager) -> set[str]:
-  return {m.id for m in await session_mgr.list_sessions(status=SessionStatus.ACTIVE)}
+  return {m.id for m in await session_mgr.listing.list_sessions(status=SessionStatus.ACTIVE)}
 
 
 async def archived_by_id(session_mgr: SessionManager) -> dict:
-  page = await session_mgr.list_archived_page()
+  page = await session_mgr.listing.list_archived_page()
   return {m.id: m for m in page["sessions"]}
 
 
@@ -64,7 +64,7 @@ async def test_delivered_worker_moves_from_the_active_list_to_the_archived_list(
   stored = await session_mgr.store.get_session(worker.id)
   assert stored is not None and stored.status == SessionStatus.ACTIVE
   # An unfiltered listing shows the derived state on the row.
-  everything = {m.id: m.status for m in await session_mgr.list_sessions()}
+  everything = {m.id: m.status for m in await session_mgr.listing.list_sessions()}
   assert everything == {root.id: SessionStatus.ACTIVE, worker.id: SessionStatus.ARCHIVED}
 
 

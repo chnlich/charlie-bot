@@ -125,11 +125,20 @@ def test_check_port_refuses_source_port_and_occupied(source_home: Path) -> None:
 
 
 def _clear_singletons(monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.runtime import session_events, session_sidebar, session_store, sessions, task_execution, triggers
+  from src.runtime import (
+      session_events,
+      session_listing,
+      session_sidebar,
+      session_store,
+      sessions,
+      task_execution,
+      triggers,
+  )
 
   monkeypatch.setattr(session_store, "_store", None)
   monkeypatch.setattr(session_events, "_events", None)
   monkeypatch.setattr(session_sidebar, "_sidebar", None)
+  monkeypatch.setattr(session_listing, "_listing", None)
   monkeypatch.setattr(sessions, "_session_manager", None)
   monkeypatch.setattr(triggers, "_trigger_manager", None)
   monkeypatch.setattr(task_execution, "_task_manager", None)
@@ -145,6 +154,7 @@ def test_assert_no_bound_singletons_passes_when_none_is_bound(monkeypatch: pytes
         ("src.runtime.session_store", "_store"),
         ("src.runtime.session_events", "_events"),
         ("src.runtime.session_sidebar", "_sidebar"),
+        ("src.runtime.session_listing", "_listing"),
         ("src.runtime.sessions", "_session_manager"),
         ("src.runtime.triggers", "_trigger_manager"),
         ("src.runtime.task_execution", "_task_manager"),

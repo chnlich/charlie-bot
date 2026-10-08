@@ -92,7 +92,7 @@ async def test_scheduler_aligns_bound_node_backend_in_place(tmp_path: Path, monk
   assert fresh.last_scheduled_cron == "0 2 * * *"
   # Idempotent: a second alignment on the now-current backend writes nothing.
   await scheduler._align_bound_backend(task_cfg, cfg)
-  sessions = await session_mgr.list_sessions()
+  sessions = await session_mgr.listing.list_sessions()
   assert len(sessions) == 1
 
 

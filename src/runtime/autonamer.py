@@ -207,7 +207,7 @@ async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, sessio
   if not assistant_text:
     return
 
-  existing_groups = await session_mgr.list_group_names()
+  existing_groups = await session_mgr.listing.list_group_names()
   await maybe_auto_name(cfg, meta, user_message, assistant_text, session_mgr, existing_groups)
 
 

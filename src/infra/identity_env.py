@@ -1,6 +1,6 @@
 """The environment variables that carry a CharlieBot identity or credential into a process.
 
-An isolated trial (the session-tree preview and the live-trial harnesses) must not inherit any of them
+An isolated trial (a preview server on a seeded home and the live-trial harnesses) must not inherit any of them
 from the process that starts it. The runtime owns two names; a package that injects or reads a
 credential of its own registers that name from its ``register()`` (``register_identity_env_var``).
 Read the full list with ``inherited_identity_env_vars()`` after ``register_all()`` has run.

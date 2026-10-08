@@ -30,11 +30,6 @@ GIT_REMOTE_MAX_ATTEMPTS = 3  # attempts per remote operation, the first included
 # Git version info used at startup (rev-parse --short HEAD, git log).
 SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks server startup
 
-# The session-tree preview's checkout-identity reads (`git rev-parse` for the
-# branch and HEAD SHA it prints as the preview's provenance); a failure refuses
-# the preview instead of starting one with an unknown identity.
-SUBPROCESS_GIT_IDENTITY_TIMEOUT = 30  # seconds
-
 # ---------------------------------------------------------------------------
 # Light one-shot backend calls (autonamer session naming, recap divider summary)
 # ---------------------------------------------------------------------------
@@ -207,7 +202,7 @@ MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds
 # frame after sending its own. One chat-platform listener's endpoint never
 # answers a client close frame, so websockets' 10 s default added 10 s to every
 # server stop and every refresh reconnect; the other chat-platform listener and
-# the two voice transcription relays take the same bound so a stop has a
+# the two speech-transcription relays take the same bound so a stop has a
 # definite ceiling.
 WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
 

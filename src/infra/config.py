@@ -43,17 +43,16 @@ from src.infra.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
 
-# Fixed house wall clock pinned by the chat-thread session-name timestamps
-# (src/features/chat_threads/thread_entry.py) and the Saturday-1AM weekly-recycle anchor
-# (src/features/cron/sequence_controller.py). Distinct from the scheduled-task default
-# (src/features/cron/config.py), overridable via ``timezone: local`` or any IANA key, so retargeting
-# that default cannot shift these pins.
+# Fixed house wall clock pinned by the feature code that stamps chat session names with a timestamp
+# and by the feature code that anchors the weekly recycle to Saturday 1 AM. Distinct from the
+# scheduled-task default timezone, which a feature owns and which is overridable via
+# ``timezone: local`` or any IANA key, so retargeting that default cannot shift these pins.
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
 # The profile's config filename, named once: the loader, the reload fingerprint,
-# and ``config_file`` must resolve to the same file, and the preview-home setup
-# (src/features/session_tree_preview/session_tree_preview.py) writes it by that name. A rename that missed
-# one site would leave that site silently reading a different file.
+# and ``config_file`` must resolve to the same file, and the setup of an isolated
+# trial home writes it by that name. A rename that missed one site would leave
+# that site silently reading a different file.
 CONFIG_FILENAME = "config.yaml"
 
 

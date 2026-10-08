@@ -19,63 +19,63 @@ from src.infra.event_types import BACKEND_SWITCHED
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
 from src.infra.models import (
-  AcknowledgeTaskInputsRequest,
-  AncestorRef,
-  CancelRunRequest,
-  CancelTaskRequest,
-  CompleteTaskRequest,
-  CreateSessionRequest,
-  DeleteGroupRequest,
-  EloneSessionRequest,
-  ForkSessionRequest,
-  PatchSessionTaskRequest,
-  RateRoundRequest,
-  RenameGroupRequest,
-  RetryRunRequest,
-  RunCancelResponse,
-  RunKind,
-  RunPage,
-  RunRow,
-  SessionMetadata,
-  SessionRow,
-  SessionStatus,
-  SetGroupRequest,
-  SwitchBackendRequest,
-  TaskState,
-  ThreadMetadata,
-  TriggerStatus,
-  UtcDatetime,
-  WorkerThreadRef,
-  WorkState,
+    AcknowledgeTaskInputsRequest,
+    AncestorRef,
+    CancelRunRequest,
+    CancelTaskRequest,
+    CompleteTaskRequest,
+    CreateSessionRequest,
+    DeleteGroupRequest,
+    EloneSessionRequest,
+    ForkSessionRequest,
+    PatchSessionTaskRequest,
+    RateRoundRequest,
+    RenameGroupRequest,
+    RetryRunRequest,
+    RunCancelResponse,
+    RunKind,
+    RunPage,
+    RunRow,
+    SessionMetadata,
+    SessionRow,
+    SessionStatus,
+    SetGroupRequest,
+    SwitchBackendRequest,
+    TaskState,
+    ThreadMetadata,
+    TriggerStatus,
+    UtcDatetime,
+    WorkerThreadRef,
+    WorkState,
 )
 from src.infra.responses import (
-  GZIP_RESPONSE_HEADERS,
-  FastJsonResponse,
-  PreencodedJSONResponse,
-  fast_json_bytes,
-  gzip_body_response,
-  gzip_file_fresh,
-  request_wants_gzip,
+    GZIP_RESPONSE_HEADERS,
+    FastJsonResponse,
+    PreencodedJSONResponse,
+    fast_json_bytes,
+    gzip_body_response,
+    gzip_file_fresh,
+    request_wants_gzip,
 )
 from src.runtime import sidebar_state, thinking_state
 from src.runtime.api.deps import (
-  SESSION_NOT_FOUND_DETAIL,
-  bad_request,
-  get_config_on_loop,
-  get_run_store,
-  get_session_manager,
-  get_task_manager,
-  get_thread_manager,
-  get_trigger_manager,
-  require_caller,
-  require_found,
-  require_session,
+    SESSION_NOT_FOUND_DETAIL,
+    bad_request,
+    get_config_on_loop,
+    get_run_store,
+    get_session_manager,
+    get_task_manager,
+    get_thread_manager,
+    get_trigger_manager,
+    require_caller,
+    require_found,
+    require_session,
 )
 from src.runtime.api.message_utils import (
-  SessionBootstrapData,
-  build_session_bootstrap_data,
-  events_to_messages,
-  get_message_projection_fast,
+    SessionBootstrapData,
+    build_session_bootstrap_data,
+    events_to_messages,
+    get_message_projection_fast,
 )
 from src.runtime.api.threads import view_thread_rows
 from src.runtime.chat_events import chat_events_path
@@ -91,15 +91,15 @@ from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, 
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_sessions import (
-  AGENT_CREATE_SCOPE_REFUSAL,
-  TASK_CREATE_REQUEST_ID_REQUIRED,
-  TaskArchivedError,
-  TaskConflictError,
-  TaskForbiddenError,
-  TaskInvalidError,
-  TaskNotFoundError,
-  TaskTreeManager,
-  not_task_node_detail,
+    AGENT_CREATE_SCOPE_REFUSAL,
+    TASK_CREATE_REQUEST_ID_REQUIRED,
+    TaskArchivedError,
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    TaskTreeManager,
+    not_task_node_detail,
 )
 from src.runtime.thinking_state import run_backend
 from src.runtime.threads import ThreadManager
@@ -133,8 +133,7 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
       "active_backend_type":
           active_backend_opt.type if active_backend_opt else "",
       "switchable_backends":
-          _switchable_backend_ids(
-              active_backend, cfg, dedicated=binding is not None and binding.dedicated_backend),
+          _switchable_backend_ids(active_backend, cfg, dedicated=binding is not None and binding.dedicated_backend),
   }
 
 
@@ -355,6 +354,7 @@ _CONTROLLER_LISTING_MODEL_NULLS = (
     "schedule_project",
     "schedule_allow_failure",
 )
+
 
 def apply_listing_fields(dump: dict, fields: dict) -> dict:
   """One listed row's payload: the model dump with controller listing fields."""

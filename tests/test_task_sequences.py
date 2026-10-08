@@ -389,9 +389,8 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
   failed_payloads = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.IMPROVE_FAILED]
   assert len(failed_payloads) == 1
   assert failed_payloads[0]["blocked_iteration"] == 1
-  # The quota pattern matches the phrase's lowercase form (the classification
-  # lowercases the event text before scanning).
-  assert claude_relay.POOL_EXHAUSTED_PHRASE.lower() in failed_payloads[0]["reason"]
+  # The error event's quota_exhausted flag makes the blocker; its reason carries the message.
+  assert failed_payloads[0]["reason"] == f"launch refused with quota exhausted: {errors[0]['message']}"
 
   # The one wake: the final report's, through the delivery entry. The
   # quota-terminated iteration never reaches the delivery point, so no

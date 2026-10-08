@@ -61,6 +61,29 @@ def test_quota_blocker_reason_scans_newest_first() -> None:
   assert reason == "provider quota/token/rate-limit rejection (insufficient quota)"
 
 
+def test_quota_blocker_match_reads_the_launch_error_events_quota_flag() -> None:
+  """A refused launch's error event names its own cause: the flag makes the blocker
+  though the message holds no pattern word."""
+  ev = {"type": "error", "message": "no login can take this run", "quota_exhausted": True}
+  assert improve_command._quota_blocker_match(ev) == "launch refused with quota exhausted: no login can take this run"
+
+
+def test_quota_blocker_match_leaves_a_false_flag_to_the_text_patterns() -> None:
+  """quota_exhausted False is no blocker by the flag; the relay-limit refusal matches no pattern."""
+  ev = {
+      "type": "error",
+      "message": "Claude account relay limit reached (3 relays in one run); this run did not complete.",
+      "quota_exhausted": False,
+  }
+  assert improve_command._quota_blocker_match(ev) is None
+
+
+def test_quota_blocker_match_judges_an_error_event_without_the_flag_by_text() -> None:
+  """An error event with no flag (any failure but a launch refusal) matches the text patterns as before."""
+  ev = {"type": "error", "message": "Provider rejected the request: insufficient quota."}
+  assert improve_command._quota_blocker_match(ev) == "provider quota/token/rate-limit rejection (insufficient quota)"
+
+
 def test_extract_iteration_summary_prefers_newest_result_or_assistant() -> None:
   """The newest event carrying text wins, whichever kind it is."""
   events = [

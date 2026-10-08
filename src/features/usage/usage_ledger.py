@@ -13,11 +13,9 @@ record is counted only while none of the session ids it carries has a NATIVE
 record of its own: the moment the CLI's log for any of those sessions is seen,
 the fallback's contribution is presumed restated there. The exclusion is a
 query-time rule over the registered sessions, not a deletion — re-reading a
-pruned-away file's captured rows and their spans stays possible forever. A usage
-row leaves the ledger only when a re-parse of its own source supersedes it by id
-prefix (``record_file``'s ``supersede_prefix``); nothing else deletes usage rows.
-(The only other DELETE in the schema reaps the aggregate's own zero-count day
-rows.)
+pruned-away file's captured rows and their spans stays possible forever. Nothing
+deletes a usage row. (The only DELETE in the schema reaps the aggregate's own
+zero-count day rows.)
 
 ``in_unsplit`` holds input tokens whose cache hit/miss split was never logged, and it
 counts toward every total like the other input columns. The one-time schema-2 upgrade
@@ -29,9 +27,8 @@ input in ``in_fresh``: the file can still be re-parsed with the correct split.
 ``captured_files`` remembers the last signature written per (host, path), so a
 collector can skip files it already ingested by content, not by existence.
 
-``capture_gates`` remembers one source's *probe* per (host, path): the file-state
-pairs a probe ran under and the signature it computed, so a fresh process reuses
-that probe while the files sit byte-still instead of re-scanning the source.
+``ledger_meta`` key ``last_capture_at:<host>`` holds when that host's capture last
+finished (ISO 8601 UTC); the page shows the ledger as of that time.
 
 ``usage_agg`` carries the page's aggregates at (group, day) granularity, maintained
 by the schema's triggers for every writer: the triggers ride the database, so any
@@ -48,12 +45,12 @@ import sqlite3
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import StrEnum
 from pathlib import Path
 from typing import Self
 
 from src.infra import log_once
 from src.infra.timeouts import USAGE_LEDGER_LOCK_WAIT_SECONDS
+from src.runtime.hooks import usage_sources
 
 log = log_once.LazyStructlogLogger()
 
@@ -78,16 +75,6 @@ CREATE INDEX IF NOT EXISTS usage_group_cover ON usage(kind, source, model, accou
 CREATE TABLE IF NOT EXISTS captured_files (
   host TEXT NOT NULL,
   path TEXT NOT NULL,
-  sig TEXT NOT NULL,
-  PRIMARY KEY (host, path)
-);
-CREATE TABLE IF NOT EXISTS capture_gates (
-  host TEXT NOT NULL,
-  path TEXT NOT NULL,
-  main_size INTEGER NOT NULL,
-  main_mtime_ns INTEGER NOT NULL,
-  wal_size INTEGER,
-  wal_mtime_ns INTEGER,
   sig TEXT NOT NULL,
   PRIMARY KEY (host, path)
 );
@@ -280,7 +267,8 @@ _AGG_TRIGGER_SQLS = {
 
 # The usage row is upserted whole on a repeated record_id (the same API call seen again
 # from another file or host): the latest capture wins on every non-key column but ts,
-# which record_file keeps at the earlier non-empty value.
+# which keeps the earlier non-empty value. The aggregate's update trigger sees the kept ts
+# as the row's new one, so a re-capture differing only by a later stamp rewrites nothing it counts.
 _UPSERT_USAGE_SQL = """
 INSERT INTO usage (record_id, kind, source, model, account, host, ts,
                    in_fresh, cache_write, cache_read, in_unsplit, output, origin, captured_at)
@@ -291,7 +279,7 @@ ON CONFLICT(record_id) DO UPDATE SET
   model = excluded.model,
   account = excluded.account,
   host = excluded.host,
-  ts = excluded.ts,
+  ts = CASE WHEN usage.ts <> '' AND (excluded.ts = '' OR excluded.ts > usage.ts) THEN usage.ts ELSE excluded.ts END,
   in_fresh = excluded.in_fresh,
   cache_write = excluded.cache_write,
   cache_read = excluded.cache_read,
@@ -334,15 +322,6 @@ FROM usage u
 GROUP BY source, model, account, kind
 """
 
-# The currently-excluded fallback rows. The fold diffs this set against the memo's
-# and stands down to the full pass on any difference: retirement cannot be patched
-# incrementally, so any set change re-prices the page from the table.
-_EXCLUDED_FALLBACK_IDS_SQL = """
-SELECT u.record_id FROM usage u WHERE u.kind = 'fallback' AND EXISTS (
-  SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
-  WHERE fs.record_id = u.record_id)
-"""
-
 # The page read over the maintained aggregate: same grouped shape as the table pass
 # above, over one row per (group, day) instead of one per record. Zero-count day rows
 # are deleted by the schema's purge trigger, so no filter here.
@@ -380,50 +359,6 @@ GROUP BY source, model, account, kind, day
 # file is gone: the manager's master: records and the native thread: ones. codex: records
 # carry their rollout's own hit/miss split, so they never move.
 _UPGRADE_MOVE_RECORDS_SQL = "(record_id GLOB 'master:*' OR (record_id GLOB 'thread:*' AND kind = 'native'))"
-
-# The rewrite-epoch bump is one statement because both rewrite paths must move
-# the same counter: the memo fold compares the epoch it stored against this
-# table's (``_rewrite_epoch``), and an upgrade-path bump the write path spells
-# differently would not invalidate the memos it must.
-_REWRITE_EPOCH_UPSERT_SQL = (
-    "INSERT INTO ledger_meta (key, value) VALUES ('rewrite_epoch', '1')"
-    " ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT)")
-
-
-class RecordKind(StrEnum):
-  """How a usage row was learned: from a CLI-kept log (native) or from a charlie-bot
-  capture whose underlying CLI log may be pruned (fallback)."""
-
-  NATIVE = "native"
-  FALLBACK = "fallback"
-
-
-@dataclass(frozen=True, slots=True)
-class UsageRecord:
-  """One API call's usage as extracted from a captured file.
-
-  ``ts`` is ISO 8601 UTC; ``sessions`` names the CLI sessions the call's log belongs
-  to, and a fallback record must carry at least one — exclusion is keyed on them.
-  ``in_unsplit`` is input whose cache hit/miss split was never logged; it counts toward
-  every total like the split input columns.
-  """
-
-  record_id: str
-  kind: RecordKind
-  source: str
-  model: str
-  account: str
-  ts: str
-  in_fresh: int
-  cache_write: int
-  cache_read: int
-  output: int
-  in_unsplit: int = 0
-  sessions: tuple[str, ...] = ()
-
-  def __post_init__(self) -> None:
-    if self.kind == RecordKind.FALLBACK and not self.sessions:
-      raise ValueError(f"fallback record {self.record_id!r} carries no sessions")
 
 
 @dataclass(frozen=True)
@@ -510,7 +445,7 @@ class _ModelSum:
 
 def _fold_grouped_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row | dict) -> None:
   """Fold one grouped pass row (calls carries the group's record count) into the accs."""
-  kind = RecordKind(row["kind"])
+  kind = usage_sources.RecordKind(row["kind"])
   acc = accs.setdefault((row["source"], row["model"]), _ModelSum())
   acc.sums.add(row)
   first, last = row["first"], row["last"]  # NULL when the group has no dated ts
@@ -518,23 +453,12 @@ def _fold_grouped_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row |
     acc.first = first
   if last and (not acc.last or last > acc.last):
     acc.last = last
-  if kind is RecordKind.FALLBACK:
+  if kind is usage_sources.RecordKind.FALLBACK:
     acc.fallback_calls += row["calls"]
     acc.fallback_output += row["output"]
-  if kind is RecordKind.NATIVE and first and (not acc.native_first or first < acc.native_first):
+  if kind is usage_sources.RecordKind.NATIVE and first and (not acc.native_first or first < acc.native_first):
     acc.native_first = first
   acc.accounts.setdefault(row["account"], _Sum()).add(row)
-
-
-def _fold_raw_row(accs: dict[tuple[str, str], _ModelSum], row: sqlite3.Row) -> None:
-  """Fold one raw usage row (the delta read's shape, one record) into the accs."""
-  day = row["ts"][:10] or None  # the grouped pass's NULLIF(SUBSTR(ts, 1, 10), '')
-  grouped = {
-      k: row[k]
-      for k in ("source", "model", "account", "kind", "in_fresh", "cache_write", "cache_read", "in_unsplit", "output")
-  }
-  grouped.update(calls=1, first=day, last=day)
-  _fold_grouped_row(accs, grouped)
 
 
 def _rows_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> list[LedgerRow]:
@@ -575,21 +499,6 @@ def _native_starts_from_accs(accs: dict[tuple[str, str], _ModelSum]) -> dict[str
   return starts
 
 
-@dataclass
-class _RowsMemo:
-  """The page-rows read's served state, one entry for the one production ledger path."""
-
-  path: str
-  identity: tuple[int, int]
-  generation: int
-  rows: list[LedgerRow]
-  native_starts: dict[str, str]
-  accs: dict[tuple[str, str], _ModelSum]
-  rowcount: int
-  excluded_fallback: frozenset[str]
-  rewrite_epoch: int
-
-
 def default_ledger_path() -> Path:
   """The CLI's default ledger: under the charliebot home, beside the sessions it indexes."""
   from src.infra.config import get_config
@@ -601,44 +510,14 @@ class UsageLedger:
   """SQLite store behind the /token-usage page; see the module docstring.
 
   The schema is created on open (IF NOT EXISTS), so a fresh path yields an empty
-  ledger and an existing one keeps every row. The one deletion of a usage row is
-  ``record_file``'s ``supersede_prefix`` range: a re-parse superseding its own source's
-  legacy-id records. A ledger with no ``schema`` stamp in ``ledger_meta`` upgrades to
-  '2' once on open (``_upgrade_schema``). A ledger whose stored aggregate-trigger bodies differ from this
-  module's gets the five swapped and a backfilled aggregate re-priced on open
-  (``_refresh_agg_triggers``).
+  ledger and an existing one keeps every row. A ledger with no ``schema`` stamp in
+  ``ledger_meta`` upgrades to '2' once on open (``_upgrade_schema``). A ledger whose
+  stored aggregate-trigger bodies differ from this module's gets the five swapped and a
+  backfilled aggregate re-priced on open (``_refresh_agg_triggers``). A ledger that still
+  holds the probe-gate table an older release kept drops it on open (``_drop_capture_gates``).
   """
 
-  # The page-rows memo, one entry for the one production ledger path: the rows
-  # serve repeat reads unchanged while the file sits byte-still. Validity rides
-  # three witnesses together -- the file's (size, mtime_ns) pair, this process's
-  # write generation, and the journal mode -- because each alone has a hole the
-  # next one covers:
-  #   * the stat pair moves on every committing writer's main-db rewrite (the
-  #     ledger runs the default rollback journal, never WAL, whose commits hide
-  #     in the -wal sidecar), but a forged pair equal to the stored one defeats it;
-  #   * the generation catches this process's own writes outright;
-  #   * a later journal-mode flip to WAL would silence future stat movement, so a
-  #     memo is stored and served only under a non-WAL mode.
-  # The (size, mtime_ns) gate is the same witness class the capture gates store
-  # (``capture_gates``), and an mtime_ns collision across two real writes is the
-  # accepted risk those gates already carry.
-  #
-  # A miss whose only change is this process's own inserts extends the memo by the
-  # row delta (``_try_fold_rows``) instead of re-running the full grouped pass --
-  # the page's own capture makes that the common shape under active turns. Any
-  # other change falls back to the full pass: an in-place value rewrite or a
-  # superseding prefix delete bumps the ledger's rewrite epoch
-  # (``_rewrite_epoch``), which the memo stores and the fold compares -- the
-  # delete must bump it because N deletes paired with N inserts slips past the
-  # row-count witness; a re-captured record upserts the same values and bumps
-  # nothing; a foreign writer's inserts and deletions fail the row-count
-  # witness; WAL silences the stat pair and stores no memo.
-  _rows_memo: _RowsMemo | None = None
-  _write_generation: int = 0
-
   def __init__(self, path: Path) -> None:
-    self._inserted_ids: set[str] = set()
     self._path = Path(path)
     self._path.parent.mkdir(parents=True, exist_ok=True)
     self._conn = sqlite3.connect(self._path, timeout=USAGE_LEDGER_LOCK_WAIT_SECONDS)
@@ -649,17 +528,17 @@ class UsageLedger:
       self._upgrade_schema()  # recreates the aggregate triggers inside its transaction
     else:
       self._refresh_agg_triggers()  # one transaction; a no-op when the stored bodies match
+    self._drop_capture_gates()
     self._conn.commit()
     # The open capture batch's SAVEPOINT name; None outside one. record_file and
-    # record_gate release their per-file savepoint into this batch instead of
-    # committing, so the capture's writes land in one fsync (see batch()).
+    # mark_capture_finished leave the commit to the batch (see batch()).
     self._batch_savepoint: str | None = None
 
   def _upgrade_schema(self) -> None:
     """The one-time upgrade to schema '2', one transaction: add ``in_unsplit`` to both
     tables, swap the five token-summing aggregate triggers for bodies that carry it, move
     the gone-source records' input, re-price a backfilled aggregate from the table
-    wholesale, bump the rewrite epoch, and stamp.
+    wholesale, and stamp.
 
     The triggers are dropped and recreated before the move so the update trigger
     subtracts and re-adds every moved row's aggregate contribution; the re-add lands on
@@ -701,7 +580,6 @@ class UsageLedger:
       if self._conn.execute("SELECT 1 FROM ledger_meta WHERE key = 'agg_backfilled'").fetchone() is not None:
         self._conn.execute(_AGG_WIPE_SQL)  # replace the served aggregate wholesale (see the docstring)
         self._conn.execute(_AGG_BACKFILL_SQL)
-      self._conn.execute(_REWRITE_EPOCH_UPSERT_SQL)
       self._conn.execute(
           "INSERT INTO ledger_meta (key, value) VALUES ('schema', '2')"
           " ON CONFLICT(key) DO UPDATE SET value = '2'")
@@ -757,6 +635,24 @@ class UsageLedger:
       self._conn.rollback()
       raise
 
+  def _drop_capture_gates(self) -> None:
+    """Drop the ``capture_gates`` table an older release kept; nothing reads or writes it now.
+
+    The presence check reads first, so an open of a ledger without the table takes no write
+    lock. The stamp stays '2': a process still running the older release opens the same
+    ledger, and a newer stamp would send it through the schema-2 upgrade again.
+    """
+    present = self._conn.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'capture_gates'")
+    if present.fetchone() is None:
+      return
+    self._conn.execute("BEGIN IMMEDIATE")
+    try:
+      self._conn.execute("DROP TABLE IF EXISTS capture_gates")
+      self._conn.commit()
+    except BaseException:
+      self._conn.rollback()
+      raise
+
   def __enter__(self) -> Self:
     return self
 
@@ -768,15 +664,14 @@ class UsageLedger:
 
   @contextlib.contextmanager
   def batch(self) -> Iterator[None]:
-    """Group the capture's record writes into one commit; exit commits, exceptions included.
+    """Group the capture's writes into one commit; exit commits, exceptions included.
 
-    Each record_* call keeps its own SAVEPOINT, so a failed file rolls back alone
-    exactly as its standalone transaction did, and the files that recorded before
-    the failure stay durable — the exit commits them, because a failed capture's
-    partial progress is durable today. The generation bumps once per commit, so a
-    batch of N files counts as one write for the rows memo. The batch holds the write
-    transaction open, so nothing inside it may run the schema's BEGIN IMMEDIATE paths
-    (the aggregate backfill, the trigger refresh) — the capture's body only records.
+    Each ``record_file`` keeps its own SAVEPOINT, so a failed file rolls back alone and the files
+    recorded before the failure stay durable: the exit commits them, because a failed capture's
+    partial progress is durable. A cold capture records thousands of files, and one commit per file
+    would add a sync to each. The batch holds the write transaction open, so nothing inside it may
+    run the schema's BEGIN IMMEDIATE paths (the aggregate backfill, the trigger refresh); the
+    capture's body only records.
     """
     savepoint = "usage_capture_batch"
     self._conn.execute(f"SAVEPOINT {savepoint}")
@@ -787,63 +682,13 @@ class UsageLedger:
       self._batch_savepoint = None
       self._conn.execute(f"RELEASE {savepoint}")  # the outermost savepoint's release commits
       self._conn.commit()
-      UsageLedger._write_generation += 1
-
-  def set_lock_wait(self, seconds: float) -> None:
-    """Rebind this connection's busy-handler ceiling to *seconds*.
-
-    The connect-time value (``USAGE_LEDGER_LOCK_WAIT_SECONDS``) stays the contract for
-    writers that run outside a request; a caller whose work sits inside one request
-    (the /token-usage page's capture) lowers it for its own statements and restores the
-    connect-time value afterwards, so no later statement on this connection inherits the
-    short bound.
-    """
-    self._conn.execute(f"PRAGMA busy_timeout = {int(seconds * 1000)}")
 
   def captured_sigs(self, host: str) -> dict[str, str]:
     """Every captured file path and its last-recorded signature for one host."""
     rows = self._conn.execute("SELECT path, sig FROM captured_files WHERE host = ?", (host,)).fetchall()
     return {row["path"]: row["sig"] for row in rows}
 
-  def captured_sig(self, host: str, path: str) -> str | None:
-    """One captured file path's last-recorded signature for *host*, or None when uncaptured."""
-    row = self._conn.execute("SELECT sig FROM captured_files WHERE host = ? AND path = ?", (host, path)).fetchone()
-    return None if row is None else row["sig"]
-
-  def captured_gate(self, host: str, path: str) -> tuple[tuple[tuple[int, int], tuple[int, int] | None], str] | None:
-    """One stored probe gate: the file-state pairs the probe ran under and the signature it
-    computed, or None when nothing is stored for the (host, path)."""
-    row = self._conn.execute(
-        "SELECT main_size, main_mtime_ns, wal_size, wal_mtime_ns, sig FROM capture_gates"
-        " WHERE host = ? AND path = ?", (host, path)).fetchone()
-    if row is None:
-      return None
-    wal = None if row["wal_size"] is None else (row["wal_size"], row["wal_mtime_ns"])
-    return ((row["main_size"], row["main_mtime_ns"]), wal), row["sig"]
-
-  def record_gate(self, host: str, path: str, main: tuple[int, int], wal: tuple[int, int] | None, sig: str) -> None:
-    """Store one probe's gate: the file-state pairs it ran under and the signature it computed."""
-    self._conn.execute("SAVEPOINT record_gate")
-    try:
-      self._conn.execute(
-          """INSERT INTO capture_gates (host, path, main_size, main_mtime_ns, wal_size, wal_mtime_ns, sig)
-             VALUES (?, ?, ?, ?, ?, ?, ?)
-             ON CONFLICT(host, path) DO UPDATE SET
-               main_size = excluded.main_size, main_mtime_ns = excluded.main_mtime_ns,
-               wal_size = excluded.wal_size, wal_mtime_ns = excluded.wal_mtime_ns,
-               sig = excluded.sig""",
-          (host, path, main[0], main[1], None if wal is None else wal[0], None if wal is None else wal[1], sig))
-    except BaseException:
-      self._conn.execute("ROLLBACK TO record_gate")
-      self._conn.execute("RELEASE record_gate")
-      raise
-    self._conn.execute("RELEASE record_gate")
-    if self._batch_savepoint is None:
-      self._conn.commit()
-      UsageLedger._write_generation += 1
-
-  def record_file(
-      self, host: str, path: str, sig: str, records: Sequence[UsageRecord], supersede_prefix: str | None = None) -> int:
+  def record_file(self, host: str, path: str, sig: str, records: Sequence[usage_sources.UsageRecord]) -> int:
     """Store one file capture atomically and return the record count.
 
     Every record is upserted on ``record_id`` (the latest capture wins on every column
@@ -851,72 +696,16 @@ class UsageLedger:
     may carry a later stamp, and the call's own time is the earlier one), each NATIVE
     record's sessions are registered once (first registration wins, later re-captures
     keep them), each FALLBACK record's sessions are linked, and the file's signature is
-    remembered for the collector's skip decision.
-
-    With ``supersede_prefix``, the same transaction first deletes every usage row whose
-    ``record_id`` starts with it -- a primary-key range, not LIKE -- together with those
-    rows' ``fallback_sessions`` rows, before the upserts land: the ledger's one bounded
-    deletion path, a re-parse superseding a source file's legacy-id records. A delete
-    that removed at least one row bumps the rewrite epoch, because N deletes paired with
-    N inserts slips past the fold's row-count witness.
+    remembered for the collector's skip decision. The file commits on its own outside ``batch()``.
     """
     captured_at = datetime.now(UTC).isoformat()
-    # Two witnesses ride every write, and the row-delta fold consumes both. (1) The
-    # inserted ids: an upsert that lands on an existing record_id updates that row in
-    # place, so only the ids absent here are new rows -- the fold's delta. (2) The
-    # value witness: an upsert that changes an existing row's aggregated values
-    # invalidates every aggregate built before it, and no delta can see the change --
-    # the fold's poison. A re-captured record upserts the same values (the parse is
-    # deterministic), so the witness stamps the poison only on a real change. The
-    # existing rows come back batched, 900 ids per read, not one query per record:
-    # the capture's wall is the page's wall.
-    existing: dict[str, tuple] = {}
-    ids = [rec.record_id for rec in records]
-    for start in range(0, len(ids), 900):  # SQLite's host-parameter ceiling
-      chunk = ids[start:start + 900]
-      marks = ",".join("?" * len(chunk))
-      for row in self._conn.execute(
-          f"SELECT record_id, kind, source, model, account, ts, in_fresh, cache_write, cache_read,"
-          f" in_unsplit, output FROM usage WHERE record_id IN ({marks})", chunk):
-        existing[row["record_id"]] = tuple(row)[1:]
-    # The savepoint keeps the file's own atomicity; standalone it commits on release,
-    # inside ledger.batch() it joins the capture's one commit (batch() documents the
-    # durability contract).
     self._conn.execute("SAVEPOINT record_file")
     try:
-      deleted = 0
-      if supersede_prefix is not None:
-        # A primary-key range: the upper bound is the prefix with its last character
-        # incremented, so 'codex:t1:' matches 'codex:t1:0' but not 'codex:t10:0' or
-        # 'codex:t1x:0'. The usage rows go first, while their fallback_sessions links
-        # still hold -- the delete trigger's counted-row check reads them, and an
-        # excluded row must not be subtracted.
-        upper = supersede_prefix[:-1] + chr(ord(supersede_prefix[-1]) + 1)
-        deleted = self._conn.execute(
-            "DELETE FROM usage WHERE record_id >= ? AND record_id < ?", (supersede_prefix, upper)).rowcount
-        self._conn.execute(
-            "DELETE FROM fallback_sessions WHERE record_id >= ? AND record_id < ?", (supersede_prefix, upper))
-      rewrote = deleted > 0
       for rec in records:
-        ts = rec.ts
-        old_values = existing.get(rec.record_id)
-        if old_values is None:
-          self._inserted_ids.add(rec.record_id)
-        else:
-          old_ts = old_values[4]
-          # The row keeps the earlier non-empty ts: an existing ts stays when the
-          # incoming one is empty or later; otherwise the incoming one wins.
-          if old_ts != "" and (ts == "" or ts > old_ts):
-            ts = old_ts
-          # The witness compares the values the row holds after the upsert, with the
-          # kept ts, so a re-capture differing only by a later stamp is not a rewrite.
-          if old_values != (rec.kind.value, rec.source, rec.model, rec.account, ts, rec.in_fresh, rec.cache_write,
-                            rec.cache_read, rec.in_unsplit, rec.output):
-            rewrote = True
         # The sessions register before the usage row: the aggregate's insert trigger
         # counts a fallback row only while none of its sessions is native, and that
         # check reads this record's own registrations.
-        if rec.kind == RecordKind.NATIVE:
+        if rec.kind == usage_sources.RecordKind.NATIVE:
           for session in rec.sessions:
             self._conn.execute(
                 "INSERT OR IGNORE INTO native_sessions (session, source) VALUES (?, ?)", (session, rec.source))
@@ -926,14 +715,8 @@ class UsageLedger:
                 "INSERT OR IGNORE INTO fallback_sessions (record_id, session) VALUES (?, ?)", (rec.record_id, session))
         self._conn.execute(
             _UPSERT_USAGE_SQL, (
-                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, ts, rec.in_fresh,
+                rec.record_id, rec.kind.value, rec.source, rec.model, rec.account, host, rec.ts, rec.in_fresh,
                 rec.cache_write, rec.cache_read, rec.in_unsplit, rec.output, path, captured_at))
-      if rewrote:
-        # A value rewrite invalidates every aggregate built before it in any process,
-        # and a superseding delete can pair N deletes with N inserts the fold's
-        # row-count witness cannot see -- the witness lives in the database, not in
-        # this process.
-        self._conn.execute(_REWRITE_EPOCH_UPSERT_SQL)
       self._conn.execute(
           """INSERT INTO captured_files (host, path, sig) VALUES (?, ?, ?)
              ON CONFLICT(host, path) DO UPDATE SET sig = excluded.sig""", (host, path, sig))
@@ -944,41 +727,33 @@ class UsageLedger:
     self._conn.execute("RELEASE record_file")
     if self._batch_savepoint is None:
       self._conn.commit()
-      UsageLedger._write_generation += 1
     return len(records)
+
+  def mark_capture_finished(self, host: str) -> None:
+    """Remember that *host*'s capture finished now, as ISO 8601 UTC under ``last_capture_at:<host>``.
+
+    Inside ``batch()`` the stamp lands in the capture's one commit; outside it commits on its own.
+    """
+    self._conn.execute(
+        "INSERT INTO ledger_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (f"last_capture_at:{host}", datetime.now(UTC).isoformat()))
+    if self._batch_savepoint is None:
+      self._conn.commit()
+
+  def last_capture_at(self, host: str) -> datetime | None:
+    """When *host*'s capture last finished (timezone-aware UTC), or None when it never has."""
+    row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = ?", (f"last_capture_at:{host}",)).fetchone()
+    return None if row is None else datetime.fromisoformat(row["value"])
 
   def model_rows(self) -> list[LedgerRow]:
     """The /token-usage page rows, aggregated from counted records only."""
     return self.model_rows_with_native_starts()[0]
 
-  def _file_stat_identity(self) -> tuple[int, int]:
-    """The ledger file's (size, mtime_ns) pair."""
-    st = self._path.stat()
-    return (st.st_size, st.st_mtime_ns)
-
-  def _rewrite_epoch(self) -> int:
-    """The ledger's in-place value-rewrite counter, one row in ledger_meta.
-
-    The counter lives in the database, not in the process: a foreign writer's
-    value rewrite must poison a memo this process built, and no process-local
-    witness can see it.
-    """
-    row = self._conn.execute("SELECT value FROM ledger_meta WHERE key = 'rewrite_epoch'").fetchone()
-    return 0 if row is None else int(row["value"])
-
-  def _journal_mode(self) -> str:
-    return self._conn.execute("PRAGMA journal_mode").fetchone()[0]
-
   def model_rows_with_native_starts(self) -> tuple[list[LedgerRow], dict[str, str]]:
-    """The page rows plus each source's first native day, served from the fastest
-    exact layer.
+    """The page rows plus each source's first native day.
 
-    Repeat reads while the ledger file sits byte-still since the last read are
-    served from the class-level memo (see its comment for the validity
-    witnesses). A memo miss caused by this process's own inserts extends the memo
-    by the row delta instead (``_try_fold_rows``). Any other miss serves the
-    trigger-maintained aggregate (``_agg_accs``) once its one-time backfill has
-    run; the grouped table pass prices the read only before that backfill.
+    The trigger-maintained aggregate (``_agg_accs``) serves the read once its one-time
+    backfill has run; the grouped table pass prices the read only before that backfill.
 
     Rows and accounts are both sorted by total descending, with the group keys as
     tiebreakers so the same ledger content always yields the same ordering.
@@ -989,53 +764,15 @@ class UsageLedger:
     NULLIF'd ``first``: an empty-ts native row must not MIN the source to the
     empty string the way a raw ``MIN(SUBSTR(ts, 1, 10))`` over the table did.
     """
-    identity = self._file_stat_identity()
-    generation = UsageLedger._write_generation
-    memo = UsageLedger._rows_memo
-    wal = self._journal_mode() == "wal"
-    if (memo is not None and memo.path == str(self._path) and memo.identity == identity and
-        memo.generation == generation and not wal):
-      return memo.rows, memo.native_starts
-    if memo is not None and memo.path == str(self._path) and not wal:
-      folded = self._try_fold_rows(memo, identity, generation)
-      if folded is not None:
-        return folded
-    self._inserted_ids.clear()
     accs = self._agg_accs()
-    # Re-anchor after the aggregate call: the one-time backfill it may run is this
-    # read's own write, and the rows below reflect the state it leaves -- only a
-    # writer after this point may void the memo.
-    identity = self._file_stat_identity()
     if accs is None:
-      # The aggregate has not been backfilled: the table pass below covers every
-      # insert this instance tracked, tracked or not.
+      # The aggregate has not been backfilled: the table pass covers every record.
       accs = {}
       for row in self._conn.execute(_MODEL_ROWS_SQL):
-        # The grouped rows enumerate every kind stored (retirement only ever drops
-        # kind='fallback' rows): an unknown stored value raises on this read's own
-        # pass instead of surfacing silently dropped from the page.
+        # The grouped rows enumerate every kind stored: an unknown stored value raises
+        # on this read's own pass instead of surfacing silently dropped from the page.
         _fold_grouped_row(accs, row)
-    rows = _rows_from_accs(accs)
-    native_starts = _native_starts_from_accs(accs)
-    # Store only a read the file provably covered: the pre-read stat must survive
-    # to the post-read check (a writer in between would leave the read consistent
-    # with the pre-write state), and never under WAL, whose commits the stat pair
-    # cannot see.
-    if (generation == UsageLedger._write_generation and self._file_stat_identity() == identity and
-        self._journal_mode() != "wal"):
-      excluded = frozenset(row["record_id"] for row in self._conn.execute(_EXCLUDED_FALLBACK_IDS_SQL))
-      rowcount = self._conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
-      UsageLedger._rows_memo = _RowsMemo(
-          path=str(self._path),
-          identity=identity,
-          generation=generation,
-          rows=rows,
-          native_starts=native_starts,
-          accs=accs,
-          rowcount=rowcount,
-          excluded_fallback=excluded,
-          rewrite_epoch=self._rewrite_epoch())
-    return rows, native_starts
+    return _rows_from_accs(accs), _native_starts_from_accs(accs)
 
   def _agg_accs(self) -> dict[tuple[str, str], _ModelSum] | None:
     """The page rows' accumulators served from the trigger-maintained aggregate, or None
@@ -1081,65 +818,6 @@ class UsageLedger:
     except BaseException:
       self._conn.rollback()
       raise
-
-  def _try_fold_rows(self, memo: _RowsMemo, identity: tuple[int, int],
-                     generation: int) -> tuple[list[LedgerRow], dict[str, str]] | None:
-    """Extend the memo's aggregates by the rows this process inserted since it was built.
-
-    Returns the folded rows, or None when any fold witness fails -- the caller
-    then re-runs the full pass, which is correct against every ledger state. The
-    delta reads only the tracked inserted ids, so its cost scales with what the
-    capture wrote, not with the table. A foreign writer's inserts are invisible
-    to this process's tracking, so the row-count witness refuses the fold and
-    the full pass prices them.
-    """
-    if generation == memo.generation or self._rewrite_epoch() != memo.rewrite_epoch:
-      return None
-    rowcount = self._conn.execute("SELECT COUNT(*) FROM usage").fetchone()[0]
-    if rowcount != memo.rowcount + len(self._inserted_ids):
-      return None  # rows moved under us beyond this instance's own inserts
-    delta: list[sqlite3.Row] = []
-    ids = sorted(self._inserted_ids)
-    for start in range(0, len(ids), 900):  # SQLite's host-parameter ceiling
-      chunk = ids[start:start + 900]
-      marks = ",".join("?" * len(chunk))
-      delta.extend(
-          self._conn.execute(
-              f"""SELECT source, model, account, kind, ts, in_fresh, cache_write, cache_read, in_unsplit, output
-              FROM usage u WHERE u.record_id IN ({marks}) AND NOT EXISTS (
-                SELECT 1 FROM fallback_sessions fs JOIN native_sessions ns ON ns.session = fs.session
-                WHERE u.kind = 'fallback' AND fs.record_id = u.record_id)""", chunk))
-    accs = memo.accs
-    for row in delta:
-      _fold_raw_row(accs, row)
-    if any(row["kind"] == RecordKind.NATIVE.value for row in delta):
-      # A new native session can retire a fallback row the memo counted; the
-      # touched groups cannot be patched incrementally, so the fold stands down
-      # and the full pass re-aggregates them.
-      excluded_now = frozenset(row["record_id"] for row in self._conn.execute(_EXCLUDED_FALLBACK_IDS_SQL))
-      if excluded_now != memo.excluded_fallback:
-        return None
-    else:
-      excluded_now = memo.excluded_fallback
-    rows = _rows_from_accs(accs)
-    native_starts = _native_starts_from_accs(accs)
-    # The same coverage rule the full pass stores under: the fold's reads must
-    # have seen exactly the state between the memo and now, with no writer since.
-    if (generation != UsageLedger._write_generation or self._file_stat_identity() != identity or
-        self._journal_mode() == "wal"):
-      return None
-    UsageLedger._rows_memo = _RowsMemo(
-        path=memo.path,
-        identity=identity,
-        generation=generation,
-        rows=rows,
-        native_starts=native_starts,
-        accs=accs,
-        rowcount=rowcount,
-        excluded_fallback=excluded_now,
-        rewrite_epoch=memo.rewrite_epoch)
-    self._inserted_ids.clear()
-    return rows, native_starts
 
 
 async def run_scheduled_usage_ledger() -> str:

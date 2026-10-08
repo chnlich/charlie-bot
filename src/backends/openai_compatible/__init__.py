@@ -2,8 +2,11 @@
 
 
 def register() -> None:
-  """Register the proxy route and the cc-openai-compatible backend type."""
-  from src.runtime.hooks import backend_types, wiring
+  """Register the proxy route and the cc-openai-compatible backend type.
+
+  The Claude CLI runs every cc-openai-compatible call and logs it, so the type's usage counts under Claude Code.
+  """
+  from src.runtime.hooks import backend_types, usage_sources, wiring
 
   wiring.register_router(
       "src.backends.openai_compatible.anthropic_proxy", prefix="/api/anthropic-proxy", tags=("anthropic-proxy",))
@@ -19,3 +22,4 @@ def register() -> None:
       ),
       lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCliLifecycle",
   )
+  usage_sources.attribute_backend_type("cc-openai-compatible", "Claude Code")

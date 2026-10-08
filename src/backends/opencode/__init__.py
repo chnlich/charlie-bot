@@ -2,8 +2,8 @@
 
 
 def register() -> None:
-  """Register the opencode backend type with the runtime."""
-  from src.runtime.hooks import backend_types
+  """Register the opencode backend type and the opencode usage source with the runtime."""
+  from src.runtime.hooks import backend_types, usage_sources
 
   backend_types.register_backend_type(
       "opencode",
@@ -16,3 +16,7 @@ def register() -> None:
           family_prefix=None,
       ),
   )
+  usage_sources.register_source(
+      usage_sources.UsageSource(
+          name="opencode", id_prefixes=("opencode-",), run_logs_only=False, module="src.backends.opencode.usage_logs"))
+  usage_sources.attribute_backend_type("opencode", "opencode")

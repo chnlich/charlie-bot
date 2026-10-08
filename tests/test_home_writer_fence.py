@@ -127,10 +127,10 @@ async def test_server_startup_preloads_the_usage_tally_stack(lifespan_env, monke
 
   from fastapi import FastAPI
 
-  import src.app.pages as pages_module
+  from src.features.usage import api as usage_api
   server_module = lifespan_env
   calls: list[int] = []
-  monkeypatch.setattr(pages_module, "preload_usage_tally_stack", lambda: calls.append(1))
+  monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: calls.append(1))
   app = FastAPI()
   async with server_module.lifespan(app):
     await asyncio.wait_for(app.state.usage_tally_warmup_task, timeout=10)

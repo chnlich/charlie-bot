@@ -2,8 +2,11 @@
 
 
 def register() -> None:
-  """Register the charlie-code backend type with the runtime."""
-  from src.runtime.hooks import backend_types
+  """Register the charlie-code backend type and the CLC usage source with the runtime.
+
+  CLC's usage lives only in CharlieBot's own run logs, so its source has no log reader.
+  """
+  from src.runtime.hooks import backend_types, usage_sources
 
   backend_types.register_backend_type(
       "charlie-code",
@@ -16,3 +19,6 @@ def register() -> None:
           family_prefix=None,
       ),
   )
+  usage_sources.register_source(
+      usage_sources.UsageSource(name="CLC", id_prefixes=("charlie-code-",), run_logs_only=True, module=None))
+  usage_sources.attribute_backend_type("charlie-code", "CLC")

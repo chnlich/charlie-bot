@@ -33,10 +33,17 @@ def default_claude_dir() -> pathlib.Path:
 
   The terminal fallback of :func:`src.infra.config.claude_config_dir`'s order and
   the root the cold-storage reader re-derives per call, so it honors a
-  redirected HOME (tests isolate stores that way); the tally layer freezes an
-  import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
+  redirected HOME (tests isolate stores that way).
   """
   return pathlib.Path.home() / ".claude"
+
+
+def default_opencode_db() -> pathlib.Path:
+  """The default opencode database (``~/.local/share/opencode/opencode.db``), read from HOME on every call.
+
+  The usage logs and the cold-storage sweep both read it, so its one spelling lives here.
+  """
+  return pathlib.Path.home() / ".local/share/opencode/opencode.db"
 
 
 # The resolved home and its string form, per raw ``CHARLIEBOT_HOME`` value plus

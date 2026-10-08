@@ -1,42 +1,35 @@
 """Tests for the /token-usage page reading its rows from the usage ledger.
 
-The ledger lives under tmp_path and ``capture_local`` is stubbed, so no test reads the
-real charliebot home or scans any real log; every number on the page must come out of
-the seeded ledger alone. The row-merge tests go one step further back: they build synthetic
+The ledger lives under tmp_path and the page never captures, so no test reads the real
+charliebot home or scans any real log; every number on the page must come out of the seeded
+ledger alone. The row-merge tests go one step further back: they build synthetic
 ``LedgerRow`` s and call the page's context builder directly, with no ledger behind them
 and an empty registry — the synthetic charlie-bot accounts resolve by their id prefix.
 """
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import re
-import sqlite3
+import socket
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 from conftest import make_page_request
 
-from src.app import pages
-from src.features.usage.usage_ledger import LedgerAccount, LedgerRow, RecordKind, UsageLedger, UsageRecord
-from src.infra.timeouts import USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS
+from src.features.usage import api
+from src.features.usage.usage_ledger import LedgerAccount, LedgerRow, UsageLedger
+from src.runtime.hooks import usage_sources
 
 CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
 CB = "charlie-bot"  # the ledger's stored spelling for its own-log records
 CC_TS, CODEX_TS, OC_TS, CB_TS = (
     "2026-01-10T08:00:00+00:00", "2026-01-11T09:00:00+00:00", "2026-01-12T10:00:00+00:00", "2026-01-13T11:00:00+00:00")
-
-
-@pytest.fixture(autouse=True)
-def _fresh_single_flight():
-  """Reset the single-flight holder around each test: a previous test's task belongs to a
-  different event loop."""
-  pages._token_usage_task = None
-  yield
-  pages._token_usage_task = None
+# A card's slot is its position in registration order, from 1, with CLC last (run_logs_only).
+SLOT = {CC: 1, CODEX: 2, OC: 3, CLC: 4}
 
 
 def _record(
@@ -45,11 +38,11 @@ def _record(
     model: str,
     ts: str,
     output: int,
-    kind: RecordKind = RecordKind.NATIVE,
+    kind: usage_sources.RecordKind = usage_sources.RecordKind.NATIVE,
     sessions: tuple[str, ...] = (),
     account: str = "acct-a",
-) -> UsageRecord:
-  return UsageRecord(
+) -> usage_sources.UsageRecord:
+  return usage_sources.UsageRecord(
       record_id=record_id,
       kind=kind,
       source=source,
@@ -81,19 +74,13 @@ def _seed(path: Path) -> None:
                 "gpt-5",
                 "2026-01-14T09:00:00+00:00",
                 7000,
-                kind=RecordKind.FALLBACK,
+                kind=usage_sources.RecordKind.FALLBACK,
                 sessions=("sess-pruned",))
         ])
     ledger.record_file("host", "/logs/oc.jsonl", "sig-oc", [_record("oc-1", OC, "o3", OC_TS, 300)])
     ledger.record_file(
         "host", "/logs/cb.jsonl", "sig-cb",
         [_record("cb-1", CB, "claude-haiku-4", CB_TS, 400, account="charlie-code-x")])
-
-
-def _stub_capture(monkeypatch: pytest.MonkeyPatch, ledger_path: Path, written: dict[str, int]) -> None:
-  monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
-  monkeypatch.setattr("src.features.usage.token_tally.capture_local", lambda ledger: written)
-  monkeypatch.setattr("src.features.usage.token_tally.backend_registry", dict)
 
 
 def _data_rows(body: str) -> list[dict]:
@@ -103,35 +90,24 @@ def _data_rows(body: str) -> list[dict]:
   return json.loads(match.group(1))["rows"]
 
 
-def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-  """Seed the ledger under tmp_path and point the page's ledger read at it."""
+def _seeded_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, captured: bool = True) -> Path:
+  """Seed the ledger under tmp_path and point the page's ledger read and registry at it; *captured*
+  stamps this host's capture time the way a finished capture does."""
   ledger_path = tmp_path / "usage" / "ledger.sqlite3"
   _seed(ledger_path)
+  if captured:
+    with UsageLedger(ledger_path) as ledger:
+      ledger.mark_capture_finished(socket.gethostname())
   monkeypatch.setattr("src.features.usage.usage_ledger.default_ledger_path", lambda: ledger_path)
+  monkeypatch.setattr("src.features.usage.token_tally.backend_registry", dict)
   return ledger_path
 
 
-async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
-  ledger_path = _seeded_ledger(monkeypatch, tmp_path)
-  _stub_capture(monkeypatch, ledger_path, {"Codex": 3, CB: 5})
-  response = await pages.token_usage_viewer(make_page_request("/token-usage"))
+async def _get_page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, captured: bool = True) -> str:
+  _seeded_ledger(monkeypatch, tmp_path, captured=captured)
+  response = await api.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   return response.body.decode("utf-8")
-
-
-async def _request_with_failing_capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-  """The seeded-ledger request whose one capture raises: the request itself fails.
-
-  Returns the ledger path so a follow-up request can prove recovery against it."""
-  ledger_path = _seeded_ledger(monkeypatch, tmp_path)
-
-  def boom(ledger: UsageLedger) -> dict[str, int]:
-    raise RuntimeError("capture exploded")
-
-  monkeypatch.setattr("src.features.usage.token_tally.capture_local", boom)
-  with pytest.raises(RuntimeError, match="capture exploded"):
-    await pages.token_usage_viewer(make_page_request("/token-usage"))
-  return ledger_path
 
 
 def _ledger_row(
@@ -170,7 +146,7 @@ def _ledger_row(
 
 def _payload_rows(rows: list[LedgerRow]) -> list[dict]:
   """The serialized rows the page's JS would feed its charts and table from."""
-  return json.loads(pages._token_usage_context(rows, {}, {}, 0.0, {})["payload"])["rows"]
+  return json.loads(api._token_usage_context(rows, {}, None, 0.0, {})["payload"])["rows"]
 
 
 @pytest.mark.asyncio
@@ -204,76 +180,6 @@ async def test_each_source_native_start_appears(monkeypatch: pytest.MonkeyPatch,
     assert date in retention
 
 
-@pytest.mark.asyncio
-async def test_capture_failure_fails_the_request(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """A capture error propagates out of the request instead of rendering stale rows."""
-  await _request_with_failing_capture(monkeypatch, tmp_path)
-
-
-@pytest.mark.asyncio
-async def test_failed_capture_clears_itself_so_the_next_request_renders(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """A failed capture uninstalls itself instead of poisoning later requests: once the
-  capture works again, the very next request renders the seeded rows (no server restart)."""
-  ledger_path = await _request_with_failing_capture(monkeypatch, tmp_path)
-
-  _stub_capture(monkeypatch, ledger_path, {"Codex": 3})
-  body = (await pages.token_usage_viewer(make_page_request("/token-usage"))).body.decode("utf-8")
-  assert {(r["model"], r["output"]) for r in _data_rows(body)} == {
-      ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
-  }
-
-
-@pytest.mark.asyncio
-async def test_locked_capture_serves_the_stored_rows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """A capture that timed out on the ledger's write lock renders the stored rows: the lock
-  says this load could not add rows, not that the stored rows are wrong."""
-  _seeded_ledger(monkeypatch, tmp_path)
-
-  def locked(ledger: UsageLedger) -> dict[str, int]:
-    raise sqlite3.OperationalError("database is locked")
-
-  monkeypatch.setattr("src.features.usage.token_tally.capture_local", locked)
-  response = await pages.token_usage_viewer(make_page_request("/token-usage"))
-  assert response.status_code == 200
-  assert {(r["model"], r["output"]) for r in _data_rows(response.body.decode("utf-8"))} == {
-      ("claude-sonnet-4", 100), ("gpt-5", 7200), ("o3", 300), ("claude-haiku-4", 400)
-  }
-
-
-@pytest.mark.asyncio
-async def test_capture_operational_error_other_than_lock_still_fails(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """The lock fallback stays narrow: every other sqlite error still fails the request."""
-  _seeded_ledger(monkeypatch, tmp_path)
-
-  def broken(ledger: UsageLedger) -> dict[str, int]:
-    raise sqlite3.OperationalError("no such table: usage")
-
-  monkeypatch.setattr("src.features.usage.token_tally.capture_local", broken)
-  with pytest.raises(sqlite3.OperationalError, match="no such table"):
-    await pages.token_usage_viewer(make_page_request("/token-usage"))
-
-
-def test_set_lock_wait_bounds_how_long_a_write_waits_out_a_lock(tmp_path: Path) -> None:
-  """The page's short bound is the busy handler's ceiling: a write against a held write
-  transaction raises within it instead of outlasting the request that set the bound."""
-  ledger_path = tmp_path / "usage" / "ledger.sqlite3"
-  with UsageLedger(ledger_path) as ledger:  # schema first: the blocker's lock must not eat the open
-    blocker = sqlite3.connect(ledger_path, timeout=5)
-    try:
-      blocker.execute("CREATE TABLE page_probe (x)")  # uncommitted write transaction: the lock held
-      blocker.execute("INSERT INTO page_probe VALUES (1)")
-      ledger.set_lock_wait(USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS)
-      started = time.monotonic()
-      with pytest.raises(sqlite3.OperationalError, match="database is locked"):
-        ledger.record_gate("host", "/logs/x.jsonl", (1, 1), None, "sig")
-      assert time.monotonic() - started < USAGE_PAGE_CAPTURE_LOCK_WAIT_SECONDS * 10
-    finally:
-      blocker.rollback()
-      blocker.close()
-
-
 def test_spellings_of_one_model_merge_into_one_row() -> None:
   """opencode's prefixed spelling and charlie-bot's bare one land on a single row: the
   display name is the largest part's spelling, the source · account sub-rows follow its
@@ -287,7 +193,7 @@ def test_spellings_of_one_model_merge_into_one_row() -> None:
   assert row["total"] == 40
   assert [(a["name"], a["total"]) for a in row["accounts"]] == [("opencode · a", 30), ("CLC · charlie-code-b", 10)]
   assert [s["total"] for s in row["segments"]] == [30, 10]
-  assert [s["slot"] for s in row["segments"]] == [pages._USAGE_SLOT[OC], pages._USAGE_SLOT[CLC]]
+  assert [s["slot"] for s in row["segments"]] == [SLOT[OC], SLOT[CLC]]
   assert sum(s["total"] for s in row["segments"]) == row["total"]
 
 
@@ -323,10 +229,10 @@ def test_per_source_tiles_count_attributed_accounts() -> None:
           accounts=[LedgerAccount("charlie-code-x", 1, 2, 2),
                     LedgerAccount("codex-y", 1, 1, 1)]),
   ]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   assert ctx["per_src"][OC]["models"] == 2
   assert ctx["per_src"][OC]["total"] == 16
-  assert ctx["per_src"][CLC]["t_comp"] == pages._compact(2)
+  assert ctx["per_src"][CLC]["t_comp"] == api._compact(2)
   assert ctx["per_src"][CLC]["models"] == 1
   assert ctx["per_src"][CODEX]["total"] == 1
   assert ctx["per_src"][CC]["total"] == 0
@@ -336,12 +242,12 @@ def test_in_unsplit_carries_into_the_payload_the_table_column_and_the_hero() -> 
   """The unsplit input rides the payload row that feeds the table column, and the hero's
   total and input figures count it like the other input columns."""
   rows = [_ledger_row(CC, "claude-sonnet-4", in_fresh=7, cache_write=3, cache_read=11, in_unsplit=5, output=4)]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   (row,) = _payload_rows(rows)
   assert row["in_unsplit"] == 5
   assert row["total"] == 30
-  assert ctx["tot_compact"] == pages._compact(30)
-  assert ctx["in_compact"] == pages._compact(26)
+  assert ctx["tot_compact"] == api._compact(30)
+  assert ctx["in_compact"] == api._compact(26)
 
 
 @pytest.mark.asyncio
@@ -353,8 +259,8 @@ async def test_rendered_page_has_one_row_per_canonical_model(monkeypatch: pytest
       _ledger_row(CB, "GLM-5.3-Flash", output=10, accounts=[LedgerAccount("charlie-code-b", 1, 10, 10)]),
       _ledger_row(CC, "claude-sonnet-4", output=100),
   ]
-  monkeypatch.setattr(pages, "_capture_ledger_rows", lambda: (rows, {}, {}, 0.0, {}))
-  response = await pages.token_usage_viewer(make_page_request("/token-usage"))
+  monkeypatch.setattr(api, "_read_ledger", lambda: (rows, {}, None, 0.0, {}))
+  response = await api.token_usage_viewer(make_page_request("/token-usage"))
   assert response.status_code == 200
   data = _data_rows(response.body.decode("utf-8"))
   assert [(r["model"], r["total"]) for r in data] == [("claude-sonnet-4", 100), ("GLM-5.3-Flash", 40)]
@@ -369,10 +275,10 @@ def test_charlie_bot_native_accounts_read_as_clc() -> None:
   native start, whose native records are all CLC usage."""
   rows = [_ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)])]
   (row,) = _payload_rows(rows)
-  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(pages._USAGE_SLOT[CLC], 140)]
+  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(SLOT[CLC], 140)]
   assert [a["name"] for a in row["accounts"]] == ["CLC · charlie-code-x"]
-  ctx = pages._token_usage_context(rows, {CB: "2026-01-01"}, {}, 0.0, {})["ctx"]
-  assert ctx["per_src"][CLC]["t_comp"] == pages._compact(140)
+  ctx = api._token_usage_context(rows, {CB: "2026-01-01"}, None, 0.0, {})["ctx"]
+  assert ctx["per_src"][CLC]["t_comp"] == api._compact(140)
   assert ctx["per_src"][CLC]["native_start"] == "2026-01-01"
 
 
@@ -387,12 +293,12 @@ def test_charlie_bot_fallback_accounts_join_their_cli_s_source() -> None:
   ]
   (row,) = _payload_rows(rows)
   assert row["total"] == 40
-  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(pages._USAGE_SLOT[CODEX], 40)]
+  assert [(s["slot"], s["total"]) for s in row["segments"]] == [(SLOT[CODEX], 40)]
   assert [(a["name"], a["total"]) for a in row["accounts"]] == [
       ("Codex · work", 30),
       ("Codex · codex-y (fallback)", 10),
   ]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   assert ctx["per_src"][CODEX]["total"] == 40
   assert ctx["per_src"][CLC]["total"] == 0
 
@@ -407,36 +313,70 @@ def test_four_tile_totals_sum_to_the_page_total() -> None:
       _ledger_row(CB, "glm-z", in_unsplit=100, output=40, accounts=[LedgerAccount("charlie-code-x", 2, 40, 140)]),
       _ledger_row(OC, "o3", output=300, accounts=[LedgerAccount("acct-a", 3, 300, 300)]),
   ]
-  ctx = pages._token_usage_context(rows, {}, {}, 0.0, {})["ctx"]
+  ctx = api._token_usage_context(rows, {}, None, 0.0, {})["ctx"]
   assert sum(ctx["per_src"][src]["total"] for src in (CC, CODEX, OC, CLC)) == sum(r.total for r in rows)
 
 
 @pytest.mark.asyncio
 async def test_page_legend_names_the_four_cli_sources_without_charlie_bot(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  """The rendered legend lists Claude Code, Codex, opencode, CLC in slot order, the
-  self-check names CharlieBot's own log, and no charlie-bot text reaches the page."""
+  """The rendered legend lists Claude Code, Codex, opencode, CLC in slot order and no
+  charlie-bot text reaches the page."""
   body = await _get_page(monkeypatch, tmp_path)
   leg = re.search(r"const LEG = (\[[^\]]*\])", body).group(1)
   assert json.loads(leg) == [CC, CODEX, OC, CLC]
-  assert "CharlieBot logs: 5 records written this load" in body
   assert "charlie-bot" not in body
 
 
+@pytest.mark.asyncio
+async def test_cards_follow_registration_order_with_run_log_sources_last(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The cards are the registered sources in registration order — no page-side list of names —
+  and a source whose usage lives only in CharlieBot's run logs closes the list wherever it registered."""
+  by_name = {s.name: s for s in usage_sources.sources()}
+  reordered = {name: by_name[name] for name in (CLC, OC, CC, CODEX)}
+  monkeypatch.setattr(usage_sources, "_sources", reordered)
+  body = await _get_page(monkeypatch, tmp_path)
+  leg = re.search(r"const LEG = (\[[^\]]*\])", body).group(1)
+  assert json.loads(leg) == [OC, CC, CODEX, CLC]
+  rows = {r["model"]: r for r in _data_rows(body)}
+  assert [s["slot"] for s in rows["claude-sonnet-4"]["segments"]] == [2]
+  assert [s["slot"] for s in rows["o3"]["segments"]] == [1]
+
+
+@pytest.mark.asyncio
+async def test_page_says_when_the_ledger_was_last_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+  """The page names its ledger's age in local time from the host's ``last_capture_at``, and says
+  no capture has run when the host has none; either way the page renders."""
+  with_capture = await _get_page(monkeypatch, tmp_path / "captured")
+  stamp = dt.datetime.now().astimezone().strftime("%Y-%m-%d")
+  assert f"as of {stamp}" in with_capture
+  assert "no capture yet" not in with_capture
+  without = await _get_page(monkeypatch, tmp_path / "fresh", captured=False)
+  assert "no capture yet" in without
+  assert "as of 20" not in without
+
+
 def test_preload_pins_the_tally_stack_in_a_fresh_process() -> None:
-  """The preload imports the lazy tally set into a fresh interpreter, and importing the
-  pages module alone stays tally-free (the M99 import floor's contract)."""
+  """The preload imports the lazy tally set and every registered source's implementation into a
+  fresh interpreter, and importing the page module alone stays tally-free (the M99 import floor's
+  contract)."""
   repo_root = str(Path(__file__).resolve().parents[1])
   code = "\n".join(
       [
           "import sys",
           f"sys.path.insert(0, {repo_root!r})",
-          "from src.app import pages",
-          "assert 'src.features.usage.token_tally' not in sys.modules, 'pages import pulled the tally stack'",
-          "assert 'src.features.usage.usage_ledger' not in sys.modules, 'pages import pulled the ledger stack'",
-          "pages.preload_usage_tally_stack()",
+          "from src.app import registrations",
+          "from src.features.usage import api",
+          "assert 'src.features.usage.token_tally' not in sys.modules, 'page import pulled the tally stack'",
+          "assert 'src.features.usage.usage_ledger' not in sys.modules, 'page import pulled the ledger stack'",
+          "registrations.register_all()",
+          "assert 'src.backends.codex.usage_logs' not in sys.modules, 'registration pulled an implementation'",
+          "api.preload_usage_tally_stack()",
           "assert 'src.features.usage.token_tally' in sys.modules",
           "assert 'src.features.usage.usage_ledger' in sys.modules",
+          "for module in ('claude_code', 'codex', 'opencode'):",
+          "  assert f'src.backends.{module}.usage_logs' in sys.modules, module",
       ])
   proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
   assert proc.returncode == 0, proc.stderr

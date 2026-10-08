@@ -1,5 +1,6 @@
 """NDJSON (newline-delimited JSON) file utilities."""
 
+import bisect
 import contextlib
 import itertools
 import json
@@ -183,6 +184,94 @@ def iter_ndjson_events_containing(path: pathlib.Path, needle: bytes, *, log_even
         pos = line_end + 1
     finally:
       del view
+
+
+def iter_jsonl_files(root: str) -> Iterator[str]:
+  """Yield every ``.jsonl`` file path under *root*, a directory's own files before its subdirectories'.
+
+  Symlinked directories are not entered; symlinked files are listed. A missing or unreadable
+  directory raises. Paths stay plain strings: a log tree holds thousands of files, and a Path per
+  entry costs more than the listing.
+  """
+  stack = [root]
+  while stack:
+    subdirs: list[str] = []
+    files: list[str] = []
+    with os.scandir(stack.pop()) as entries:
+      for entry in entries:
+        if entry.is_dir():
+          if not entry.is_symlink():
+            subdirs.append(entry.path)
+        elif entry.name.endswith(".jsonl"):
+          files.append(entry.path)
+    stack.extend(subdirs)
+    yield from files
+
+
+# Bytes read per round by parse_marker_lines. One C-level find scan per marker hands the
+# parse only the marker lines; a per-line Python membership test would pay every line.
+_MARKER_CHUNK = 1 << 22
+
+
+def parse_marker_lines(path: str | pathlib.Path, markers: tuple[bytes, ...]) -> list[dict]:
+  """The parsed objects of *path*'s complete lines that contain any of *markers*, in file order.
+
+  Only complete lines parse: a trailing fragment without its newline waits for the read that covers
+  it whole, and an unparseable marker line is dropped. A caller that stores a signature for the file
+  takes it before this read, so an append during the read outdates the stored signature.
+
+  The carry buffer holds exactly the current unterminated line between rounds: each round appends
+  only the fresh bytes and drops the consumed prefix once, so a multi-hundred-MB line costs one
+  append pass per chunk (a ~500 MB line reads in ~1 s; re-concatenating the carry per round took 96 s).
+  The newline scans ride the fresh region; the marker pass runs once per round over the complete
+  region, carried partial included, so each line is scanned once in its life.
+  """
+  objects: list[dict] = []
+  carry = bytearray()
+  hits: list[int] = []
+  with open(path, "rb") as fh:
+    while True:
+      chunk = fh.read(_MARKER_CHUNK)
+      if not chunk:
+        break
+      plen = len(carry)
+      carry += chunk
+      cut = carry.rfind(b"\n", plen)
+      if cut == -1:
+        continue
+      hits.clear()
+      for marker in markers:
+        i = carry.find(marker, 0, cut + 1)
+        while i != -1:
+          hits.append(i)
+          i = carry.find(marker, i + 1, cut + 1)
+      starts: set[int] = set()
+      if hits:
+        # A hit's line start is the carry's first byte (the carry holds no newline before the
+        # fresh region) or the byte after the last fresh newline before it, both from one
+        # ascending newline walk, never a from-zero rfind per hit.
+        fresh_nls: list[int] = []
+        pos = carry.find(b"\n", plen)
+        while pos != -1 and pos <= cut:
+          fresh_nls.append(pos)
+          pos = carry.find(b"\n", pos + 1)
+        for i in hits:
+          j = bisect.bisect_left(fresh_nls, i)
+          starts.add(0 if j == 0 else fresh_nls[j - 1] + 1)
+      for start in sorted(starts):
+        end = carry.find(b"\n", start)
+        line = bytes(carry[start:end + 1])
+        try:
+          objects.append(orjson.loads(line))
+        except ValueError:
+          # orjson rejects invalid UTF-8, NaN/Infinity and >8-byte float overflow; the
+          # stdlib replace-decode keeps the tolerant parse those lines always had.
+          try:
+            objects.append(json.loads(line.decode("utf-8", errors="replace")))
+          except ValueError:
+            continue
+      del carry[:cut + 1]
+  return objects
 
 
 def parse_ndjson_file(path: pathlib.Path) -> list[dict]:

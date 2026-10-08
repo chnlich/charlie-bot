@@ -2,8 +2,11 @@
 
 
 def register() -> None:
-  """Register the cc-kimi backend type with the runtime."""
-  from src.runtime.hooks import backend_types
+  """Register the cc-kimi backend type with the runtime.
+
+  The Claude CLI runs every cc-kimi call and logs it, so the type's usage counts under Claude Code.
+  """
+  from src.runtime.hooks import backend_types, usage_sources
 
   backend_types.register_backend_type(
       "cc-kimi",
@@ -17,3 +20,4 @@ def register() -> None:
       ),
       lifecycle="src.backends.claude_code.claude_lifecycle:ClaudeCliLifecycle",
   )
+  usage_sources.attribute_backend_type("cc-kimi", "Claude Code")

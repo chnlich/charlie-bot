@@ -49,13 +49,6 @@ Known-alive symbols:
   `pidfd_open_available` (`tests/conftest.py`, the pid-watch tests' skip gate, requested
   by name in `tests/test_trigger_pid_watch.py`), but it is named in the parameter lists of the
   tests that use it, so the Step 3 grep already finds its references; no list entry needed.
-- `_fresh_single_flight` (`tests/test_token_usage_page.py`) — `@pytest.fixture(autouse=True)`,
-  reached by fixture-name discovery like the block above. It resets `pages._token_usage_task`
-  (the /token-usage page's module-global single-flight holder) to None around each test. A task
-  left installed by one test is bound to that test's event loop, which pytest closes right after;
-  the reset keeps a later test's request from awaiting it across loops. Every current test joins
-  its request to completion and the request's finally clears the holder, so deleting the fixture
-  leaves the suite green. Vulture flags it as an unused function.
 - `no_real_usage_capture` (`tests/test_storage_cool.py`) — `@pytest.fixture(autouse=True)`, same
   discovery. It stubs `storage_cool._capture_usage_before_sweep` to `dict`, so every sweep runs
   with the pre-sweep capture as a no-op; the two tests that exercise the capture monkeypatch their

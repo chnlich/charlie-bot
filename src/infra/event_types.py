@@ -33,9 +33,9 @@ QUOTA_EXHAUSTED = "quota_exhausted"
 # reads (src/runtime/message_aggregator.py, web/static/js/chat/rendering.js); a
 # still_thinking round carries none, so its separator renders no seconds.
 # input_event_ids names the chat events the round answers, in arrival order:
-# the Slack round audit re-reads it, and the
-# slack_notice and slack_backfill payloads carry the singular input_event_id
-# name for the one summon each is about.
+# the chat-thread round audit re-reads it, and the chat-thread platforms'
+# ``<platform>_notice`` and ``<platform>_backfill`` payloads carry the singular
+# input_event_id name for the one summon each is about.
 # MASTER_DONE events written before input batching carry the singular
 # input_event_id instead; every reader of either shape goes through
 # master_done_input_event_ids (src/runtime/api/message_utils.py).
@@ -78,20 +78,6 @@ SESSION_ATTACHED = "session_attached"
 # Cross-session agent message: carries the caller session's provenance and is
 # never a real user message (the authorization gate excludes it by type).
 AGENT_MESSAGE = "agent_message"
-
-# -- Slack -------------------------------------------------------------------
-# A reply the master posted to its session's Slack thread through
-# ``charliebot slack reply``; the same-named ``slack_reply`` payload names the
-# summon it answers, which the round-end audit reads. Both uses share this one
-# constant, as with CONTEXT_READING below.
-SLACK_REPLY = "slack_reply"
-
-# -- Discord -----------------------------------------------------------------
-# A reply the master posted to its session's Discord thread through
-# ``charliebot discord reply``; the same-named ``discord_reply`` payload names
-# the summon it answers, which the round-end audit reads. Both uses share this
-# one constant, as with SLACK_REPLY above.
-DISCORD_REPLY = "discord_reply"
 
 # -- Context -----------------------------------------------------------------
 CONTEXT_COMPACTED = "context_compacted"
@@ -195,8 +181,9 @@ RUN_DELIVERY = "run_delivery"
 # anything later stays pending.
 TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 
-# -- LaTeX -------------------------------------------------------------------
-TEX_EDIT_PROPOSED = "tex_edit_proposed"
+# -- Scheduled-task runs ------------------------------------------------------
+# TASK_TRIGGERED is the manual scheduled-task run endpoint's response type.
+TASK_TRIGGERED = "task_triggered"
 
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"

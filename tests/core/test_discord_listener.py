@@ -32,6 +32,7 @@ from src.features.discord.discord_listener import (
     post_reply,
     summon_session_id,
 )
+from src.features.discord.event_types import DISCORD_REPLY
 from src.features.discord.metadata import DiscordOrigin
 from src.infra import event_types as ET
 from src.infra import metadata_slots
@@ -583,7 +584,7 @@ async def test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link(
   assert link in excinfo.value.detail
   assert f"charliebot publish {named_path}" in excinfo.value.detail
   assert client.posts == []
-  assert not [ev for ev in session_mgr.load_chat_events_sync(sid) if ev.get("type") == ET.DISCORD_REPLY]
+  assert not [ev for ev in session_mgr.load_chat_events_sync(sid) if ev.get("type") == DISCORD_REPLY]
 
 
 @pytest.mark.asyncio

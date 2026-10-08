@@ -7,8 +7,9 @@ import pydantic
 import pytest
 
 from src.infra import config, models
+from src.features.discord.event_types import DISCORD_REPLY
 from src.features.discord.metadata import DiscordOrigin
-from src.infra import event_types as ET, metadata_slots
+from src.infra import metadata_slots
 from src.runtime import message_aggregator
 
 _GUILD = "100000000000000001"
@@ -76,7 +77,7 @@ def test_discord_reply_renders_as_system_row() -> None:
   deltas = list(
       agg.feed(
           {
-              "type": ET.DISCORD_REPLY,
+              "type": DISCORD_REPLY,
               "content": "hi there",
               "discord_reply": {
                   "answers": None,

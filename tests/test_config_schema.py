@@ -89,6 +89,19 @@ def test_credentials_shape_errors_name_the_offending_depth(
   assert fragment in str(excinfo.value)
 
 
+def test_retired_slack_credential_keys_name_their_credentials_location(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  home = _credentials_home(tmp_path, monkeypatch)
+  (home / "config.yaml").write_text("slack_bot_token: x\nslack_app_token: y\nslack_user_token: z\n", encoding="utf-8")
+  with pytest.raises(ValueError) as excinfo:
+    config_module.load_config()
+  assert str(excinfo.value) == (
+      f"{home / 'config.yaml'} still uses retired top-level keys; move each one:\n"
+      "  slack_bot_token -> credentials.yaml slack.bot_token\n"
+      "  slack_app_token -> credentials.yaml slack.app_token\n"
+      "  slack_user_token -> credentials.yaml slack.user_token")
+
+
 EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
 
 STARTER_BACKEND_IDS = ["claude-fable", "claude-opus", "claude-sonnet"]

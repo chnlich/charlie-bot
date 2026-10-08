@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
-from src.infra import event_types as ET
+from src.features.slack.event_types import SLACK_REPLY
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata
 from src.runtime.hooks import turn_contributions
@@ -32,7 +32,7 @@ class SlackTurnContribution(turn_contributions.TurnContribution):
     await slack_listener.deliver_done(meta.id, done_event, cfg, sessions)
 
   def event_renderers(self) -> dict[str, Callable[[dict], dict]]:
-    return {ET.SLACK_REPLY: _slack_reply_message}
+    return {SLACK_REPLY: _slack_reply_message}
 
 
 CONTRIBUTION = SlackTurnContribution()

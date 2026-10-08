@@ -43,10 +43,10 @@ from src.infra.yaml_utils import load_yaml
 
 log = LazyStructlogLogger()
 
-# Fixed house wall clock pinned by Slack timestamp prefixes
-# (src/features/slack/slack_listener.py) and the Saturday-1AM weekly-recycle anchor
+# Fixed house wall clock pinned by the chat-thread session-name timestamps
+# (src/features/chat_threads/thread_entry.py) and the Saturday-1AM weekly-recycle anchor
 # (src/runtime/master_trigger.py). Distinct from DEFAULT_TIMEZONE below, a per-task default
-# overridable via ``timezone: local`` or any IANA key, so retargeting the cron default
+# overridable via ``timezone: local`` or any IANA key, so retargeting the scheduled-task default
 # cannot shift these pins.
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
@@ -400,9 +400,6 @@ LEGACY_KEYS: dict[str, str] = {
     "model_preference": "backends.preference",
     "home_services": "ui.home_services",
     "telegram_chat_id": "telegram.chat_id",
-    CREDENTIALS_PREFIX + "slack_bot_token": "slack.bot_token",
-    CREDENTIALS_PREFIX + "slack_app_token": "slack.app_token",
-    CREDENTIALS_PREFIX + "slack_user_token": "slack.user_token",
     CREDENTIALS_PREFIX + "telegram_bot_token": "telegram.bot_token",
     CREDENTIALS_PREFIX + "charliebot_access_key": "charliebot.access_key",
     CREDENTIALS_PREFIX + "moonshot_api_key": "moonshot.api_key",

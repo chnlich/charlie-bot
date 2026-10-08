@@ -13,7 +13,12 @@ def register() -> None:
   config_registry.register_config_section(
       "slack",
       "src.features.slack.config:SlackConfig",
-      legacy_keys={"slack_allowed_user_ids": "slack.allowed_user_ids"},
+      legacy_keys={
+          "slack_allowed_user_ids": "slack.allowed_user_ids",
+          config_registry.CREDENTIALS_PREFIX + "slack_bot_token": "slack.bot_token",
+          config_registry.CREDENTIALS_PREFIX + "slack_app_token": "slack.app_token",
+          config_registry.CREDENTIALS_PREFIX + "slack_user_token": "slack.user_token",
+      },
   )
   metadata_slots.register_metadata_fields(
       OWNER,

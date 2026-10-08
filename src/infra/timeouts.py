@@ -204,10 +204,11 @@ MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds
 # ---------------------------------------------------------------------------
 
 # How long a WebSocket this server opens as a client waits for the peer's close
-# frame after sending its own. Slack's Socket Mode endpoint never answers a
-# client close frame, so websockets' 10 s default added 10 s to every server
-# stop and every refresh reconnect; the other client connections (the two voice
-# transcription relays) take the same bound so a stop has a definite ceiling.
+# frame after sending its own. One chat-platform listener's endpoint never
+# answers a client close frame, so websockets' 10 s default added 10 s to every
+# server stop and every refresh reconnect; the other chat-platform listener and
+# the two voice transcription relays take the same bound so a stop has a
+# definite ceiling.
 WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
 
 # ---------------------------------------------------------------------------

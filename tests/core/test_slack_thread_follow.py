@@ -10,6 +10,7 @@ import conftest
 import pytest
 
 from src.features.slack import slack_listener
+from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra import metadata_slots
@@ -209,7 +210,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   assert [m["ts"] for m in payload["new_messages"]] == [_ts(110), _ts(130)]
   assert payload["new_messages"][0] == {"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
   assert client.posts == []
-  assert not [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SLACK_REPLY]
+  assert not [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
 
 
 @pytest.mark.asyncio
@@ -238,7 +239,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
     assert resp.json()["posted"] is True
 
   assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len([ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SLACK_REPLY]) == 1
+  assert len([ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
 
 
 # ---------------------------------------------------------------------------

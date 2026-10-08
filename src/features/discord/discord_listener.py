@@ -86,7 +86,7 @@ from src.features.discord.discord_client import (
     missing_permissions,
     snowflake_key,
 )
-from src.infra import event_types as ET
+from src.features.discord.event_types import DISCORD_REPLY
 from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
@@ -154,7 +154,7 @@ _DM_NOTICE = "请在服务器频道里 @ 我。"
 DISCORD = ThreadPlatform(
     name="discord",
     display_name="Discord",
-    reply_event_type=ET.DISCORD_REPLY,
+    reply_event_type=DISCORD_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
     scope_doc="discord_reply_scope.md",

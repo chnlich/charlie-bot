@@ -13,7 +13,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import chat_events, runs, session_aliases, sessions, task_sessions
+from src.runtime import chat_events, runs, sessions, task_sessions
 
 
 def build_env(
@@ -52,9 +52,9 @@ async def register_live_run(store: runs.RunStore, session_id: str, proc: subproc
 
 
 @pytest.mark.asyncio
-async def test_register_is_idempotent_and_registers_alias(tmp_path: pathlib.Path) -> None:
+async def test_register_is_idempotent(tmp_path: pathlib.Path) -> None:
   env = build_env(tmp_path)
-  _, session_mgr, mgr, store = env
+  _, session_mgr, _, store = env
   session_id = await make_task(env, "t1")
 
   run = await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
@@ -62,8 +62,7 @@ async def test_register_is_idempotent_and_registers_alias(tmp_path: pathlib.Path
   assert again.id == run.id and again.kind == "work"  # the original product wins
 
   assert (await store.get_run(session_id, "r1")) is not None
-  assert mgr.aliases.resolve_thread(session_id, "r1") == {"session_id": session_id, "run_id": "r1"}
-  # No second ThreadMetadata exists for the alias.
+  # Registering a run writes no ThreadMetadata.
   assert not (session_mgr._cfg.sessions_dir / session_id / "threads" / "r1").exists()
 
   # A queued run is distinguishable from a live process and keeps its inputs for dispatch.
@@ -299,7 +298,7 @@ async def test_record_launch_refused_on_a_run_with_a_stop_request(tmp_path: path
 async def test_readonly_store_reads_without_a_control_lock(tmp_path: pathlib.Path) -> None:
   sessions_dir = tmp_path / "sessions"
   sessions_dir.mkdir()
-  store = runs.RunStore(sessions_dir, None, None, session_aliases.SessionAliasStore(sessions_dir))
+  store = runs.RunStore(sessions_dir, None, None)
   session_id, run_id = "sess-ro", "run-ro"
   record = models.RunRecord(id=run_id, session_id=session_id)
   path = store.metadata_path(session_id, run_id)

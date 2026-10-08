@@ -73,7 +73,6 @@ from src.runtime.control_events import (
 )
 from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_alive, stop_requested_in_events
-from src.runtime.session_aliases import SessionAliasStore
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.runtime.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.runtime.takeoff_gate import is_verify_exempt
@@ -286,12 +285,11 @@ def _admits_input_type(event: dict) -> bool:
   """The fold's input-type admission.
 
   The admitted types are the one INPUT_EVENT_TYPES definition
-  (src/runtime/session_dispatch.py) — the same set the legacy master queue's
-  batching declares against. Agent messages, scheduled triggers, and child
-  reports are input by type; a USER event is input only when it is a real
-  user message — the Claude CLI persists each tool result as a user-type event
-  with list content, and that echo is tool output no round can ever confirm,
-  not a message.
+  (src/runtime/session_dispatch.py) — the same set ``admit_input`` accepts.
+  Agent messages, scheduled triggers, and child reports are input by type; a
+  USER event is input only when it is a real user message — the Claude CLI
+  persists each tool result as a user-type event with list content, and that
+  echo is tool output no round can ever confirm, not a message.
   """
   etype = event.get("type")
   if etype not in INPUT_EVENT_TYPES:
@@ -396,8 +394,7 @@ class TaskTreeManager:
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
     self.events = ControlEventSink(session_mgr)
-    self.aliases = SessionAliasStore(cfg.sessions_dir)
-    self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events, self.aliases)
+    self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events)
     # The run owner's terminal/stop/identity reads see the full fact history
     # (archived segments included), so a rotated acknowledgement never un-dones
     # itself and a repeat finish stays idempotent across rotation.
@@ -1575,7 +1572,7 @@ class TaskTreeManager:
     return self._deletion_blockers_locked(index, session_id)
 
   def _deletion_reference_blockers(self, index: _TreeIndex, session_id: str) -> list[str]:
-    """Saved child, run, trigger, and alias references that prevent deletion."""
+    """Saved child, run, and trigger references that prevent deletion."""
     blockers: list[str] = []
     children = self._children_of(index, session_id)
     if children:
@@ -1586,17 +1583,15 @@ class TaskTreeManager:
     triggers_dir = self._cfg.sessions_dir / session_id / "triggers"
     if triggers_dir.is_dir() and any(triggers_dir.glob("*.json")):
       blockers.append("has saved trigger reference(s)")
-    blockers.extend(
-        f"referenced by session alias for old id {old_id}" for old_id in self.aliases.old_ids_for(session_id))
     return blockers
 
   def _deletion_blockers_locked(self, index: _TreeIndex, session_id: str) -> list[str]:
     """The v2 empty/unreferenced rule, evaluated under the control lock.
 
-    No children, runs, triggers, aliases, or any other saved structured
-    reference (origin/created-by/parent/successor pointers from other
-    records, child reports another log holds), and no preserved conversation
-    or evidence beyond the creation fact itself.
+    No children, runs, triggers, or any other saved structured reference
+    (origin/created-by/parent/successor pointers from other records, child
+    reports another log holds), and no preserved conversation or evidence
+    beyond the creation fact itself.
     """
     blockers = self._deletion_reference_blockers(index, session_id)
     facts = self._facts_of(session_id)

@@ -128,8 +128,7 @@ async def _delegate_task_tree(
 
   The child is a task-tree node (profile=worker) under the calling manager
   task; the Run is its first execution record. A replayed request returns the
-  original child and Run. The returned ``thread_id`` is the compatibility
-  alias the legacy thread routes resolve to the same Run.
+  original child and Run. The returned ``thread_id`` equals ``run_id``.
   """
   from src.infra.models import RunRecord, TaskSpec
   from src.runtime.control_events import stable_run_id
@@ -190,10 +189,6 @@ async def _delegate_task_tree(
       )
       async with task_mgr.control_lock:
         await task_mgr.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(task_spec))
-        # The parent-entry compatibility alias: legacy thread routes addressed
-        # from the delegating session resolve to the same Run (whose owner is
-        # the child task).
-        task_mgr.aliases.register_owner_thread_alias(req.session_id, child.id, run_id)
   except (DelegationBlockedError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
     from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e

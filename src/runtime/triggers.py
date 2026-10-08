@@ -842,28 +842,23 @@ class TriggerManager:
     else:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
 
-    # Established aliases resolve to the canonical task without changing its
-    # ownership. The trigger file stays where it was written; only the
-    # delivery target resolves.
-    deliver_to = self._tree_alias_target(fresh.session_id) or fresh.session_id
-
     # Re-read task metadata before delivery: a node removed or blanked during
     # the wait is cancelled instead of writing into a missing task.
     task_mgr = self._task_tree_provider()
-    if await task_mgr.load_meta(deliver_to) is None:
+    if await task_mgr.load_meta(fresh.session_id) is None:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
     # Race backstop: the watchdog covers the wait, so this fire-time re-check of
     # the same predicate catches an archive landing in the final stretch.
-    dormancy_reason = await self._dormancy_reason(deliver_to)
+    dormancy_reason = await self._dormancy_reason(fresh.session_id)
     if dormancy_reason is not None:
       await self._cancel_undeliverable(fresh, reason=dormancy_reason)
       return
 
     # The trigger id is the durable input identity, so a crash after admission
     # but before the FIRED stamp replays into the same task input.
-    await self._fire_task_tree(fresh, trigger_message, deliver_to)
+    await self._fire_task_tree(fresh, trigger_message)
     await self._stamp_fired(fresh, reason)
 
   async def _stamp_fired(self, fresh: PendingTrigger, reason: str) -> None:
@@ -880,20 +875,12 @@ class TriggerManager:
     self._tasks.pop(fresh.id, None)
     log.info("trigger_fired", trigger_id=fresh.id, session=fresh.session_id, reason=reason)
 
-  def _tree_alias_target(self, session_id: str) -> str | None:
-    """The canonical task id an established alias maps to, or None."""
-    try:
-      return self._task_tree_provider().aliases.resolve_session(session_id)
-    except Exception:
-      log.exception("trigger_alias_resolution_failed", session=session_id)
-      return None
-
-  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str, session_id: str | None = None) -> None:
+  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str) -> None:
     """Admit and dispatch one durable scheduled input to its stable node."""
     from src.runtime.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
     task_mgr = self._task_tree_provider()
-    session_id = session_id or trigger.session_id
+    session_id = trigger.session_id
     await task_mgr.load_task_meta(session_id)
     try:
       await task_mgr.dispatch.admit_input(

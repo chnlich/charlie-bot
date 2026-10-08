@@ -99,7 +99,6 @@ from src.runtime.home_writer_fence import (
     acquire_home_writer_fence,
 )
 from src.runtime.runs import read_pid_stat
-from src.runtime.session_aliases import ALIASES_FILE_NAME
 from src.runtime.task_recovery import reconcile_task_tree
 
 log = LazyStructlogLogger()
@@ -275,8 +274,8 @@ def _legacy_home_evidence(home: Path) -> list[str]:
     evidence.append("config.d/ exists (scheduled task configuration)")
   if (home / "triggers").is_dir():
     evidence.append("triggers/ exists")
-  if (home / ALIASES_FILE_NAME).is_file():
-    evidence.append(f"{ALIASES_FILE_NAME} exists")
+  if (home / "session_aliases.json").is_file():
+    evidence.append("session_aliases.json exists")
   if (home / "sessions").is_dir():
     evidence.append("sessions/ exists")
   return evidence

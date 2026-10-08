@@ -292,7 +292,7 @@ class PlanRegistryManager:
   def _find_binding_by_file(self, data: dict, file: str) -> tuple[int, int] | None:
     """Return (plan_id, v) for the first version whose normalized file path equals ``file``.
 
-    Both sides are normalized via ``posixpath.normpath`` so legacy rows with non-canonical
+    Both sides are normalized via ``posixpath.normpath`` so rows with non-canonical
     spellings (e.g. ``./artifacts/c.html``) match a canonical target without any data migration.
     """
     for plan in data["plans"]:

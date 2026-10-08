@@ -4,10 +4,9 @@ The improve controller keeps its existing canonical state — the per-loop
 directory under ``sessions/<id>/loops/<loop_id>/`` with ``goal.md`` (re-read at
 every iteration), the optional ``plan.md``, and ``state.json``
 (:class:`~src.features.improve.improve_command.ImproveState`) — and its existing stop
-convention (goal reached, iterations exhausted, or explicitly stopped). What
-changes is where executions live: instead of legacy worker threads, the loop
-owns ONE worker child task under the calling manager, and every iteration is
-one Run on that child (``kind="iteration"``,
+convention (goal reached, iterations exhausted, or explicitly stopped).
+Executions live on ONE worker child task that the loop owns under the calling
+manager, and every iteration is one Run on that child (``kind="iteration"``,
 ``sequence_ref=(improve, owner_ref=<loop dir>, position=<n>)``).
 
 Boundaries this module pins:

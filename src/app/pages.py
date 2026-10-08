@@ -162,7 +162,7 @@ async def index(
     )
     # The first-paint list shares the All endpoint's membership: sequence-subtree
     # rows and every sidebar view's subtree ride no listing, so a firing leaf neither
-    # flattens into a top-level sidebar row, a Slack/Discord thread session
+    # flattens into a top-level sidebar row, a chat-platform thread session
     # never paints into Workspace, and neither becomes the auto-redirect target.
     sequence_subtree = await session_mgr.sequence_subtree_roots()
     views = await session_mgr.view_subtree_roots()

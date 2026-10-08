@@ -26,6 +26,7 @@ from src.runtime.api.deps import (
 from src.runtime.api.deps import require_caller as require_caller_dep
 from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
+from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
@@ -132,13 +133,7 @@ async def _delegate_task_tree(
   """
   from src.infra.models import RunRecord, TaskSpec
   from src.runtime.control_events import stable_run_id
-  from src.runtime.task_sessions import (
-      TaskConflictError,
-      TaskForbiddenError,
-      TaskInvalidError,
-      TaskNotFoundError,
-      canonical_task_spec_text,
-  )
+  from src.runtime.task_sessions import canonical_task_spec_text
 
   try:
     # The nearest-user-ancestor gate judges here, where the delegation request
@@ -339,8 +334,6 @@ async def session_message(
   target = await session_mgr.get_session(req.target_session_id)
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
-
-  from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
   try:
     await task_mgr.dispatch.admit_input(

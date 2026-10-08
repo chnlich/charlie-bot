@@ -86,16 +86,14 @@ from src.runtime.session_dispatch import agent_provenance, input_event_type_for_
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
-from src.runtime.task_sessions import (
-    AGENT_CREATE_SCOPE_REFUSAL,
-    TASK_CREATE_REQUEST_ID_REQUIRED,
+from src.runtime.task_errors import (
     TaskArchivedError,
     TaskConflictError,
     TaskForbiddenError,
     TaskInvalidError,
     TaskNotFoundError,
-    TaskTreeManager,
 )
+from src.runtime.task_sessions import AGENT_CREATE_SCOPE_REFUSAL, TASK_CREATE_REQUEST_ID_REQUIRED, TaskTreeManager
 from src.runtime.thinking_state import run_backend
 from src.runtime.triggers import TriggerManager
 

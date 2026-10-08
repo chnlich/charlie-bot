@@ -76,6 +76,15 @@ from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_aliv
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.runtime.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.runtime.takeoff_gate import is_verify_exempt
+from src.runtime.task_completion import TaskCompletionManager
+from src.runtime.task_errors import (
+    ANCESTOR_HOP_LIMIT,
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    require_operator,
+)
 from src.runtime.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
 
 if TYPE_CHECKING:
@@ -89,58 +98,12 @@ PROMPT_BODIES_DIR_NAME = "prompt_bodies"
 # stay invisible for.
 _TREE_INDEX_TTL_SECONDS = 2.0
 
-# Bound on the ancestor walk: open-ancestor checks and ancestor paths must
-# never spin on a corrupted relation.
-_ANCESTOR_HOP_LIMIT = 1000
-
-# The restore chain walks the same relation; it shares the bound.
-_RESTORE_CHAIN_HOP_LIMIT = _ANCESTOR_HOP_LIMIT
-
 # The create route (src/runtime/api/sessions.py) reproduces these two refusals
 # verbatim as its client-visible details — the first in the v2 pre-check, the
 # second in the legacy-shape guard; the wording lives beside the raises that
 # own the contracts.
 TASK_CREATE_REQUEST_ID_REQUIRED = "request_id is required for task creation"
 AGENT_CREATE_SCOPE_REFUSAL = "an agent may only create a task directly under its own open manager task"
-
-
-class TaskInvalidError(ValueError):
-  """Empty target or illegal relation (API: 400)."""
-
-
-class TaskNotFoundError(LookupError):
-  """The referenced task/Run does not exist (API: 404)."""
-
-
-class TaskForbiddenError(PermissionError):
-  """The caller's identity or role does not allow the operation (API: 403)."""
-
-
-class TaskConflictError(Exception):
-  """Concurrent change or lifecycle conflict with concrete blockers (API: 409)."""
-
-  def __init__(self, blockers: list[str]) -> None:
-    self.blockers = blockers
-    super().__init__("; ".join(blockers))
-
-
-class TaskArchivedError(TaskConflictError):
-  """The target task node is archived — it accepts no machine input (API: 409).
-
-  The refusal sentence is the API's whole 409 detail (the sender reads exactly
-  ``task <id> is archived``), not the blockers-dict shape a plain
-  TaskConflictError maps to.
-  """
-
-  def __init__(self, session_id: str) -> None:
-    self.session_id = session_id
-    super().__init__([f"task {session_id} is archived"])
-
-
-def require_operator(caller: object, message: str) -> None:
-  """Refuse *caller* with TaskForbiddenError(*message*) unless it carries operator credentials."""
-  if not isinstance(caller, CallerIdentity) or not caller.is_operator:
-    raise TaskForbiddenError(message)
 
 
 def closed_ancestors_blocker(closed_ids: list[str]) -> str:
@@ -404,9 +367,6 @@ class TaskTreeManager:
     # The notification is the tree owner's because only the tree index knows
     # which nodes are workers.
     self.runs.set_liveness_notifier(self._note_run_liveness)
-    # The M99 server import floor carries no completion-owner stack; the import
-    # rides the owner's once-per-process construction.
-    from src.runtime.task_completion import TaskCompletionManager
     self.dispatch = TaskInputDispatcher(self)
     self.completion = TaskCompletionManager(self)
     # The pending-input blockers of one session ([] when none): the structural
@@ -620,8 +580,8 @@ class TaskTreeManager:
       seen.add(sid)
       out.append(sid)
       stack.extend(self._children_of(index, sid))
-      if len(out) > _ANCESTOR_HOP_LIMIT:
-        raise TaskConflictError([f"subtree of {session_id} exceeds {_ANCESTOR_HOP_LIMIT} nodes"])
+      if len(out) > ANCESTOR_HOP_LIMIT:
+        raise TaskConflictError([f"subtree of {session_id} exceeds {ANCESTOR_HOP_LIMIT} nodes"])
     return out
 
   def _ancestors(self, index: _TreeIndex, session_id: str) -> list[SessionMetadata]:
@@ -635,8 +595,8 @@ class TaskTreeManager:
       seen.add(current.task_parent_id)
       current = self._index_meta(index, current.task_parent_id)
       chain.append(current)
-      if len(chain) > _ANCESTOR_HOP_LIMIT:
-        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {_ANCESTOR_HOP_LIMIT} hops"])
+      if len(chain) > ANCESTOR_HOP_LIMIT:
+        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {ANCESTOR_HOP_LIMIT} hops"])
     return chain
 
   async def _note_run_liveness(self, session_id: str, run: RunRecord, launched: bool) -> None:
@@ -926,7 +886,7 @@ class TaskTreeManager:
       if known is not None:
         inherited = known
         break
-      if current in seen or len(chain) > _ANCESTOR_HOP_LIMIT:
+      if current in seen or len(chain) > ANCESTOR_HOP_LIMIT:
         raise TaskConflictError([f"task relation cycle through {current}"])
       seen.add(current)
       meta = self._index_meta(index, current)

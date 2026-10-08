@@ -21,7 +21,7 @@ import pytest_asyncio
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import task_sessions
+from src.runtime import task_errors
 
 
 @pytest_asyncio.fixture
@@ -66,7 +66,7 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
   tree, _session_mgr, root_id = env
   spy = conftest.NotificationSpy(tree)
   spy.install()
-  with pytest.raises(task_sessions.TaskInvalidError):
+  with pytest.raises(task_errors.TaskInvalidError):
     await tree.create_task(
         request_id="bad",
         task_parent_id=root_id,
@@ -85,7 +85,7 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
       name="W0",
       backend=None,
       caller=conftest.OPERATOR)
-  with pytest.raises(task_sessions.TaskInvalidError):
+  with pytest.raises(task_errors.TaskInvalidError):
     await tree.create_task(
         request_id="under-worker",
         task_parent_id=worker.id,
@@ -95,7 +95,7 @@ async def test_failed_prepublication_create_emits_no_signal(env) -> None:
         backend=None,
         caller=conftest.OPERATOR)
   # An unknown parent is refused at the lookup guard.
-  with pytest.raises(task_sessions.TaskNotFoundError):
+  with pytest.raises(task_errors.TaskNotFoundError):
     await tree.create_task(
         request_id="under-missing",
         task_parent_id="00000000-0000-0000-0000-00000000dead",

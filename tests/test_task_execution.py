@@ -1279,7 +1279,7 @@ async def test_manual_complete_with_forged_landing_ref_stays_open(
       result_refs=["run:run-work", f"landed:main@{unlanded}"],
       run_ids=["run-work"],
       review_run_ids=["run-review"])
-  from src.runtime.task_sessions import TaskConflictError as TCE
+  from src.runtime.task_errors import TaskConflictError as TCE
   with pytest.raises(TCE, match="landing evidence unverified"):
     await tree.completion.complete_task(worker.id, request_id="manual-1", evidence=evidence, caller="operator")
   assert tree.task_state(worker.id) == "open"

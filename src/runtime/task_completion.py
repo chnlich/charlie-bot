@@ -38,7 +38,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
@@ -55,12 +55,85 @@ from src.runtime.control_events import (
     stable_input_ack_event_id,
     stable_reopen_event_id,
 )
-from src.runtime.runs import run_not_found_in_task_text
+from src.runtime.runs import RunStore, run_not_found_in_task_text
+from src.runtime.task_errors import (
+    RESTORE_CHAIN_HOP_LIMIT,
+    TaskArchivedError,
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+    require_operator,
+)
 
 if TYPE_CHECKING:
-  from src.runtime.task_sessions import TaskTreeManager
+  import asyncio
+  from datetime import datetime
+
+  from src.runtime.control_sink import ControlEventSink
+  from src.runtime.sessions import SessionManager
 
 log = LazyStructlogLogger()
+
+
+class CompletionFacts(Protocol):
+  """The folded task facts the completion owner reads; ``task_sessions`` owns the fold."""
+
+  run_outcomes: dict[str, str]
+  close_requests: list[dict]
+  confirmed_input_ids: set[str]
+
+
+class CompletionTree(Protocol):
+  """The task tree members the completion owner calls; ``TaskTreeManager`` implements them.
+
+  ``index`` is the tree's rebuildable index: the completion owner hands it back to
+  the tree and never reads it, so its type is ``Any``.
+  """
+
+  control_lock: asyncio.Lock
+  events: ControlEventSink
+  runs: RunStore
+  dispatch: session_dispatch.TaskInputDispatcher
+  _index: tuple[Any, float] | None
+
+  @property
+  def sessions(self) -> SessionManager:
+    ...
+
+  async def load_meta(self, session_id: str) -> SessionMetadata | None:
+    ...
+
+  async def load_task_meta(self, session_id: str) -> SessionMetadata:
+    ...
+
+  def task_state(self, session_id: str) -> str:
+    ...
+
+  def fact_history(self, session_id: str) -> list[dict]:
+    ...
+
+  def facts_of(self, session_id: str) -> CompletionFacts:
+    ...
+
+  async def _get_index(self) -> Any:
+    ...
+
+  def _index_meta(self, index: Any, session_id: str) -> SessionMetadata:
+    ...
+
+  def _children_of(self, index: Any, session_id: str | None) -> list[str]:
+    ...
+
+  def _descendants(self, index: Any, session_id: str) -> list[str]:
+    ...
+
+  def _invalidate_index(self) -> None:
+    ...
+
+  def _host_boot_time(self) -> datetime:
+    ...
+
 
 # The structured result-ref grammar the evidence checks resolve against the
 # task's own facts. Anything else is an opaque evidence pointer (a file path,
@@ -106,7 +179,7 @@ class CompletionEvidence:
 class TaskCompletionManager:
   """The close/cancel/reopen owner wired over one TaskTreeManager."""
 
-  def __init__(self, tree: TaskTreeManager) -> None:
+  def __init__(self, tree: CompletionTree) -> None:
     self._tree = tree
 
   # ------------------------------------------------------------------
@@ -447,7 +520,6 @@ class TaskCompletionManager:
         finishes successfully.
         """
     from src.runtime.run_token import CallerIdentity
-    from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
 
     if not request_id:
       raise TaskInvalidError("request_id is required for completion")
@@ -572,8 +644,6 @@ class TaskCompletionManager:
         runs outside it, and the relevant facts/spec/refs are revalidated
         under the lock before the close fact lands.
         """
-    from src.runtime.task_sessions import TaskConflictError
-
     tree = self._tree
     async with tree.control_lock:
       index = await tree._get_index()
@@ -712,8 +782,6 @@ class TaskCompletionManager:
         pending).
         """
     tree = self._tree
-    from src.runtime.task_sessions import TaskConflictError
-
     facts = tree.facts_of(session_id)
     outcomes = facts.run_outcomes
     if outcomes.get(run_id) != "success":
@@ -764,8 +832,6 @@ class TaskCompletionManager:
         request: recovery replays of the same request admit nothing new. The
         notice targets open nodes only.
         """
-    from src.runtime.task_sessions import TaskArchivedError
-
     tree = self._tree
     lines = "\n".join(f"- {b}" for b in blockers)
     try:
@@ -807,8 +873,6 @@ class TaskCompletionManager:
         implement workflow's review/landing delivery — replaces the work-only
         default wholesale and passes the same verified close checks.
         """
-    from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskNotFoundError
-
     tree = self._tree
     meta = await tree.load_task_meta(session_id)
     if meta.profile != "worker":
@@ -823,7 +887,6 @@ class TaskCompletionManager:
           ])
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
-      from src.runtime.task_sessions import TaskNotFoundError
       raise TaskNotFoundError(run_not_found_in_task_text(run_id, session_id))
     if evidence is not None:
       effective_evidence = evidence
@@ -855,8 +918,6 @@ class TaskCompletionManager:
         bundle. A blocked automatic close keeps its blockers visible and the
         adapters re-evaluate.
         """
-    from src.runtime.task_sessions import TaskConflictError
-
     tree = self._tree
     meta = await tree.load_task_meta(session_id)
     await self.recheck_close_requests(session_id, run_id)
@@ -907,8 +968,6 @@ class TaskCompletionManager:
         active Runs, open children, and any input that arrived after the
         acknowledgement keep blocking.
         """
-    from src.runtime.task_sessions import TaskConflictError, TaskInvalidError, require_operator
-
     require_operator(caller, "acknowledging task input requires operator credentials")
     if not request_id:
       raise TaskInvalidError("request_id is required for input acknowledgement")
@@ -1006,7 +1065,6 @@ class TaskCompletionManager:
         authorization bypass.
         """
     from src.runtime.run_token import CallerIdentity
-    from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
 
     if not isinstance(caller, CallerIdentity):
       raise TaskForbiddenError("task cancellation requires operator credentials")
@@ -1092,8 +1150,6 @@ class TaskCompletionManager:
     restores nothing twice (per-node replay check); a target that is already
     open restores nothing and returns an empty list.
     """
-    from src.runtime.task_sessions import TaskInvalidError, require_operator
-
     require_operator(caller, "task restore requires operator credentials")
     if not request_id:
       raise TaskInvalidError("request_id is required for restore")
@@ -1120,8 +1176,6 @@ class TaskCompletionManager:
     releasing the lock. A replayed request id skips its already-restored
     nodes, so a crash between facts replays into the same single set.
     """
-    from src.runtime.task_sessions import _RESTORE_CHAIN_HOP_LIMIT, TaskConflictError, TaskNotFoundError
-
     tree = self._tree
     index = await tree._get_index()
     if index.metas.get(session_id) is None:
@@ -1140,8 +1194,8 @@ class TaskCompletionManager:
         break
       seen.add(current)
       current = meta.task_parent_id
-      if len(chain) > _RESTORE_CHAIN_HOP_LIMIT:
-        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {_RESTORE_CHAIN_HOP_LIMIT} hops"])
+      if len(chain) > RESTORE_CHAIN_HOP_LIMIT:
+        raise TaskConflictError([f"ancestor chain of {session_id} exceeds {RESTORE_CHAIN_HOP_LIMIT} hops"])
     if not chain:
       return [], []
     restored: list[str] = []

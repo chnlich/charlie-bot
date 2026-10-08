@@ -27,11 +27,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Iterator
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, SessionStatus, ensure_utc
+from src.infra.models import RunRecord, SessionMetadata, SessionStatus, ensure_utc
 from src.runtime.control_events import (
     ACTOR_AGENT,
     ACTOR_SYSTEM,
@@ -39,11 +39,92 @@ from src.runtime.control_events import (
     build_control_event,
     stable_child_report_id,
 )
+from src.runtime.task_errors import (
+    TaskArchivedError,
+    TaskConflictError,
+    TaskForbiddenError,
+    TaskInvalidError,
+    TaskNotFoundError,
+)
 
 if TYPE_CHECKING:
-  from src.runtime.task_sessions import TaskTreeManager
+  from src.runtime.control_sink import ControlEventSink
+  from src.runtime.runs import RunStore
+  from src.runtime.sessions import SessionManager
 
 log = LazyStructlogLogger()
+
+
+class DispatchFacts(Protocol):
+  """The folded task facts the dispatcher reads; ``task_sessions`` owns the fold."""
+
+  boundary_index: int | None
+  imported_pending_ids: frozenset[str]
+  confirmed_input_ids: set[str]
+  input_candidates: list[dict]
+  close_events: list[dict]
+
+
+class DispatchCompletion(Protocol):
+  """The completion owner members the dispatcher calls."""
+
+  async def restore_chain_locked(self, session_id: str, *, request_id: str,
+                                 reason: str) -> tuple[list[str], list[tuple[str, dict, int]]]:
+    ...
+
+  async def after_run_finished(self, session_id: str, run_id: str) -> None:
+    ...
+
+
+class DispatchTree(Protocol):
+  """The task tree members the dispatcher calls; ``TaskTreeManager`` implements them.
+
+  ``index`` is the tree's rebuildable index: the dispatcher hands it back to the
+  tree and never reads it, so its type is ``Any``.
+  """
+
+  control_lock: asyncio.Lock
+  events: ControlEventSink
+  runs: RunStore
+  completion: DispatchCompletion
+
+  @property
+  def sessions(self) -> SessionManager:
+    ...
+
+  async def load_meta(self, session_id: str) -> SessionMetadata | None:
+    ...
+
+  async def load_task_meta(self, session_id: str) -> SessionMetadata:
+    ...
+
+  def task_state(self, session_id: str) -> str:
+    ...
+
+  def fact_history(self, session_id: str) -> list[dict]:
+    ...
+
+  def facts_of(self, session_id: str) -> DispatchFacts:
+    ...
+
+  async def _get_index(self) -> Any:
+    ...
+
+  def _index_meta(self, index: Any, session_id: str) -> SessionMetadata:
+    ...
+
+  def _ancestors(self, index: Any, session_id: str) -> list[SessionMetadata]:
+    ...
+
+  def archived_of(self, index: Any, meta: SessionMetadata) -> bool:
+    ...
+
+  def invalidate_tree_index(self) -> None:
+    ...
+
+  async def check_task_authorization(self, session_id: str) -> str:
+    ...
+
 
 # The event types that carry consumable task input. Real user input is the
 # USER type and nothing else: agent relays, scheduled triggers, and child
@@ -81,7 +162,7 @@ def inputs_not_pending_conflict(session_id: str, unknown: list[str]) -> str:
 class TaskInputDispatcher:
   """The input/report owner wired over one TaskTreeManager."""
 
-  def __init__(self, tree: TaskTreeManager) -> None:
+  def __init__(self, tree: DispatchTree) -> None:
     self._tree = tree
     # The execution-stage seam: an async callable (session_id, pending input
     # event dicts) that binds a Run and launches. None until the execution
@@ -115,8 +196,6 @@ class TaskInputDispatcher:
         route may mint USER only for operator callers (the route enforces
         that; this method refuses the mismatch as a backstop).
         """
-    from src.runtime.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError
-
     if event_type not in INPUT_EVENT_TYPES:
       raise TaskInvalidError(f"{event_type} is not a task input type")
     if event_type == ET.USER and actor != ACTOR_USER:
@@ -213,8 +292,6 @@ class TaskInputDispatcher:
         delivers an agent message to a worker node passes through here.
         """
     from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
-    from src.runtime.task_sessions import TaskForbiddenError
-
     if event_type != ET.AGENT_MESSAGE or meta.profile != "worker":
       return
     if is_verify_exempt(meta.task):
@@ -247,8 +324,6 @@ class TaskInputDispatcher:
         for the next consumer. A queued (registered, never launched) Run
         still claims, as now.
         """
-    from src.runtime.task_sessions import TaskInvalidError
-
     tree = self._tree
     facts = tree.facts_of(session_id)
     if facts.boundary_index is None and not facts.imported_pending_ids:
@@ -293,8 +368,6 @@ class TaskInputDispatcher:
         The executor's reservation binds the batch inside its own lock hold;
         taking the lock again here would deadlock a non-reentrant asyncio.Lock.
         """
-    from src.runtime.task_sessions import TaskConflictError, TaskNotFoundError
-
     tree = self._tree
     run = await tree.runs.get_run(session_id, run_id)
     if run is None:
@@ -445,8 +518,6 @@ class TaskInputDispatcher:
         """
     from datetime import datetime
 
-    from src.runtime.task_sessions import TaskConflictError
-
     tree = self._tree
     if input_event_ids:
       # A run without a registered batch may acknowledge only currently
@@ -587,8 +658,6 @@ class TaskInputDispatcher:
         already exists in the recipient's fact history (the dedup path), so the
         caller never announces a second copy of a delivered report.
         """
-    from src.runtime.task_sessions import TaskNotFoundError
-
     if recipient is None:
       return {}, False
     tree = self._tree
@@ -687,7 +756,6 @@ def input_event_type_for_caller(caller: object) -> str:
   never manufacture a real USER event or another caller's provenance.
   """
   from src.runtime.run_token import CallerIdentity
-  from src.runtime.task_sessions import TaskForbiddenError
 
   if isinstance(caller, CallerIdentity):
     if caller.is_operator:

@@ -232,10 +232,10 @@ async def ensure_firing_leaf(
 
   The parent is the bound manager task, which owns the firing's worker leaf.
   """
-  from src.runtime import task_sessions
+  from src.runtime import task_errors
 
   if meta.profile != "manager":
-    raise task_sessions.TaskInvalidError(
+    raise task_errors.TaskInvalidError(
         f"scheduled task '{task_cfg.name}' cannot create a worker leaf under "
         f"{meta.id}: the parent is not a manager task")
   return await tree.create_task(
@@ -688,7 +688,7 @@ async def run_firing_steps_boundary_report(
     leaf_id: str,
 ) -> None:
   """The successful boundary's close (which delivers the one report)."""
-  from src.runtime import task_sessions
+  from src.runtime import task_errors
 
   records = tree.runs.list_run_records_sync(leaf_id)
   events = tree.runs.load_events_sync(leaf_id)
@@ -725,7 +725,7 @@ async def run_firing_steps_boundary_report(
         result_refs=[f"{task_completion.RUN_REF_PREFIX}{r.id}" for r in chain],
         request_id=f"auto:{firing_ref(task_cfg, firing)}",
     )
-  except task_sessions.TaskConflictError as e:
+  except task_errors.TaskConflictError as e:
     blockers = list(getattr(e, "blockers", None) or [])
     if any("no longer open" in str(b) for b in blockers):
       # A concurrent owner landed this close and delivered the completed

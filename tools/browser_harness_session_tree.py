@@ -909,8 +909,9 @@ async def seed_scenario(home: Path) -> dict:
     # longest the Last line renders. The enabled bound node stays
     # unseeded, so its row keeps carrying no Last line.
     from src.infra.models import LastRunStatus
-    await tree.record_scheduled_fire(
+    await tree.update_slot_fields(
         paused_node.id,
+        "cron",
         last_scheduled_run=(base + timedelta(minutes=1500)).isoformat(),
         last_run_status=LastRunStatus.FAILED)
     # The broken file: an inline prompt is a load error, so the loader
@@ -3375,7 +3376,7 @@ async def run_harness(args: argparse.Namespace) -> None:
       # line was the one schedule line without truncate, so it wrapped
       # to a second row line on the touch drawer. The paused node
       # carries the seeded fire (failed + timestamp through
-      # record_scheduled_fire, allow_failure on the task), so its row
+      # update_slot_fields, allow_failure on the task), so its row
       # shows the four text lines -- name, Disabled, cron - timezone,
       # Last -- each one line tall, with the Last line truncating like
       # the cron line above it and carrying its full text in title.

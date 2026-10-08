@@ -82,19 +82,13 @@ def request_wants_gzip(request: requests.Request) -> bool:
   return "gzip" in request.headers.get("accept-encoding", "")
 
 
-def gzip_file_fresh(
-    memo: StatSignatureMemo[pathlib.Path, bytes], path: pathlib.Path, max_bytes: int | None) -> bytes | None:
+def gzip_file_fresh(memo: StatSignatureMemo[pathlib.Path, bytes], path: pathlib.Path) -> bytes:
   """The file's level-1 gzip form, memoized on the stat pair the read served.
 
   stat precedes the read in the same call (the StatSignatureMemo contract), so a
-  repeat hit serves only bytes its signature proves current. *max_bytes* prices
-  the resident whole-body form: an over-cap file returns None unread and
-  uncached, the caller's signal to serve by stream — so None occurs only when
-  *max_bytes* is not None.
+  repeat hit serves only bytes its signature proves current.
   """
   st = path.stat()
-  if max_bytes is not None and st.st_size > max_bytes:
-    return None
   hit = memo.fresh(path, st)
   if hit is not None:
     return hit

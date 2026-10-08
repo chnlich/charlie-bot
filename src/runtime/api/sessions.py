@@ -1501,7 +1501,7 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
   # The read and the deflate ride one executor hop: FileResponse streams 64 KiB
   # chunks and the gzip middleware compresses every chunk inline on the event
   # loop (the M101 loop-lag readings).
-  body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path, None)
+  body = await asyncio.to_thread(gzip_file_fresh, _events_gzip_memo, path)
   return Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
 
 

@@ -11,54 +11,11 @@ from urllib import parse
 import fastapi
 from fastapi import responses
 
-from src.infra import human_size, memo
-from src.infra import responses as responses_api
+from src.infra import human_size
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.hooks import wiring
 
 router = fastapi.APIRouter()
-
-
-class _ServedFileResponse(responses.FileResponse):
-  # Starlette 1.0.0 exposes the read chunk size as this class attribute (no
-  # __init__ parameter). The 64 KiB default prices a page-cache serve at
-  # ~250 MB/s: one executor hop plus one ASGI send per chunk. A 1 MiB chunk
-  # cuts both ~16x per MB and is the transport's only knob; the wire bytes are
-  # identical, so no served body changes.
-  chunk_size = 1 << 20
-
-
-# Bound on the bare-file arm's gzip memo: the arm serves the file server's
-# repeat views of gzip-able files (html pages above all — the M105 html
-# witness's 15.4 ms per repeat serve was the middleware's per-request per-chunk
-# inline deflate). Four slots cover the pages a user re-opens across tabs; one
-# slot holds the compressed form of a file up to the raw-size cap.
-_SERVED_FILE_GZIP_MEMO_LIMIT = 4
-
-# Raw-size cap of the same arm. Above it the serve stays on the streaming
-# _ServedFileResponse arm: a whole-body read plus its gzip form would hold
-# multi-hundred-MB resident per slot for files the middleware already serves
-# chunk-wise without buffering.
-_SERVED_FILE_GZIP_MAX_BYTES = 16 << 20
-
-# Media gate of the same arm: the text formats the transport compresses and
-# repeat-serves. The gzip middleware's skip list (server.py) is this gate's
-# complement in spirit — every prefix here stays outside that list — while
-# unknown and binary media types (application/octet-stream above all) keep the
-# streaming arm: their gzip form is a ratio gamble and their chunked-identity
-# contract is pinned by the suite.
-_SERVED_FILE_GZIP_MEDIA_PREFIXES = ("text/",)
-_SERVED_FILE_GZIP_MEDIA_TYPES = frozenset(
-    {
-        "application/json",
-        "application/javascript",
-        "text/javascript",
-        "application/xml",
-        "image/svg+xml",
-    })
-
-_served_file_gzip_memo: memo.StatSignatureMemo[pathlib.Path,
-                                               bytes] = memo.StatSignatureMemo(_SERVED_FILE_GZIP_MEMO_LIMIT)
 
 # Client-visible detail of the listing's and the read's 403.
 _PERMISSION_DENIED_DETAIL = "Permission denied"
@@ -176,21 +133,10 @@ async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
   if listing is not None:
     return responses.HTMLResponse(listing)
 
-  # Serve the file with auto-detected MIME type. A gzip-accepting GET of a
-  # gated media type under the memo cap rides the memo arm: Content-Encoding
-  # set upstream is what makes the middleware skip its per-request per-chunk
-  # inline deflate, and the stat signature proves a repeat hit's stored bytes.
-  # Every other shape — no-gzip clients, Range requests, unlisted media types,
-  # over-cap files — stays on the streaming arm unchanged.
+  # Serve the file with auto-detected MIME type
   media_type, _ = mimetypes.guess_type(str(fs_path))
-  if (responses_api.request_wants_gzip(request) and "range" not in request.headers and media_type is not None and
-      (media_type.startswith(_SERVED_FILE_GZIP_MEDIA_PREFIXES) or media_type in _SERVED_FILE_GZIP_MEDIA_TYPES)):
-    compressed = await asyncio.to_thread(
-        responses_api.gzip_file_fresh, _served_file_gzip_memo, fs_path, _SERVED_FILE_GZIP_MAX_BYTES)
-    if compressed is not None:
-      return responses.Response(content=compressed, media_type=media_type, headers=responses_api.GZIP_RESPONSE_HEADERS)
   try:
-    return _ServedFileResponse(str(fs_path), media_type=media_type)
+    return responses.FileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
     raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
 

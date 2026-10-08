@@ -93,8 +93,8 @@ def test_whole_body_gzip_bytes_match_starlette_inline() -> None:
   assert headers["content-encoding"] == "gzip"
   # The responder deflates with ISA-L and the stock middleware with zlib, so
   # the wires differ as byte streams; the pinned contracts are the container's
-  # validity, the parsed-content parity, and the off-loop hop changing no
-  # bytes of the responder's own wire.
+  # validity, the parsed-content parity, and the responder's own wire
+  # repeating byte for byte.
   assert gzip.decompress(body) == BODY
   assert gzip.decompress(baseline_body) == BODY
   _, body_again = _drive(_build(handler, server._CharlieBotGZipMiddleware))

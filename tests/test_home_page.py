@@ -10,8 +10,8 @@ import pytest
 
 from src.app import pages
 from src.infra import config
-from src.infra.constants import FILE_SERVER_MOUNTS
 from src.runtime.api import auth
+from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.hooks import page_render
 
 

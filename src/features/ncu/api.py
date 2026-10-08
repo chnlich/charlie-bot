@@ -7,8 +7,8 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from starlette.responses import Response
 
-from src.infra.constants import FILE_SERVER_MOUNTS
 from src.runtime import templating
+from src.runtime.file_urls import FILE_SERVER_MOUNTS
 
 router = APIRouter()
 

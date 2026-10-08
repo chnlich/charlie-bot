@@ -12,8 +12,9 @@ from urllib import parse
 import fastapi
 from fastapi import responses
 
-from src.infra import constants, human_size, memo
+from src.infra import human_size, memo
 from src.infra import responses as responses_api
+from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.hooks import wiring
 
 router = fastapi.APIRouter()
@@ -189,8 +190,8 @@ def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> tuple[str | No
   rows = []
   prefix = url_prefix.rstrip("/")
   # Parent directory link (unless at a mount root)
-  if prefix != constants.FILE_SERVER_MOUNTS[0]:
-    parent = "/".join(prefix.split("/")[:-1]) or constants.FILE_SERVER_MOUNTS[0]
+  if prefix != FILE_SERVER_MOUNTS[0]:
+    parent = "/".join(prefix.split("/")[:-1]) or FILE_SERVER_MOUNTS[0]
     rows.append('<tr>'
                 f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
                 '<td></td><td></td>'
@@ -260,7 +261,7 @@ async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
     response = await view(request, path)
     if response is not None:
       return response
-  url_prefix = f"{constants.FILE_SERVER_MOUNTS[0]}/{path}" if path else constants.FILE_SERVER_MOUNTS[0]
+  url_prefix = f"{FILE_SERVER_MOUNTS[0]}/{path}" if path else FILE_SERVER_MOUNTS[0]
   # One executor hop carries the resolve, the exists answer, and the whole
   # listing build; None means a file, falling through to responses.FileResponse.
   fs_path, page, exists = await asyncio.to_thread(_resolve_and_list, path, url_prefix)
@@ -297,5 +298,5 @@ async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
 # prefix reads as wrong where it is written. The "/files" and "/file" spellings are unmounted: nothing
 # answers there, both 404. The routes list is complete here, after every route of `router` is declared.
 mounted_router = fastapi.APIRouter()
-for _mount in constants.FILE_SERVER_MOUNTS:
+for _mount in FILE_SERVER_MOUNTS:
   mounted_router.include_router(router, prefix=_mount)

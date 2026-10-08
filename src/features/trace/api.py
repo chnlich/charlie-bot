@@ -23,9 +23,10 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from src.features.trace import direct_pass_child, trace_merge_child
 from src.infra.config import get_config
-from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH
+from src.infra.constants import PERFETTO_MERGED_PATH
 from src.infra.log_once import LazyStructlogLogger
 from src.runtime import templating
+from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.hooks import wiring
 
 log = LazyStructlogLogger()

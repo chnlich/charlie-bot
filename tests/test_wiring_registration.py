@@ -20,7 +20,7 @@ import uvicorn
 import server
 from src.app import registrations
 from src.infra.config import CharlieBotConfig
-from src.runtime import templating
+from src.runtime import templating, v1_sessions
 from src.runtime.hooks import page_render, wiring
 
 DELETED_PACKAGE = "src.features.latex"
@@ -117,6 +117,116 @@ def test_server_main_serves_only_after_every_startup_check_passes(monkeypatch: p
 
   assert passed == ["startup_check", "uvicorn.run"]
   assert stopped == ["startup_check"]
+
+
+# The probe process runs the real main() over the home on disk and replaces only uvicorn.run:
+# "SERVING" on stdout means main() passed every start check.
+START_PROBE = """
+import uvicorn
+uvicorn.run = lambda *args, **kwargs: print("SERVING")
+import server
+server.main()
+"""
+
+HOME_CONFIG = """
+backends:
+  options:
+    - id: claude-opus
+      label: Opus
+      type: cc-claude
+      model: claude-opus-4-6
+"""
+
+
+async def _write_home_with_sessions(tmp_path: Path, *, v1_count: int) -> Path:
+  """A home on disk with two task-tree sessions and *v1_count* sessions whose metadata has no profile."""
+  cfg, _, tree = conftest.build_env(tmp_path)
+  cfg.charliebot_home.mkdir(parents=True, exist_ok=True)
+  (cfg.charliebot_home / "config.yaml").write_text(HOME_CONFIG, encoding="utf-8")
+  for index in range(2):
+    await conftest.create_task(tree, parent=None, request_id=f"tree-{index}")
+  for index in range(v1_count):
+    node = await conftest.create_task(tree, parent=None, request_id=f"v1-{index}")
+    path = cfg.sessions_dir / node.id / "metadata.json"
+    meta = json.loads(path.read_text(encoding="utf-8"))
+    del meta["profile"]
+    meta["schema_version"] = 1
+    path.write_text(json.dumps(meta), encoding="utf-8")
+  return cfg.charliebot_home
+
+
+def _start_server_main(home: Path) -> subprocess.CompletedProcess:
+  return subprocess.run(
+      [sys.executable, "-c", START_PROBE],
+      cwd=conftest.ROOT,
+      capture_output=True,
+      text=True,
+      timeout=60,
+      check=False,
+      env={
+          **os.environ, "CHARLIEBOT_HOME": str(home)
+      })
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+@pytest.mark.parametrize("v1_count", [1, 3])
+async def test_server_main_refuses_a_home_with_v1_sessions_before_it_serves(tmp_path: Path, v1_count: int) -> None:
+  home = await _write_home_with_sessions(tmp_path, v1_count=v1_count)
+
+  result = _start_server_main(home)
+
+  assert result.returncode != 0
+  assert "SERVING" not in result.stdout
+  error = result.stderr
+  assert str(home) in error
+  assert f"holds {v1_count} v1 session" in error
+  assert error.count(f"scripts/v1_session_conversion.py dry-run --home {home}") == 1
+  assert f"scripts/v1_session_conversion.py apply --home {home}" in error
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_server_main_serves_a_home_without_v1_sessions(tmp_path: Path) -> None:
+  home = await _write_home_with_sessions(tmp_path, v1_count=0)
+
+  result = _start_server_main(home)
+
+  assert result.returncode == 0, result.stderr
+  assert result.stdout.splitlines()[-1] == "SERVING"
+
+
+def test_count_v1_sessions_reads_the_profile_key_of_published_sessions_only(tmp_path: Path) -> None:
+  sessions_dir = tmp_path / "sessions"
+  files = {
+      "with-profile": {
+          "id": "with-profile",
+          "profile": "manager"
+      },
+      "no-profile-key": {
+          "id": "no-profile-key"
+      },
+      "null-profile": {
+          "id": "null-profile",
+          "profile": None
+      },
+      ".task-abc-1-def.tmp": {
+          "id": "staging"
+      },
+  }
+  for name, meta in files.items():
+    (sessions_dir / name).mkdir(parents=True)
+    (sessions_dir / name / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
+  (sessions_dir / "no-metadata-yet").mkdir()
+  (sessions_dir / ".counter").write_text("3", encoding="utf-8")
+
+  assert v1_sessions.count_v1_sessions(sessions_dir) == 2
+  assert v1_sessions.count_v1_sessions(tmp_path / "fresh-home" / "sessions") == 0
+
+  (sessions_dir / "torn").mkdir()
+  (sessions_dir / "torn" / "metadata.json").write_text("", encoding="utf-8")
+  with pytest.raises(ValueError, match="torn"):
+    v1_sessions.count_v1_sessions(sessions_dir)
 
 
 def test_register_all_twice_registers_once() -> None:

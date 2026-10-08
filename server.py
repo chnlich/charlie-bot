@@ -52,6 +52,7 @@ with gc_off(collect=False):
   from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
   from src.runtime.triggers import TriggerManager
+  from src.runtime.v1_sessions import require_no_v1_sessions
 
 log = LazyStructlogLogger()
 
@@ -634,6 +635,9 @@ def main() -> None:
   apply_agent_environment()
   cfg = get_config()
   require_backends(cfg)
+  # The sessions tree belongs to the runtime, and wiring carries only what feature and backend
+  # packages register, so the runtime's own check runs here.
+  require_no_v1_sessions(cfg)
   for startup_check in wiring.startup_checks():
     startup_check(cfg)
   uvicorn.run(

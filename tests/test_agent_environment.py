@@ -148,6 +148,7 @@ def test_server_main_applies_the_environment_before_config_and_uvicorn(
 
   monkeypatch.setattr(server, "get_config", fake_get_config)
   monkeypatch.setattr(server, "require_backends", lambda _cfg: None)
+  monkeypatch.setattr(server, "require_no_v1_sessions", lambda _cfg: None)
   monkeypatch.setattr(server.wiring, "startup_checks", list)
   monkeypatch.setattr(uvicorn, "run", fake_run)
 

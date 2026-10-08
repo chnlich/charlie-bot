@@ -63,6 +63,7 @@ from src.runtime.api.deps import (
     get_run_store,
     get_session_events,
     get_session_manager,
+    get_session_sidebar,
     get_session_store,
     get_task_manager,
     get_trigger_manager,
@@ -86,6 +87,7 @@ from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_sidebar import SessionSidebar
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
@@ -617,7 +619,7 @@ async def all_sessions_status(
     request: Request,
     ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
     force: bool = False,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    sidebar: SessionSidebar = Depends(get_session_sidebar),
     store: SessionStore = Depends(get_session_store),
 ) -> Response:
   """Return derived sidebar state for the requested sessions.
@@ -643,12 +645,12 @@ async def all_sessions_status(
         sessions = await store.get_sessions_readonly(requested)
         active = [m for m in sessions if m.status != SessionStatus.ARCHIVED]
         if active:
-          session_mgr.schedule_sidebar_sweep(active)
+          sidebar.schedule_sidebar_sweep(active)
       return await gzip_body_response(request, cached_body, {}, _switch_gzip_memo)
   sessions = await store.get_sessions_readonly(requested)
   if not sessions:
     return await _switch_payload_response(request, {})
-  derived = await session_mgr.resolve_sidebar_state(
+  derived = await sidebar.resolve_sidebar_state(
       sessions,
       include_running_status=True,
       include_pending_trigger_status=True,

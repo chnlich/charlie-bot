@@ -15,7 +15,8 @@ from conftest import build_session_manager, build_two_backend_cfg, create_root_s
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.runtime import sidebar_state, thinking_state
 from src.runtime.api import sessions as sessions_api
-from src.runtime.sessions import SessionManager, _iter_trigger_stats, _listing_row_copy
+from src.runtime.session_sidebar import _iter_trigger_stats
+from src.runtime.sessions import SessionManager, _listing_row_copy
 from src.runtime.task_sessions import TaskTreeManager
 
 
@@ -83,13 +84,13 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
 
   # The probe round's own stores bump the generation past its key, so the
   # first clean re-derive is the one the next poll serves whole.
-  await session_mgr.resolve_sidebar_state([session], **flags)
-  second = await session_mgr.resolve_sidebar_state([session], **flags)
-  third = await session_mgr.resolve_sidebar_state([session], **flags)
+  await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
+  second = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
+  third = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
   assert third is second  # unchanged generation: the stored map serves whole
 
   sidebar_state.mark_sidebar_dirty(session.id)
-  fourth = await session_mgr.resolve_sidebar_state([session], **flags)
+  fourth = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
   assert fourth is not second
 
   sidebar_state.store_snapshot_entry(
@@ -99,7 +100,7 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
           sidebar_state.NEXT_TRIGGER_AT: None,
           sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
       })
-  fifth = await session_mgr.resolve_sidebar_state([session], **flags)
+  fifth = await session_mgr.sidebar.resolve_sidebar_state([session], **flags)
   assert fifth is not fourth
 
 

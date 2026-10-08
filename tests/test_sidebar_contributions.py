@@ -42,7 +42,7 @@ def test_the_base_class_adds_nothing(tmp_path: Path) -> None:
 
   assert contribution.watched_files == ()
   assert contribution.row_flags(tmp_path, "sid") == {}
-  assert contribution.view_member(models.SessionMetadata(name="any")) is None
+  assert contribution.view_member(models.SessionMetadata(profile="manager", name="any")) is None
   assert contribution.copy_on_fork(tmp_path, tmp_path) is None
   assert contribution.drop_runtime_state("sid") is None
 
@@ -84,10 +84,10 @@ def test_a_second_registration_of_one_name_raises_and_leaves_the_registry_alone(
 def test_every_view_a_contribution_answers_maps_its_own_subtree(monkeypatch: pytest.MonkeyPatch) -> None:
   stub_module(monkeypatch, "roots_module", contribution=Roots())
   hook.register_sidebar_contribution("roots", "roots_module:contribution")
-  alpha_root = models.SessionMetadata(name="alpha-root")
-  alpha_child = models.SessionMetadata(name="child", task_parent_id=alpha_root.id)
-  beta_root = models.SessionMetadata(name="beta-root")
-  plain = models.SessionMetadata(name="plain")
+  alpha_root = models.SessionMetadata(profile="manager", name="alpha-root")
+  alpha_child = models.SessionMetadata(profile="manager", name="child", task_parent_id=alpha_root.id)
+  beta_root = models.SessionMetadata(profile="manager", name="beta-root")
+  plain = models.SessionMetadata(profile="manager", name="plain")
 
   views = scheduled_sessions.view_subtree_roots([alpha_child, plain, alpha_root, beta_root])
 
@@ -104,7 +104,7 @@ def test_every_view_a_contribution_answers_maps_its_own_subtree(monkeypatch: pyt
 
 @pytest.mark.usefixtures("empty_registry")
 def test_a_view_no_session_roots_has_no_entry() -> None:
-  assert scheduled_sessions.view_subtree_roots([models.SessionMetadata(name="plain")]) == {}
+  assert scheduled_sessions.view_subtree_roots([models.SessionMetadata(profile="manager", name="plain")]) == {}
 
 
 # The probe process drops one package line, registers, imports the server, then drops a session's runtime

@@ -414,12 +414,13 @@ Known-alive symbols:
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.
-- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only by string:
+- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only by string outside `tests/`:
   the `register()` of the voice package passes `"src.features.voice.voice_setup"` to
   `wiring.register_setup_step`, and `setup_step` starts `enable_step` with
-  `python -m src.app.setup --step src.features.voice.voice_setup:enable_step`. No `.py` or `.js` file
-  imports the module, so a reference scan restricted to those sources reads it as an unreferenced module.
-  `enable_step` has no whole-repo match outside its definition and that command string.
+  `python -m src.app.setup --step src.features.voice.voice_setup:enable_step`. No file outside `tests/`
+  imports the module (`tests/test_setup_runner.py` does), so a reference scan that excludes tests reads it as
+  an unreferenced module. `enable_step` has no whole-repo match outside its definition, that command string
+  and that test.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
   `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /

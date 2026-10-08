@@ -4,7 +4,7 @@ import asyncio
 import os
 import time
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 
 from src.infra import event_types as ET
@@ -13,7 +13,6 @@ from src.infra.constants import SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     BackendOption,
-    MasterRunRecord,
     SessionMetadata,
     backend_type_allows_missing_model,
 )
@@ -538,20 +537,19 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if relays_before == 0:
       resume_id = process_launch.resume_id
       # Pre-flight catches a missing transcript when a durable anchor exists.
-      if not resume_id and not fresh_native:
-        if session_meta.cc_session_id:
-          reason = ET.RESUME_REASON_TRANSCRIPT_MISSING
-          log.error(
-              "master_cc_resume_anchor_missing",
-              session=session_meta.id,
-              backend=option.type,
-              reason=reason,
-          )
-          await item.callbacks.persist_and_broadcast(
-              session_meta.id, {
-                  "type": ET.RESUME_CONTEXT_DROPPED,
-                  "reason": reason,
-              })
+      if not resume_id and not fresh_native and session_meta.cc_session_id:
+        reason = ET.RESUME_REASON_TRANSCRIPT_MISSING
+        log.error(
+            "master_cc_resume_anchor_missing",
+            session=session_meta.id,
+            backend=option.type,
+            reason=reason,
+        )
+        await item.callbacks.persist_and_broadcast(
+            session_meta.id, {
+                "type": ET.RESUME_CONTEXT_DROPPED,
+                "reason": reason,
+            })
       log.info(
           "master_cc_starting",
           session=session_meta.id,

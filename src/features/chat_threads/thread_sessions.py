@@ -23,4 +23,4 @@ def is_thread_session(meta: SessionMetadata) -> bool:
   """True when *meta* carries a Slack or Discord thread origin."""
   slack = metadata_slots.fields_of(meta, "slack")
   discord = metadata_slots.fields_of(meta, "discord")
-  return getattr(slack, "slack_origin") is not None or getattr(discord, "discord_origin") is not None
+  return slack.slack_origin is not None or discord.discord_origin is not None

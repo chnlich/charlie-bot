@@ -57,13 +57,11 @@ async def trigger_master(
     pull_back: bool = True,
 ) -> None:
   """Dispatch a wake to the task node at the end of the session's succession chain."""
-  target_session_id = session_id
   resolved = await successor.resolve_successor_chain(session_id)
   if resolved is None:
     log.error("trigger_master_session_not_found", session=session_id)
     return
 
-  target_session_id = resolved.id
   if resolved.id != session_id:
     log.info("trigger_master_redirected_to_successor", session=session_id, resolved_session=resolved.id)
 

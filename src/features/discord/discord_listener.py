@@ -87,11 +87,11 @@ from src.features.discord.discord_client import (
     snowflake_key,
 )
 from src.features.discord.event_types import DISCORD_REPLY
+from src.features.discord.metadata import DiscordOrigin
 from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
-from src.features.discord.metadata import DiscordOrigin
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing

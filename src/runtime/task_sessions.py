@@ -1585,7 +1585,6 @@ class TaskTreeManager:
     """Permanent delete requires an empty, unreferenced task (the check half)."""
     index = await self._get_index(force=True)  # a just-saved reference must be seen
     self._index_meta(index, session_id)
-    meta = index.metas[session_id]
     return self._deletion_blockers_locked(index, session_id)
 
   def _deletion_reference_blockers(self, index: _TreeIndex, session_id: str) -> list[str]:

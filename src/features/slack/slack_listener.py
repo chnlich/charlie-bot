@@ -58,11 +58,11 @@ from src.features.chat_threads.thread_entry import (
     summon_prompt_tail,
 )
 from src.features.slack.event_types import SLACK_REPLY
+from src.features.slack.metadata import SlackOrigin
 from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
-from src.features.slack.metadata import SlackOrigin
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing

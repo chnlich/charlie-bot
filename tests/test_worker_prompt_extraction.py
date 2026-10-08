@@ -11,7 +11,6 @@ from pathlib import Path
 import pytest
 from conftest import cfg_with_repo as _cfg_with_repo
 
-from src.infra.config import CharlieBotConfig
 from src.runtime import spawner
 
 # --- Fail-loud loader semantics -----------------------------------------------

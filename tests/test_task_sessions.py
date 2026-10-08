@@ -102,7 +102,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   root = await conftest.create_task(mgr, parent=None, request_id="root", name="Root")
   agent = run_token.CallerIdentity(
       kind="agent", claims=run_token.RunTokenClaims(session_id=root.id, run_id="run-1", agent="manager"))
-  create = dict(task_parent_id=root.id, profile="manager", task=None, name="child", backend=None)
+  create = {"task_parent_id": root.id, "profile": "manager", "task": None, "name": "child", "backend": None}
 
   # The agent's own-child create stays legal; naming its id is the scope refusal.
   with pytest.raises(task_errors.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):

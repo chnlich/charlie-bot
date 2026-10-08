@@ -36,8 +36,7 @@ def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRe
   # The master-cc run path re-imports build_backend through the registry on
   # every call, so the patch lands there; the instructions builder is stubbed
   # with it because _run_cc builds instructions before the first backend build.
-  builds = install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
-  return builds
+  return install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
 
 
 def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionMetadata:

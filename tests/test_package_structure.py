@@ -17,6 +17,13 @@ layer or a lower layer. The import graph of src/runtime has no cycle, and neithe
 A runtime module that no entry of the table covers fails a test, and so does an entry that covers no module. A
 package ``__init__.py`` is in no layer and is exempt as importer and as target of both rules.
 
+An import statement inside a function body in src/runtime or src/infra that names a src module belongs at the module
+top. It stays in the function only when a measurement shows that the module-top form slows the startup of one command.
+Then it carries the comment ``# deferred: <command>``, for example ``# deferred: charliebot improve --help``. The
+comment stands at the end of the first line of the statement or alone on the line directly above it. It names the
+command and holds no number: the measured cost goes into the commit message of the change that adds the deferral. A
+function-level import of a standard-library or third-party module needs no comment.
+
 An import counts where it stands: module level, function body, ``if TYPE_CHECKING`` block, relative form. A string
 whose whole value is a dotted ``src.`` module path counts as an import of the longest existing module: lazy
 loaders, the CLI command table and patch targets name modules this way. A longer string counts one import per
@@ -31,8 +38,10 @@ table, and a break is fixed in the code.
 """
 
 import ast
+import io
 import re
 import textwrap
+import tokenize
 from pathlib import Path
 from typing import NamedTuple
 
@@ -43,6 +52,8 @@ BACKEND_VARIANTS = frozenset({"kimi", "openai_compatible"})
 CHAT_CHANNELS = frozenset({"slack", "discord"})
 CONTAINER_MARKERS = frozenset({"src/__init__.py", "src/backends/__init__.py", "src/features/__init__.py"})
 EXCEPTIONS_PATH = Path(__file__).with_name("structure_exceptions.txt")
+DEFERRAL_COMMENT = re.compile(r"#\s*deferred:\s*\S")
+DEFERRAL_SCOPES = ("src/runtime/", "src/infra/")
 MODULE_PATH = re.compile(r"src(\.[A-Za-z_]\w*)+")
 EMBEDDED = re.compile(r"(?<![\w.])src(?:\.[A-Za-z_]\w*)+")
 DEPEND_ON_THE_RUNTIME = (
@@ -362,6 +373,69 @@ def import_cycles(structure: Structure, package: str) -> list[str]:
   return failures
 
 
+def function_level_imports(tree: ast.Module) -> list[ast.Import | ast.ImportFrom]:
+  """The import statements inside a function body, nested functions included, in source order."""
+  found: list[ast.Import | ast.ImportFrom] = []
+
+  def visit(node: ast.AST, *, in_function: bool) -> None:
+    for child in ast.iter_child_nodes(node):
+      if not isinstance(child, (ast.stmt, ast.excepthandler, ast.match_case)):
+        continue  # an import is a statement: no expression holds one, so the walk stops at the statements
+      if isinstance(child, (ast.Import, ast.ImportFrom)):
+        if in_function:
+          found.append(child)
+      else:
+        visit(child, in_function=in_function or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)))
+
+  visit(tree, in_function=False)
+  return found
+
+
+def comments_by_line(source: str) -> dict[int, tuple[str, bool]]:
+  """Line number -> (comment text, whether the comment is alone on its line), for each line that holds a comment."""
+  return {
+      token.start[0]: (token.string, token.line.lstrip().startswith("#"))
+      for token in tokenize.generate_tokens(io.StringIO(source).readline)
+      if token.type == tokenize.COMMENT
+  }
+
+
+def has_deferral(comments: dict[int, tuple[str, bool]], line: int) -> bool:
+  """Whether ``# deferred: <text>`` ends ``line`` or stands alone on the line directly above it."""
+  for number, alone in ((line, False), (line - 1, True)):
+    found = comments.get(number)
+    if found is not None and found[1] == alone and DEFERRAL_COMMENT.match(found[0]):
+      return True
+  return False
+
+
+def deferral_breaks(root: Path) -> list[str]:
+  """One failure line per function-level import of a src module, under src/runtime or src/infra, that has no
+  ``# deferred: <command>`` comment. The target resolves as in :func:`scan`."""
+  index = module_index(root)
+  failures = []
+  for rel in index.values():
+    if not rel.startswith(DEFERRAL_SCOPES):
+      continue
+    source = (root / rel).read_text(encoding="utf-8")
+    package = ".".join(Path(rel).with_suffix("").parts[:-1])
+    comments = None
+    for node in function_level_imports(ast.parse(source, filename=rel)):
+      targets = {
+          target for name in named_modules(node, package, index) if (target := resolve(name, index)) not in (None, rel)
+      }
+      if not targets:
+        continue
+      if comments is None:
+        comments = comments_by_line(source)  # tokenizing is slow: only a file with a src import needs it
+      if not has_deferral(comments, node.lineno):
+        failures.append(
+            f"{rel}:{node.lineno}: function-level import of {', '.join(sorted(targets))} has no "
+            "'# deferred: <command>' comment; move it to the module top, or name the command whose startup it protects."
+        )
+  return failures
+
+
 # The synthetic tree of the scan test: runtime/core.py names one module of features/alpha once per line below, in
 # every import form, as a whole string, and embedded in a command string and a prose f-string, then builds two
 # module paths (the "src.features." prefixes still name the features marker). The docstring of `documented` names
@@ -432,6 +506,24 @@ BOTTOM_SOURCE = textwrap.dedent(
       from src.runtime import top as inner
       return "src.runtime.top"
     """)
+
+# The synthetic tree of the deferral test. Each module of src/runtime holds one function-level import: marked.py
+# imports src/infra/models.py twice with a comment (at the end of the line, and alone on the line above); unmarked.py
+# and empty.py have no comment and an empty one; outside.py imports only the standard library and a third-party module.
+DEFERRAL_MODULES = {
+    "server.py": "",
+    "src/__init__.py": "",
+    "src/infra/__init__.py": "",
+    "src/infra/models.py": "",
+    "src/runtime/__init__.py": "",
+    "src/runtime/marked.py":
+        (
+            "def at_the_end():\n  from src.infra import models  # deferred: charliebot improve --help\n\n\n"
+            "def alone_above():\n  # deferred: charliebot improve --help\n  from src.infra import models\n"),
+    "src/runtime/unmarked.py": "def bare():\n  from src.infra import models\n",
+    "src/runtime/empty.py": "def blank():\n  from src.infra import models  # deferred:\n",
+    "src/runtime/outside.py": "def later():\n  import json\n  import yaml\n  from collections import OrderedDict\n",
+}
 
 
 def write_tree(root: Path, modules: dict[str, str]) -> None:
@@ -506,6 +598,11 @@ def test_the_import_graph_has_no_cycle(structure: Structure, package: str) -> No
   assert not failures, "\n\n".join(failures)
 
 
+def test_every_function_level_import_names_its_command() -> None:
+  failures = deferral_breaks(conftest.ROOT)
+  assert not failures, "\n".join(failures)
+
+
 def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
   """An import form the scan skips would let a reverse import in unseen."""
   modules = dict.fromkeys(EMPTY_MODULES, "")
@@ -549,3 +646,15 @@ def test_the_layer_checks_find_each_break(tmp_path: Path) -> None:
   assert infra_edges == ["  src/infra/left.py:1 -> src/infra/right.py", "  src/infra/right.py:1 -> src/infra/left.py"]
   with pytest.raises(ValueError, match="top"):
     layer_of("top", (Layer(2, "first", ("top",)), Layer(1, "second", ("top",))))
+
+
+def test_the_deferral_check_finds_each_unmarked_import(tmp_path: Path) -> None:
+  """A deferral without its command, or with an empty one, would stay in the code unread."""
+  write_tree(tmp_path, DEFERRAL_MODULES)
+
+  failures = deferral_breaks(tmp_path)
+
+  assert failures == [
+      f"src/runtime/{name}.py:2: function-level import of src/infra/models.py has no '# deferred: <command>' comment; "
+      "move it to the module top, or name the command whose startup it protects." for name in ("empty", "unmarked")
+  ]

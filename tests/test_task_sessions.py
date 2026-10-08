@@ -11,7 +11,7 @@ import pytest
 from src.infra import models
 from src.features.slack.metadata import SlackOrigin
 from src.infra import metadata_slots
-from src.runtime import run_token, task_sessions
+from src.runtime import run_token, task_errors, task_sessions
 
 
 async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
@@ -40,7 +40,7 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
     assert meta.schema_version == 2
 
   # A worker is a leaf: no task may be created under it.
-  with pytest.raises(task_sessions.TaskInvalidError, match="not a manager"):
+  with pytest.raises(task_errors.TaskInvalidError, match="not a manager"):
     await conftest.create_task(mgr, parent=ids["worker1"], profile="worker", request_id="under-worker")
 
 
@@ -106,7 +106,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   create = dict(task_parent_id=root.id, profile="manager", task=None, name="child", backend=None)
 
   # The agent's own-child create stays legal; naming its id is the scope refusal.
-  with pytest.raises(task_sessions.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):
+  with pytest.raises(task_errors.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):
     await mgr.create_task(request_id="by-agent", session_id="agent-picked-id", caller=agent, **create)
   assert await session_mgr.get_session("agent-picked-id") is None
   assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"

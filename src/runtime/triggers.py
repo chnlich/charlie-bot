@@ -33,6 +33,7 @@ from src.infra.timeouts import SSH_OVERALL_TIMEOUT
 from src.runtime import trigger_files
 from src.runtime.sessions import SessionManager
 from src.runtime.sidebar_state import mark_sidebar_dirty
+from src.runtime.task_errors import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
 log = LazyStructlogLogger()
 
@@ -857,8 +858,6 @@ class TriggerManager:
 
   async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str) -> None:
     """Admit and dispatch one durable scheduled input to its stable node."""
-    from src.runtime.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
-
     task_mgr = self._task_tree_provider()
     session_id = trigger.session_id
     await task_mgr.load_task_meta(session_id)

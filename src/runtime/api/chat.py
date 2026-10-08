@@ -21,6 +21,7 @@ from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.sessions import SessionManager
+from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError
 from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
@@ -67,8 +68,6 @@ async def send_message(
 ) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
   uploaded_files = serialize_uploaded_files(req.uploaded_files)
-  from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
-
   event_type = input_event_type_for_caller(caller)
   from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
   try:

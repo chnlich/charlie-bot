@@ -13,7 +13,8 @@ from src.infra.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc
 from src.runtime.api.message_utils import events_to_view
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token
 from src.runtime.sessions import SessionManager
-from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskTreeManager
+from src.runtime.task_errors import TaskConflictError, TaskForbiddenError
+from src.runtime.task_sessions import TaskTreeManager
 
 
 async def admit(
@@ -263,7 +264,7 @@ async def test_closed_node_keeps_input_and_agent_content_never_mints_authorizati
 
   # The closed node keeps a late machine input as history (and the machine
   # refusal never mints an authorization window).
-  from src.runtime.task_sessions import TaskArchivedError
+  from src.runtime.task_errors import TaskArchivedError
   with pytest.raises(TaskArchivedError):
     await admit(
         tree, worker.id, "late machine arrival", event_type=ET.AGENT_MESSAGE, actor="agent", from_session=root.id)

@@ -25,7 +25,8 @@ from conftest import OPERATOR, build_env, create_task
 from src.infra import event_types as ET
 from src.infra.models import RunRecord
 from src.runtime.run_token import CallerIdentity, RunTokenClaims
-from src.runtime.task_sessions import TaskArchivedError, TaskConflictError, TaskTreeManager
+from src.runtime.task_errors import TaskArchivedError, TaskConflictError
+from src.runtime.task_sessions import TaskTreeManager
 
 
 class ScriptedExecutor:
@@ -241,7 +242,7 @@ async def test_restore_of_an_open_node_is_a_no_op_and_operator_only(tmp_path: Pa
   root, _mid, _leaf, _completed = await build_tree(tree)
   assert await tree.completion.restore_chain(root.id, request_id="r-1", reason="sidebar unarchive") == []
   agent = CallerIdentity(kind="agent", claims=RunTokenClaims(run_id="run-1", session_id=root.id, agent="a"))
-  from src.runtime.task_sessions import TaskForbiddenError
+  from src.runtime.task_errors import TaskForbiddenError
   with pytest.raises(TaskForbiddenError):
     await tree.completion.restore_task(root.id, request_id="r-2", reason="x", caller=agent)
 

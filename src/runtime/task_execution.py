@@ -67,8 +67,17 @@ from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in
 from src.runtime.session_dispatch import child_report_text
 from src.runtime.sessions import SessionManager, backend_switch_reset_reason, context_reset_note
 from src.runtime.spawner_backends import resolve_backend_option
+from src.runtime.task_completion import (
+    LANDING_REF_PREFIX,
+    REVIEW_REF_PREFIX,
+    RUN_REF_PREFIX,
+    SPEC_REF_PREFIX,
+    CompletionEvidence,
+    LandingEvidence,
+)
+from src.runtime.task_errors import TaskConflictError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
-from src.runtime.task_sessions import TaskConflictError, TaskInvalidError, TaskNotFoundError, canonical_task_spec_text
+from src.runtime.task_sessions import canonical_task_spec_text
 from src.runtime.worker import QuotaExhaustedError, Worker
 
 if TYPE_CHECKING:
@@ -1832,15 +1841,6 @@ class TaskExecutionAdapter:
       await controller.redrive(session_id, self._tree, self._cfg)
 
   async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
-    from src.runtime.task_completion import (
-        LANDING_REF_PREFIX,
-        REVIEW_REF_PREFIX,
-        RUN_REF_PREFIX,
-        SPEC_REF_PREFIX,
-        CompletionEvidence,
-        LandingEvidence,
-    )
-
     session_id = meta.id
     work_run = await self._tree.runs.get_run(session_id, run.review_of_run_id or "")
     if work_run is None:
@@ -2040,7 +2040,6 @@ class TaskExecutionAdapter:
         report wakes the parent, so a recovery re-delivery of an already
         delivered report never wakes twice.
         """
-    from src.runtime.task_completion import RUN_REF_PREFIX
     meta = await self._tree.load_meta(session_id)
     if meta is None or not meta.task_parent_id:
       return

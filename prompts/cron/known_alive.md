@@ -396,13 +396,6 @@ Known-alive symbols:
   `'idle'` instead of `null`. The name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `_load_legacy_single_event_id` (`src/infra/models.py`, on `MasterRunRecord`) — pydantic
-  `@model_validator(mode='before')` method: it loads a pre-batching record's single
-  `user_event_id` as a one-element `user_event_ids`, so an interrupted turn written by the old
-  schema still feeds the restart-replay exclusion set. The name has exactly zero whole-repo
-  matches outside its definition, so vulture flags it as an unused method. Same
-  framework-registered class as the `check_sources_and_mode` entry above; deleting it would not
-  fail validation, it would silently drop the legacy record's replay exclusion.
 - `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
   (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), each option model class in
   `src/backends/*/options.py`, and `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`) —

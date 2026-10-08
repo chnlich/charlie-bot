@@ -29,6 +29,12 @@ _BLOCK_TAGS = frozenset(
         "hr", "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "tbody", "td", "tfoot", "th",
         "thead", "tr", "ul"
     })
+_CJK_RANGES = (
+    (0x3400, 0x4DBF),
+    (0x4E00, 0x9FFF),
+    (0xF900, 0xFAFF),
+    (0x20000, 0x2FA1F),
+)
 _CBD_STYLE = """\
 .cbd-header { margin: 0 0 14px; padding: 8px 12px; border: 1px solid #d9dfe6; border-radius: 7px; \
 background: #fff8df; color: #7a5a00; font-weight: 600; }
@@ -48,19 +54,8 @@ class _TextPart:
   start: int
   end: int
   text: str
+  raw_ranges: list[tuple[int, int]]
   node: _Node
-  # True when ``text`` is the raw source slice itself (parsed data:
-  # handle_data verifies ``source[start:end] == text``, so the raw offset of
-  # logical offset i is ``start + i``). False for an entity reference: the
-  # decoded text shares one raw span, so every logical range maps to the
-  # part's whole ``(start, end)``.
-  text_is_raw: bool
-
-  def raw_span(self, logical_start: int, logical_end: int) -> tuple[int, int]:
-    """Return the raw source span of the logical range ``[logical_start, logical_end)``."""
-    if self.text_is_raw:
-      return (self.start + logical_start, self.start + logical_end)
-    return (self.start, self.end)
 
 
 @dataclasses.dataclass(eq=False)
@@ -74,14 +69,6 @@ class _Node:
   end_end: int | None = None
   children: list[_Node | _TextPart] = dataclasses.field(default_factory=list)
   text_parts: list[_TextPart] = dataclasses.field(default_factory=list)
-
-
-@dataclasses.dataclass
-class _Anchor:
-  start: int | None = None
-  start_end: int | None = None
-  end: int | None = None
-  end_end: int | None = None
 
 
 class _OffsetParser(html.parser.HTMLParser):
@@ -125,9 +112,9 @@ class _Parser(_OffsetParser):
     self.root = _Node("#root", {}, None)
     self._stack = [self.root]
 
-  def _append_part(self, raw_start: int, raw_end: int, text: str, text_is_raw: bool) -> None:
+  def _append_part(self, raw_start: int, raw_end: int, text: str, raw_ranges: list[tuple[int, int]]) -> None:
     node = self._stack[-1]
-    part = _TextPart(raw_start, raw_end, text, node, text_is_raw)
+    part = _TextPart(raw_start, raw_end, text, raw_ranges, node)
     node.children.append(part)
     node.text_parts.append(part)
 
@@ -160,7 +147,7 @@ class _Parser(_OffsetParser):
     end = start + len(data)
     if self.source[start:end] != data:
       raise ValueError(f"could not locate text data at offset {start}")
-    self._append_part(start, end, data, text_is_raw=True)
+    self._append_part(start, end, data, [(start + index, start + index + 1) for index in range(len(data))])
 
   def handle_entityref(self, name: str) -> None:
     self._append_ref(name, ("&" + name + ";",), 1)
@@ -179,60 +166,7 @@ class _Parser(_OffsetParser):
     if any(raw.startswith(ref) for ref in refs):
       length += 1
     text = _html.unescape(self.source[start:start + length])
-    self._append_part(start, start + length, text, text_is_raw=False)
-
-
-class _BoundaryParser(_OffsetParser):
-  """First head/body anchors only, riding _Parser's tokenizer walk without the DOM build.
-
-  Inherits _OffsetParser's offset math and tag-span locating.  The same innermost-open-tag end
-  matching as ``_Parser`` — the record rides the stack slot that opened it, so
-  a nested same-tag element takes the end tag and the tracked first element
-  stays end-less exactly as the tree's node would — so the anchors equal the
-  full parse's ``_first_descendant`` answers on every input.
-  """
-
-  def __init__(self, source: str) -> None:
-    super().__init__(source)
-    self._open: list[tuple[str, _Anchor | None]] = []
-    self.head: _Anchor | None = None
-    self.body: _Anchor | None = None
-
-  def _track(self, tag: str, start: int, start_end: int) -> _Anchor | None:
-    if tag == "head" and self.head is None:
-      self.head = _Anchor(start, start_end)
-      return self.head
-    if tag == "body" and self.body is None:
-      self.body = _Anchor(start, start_end)
-      return self.body
-    return None
-
-  def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    start, start_end = self._start_tag_span()
-    record = self._track(tag, start, start_end)
-    if tag not in VOID_TAGS:
-      self._open.append((tag, record))
-
-  def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-    start, start_end = self._start_tag_span()
-    self._track(tag, start, start_end)
-
-  def handle_endtag(self, tag: str) -> None:
-    start, end_end = self._end_tag_span()
-    for index in range(len(self._open) - 1, -1, -1):
-      if self._open[index][0] == tag:
-        record = self._open[index][1]
-        if record is not None and record.end is None:
-          record.end, record.end_end = start, end_end
-        del self._open[index:]
-        return
-
-
-def _parse_anchors(source: str) -> tuple[_Anchor | None, _Anchor | None]:
-  parser = _BoundaryParser(source)
-  parser.feed(source)
-  parser.close()
-  return parser.head, parser.body
+    self._append_part(start, start + length, text, [(start, start + length)] * len(text))
 
 
 @dataclasses.dataclass
@@ -260,6 +194,11 @@ class _LeafChange:
   old: _Leaf | None
   new: _Leaf | None
   new_index: int | None
+
+
+def _is_cjk(char: str) -> bool:
+  value = ord(char)
+  return any(start <= value <= end for start, end in _CJK_RANGES)
 
 
 def _is_boundary(node: _Node) -> bool:
@@ -332,22 +271,30 @@ def _normalise(text: str) -> str:
   return re.sub(r"\s+", " ", text).strip()
 
 
-# The tokeniser's scan (see _tokenise for the shape rules the alternation encodes).
-_TOKEN_RE = re.compile(r"\s+|[A-Za-z0-9_]+|.")
-
-
 def _tokenise(text: str) -> list[tuple[str, int, int]]:
-  # The three token shapes in one C-level scan; alternation order decides the
-  # shape. ``\s+`` is str.isspace()'s own set (the same C table), so a
-  # whitespace run can never reach ``.``. ``[A-Za-z0-9_]`` is exactly
-  # ``char.isascii() and (char.isalnum() or char == "_")``. Every remaining
-  # character — each CJK char, each punctuation char — is one token, the
-  # per-character granularity the differ's alignment relies on.
   tokens: list[tuple[str, int, int]] = []
-  for match in _TOKEN_RE.finditer(text):
-    value = match.group()
-    if not value[0].isspace():
-      tokens.append((value, match.start(), match.end()))
+  index = 0
+  while index < len(text):
+    char = text[index]
+    if char.isspace():
+      end = index + 1
+      while end < len(text) and text[end].isspace():
+        end += 1
+      index = end
+      continue
+    if _is_cjk(char):
+      tokens.append((char, index, index + 1))
+      index += 1
+      continue
+    if char.isascii() and (char.isalnum() or char == "_"):
+      end = index + 1
+      while end < len(text) and text[end].isascii() and (text[end].isalnum() or text[end] == "_"):
+        end += 1
+      tokens.append((text[index:end], index, end))
+      index = end
+      continue
+    tokens.append((char, index, index + 1))
+    index += 1
   return tokens
 
 
@@ -360,27 +307,25 @@ def _leaf_tokens(leaf: _Leaf) -> list[_Token]:
   offset = 0
   for part in leaf.parts:
     for value, start, end in _tokenise(part.text):
-      raw_start, raw_end = part.raw_span(start, end)
-      result.append(_Token(value, offset + start, offset + end, raw_start, raw_end))
+      result.append(
+          _Token(
+              value,
+              offset + start,
+              offset + end,
+              part.raw_ranges[start][0],
+              part.raw_ranges[end - 1][1],
+          ))
     offset += len(part.text)
   return result
 
 
-def _raw_bounds(tokens: list[_Token], start: int, end: int, leaf: _Leaf) -> list[tuple[int, int]]:
-  if start >= end:
-    return []
-  logical_start = tokens[start].logical_start
-  logical_end = tokens[end - 1].logical_end
-  result: list[tuple[int, int]] = []
-  offset = 0
-  for part in leaf.parts:
-    part_end = offset + len(part.text)
-    lo = max(offset, logical_start)
-    hi = min(part_end, logical_end)
-    if lo < hi:
-      result.append(part.raw_span(lo - offset, hi - offset))
-    offset = part_end
-  return result
+def _leaf_raw_map(leaf: _Leaf) -> tuple[list[tuple[int, int]], list[int]]:
+  raw_ranges: list[tuple[int, int]] = []
+  part_indices: list[int] = []
+  for part_index, part in enumerate(leaf.parts):
+    raw_ranges.extend(part.raw_ranges)
+    part_indices.extend([part_index] * len(part.text))
+  return raw_ranges, part_indices
 
 
 def _merged_opcodes(old: list[_Token], new: list[_Token]) -> list[tuple[str, int, int, int, int]]:
@@ -537,6 +482,25 @@ def _add_attr(source: str, node: _Node, name: str, value: str | None, insertions
   _add_insertion(insertions, start + _attr_insert_offset(raw), addition)
 
 
+def _raw_bounds(tokens: list[_Token], start: int, end: int, leaf: _Leaf) -> list[tuple[int, int]]:
+  if start >= end:
+    return []
+  raw_ranges, part_indices = _leaf_raw_map(leaf)
+  logical_start = tokens[start].logical_start
+  logical_end = tokens[end - 1].logical_end
+  result: list[tuple[int, int]] = []
+  current_part = part_indices[logical_start]
+  current_start = logical_start
+  for logical_index in range(logical_start + 1, logical_end):
+    part = part_indices[logical_index]
+    if part != current_part:
+      result.append((raw_ranges[current_start][0], raw_ranges[logical_index - 1][1]))
+      current_part = part
+      current_start = logical_index
+  result.append((raw_ranges[current_start][0], raw_ranges[logical_end - 1][1]))
+  return result
+
+
 def _anchor_offset(tokens: list[_Token], start: int, leaf: _Leaf) -> int:
   if start < len(tokens):
     return tokens[start].raw_start
@@ -573,19 +537,12 @@ def _wrapping_removes_direct_text(leaf: _Leaf, ranges: list[tuple[int, int]]) ->
   for child in leaf.element.children:
     if not isinstance(child, _TextPart):
       continue
-    if child.text_is_raw:
-      for index, char in enumerate(child.text):
-        if char.isspace():
-          continue
-        has_direct_text = True
-        raw_start, raw_end = child.raw_span(index, index + 1)
-        if not any(start <= raw_start and raw_end <= end for start, end in ranges):
-          return False
-    # A reference's decoded characters share one raw span, so one check
-    # answers for all of them.
-    elif child.text.strip():
+    for index, char in enumerate(child.text):
+      if char.isspace():
+        continue
       has_direct_text = True
-      if not any(start <= child.start and child.end <= end for start, end in ranges):
+      raw_start, raw_end = child.raw_ranges[index]
+      if not any(start <= raw_start and raw_end <= end for start, end in ranges):
         return False
   return has_direct_text
 
@@ -774,19 +731,13 @@ def _render_start_tag_additions(
 
 
 def _splice(source: str, insertions: dict[int, list[str]]) -> str:
-  # Ascending offsets with per-offset list order preserved — the contract the
-  # render passes rely on — so the slice merge below emits exactly the byte
-  # sequence the per-character walk produced.
-  if not insertions:
-    return source
-  pieces: list[str] = []
-  cursor = 0
-  for offset in sorted(insertions):
-    pieces.append(source[cursor:offset])
-    pieces.extend(insertions[offset])
-    cursor = offset
-  pieces.append(source[cursor:])
-  return "".join(pieces)
+  result: list[str] = []
+  for offset in range(len(source) + 1):
+    if offset in insertions:
+      result.extend(insertions[offset])
+    if offset < len(source):
+      result.append(source[offset])
+  return "".join(result)
 
 
 def _parse(source: str) -> _Parser:
@@ -796,51 +747,34 @@ def _parse(source: str) -> _Parser:
   return parser
 
 
-def _offset_after_insertions(offset: int, insertions: dict[int, list[str]]) -> int:
-  """The spliced-page position an original-page offset lands at.
-
-  ``_splice`` only ever inserts bytes, so a position shifts by the total length
-  inserted before it; insertions at the offset itself share its source boundary
-  and sit ahead of it.
-  """
-  return offset + sum(sum(len(piece) for piece in pieces) for at, pieces in insertions.items() if at < offset)
-
-
-def _append_style_and_header(source: str, insertions: dict[int, list[str]], root: _Node) -> str:
+def _append_style_and_header(source: str) -> str:
   # The anchors are read off a re-parse of the spliced page on purpose: the
   # render passes can rewrite the body start tag itself (class and data-del
   # attributes) and insert synthetic start tags, so a spliced page's DOM can
-  # disagree with the pre-splice parse about where head and body sit. The
-  # re-parse rides the anchor-only parser — the same tokenizer walk as _Parser,
-  # minus the DOM build nothing here reads. The wrap header anchor needs no
-  # re-parse: no render pass synthesizes a wrap class (a ghost stamps only
-  # cbd-del), so the pre-splice DOM answers the same lookup, and no pass
-  # inserts inside another element's start tag except attribute additions, so
-  # the element's tag bytes stay contiguous and its spliced position is the
-  # pre-splice one shifted by the inserted length before it
-  # (_offset_after_insertions). The main-tag fallback can diverge from the
-  # spliced-page re-parse — a deleted bare main or body becomes a ghost carrying
-  # that tag — but the artifact pages the route serves share the wrap chrome,
-  # which answers the lookup first; there the header moves outside the
-  # deleted ghost, the saner placement.
-  head, body = _parse_anchors(source)
-  header_insertions: dict[int, list[str]] = {}
+  # disagree with the pre-splice parse about where head and body sit.
+  parser = _parse(source)
+  insertions: dict[int, list[str]] = {}
   style_tag = f'<style data-cbd-style>{_CBD_STYLE}</style>'
+  head = _first_descendant(parser.root, "head")
+  body = _first_descendant(parser.root, "body")
   if head is not None and head.end is not None:
-    _add_insertion(header_insertions, head.end, style_tag)
+    _add_insertion(insertions, head.end, style_tag)
   else:
     offset = body.start if body is not None and body.start is not None else 0
-    _add_insertion(header_insertions, offset, style_tag)
+    _add_insertion(insertions, offset, style_tag)
   if body is not None and body.start_end is not None:
     # Artifact genres share the body{padding} + .wrap{max-width;margin:auto} chrome, so a
     # header outside the wrapper spans full width while the column does not.
+    root = _document_root(parser)
     target = _first_class_descendant(root, "wrap") or _first_descendant(root, "main")
-    offset = _offset_after_insertions(target.start_end, insertions) if target is not None else body.start_end
+    offset = target.start_end if target is not None else body.start_end
+  elif parser.root.end is not None:
+    offset = parser.root.end
   else:
     offset = len(source)
   header = f'<div class="cbd-header" data-cbd-header="{_html.escape(_HEADER_TEXT, quote=True)}"></div>'
-  _add_insertion(header_insertions, offset, header)
-  return _splice(source, header_insertions)
+  _add_insertion(insertions, offset, header)
+  return _splice(source, insertions)
 
 
 def _analyse(base_html: str, new_html: str) -> tuple[_Parser, _Parser, list[_LeafChange], list[_Leaf], list[_Leaf]]:
@@ -857,10 +791,10 @@ def annotate(base_html: str, new_html: str) -> str:
   insertions: dict[int, list[str]] = {}
   classes: dict[_Node, set[str]] = {}
   details: set[_Node] = set()
-  root = _document_root(new_parser)
-  _render_leaf_changes(new_html, root, changes, new_leaves, insertions, classes, details, base_parser.source)
+  _render_leaf_changes(
+      new_html, _document_root(new_parser), changes, new_leaves, insertions, classes, details, base_parser.source)
   _render_start_tag_additions(new_html, classes, details, insertions)
-  return _append_style_and_header(_splice(new_html, insertions), insertions, root)
+  return _append_style_and_header(_splice(new_html, insertions))
 
 
 def diff_text(base_html: str, new_html: str) -> str:

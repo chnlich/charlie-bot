@@ -298,11 +298,6 @@ class CharlieBotConfig(BaseModel):
     return self.charliebot_home / "MASTER_AGENT_PROMPT.md"
 
   @property
-  def memory_dir(self) -> Path:
-    """Root of the labeled-entry memory store: ~/.charliebot/memory/."""
-    return self.charliebot_home / "memory"
-
-  @property
   def charlie_bot_repo(self) -> Path:
     """Root of the charlie-bot repository (derived from package location)."""
     return REPO_ROOT

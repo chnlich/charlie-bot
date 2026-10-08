@@ -10,6 +10,7 @@ import fastapi
 
 from src.infra import config, memo, timeouts
 from src.runtime.api import deps
+from src.runtime.hooks import wiring
 
 router = fastapi.APIRouter()
 
@@ -106,18 +107,18 @@ _NOT_A_GIT_REPO_DETAIL = "Not a git repo: {}"
 def _resolve_repo_under_workspace(repo: str, cfg: config.CharlieBotConfig) -> pathlib.Path:
   """Validate repo path and return resolved pathlib.Path; raise fastapi.HTTPException(400) otherwise.
 
-  Besides the ``paths.workspace_dirs`` roots, the one extra repo outside them
-  is the memory store (``cfg.memory_dir``): its PR flow serves its proposal
-  diff through this same /diff page.
+  Besides the ``paths.workspace_dirs`` roots, a package may register a root of
+  its own (``wiring.register_diff_root``): a package whose repository lives
+  outside the workspaces serves its diffs through this same /diff page.
   """
   repo_path = pathlib.Path(repo).expanduser().resolve()
   if not (repo_path / ".git").exists():
     raise fastapi.HTTPException(status_code=400, detail=_NOT_A_GIT_REPO_DETAIL.format(repo))
   allowed_roots = [pathlib.Path(d).expanduser().resolve() for d in cfg.paths.workspace_dirs]
-  allowed_roots.append(cfg.memory_dir.resolve())
+  allowed_roots.extend(root(cfg).resolve() for root in wiring.diff_roots())
   if not any(repo_path.is_relative_to(root) for root in allowed_roots):
     raise fastapi.HTTPException(
-        status_code=400, detail="repo must be under configured paths.workspace_dirs or the memory store")
+        status_code=400, detail="repo must be under configured paths.workspace_dirs or a registered package repository")
   return repo_path
 
 

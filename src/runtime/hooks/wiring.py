@@ -1,4 +1,5 @@
-"""Wiring registry: packages register their routers, CLI commands, background services, file views and startup checks.
+"""Wiring registry: packages register their routers, CLI commands, background services, file views, startup checks
+and diff roots.
 
 Each registration holds module path strings. The server and the CLI import a registered
 module when they use it, so this module imports nothing heavy and a CLI command loads
@@ -12,6 +13,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+  from pathlib import Path
+
   from src.infra.config import CharlieBotConfig
 
 PHASES = ("early", "ready")
@@ -22,6 +25,7 @@ _COMMANDS: dict[str, str] = {}
 _SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
 _FILE_VIEWS: list[tuple[str, str]] = []  # (module, attr)
 _STARTUP_CHECKS: list[tuple[str, str]] = []  # (module, attr)
+_DIFF_ROOTS: list[tuple[str, str]] = []  # (module, attr)
 
 
 class ServiceContext:
@@ -98,6 +102,17 @@ def register_startup_check(module: str, *, attr: str) -> None:
   _STARTUP_CHECKS.append((module, attr))
 
 
+def register_diff_root(module: str, *, attr: str) -> None:
+  """The diff view also accepts repositories under getattr(import_module(module), attr)(cfg), a Path.
+
+  cfg is the CharlieBotConfig. The roots join the paths.workspace_dirs roots in registration order.
+  A second registration of one (module, attr) raises ValueError.
+  """
+  if (module, attr) in _DIFF_ROOTS:
+    raise ValueError(f"diff root {module}:{attr} is already registered")
+  _DIFF_ROOTS.append((module, attr))
+
+
 def routers(*, before_runtime: bool = False) -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
   """(module, prefix, tags, attr) in registration order, for the routers registered with this before_runtime."""
   return tuple(router[:4] for router in _ROUTERS if router[4] == before_runtime)
@@ -142,3 +157,8 @@ def file_views() -> list[object]:
 def startup_checks() -> list[Callable[[CharlieBotConfig], None]]:
   """The registered startup check functions, imported, in registration order."""
   return [getattr(importlib.import_module(module), attr) for module, attr in _STARTUP_CHECKS]
+
+
+def diff_roots() -> list[Callable[[CharlieBotConfig], Path]]:
+  """The registered diff root functions, imported, in registration order."""
+  return [getattr(importlib.import_module(module), attr) for module, attr in _DIFF_ROOTS]

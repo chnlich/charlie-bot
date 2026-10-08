@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from src.features.memory import memory
+from src.features.memory.store_root import memory_dir
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata
 from src.runtime import task_prompts
@@ -16,10 +17,10 @@ def memory_selection_for(meta: SessionMetadata, kind: str, cfg: CharlieBotConfig
   Repo-less workers get the worker index only — never a guessed project.
   """
   if kind in task_prompts.MANAGER_KINDS:
-    return memory.select_master_memory(cfg.memory_dir)
+    return memory.select_master_memory(memory_dir(cfg))
   # A repo-less worker matches no repo topic: worker index only, never a guessed project.
   repo_basename = Path(meta.task.repo_path).name if (meta.task is not None and meta.task.repo_path) else ""
-  return memory.select_worker_memory(cfg.memory_dir, repo_basename)
+  return memory.select_worker_memory(memory_dir(cfg), repo_basename)
 
 
 def _memory_rule_segments(selection: memory.MemorySelection) -> list[task_prompts.RuleSegment]:

@@ -140,10 +140,22 @@ PY
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "==> NVIDIA GPU detected: provisioning the qwen3_hf voice engine"
   if (( DRY_RUN )); then
-    echo "  dry-run: would run: uv sync --group gpu-voice; then python -m src.features.voice.voice_setup enable"
+    echo "  dry-run: would run: uv sync --group gpu-voice; then register_all() + voice_setup.enable()"
   else
     uv sync --group gpu-voice
-    uv run --no-sync python -m src.features.voice.voice_setup enable
+    # The enable flow parses config.yaml; the backend packages register their option models
+    # and the accounts section before the first parse (python -m src.features.voice.voice_setup
+    # would skip the registration and refuse the config's backend keys).
+    uv run --no-sync python - <<'PY'
+from src.app import registrations
+
+registrations.register_all()
+from src.features.voice import voice_setup
+
+report = voice_setup.enable()
+for key, value in report.items():
+  print(f"{key}: {value}")
+PY
   fi
 else
   echo "==> No NVIDIA GPU detected: voice engine stays sherpa (CPU)"

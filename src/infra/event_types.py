@@ -264,7 +264,8 @@ BACKEND_OVERLAY_UNDECLARED = "backend_overlay_undeclared"
 # Keys of a result event's ``usage`` dict (``make_result_event`` in
 # src/runtime/agent_process/base.py builds it). The names are the Anthropic Messages
 # API's usage-block names, and they are persisted wire values: the token tally
-# re-reads them from Claude Code transcripts (src/features/usage/token_tally.py) and the
+# re-reads them from Claude Code transcripts (src/backends/claude_code/usage_logs.py) and from
+# CharlieBot's own result events (src/features/usage/token_tally.py), and the
 # proxy answers carry the same shape (src/backends/openai_compatible/anthropic_proxy.py). The Codex
 # rollout wire carries same-named ``input_tokens``/``output_tokens`` from a
 # different upstream (src/backends/codex/codex_usage.py, src/backends/codex/codex_pricing.py);
@@ -278,6 +279,20 @@ USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
 # (src/runtime/session_usage.py); the resolver's usage dict reuses the name
 # for the panel.
 RESULT_TOTAL_COST_USD = "total_cost_usd"
+
+
+def usage_counts(usage: dict) -> tuple[int, int, int, int]:
+  """The (fresh input, cache write, cache read, output) counts of one Claude-style usage block.
+
+  A missing or null key counts as 0.
+  """
+  return (
+      usage.get(USAGE_INPUT_TOKENS, 0) or 0,
+      usage.get(USAGE_CACHE_CREATION_INPUT_TOKENS, 0) or 0,
+      usage.get(USAGE_CACHE_READ_INPUT_TOKENS, 0) or 0,
+      usage.get(USAGE_OUTPUT_TOKENS, 0) or 0,
+  )
+
 
 # -- Shared event predicates -------------------------------------------------
 # One definition, two consumers: the takeoff authorization gate

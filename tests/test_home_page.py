@@ -80,7 +80,7 @@ async def test_home_page_lists_the_app_cards_then_each_package_card(tmp_path: pa
   """The app's own cards come first; each package's card follows in PACKAGES order."""
   response = await pages.home_page(conftest.make_page_request("/home"), _cfg(tmp_path / "h", []))
   names = re.findall(r'<span class="nm">([^<]*)</span>', response.body.decode("utf-8"))
-  assert names == ["Chat", "Token usage by model", "Host login authorization", "Diff viewer", "File browser"]
+  assert names == ["Chat", "Host login authorization", "Diff viewer", "Token usage by model", "File browser"]
 
 
 def test_the_file_browser_card_links_to_the_file_server_mount() -> None:

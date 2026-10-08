@@ -122,13 +122,12 @@ PERFETTO_MERGED_PATH = "/perfetto/merged"
 NCU_VIEWER_PATH = "/ncu"
 AUTH_STATUS_PATH = "/api/auth/status"
 
-# Usage-source vocabulary: the token tally (src/features/usage/token_tally.py) tags every row with
-# one of these corpus sources — the log the record was read from — and the usage panel
-# (src/app/pages.py) attributes each charlie-bot row's accounts to the CLI that ran the
-# call, so the panel's tiles and row slots key on the four CLI spellings below plus
-# USAGE_SOURCE_CHARLIE_CODE, never on USAGE_SOURCE_CHARLIE_BOT. The panel reads rows the
-# tally produces but must not import it — the tally pulls the config and model stack onto
-# every page render — so the shared spellings live in this stdlib-only module.
+# Usage-source vocabulary: the ledger's source values. Each backend package's register() names
+# its usage source (src/runtime/hooks/usage_sources.py) and its log reader tags every record with
+# the same value; the token tally (src/features/usage/token_tally.py) tags the records of
+# CharlieBot's own logs USAGE_SOURCE_CHARLIE_BOT. The usage page (src/features/usage/api.py)
+# attributes each charlie-bot row's accounts to the CLI that ran the call, so its cards key on the
+# registered names, never on USAGE_SOURCE_CHARLIE_BOT.
 USAGE_SOURCE_CLAUDE_CODE = "Claude Code"
 USAGE_SOURCE_CODEX = "Codex"
 USAGE_SOURCE_OPENCODE = "opencode"

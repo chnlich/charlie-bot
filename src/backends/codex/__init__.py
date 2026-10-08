@@ -2,8 +2,8 @@
 
 
 def register() -> None:
-  """Register the codex backend type with the runtime."""
-  from src.runtime.hooks import backend_lifecycle, backend_types
+  """Register the codex backend type and the Codex usage source with the runtime."""
+  from src.runtime.hooks import backend_lifecycle, backend_types, usage_sources
 
   backend_types.register_backend_type(
       "codex",
@@ -17,3 +17,7 @@ def register() -> None:
       ),
   )
   backend_lifecycle.register_usage_resolver("codex", "src.backends.codex.codex_usage:CodexUsageResolver")
+  usage_sources.register_source(
+      usage_sources.UsageSource(
+          name="Codex", id_prefixes=("codex-",), run_logs_only=False, module="src.backends.codex.usage_logs"))
+  usage_sources.attribute_backend_type("codex", "Codex")

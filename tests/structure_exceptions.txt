@@ -9,7 +9,6 @@ src/features/storage/storage_cool.py -> src/features/usage/usage_ledger.py
 src/features/usage/ext_usage.py -> src/backends/claude_code/claude_accounts.py
 src/features/usage/ext_usage.py -> src/backends/codex/codex_pricing.py
 src/features/usage/ext_usage.py -> src/backends/codex/codex_usage.py
-src/features/usage/token_tally.py -> src/backends/codex/codex_usage.py
 src/infra/config.py -> src/features/voice/transcription/registry.py
 src/runtime/api/deps.py -> src/features/artifacts/plans.py
 src/runtime/api/internal.py -> src/features/artifacts/plans.py

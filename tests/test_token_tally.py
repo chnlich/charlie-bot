@@ -1,25 +1,28 @@
 """Tests for the usage capture (src/features/usage/token_tally.py): per-source parsing into the
 usage ledger's records.
 
-Each test builds fixture log directories under tmp_path and points the capture at them
-directly, so no test reads the real home directory. Every assertion checks a named
-mechanism rather than a hard-coded total.
+Each test builds fixture logs under tmp_path and points HOME at it, so the registered sources' default
+homes (``~/.claude``, ``~/.codex``, the opencode db) resolve there and no test reads the real home
+directory. Every assertion checks a named mechanism rather than a hard-coded total.
 """
 
 from __future__ import annotations
 
-import io
 import json
 import shutil
 import sqlite3
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from conftest import codex_token_count_event
 
+from src.backends.claude_code import usage_logs as claude_logs
+from src.backends.codex import usage_logs as codex_logs
 from src.features.usage import token_tally as tt
-from src.features.usage.usage_ledger import RecordKind, UsageLedger, UsageRecord
+from src.features.usage.usage_ledger import UsageLedger
+from src.infra import config, home, ndjson
 from src.infra.constants import (
     USAGE_SOURCE_CHARLIE_BOT,
     USAGE_SOURCE_CHARLIE_CODE,
@@ -27,8 +30,19 @@ from src.infra.constants import (
     USAGE_SOURCE_CODEX,
     USAGE_SOURCE_OPENCODE,
 )
+from src.runtime.hooks import usage_sources
 
 NAME = "claude-model"
+
+
+@pytest.fixture(autouse=True)
+def _host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """This host as the capture sees it: HOME under tmp_path, a config that names the second Claude
+  login directory and no backend options, and tmp_path/sessions as the session tree."""
+  monkeypatch.setenv("HOME", str(tmp_path))
+  accounts = SimpleNamespace(claude=[SimpleNamespace(config_dir=str(tmp_path / ".claude-ext-1"))])
+  cfg = SimpleNamespace(accounts=accounts, backends=SimpleNamespace(options=[]), sessions_dir=tmp_path / "sessions")
+  monkeypatch.setattr(config, "get_config", lambda: cfg)
 
 
 def _claude_record(record_id: str, model: str, ts: str, usage: dict) -> dict:
@@ -58,7 +72,6 @@ class Claude:
   def __init__(self, tmp_path: Path) -> None:
     self.work = tmp_path / ".claude"
     self.ext = tmp_path / ".claude-ext-1"
-    self.dirs = {"work (default)": self.work, "ext-1": self.ext}
 
   def write(self, home: Path, session: str, records: list[dict], subagents: list[list[dict]] | None = None) -> None:
     sess_dir = home / "projects" / "rel" / session
@@ -79,7 +92,6 @@ class Codex:
 
   def __init__(self, tmp_path: Path) -> None:
     self.home = tmp_path / ".codex"
-    self.homes = {"work (default)": self.home}
 
   def write(self, name: str, records: list[dict]) -> None:
     flow = self.home / "sessions" / name
@@ -120,29 +132,11 @@ def _write_rollout(codex: Codex, sid: str, lines: list[dict]) -> Path:
   return path
 
 
-def _capture_all(
-    ledger: UsageLedger,
-    claude: Claude | None = None,
-    codex: Codex | None = None,
-    cache: Path | None = None,
-    sessions: Path | None = None) -> dict[str, int]:
-  """One capture_usage round over the sources the caller names, under the "host-a" labels."""
-  return tt.capture_usage(
-      ledger,
-      host="host-a",
-      claude_homes=claude.dirs if claude else {},
-      codex_homes=codex.homes if codex else {},
-      opencode_db=None,
-      sessions_dir=sessions,
-      cache_path=cache,
-  )
-
-
 def test_capture_usage_rows_are_absolutely_correct(tmp_path: Path) -> None:
-  claude, codex = _claude_codex_corpus(tmp_path)
+  _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert _capture_all(ledger, claude, codex, cache=tmp_path / "cache.json") == \
-        {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included
+    written = _capture(ledger)
+    assert (written["Claude Code"], written["Codex"]) == (3, 1)  # every parsed file's records, replays included
 
     cl = _ledger_row(ledger, "Claude Code", NAME)
     assert cl.calls == 2  # one original + one subagent; the replay is deduped
@@ -166,33 +160,22 @@ def test_appends_are_visible(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture_all(ledger, claude)
+    _capture(ledger)
     before = _ledger_row(ledger, "Claude Code", NAME)
 
     # A later session file records the same model: its total rises by exactly those tokens.
     claude.write(claude.work, "sess2", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(1000, 2))])
-    _capture_all(ledger, claude)
+    _capture(ledger)
     after = _ledger_row(ledger, "Claude Code", NAME)
   assert after.total == before.total + 1002
   assert after.calls == before.calls + 1
 
 
-# Rows are the two stores the replay dedup must hold across: the sqlite row
-# store alone, and the row store with the json cache written beside it by the
-# first capture.
-_REPLAY_STORE_ROWS = [
-    pytest.param(False, id="row-store-only"),
-    pytest.param(True, id="row-store-plus-cache"),
-]
-
-
-@pytest.mark.parametrize("with_cache", _REPLAY_STORE_ROWS)
-def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> None:
+def test_replays_are_not_double_counted(tmp_path: Path) -> None:
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(100, 10))])
-  cache = tmp_path / "cache.json" if with_cache else None
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture_all(ledger, claude, cache=cache)
+    _capture(ledger)
     before = _ledger_row(ledger, "Claude Code", NAME)
 
     # Copy the session file verbatim to a new session id (resume/fork behaviour).
@@ -201,7 +184,7 @@ def test_replays_are_not_double_counted(tmp_path: Path, with_cache: bool) -> Non
     dst.mkdir(parents=True, exist_ok=True)
     (dst / "sess2.jsonl").write_text(src.read_text())
 
-    _capture_all(ledger, claude, cache=cache)
+    _capture(ledger)
     after = _ledger_row(ledger, "Claude Code", NAME)
   assert after.total == before.total
   assert after.calls == before.calls
@@ -214,11 +197,11 @@ def _claude_rig(tmp_path: Path) -> Claude:
   return claude
 
 
-def test_parse_lines_multi_chunk_giant_line_parity(monkeypatch: pytest.MonkeyPatch) -> None:
-  """A no-marker observation line spanning many chunks parses once: objects, order and the
-  consumed offset match the shapes the per-round re-concat read (the gigabyte raw-log shape
-  whose re-concat paid O(line^2 / chunk))."""
-  monkeypatch.setattr(tt, "_PARSE_CHUNK", 64)
+def test_parse_marker_lines_across_chunks_around_a_giant_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A no-marker line spanning many chunks parses once, never: the marker lines around it come out
+  in file order and the trailing fragment without its newline waits (the gigabyte raw-log shape
+  whose per-round re-concat paid O(line^2 / chunk))."""
+  monkeypatch.setattr(ndjson, "_MARKER_CHUNK", 64)
   lines = [
       b'{"type": "context", "model": "clc-x"}',
       b'{"pad": "' + b"q" * 500 + b'"}',  # no marker, spans ~8 chunks
@@ -226,32 +209,31 @@ def test_parse_lines_multi_chunk_giant_line_parity(monkeypatch: pytest.MonkeyPat
       b'{"pad2": "' + b"r" * 130 + b'"}',  # no marker, spans 2-3 chunks
       b'{"type": "result", "usage": {"input_tokens": 5, "output_tokens": 6}}',
   ]
-  blob = b"\n".join(lines) + b"\n" + b'{"trailing": "fragment"}'
-  objects, consumed = tt._parse_lines(io.BytesIO(blob), tt._CHARLIEBOT_MASTER_MARKERS)
-  assert consumed == blob.rfind(b"\n") + 1  # the trailing fragment stays unconsumed
+  path = tmp_path / "giant.ndjson"
+  path.write_bytes(b"\n".join(lines) + b"\n" + b'{"trailing": "fragment"}')
+  objects = ndjson.parse_marker_lines(path, (b'"type": "context"', b'"type": "result"'))
   assert [(o.get("type"), o.get("usage", {}).get("input_tokens")) for o in objects] == [
       ("context", None), ("result", 3), ("result", 5)
   ]
 
 
-def test_append_tail_rejects_a_replaced_or_shrunk_file(tmp_path: Path) -> None:
-  """A rewrite the guard cannot prove — replaced prefix or shrink — re-parses whole, so the
-  file's records restate its current content. The ledger keeps earlier records (no delete),
-  so the row totals accumulate across the rewrites."""
+def test_a_rewritten_file_reads_whole(tmp_path: Path) -> None:
+  """A file whose signature moved reads whole — a replaced prefix or a shrink included — so its
+  records restate its current content. The ledger keeps earlier records (no delete), so the row
+  totals accumulate across the rewrites."""
   claude = _claude_rig(tmp_path)
-  cache = tmp_path / "cache.json"
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture_all(ledger, claude, cache=cache)
+    _capture(ledger)
     claude.write(  # whole-file rewrite: early content replaced, last line preserved
         claude.work, "sess1",
         [_claude_record("m9", NAME, "2024-01-03T00:00:00Z", _usage(7, 7)),
          _claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
-    assert _capture_all(ledger, claude, cache=cache)["Claude Code"] == 2  # both records, re-parsed whole
+    assert _capture(ledger)["Claude Code"] == 2  # both records, read whole
     row = _ledger_row(ledger, "Claude Code", NAME)
     assert (row.calls, row.total) == (2, 29)
 
     claude.write(claude.work, "sess1", [_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(3, 3))])
-    assert _capture_all(ledger, claude, cache=cache)["Claude Code"] == 1
+    assert _capture(ledger)["Claude Code"] == 1
     row = _ledger_row(ledger, "Claude Code", NAME)
     assert (row.calls, row.total) == (3, 35)  # m2 joins the records the ledger keeps
 
@@ -301,22 +283,8 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
     tt.backend_page_source("gem-1", {})
 
 
-class _Backends:
-  """The ``cfg.backends`` shape the collector reads."""
-
-  def __init__(self, options: list[_Option]) -> None:
-    self.options = options
-
-
-class _Registry:
-  """Stand-in for CharlieBotConfig's backend registry in the collector."""
-
-  def __init__(self, *options: _Option) -> None:
-    self.backends = _Backends(list(options))
-
-
 def _stub_registry(monkeypatch: pytest.MonkeyPatch, *options: _Option) -> None:
-  monkeypatch.setattr(tt, "get_config", lambda: _Registry(*options))
+  monkeypatch.setattr(tt, "backend_registry", lambda: {opt.id: opt for opt in options})
 
 
 class Charliebot:
@@ -413,7 +381,7 @@ def test_charliebot_thread_row_takes_the_recorded_model_first(tmp_path: Path, mo
 
 
 # ---------------------------------------------------------------------------
-# usage ledger capture (capture_jsonl_sources)
+# usage ledger capture (capture_usage)
 # ---------------------------------------------------------------------------
 
 
@@ -450,20 +418,9 @@ def _claude_codex_corpus(tmp_path: Path) -> tuple[Claude, Codex]:
   return claude, codex
 
 
-def _capture(claude: Claude | None,
-             codex: Codex | None,
-             ledger: UsageLedger,
-             cache: Path | None = None) -> dict[str, int]:
-  """One capture round against *ledger*; *cache*, when given, is loaded and saved like the
-  capture's own document, so every round rides the same cache-gated serve."""
-  notes: list[str] = []
-  tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
-  written = tt.capture_jsonl_sources(
-      ledger, "host-a", claude.dirs if claude else {}, codex.homes if codex else {}, tally_cache,
-      ledger.captured_sigs("host-a"))
-  if tally_cache is not None:
-    tally_cache.save(cache)
-  return written
+def _capture(ledger: UsageLedger) -> dict[str, int]:
+  """One capture round against *ledger* over this host's logs and session tree, under the "host-a" label."""
+  return tt.capture_usage(ledger, host="host-a", sessions_dir=config.get_config().sessions_dir)
 
 
 def _ledger_row(ledger: UsageLedger, source: str, model: str):
@@ -475,23 +432,23 @@ def test_captured_rows_survive_deleting_the_source_files(tmp_path: Path) -> None
   the ledger contains no delete, so its rows outlive the logs they were parsed from."""
   claude, codex = _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture(claude, codex, ledger)
+    _capture(ledger)
     before = ledger.model_rows()
     shutil.rmtree(claude.work)
     shutil.rmtree(claude.ext)
     shutil.rmtree(codex.home)
-    _capture(claude, codex, ledger)
+    _capture(ledger)
     assert ledger.model_rows() == before
 
 
 def test_second_capture_without_changes_writes_nothing(tmp_path: Path) -> None:
   """A file the ledger already holds at the same signature is skipped: the second capture
   over an unchanged corpus writes zero records."""
-  claude, codex = _claude_codex_corpus(tmp_path)
+  _claude_codex_corpus(tmp_path)
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    first = _capture(claude, codex, ledger)
-    assert first == {"Claude Code": 3, "Codex": 1}  # every parsed file's records, replays included
-    assert _capture(claude, codex, ledger) == {"Claude Code": 0, "Codex": 0}
+    first = _capture(ledger)
+    assert (first["Claude Code"], first["Codex"]) == (3, 1)  # every parsed file's records, replays included
+    assert set(_capture(ledger).values()) == {0}
 
 
 def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: Path) -> None:
@@ -500,9 +457,8 @@ def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: P
   config dir is captured yet still counted once."""
   claude = Claude(tmp_path)
   claude.write(claude.work, "sess1", [_claude_record("m1", NAME, "2024-01-01T00:00:00Z", _usage(10, 5))])
-  cache = tmp_path / "cache.json"
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture(claude, None, ledger, cache)
+    _capture(ledger)
     before = _ledger_row(ledger, "Claude Code", NAME)
 
     # Resume/fork behaviour: the session file copied verbatim into the second config dir.
@@ -510,13 +466,13 @@ def test_appended_line_is_captured_and_second_dir_replay_counts_once(tmp_path: P
     replay_dir = claude.ext / "projects" / "rel" / "sess1"
     replay_dir.mkdir(parents=True)
     (replay_dir / "sess1.jsonl").write_text(src.read_text())
-    assert _capture(claude, None, ledger, cache)["Claude Code"] == 1  # the replay file is captured too
+    assert _capture(ledger)["Claude Code"] == 1  # the replay file is captured too
     replayed = _ledger_row(ledger, "Claude Code", NAME)
     assert replayed.calls == before.calls == 1  # ... yet its message id counts once
 
     with src.open("a") as fh:
       fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-02T00:00:00Z", _usage(100, 2))) + "\n")
-    written = _capture(claude, None, ledger, cache)
+    written = _capture(ledger)
     after = _ledger_row(ledger, "Claude Code", NAME)
 
   assert written["Claude Code"] == 2  # m1 re-upserts beside the appended m2
@@ -607,7 +563,7 @@ def test_forked_rollout_counts_the_copied_events_once(tmp_path: Path) -> None:
   _write_rollout(codex, "forkchild1", fork)
 
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    _capture(None, codex, ledger)
+    _capture(ledger)
     rows = _codex_rows(ledger)
 
   assert len(rows) == 5  # 3 parent calls + 2 fork-own calls; the 2 copies ride the parent's ids
@@ -653,9 +609,9 @@ def test_reemitted_events_add_no_record_and_overwrite_nothing(tmp_path: Path, re
       ("reemitreal1", real, "reemitfork1", fork) if real_first else ("reemitfork1", fork, "reemitreal1", real))
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     _write_rollout(codex, first_sid, first_lines)
-    _capture(None, codex, ledger)
+    _capture(ledger)
     _write_rollout(codex, second_sid, second_lines)
-    _capture(None, codex, ledger)
+    _capture(ledger)
     rows = _codex_rows(ledger)
 
   assert len(rows) == 1
@@ -664,48 +620,9 @@ def test_reemitted_events_add_no_record_and_overwrite_nothing(tmp_path: Path, re
   assert rows[0]["ts"] == "2026-09-10T00:00:00Z"  # the call's own ts, whichever file recorded first
 
 
-def test_capture_supersedes_the_legacy_id_rows_of_its_rollout(tmp_path: Path) -> None:
-  """Capturing a rollout retires the codex:<sid>:<n> rows its earlier captures wrote, in the
-  same transaction that writes the totals-keyed ids; another thread's legacy rows survive."""
-  codex = Codex(tmp_path)
-  sid = "legacythread1"
-  other = "legacythread2"
-  _write_rollout(
-      codex, sid, [
-          _codex_meta(session_id=sid),
-          _codex_turn("codex-m1"),
-          _codex_count_solo("2026-09-10T00:00:00Z"),
-      ])
-
-  def legacy(legacy_sid: str, count: int) -> list[UsageRecord]:
-    """The rows the pre-p2 parser wrote: one per token_count event ordinal."""
-    return [
-        UsageRecord(
-            record_id=f"codex:{legacy_sid}:{i}",
-            kind=RecordKind.NATIVE,
-            source=USAGE_SOURCE_CODEX,
-            model="codex-m1",
-            account="work (default)",
-            ts="2026-09-10T00:00:00Z",
-            in_fresh=60,
-            cache_write=0,
-            cache_read=20,
-            output=7,
-            sessions=(legacy_sid,)) for i in range(count)
-    ]
-
-  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    ledger.record_file("host-a", f"gone/{sid}.jsonl", "legacy", legacy(sid, 2))
-    ledger.record_file("host-a", f"gone/{other}.jsonl", "legacy", legacy(other, 1))
-    _capture(None, codex, ledger)
-    rows = _codex_rows(ledger)
-
-  assert [row["record_id"] for row in rows] == [f"codex-total:{sid}:60:20:7", f"codex:{other}:0"]
-
-
-def test_codex_signature_version_gates_the_skip(tmp_path: Path) -> None:
-  """A stored pre-p2 signature never matches, so the unchanged file re-parses once; the
-  stored p2: signature of the same unchanged file skips it."""
+def test_codex_p2_signature_rereads_the_unchanged_rollout_once(tmp_path: Path) -> None:
+  """A rollout stored under the previous release's ``p2:`` signature never matches the bare stat
+  pair, so the unchanged file reads again once and then skips on the bare pair."""
   codex = Codex(tmp_path)
   path = _write_rollout(
       codex, "sigthread1", [
@@ -715,177 +632,9 @@ def test_codex_signature_version_gates_the_skip(tmp_path: Path) -> None:
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     st = path.stat()
-    # The pre-p2 shape: bare mtime_ns:size, no parse-version prefix.
-    ledger.record_file("host-a", str(path), f"{st.st_mtime_ns}:{st.st_size}", [])
-    assert _capture(None, codex, ledger)["Codex"] == 1  # the legacy signature never matches
-    assert _capture(None, codex, ledger)["Codex"] == 0  # the stored p2: signature does
-
-
-def test_codex_append_tail_parse_matches_a_full_parse(tmp_path: Path) -> None:
-  """A tail parse over appended events yields the entry a full parse of the grown file
-  yields: the same records, root and trailing model context."""
-  codex = Codex(tmp_path)
-  path = _write_rollout(
-      codex, "tailthread1", [
-          _codex_meta(session_id="tailroot1"),
-          _codex_turn("codex-m1"),
-          _codex_count_solo("2026-09-10T00:00:00Z"),
-          _codex_count(
-              {
-                  "input_tokens": 30,
-                  "cached_input_tokens": 0,
-                  "output_tokens": 5
-              }, {
-                  "input_tokens": 90,
-                  "cached_input_tokens": 20,
-                  "output_tokens": 12
-              }, "2026-09-10T00:00:01Z"),
-      ])
-  prefix = tt._codex_file_contribution(str(path))[0]
-  with path.open("a") as fh:
-    fh.write(json.dumps(_codex_turn("codex-m2")) + "\n")
-    fh.write(
-        json.dumps(
-            _codex_count(
-                {
-                    "input_tokens": 10,
-                    "cached_input_tokens": 4,
-                    "output_tokens": 1
-                }, {
-                    "input_tokens": 100,
-                    "cached_input_tokens": 24,
-                    "output_tokens": 13
-                }, "2026-09-10T00:00:02Z")) + "\n")
-  tailed = tt._codex_file_contribution(str(path), prefix)[0]
-  full = tt._codex_file_contribution(str(path))[0]
-  assert tailed["records"] == full["records"]
-  assert (tailed["root"], tailed["model_ctx"]) == (full["root"], full["model_ctx"]) == ("tailroot1", "codex-m2")
-
-
-def test_cache_load_drops_pre_p2_codex_and_charliebot_entries(tmp_path: Path) -> None:
-  """A version-3 document loads with its Claude entries served and its Codex and charlie-bot
-  entries gone — the Codex records carry neither the root nor the totals the current ids
-  are built from, and the charlie-bot records predate the cache-split corrections."""
-  assert tt.TallyCache.SCHEMA_VERSION == 5
-  path = tmp_path / "cache.json"
-  path.write_text(
-      json.dumps(
-          {
-              "version": 3,
-              "sources":
-                  {
-                      "claude":
-                          {
-                              "claude-file":
-                                  {
-                                      "sig": [11, 22],
-                                      "records": [["claude-m1", "2026-09-10T00:00:00Z", 10, 0, 0, 5]],
-                                  }
-                          },
-                      "codex":
-                          {
-                              "codex-file":
-                                  {
-                                      "sig": [33, 44],
-                                      "records": [["codex-m1", "2026-09-10T00:00:00Z", 40, 20, 7]],
-                                      "model_ctx": "codex-m1",
-                                      "end": 999,
-                                  }
-                          },
-                      "charlie-bot":
-                          {
-                              "thread-file": {
-                                  "sig": [55, 66],
-                                  "records": [],
-                                  "ids": [],
-                                  "meta": None,
-                                  "end": 1,
-                              }
-                          },
-                  },
-          }))
-  cache = tt.TallyCache.load(path, [])
-  assert cache.lookup_sig("claude", "claude-file", [11, 22]) is not None
-  assert cache.lookup_sig("codex", "codex-file", [33, 44]) is None
-  assert cache.prev("codex", "codex-file") is None
-  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is None
-  assert cache.prev("charlie-bot", "thread-file") is None
-
-  # The drop is version-gated, not source-gated: a current document serves both sources.
-  path.write_text(
-      json.dumps(
-          {
-              "version": tt.TallyCache.SCHEMA_VERSION,
-              "sources":
-                  {
-                      "codex": {
-                          "codex-file": {
-                              "sig": [33, 44],
-                              "records": [],
-                              "root": "tailroot1",
-                              "end": 1,
-                          }
-                      },
-                      "charlie-bot":
-                          {
-                              "thread-file": {
-                                  "sig": [55, 66],
-                                  "records": [],
-                                  "ids": [],
-                                  "meta": None,
-                                  "end": 1,
-                              }
-                          }
-                  },
-          }))
-  cache = tt.TallyCache.load(path, [])
-  assert cache.lookup_sig("codex", "codex-file", [33, 44]) is not None
-  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is not None
-
-
-def test_cache_load_drops_version4_charliebot_entries(tmp_path: Path) -> None:
-  """A version-4 document keeps its Claude and Codex entries but drops its charlie-bot
-  entries: those records predate the cache-split corrections, so their files re-parse."""
-  path = tmp_path / "cache.json"
-  path.write_text(
-      json.dumps(
-          {
-              "version": 4,
-              "sources":
-                  {
-                      "claude":
-                          {
-                              "claude-file":
-                                  {
-                                      "sig": [11, 22],
-                                      "records": [["claude-m1", "2026-09-10T00:00:00Z", 10, 0, 0, 5]],
-                                  }
-                          },
-                      "codex": {
-                          "codex-file": {
-                              "sig": [33, 44],
-                              "records": [],
-                              "root": "tailroot1",
-                              "end": 1,
-                          }
-                      },
-                      "charlie-bot":
-                          {
-                              "thread-file": {
-                                  "sig": [55, 66],
-                                  "records": [],
-                                  "ids": [],
-                                  "meta": None,
-                                  "end": 1,
-                              }
-                          }
-                  },
-          }))
-  cache = tt.TallyCache.load(path, [])
-  assert cache.lookup_sig("claude", "claude-file", [11, 22]) is not None
-  assert cache.lookup_sig("codex", "codex-file", [33, 44]) is not None
-  assert cache.lookup_sig("charlie-bot", "thread-file", [55, 66]) is None
-  assert cache.prev("charlie-bot", "thread-file") is None
+    ledger.record_file("host-a", str(path), f"p2:{st.st_mtime_ns}:{st.st_size}", [])
+    assert _capture(ledger)["Codex"] == 1  # the p2: signature never matches
+    assert _capture(ledger)["Codex"] == 0  # the stored bare pair does
 
 
 def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
@@ -899,7 +648,7 @@ def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
           _codex_count_solo("2026-09-10T00:00:00Z"),
       ])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(ValueError, match="norootthread1"):
-    _capture(None, codex, ledger)
+    _capture(ledger)
 
 
 # ---------------------------------------------------------------------------
@@ -907,15 +656,9 @@ def test_rollout_without_a_session_id_fails_the_capture(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _capture_charliebot(ledger: UsageLedger, sessions_dir: Path, cache: Path | None = None) -> int:
-  """One charlie-bot capture round against *ledger*; *cache* rides like the capture's own
-  document, so every round shares the same cache-gated serve."""
-  notes: list[str] = []
-  tally_cache = tt.TallyCache.load(cache, notes) if cache is not None else None
-  written = tt.capture_charliebot(ledger, "host-a", sessions_dir, tally_cache, ledger.captured_sigs("host-a"))
-  if tally_cache is not None:
-    tally_cache.save(cache)
-  return written
+def _capture_charliebot(ledger: UsageLedger, sessions_dir: Path) -> int:
+  """One charlie-bot capture round against *ledger*."""
+  return tt.capture_charliebot(ledger, "host-a", sessions_dir, ledger.captured_sigs("host-a"))
 
 
 def _ledger_rows(ledger: UsageLedger) -> dict:
@@ -965,10 +708,9 @@ def test_charliebot_capture_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
               "usage": _result_usage(300, 7)
           },
       ])
-  cache = tmp_path / "cache.json"
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert _capture_charliebot(ledger, cb.root, cache) == 3
-    assert _capture_charliebot(ledger, cb.root, cache) == 0  # the unchanged corpus is skipped
+    assert _capture_charliebot(ledger, cb.root) == 3
+    assert _capture_charliebot(ledger, cb.root) == 0  # the unchanged corpus is skipped
     rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "charlie-bot"}
 
   assert set(rows) == {("charlie-bot", "GLM-5.3-Flash"), ("charlie-bot", "GLM-5.4-Flash")}
@@ -1081,11 +823,12 @@ def test_charliebot_master_counts_its_cached_reads_once(tmp_path: Path, monkeypa
     assert row.total == 1293011 + 8712
 
 
-def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
+def test_charliebot_codex_thread_is_skipped_while_a_rollout_of_it_exists(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A codex-type thread whose session id has a captured rollout is excluded by the ledger's
-  any-match rule; deleting the rollout file and re-capturing changes no row — the fallback
-  rows stay stored but excluded, and the native rows are never deleted."""
+  """The Codex rule: a codex-type thread any of whose session ids names a rollout still on disk
+  contributes nothing — the rollout's own native rows are the usage, and a partly pruned
+  multi-session thread must not count twice. A thread none of whose ids has a rollout counts as
+  a fallback row. Deleting the rollout afterwards changes no row."""
   _stub_registry(monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"))
   sid = "rolloutsid1"
   codex = Codex(tmp_path)
@@ -1100,23 +843,24 @@ def test_charliebot_codex_thread_excluded_by_the_captured_rollout(
           "output_tokens": 7
       }, "2026-09-10T00:00:00Z")
   cb = Charliebot(tmp_path)
-  cb.thread(
-      "s1",
-      "t1",
-      backend="codex-gpt",
-      model=None,
-      session_ids=[sid],
-      results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
+  for tid, ids in (("t1", [sid]), ("t2", [sid, "pruned-sid"]), ("t3", ["orphan-sid"])):
+    cb.thread(
+        "s1",
+        tid,
+        backend="codex-gpt",
+        model=None,
+        session_ids=ids,
+        results=[("2026-09-11T20:00:00+00:00", _result_usage(100, 5))])
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert _capture(None, codex, ledger)["Codex"] == 1  # the rollout is captured native
-    assert _capture_charliebot(ledger, cb.root) == 1  # the thread's fallback row is stored
+    written = _capture(ledger)
+    assert (written["Codex"], written["charlie-bot"]) == (1, 1)  # only t3's thread is stored
     rows = _ledger_rows(ledger)
-    assert ("charlie-bot", "gpt-5") not in rows  # excluded: the session id has a native record
     assert rows["Codex", "codex-gpt5"].calls == 1
+    assert (rows["charlie-bot", "gpt-5"].calls, rows["charlie-bot", "gpt-5"].fallback_calls) == (1, 1)
+    assert len(ledger.captured_sigs("host-a")) == 4  # the skipped threads are recorded too: never read again
 
     shutil.rmtree(codex.home)
-    assert _capture(None, codex, ledger)["Codex"] == 0  # the native rows survive the deletion
-    assert _capture_charliebot(ledger, cb.root) == 0  # the unchanged thread file is skipped
+    assert set(_capture(ledger).values()) == {0}  # the native rows survive the deletion
     assert _ledger_rows(ledger) == rows
 
 
@@ -1127,7 +871,7 @@ def test_charliebot_fallback_rows_count_until_the_cli_log_is_captured(
   thread's session id names retires that row, while the codex thread's row stays."""
   _stub_registry(
       monkeypatch, _Option("codex-gpt", "codex", "openai/gpt-5"),
-      _Option("claude-sonnet", "claude", "anthropic/claude-sonnet-4"))
+      _Option("claude-sonnet", "cc-claude", "anthropic/claude-sonnet-4"))
   cb = Charliebot(tmp_path)
   cb.thread(
       "s1",
@@ -1152,7 +896,7 @@ def test_charliebot_fallback_rows_count_until_the_cli_log_is_captured(
 
     claude = Claude(tmp_path)
     claude.write(claude.work, "cl-sess", [_claude_record("m1", NAME, "2026-09-12T20:00:00Z", _usage(200, 6))])
-    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    assert _capture(ledger)["Claude Code"] == 1
     rows = _ledger_rows(ledger)
     assert ("charlie-bot", "claude-sonnet-4") not in rows  # excluded: the transcript is captured
     assert rows["charlie-bot", "gpt-5"].fallback_calls == 1  # the codex thread stays counted
@@ -1205,9 +949,9 @@ def test_charliebot_capture_reparses_a_file_the_bare_signature_recorded(
   st = path.stat()
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
     # What the older parser wrote: the whole input in in_fresh, under the bare stat pair.
-    stale = UsageRecord(
+    stale = usage_sources.UsageRecord(
         record_id="thread:s1/t1/0",
-        kind=RecordKind.NATIVE,
+        kind=usage_sources.RecordKind.NATIVE,
         source=USAGE_SOURCE_CHARLIE_BOT,
         model="GLM-5.3-Flash",
         account="charlie-code-glm-flash",
@@ -1220,7 +964,7 @@ def test_charliebot_capture_reparses_a_file_the_bare_signature_recorded(
     assert _capture_charliebot(ledger, cb.root) == 1  # the bare stat pair is no current signature
     row = _ledger_rows(ledger)["charlie-bot", "GLM-5.3-Flash"]
     assert (row.calls, row.in_fresh, row.in_unsplit, row.output) == (1, 0, 100, 5)  # same id, corrected values
-    assert ledger.captured_sig("host-a", str(path)) == f"p2:{st.st_mtime_ns}:{st.st_size}"
+    assert ledger.captured_sigs("host-a")[str(path)] == f"p2:{st.st_mtime_ns}:{st.st_size}"
     assert _capture_charliebot(ledger, cb.root) == 0  # the matching p2 signature serves
 
 
@@ -1345,12 +1089,12 @@ def test_capture_runs_cc_claude_fallback_retires_when_the_transcript_is_captured
 
     claude = Claude(tmp_path)
     claude.write(claude.work, "cl-sess-1", [_claude_record("m1", NAME, "2026-09-27T17:50:39Z", _usage(4, 404))])
-    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    assert _capture(ledger)["Claude Code"] == 1
     row = _ledger_rows(ledger)["charlie-bot", "claude-opus-5-5"]
     assert (row.calls, row.fallback_calls) == (1, 1)  # r1 retired, the stream-id run r2 stays
 
     claude.write(claude.work, "cl-sess-2", [_claude_record("m2", NAME, "2026-09-28T12:46:23Z", _usage(4, 404))])
-    assert _capture(claude, None, ledger)["Claude Code"] == 1
+    assert _capture(ledger)["Claude Code"] == 1
     assert ("charlie-bot", "claude-opus-5-5") not in _ledger_rows(ledger)  # r2 retired too
 
 
@@ -1414,7 +1158,7 @@ def test_capture_runs_codex_sums_turns_and_retires_on_the_captured_rollout(
             "cached_input_tokens": 30,
             "output_tokens": 8
         }, "2026-09-27T18:00:00Z")
-    assert _capture(None, codex, ledger)["Codex"] == 1  # the rollout is captured native
+    assert _capture(ledger)["Codex"] == 1  # the rollout is captured native
     assert ("charlie-bot", "gpt-5") not in _ledger_rows(ledger)  # excluded: its session id has a native record
 
 
@@ -1462,7 +1206,7 @@ def test_capture_runs_writes_no_record_for_a_resultless_run_and_recaptures_nothi
 def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """An unchanged run file's second capture decides on its stat pair alone —
-  _prefiltered_jsonl is never called — and an appended result line moves the stat, so the
+  parse_marker_lines is never called — and an appended result line moves the stat, so the
   capture re-parses and upserts the run's record on the new usage."""
   _stub_registry(monkeypatch, _Option("charlie-code-glm53-flash", "charlie-code", "openai/zai-org/GLM-5.4-Flash"))
   runs = Runs(tmp_path)
@@ -1485,10 +1229,10 @@ def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
     def _refuse_parse(path: str, markers: tuple[bytes, ...]) -> tuple:
       raise AssertionError(f"unchanged corpus re-parsed a run log: {path}")
 
-    real_parse = tt._prefiltered_jsonl
-    monkeypatch.setattr(tt, "_prefiltered_jsonl", _refuse_parse)
+    real_parse = ndjson.parse_marker_lines
+    monkeypatch.setattr(ndjson, "parse_marker_lines", _refuse_parse)
     assert _capture_runs(ledger, runs.root) == 0  # the stat pair alone decides the skip
-    monkeypatch.setattr(tt, "_prefiltered_jsonl", real_parse)
+    monkeypatch.setattr(ndjson, "parse_marker_lines", real_parse)
 
     with log.open("a") as fh:
       fh.write(
@@ -1506,27 +1250,7 @@ def test_capture_runs_second_capture_skips_by_stat_and_recaptures_an_append(
 
 
 # ---------------------------------------------------------------------------
-# tally cache document (TallyCache.load)
-# ---------------------------------------------------------------------------
-
-
-def test_tally_cache_load_reserves_the_memo_for_the_byte_still_document(tmp_path: Path) -> None:
-  """The loaded-document memo's stat gate: a byte-still document re-serves its parse and a
-  rewritten one re-reads. A stale document would be harmless on its own -- lookup_sig serves
-  an entry only while the source file's own signature matches -- but only while the memo
-  tracks the file, so the gate is what the test pins."""
-  cache = tmp_path / "tally.json"
-  notes: list[str] = []
-  cache.write_bytes(json.dumps({"version": 3, "sources": {"claude": {"k": {"sig": [1, 2]}}}}).encode())
-  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [1, 2]}
-  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [1, 2]}
-  cache.write_bytes(json.dumps({"version": 3, "sources": {"claude": {"k": {"sig": [3, 4]}}}}).encode())
-  assert tt.TallyCache.load(cache, notes).prev("claude", "k") == {"sig": [3, 4]}
-  assert notes == []
-
-
-# ---------------------------------------------------------------------------
-# usage ledger capture (capture_opencode / capture_usage / capture_local)
+# usage ledger capture (opencode, every source, the capture's bookkeeping)
 # ---------------------------------------------------------------------------
 
 
@@ -1534,7 +1258,8 @@ class Opencode:
   """Synthetic opencode db: the message table schema and rows the real one carries."""
 
   def __init__(self, tmp_path: Path) -> None:
-    self.db = tmp_path / "opencode.db"
+    self.db = tmp_path / home.default_opencode_db().relative_to(tmp_path)
+    self.db.parent.mkdir(parents=True)
     con = sqlite3.connect(self.db)
     try:
       con.execute(
@@ -1591,16 +1316,18 @@ class Opencode:
 
 
 def test_opencode_capture_rows(tmp_path: Path) -> None:
-  """Every contributing message row becomes one ledger record projected through
-  ``_opencode_row_data``; a zero-token row contributes nothing, so the db's non-usage rows
-  invent no ledger rows."""
+  """Every contributing message row becomes one ledger record; a zero-token row contributes
+  nothing, so the db's non-usage rows invent no ledger rows; a host without the db contributes
+  nothing."""
+  with UsageLedger(tmp_path / "absent.sqlite3") as ledger:
+    assert _capture(ledger)["opencode"] == 0
   oc = Opencode(tmp_path)
   oc.write("m1", 100, _usage(100, 30))
   oc.write("m2", 200, _usage(50, 5), model="gpt-5", provider="openai")
   oc.write("m3", 300, _usage(0, 0))  # zero tokens: no record
 
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+    assert _capture(ledger)["opencode"] == 2
     rows = {(r.source, r.model): r for r in ledger.model_rows() if r.source == "opencode"}
   assert set(rows) == {("opencode", NAME), ("opencode", "gpt-5")}
   anthropic = rows["opencode", NAME]
@@ -1617,42 +1344,40 @@ def test_capture_opencode_rereads_updated_rows_and_keeps_deleted_rows_stored(tmp
   oc.write("m1", 100, _usage(100, 10))
   oc.write("m2", 200, _usage(200, 20))
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+    assert _capture(ledger)["opencode"] == 2
 
     oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
+    assert _capture(ledger)["opencode"] == 1  # only the moved row is re-read
     row = _ledger_row(ledger, "opencode", NAME)
     assert (row.in_fresh, row.output, row.calls) == (100 + 222, 10 + 22, 2)
 
     before = ledger.model_rows()
     oc.delete("m1")
     oc.delete("m2")
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    assert _capture(ledger)["opencode"] == 0
     assert ledger.model_rows() == before
 
 
 def test_capture_opencode_skips_an_unchanged_db_and_never_writes_to_it(tmp_path: Path) -> None:
-  """A db whose probe signature the ledger already recorded writes nothing on the second
-  call; the db opens read-only, so the capture leaves its bytes, mtime and directory
-  untouched, and a missing db contributes nothing."""
+  """A db whose files sit still since the stored signature writes nothing on the next capture;
+  the db opens read-only, so the capture leaves its bytes, mtime and directory untouched."""
   oc = Opencode(tmp_path)
   oc.write("m1", 100, _usage(100, 10))
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert tt.capture_opencode(ledger, "host-a", tmp_path / "absent.sqlite") == 0
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1
+    assert _capture(ledger)["opencode"] == 1
 
     sig_before = (oc.db.stat().st_mtime_ns, oc.db.stat().st_size)
-    files_before = sorted(p.name for p in tmp_path.iterdir())
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
+    files_before = sorted(p.name for p in oc.db.parent.iterdir())
+    assert _capture(ledger)["opencode"] == 0
     assert (oc.db.stat().st_mtime_ns, oc.db.stat().st_size) == sig_before
-    assert sorted(p.name for p in tmp_path.iterdir()) == files_before
+    assert sorted(p.name for p in oc.db.parent.iterdir()) == files_before
 
 
 def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """One call over Claude, Codex, opencode and a charlie-bot sessions dir writes each
-  source's records and reports the per-source counts; a second call over the unchanged
-  corpus writes all zeros."""
+  """One call over Claude, Codex, opencode and a charlie-bot sessions dir writes each source's
+  records and reports the per-source counts; a second call over the unchanged corpus writes all
+  zeros. CLC has no log of its own, so only the charlie-bot label reports its records."""
   _stub_registry(monkeypatch, _Option("charlie-code-glm-flash", "charlie-code", "openai/zai-org/GLM-5.3-Flash"))
   claude = Claude(tmp_path)
   codex = Codex(tmp_path)
@@ -1677,85 +1402,133 @@ def test_capture_usage_covers_every_source_and_zeroes_on_the_second_round(
       model="openai/zai-org/GLM-5.3-Flash",
       session_ids=[],
       results=[("2026-09-11T20:00:00+00:00", _result_usage(200, 6))])
-  cache = tmp_path / "cache.json"
-  round_args = {
-      "host": "host-a",
-      "claude_homes": claude.dirs,
-      "codex_homes": codex.homes,
-      "opencode_db": oc.db,
-      "sessions_dir": cb.root,
-      "cache_path": cache,
-  }
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert tt.capture_usage(ledger, **round_args) == \
-        {"Claude Code": 1, "Codex": 1, "opencode": 1, "charlie-bot": 1}
-    assert tt.capture_usage(ledger, **round_args) == \
-        {"Claude Code": 0, "Codex": 0, "opencode": 0, "charlie-bot": 0}
-    # Sources the caller leaves unnamed are absent from the report, not zero-filled.
-    assert tt.capture_usage(
-        ledger, host="host-a", claude_homes={}, codex_homes={}, opencode_db=None, sessions_dir=None,
-        cache_path=None) == {
-            "Claude Code": 0,
-            "Codex": 0
-        }
+    assert _capture(ledger) == {"Claude Code": 1, "Codex": 1, "opencode": 1, "charlie-bot": 1}
+    assert _capture(ledger) == {"Claude Code": 0, "Codex": 0, "opencode": 0, "charlie-bot": 0}
 
 
-def test_capture_opencode_gate_skips_the_probe_until_the_db_files_move(
+# ---------------------------------------------------------------------------
+# the capture's signature-first contract and its bookkeeping
+# ---------------------------------------------------------------------------
+
+
+def test_a_file_at_its_stored_signature_is_never_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """A Claude or Codex file whose stat pair equals the stored signature skips its source's
+  ``read()`` altogether, so an unchanged corpus costs one stat per file; a file that moved reads again."""
+  claude, _codex = _claude_codex_corpus(tmp_path)
+  real_claude_read, real_codex_read = claude_logs.read, codex_logs.read
+
+  def refuse(path: Path, account: str, previous: str | None) -> tuple:
+    raise AssertionError(f"read() of an unchanged file: {path}")
+
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    _capture(ledger)
+    monkeypatch.setattr(claude_logs, "read", refuse)
+    monkeypatch.setattr(codex_logs, "read", refuse)
+    assert set(_capture(ledger).values()) == {0}  # every file skipped before its read
+
+    monkeypatch.setattr(claude_logs, "read", real_claude_read)
+    monkeypatch.setattr(codex_logs, "read", real_codex_read)
+    with (claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl").open("a") as fh:
+      fh.write(json.dumps(_claude_record("m2", NAME, "2024-01-04T00:00:00Z", _usage(1, 1))) + "\n")
+    assert _capture(ledger)["Claude Code"] == 2  # the moved file reads again; only it does
+    assert _capture(ledger)["Codex"] == 0
+
+
+def test_old_format_opencode_signature_forces_one_reread(tmp_path: Path) -> None:
+  """The opencode db's signature is five numeric parts; a stored signature in any other format
+  reads the whole table once, and the capture stores the current format, which then skips."""
+  oc = Opencode(tmp_path)
+  oc.write("m1", 100, _usage(100, 10))
+  oc.write("m2", 200, _usage(200, 20))
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert _capture(ledger)["opencode"] == 2
+    ledger.record_file("host-a", str(oc.db), "legacy-gate-signature", [])
+    assert _capture(ledger)["opencode"] == 2  # the whole table, not just the rows past the stored max
+    assert len(ledger.captured_sigs("host-a")[str(oc.db)].split(":")) == 5
+    assert _capture(ledger)["opencode"] == 0
+    assert _ledger_row(ledger, "opencode", NAME).calls == 2  # the reread upserted onto the same ids
+
+
+def test_a_finished_capture_stamps_last_capture_at_and_a_failed_one_does_not(tmp_path: Path) -> None:
+  """``last_capture_at`` is the page's "as of": a capture that returns stamps its host, and a
+  capture that raises leaves the stamp alone."""
+  codex = Codex(tmp_path)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert ledger.last_capture_at("host-a") is None
+    _capture(ledger)
+    stamped = ledger.last_capture_at("host-a")
+    assert stamped is not None
+    assert ledger.last_capture_at("host-b") is None
+
+    _write_rollout(codex, "norootthread1", [_codex_meta(), _codex_turn("codex-m1"), _codex_count_solo("ts")])
+    with pytest.raises(ValueError, match="norootthread1"):
+      _capture(ledger)
+    assert ledger.last_capture_at("host-a") == stamped
+
+
+def test_capture_without_a_registered_source_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """An entry point that skipped ``registrations.register_all()`` fails the capture instead of
+  capturing only the charlie-bot logs and stamping the ledger as current."""
+  monkeypatch.setattr(usage_sources, "_sources", {})
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger, pytest.raises(RuntimeError, match="register_all"):
+    _capture(ledger)
+  with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
+    assert ledger.last_capture_at("host-a") is None
+
+
+def test_capture_runs_opencode_run_is_a_fallback_through_the_claude_envelope_keys(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The signature probe scans the whole message table, so it re-runs only when the db's
-  main file or -wal sidecar moved since the probe that recorded the served signature; a
-  gate hit opens no connection, and a committed row re-probes and re-reads."""
+  """Every backend whose source is neither run-logs-only nor under the Codex rule reads its run's
+  trailing result through the Claude envelope keys: an opencode-type run is a fallback row that
+  retires once the opencode session its metadata names is captured."""
+  _stub_registry(monkeypatch, _Option("oc-qwen", "opencode", "qwen/qwen3"))
+  Runs(tmp_path).run(
+      "s1",
+      "r1", [_cc_claude_result("oc-sess-1")],
+      backend="oc-qwen",
+      model="qwen/qwen3",
+      native_session_id="oc-sess-1",
+      started_at="2026-09-27T17:50:39.124791Z")
   oc = Opencode(tmp_path)
-  oc.write("m1", 100, _usage(100, 10))
-  oc.write("m2", 200, _usage(200, 20))
   with UsageLedger(tmp_path / "ledger.sqlite3") as ledger:
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+    assert _capture(ledger)["charlie-bot"] == 1
+    row = _ledger_rows(ledger)["charlie-bot", "qwen3"]
+    assert (row.calls, row.fallback_calls, row.in_fresh, row.cache_write, row.cache_read,
+            row.output) == (1, 1, 4, 10, 100, 7)
 
-    real_connect = sqlite3.connect
-    opens = {"n": 0}
-
-    def counting_connect(*args: Any, **kwargs: Any) -> Any:
-      opens["n"] += 1
-      return real_connect(*args, **kwargs)
-
-    monkeypatch.setattr(tt.sqlite3, "connect", counting_connect)
-
-    opens["n"] = 0
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
-    assert opens["n"] == 0  # gate hit: no probe connection, the recorded signature serves
-
-    oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
-    before = opens["n"]
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
-    assert opens["n"] - before == 1  # the commit moved the files: one probe connection
-    row = _ledger_row(ledger, "opencode", NAME)
-    assert (row.calls, row.in_fresh, row.output) == (2, 322, 32)
+    oc.write("m1", 100, _usage(4, 7), session="oc-sess-1")
+    assert _capture(ledger)["opencode"] == 1
+    assert ("charlie-bot", "qwen3") not in _ledger_rows(ledger)  # the opencode session is captured: retired
 
 
-def test_capture_opencode_gate_survives_a_reopened_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The probe's gate lives in the ledger, not the process: a capture against a reopened
-  ledger — fresh module state, the shape of every server restart's first page load — skips
-  the whole-table probe while the db files sit unchanged since the stored gate."""
-  oc = Opencode(tmp_path)
-  oc.write("m1", 100, _usage(100, 10))
-  oc.write("m2", 200, _usage(200, 20))
-  ledger_path = tmp_path / "ledger.sqlite3"
-  with UsageLedger(ledger_path) as ledger:
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 2
+def test_a_capture_commits_once_and_a_failed_one_keeps_its_finished_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """No file of a capture is visible to another connection until the capture ends, the stamp
+  lands in the same commit, and a capture that raises still commits the files it finished
+  (without the stamp)."""
+  claude, _codex = _claude_codex_corpus(tmp_path)
+  path = tmp_path / "ledger.sqlite3"
+  seen: list[int] = []
+  real_read = claude_logs.read
 
-  real_connect = sqlite3.connect
-  opens = {"n": 0}
+  def spying_read(file: Path, account: str, previous: str | None) -> tuple:
+    seen.append(len(reader.captured_sigs("host-a")))
+    return real_read(file, account, previous)
 
-  def counting_connect(*args: Any, **kwargs: Any) -> Any:
-    opens["n"] += 1
-    return real_connect(*args, **kwargs)
+  monkeypatch.setattr(claude_logs, "read", spying_read)
+  with UsageLedger(path) as ledger, UsageLedger(path) as reader:
+    _capture(ledger)
+    assert len(seen) >= 2 and set(seen) == {0}  # nothing was committed while files were still being read
+    assert len(reader.captured_sigs("host-a")) == 5  # 4 Claude files + 1 rollout
+    assert reader.last_capture_at("host-a") is not None
 
-  monkeypatch.setattr(tt.sqlite3, "connect", counting_connect)
-  with UsageLedger(ledger_path) as ledger:
-    opens["n"] = 0  # the reopened ledger's own connect is not the probe
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 0
-    assert opens["n"] == 0  # the stored gate serves: no probe connection, no re-read
-    oc.write("m2", 300, _usage(222, 22))  # same id, higher time_updated: a real update
-    before = opens["n"]
-    assert tt.capture_opencode(ledger, "host-a", oc.db) == 1  # only the moved row is re-read
-    assert opens["n"] - before == 1  # the commit moved the files: one probe connection, re-read on it
+    monkeypatch.setattr(claude_logs, "read", real_read)
+    with (claude.work / "projects" / "rel" / "sess1" / "sess1.jsonl").open("a") as fh:
+      fh.write(json.dumps(_claude_record("m3", NAME, "2024-01-05T00:00:00Z", _usage(1, 1))) + "\n")
+    stamped = reader.last_capture_at("host-a")
+    _write_rollout(Codex(tmp_path), "norootthread1", [_codex_meta(), _codex_turn("codex-m1"), _codex_count_solo("ts")])
+    with pytest.raises(ValueError, match="norootthread1"):
+      _capture(ledger)
+    assert reader.last_capture_at("host-a") == stamped  # the failed capture left the stamp alone
+    assert _ledger_row(reader, "Claude Code", NAME).calls == 3  # ... but the Claude file it finished is durable

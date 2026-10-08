@@ -34,6 +34,7 @@ with gc_off(collect=False):
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
   from src.app import pages, registrations
+  from src.features.usage import api as usage_page
   from src.features.usage import ext_usage
   from src.infra import responses, timeouts
   from src.infra.buildinfo import init_build_info
@@ -343,7 +344,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 500s the usage page (and the ledger cron handler) until restart. Same
     # thread pattern as the speech service: the M99 import floor stays.
     app.state.usage_tally_warmup_task = create_logged_task(
-        asyncio.to_thread(pages.preload_usage_tally_stack), name="usage-tally-warmup")
+        asyncio.to_thread(usage_page.preload_usage_tally_stack), name="usage-tally-warmup")
 
     # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
     # BEFORE any door that can start a competing process: a new chat input, a

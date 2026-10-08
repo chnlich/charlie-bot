@@ -67,7 +67,7 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 - Individual Worker logs are in `data/runs/{run_id}/`: the raw-log spawn writes `agent.raw.ndjson` (the
   CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
   `events.jsonl` holds the translated events.
-- `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
+- `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The diff page's repo picker lists the discovered projects.
 
 ### 3.2 Repository Code Structure (Stateless)
 ```text

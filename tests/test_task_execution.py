@@ -217,12 +217,10 @@ def make_api_client(cfg, session_blocks, task_mgr) -> TestClient:
   from src.infra import config
   from src.runtime.api import internal as internal_api
   from src.runtime.api import sessions as sessions_api
-  from src.runtime.api import threads as threads_api
   from src.runtime.api.deps import get_config_on_loop, get_run_store, get_task_manager
 
   app = FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.include_router(threads_api.router, prefix="/api/threads")
   app.include_router(internal_api.router, prefix="/api/internal")
   app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
@@ -632,17 +630,6 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     ]
     assert reports and reports[-1]["outcome"] == "completed"
 
-    # The list route exposes the same Run as a thread row: its real id,
-    # backend and finished status — no ThreadMetadata exists.
-    from src.runtime import task_execution
-    monkeypatch.setattr(task_execution, "_task_manager", tree)
-    listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
-    assert listed.status_code == 200, listed.text
-    rows = listed.json()
-    assert isinstance(rows, list)
-    compat = [r for r in rows if r.get("id") == run_id]
-    assert compat, f"the worker run did not surface in the thread list: {listed.text[:400]}"
-    assert compat[0]["backend"] == "fake" and compat[0]["status"] == "completed"
     legacy_dir = cfg.sessions_dir / child_id / "threads"
     assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True
 

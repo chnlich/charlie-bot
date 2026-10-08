@@ -45,11 +45,14 @@ checks whether a profile is set and passes the resolved home to new panes explic
 └── sessions/            # Session directories
     └── {session_uuid}/
         ├── metadata.json      # Session info (name, status, timestamps)
-        ├── data/              # Session-level JSON data
-        └── threads/           # Thread directories
-            └── {thread_uuid}/
-                ├── metadata.json    # Thread info (task description, status)
-                └── data/            # Thread-specific JSON data (logs, state)
+        └── data/              # Session-level JSON data
+            └── runs/              # Run directories
+                └── {run_id}/
+                    ├── metadata.json    # Run record (identity, backend, status, timestamps)
+                    ├── task_spec.md     # The run's pinned task-spec body
+                    ├── events.jsonl     # The run's translated transport events
+                    ├── agent.raw.ndjson # The CLI's raw stream
+                    └── agent.stderr.log # The CLI's stderr
 ```
 
 **Worktrees** are stored under `worktree_dir` (config, default `~/worktrees`), one directory per
@@ -61,7 +64,7 @@ thread branch — the directory name is the branch name with `/` replaced by `-`
 ```
 
 **Notes:**
-- Individual Worker logs are in `threads/{uuid}/data/`: the raw-log spawn writes `agent.raw.ndjson` (the
+- Individual Worker logs are in `data/runs/{run_id}/`: the raw-log spawn writes `agent.raw.ndjson` (the
   CLI's stream) plus `agent.stderr.log`; the pipe transports write `stdout.log` plus `stderr.log`;
   `events.jsonl` holds the translated events.
 - `workspace_dirs`: Config option (`config.yaml`) listing workspace directories to scan for git projects. The `GET /api/sessions/projects` endpoint returns discovered projects for the UI project picker.
@@ -269,13 +272,13 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 
 **Backend**
 - FastAPI server (`server.py`)
-- All API routes: `/api/sessions`, `/api/chat`, `/api/threads`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py` and the packages in `src/app/registrations.py`)
+- All API routes: `/api/sessions`, `/api/chat`, `/api/internal/delegate` (full list: the `include_router` calls in `server.py` and the packages in `src/app/registrations.py`)
 - Master Agent as Claude Code session (`src/runtime/master_cc.py`) with `--resume` support for persistent conversations. Supports any configured backend via the pluggable `AgentBackend` interface
 - Delegation CLI (`src/runtime/cli/delegate.py`) — called by the master to spawn workers via `POST /api/internal/delegate`
 - Worker spawner (`src/runtime/spawner.py`) — creates isolated git worktrees, builds enriched prompts, spawns workers, and orchestrates the two-phase worker+reviewer pipeline
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.preference`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
-- `SessionManager`, `ThreadManager`, `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
+- Session blocks (`src/runtime/session_*.py`), `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
 - `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
 - Memory store: `ensure_store` (`src/features/memory/memory.py`) creates the scaffold (git repo + topics vocabulary) at first use, so a fresh home has no `memory/` directory until then
 - Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries

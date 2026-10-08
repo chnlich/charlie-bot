@@ -545,9 +545,7 @@ from src.runtime.run_identity import (  # noqa: E402, F401  (re-export)
 def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   """The last recorded run_finished outcome of one Run (None while none).
 
-  The pure fact scan behind ``RunStore.terminal_outcome``: the Threads list route's
-  status fold (src.runtime.api.threads) reads the same durable events through this
-  function so both owners answer one identical question.
+  The pure fact scan behind ``RunStore.terminal_outcome``.
   """
   outcome: str | None = None
   for event in events:

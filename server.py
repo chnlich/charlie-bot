@@ -42,7 +42,7 @@ with gc_off(collect=False):
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
   from src.runtime import init_seed, session_events, session_store
   from src.runtime.agent_environment import apply_agent_environment
-  from src.runtime.api import chat, internal, sessions, threads
+  from src.runtime.api import chat, internal, sessions
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
   from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
@@ -351,7 +351,6 @@ with gc_off(collect=False):
   # Runtime API routers
   app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
   app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-  app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
 
 # ---------------------------------------------------------------------------

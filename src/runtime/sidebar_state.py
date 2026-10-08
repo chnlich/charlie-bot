@@ -76,119 +76,12 @@ _derived_generation = 0
 _DERIVED_MAP_MEMO_LIMIT = 4
 _derived_maps: BoundedMemo[tuple, dict] = BoundedMemo(_DERIVED_MAP_MEMO_LIMIT)
 
-# session id -> monotone change revision, bumped by every mark_sidebar_dirty
-# call. Consumers outside the poll prove a derived value against disk through
-# a :class:`RevisionSweepGate` and skip the proof while it stands.
-_revisions: dict[str, int] = {}
 
-# session id -> row-source paths the writers marked since the last take. The
-# session list route proves its stored body against exactly these files (one
-# stat per mark) instead of re-walking every row-source file; a mark without a
-# path, or a taken-and-dropped race, leaves the request on the full walk.
-# Capped per session: an overflowing burst clears the set, and the next proof
-# full-walks — the same verdict an empty set gets.
-_MARKED_PATHS_CAP = 64
-_marked_paths: dict[str, set[str]] = {}
-
-
-def mark_sidebar_dirty(session_id: str, path: str | None = None) -> None:
-  """Flag *session_id*'s probed sidebar state for re-probe on the next poll.
-
-  *path* is the row-source file the caller just published through its atomic
-  rename (thread metadata.json) — the list poll's incremental proof stats
-  exactly the marked paths, so the mark must follow the rename.
-  """
+def mark_sidebar_dirty(session_id: str) -> None:
+  """Flag *session_id*'s probed sidebar state for re-probe on the next poll."""
   _dirty.add(session_id)
-  _revisions[session_id] = _revisions.get(session_id, 0) + 1
   global _derived_generation
   _derived_generation += 1
-  if path is not None:
-    paths = _marked_paths.setdefault(session_id, set())
-    if len(paths) >= _MARKED_PATHS_CAP:
-      # The burst outran the cap: drop every pending path, the newest included,
-      # so the next poll finds no paths and full-walks — re-proving all row
-      # sources at once, the proof a partially-taken set cannot give.
-      paths.clear()
-    else:
-      paths.add(path)
-
-
-def take_marked_paths(session_id: str) -> list[str]:
-  """Consume the row-source paths marked since the last take."""
-  return list(_marked_paths.pop(session_id, ()))
-
-
-def session_revision(session_id: str) -> int:
-  """Current change revision of *session_id*'s probed state sources."""
-  return _revisions.get(session_id, 0)
-
-
-class RevisionSweepGate:
-  """Per-consumer revision gate with the every-Nth-poll sweep.
-
-  A consumer proves a derived value against disk and serves the stored value
-  while :meth:`serve_hit` says the proof stands: the session's change revision
-  still matches the one the proof was taken at, and fewer than *sweep_every*
-  polls passed since the proof. A hit bumps the poll count and never resets
-  it, so the sweep arrives on schedule even when every poll hits;
-  :meth:`mark_proven` resets the count at a fresh proof.
-
-  The revision enters only through the caller, which reads it from
-  :func:`session_revision` before its walk: a mark landing mid-walk or
-  mid-rebuild only raises the live revision past the stored one, so the next
-  poll re-walks instead of serving a value missing that write.
-  """
-
-  def __init__(self, sweep_every: int) -> None:
-    self._sweep_every = sweep_every
-    self._gates: dict[str, tuple[int, int]] = {}
-
-  def serve_hit(self, session_id: str, revision: int) -> bool:
-    """Consume one poll against the stored proof; True when it still stands."""
-    gate = self._gates.get(session_id)
-    if gate is None or gate[0] != revision or gate[1] + 1 >= self._sweep_every:
-      return False
-    self._gates[session_id] = (revision, gate[1] + 1)
-    return True
-
-  def mark_proven(self, session_id: str, revision: int, reset_sweep: bool = True) -> None:
-    """Store a fresh proof taken at *revision*, resetting the sweep countdown.
-
-    *reset_sweep=False* (the list poll's incremental proof, which covered only
-    the marked files) advances the countdown by this poll instead: the full-walk
-    sweep still arrives on its schedule under continuous marked polls.
-    """
-    count = 0 if reset_sweep else self._gates.get(session_id, (revision, 0))[1] + 1
-    self._gates[session_id] = (revision, count)
-
-  def sweep_due(self, session_id: str, revision: int) -> bool:
-    """True when a proof stands at *revision* and only the countdown expired.
-
-    The stored value is revision-current here — the scheduled walk is insurance
-    against an unmarked write, so the caller may serve it and run the walk
-    detached. A revision mismatch returns False: that walk answers a seen
-    write and stays synchronous.
-    """
-    gate = self._gates.get(session_id)
-    return gate is not None and gate[0] == revision and gate[1] + 1 >= self._sweep_every
-
-  def marked_since_proof(self, session_id: str, revision: int) -> bool:
-    """True when a proof stands for an older revision and the sweep is not due.
-
-    The list poll's incremental branch requires both: a mark moved the revision
-    since the proof (the marked paths say where), and the countdown still
-    stands, so the scheduled full walk is never postponed by marked polls.
-    """
-    gate = self._gates.get(session_id)
-    return gate is not None and gate[0] != revision and gate[1] + 1 < self._sweep_every
-
-  def drop(self, session_id: str) -> None:
-    """Forget the session's proof (its stored value failed the walk)."""
-    self._gates.pop(session_id, None)
-
-  def clear(self) -> None:
-    """Forget every proof (the tests' cross-test pollution reset)."""
-    self._gates.clear()
 
 
 def is_dirty(session_id: str) -> bool:
@@ -283,12 +176,11 @@ def register_poll(force: bool) -> bool:
 
 
 def reset_for_tests() -> None:
-  """Clear the dirty set, the snapshot, the probe signatures, the marked paths, and the poll counter (tests only)."""
+  """Clear the dirty set, the snapshot, the probe signatures, and the poll counter (tests only)."""
   global _poll_count
   _dirty.clear()
   _snapshot.clear()
   _probe_signatures.clear()
-  _marked_paths.clear()
   _poll_count = 0
   global _derived_generation
   _derived_generation = 0

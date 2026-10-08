@@ -188,14 +188,13 @@ async def start_server(port: int, title: str) -> None:
   import uvicorn
   from fastapi import FastAPI
 
-  from src.runtime.api import chat, internal, sessions, threads
+  from src.runtime.api import chat, internal, sessions
   from src.runtime.api.auth import AuthMiddleware
 
   app = FastAPI(title=title)
   app.add_middleware(AuthMiddleware)
   app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
   app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
-  app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
   config = uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off")
   server = uvicorn.Server(config)

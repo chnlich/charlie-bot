@@ -1,6 +1,6 @@
 """Feature routes: each package serves its HTTP routes through the router its register() adds.
 
-The improve, Slack, Discord, plan, recap and explain routes live in ``src/features/<package>/api.py``.
+The improve, Slack, Discord, plan and explain routes live in ``src/features/<package>/api.py``.
 The checks here pin what moving them out of the runtime routers must not change: the access key
 still gates every moved path, no earlier route answers a moved path, and deleting a package's line
 in PACKAGES removes exactly the routes its api module serves.
@@ -46,7 +46,6 @@ IMPROVE = "src.features.improve"
 SLACK = "src.features.slack"
 DISCORD = "src.features.discord"
 ARTIFACTS = "src.features.artifacts"
-RECAP = "src.features.recap"
 EXPLAIN = "src.features.explain"
 
 MOVED_ROUTES = [
@@ -70,8 +69,6 @@ MOVED_ROUTES = [
         ARTIFACTS, "POST", "/api/internal/plan/close", _session_body(plan_id=1, close_as="abandoned"), 404,
         SESSION_NOT_FOUND),
     MovedRoute(ARTIFACTS, "GET", "/api/sessions/{session_id}/plans", {}, 404, SESSION_NOT_FOUND),
-    MovedRoute(RECAP, "GET", "/api/sessions/{session_id}/recap", {}, 404, SESSION_NOT_FOUND),
-    MovedRoute(RECAP, "POST", "/api/sessions/{session_id}/recap/summarize?upto=0", {}, 404, SESSION_NOT_FOUND),
     MovedRoute(
         EXPLAIN, "POST", "/api/sessions/{session_id}/explain", {
             "event_index": 0,

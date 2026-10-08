@@ -465,7 +465,7 @@ function eMsg(role, id, content, extra = {}) {
 }
 
 // A finished turn: user head, `steps` intermediate messages, assistant
-// conclusion, separator with an event index (recap restore needs one).
+// conclusion, separator with an event index, as the server sends it.
 function eTurn(prefix, i, steps = 2) {
   const msgs = [eMsg('user', `${prefix}h${i}`, `question ${prefix} number ${i}`)];
   for (let s = 0; s < steps; s++) {
@@ -487,7 +487,7 @@ function eTurnKey(prefix, i) {
 }
 
 // The engine's message-node factory hook: mirrors where renderMessage puts
-// identity, text and the separator's recap/collapse anchors.
+// identity, text and the separator's collapse anchor.
 function fakeEngineNode(msg) {
   const el = new FakeElement('DIV');
   if (msg.id != null) el.dataset.messageId = String(msg.id);
@@ -498,9 +498,6 @@ function fakeEngineNode(msg) {
     if (msg.thinking_seconds != null) el.dataset.thinkingSeconds = String(msg.thinking_seconds);
     el.__baseHeight = 30;
     el.appendChild(new FakeElement('DIV', {className: 'flex-1 border-t'}));
-    if (msg.event_index != null) {
-      el.appendChild(new FakeElement('BUTTON', {className: 'recap-toggle p-0.5 text-slate-500'}));
-    }
     return el;
   }
   const bubble = new FakeElement('DIV', {
@@ -689,25 +686,6 @@ function messageIdsUnder(el) {
   return ids;
 }
 
-// The fake DOM cannot parse innerHTML, so the real recap flow (which builds
-// its panel body from an HTML string) is stubbed at the Chat seam. The stub
-// keeps the open/close state machine and the engine's registry feedback.
-function stubRecapToggle(context, root) {
-  const stub = function (btn) {
-    const sep = btn.closest('.separator-line');
-    const next = sep.nextElementSibling;
-    if (next && next.classList.contains('recap-panel')) {
-      next.remove();
-    } else {
-      sep.parentNode.insertBefore(new FakeElement('DIV', {className: 'recap-panel'}), sep.nextSibling);
-    }
-    const engine = context.Chat.TurnEngine.activeFor(root);
-    if (engine) engine.noteRecapToggle(btn);
-  };
-  context.Chat.toggleRecapPanel = stub;
-  context.toggleRecapPanel = stub;
-}
-
 module.exports = {
   ELEMENT_NODE,
   TEXT_NODE,
@@ -745,5 +723,4 @@ module.exports = {
   assertFoldedWrapsBodyFree,
   wrapsByKey,
   messageIdsUnder,
-  stubRecapToggle,
 };

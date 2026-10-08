@@ -187,7 +187,7 @@ class ChatEventStore:
     # extend the coverage backward page by page, so a scroll never parses
     # bytes its pages do not need. Gated to archive_offset > 0 sessions:
     # unarchived sessions paginate through the message projection, so their
-    # range callers (recap extract, bulk reads) would pay a whole-file parse
+    # range callers (the explain round extract, bulk reads) would pay a whole-file parse
     # to retain a list a moving divider never reuses.
     self._live_range_memo: memo.BoundedMemo[pathlib.Path, tuple[int, int, int, list[dict | None], int, bool, int,
                                                                 int]] = memo.BoundedMemo(_LIVE_RANGE_MEMO_LIMIT)
@@ -294,7 +294,7 @@ class ChatEventStore:
         # load_chat_events_sync's consumers (projection, usage) already
         # place in it. parse_ndjson_range's islice counts
         # physical lines instead, so the disk read both re-parses the whole
-        # prefix per call (the recap's per-divider cost) and skews its window
+        # prefix per call (the explain extract's per-divider cost) and skews its window
         # by any malformed lines the cached count never charged.
         return cached[rel_start:rel_end], start > 0
       events, _ = ndjson.parse_ndjson_range(live_path, rel_start, rel_end)

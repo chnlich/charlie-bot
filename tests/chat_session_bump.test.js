@@ -39,7 +39,6 @@ const {
   assertFoldedWrapsBodyFree,
   wrapsByKey,
   messageIdsUnder,
-  stubRecapToggle,
 } = require('./turn_engine_harness');
 
 
@@ -645,7 +644,7 @@ test('I2: a landing separator wraps the finished turn and folds the one before i
 });
 
 // --- I5 ---------------------------------------------------------------------
-test('I5: manual open/fold, an expanded N steps bar and an open recap panel survive later derives', () => {
+test('I5: manual open/fold and an expanded N steps bar survive later derives', () => {
   const items = [
     ...finishedTurn('r1', {steps: 2}),
     ...finishedTurn('r2', {steps: 3}),
@@ -672,14 +671,6 @@ test('I5: manual open/fold, an expanded N steps bar and an open recap panel surv
   assert.equal(band.classList.contains('hidden'), false);
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
 
-  // Recap panel pulled open next to the second turn's separator, exactly where
-  // toggleRecapPanel() puts it.
-  const panel = new FakeElement('DIV', {className: 'recap-panel'});
-  panel.textContent = 'What was discussed';
-  const sep = nodes.get(items.find((item) => item.id === 'r2-sep'));
-  sep.parentNode.insertBefore(panel, sep.nextElementSibling);
-  const panelIndex = second.childNodes.indexOf(panel);
-
   const bandContents = band.children.slice();
   context.applyTurnOutline(root);
   context.applyTurnOutline(root);
@@ -689,9 +680,6 @@ test('I5: manual open/fold, an expanded N steps bar and an open recap panel surv
   assert.equal(band.classList.contains('hidden'), false, 'expanded bar survives');
   assert.equal(bar.getAttribute('aria-expanded'), 'true');
   assert.deepEqual(band.children, bandContents, 'band contents unmoved');
-  assert.equal(panel.parentElement, second, 'recap panel stays in its wrapper');
-  assert.equal(second.childNodes.indexOf(panel), panelIndex, 'recap panel stays in place');
-  assert.equal(panel.textContent, 'What was discussed', 'recap panel content untouched');
 
   // A newly finished turn arriving later must not disturb any of it.
   const landing = finishedTurn('r4', {steps: 1});
@@ -706,8 +694,6 @@ test('I5: manual open/fold, an expanded N steps bar and an open recap panel surv
   assert.equal(first.dataset.turnOpen, 'true');
   assert.equal(third.dataset.turnOpen, 'false');
   assert.equal(band.classList.contains('hidden'), false);
-  assert.equal(panel.parentElement, second);
-  assert.equal(second.childNodes.indexOf(panel), panelIndex);
   assert.equal(wrappers(root).length, 4);
   assert.equal(wrappers(root)[3].dataset.turnOpen, 'true');
 });
@@ -1116,12 +1102,11 @@ test('turn engine: the 900px wheel path still leaves the bottom follow band', ()
   assert.ok(distanceFromBottom(root) > 150, 'large wheel step remains outside the follow band');
 });
 
-// --- (c): open/override, expanded N steps and open recap survive eviction ----
-test('turn engine: override, expanded steps bar and open recap survive window eviction and re-materialization', () => {
+// --- (c): open/override and expanded N steps survive eviction ----
+test('turn engine: override and expanded steps bar survive window eviction and re-materialization', () => {
   const msgs = [];
   for (let i = 0; i < 12; i++) msgs.push(...eTurn('st_', i, 2));
   const {context, root, timers} = mountEngine(msgs, {clientHeight: 120});
-  stubRecapToggle(context, root);
   settle(timers);
 
   const keyX = eTurnKey('st_', 5);
@@ -1147,11 +1132,6 @@ test('turn engine: override, expanded steps bar and open recap survive window ev
   assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,
       'steps band expanded');
 
-  const sep = wrap.querySelector('.separator-line');
-  context.toggleRecapPanel(sep.querySelector('.recap-toggle'), 'sess-eng', 1005);
-  assert.ok(sep.nextElementSibling && sep.nextElementSibling.classList.contains('recap-panel'),
-      'recap panel opened next to the separator');
-
   // Evict X from the window entirely.
   const lastIndex = debug().segments - 1;
   scrollTo(timers, root, debug().offsets[lastIndex]);
@@ -1170,9 +1150,6 @@ test('turn engine: override, expanded steps bar and open recap survive window ev
   assert.equal(wrap.querySelectorAll('.turn-collapse').length, 1, 'collapse control is not duplicated');
   assert.equal(wrap.querySelector('.turn-fold-content').classList.contains('hidden'), false,
       'expanded steps band survived eviction');
-  const sep2 = wrap.querySelector('.separator-line');
-  assert.ok(sep2.nextElementSibling && sep2.nextElementSibling.classList.contains('recap-panel'),
-      'open recap panel restored');
 });
 
 // --- (d): prepending pages never re-derives or re-materializes settled wraps ---

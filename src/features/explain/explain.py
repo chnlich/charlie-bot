@@ -1,12 +1,11 @@
 """Explain (btw-style): a per-divider, async, chosen-backend explanation of the round.
 
 The chat UI's explain button picks a configured backend for one divider; this module
-owns the whole server side. The round text comes out of the recap extraction pipeline
-(``load_chat_events_range`` + ``events_to_messages`` over ``[0, upto+1)``), the
-invocation rides the base agent-run ``AgentBackend.one_shot_text`` for every
-backend (CLI-native overrides bypassed), and the session history reaches the
-explaining agent only as a chmod-0444 copy whose path — never the real
-``chat_events.jsonl`` path — the prompt carries.
+owns the whole server side. The round text comes out of ``load_chat_events_range`` +
+``events_to_messages`` over ``[0, upto+1)``, the invocation rides the base agent-run
+``AgentBackend.one_shot_text`` for every backend (CLI-native overrides bypassed), and the
+session history reaches the explaining agent only as a chmod-0444 copy whose path — never the
+real ``chat_events.jsonl`` path — the prompt carries.
 
 Persisted truth is one file, ``explain_results.json`` next to ``chat_events.jsonl``,
 keyed by the divider's ``event_index`` (``upto``); one entry per divider, and a re-run
@@ -103,7 +102,7 @@ def _write_entry(session_events: SessionEvents, session_id: str, upto: int, entr
   results = json_utils.load_json_dict(path)
   results[str(upto)] = entry
   # Readers parse this file from executor threads with no coordination against this
-  # write; the swap keeps every read on one complete document (recap's cache rule).
+  # write; the swap keeps every read on one complete document.
   json_utils.write_json_atomically(path, results, indent=2)
 
 
@@ -152,7 +151,7 @@ def _terminal_entry(backend_id: str, requested_at: str, *, state: str, answer: s
 def extract_round_text(session_events: SessionEvents, session_id: str, upto: int) -> str | None:
   """The last assistant text over the global event range [0, upto+1) — the round the divider closes.
 
-  The recap pipeline's path (``load_chat_events_range`` + ``events_to_messages``); ``None``
+  Read through ``load_chat_events_range`` + ``events_to_messages``; ``None``
   when the range holds no assistant text at all (e.g. a pure tool round).
   """
   events, _ = session_events.load_chat_events_range(session_id, 0, upto + 1)

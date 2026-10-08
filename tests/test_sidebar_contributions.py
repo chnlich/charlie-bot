@@ -2,7 +2,7 @@
 
 The registry tests run against an empty registry swapped in for the process-wide one. The deletion test
 runs a fresh interpreter that drops one package line from PACKAGES: the session store must keep working
-without the recap memo hook and without the Threads view.
+without the Threads view.
 """
 
 import json
@@ -107,8 +107,8 @@ def test_a_view_no_session_roots_has_no_entry() -> None:
   assert scheduled_sessions.view_subtree_roots([models.SessionMetadata(profile="manager", name="plain")]) == {}
 
 
-# The probe process drops one package line, registers, imports the server, then drops a session's runtime
-# state and asks for the views over a Slack thread session.
+# The probe process drops one package line, registers, imports the server, then asks for the views over a
+# Slack thread session.
 PROBE = """
 import asyncio
 import json
@@ -136,7 +136,6 @@ async def main():
       models.CreateSessionRequest(
           name="thread", slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")),
       backend="b")
-  mgr.events.drop_session_runtime_state(thread.id)
   views = await mgr.listing.view_subtree_roots()
   server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
   server.app.dependency_overrides[get_session_listing] = lambda: mgr.listing
@@ -166,13 +165,6 @@ def probe_without(package: str, home: Path) -> dict:
       })
   assert probe.returncode == 0, probe.stderr
   return json.loads(probe.stdout.splitlines()[-1])
-
-
-def test_the_session_store_runs_without_the_recap_package(tmp_path: Path) -> None:
-  found = probe_without("src.features.recap", tmp_path)
-
-  assert found["views"] == {"threads": {found["thread"]: found["thread"]}}
-  assert found["thread"] not in found["workspace_ids"]
 
 
 def test_a_thread_session_roots_no_view_without_the_chat_threads_package(tmp_path: Path) -> None:

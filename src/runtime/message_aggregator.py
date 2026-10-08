@@ -345,7 +345,7 @@ def _task_delegated_msg(ev: dict) -> dict:
   model = ev.get("model") or ev.get("resolved_model") or ""
   # Task-spec-length description and the worker summary's full text stay on the
   # persisted event (the review scan and fork reference read raw events); no
-  # projection reader -- client bubble or server recap -- reads them here.
+  # projection reader -- the client bubble or the server's round-text extract -- reads them here.
   return {
       "role": ET.TASK_DELEGATED,
       "content": "Task delegated",

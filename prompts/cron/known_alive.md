@@ -23,7 +23,7 @@ Known-alive symbols:
   `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
   each router with `include_router(prefix=...)` (the package routers through the wiring registry,
   `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
-  (e.g. `/rounds/{id}/rate` from `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside
+  (e.g. `/rounds/{id}/rate` from `chat/ratings-explain.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
   because its URL is built inside the Python registry rather than `web/`.

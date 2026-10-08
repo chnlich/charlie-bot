@@ -1725,8 +1725,8 @@ CLI_MEMORY_HOME_PATCH_TARGET = "src.features.memory.cli.charliebot_home_dir"
 # Import-path patch target shared by every test that swaps the backend factory a master session
 # runs under. src/runtime/master_cc_run.py reads `backend_types.build_backend` as a module
 # attribute at every build, so monkeypatch.setattr on the backend type table's module attribute
-# lands the stand-in where that read resolves. The lazy carriers (worker.py, autonamer.py,
-# recap.py — each deferring through the shared load_build_backend in
+# lands the stand-in where that read resolves. The lazy carriers (worker.py, autonamer.py —
+# each deferring through the shared load_build_backend in
 # src/runtime/agent_process/deferred_build.py, which returns an existing module binding
 # untouched) resolve the same function at first build, so a patch applied before that first
 # build reaches them too; a patch applied after binds their module attribute directly.

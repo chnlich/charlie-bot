@@ -6,8 +6,9 @@ removes its routes, commands and services from the server and the CLI.
 
 import importlib
 
-# Registration order is route inclusion order and service start order. The file server's
-# catch-all routes come last among the feature lines.
+# Registration order is route inclusion order, service start order and the order of the home-page
+# cards that packages add after the app's own. The file server's catch-all routes come last among
+# the feature lines.
 PACKAGES = (
     "src.features.artifacts",
     "src.features.backlog",
@@ -15,17 +16,19 @@ PACKAGES = (
     "src.features.code_server",
     "src.features.cron",
     "src.features.diag",
-    "src.features.diff_view",
     "src.features.discord",
     "src.features.host_auth",
+    "src.features.diff_view",
     "src.features.improve",
     "src.features.latex",
     "src.features.memory",
+    "src.features.ncu",
     "src.features.remote_launch",
     "src.features.session_tree_preview",
     "src.features.slack",
     "src.features.storage",
     "src.features.terminal",
+    "src.features.trace",
     "src.features.usage",
     "src.features.voice",
     "src.backends.openai_compatible",

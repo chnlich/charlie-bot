@@ -2,11 +2,8 @@
 # Rows only leave this table.
 #
 # One row per pair: importer file -> imported file. Paths are repo-relative and the rows are sorted.
-src/features/files/api.py -> src/app/pages.py
 src/features/files/api.py -> src/features/artifacts/plan_diff.py
-src/features/host_auth/api.py -> src/app/pages.py
 src/features/improve/improve_command.py -> src/backends/claude_code/claude_relay.py
-src/features/session_tree_preview/session_tree_preview.py -> src/app/pages.py
 src/features/session_tree_preview/session_tree_preview.py -> src/features/usage/ext_usage.py
 src/features/storage/storage_cool.py -> src/backends/codex/codex_usage.py
 src/features/storage/storage_cool.py -> src/features/usage/token_tally.py

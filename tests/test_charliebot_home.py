@@ -90,9 +90,9 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   monkeypatch.setenv("HOME", str(fake_home))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
 
-  from src.app import pages as api_pages
   from src.features.backup import backup as core_backup
   from src.features.cron import api as api_cron
+  from src.features.trace import api as trace_api
   from src.runtime import init as core_init
 
   asyncio.run(core_init.init_seed.init_charliebot_home())
@@ -111,7 +111,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       cfg.memory_dir,
       cfg.claude_md_file,
       api_cron.cron_dir(),
-      api_pages._perfetto_merge_cache_dir(),
+      trace_api._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),
   ]
   for path in owned:
@@ -144,6 +144,7 @@ def test_no_new_hardcoded_state_paths() -> None:
   web_files = [
       *sorted((conftest.ROOT / "web" / "static" / "js").rglob("*.js")),
       *sorted((conftest.ROOT / "web" / "templates").rglob("*.html")),
+      *sorted((conftest.ROOT / "src" / "features").glob("*/templates/**/*.html")),
   ]
   for path in web_files:
     for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):

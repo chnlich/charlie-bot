@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from src.app.pages import _build_direct_pass_gzip
 from src.features.trace import direct_pass_child
+from src.features.trace.api import _build_direct_pass_gzip
 from src.features.trace.trace_merge import NotATraceError
 
 

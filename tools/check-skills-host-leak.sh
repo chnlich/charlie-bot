@@ -10,7 +10,7 @@ cd "$repo_root"
 host_auth_scan=(
   "src/features/host_auth/host_auth.py"
   "src/features/host_auth/api.py"
-  "web/templates/host_auth.html"
+  "src/features/host_auth/templates/host_auth.html"
   "tests/test_host_auth.py"
 )
 

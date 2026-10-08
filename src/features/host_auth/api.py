@@ -6,9 +6,9 @@ import datetime
 import fastapi
 from fastapi import responses
 
-from src.app import pages
 from src.features.host_auth import host_auth
 from src.infra import log_once, models, tasks
+from src.runtime import templating
 from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
@@ -125,7 +125,7 @@ async def host_auth_page(request: fastapi.Request) -> responses.HTMLResponse:
   """Render the standing status page from the state file, server-side and page-JavaScript-free."""
   state = host_auth.load_state()
   now = models.utc_now()
-  return pages._templates().TemplateResponse(
+  return templating.templates().TemplateResponse(
       request,
       "host_auth.html",
       context={

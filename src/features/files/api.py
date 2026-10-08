@@ -15,9 +15,9 @@ from urllib import parse
 import fastapi
 from fastapi import responses
 
-from src.app import pages
 from src.infra import compression, config, constants, human_size, memo
 from src.infra import responses as responses_api
+from src.runtime import templating
 
 router = fastapi.APIRouter()
 
@@ -253,7 +253,7 @@ def _inject_artifact_ui(html_text: str, session_id: str) -> str:
   script tags so the id is set before the comment scripts run."""
   # One version per body: two walks could straddle a tree edit and ship mixed
   # tokens in one page.
-  version = pages._static_asset_version()
+  version = templating.static_asset_version()
   tags = (
       f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
       f"<script src=/static/js/comment_post.js?v={version}></script>\n"

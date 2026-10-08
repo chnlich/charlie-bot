@@ -387,7 +387,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
       await timed_step(f"{name}_ms", stop_service)
     await timed_step("http_client_ms", close_http_client)
     await timed_step("ws_close_ms", streaming_manager.close_all)
-    await timed_step("merge_pool_ms", pages.shutdown_merge_executor)
   finally:
     if writer_fence is not None:
       writer_fence.release()

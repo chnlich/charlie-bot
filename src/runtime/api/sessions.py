@@ -640,6 +640,7 @@ async def create_session(
           name=req.name,
           backend=req.backend,
           group=req.group,
+          slot_values=req.model_extra,
           caller=caller,
       )
     except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, DelegationBlockedError) as e:
@@ -665,6 +666,7 @@ async def create_session(
       session_id=req.session_id,
       slack_origin=req.slack_origin,
       discord_origin=req.discord_origin,
+      slot_values=req.model_extra,
       caller=caller)
 
 

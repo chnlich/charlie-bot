@@ -11,6 +11,7 @@ from src.infra import config, log_once, models, process, tasks
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, master_cc_state, runs, session_dispatch, sidebar_state, streaming, thinking_state
 from src.runtime.agent_process import base
+from src.runtime.hooks import backend_types
 
 if TYPE_CHECKING:
   from src.runtime import sessions
@@ -197,7 +198,7 @@ async def _refresh_anchors_from_disk(
     item: master_cc_state._WorkItem,
     session_id: str,
     last_cc_session_id: str | None,
-    last_claude_account: str | None,
+    last_account_label: str | None,
 ) -> None:
   """Overwrite the dequeued item's anchor snapshot with what disk holds.
 
@@ -230,12 +231,13 @@ async def _refresh_anchors_from_disk(
       meta.cc_session_id = fresh.cc_session_id
     if meta.native_backend is not None:
       meta.native_backend = fresh.native_backend
-    if meta.claude_account is not None:
-      meta.claude_account = fresh.claude_account
+    keeper = backend_types.account_keeper(meta)
+    if keeper is not None:
+      backend_types.record_account_label(meta, keeper.account_label(fresh))
   if last_cc_session_id and not meta.cc_session_id:
     meta.cc_session_id = last_cc_session_id
-  if last_claude_account and not meta.claude_account:
-    meta.claude_account = last_claude_account
+  if last_account_label and backend_types.account_keeper(meta) is None:
+    backend_types.record_account_label(meta, last_account_label)
 
 
 async def _session_consumer(session_id: str) -> None:
@@ -251,7 +253,7 @@ async def _session_consumer(session_id: str) -> None:
   # SessionMetadata instances (e.g. fork bootstrap vs. user message loaded later).
   last_cc_session_id: str | None = None
   # Same relay for the pool account holding that transcript.
-  last_claude_account: str | None = None
+  last_account_label: str | None = None
   # Teardown context for the idle RUNNING_CHANGED broadcast, captured per item
   # so the finally never reads the loop variable — `item` is unbound when the
   # consumer exits (e.g. via cancellation) before the first queue.get() returns.
@@ -276,7 +278,7 @@ async def _session_consumer(session_id: str) -> None:
       try:
         # Disk is the authority at dequeue time; the last_* relay below is the
         # failed-read fallback (see _refresh_anchors_from_disk).
-        await _refresh_anchors_from_disk(item, session_id, last_cc_session_id, last_claude_account)
+        await _refresh_anchors_from_disk(item, session_id, last_cc_session_id, last_account_label)
         result = await (
             master_cc_run._resume_cc(item) if item.resume_record is not None else master_cc_run._run_cc(item))
         cc_session_id, exit_code, _error_msg, finish_extras = result
@@ -337,16 +339,17 @@ async def _session_consumer(session_id: str) -> None:
         # The pool account holding the transcript is persisted the same way,
         # every round with a read-back: a relay or a pool-wide transcript search
         # that moved the anchor must survive the next whole-object save.
-        claude_account = item.session_meta.claude_account
-        if claude_account and item.callbacks.persist_claude_account is not None:
-          last_claude_account = claude_account
+        keeper = backend_types.account_keeper(item.session_meta)
+        account_label = keeper.account_label(item.session_meta) if keeper is not None else None
+        if keeper is not None and account_label and item.callbacks.persist_account_label is not None:
+          last_account_label = account_label
           await _persist_with_readback(
               item.callbacks,
-              item.callbacks.persist_claude_account,
+              item.callbacks.persist_account_label,
               session_id,
-              claude_account,
-              "claude_account",
-              "Claude account",
+              account_label,
+              keeper.account_source,
+              keeper.account_subject,
           )
 
         # Computed once, with no re-check: a queued item keeps this round's

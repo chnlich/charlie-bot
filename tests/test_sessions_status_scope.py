@@ -214,13 +214,13 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   row.has_unread = True  # a caller mutation must never reach the shared cache
   assert (await session_mgr.list_sessions(**flags))[0].has_unread is False
 
-  # The fast copy bakes in SessionMetadata's model config: the None extra and
-  # private writes hold only while unknown keys are ignored and the model
-  # carries no private attrs. The value arm below cannot catch that config
-  # change on its own — pydantic keeps empty extra dicts and private attrs
-  # out of both model_dump() and __pydantic_fields_set__ — so the two config
-  # facts are asserted directly and the config change fails here.
-  assert SessionMetadata.model_config.get("extra") != "allow"
+  # The fast copy bakes in SessionMetadata's model config: the copy carries the
+  # extras dict and writes None private state, which holds only while the model
+  # keeps unregistered keys as extras and carries no private attrs. The value arm
+  # below cannot catch a private-attr change on its own — pydantic keeps empty
+  # private attrs out of both model_dump() and __pydantic_fields_set__ — so the
+  # two config facts are asserted directly and the config change fails here.
+  assert SessionMetadata.model_config.get("extra") == "allow"
   assert not SessionMetadata.__private_attributes__
   update = {
       "thinking_since": thinking_state.busy_since(session.id),
@@ -230,9 +230,12 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
       "status": SessionStatus.ARCHIVED,
   }
   for meta in await session_mgr._load_session_metas():
+    meta.unregistered_key = "kept"  # an extra key rides the copy
     fast = _listing_row_copy(meta, update)
     reference = meta.model_copy(update=update)
     assert fast.model_dump() == reference.model_dump()
+    assert fast.model_extra == reference.model_extra == meta.model_extra
+    assert fast.model_extra is not meta.model_extra
     assert fast.__pydantic_fields_set__ == reference.__pydantic_fields_set__
 
 

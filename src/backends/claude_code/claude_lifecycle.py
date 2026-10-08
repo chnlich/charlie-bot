@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import shlex
 from pathlib import Path
+from typing import Any
 
-from src.backends.claude_code import claude_accounts, claude_code, claude_relay, master_cc_relay
+from src.backends.claude_code import claude_accounts, claude_code, claude_metadata, claude_relay, master_cc_relay
 from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
@@ -51,11 +53,14 @@ def cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
   return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
 
 
-def _launch_flags(ctx: backend_lifecycle.LaunchContext) -> dict[str, list[str]]:
-  """The factory arguments that every process of a turn carries: the dynamic-sections flag."""
+def _launch_args(ctx: backend_lifecycle.LaunchContext, *, first_process: bool) -> dict[str, Any]:
+  """The factory arguments of one process: every process of a turn carries the dynamic-sections flag, and the
+  first process of a task opens the conversation id the runtime chose (a later one resumes it)."""
   if ctx.kind == "turn":
     return {"extra_flags": [EXCLUDE_DYNAMIC_SECTIONS_FLAG]}
   if ctx.kind == "task":
+    if first_process and ctx.preassigned_native_id:
+      return {"claude_session_id": ctx.preassigned_native_id}
     return {}
   raise ValueError(f"unknown launch kind {ctx.kind!r}")
 
@@ -90,7 +95,7 @@ class ClaudeCliLifecycle(backend_lifecycle.BackendLifecycle):
 
   def _launch(self, ctx: backend_lifecycle.LaunchContext, *, resume_id: str | None) -> ClaudeLaunch:
     return ClaudeLaunch(
-        backend_kwargs=dict(_launch_flags(ctx)),
+        backend_kwargs=_launch_args(ctx, first_process=True),
         resume_id=resume_id,
         prompt=None,
         account_label=None,
@@ -115,6 +120,9 @@ class ClaudeCliLifecycle(backend_lifecycle.BackendLifecycle):
 
 class ClaudeCodeLifecycle(ClaudeCliLifecycle):
   """cc-claude: on the account pool, a run picks a login and relays to the next login on quota."""
+
+  account_source = "claude_account"
+  account_subject = "Claude account"
 
   def continuation_domain(self, option: models.BackendOption, cfg: config.CharlieBotConfig) -> str:
     """The account pool when one is configured, else the default login directory."""
@@ -165,14 +173,14 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     Each pool account has its own login directory and cannot see another's conversations, so
     resuming an id recorded under a different account always fails. The lookup tries the
     session's own account first and then every pool login, and writes a hit elsewhere back onto
-    ``session_meta.claude_account``; that is how sessions created before the pool migrate
+    the session's account label; that is how sessions created before the pool migrate
     without a metadata rewrite.
     """
     cc_session_id = ctx.held_native_id
     if not cc_session_id:
       return None
     session_meta = ctx.session_meta
-    current = claude_accounts.account_by_label(ctx.cfg, session_meta.claude_account)
+    current = claude_accounts.account_by_label(ctx.cfg, claude_metadata.account_of(session_meta))
     if current is not None and cc_transcript_exists(Path(current.config_dir), cc_session_id):
       return cc_session_id
     found = claude_accounts.find_transcript_account(ctx.cfg, cc_session_id)
@@ -182,9 +190,9 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
           session=session_meta.id,
           cc_session_id=cc_session_id,
           account=found.label,
-          previous_account=session_meta.claude_account,
+          previous_account=claude_metadata.account_of(session_meta),
       )
-      session_meta.claude_account = found.label
+      claude_metadata.set_account(session_meta, found.label)
       return cc_session_id
     log.warning(
         "master_cc_resume_transcript_missing",
@@ -207,7 +215,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     return ClaudeLaunch(
         backend_kwargs={
             "claude_account": account,
-            **_launch_flags(ctx)
+            **_launch_args(ctx, first_process=relays == 0)
         },
         resume_id=resume_id,
         prompt=prompt,
@@ -256,7 +264,7 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
       # The relay's label persist point: disk carries the new account from the moment the
       # continuation is built, not at round end (an unchanged account skips the write inside
       # the funnel).
-      ctx.session_meta.claude_account = next_account.label
+      claude_metadata.set_account(ctx.session_meta, next_account.label)
       await ctx.record_account(next_account.label)
     return self._pooled_launch(
         ctx, next_account, resume_id=native_id, prompt=claude_relay.CONTINUATION_PROMPT, relays=relays)
@@ -268,5 +276,27 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
     turn: runs after the round's account label is persisted.
     task: does nothing.
     """
-    if ctx.kind == "turn" and succeeded and native_id and ctx.session_meta.claude_account:
+    if ctx.kind == "turn" and succeeded and native_id and claude_metadata.account_of(ctx.session_meta):
       await asyncio.to_thread(claude_accounts.retire_transcript_copies, ctx.cfg, native_id)
+
+  def account_label(self, meta: models.SessionMetadata) -> str | None:
+    return claude_metadata.account_of(meta)
+
+  def record_account_label(self, meta: models.SessionMetadata, label: str | None) -> bool:
+    if claude_metadata.account_of(meta) == label:
+      return False
+    claude_metadata.set_account(meta, label)
+    return True
+
+  def thread_native_id(self, thread: models.ThreadMetadata) -> str | None:
+    return claude_metadata.session_id_of(thread)
+
+  def assign_thread_native_id(self, thread: models.ThreadMetadata, native_id: str | None) -> None:
+    claude_metadata.set_session_id(thread, native_id)
+
+  def attach_command(self, thread: models.ThreadMetadata) -> str | None:
+    """``claude --resume`` in the task's worktree; None until the thread has both."""
+    session_id = claude_metadata.session_id_of(thread)
+    if not thread.worktree_path or not session_id:
+      return None
+    return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(session_id)}"

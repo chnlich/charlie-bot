@@ -172,7 +172,8 @@ def block_sources(snapshot: dict) -> list[tuple[str, str]]:
 async def run_harness(args: argparse.Namespace) -> None:
   import yaml
 
-  from src.infra.constants import INHERITED_IDENTITY_ENV_VARS
+  from src.app import registrations
+  from src.infra.identity_env import inherited_identity_env_vars
   from tools.browser_harness_session_tree_preview import (
       build_source_home,
       preview_instance_env,
@@ -189,7 +190,8 @@ async def run_harness(args: argparse.Namespace) -> None:
   # build_source_home takes the selected backend ids as a list (the shared
   # harness helper's contract); a bare string would iterate per character.
   build_source_home(source, [args.backend])
-  for var in INHERITED_IDENTITY_ENV_VARS:
+  registrations.register_all()
+  for var in inherited_identity_env_vars():
     os.environ.pop(var, None)
 
   # The independent second instance: its own home, its own live writer

@@ -30,7 +30,7 @@ from src.infra.deferred import import_attr
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
-  from src.infra.models import BackendOption, SessionMetadata
+  from src.infra.models import BackendOption, SessionMetadata, ThreadMetadata
 
 
 class LaunchRefused(Exception):  # noqa: N818  (a refusal is a run outcome, named for what the backend did)
@@ -59,6 +59,7 @@ class LaunchContext:
   kind: Literal["turn", "task"]
   cwd: str
   held_native_id: str | None  # the conversation this run may resume; None starts fresh
+  preassigned_native_id: str | None  # task: the id the runtime chose for the conversation its first process opens
   emit: Callable[[dict], Awaitable[None]]
   #   turn: persist and broadcast one session event.
   #   task: write the event to the run's raw log through its fd AND to the session's successor
@@ -76,7 +77,7 @@ class Launch:
   conversation this process resumes. ``prompt`` replaces the run's prompt when set: a relay sets
   the continuation prompt. ``account_label`` names the login for the run's log lines.
   """
-  backend_kwargs: dict[str, Any]  # extra factory arguments; the only carrier of the claude_account key
+  backend_kwargs: dict[str, Any]  # extra factory arguments of this process
   resume_id: str | None
   prompt: str | None = None
   account_label: str | None = None
@@ -141,6 +142,32 @@ class BackendLifecycle:
   def round_notices(self, option: BackendOption, events: list[dict]) -> list[dict]:
     """The notice events for the user that the finished round's events call for."""
     return []
+
+  # The metadata keys a backend keeps on the session and on the task's thread record. The defaults
+  # keep none: a backend type without a login pool has no account label and preassigns no task id.
+
+  account_source = ""  # the name that logs and error events give the account label; "" when the backend keeps none
+  account_subject = ""  # the same, as a noun phrase in a message
+
+  def account_label(self, meta: SessionMetadata) -> str | None:
+    """The label of the pool login whose transcript store holds the session's conversation; None when unrecorded."""
+    return None
+
+  def record_account_label(self, meta: SessionMetadata, label: str | None) -> bool:
+    """Record ``label`` on ``meta`` in memory. True when the recorded label changed."""
+    return False
+
+  def thread_native_id(self, thread: ThreadMetadata) -> str | None:
+    """The conversation id the runtime chose for the task before its first process started; None when none."""
+    return None
+
+  def assign_thread_native_id(self, thread: ThreadMetadata, native_id: str | None) -> None:
+    """Record on ``thread`` the conversation id that the runtime chose for the task."""
+    return
+
+  def attach_command(self, thread: ThreadMetadata) -> str | None:
+    """The shell command that attaches a terminal to the task's conversation; None when the backend has none."""
+    return None
 
 
 # ---------------------------------------------------------------------------

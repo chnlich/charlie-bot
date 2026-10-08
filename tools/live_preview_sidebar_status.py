@@ -43,7 +43,8 @@ import os  # noqa: E402
 import subprocess  # noqa: E402
 import time  # noqa: E402
 
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.app import registrations  # noqa: E402
+from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     evaluate,
@@ -278,7 +279,8 @@ async def run_harness(args: argparse.Namespace) -> None:
       record("production home untouched (exists read-only, never written)", ok=True, detail=str(home))
 
   tmp_path = trial_home_root("charliebot-sidebar-status-", keep=args.keep)
-  for var in INHERITED_IDENTITY_ENV_VARS:
+  registrations.register_all()
+  for var in inherited_identity_env_vars():
     os.environ.pop(var, None)
 
   # An independent instance's sentinel home: nothing outside the trial changes.

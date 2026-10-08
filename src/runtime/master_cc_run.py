@@ -516,13 +516,13 @@ def _turn_launch_context(
     await callbacks.persist_and_broadcast(session_meta.id, event)
 
   async def record_account(label: str) -> None:
-    if callbacks.persist_claude_account is not None:
-      await callbacks.persist_claude_account(session_meta.id, label)
+    if callbacks.persist_account_label is not None:
+      await callbacks.persist_account_label(session_meta.id, label)
 
   async def context_state() -> tuple[int | None, datetime | None]:
-    if callbacks.claude_context_state is None:
+    if callbacks.context_state is None:
       return None, None
-    return await callbacks.claude_context_state(session_meta.id, session_meta)
+    return await callbacks.context_state(session_meta.id, session_meta)
 
   return backend_lifecycle.LaunchContext(
       cfg=item.cfg,
@@ -531,6 +531,7 @@ def _turn_launch_context(
       kind="turn",
       cwd=cwd,
       held_native_id=held_native_id,
+      preassigned_native_id=None,
       emit=emit,
       record_account=record_account,
       context_state=context_state)

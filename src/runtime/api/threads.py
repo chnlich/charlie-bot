@@ -5,7 +5,6 @@ import contextlib
 import hashlib
 import json
 import os
-import shlex
 import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -29,6 +28,7 @@ from src.runtime.api.deps import (
     require_caller,
     task_manager,
 )
+from src.runtime.hooks import backend_types
 from src.runtime.message_aggregator import (
     TOOL_PREVIEW_CHARS,
     extract_text_from_message,
@@ -106,25 +106,16 @@ def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _
 
 
 def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> str | None:
+  """The shell command that attaches a terminal to the thread's conversation, from its backend's lifecycle."""
   dispatch = _backend_dispatch(thread, cfg)
-  if dispatch is None:
+  if dispatch is None or dispatch.type not in backend_types.registered_types():
     return None
-
-  if dispatch.type == "cc-claude":
-    if not thread.worktree_path or not thread.claude_session_id:
-      return None
-    return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
-  return None
+  return backend_types.lifecycle_for_type(dispatch.type).attach_command(thread)
 
 
 async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bool:
-  dispatch = _backend_dispatch(thread, cfg)
-  if dispatch is None:
-    return False
-
-  if dispatch.type == "cc-claude":
-    return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
-  return False
+  return build_attach_command(thread, cfg) is not None and bool(thread.worktree_path) and os.path.isdir(
+      thread.worktree_path)
 
 
 def _epoch_ms(dt: datetime) -> int:

@@ -244,7 +244,7 @@ async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) 
   cfg = _no_pool_cfg(tmp_path)
   session_meta = SessionMetadata(id="consumer-account", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
-  callbacks.persist_claude_account.side_effect = lambda sid, label: "other"
+  callbacks.persist_account_label.side_effect = lambda sid, label: "other"
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)
 
   async def fake_run_cc(work_item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
@@ -253,7 +253,7 @@ async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) 
 
   await run_session_consumer(session_meta.id, [item], fake_run_cc)
 
-  callbacks.persist_claude_account.assert_awaited_once_with(session_meta.id, "ext-1")
+  callbacks.persist_account_label.assert_awaited_once_with(session_meta.id, "ext-1")
   errors = [
       call.args[1]
       for call in callbacks.persist_and_broadcast.await_args_list

@@ -70,7 +70,8 @@ import traceback  # noqa: E402
 import urllib.request  # noqa: E402
 from collections.abc import Callable  # noqa: E402
 
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.app import registrations  # noqa: E402
+from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     CDP,
     DESKTOP_CAPTURE_FLAGS,
@@ -560,7 +561,8 @@ async def run_harness(args: argparse.Namespace) -> None:
     build_source_home(source, backends)
     # The harness process itself must keep production identities out of any
     # child it spawns; the preview CLI clears its own in addition.
-    for var in INHERITED_IDENTITY_ENV_VARS:
+    registrations.register_all()
+    for var in inherited_identity_env_vars():
       os.environ.pop(var, None)
     home = tmp_path / "preview-home"
     port = pick_free_port()

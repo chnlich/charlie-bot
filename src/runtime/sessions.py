@@ -22,6 +22,7 @@ if TYPE_CHECKING:
   import numpy as np
 from src.features.artifacts import plan_paths
 from src.features.artifacts.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
+from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.gc_control import gc_off
 from src.infra.json_utils import atomic_write_stream, atomic_write_text, load_json_meta, write_json_atomically
@@ -45,6 +46,7 @@ from src.infra.tasks import create_logged_task
 from src.runtime import init_worker_recovery, sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
+from src.runtime.hooks import backend_types
 from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
@@ -189,10 +191,11 @@ _SUCCESSOR_CHAIN_HOP_LIMIT = 100
 _AGGREGATOR_INIT_SLICE_EVENTS = 256
 
 # The resume anchors: the metadata fields that name where the conversation
-# lives and who produced it (the cc-id, the pool login holding its transcript,
-# and the backend the id came from). They change only through their authorized
-# channels (see save_metadata's guard).
-_ANCHOR_FIELDS = ("cc_session_id", "claude_account", "native_backend")
+# lives and who produced it (the cc-id and the backend the id came from; the
+# pool login holding the transcript is the backend lifecycle's account label,
+# guarded beside them). They change only through their authorized channels
+# (see save_metadata's guard).
+_ANCHOR_FIELDS = ("cc_session_id", "native_backend")
 
 _TRANSIENT_METADATA_FIELDS = {
     "has_running_tasks",
@@ -301,17 +304,17 @@ def _apply_sidebar_state(
 def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionMetadata:
   """Return *meta* as a caller-safe listing row carrying *update*, as ``model_copy`` would.
 
-  SessionMetadata runs the default model config — unknown keys ignored, no
-  private attrs, no computed fields — so a row's ancillary state is
-  ``__pydantic_fields_set__`` alone and the copy reduces to the field dict
-  plus that set. The listing row test asserts those config facts directly
-  and pins the result dump- and field-set-equal to
-  ``model_copy(update=...)``; a config change that adds extra or private
-  state must extend the copy with that state in the same change.
+  SessionMetadata keeps its unregistered and package-registered keys as
+  extras, and has no private attrs and no computed fields — so a row's
+  ancillary state is the extras dict plus ``__pydantic_fields_set__`` and the
+  copy reduces to the field dict plus those two. The listing row test asserts
+  that config fact directly and pins the result dump- and field-set-equal to
+  ``model_copy(update=...)``; a config change that adds private state must
+  extend the copy with that state in the same change.
   """
   row = SessionMetadata.__new__(SessionMetadata)
   object.__setattr__(row, "__dict__", {**meta.__dict__, **update})
-  object.__setattr__(row, "__pydantic_extra__", None)
+  object.__setattr__(row, "__pydantic_extra__", dict(meta.model_extra or {}))
   object.__setattr__(row, "__pydantic_fields_set__", meta.__pydantic_fields_set__ | update.keys())
   object.__setattr__(row, "__pydantic_private__", None)
   return row
@@ -1141,6 +1144,7 @@ class SessionManager:
         discord_origin=req.discord_origin,
         group=req.group,
         **overrides)
+    metadata_slots.set_registered(meta, req.model_extra or {})
 
     self._create_session_dirs(self._session_dir(meta.id))
 
@@ -2268,21 +2272,19 @@ class SessionManager:
 
     await self._persist_anchor_fresh(session_id, set_provenance)
 
-  async def persist_claude_account(self, session_id: str, claude_account: str) -> str | None:
+  async def persist_account_label(self, session_id: str, label: str) -> str | None:
     """Persist the pool account holding the session's transcript; returns the label on disk.
 
-    Only ``claude_account`` changes, so concurrent single-field writes survive;
-    an unchanged label writes nothing.
+    The label is the backend lifecycles' account label: each lifecycle that keeps one records it
+    (``backend_types.record_account_label``). Only the label changes, so concurrent
+    single-field writes survive; an unchanged label writes nothing.
     """
 
-    def set_label(meta: SessionMetadata) -> bool:
-      if meta.claude_account == claude_account:
-        return False
-      meta.claude_account = claude_account
-      return True
-
-    saved = await self._persist_anchor_fresh(session_id, set_label)
-    return saved.claude_account if saved is not None else None
+    saved = await self._persist_anchor_fresh(session_id, lambda meta: backend_types.record_account_label(meta, label))
+    if saved is None:
+      return None
+    keeper = backend_types.account_keeper(saved)
+    return keeper.account_label(saved) if keeper is not None else None
 
   async def clear_cc_session_anchor(self, session_id: str) -> None:
     """Intentionally clear the session's resume anchor; the authorized clear channel.
@@ -2300,8 +2302,7 @@ class SessionManager:
 
     await self._persist_anchor_fresh(session_id, clear)
 
-  async def claude_context_state(self, session_id: str,
-                                 session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
+  async def context_state(self, session_id: str, session_meta: SessionMetadata) -> tuple[int | None, datetime | None]:
     """Context size and the time of the last model request, for the account pool.
 
     ``context_tokens`` is the usage panel's reading (``resolve_session_usage``);
@@ -2609,8 +2610,8 @@ class SessionManager:
         persist_cc_session_id=self.persist_cc_session_id,
         has_completed_round=self.has_completed_round,
         persist_master_run=self.persist_master_run,
-        persist_claude_account=self.persist_claude_account,
-        claude_context_state=self.claude_context_state,
+        persist_account_label=self.persist_account_label,
+        context_state=self.context_state,
         after_round=self.name_after_round,
     )
 
@@ -3286,7 +3287,7 @@ class SessionManager:
     """Correct *meta*'s anchor fields back to the on-disk values before a whole-object save.
 
     The guard behind the authorized-channel model: the resume anchors change
-    only through their channels (``persist_cc_session_id``, ``persist_claude_account``,
+    only through their channels (``persist_cc_session_id``, ``persist_account_label``,
     ``persist_native_backend``, ``persist_native_anchor_provenance``,
     ``clear_cc_session_anchor``), so a whole-object save built from a stale cached
     meta must not roll them back. Reads metadata.json fresh (a cached view is the
@@ -3310,6 +3311,17 @@ class SessionManager:
             attempted=getattr(meta, field),
         )
         setattr(meta, field, on_disk)
+    for lifecycle in backend_types.lifecycles():
+      label_on_disk = lifecycle.account_label(disk)
+      if lifecycle.account_label(meta) != label_on_disk:
+        log.warning(
+            "session_anchor_write_corrected",
+            session_id=meta.id,
+            field=lifecycle.account_source,
+            on_disk=label_on_disk,
+            attempted=lifecycle.account_label(meta),
+        )
+        lifecycle.record_account_label(meta, label_on_disk)
 
   async def save_metadata(
       self,
@@ -3337,7 +3349,7 @@ class SessionManager:
       The lock is never reentrant; the reconciliation then runs inside the
       caller's own critical section. Lock-free callers get the acquisition here.
     * ``anchor_write`` — this save is an authorized anchor channel
-      (``persist_cc_session_id``, ``persist_claude_account``,
+      (``persist_cc_session_id``, ``persist_account_label``,
       ``persist_native_backend``, ``persist_native_anchor_provenance``,
       ``clear_cc_session_anchor``) and legitimately changes an anchor field; the
       reconciliation is skipped, because its whole purpose would revert the

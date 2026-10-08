@@ -330,8 +330,8 @@ def mock_session_callbacks() -> models.SessionCallbacks:
       persist_and_broadcast=AsyncMock(),
       **mocked_callback_fields(),
       persist_master_run=AsyncMock(),
-      persist_claude_account=AsyncMock(side_effect=lambda sid, label: label),
-      claude_context_state=AsyncMock(return_value=(None, None)),
+      persist_account_label=AsyncMock(side_effect=lambda sid, label: label),
+      context_state=AsyncMock(return_value=(None, None)),
   )
 
 
@@ -345,8 +345,8 @@ def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
           has_completed_round=mgr.has_completed_round,
       ),
       persist_master_run=mgr.persist_master_run,
-      persist_claude_account=mgr.persist_claude_account,
-      claude_context_state=AsyncMock(return_value=(None, None)),
+      persist_account_label=mgr.persist_account_label,
+      context_state=AsyncMock(return_value=(None, None)),
   )
 
 

@@ -49,7 +49,8 @@ import time  # noqa: E402
 import urllib.error  # noqa: E402
 import urllib.request  # noqa: E402
 
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.app import registrations  # noqa: E402
+from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     evaluate,
     open_evidence_dir,
@@ -83,8 +84,9 @@ PURE_DELAY_MESSAGE = "check the eval sweep results and report the best checkpoin
 
 
 def scrub_identity_env() -> dict[str, str]:
+  registrations.register_all()
   env = dict(os.environ)
-  for var in INHERITED_IDENTITY_ENV_VARS:
+  for var in inherited_identity_env_vars():
     env.pop(var, None)
   return env
 

@@ -5,10 +5,20 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Annotated, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Self
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializationInfo,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 
+from src.infra import metadata_slots
 from src.infra.deferred import deferred_import_loader
 
 # The cross-layer constants single-home in src.infra.constants (stdlib-only, the
@@ -217,6 +227,10 @@ class RunRecord(BaseModel):
 
 
 class ThreadMetadata(BaseModel):
+  # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
+  # declared fields and are written back unchanged.
+  model_config = ConfigDict(extra="allow")
+
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   session_id: str
   description: str
@@ -231,7 +245,6 @@ class ThreadMetadata(BaseModel):
   # older builds — such threads can never be judged alive.
   pid_start: str | None = None
   exit_code: int | None = None
-  claude_session_id: str | None = None
   branch_name: str | None = None
   base_branch: str | None = None
   repo_path: str | None = None
@@ -242,6 +255,10 @@ class ThreadMetadata(BaseModel):
   keep_worktree: bool = False
   tried_backends: list[str] = Field(default_factory=list)
   task_type: TaskType | None = None
+
+  @model_serializer(mode="wrap")
+  def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+    return metadata_slots.arrange(metadata_slots.ON_THREAD, type(self).model_fields, handler(self), info)
 
 
 # ---------------------------------------------------------------------------
@@ -349,6 +366,10 @@ class WorkerThreadRef(BaseModel):
 
 
 class SessionMetadata(BaseModel):
+  # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
+  # declared fields and are written back unchanged.
+  model_config = ConfigDict(extra="allow")
+
   id: str = Field(default_factory=lambda: str(uuid.uuid4()))
   name: str
   status: SessionStatus = SessionStatus.ACTIVE
@@ -381,10 +402,6 @@ class SessionMetadata(BaseModel):
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: str | None = None
   cc_session_started_at: UtcDatetime | None = None
-  # Label (claude_accounts[].label) of the pool account whose transcript store
-  # holds this session's Claude Code conversation. None until the pool assigns
-  # one, and always None for a pinned or non-cc-claude backend.
-  claude_account: str | None = None
   # In-flight master turn identity for restart reconcile; None when idle.
   master_run: MasterRunRecord | None = None
   backend: str = ""  # empty default; create_session always provides the real value
@@ -460,6 +477,10 @@ class SessionMetadata(BaseModel):
   # archive_offset + line_in_live_file.
   archive_offset: int = 0
 
+  @model_serializer(mode="wrap")
+  def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
+    return metadata_slots.arrange(metadata_slots.ON_SESSION, type(self).model_fields, handler(self), info)
+
 
 # ---------------------------------------------------------------------------
 # Worker Output Models
@@ -486,6 +507,10 @@ class WorkerEvent(BaseModel):
 
 
 class CreateSessionRequest(BaseModel):
+  # The keys a package registered on the session file ride beside the declared fields; any other key is
+  # refused. ``model_extra`` holds them, and create writes them through metadata_slots.set_registered.
+  model_config = ConfigDict(extra="allow")
+
   name: str | None = None
   backend: str | None = None
   session_id: str | None = None
@@ -500,6 +525,11 @@ class CreateSessionRequest(BaseModel):
   # Both create shapes: the sidebar group the new session is born into (the
   # group-header "+" create). Stored verbatim, same as set_group stores it.
   group: str | None = None
+
+  @model_validator(mode="after")
+  def _registered_keys_only(self) -> Self:
+    metadata_slots.check_registered(metadata_slots.ON_SESSION, self.model_extra or {})
+    return self
 
 
 class PatchSessionTaskRequest(BaseModel):
@@ -862,9 +892,9 @@ class SessionCallbacks:
   # Persists the pool account holding the session's transcript and returns the
   # label read back from disk. Optional so callback bundles built before the
   # account pool existed (tests) stay valid; the live bundle always sets it.
-  persist_claude_account: Callable[[str, str], Awaitable[str | None]] | None = None
+  persist_account_label: Callable[[str, str], Awaitable[str | None]] | None = None
   # (context_tokens, last_request_at) for the account pool's cold-cache rule;
   # None when the caller wired no pool (tests).
-  claude_context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
+  context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
   # Runs after each finished round (e.g. session naming); optional so test-built bundles stay valid.
   after_round: Callable[[str], Awaitable[None]] | None = None

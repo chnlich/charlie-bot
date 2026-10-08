@@ -53,7 +53,7 @@ from src.infra import git
 from src.infra.config import CharlieBotConfig, configured_access_key
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, utc_now_iso
+from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
 from src.runtime import review, runs, task_prompts
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import (
@@ -79,21 +79,21 @@ if TYPE_CHECKING:
 log = LazyStructlogLogger()
 
 
-@dataclasses.dataclass
-class RunWorkerBinding:
+def run_worker_binding(
+    run_id: str,
+    session_id: str,
+    *,
+    pid: int | None = None,
+    pid_start: str | None = None,
+) -> ThreadMetadata:
   """The Run-backed worker identity a v2 launch hands to :class:`Worker`.
 
-    Duck-types the ``ThreadMetadata`` fields the Worker reads (id, session_id,
-    pid, pid_start, claude_session_id) without ever materializing a legacy
-    thread record: the pid/pid_start pair is persisted onto the Run by the
-    adapter's ``on_spawned`` callback, not onto a thread file.
+    An in-memory thread record that is never written: the Worker reads its id,
+    session id, process identity and the backend's preassigned conversation id.
+    The pid/pid_start pair is persisted onto the Run by the adapter's
+    ``on_spawned`` callback, not onto a thread file.
     """
-
-  id: str
-  session_id: str
-  pid: int | None = None
-  pid_start: str | None = None
-  claude_session_id: str | None = None
+  return ThreadMetadata(id=run_id, session_id=session_id, description="", pid=pid, pid_start=pid_start)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1195,11 +1195,11 @@ class TaskExecutionAdapter:
     prompt = context
     await self._persist_launch_text(session_id, run_id, prompt)
 
-    binding = RunWorkerBinding(id=run_id, session_id=session_id)
+    binding = run_worker_binding(run_id, session_id)
     if backend_types.traits_for(option.type).preassigned_session_id:
-      binding.claude_session_id = str(uuid.uuid4())
+      backend_types.lifecycle_for(option).assign_thread_native_id(binding, str(uuid.uuid4()))
 
-    async def on_spawned(spawned: RunWorkerBinding) -> None:
+    async def on_spawned(spawned: ThreadMetadata) -> None:
       if spawned.pid is None or spawned.pid_start is None:
         raise RuntimeError(f"run {run_id} spawned without a pinned process identity")
       await self._tree.runs.record_launch(session_id, run_id, pid=spawned.pid, pid_start=spawned.pid_start)
@@ -1213,7 +1213,7 @@ class TaskExecutionAdapter:
       # the lifecycle asks for it (src/runtime/launch_loop.py). A refused launch — before the
       # first process or at a relay — ends the run through the LaunchRefused branch below.
       worker = Worker(
-          binding,  # type: ignore[arg-type]
+          binding,
           working_dir,
           events_log,
           prompt,
@@ -1743,15 +1743,11 @@ class TaskExecutionAdapter:
     session_id, run_id = meta.id, run.id
     run_dir = self._tree.runs.run_dir(session_id, run_id)
     events_log = run_dir / RUN_EVENTS_NAME
-    binding = RunWorkerBinding(
-        id=run_id,
-        session_id=session_id,
-        pid=run.pid,
-        pid_start=run.pid_start,
-        claude_session_id=(
-            run.native_session_id if backend_types.traits_for(option.type).preassigned_session_id else None))
+    binding = run_worker_binding(run_id, session_id, pid=run.pid, pid_start=run.pid_start)
+    if backend_types.traits_for(option.type).preassigned_session_id:
+      backend_types.lifecycle_for(option).assign_thread_native_id(binding, run.native_session_id)
     worker = Worker(
-        binding,  # type: ignore[arg-type]
+        binding,
         Path(run.worktree_path) if run.worktree_path else run_dir,
         events_log,
         "",  # the follow builds nothing: the prompt text was the launch's

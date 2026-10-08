@@ -11,7 +11,6 @@ from collections.abc import Iterator
 
 import pydantic
 
-from src.backends.claude_code import claude_relay
 from src.infra import config, git, log_once, models, timeouts
 from src.infra import event_types as ET
 from src.runtime import message_aggregator
@@ -50,10 +49,6 @@ _QUOTA_BLOCKER_TEXT_PATTERNS = (
     "out-of-token",
     "insufficient tokens",
     "tokens exhausted",
-    # The pre-spawn pool exhaustion (claude_relay.pool_exhausted_message rides
-    # the run's events-log error event): one home for the phrase, so the
-    # classification and the message cannot drift apart.
-    claude_relay.POOL_EXHAUSTED_PHRASE.lower(),
 )
 
 # ---------------------------------------------------------------------------
@@ -528,6 +523,11 @@ def _quota_blocker_match(ev: dict) -> str | None:
     if status == 'rejected' or overage_status == 'rejected':
       rate_type = rli.get('rateLimitType') or 'rate limit'
       return f"rate-limit rejection ({rate_type})"
+
+  # A refused launch states its cause on the run's error event (ET.QUOTA_EXHAUSTED);
+  # a False flag leaves the text patterns to judge the event.
+  if event_type == ET.ERROR and ev.get(ET.QUOTA_EXHAUSTED) is True:
+    return f"launch refused with quota exhausted: {ev['message']}"
 
   if event_type not in (ET.ERROR, ET.ASSISTANT_ERROR, ET.RESULT):
     return None

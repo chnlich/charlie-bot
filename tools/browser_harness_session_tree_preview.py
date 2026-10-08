@@ -363,8 +363,10 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
     """
   import yaml
 
+  from src.app import registrations
   from src.infra.config import CharlieBotConfig, charliebot_home_dir, load_credentials
 
+  registrations.register_all()
   config_path = charliebot_home_dir() / "config.yaml"
   raw_options = (yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}).get("backends", {}).get("options") or []
   entries = []
@@ -382,9 +384,9 @@ def build_source_home(source: Path, backend_ids: list[str]) -> None:
           f"backend {backend_id!r} in {config_path} is not interpretable by this branch's "
           f"config schema: {e}") from e
     assert option is not None
-    if option.type.value != "charlie-code":
+    if option.type != "charlie-code":
       raise SystemExit(
-          f"backend {backend_id!r} has type {option.type.value!r}; the preview isolates native "
+          f"backend {backend_id!r} has type {option.type!r}; the preview isolates native "
           "state only for charlie-code")
     entries.append(json.loads(option.model_dump_json()))
     if getattr(option, "credential", None):

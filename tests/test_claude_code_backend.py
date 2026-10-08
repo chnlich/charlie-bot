@@ -5,7 +5,8 @@ import conftest
 import pytest
 
 from src.backends.claude_code import claude_code
-from src.infra import config, models
+from src.backends.claude_code.claude_config import ClaudeAccount
+from src.infra import config
 from src.runtime.hooks import backend_types
 
 
@@ -74,7 +75,7 @@ def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytes
   the backend expands ``~`` against HOME before injecting CLAUDE_CONFIG_DIR."""
   monkeypatch.setenv("HOME", "/home/test-user")
   option = conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
-  account = models.ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
+  account = ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
 
   backend = backend_types.build_backend(option, config.CharlieBotConfig(), claude_account=account)
 

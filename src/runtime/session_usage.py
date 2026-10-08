@@ -47,7 +47,6 @@ from typing import Any
 
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.constants import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.infra.memo import BoundedMemo
 from src.infra.models import SessionMetadata
 from src.runtime.hooks import backend_lifecycle, backend_types
@@ -282,17 +281,23 @@ def _snapshot_full_and_compact(limit: dict) -> tuple[int | None, int | None]:
   """Derive (context_full, context_compact_at) from a snapshot ``limit`` dict.
 
   context_full is ``limit.input`` when present, else ``limit.context - limit.output``.
-  context_compact_at is ``limit.input - min(OPENCODE_COMPACT_OUTPUT_RESERVE, limit.output)``
-  when ``input`` is present; otherwise ``None`` (it would coincide with full, so the
-  line carries no information). A non-int ``output`` (e.g. a JSON ``null`` in the
-  catalog payload) degrades to ``(None, None)`` rather than raising ``TypeError``.
+  context_compact_at is ``limit.input - min(reserve, limit.output)`` when ``input`` is
+  present, where ``reserve`` is the ``compact_reserve`` that a package registered for
+  the ``snapshot`` reading (``None`` without one: the line is not drawn); otherwise
+  ``None`` (it would coincide with full, so the line carries no information). A non-int
+  ``output`` (e.g. a JSON ``null`` in the catalog payload) degrades to ``(None, None)``
+  rather than raising ``TypeError``.
   """
   context_input = limit.get("input")
   context_output = limit.get("output", 0)
   context_context = limit.get("context")
   if isinstance(context_input, int) and isinstance(context_output, int):
     context_full = context_input
-    context_compact_at = context_input - min(OPENCODE_COMPACT_OUTPUT_RESERVE, context_output)
+    limits = backend_lifecycle.reading_limits(_READING_SNAPSHOT)
+    if limits is None or limits.compact_reserve is None:
+      context_compact_at = None
+    else:
+      context_compact_at = context_input - min(limits.compact_reserve, context_output)
   elif isinstance(context_context, int) and isinstance(context_output, int):
     context_full = context_context - context_output
     context_compact_at = None

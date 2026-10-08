@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.constants import BackendType
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
 from src.infra.models import RunRecord, ThreadMetadata, WorkerEvent
@@ -111,7 +110,7 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -
   if dispatch is None:
     return None
 
-  if dispatch.type == BackendType.CC_CLAUDE:
+  if dispatch.type == "cc-claude":
     if not thread.worktree_path or not thread.claude_session_id:
       return None
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
@@ -123,7 +122,7 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
   if dispatch is None:
     return False
 
-  if dispatch.type == BackendType.CC_CLAUDE:
+  if dispatch.type == "cc-claude":
     return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
   return False
 

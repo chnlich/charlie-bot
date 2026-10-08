@@ -54,3 +54,11 @@ def deferred_import_loader(attr: str, module_path: str) -> Callable[[dict[str, A
     return value
 
   return load
+
+
+def import_attr(path: str) -> Any:
+  """The attribute that a "module:attr" string names; the module imports on this call."""
+  module_name, separator, attr = path.partition(":")
+  if not separator or not module_name or not attr:
+    raise ValueError(f"{path!r} is not a 'module:attr' string")
+  return getattr(importlib.import_module(module_name), attr)

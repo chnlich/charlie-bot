@@ -182,6 +182,6 @@ async def test_run_cc_reports_loudly_when_no_account_is_left(tmp_path: Path, mon
   errors = _events_of(item.callbacks, ET.ASSISTANT_ERROR)
   assert len(errors) == 1 and "no available account" in errors[0]["content"]
   # Both emptied logins were reported once, without waiting for a run on them.
-  notices = _events_of(item.callbacks, ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED)
+  notices = _events_of(item.callbacks, claude_relay.CLAUDE_ACCOUNT_LOGIN_REQUIRED)
   assert sorted(n["account"] for n in notices) == ["ext-1", "ext-2"]
   assert {n["reason"] for n in notices} == {"empty_credentials"}

@@ -254,6 +254,7 @@ async def seed_scenario(home: Path) -> dict:
     task_sessions owner the APIs serve, in-process only.
     """
   os.environ["CHARLIEBOT_HOME"] = str(home)
+  from src.app import registrations
   from src.infra import event_types as ET
   from src.infra.config import get_config
   from src.infra.models import CreateSessionRequest, PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
@@ -261,6 +262,7 @@ async def seed_scenario(home: Path) -> dict:
   from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
+  registrations.register_all()
   cfg = get_config()
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)

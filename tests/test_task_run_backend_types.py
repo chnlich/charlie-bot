@@ -17,23 +17,22 @@ import pathlib
 import conftest
 import pytest
 
-from src.infra import backend_models
+from src.infra import backend_models, config_registry
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
 
 
-def build_env(tmp_path: pathlib.Path, backend_type: backend_models.BackendType):
+def build_env(tmp_path: pathlib.Path, backend_type: str):
   """One backend of the requested TYPE, configured the way the type requires."""
   import src.infra.config as core_config
 
   home = tmp_path / "home"
-  model = None if backend_type is backend_models.BackendType.ANTIGRAVITY else "fake-model"
-  kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type.value}
-  if backend_type is not backend_models.BackendType.ANTIGRAVITY:
-    kwargs["model"] = model
-  if backend_type in (backend_models.BackendType.CC_OPENAI_COMPATIBLE, backend_models.BackendType.CHARLIE_CODE):
+  kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type}
+  if not backend_models.backend_type_allows_missing_model(backend_type):
+    kwargs["model"] = "fake-model"
+  if backend_type in ("cc-openai-compatible", "charlie-code"):
     kwargs["api_base"] = "http://127.0.0.1:9"
-  if backend_type == backend_models.BackendType.CC_KIMI:
+  if backend_type == "cc-kimi":
     kwargs["credential"] = "kimi"
   option = conftest.backend_option(**kwargs)
   cfg = core_config.CharlieBotConfig(
@@ -55,13 +54,13 @@ def session_attached_event(native_id: str) -> dict:
   return {"type": "system", "subtype": "init", "session_id": native_id}
 
 
-BACKEND_TYPES = list(backend_models.BackendType)
+BACKEND_TYPES = list(config_registry.registered_backend_types())
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
+@pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=str)
 async def test_run_records_stream_identity_and_result_truth(
-    tmp_path: pathlib.Path, backend_type: backend_models.BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, backend_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
   from tests import test_task_execution
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)
@@ -84,7 +83,7 @@ async def test_run_records_stream_identity_and_result_truth(
 
   # The Run records the configured model, the stream's native session id,
   # and its own transport refs.
-  if backend_type is not backend_models.BackendType.ANTIGRAVITY:
+  if not backend_models.backend_type_allows_missing_model(backend_type):
     assert run.model == "fake-model"
   assert run.native_session_id == "native-xyz-1"
   run_dir = tree.runs.run_dir(root.id, run_id)
@@ -96,9 +95,9 @@ async def test_run_records_stream_identity_and_result_truth(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
+@pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=str)
 async def test_zero_output_and_error_results_fail_across_types(
-    tmp_path: pathlib.Path, backend_type: backend_models.BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
+    tmp_path: pathlib.Path, backend_type: str, monkeypatch: pytest.MonkeyPatch) -> None:
   from tests import test_task_execution
 
   cfg, session_mgr, tree = build_env(tmp_path, backend_type)

@@ -10,6 +10,7 @@ def register() -> None:
 
   backend_types.register_backend_type(
       "cc-kimi",
+      options="src.backends.kimi.options:CcKimiBackend",
       factory="src.backends.kimi.factory:build",
       traits=backend_types.BackendTraits(
           resume="cli_flag",

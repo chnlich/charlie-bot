@@ -51,6 +51,11 @@ def fail(message: str):
 
 backend_id = sys.argv[1]
 
+# The backend packages register their option models before the first config parse.
+from src.app import registrations
+
+registrations.register_all()
+
 # Mechanism 1: the config entry exists and is a charlie-code backend.
 from src.infra.config import get_config
 
@@ -68,10 +73,6 @@ if option.type != "charlie-code":
   )
 
 # Mechanism 2: the backend builds, so its binary resolves.
-from src.app import registrations
-
-registrations.register_all()
-
 from src.runtime.hooks.backend_types import build_backend
 
 try:

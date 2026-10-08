@@ -127,13 +127,16 @@ Known-alive symbols:
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
-  `src/features/diag/api.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
+  `src/backends/claude_code/claude_config.py`, `src/features/diag/api.py`, and
+  `src/features/cron/api.py`) — `ModelMetaclass`
   consumes it by attribute name at class-definition time. Every assignment pins
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
   `TaskCreate` in `src/features/cron/api.py`, which pins
   `extra='ignore'` (the pydantic default) so the create-request body stays looser than the
-  loader's forbid task model, as the comment above the assignment states. Vulture flags each
-  production assignment as an unused variable.
+  loader's forbid task model, as the comment above the assignment states, and
+  `CharlieBotConfig` in `src/infra/config.py`, which pins `extra='allow'` so the sections that
+  packages register ride as extras (`_parse_package_sections` refuses every other unknown key).
+  Vulture flags each production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
   `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
@@ -257,7 +260,7 @@ Known-alive symbols:
   resolves there. Vulture flags it as an unused function. Same autouse class as
   `_reset_config_caches` above.
 - `require_model` (`src/infra/backend_models.py`) — pydantic `@model_validator(mode='after')`
-  method on `BackendBase`, registered with pydantic at class-definition time and invoked during
+  method on `BackendOption`, registered with pydantic at class-definition time and invoked during
   model validation: it rejects a backend config entry whose type requires a `model` but declares
   none. The only exact-name matches outside the definition are this list and the
   `option_default_model` docstring's reference (`src/infra/backend_models.py`), so vulture
@@ -401,11 +404,16 @@ Known-alive symbols:
   matches outside its definition, so vulture flags it as an unused method. Same
   framework-registered class as the `check_sources_and_mode` entry above; deleting it would not
   fail validation, it would silently drop the legacy record's replay exclusion.
-- `_default_backend_is_registered` (`src/infra/config.py`, on `VoiceConfig`) — pydantic
-  `@model_validator(mode='after')` method: it rejects a `default_backend` typo against the
-  registry's ids at startup. The name has exactly zero whole-repo matches outside its
-  definition, so vulture flags it as an unused method. Same framework-registered class as the
-  `check_sources_and_mode` entry above.
+- `check_default_backend` (`src/features/voice/config_check.py`), `check_claude_pools`
+  (`src/backends/claude_code/claude_config.py`), `AccountsConfig` (same file), each option model class in
+  `src/backends/*/options.py`, and `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`) —
+  reached by string: the `register()` of each package passes a "module:attr" string to
+  `config_registry.register_config_check`, `register_config_section` or `register_option_model`
+  (the option strings ride `backend_types.register_backend_type(options=...)`) or to
+  `backend_lifecycle.register_reading_limits`, and the registry imports the attribute by that
+  string at the first config parse or first use. The names have no whole-repo matches outside their
+  definitions, so vulture flags them as unused. `check_default_backend` rejects a
+  `voice.default_backend` typo against the transcription registry's ids at startup.
 - `voice_setup` (the module `src/features/voice/voice_setup.py`) — reached by string:
   `scripts/setup.sh` runs `python -m src.features.voice.voice_setup enable` on GPU hosts, so the module
   has no import-site reference anywhere in Python; a reference scan restricted to `.py`/`.js`

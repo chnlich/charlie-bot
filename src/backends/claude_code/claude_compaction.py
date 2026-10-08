@@ -42,23 +42,26 @@ from pathlib import Path
 from src.backends.claude_code import claude_accounts
 from src.backends.claude_code.claude_code import BASE_COMMAND, HEADLESS_DISALLOWED_TOOLS, claude_supervisor_env
 from src.backends.claude_code.claude_launch import DISABLE_CONNECTOR_SETTINGS, headless_claude_env
-from src.infra import backend_models
 from src.infra import event_types as ET
 from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.process import kill_process_group, make_session_cgroup_preexec, prepare_session_cgroup
-from src.infra.timeouts import CLAUDE_COMPACTION_TIMEOUT
 from src.runtime.agent_process.base import (
     DISALLOWED_TOOLS_FLAG,
     make_context_compact_failed_event,
     make_context_compacted_event,
 )
+from src.runtime.model_family import model_family
 
 log = LazyStructlogLogger()
 
 # Claude Code writes one-hour prompt-cache entries only, and every hit renews the
 # entry, so a request more than an hour after the previous one finds nothing cached.
 CACHE_TTL = timedelta(minutes=60)
+
+# Whole Claude Code /compact run. A 70K-token compaction measured 21 s; the
+# ceiling leaves room for a 400K one.
+CLAUDE_COMPACTION_TIMEOUT = 900.0  # seconds
 
 COMPACTION_MODEL = "claude-sonnet-5"
 COMPACTION_FAMILY = "sonnet"
@@ -90,7 +93,7 @@ _COST_STATE_MARKER = '"cost-state"'
 
 
 def is_fable(model: str | None) -> bool:
-  return backend_models.model_family(model) == FABLE_FAMILY
+  return model_family(model) == FABLE_FAMILY
 
 
 def cache_expired(last_request_at: datetime | None, now: datetime | None) -> bool:
@@ -254,7 +257,7 @@ def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: i
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
   if after <= before:
     return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
-  if not models or any(backend_models.model_family(name) != COMPACTION_FAMILY for name in models):
+  if not models or any(model_family(name) != COMPACTION_FAMILY for name in models):
     return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
   return CompactionOutcome(ok=True, models=models)
 

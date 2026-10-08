@@ -121,8 +121,7 @@ def install_native_session_dir_isolation(clc_sessions: Path) -> None:
   original = master_module.build_backend
 
   def wrapped(option, cfg, **kwargs):
-    from src.infra.backend_models import BackendType
-    if option.type == BackendType.CHARLIE_CODE:
+    if option.type == "charlie-code":
       kwargs["extra_flags"] = [*(kwargs.get("extra_flags") or []), "--session-dir", str(clc_sessions)]
     return original(option, cfg, **kwargs)
 

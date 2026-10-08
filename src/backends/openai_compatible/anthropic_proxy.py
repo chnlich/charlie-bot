@@ -9,7 +9,7 @@ import fastapi
 import orjson
 from fastapi import responses
 
-from src.infra import config, constants, http, sse
+from src.infra import config, http, sse
 from src.infra import event_types as ET
 from src.runtime.api import deps
 
@@ -500,7 +500,7 @@ async def openai_compatible_messages(
   option = cfg.get_backend_option(backend_id)
   if option is None:
     raise fastapi.HTTPException(status_code=404, detail=f"unknown backend id: {backend_id}")
-  if option.type != constants.BackendType.CC_OPENAI_COMPATIBLE:
+  if option.type != "cc-openai-compatible":
     raise fastapi.HTTPException(
         status_code=400, detail=f"backend '{backend_id}' is not type 'cc-openai-compatible' (got '{option.type}')")
   if not option.api_base:

@@ -22,22 +22,15 @@ registering costs no backend import. This module imports no backend module and n
 from __future__ import annotations
 
 import dataclasses
-import importlib
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
+from src.infra.deferred import import_attr
+
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
   from src.infra.models import BackendOption, SessionMetadata
-
-
-def import_attr(path: str) -> Any:
-  """The attribute a "module:attr" string names; the module imports on this call."""
-  module_name, separator, attr = path.partition(":")
-  if not separator or not module_name or not attr:
-    raise ValueError(f"{path!r} is not a 'module:attr' string")
-  return getattr(importlib.import_module(module_name), attr)
 
 
 class LaunchRefused(Exception):  # noqa: N818  (a refusal is a run outcome, named for what the backend did)
@@ -103,8 +96,12 @@ class LaunchWatch(Protocol):
 
 @dataclasses.dataclass(frozen=True)
 class ContextLimits:
-  """The context limits of one reading kind. ``compact_reserve`` None: the compaction point is unknown."""
-  declared_window: int
+  """The context limits of one reading kind.
+
+  ``declared_window`` None: the reading itself carries the window. ``compact_reserve`` None: the
+  compaction point is unknown.
+  """
+  declared_window: int | None
   compact_reserve: int | None
 
 

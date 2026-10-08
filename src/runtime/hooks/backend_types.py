@@ -7,19 +7,23 @@ and reads context limits through this table and imports no backend module.
 Vocabulary:
 
 - A *type* is a ``BackendOption.type`` string such as "codex".
+- The *option model* of a type is the pydantic model of its ``backends.options[]`` entry
+  (``src/infra/config_registry.py`` holds it).
 - The *factory* of a type builds its ``AgentBackend`` from one option.
 - The *traits* of a type are the behaviors that runtime code reads by type, in ``BackendTraits``.
 - The *lifecycle* of a type is its ``BackendLifecycle`` (``backend_lifecycle.py``).
 
-The factory and the lifecycle are "module:attr" strings. They import on first use, so a
-registration costs no backend import.
+The option model, the factory and the lifecycle are "module:attr" strings. They import on first
+use, so a registration costs no backend import.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import importlib
 from typing import TYPE_CHECKING, Any
+
+from src.infra import config_registry
+from src.infra.deferred import import_attr
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
@@ -68,17 +72,10 @@ _lifecycles: dict[str, backend_lifecycle.BackendLifecycle] = {}
 _DEFAULT_LIFECYCLE: backend_lifecycle.BackendLifecycle | None = None
 
 
-def _import_attr(path: str) -> Any:
-  """Import the named module attribute on first use."""
-  module_name, separator, attr = path.partition(":")
-  if not separator or not module_name or not attr:
-    raise ValueError(f"{path!r} is not a 'module:attr' string")
-  return getattr(importlib.import_module(module_name), attr)
-
-
 def register_backend_type(
     backend_type: str,
     *,
+    options: str,
     factory: str,
     traits: BackendTraits,
     lifecycle: str | None = None,
@@ -86,9 +83,10 @@ def register_backend_type(
 ) -> None:
   """Register one backend type.
 
-  ``factory`` and ``lifecycle`` are "module:attr" strings, imported on first use. The factory
-  attr is ``(option, cfg, **launch_kwargs) -> AgentBackend``. The lifecycle attr is a
-  ``BackendLifecycle`` subclass, instantiated once with no arguments on first use.
+  ``options``, ``factory`` and ``lifecycle`` are "module:attr" strings, imported on first use.
+  The options attr is the pydantic option model; this function forwards it to
+  ``config_registry.register_option_model``. The factory attr is ``(option, cfg, **launch_kwargs) -> AgentBackend``. The lifecycle attr is
+  a ``BackendLifecycle`` subclass, instantiated once with no arguments on first use.
   ``translate_fallback`` marks the one type that serves the worker's binary-free translate
   fallback; its factory then also accepts ``option=None``. A second registration of one type
   raises ValueError.
@@ -97,6 +95,7 @@ def register_backend_type(
     raise ValueError(f"backend type {backend_type!r} is already registered")
   if translate_fallback and any(registration.translate_fallback for registration in _registry.values()):
     raise ValueError(f"backend type {backend_type!r} cannot serve the translate fallback: another type does")
+  config_registry.register_option_model(backend_type, options)
   _registry[backend_type] = _Registration(
       factory=factory, traits=traits, lifecycle=lifecycle, translate_fallback=translate_fallback)
 
@@ -115,14 +114,14 @@ def build_backend(option: BackendOption, cfg: CharlieBotConfig, **launch_kwargs:
   extra_flags, buffer_limit, on_spawn). Raises ValueError when the type is unregistered or
   required config is missing.
   """
-  return _import_attr(_registration(option.type).factory)(option, cfg, **launch_kwargs)
+  return import_attr(_registration(option.type).factory)(option, cfg, **launch_kwargs)
 
 
 def build_translate_fallback(cfg: CharlieBotConfig, **launch_kwargs: Any) -> AgentBackend:
   """Instantiate the backend of the type that serves the binary-free translate fallback."""
   for registration in _registry.values():
     if registration.translate_fallback:
-      return _import_attr(registration.factory)(None, cfg, **launch_kwargs)
+      return import_attr(registration.factory)(None, cfg, **launch_kwargs)
   raise ValueError("no backend type serves the translate fallback")
 
 
@@ -142,7 +141,7 @@ def lifecycle_for(option: BackendOption) -> backend_lifecycle.BackendLifecycle:
       _DEFAULT_LIFECYCLE = backend_lifecycle.BackendLifecycle()
     return _DEFAULT_LIFECYCLE
   if path not in _lifecycles:
-    _lifecycles[path] = _import_attr(path)()
+    _lifecycles[path] = import_attr(path)()
   return _lifecycles[path]
 
 

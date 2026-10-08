@@ -7,6 +7,7 @@ def register() -> None:
 
   backend_types.register_backend_type(
       "codex",
+      options="src.backends.codex.options:CodexBackend",
       factory="src.backends.codex.factory:build",
       traits=backend_types.BackendTraits(
           resume="native_id",

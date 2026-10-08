@@ -1210,7 +1210,9 @@ async def run_harness(args: argparse.Namespace) -> None:
   # The browser binary is host-local, so the synthetic home inherits the host
   # config's headless_chrome_bin — read through the existing config entry
   # BEFORE the env override (both caches hot-reload per file fingerprint).
+  from src.app import registrations
   from src.infra.config import get_config as read_host_config
+  registrations.register_all()
   host_chrome_bin = str(read_host_config().headless_chrome_bin or "")
 
   home = tmp_path / "charliebot-home"

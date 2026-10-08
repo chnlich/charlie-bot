@@ -1035,7 +1035,8 @@ async def _poll_loop() -> None:
                 "error": inst.last_error,
             }
         if inst.provider == "claude" and inst.label in pool_dirs:
-          _annotate_login_state(cache_key, models.ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
+          _annotate_login_state(
+              cache_key, claude_accounts.ClaudeAccount(label=inst.label, config_dir=pool_dirs[inst.label]))
         if _cached_usage:
           await streaming.streaming_manager.broadcast(
               streaming.SIDEBAR_CHANNEL, {
@@ -1052,7 +1053,7 @@ async def _poll_loop() -> None:
       await asyncio.sleep(timeouts.EXT_USAGE_ROUND_GAP_SECONDS)
 
 
-def _annotate_login_state(cache_key: str, account: models.ClaudeAccount) -> None:
+def _annotate_login_state(cache_key: str, account: claude_accounts.ClaudeAccount) -> None:
   """Mark a pool account's panel entry with the login directory while it needs a new login.
 
   The pool is the judge (empty credential store or a recent authentication

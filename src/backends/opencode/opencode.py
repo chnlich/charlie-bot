@@ -761,7 +761,7 @@ class OpenCodeBackend(base.AgentBackend):
     """Generate text via `opencode run --format json` with all tools denied.
 
     Uses the one-shot ``run`` command (not the ``serve`` server the agent loop
-    drives) and injects a deny-all permission policy so the naming/recap one-shot
+    drives) and injects a deny-all permission policy so the one-shot
     cannot call tools. opencode run has no system-prompt flag, so the system
     prompt is framed into the user prompt.
 

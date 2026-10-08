@@ -31,12 +31,11 @@ GIT_REMOTE_MAX_ATTEMPTS = 3  # attempts per remote operation, the first included
 SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks server startup
 
 # ---------------------------------------------------------------------------
-# Light one-shot backend calls (autonamer session naming, recap divider summary)
+# Light one-shot backend calls (autonamer session naming)
 # ---------------------------------------------------------------------------
 
 # One one_shot_text call to a resolved light backend (config backends.preference):
-# the autonamer's {name, group} ask and the recap's divider-summary ask ride the
-# same 30 s budget.
+# the autonamer's {name, group} ask.
 LIGHT_ONESHOT_TIMEOUT = 30.0  # seconds
 
 # ---------------------------------------------------------------------------

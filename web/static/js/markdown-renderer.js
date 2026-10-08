@@ -743,7 +743,7 @@ const proseParseCache = new Map();
 // The walk's input and output per body source, keyed on the same string the
 // parse memo keys on (data-raw decodes back to it). The KaTeX walk is a pure
 // function of the body's pre-walk HTML, so a repeat message render — the
-// session re-entry, the page-depth change, the recap rebuild — serves the
+// session re-entry, the page-depth change — serves the
 // walked bytes instead of re-running KaTeX over unchanged nodes. Same cap and
 // recency rule as the parse cache; entries are strictly larger than their
 // keys, so the cap bounds the pair together.

@@ -10,7 +10,7 @@
   // math / artifact / timestamp post-process run in scroll-gated idle slices
   // producing ready fragments. Collapsed turn bodies and out-of-window turns
   // are never in the DOM. Open/override, expanded `N steps` bars and open
-  // recap panels live in a registry keyed by turn key (head|conclusion|
+  // explain panels live in a registry keyed by turn key (head|conclusion|
   // separator message ids). Spacer heights come from measurements once a turn
   // has materialized, from estimates otherwise, with scroll position corrected
   // whenever a measurement refines an estimate above the viewport.
@@ -207,7 +207,7 @@
     state(key) {
       let state = this.registry.get(key);
       if (!state) {
-        state = {override: null, nStepsExpanded: false, recapOpen: false, explainOpen: false};
+        state = {override: null, nStepsExpanded: false, explainOpen: false};
         this.registry.set(key, state);
       }
       return state;
@@ -403,20 +403,9 @@
         const bar = wrap.querySelector('.turn-fold-bar');
         if (bar) Chat.setTurnFoldExpanded(bar, true);
       }
-      this.restoreRecapPanel(wrap, seg);
       this.restoreExplainPanel(wrap, seg);
       this.stats.segmentMaterializations++;
       return wrap;
-    }
-
-    restoreRecapPanel(wrap, seg) {
-      const state = this.registry.get(seg.key);
-      if (!state || !state.recapOpen) return;
-      const eventIndex = seg.separatorEntry.msg.event_index;
-      if (eventIndex == null) throw new Error('recap-open turn without separator event_index');
-      const btn = seg.separatorEntry.node.querySelector('.recap-toggle');
-      if (!btn) throw new Error('recap toggle button missing on separator');
-      Chat.toggleRecapPanel(btn, this.sessionId, eventIndex);
     }
 
     restoreExplainPanel(wrap, seg) {
@@ -1314,16 +1303,6 @@
       }
     }
 
-    noteRecapToggle(btn) {
-      if (!this.alive || !btn.closest) return;
-      const wrap = btn.closest('.turn-wrap');
-      if (!wrap || !wrap.dataset.turnKey) return;
-      const sep = btn.closest('.separator-line');
-      const open = Boolean(
-        sep && sep.nextElementSibling && sep.nextElementSibling.classList.contains('recap-panel'));
-      this.state(wrap.dataset.turnKey).recapOpen = open;
-    }
-
     noteExplainToggle(btn) {
       if (!this.alive || !btn.closest) return;
       const wrap = btn.closest('.turn-wrap');
@@ -1347,23 +1326,10 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Recap toggle wrapping: after the original toggle runs, record the panel's
+  // Explain toggle wrapping: after the original toggle runs, record the panel's
   // open state in the active engine's registry so it can be restored on
   // re-materialization.
   // ---------------------------------------------------------------------------
-  const originalToggleRecapPanel = Chat.toggleRecapPanel;
-  function toggleRecapPanelTracked(btn, sessionId, eventIndex) {
-    const result = originalToggleRecapPanel.apply(this, arguments);
-    const container = document.getElementById('messages');
-    const engine = activeEngines().get(container);
-    if (engine) engine.noteRecapToggle(btn);
-    return result;
-  }
-  Chat.toggleRecapPanel = toggleRecapPanelTracked;
-  globalThis.toggleRecapPanel = toggleRecapPanelTracked;
-
-  // Explain toggle wrapping: the same recording rule as the recap toggle above,
-  // so the explain panel's open state restores on re-materialization too.
   const originalToggleExplainPanel = Chat.toggleExplainPanel;
   function toggleExplainPanelTracked(btn, sessionId, eventIndex) {
     const result = originalToggleExplainPanel.apply(this, arguments);

@@ -26,7 +26,6 @@ PACKAGES = (
     "src.features.latex",
     "src.features.memory",
     "src.features.ncu",
-    "src.features.recap",
     "src.features.remote_launch",
     "src.features.session_tree_preview",
     "src.features.terminal",

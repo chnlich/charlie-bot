@@ -101,120 +101,6 @@ async function rateRound(sessionId, roundId, rating) {
 }
 
 // ---------------------------------------------------------------------------
-// In-session recap: zero-token extraction + opt-in cached Haiku summary
-// ---------------------------------------------------------------------------
-const RECAP_ASK_CAP = 6;
-
-// The one small action-button style for the recap panel's text buttons:
-// renderRecapAsks's show-all toggle and recapRerunButton's re-summarize.
-const RECAP_ACTION_CLASS = 'mt-1 text-[11px] text-sky-400 hover:text-sky-300';
-
-function toggleRecapPanel(btn, sessionId, eventIndex) {
-  const sep = btn.closest('.separator-line');
-  if (!sep) return;
-  const next = sep.nextElementSibling;
-  if (next && next.classList.contains('recap-panel')) {
-    next.remove();
-    btn.classList.remove('text-sky-400');
-    return;
-  }
-  btn.classList.add('text-sky-400');
-  const panel = document.createElement('div');
-  panel.className = 'recap-panel mx-4 my-1 px-3 py-2 bg-slate-800/70 border border-slate-700/60 rounded-lg';
-  panel.dataset.sessionId = sessionId;
-  panel.dataset.eventIndex = eventIndex;
-  panel.innerHTML = '<div class="recap-body text-slate-500 text-xs">Loading recap…</div>';
-  sep.parentNode.insertBefore(panel, sep.nextSibling);
-  loadRecap(sessionId, eventIndex, panel);
-}
-
-async function loadRecap(sessionId, eventIndex, panel) {
-  const body = panel.querySelector('.recap-body');
-  let data;
-  try {
-    const res = await fetch('/api/sessions/' + sessionId + '/recap?upto=' + eventIndex);
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    data = await res.json();
-  } catch (err) {
-    console.error('Load recap failed:', err);
-    body.innerHTML = '<div class="text-red-400 text-xs">Failed to load recap</div>';
-    return;
-  }
-  body.classList.remove('text-slate-500', 'text-xs');
-  body.innerHTML =
-    recapSectionLabel('What was discussed')
-    + renderRecapAsks(data.asks)
-    + '<div class="recap-summary mt-2 pt-2 border-t border-slate-700/60"></div>';
-  applyRecapSummary(panel, sessionId, eventIndex, data);
-}
-
-function recapSectionLabel(text) {
-  return '<div class="text-[11px] uppercase tracking-wide text-slate-500 mb-1">' + escapeHtml(text) + '</div>';
-}
-
-function renderRecapAsks(asks) {
-  if (!asks || !asks.length) return '<div class="text-slate-500 text-xs">(none)</div>';
-  const items = asks.map((ask, i) =>
-    '<li class="' + (i >= RECAP_ASK_CAP ? 'recap-ask-extra hidden' : '') + '">' + escapeHtml(ask) + '</li>'
-  ).join('');
-  let html = '<ul class="list-disc pl-5 space-y-0.5 text-xs text-slate-300">' + items + '</ul>';
-  if (asks.length > RECAP_ASK_CAP) {
-    html += '<button class="' + RECAP_ACTION_CLASS + '" onclick="toggleRecapAsks(this)">'
-      + 'Show all (' + asks.length + ')</button>';
-  }
-  return html;
-}
-
-function toggleRecapAsks(btn) {
-  const panel = btn.closest('.recap-panel');
-  const extras = panel.querySelectorAll('.recap-ask-extra');
-  const collapsed = extras.length && extras[0].classList.contains('hidden');
-  extras.forEach((el) => el.classList.toggle('hidden', !collapsed));
-  btn.textContent = collapsed ? 'Collapse' : 'Show all (' + (RECAP_ASK_CAP + extras.length) + ')';
-}
-
-function applyRecapSummary(panel, sessionId, eventIndex, data) {
-  const sumEl = panel.querySelector('.recap-summary');
-  if (data.summary && !data.summary_stale) {
-    sumEl.innerHTML = recapSectionLabel('Summary') + recapSummaryText(data.summary);
-    return;
-  }
-  if (data.summary && data.summary_stale) {
-    sumEl.innerHTML = recapSectionLabel('Summary (stale)') + recapSummaryText(data.summary) + recapRerunButton();
-    return;
-  }
-  // No summary yet for any point up to here -> the explicit recap-button click generates one.
-  fetchRecapSummary(sessionId, eventIndex, panel);
-}
-
-function recapSummaryText(text) {
-  return '<div class="text-xs text-slate-300 whitespace-pre-wrap">' + escapeHtml(text || '') + '</div>';
-}
-
-function recapRerunButton() {
-  return '<button class="' + RECAP_ACTION_CLASS + '" onclick="rerunRecapSummary(this)">↻ Re-summarize</button>';
-}
-
-function rerunRecapSummary(btn) {
-  const panel = btn.closest('.recap-panel');
-  fetchRecapSummary(panel.dataset.sessionId, panel.dataset.eventIndex, panel);
-}
-
-async function fetchRecapSummary(sessionId, eventIndex, panel) {
-  const sumEl = panel.querySelector('.recap-summary');
-  sumEl.innerHTML = recapSectionLabel('Summary') + '<div class="text-slate-500 text-xs">Summarizing…</div>';
-  try {
-    const res = await fetch('/api/sessions/' + sessionId + '/recap/summarize?upto=' + eventIndex, {method: 'POST'});
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    const data = await res.json();
-    sumEl.innerHTML = recapSectionLabel('Summary') + recapSummaryText(data.summary);
-  } catch (err) {
-    console.error('Summarize recap failed:', err);
-    sumEl.innerHTML = recapSectionLabel('Summary') + '<div class="text-red-400 text-xs">Failed to summarize</div>' + recapRerunButton();
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Explain (btw-style): per-divider async explanation with a chosen backend
 // ---------------------------------------------------------------------------
 // The lightbulb icon and the pending spinner: the four button states (none /
@@ -383,9 +269,6 @@ function markExplainPending(sessionId, eventIndex, backend) {
 const GLOBALS = {
   setActiveRoundRatings,
   rateRound,
-  toggleRecapPanel,
-  toggleRecapAsks,
-  rerunRecapSummary,
   setActiveExplainStatuses,
   toggleExplainPanel,
   markExplainPending,

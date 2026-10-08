@@ -2,7 +2,7 @@
 // shared.js, no-op stubs for rendering.js's two cross-module dependencies,
 // then rendering.js. The stubs must land before rendering.js loads:
 // rendering.js is an IIFE that binds Chat.renderRoundRatingButtons and
-// Chat.renderExplainButton (both defined in chat/ratings-recap.js) and
+// Chat.renderExplainButton (both defined in chat/ratings-explain.js) and
 // Chat.embedLinkedHtmlArtifacts (chat/artifacts.js) into module-scope consts at
 // load, and these harnesses load none of the defining modules. A harness that
 // needs another module between shared.js and the stubs, or a non-empty

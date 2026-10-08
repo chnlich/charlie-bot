@@ -111,7 +111,7 @@ function isStableRenderedMessage(el) {
 // plus one `.turn-row`. Folded shows the row and hides the span; open does the
 // reverse. Nothing is ever unwrapped, and the only nodes that ever move after
 // wrapping are a span's carried inputs (queued for the next round) — so a
-// reader-expanded `N steps` bar, an open recap panel and embedded artifact
+// reader-expanded `N steps` bar, an open explain panel and embedded artifact
 // iframes all survive every later derive.
 // ---------------------------------------------------------------------------
 const TURN_TYPE_LABELS = {user: 'You', scheduled_trigger: 'Trigger', agent_message: 'Agent', worker_summary: 'Worker', child_report: 'Report'};
@@ -358,7 +358,7 @@ function buildTurnRow(turn) {
 }
 
 // The fold-back control shares the separator line with clone-to-here, Elon-e,
-// Recap and the round rating.
+// Explain and the round rating.
 function installTurnCollapseControl(separator) {
   if (separator.querySelector('.turn-collapse')) return;
   const btn = document.createElement('button');
@@ -824,11 +824,7 @@ function renderMessage(msg, sessionId) {
           + " class=\"p-0.5 text-slate-500 hover:text-yellow-400\" title=\"Elon-e: retry with a fresh perspective\">"
           + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M13 10V3L4 14h7v7l9-11h-7z\"/></svg>"
           + "</button>"
-          + renderExplainButton(sessionId, msg.event_index)
-          + "<button onclick=\"toggleRecapPanel(this, \x27" + sessionId + "\x27, " + msg.event_index + ")\""
-          + " class=\"recap-toggle p-0.5 text-slate-500 hover:text-sky-400\" title=\"Recap: what this section covered\">"
-          + "<svg class=\"w-3.5 h-3.5\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M3.75 6h16.5M3.75 12h16.5M3.75 18h10.5\"/></svg>"
-          + "</button>";
+          + renderExplainButton(sessionId, msg.event_index);
       }
       if (msg.id != null) {
         buttons += renderRoundRatingButtons(sessionId, msg.id);

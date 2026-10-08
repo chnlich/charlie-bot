@@ -54,17 +54,18 @@ async def test_keyset_pages_walk_newest_first(tmp_path: Path) -> None:
   mgr = make_session_mgr(tmp_path)
   ordered = [await _add_session(mgr, f"s{i}", minutes=i) for i in range(5)]
 
-  first = await mgr.list_archived_page(limit=2)
+  first = await mgr.listing.list_archived_page(limit=2)
   assert [s.id for s in first["sessions"]] == [ordered[4].id, ordered[3].id]
   assert first["has_more"] is True
   assert first["next_before"] == ordered[3].updated_at.isoformat()
   assert first["next_before_id"] == ordered[3].id
 
-  second = await mgr.list_archived_page(limit=2, before=first["next_before"], before_id=first["next_before_id"])
+  second = await mgr.listing.list_archived_page(limit=2, before=first["next_before"], before_id=first["next_before_id"])
   assert [s.id for s in second["sessions"]] == [ordered[2].id, ordered[1].id]
   assert second["has_more"] is True
 
-  third = await mgr.list_archived_page(limit=2, before=second["next_before"], before_id=second["next_before_id"])
+  third = await mgr.listing.list_archived_page(
+      limit=2, before=second["next_before"], before_id=second["next_before_id"])
   assert [s.id for s in third["sessions"]] == [ordered[0].id]
   assert third["has_more"] is False
   assert third["next_before"] is None
@@ -77,11 +78,11 @@ async def test_bad_cursor_fails_loudly(tmp_path: Path) -> None:
   await _add_session(mgr, "s0")
 
   with pytest.raises(ValueError, match="not-a-timestamp"):
-    await mgr.list_archived_page(before="not-a-timestamp", before_id="x")
+    await mgr.listing.list_archived_page(before="not-a-timestamp", before_id="x")
   with pytest.raises(ValueError, match="timezone-aware"):
-    await mgr.list_archived_page(before="2026-08-01T12:00:00", before_id="x")  # naive timestamp
+    await mgr.listing.list_archived_page(before="2026-08-01T12:00:00", before_id="x")  # naive timestamp
   with pytest.raises(ValueError, match="pass both or neither"):
-    await mgr.list_archived_page(before=_BASE_TIME.isoformat(), before_id=None)  # half a cursor
+    await mgr.listing.list_archived_page(before=_BASE_TIME.isoformat(), before_id=None)  # half a cursor
 
 
 @pytest.mark.asyncio
@@ -91,11 +92,11 @@ async def test_warm_list_paths_read_zero_metadata_files(tmp_path: Path, monkeypa
     await _add_session(mgr, f"arch{i}", minutes=i)
   await _add_session(mgr, "live-alpha", status=SessionStatus.ACTIVE, minutes=10)
 
-  await mgr.list_sessions()  # warm every entry
+  await mgr.listing.list_sessions()  # warm every entry
 
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
-  await mgr.list_archived_page(limit=2)
-  await mgr.list_sessions(status=SessionStatus.ACTIVE)
+  await mgr.listing.list_archived_page(limit=2)
+  await mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
   await mgr.search_sessions("alpha")
   assert reads == []
 
@@ -113,7 +114,7 @@ async def test_archived_entries_survive_ttl_active_entries_expire(
     mgr.store.metadata_cache[sid] = (meta, time.monotonic() - 3600, None)
 
   reads = _count_session_metadata_reads(monkeypatch, mgr._cfg.sessions_dir)
-  listed = await mgr.list_sessions()
+  listed = await mgr.listing.list_sessions()
   assert {s.id for s in listed} == {archived.id, active.id}
   assert [p.parent.name for p in reads] == [active.id]
 

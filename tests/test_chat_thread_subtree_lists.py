@@ -100,7 +100,7 @@ def _thread_ids(fx: Fixture) -> set[str]:
 @pytest.mark.asyncio
 async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  chat = (await fx.session_mgr.view_subtree_roots())["threads"]
+  chat = (await fx.session_mgr.listing.view_subtree_roots())["threads"]
   # Both origin fields root a subtree, and the root itself is a member.
   assert chat[fx.thread.id] == fx.thread.id
   assert chat[fx.slack_thread.id] == fx.slack_thread.id
@@ -111,7 +111,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 
   # The cron rule beside which the walk lives keeps its results unchanged: the
   # cron child maps to its cron session, and no chat-thread row joins it.
-  cron = await fx.session_mgr.sequence_subtree_roots()
+  cron = await fx.session_mgr.listing.sequence_subtree_roots()
   assert cron[fx.cron_child.id] == fx.cron.id
   assert fx.cron.id not in cron
   assert not (set(cron) & _thread_ids(fx))
@@ -136,9 +136,9 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
 
   # The two routes partition the active non-cron task nodes, and the union is
   # the listing the cron exclusion alone produced before the split.
-  sequence_subtree = await fx.session_mgr.sequence_subtree_roots()
+  sequence_subtree = await fx.session_mgr.listing.sequence_subtree_roots()
   unprojected = [
-      row for row in await fx.session_mgr.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
+      row for row in await fx.session_mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
       if row.id not in sequence_subtree
   ]
   active = {row.id for row in unprojected}

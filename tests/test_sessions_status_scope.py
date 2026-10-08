@@ -15,8 +15,9 @@ from conftest import build_session_manager, build_two_backend_cfg, create_root_s
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.runtime import sidebar_state, thinking_state
 from src.runtime.api import sessions as sessions_api
+from src.runtime.session_listing import SessionListing, _listing_row_copy
 from src.runtime.session_sidebar import _iter_trigger_stats
-from src.runtime.sessions import SessionManager, _listing_row_copy
+from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
 
@@ -30,7 +31,7 @@ def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
   async def explode(*args: object, **kwargs: object) -> list[SessionMetadata]:
     raise AssertionError("status handlers must not enumerate all sessions")
 
-  monkeypatch.setattr(SessionManager, "list_sessions", explode)
+  monkeypatch.setattr(SessionListing, "list_sessions", explode)
 
 
 @pytest.mark.asyncio
@@ -211,14 +212,14 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
       "include_pending_trigger_status": True,
       "include_pending_plan_approval": True,
   }
-  rows = await session_mgr.list_sessions(**flags)
+  rows = await session_mgr.listing.list_sessions(**flags)
   row = next(r for r in rows if r.id == session.id)
   assert row.thinking_since == thinking_state.busy_since(session.id) is not None
   assert row.has_running_tasks is False  # no Run is live; thinking_since is the separate busy stamp
   assert row.has_pending_trigger is False
   assert row.has_pending_plan_approval is False
   row.has_unread = True  # a caller mutation must never reach the shared cache
-  assert (await session_mgr.list_sessions(**flags))[0].has_unread is False
+  assert (await session_mgr.listing.list_sessions(**flags))[0].has_unread is False
 
   # The fast copy bakes in SessionMetadata's model config: the copy carries the
   # extras dict and writes None private state, which holds only while the model

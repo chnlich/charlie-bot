@@ -210,7 +210,7 @@ async def test_same_thread_twice_reuses_the_session(tmp_path: Path, monkeypatch:
     second = await handle_app_mention(event, cfg, session_mgr, client)
 
   assert first == second
-  sessions = await session_mgr.list_sessions()
+  sessions = await session_mgr.listing.list_sessions()
   assert len(sessions) == 1
   assert sessions[0].id == first
 

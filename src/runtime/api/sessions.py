@@ -62,6 +62,7 @@ from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
     get_session_events,
+    get_session_listing,
     get_session_manager,
     get_session_sidebar,
     get_session_store,
@@ -87,6 +88,7 @@ from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_listing import SessionListing
 from src.runtime.session_sidebar import SessionSidebar
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
@@ -329,7 +331,7 @@ class _SessionsListMemos:
 _workspace_list_memos = _SessionsListMemos()
 
 
-async def _active_listing_corpus(session_mgr: SessionManager) -> tuple[list[SessionMetadata], dict[str, dict]]:
+async def _active_listing_corpus(listing: SessionListing) -> tuple[list[SessionMetadata], dict[str, dict]]:
   """The active non-scheduled corpus with its status derivations, read-only.
 
   One home for the fetch both sidebar root lists ride: the Workspace list and
@@ -337,7 +339,7 @@ async def _active_listing_corpus(session_mgr: SessionManager) -> tuple[list[Sess
   the corpus definition (a new derivation flag) lands here and reaches both
   lists.
   """
-  return await session_mgr.list_sessions_readonly(
+  return await listing.list_sessions_readonly(
       status=SessionStatus.ACTIVE,
       scheduled=False,
       include_running_status=True,
@@ -428,7 +430,7 @@ async def _sessions_list_response(
 @router.get("/")
 async def list_sessions(
     request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    listing: SessionListing = Depends(get_session_listing),
 ) -> Response:
   """List active task nodes newest first.
 
@@ -438,9 +440,9 @@ async def list_sessions(
   leaf never flattens into a top-level row.
   Every row's controller fields come from the one listing join.
   """
-  rows, derived = await _active_listing_corpus(session_mgr)
-  sequence_subtree = await session_mgr.sequence_subtree_roots()
-  views = await session_mgr.view_subtree_roots()
+  rows, derived = await _active_listing_corpus(listing)
+  sequence_subtree = await listing.sequence_subtree_roots()
+  views = await listing.view_subtree_roots()
   rows = [row for row in rows if row.id not in sequence_subtree and not any(row.id in view for view in views.values())]
   return await _sessions_list_response(request, rows, derived, _workspace_list_memos)
 
@@ -514,25 +516,25 @@ async def list_archived_sessions(
     limit: int = 100,
     before: str | None = None,
     before_id: str | None = None,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    listing: SessionListing = Depends(get_session_listing),
 ) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip.
 
   Page size, cursor, and the group aggregates count archived rows only. Each
   page also carries its rows' unarchived ancestors as ``context_only`` rows
-  (the one walk on the manager, archived_context_rows), merged into the page's
+  (the one walk on the listing block, archived_context_rows), merged into the page's
   one newest-first list, so the client merges pages into a single
   project-grouped tree where a delivered firing nests under its still-active
   scheduled node without a second fetch.
   """
   try:
-    page = await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
+    page = await listing.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
   except ValueError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
   rows = page["sessions"]
   sequence_subtree = sequence_subtree_roots(rows)
   rows = [row for row in rows if row.id not in sequence_subtree]
-  context = await session_mgr.archived_context_rows(rows)
+  context = await listing.archived_context_rows(rows)
   # One page list, newest first: the stable sort keeps the archived rows in
   # their keyset order and interleaves the context rows by the same key.
   merged = sorted(
@@ -550,14 +552,14 @@ async def list_archived_sessions(
 
 
 @router.get("/starred")
-async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager),) -> list[dict]:
+async def list_starred_sessions(listing: SessionListing = Depends(get_session_listing),) -> list[dict]:
   """List starred task nodes, newest first.
 
   Row shape matches the other sidebar lists: the model dump with the schedule
   join's fields, so a starred row the client has also archived later renders
   the archived row form without a second endpoint.
   """
-  sessions = await session_mgr.list_sessions(
+  sessions = await listing.list_sessions(
       starred=True,
       include_running_status=True,
       include_pending_trigger_status=True,
@@ -570,9 +572,9 @@ async def list_starred_sessions(session_mgr: SessionManager = Depends(get_sessio
 
 
 @router.get("/groups")
-async def list_groups(session_mgr: SessionManager = Depends(get_session_manager)) -> list[str]:
+async def list_groups(listing: SessionListing = Depends(get_session_listing)) -> list[str]:
   """Return sorted distinct group names across all sessions."""
-  return await session_mgr.list_group_names()
+  return await listing.list_group_names()
 
 
 @router.post("/groups/rename")
@@ -879,6 +881,7 @@ async def search_sessions(
     request: Request,
     q: str = '',
     session_mgr: SessionManager = Depends(get_session_manager),
+    listing: SessionListing = Depends(get_session_listing),
 ) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
@@ -886,7 +889,7 @@ async def search_sessions(
     # active list from the shared cached references and rides the same
     # whole-body-memo render — the copy path's per-row model_copy plus the
     # response-model walk measured multi-ms on the projected fan-out.
-    rows, derived = await session_mgr.list_sessions_readonly(
+    rows, derived = await listing.list_sessions_readonly(
         status=SessionStatus.ACTIVE,
         include_running_status=True,
         include_pending_trigger_status=True,

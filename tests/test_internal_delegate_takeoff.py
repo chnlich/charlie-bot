@@ -33,6 +33,7 @@ class _LastSessionManager:
     self.store = self
     self.events = self
     self.sidebar = self
+    self.listing = self
 
   async def get_session(self, session_id: str):
     return None

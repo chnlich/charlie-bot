@@ -85,7 +85,7 @@ async def test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_li
   events_path.write_text(json.dumps(conftest.user_event("hello")) + "\n", encoding="utf-8")
 
   loaded = await mgr.store.get_session(stored.id)
-  listed = await mgr.list_sessions()
+  listed = await mgr.listing.list_sessions()
 
   assert loaded is not None
   assert loaded.backend == "claude-fable-sub"

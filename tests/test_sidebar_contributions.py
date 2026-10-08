@@ -124,7 +124,7 @@ from pathlib import Path
 from src.features.slack.metadata import SlackOrigin
 from src.infra import backend_models, models
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
+from src.runtime.api.deps import get_config_on_loop, get_session_listing, get_session_manager, get_session_store
 
 
 async def main():
@@ -137,9 +137,10 @@ async def main():
           name="thread", slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")),
       backend="b")
   mgr.events.drop_session_runtime_state(thread.id)
-  views = await mgr.view_subtree_roots()
+  views = await mgr.listing.view_subtree_roots()
   server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
   server.app.dependency_overrides[get_session_manager] = lambda: mgr
+  server.app.dependency_overrides[get_session_listing] = lambda: mgr.listing
   server.app.dependency_overrides[get_session_store] = lambda: mgr.store
   workspace = TestClient(server.app).get("/api/sessions/").json()
   print(json.dumps({{"thread": thread.id, "views": views, "workspace_ids": [row["id"] for row in workspace]}}))

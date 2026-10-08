@@ -174,7 +174,7 @@ async def test_disabled_task_and_task_without_prior_cron_session_are_bound_too(t
     node = await tree.load_meta(body["session_id"])
     assert node is not None and node.profile == "manager" and node.name == name
   # Neither task had a cron session; none was created.
-  assert not await session_mgr.list_sessions(scheduled=True)
+  assert not await session_mgr.listing.list_sessions(scheduled=True)
 
 
 @pytest.mark.asyncio
@@ -418,7 +418,7 @@ async def test_cron_editor_backend_change_switches_bound_node_in_place(
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 200
-  sessions = await session_mgr.list_sessions()
+  sessions = await session_mgr.listing.list_sessions()
   assert len(sessions) == 1 and sessions[0].id == node_id  # no session was created
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == "codex-o3"
@@ -463,7 +463,7 @@ async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -
 
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == "codex-o3"
-  sessions = await session_mgr.list_sessions()
+  sessions = await session_mgr.listing.list_sessions()
   assert [s.id for s in sessions] == [node_id]  # switched in place, no new session
 
 

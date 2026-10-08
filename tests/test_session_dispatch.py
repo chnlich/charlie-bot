@@ -668,12 +668,12 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
 
   await tree.update_slot_fields(
       s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=LastRunStatus.SKIPPED)
-  listing = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  listing = await session_mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [s.id, x.id]
   assert next(r for r in listing if r.id == s.id).last_run_status == LastRunStatus.SKIPPED
 
   # The user messages the older node; the fired node keeps its place.
   messaged_at = (base - timedelta(minutes=30)).isoformat()
   await admit(tree, x.id, "my turn", timestamp=messaged_at)
-  listing = await session_mgr.list_sessions(status=SessionStatus.ACTIVE)
+  listing = await session_mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [x.id, s.id]

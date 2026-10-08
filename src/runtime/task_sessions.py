@@ -386,7 +386,7 @@ class TaskTreeManager:
     # lets the sidebar's active list drop a delivered worker — and, with it,
     # every descendant of an archived ancestor — while its Archived list shows
     # them, with no status write.
-    session_mgr.archive_overlay = self.derived_archived_ids
+    session_mgr.listing.archive_overlay = self.derived_archived_ids
     # The sidebar's probe derives a task-tree node's activity through this
     # hook — the tree's own derivation, never a second copy of the rules.
     session_mgr.sidebar.task_tree_activity = self.activity_pair_of

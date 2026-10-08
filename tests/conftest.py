@@ -257,7 +257,12 @@ from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
 from src.runtime import streaming  # noqa: E402
 from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
-from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_sidebar  # noqa: E402
+from src.runtime.api.deps import (  # noqa: E402
+    get_config_on_loop,
+    get_session_events,
+    get_session_listing,
+    get_session_sidebar,
+)
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
@@ -265,6 +270,7 @@ from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
 from src.runtime.session_events import SessionEvents  # noqa: E402
+from src.runtime.session_listing import SessionListing  # noqa: E402
 from src.runtime.session_sidebar import SessionSidebar  # noqa: E402
 from src.runtime.session_store import SessionStore  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
@@ -966,9 +972,10 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 
 def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events and sidebar blocks, all built on *cfg*."""
+  """A SessionManager over its own store, events, sidebar and listing blocks, all built on *cfg*."""
   store = SessionStore(cfg)
-  return SessionManager(cfg, store, SessionEvents(cfg, store), SessionSidebar(cfg, store))
+  sidebar = SessionSidebar(cfg, store)
+  return SessionManager(cfg, store, SessionEvents(cfg, store), sidebar, SessionListing(cfg, store, sidebar))
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -986,12 +993,13 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   leaves sessions.session_manager() free to build a second SessionManager over the
   same home, whose private chat-event cache never sees the tree's rounds.
   """
-  from src.runtime import session_events, session_sidebar, session_store, sessions, task_execution
+  from src.runtime import session_events, session_listing, session_sidebar, session_store, sessions, task_execution
   monkeypatch.setattr(task_execution, "_task_manager", tree)
   monkeypatch.setattr(sessions, "_session_manager", session_mgr)
   monkeypatch.setattr(session_store, "_store", session_mgr.store)
   monkeypatch.setattr(session_events, "_events", session_mgr.events)
   monkeypatch.setattr(session_sidebar, "_sidebar", session_mgr.sidebar)
+  monkeypatch.setattr(session_listing, "_listing", session_mgr.listing)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1168,6 +1176,7 @@ def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
   app.dependency_overrides[get_session_store] = lambda: session_mgr.store
   app.dependency_overrides[get_session_events] = lambda: session_mgr.events
   app.dependency_overrides[get_session_sidebar] = lambda: session_mgr.sidebar
+  app.dependency_overrides[get_session_listing] = lambda: session_mgr.listing
 
 
 def make_router_client(

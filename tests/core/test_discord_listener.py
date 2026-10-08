@@ -340,7 +340,7 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: 
     await _drain(tasks)
 
   assert first == second == third
-  sessions = await session_mgr.list_sessions()
+  sessions = await session_mgr.listing.list_sessions()
   assert len(sessions) == 1
   meta = await session_mgr.store.get_session(first)
   assert meta is not None and meta.status == SessionStatus.ACTIVE
@@ -367,7 +367,7 @@ async def test_disallowed_user_and_bot_author_create_nothing(tmp_path: Path) -> 
 
   assert disallowed is None and bot is None
   assert not client.calls
-  assert await session_mgr.list_sessions() == []
+  assert await session_mgr.listing.list_sessions() == []
 
 
 @pytest.mark.asyncio
@@ -392,7 +392,7 @@ async def test_allowed_dm_mention_gets_the_notice_only(tmp_path: Path) -> None:
   assert sid is None
   assert client.posts == [{"channel_id": _DM_CHANNEL, "content": _DM_NOTICE}]
   assert not [name for name, _ in client.calls if name == "add_reaction"]
-  assert await session_mgr.list_sessions() == []
+  assert await session_mgr.listing.list_sessions() == []
 
 
 # ---------------------------------------------------------------------------

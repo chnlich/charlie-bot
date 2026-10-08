@@ -337,7 +337,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
     # BEFORE any door that can start a competing process: a new chat input, a
-    # cron fire, or a recovered trigger must not launch while a recorded live
+    # scheduled fire, or a recovered trigger must not launch while a recorded live
     # run is still unattached, a pending batch unclaimed, or a sequence
     # boundary unreconciled. The scan is bounded to this configured instance's
     # own sessions directory and its owned records. The legacy (v1) scan stays

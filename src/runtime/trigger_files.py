@@ -1,6 +1,6 @@
 """The trigger file walk: the stat listing of one session's trigger files.
 
-The trigger manager (``src/runtime/triggers.py``) and the sidebar probe (``src/runtime/sessions.py``)
+The trigger manager (``src/runtime/triggers.py``) and the sidebar probe (``src/runtime/session_sidebar.py``)
 read the same files, so both import the one walk from here.
 """
 

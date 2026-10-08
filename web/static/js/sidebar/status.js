@@ -11,7 +11,7 @@ const STATUS_QUERY_MAX_BYTES = 8192;
 
 // Status of every rendered sidebar row, keyed by session id. The status
 // poll skips archived rows through it: their server probe is the constant-False
-// shortcut (src/runtime/sessions.py populate_sidebar_state), so per-cycle request
+// shortcut (src/runtime/session_sidebar.py populate_sidebar_state), so per-cycle request
 // volume tracks the active rows on screen, not the archived list length.
 const renderedSessionStatuses = {};
 

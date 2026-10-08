@@ -1,4 +1,4 @@
-"""Wiring registry: packages register their routers, CLI commands, background services and file views.
+"""Wiring registry: packages register their routers, CLI commands, background services, file views and startup checks.
 
 Each registration holds module path strings. The server and the CLI import a registered
 module when they use it, so this module imports nothing heavy and a CLI command loads
@@ -8,6 +8,11 @@ only its own module.
 from __future__ import annotations
 
 import importlib
+from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+  from src.infra.config import CharlieBotConfig
 
 PHASES = ("early", "ready")
 
@@ -16,6 +21,7 @@ _ROUTERS: list[tuple[str, str, tuple[str, ...], str]] = []
 _COMMANDS: dict[str, str] = {}
 _SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
 _FILE_VIEWS: list[tuple[str, str]] = []  # (module, attr)
+_STARTUP_CHECKS: list[tuple[str, str]] = []  # (module, attr)
 
 
 class ServiceContext:
@@ -70,6 +76,17 @@ def register_file_view(module: str, *, attr: str) -> None:
   _FILE_VIEWS.append((module, attr))
 
 
+def register_startup_check(module: str, *, attr: str) -> None:
+  """The server calls getattr(import_module(module), attr)(cfg) once at start, before it serves.
+
+  cfg is the CharlieBotConfig. The function raises ValueError to stop the start. Checks run
+  in registration order. A second registration of one (module, attr) raises ValueError.
+  """
+  if (module, attr) in _STARTUP_CHECKS:
+    raise ValueError(f"startup check {module}:{attr} is already registered")
+  _STARTUP_CHECKS.append((module, attr))
+
+
 def routers() -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
   """(module, prefix, tags, attr) in registration order."""
   return tuple(_ROUTERS)
@@ -109,3 +126,8 @@ def service_stops() -> list[tuple[str, object]]:
 def file_views() -> list[object]:
   """The registered view coroutine functions, imported, in registration order."""
   return [getattr(importlib.import_module(module), attr) for module, attr in _FILE_VIEWS]
+
+
+def startup_checks() -> list[Callable[[CharlieBotConfig], None]]:
+  """The registered startup check functions, imported, in registration order."""
+  return [getattr(importlib.import_module(module), attr) for module, attr in _STARTUP_CHECKS]

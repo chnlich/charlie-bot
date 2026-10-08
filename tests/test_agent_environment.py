@@ -147,8 +147,8 @@ def test_server_main_applies_the_environment_before_config_and_uvicorn(
     seen["uvicorn.run"] = environment_state()
 
   monkeypatch.setattr(server, "get_config", fake_get_config)
-  monkeypatch.setattr(server, "get_scheduled_tasks", list)
-  monkeypatch.setattr(server, "require_backends", lambda _cfg, _tasks: None)
+  monkeypatch.setattr(server, "require_backends", lambda _cfg: None)
+  monkeypatch.setattr(server.wiring, "startup_checks", list)
   monkeypatch.setattr(uvicorn, "run", fake_run)
 
   server.main()

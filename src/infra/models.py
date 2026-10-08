@@ -638,12 +638,6 @@ class EloneSessionRequest(BaseModel):
   backend: str | None = None
 
 
-class ExplainRequest(BaseModel):
-  """One explain (btw-style) request for a divider: the chosen backend is required."""
-  event_index: int
-  backend: str
-
-
 class UploadedFileRef(BaseModel):
   filename: str
   path: str
@@ -711,28 +705,6 @@ class DelegateRequest(BaseModel):
   request_id: str | None = None
 
 
-class ImproveRequest(BaseModel):
-  """Request body for the internal improve endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  repo_path: str
-  base_branch: str
-  backend: str | None = None
-  iterations: int = 3
-  goal: str
-  plan: str | None = None
-  work_branch: str | None = None
-  merge_back: bool = False
-
-
-class ImproveStopRequest(BaseModel):
-  """Request body for the internal improve-stop endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-
-
 class ScheduleTriggerRequest(BaseModel):
   """Request body for the internal schedule-trigger endpoint."""
   model_config = ConfigDict(extra="forbid")
@@ -750,98 +722,6 @@ class SessionMessageRequest(BaseModel):
   session_id: str  # caller session (provenance)
   target_session_id: str
   content: str
-
-
-class SlackReplyRequest(BaseModel):
-  """Request body for the internal slack/reply endpoint: the calling session posts *text* to its own thread."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  text: str
-
-
-class SlackAckRequest(BaseModel):
-  """Request body for the internal slack/ack endpoint: the calling session marks *message_ids* (Slack ts) as read."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  message_ids: list[str]
-
-
-class DiscordReplyRequest(BaseModel):
-  """Request body for the internal discord/reply endpoint: the calling session posts *text* to its own thread."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  text: str
-
-
-class DiscordReadRequest(BaseModel):
-  """Request body for the internal discord/read endpoint: the session reads its own thread, or the channel *url* names."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  url: str | None = None
-  limit: int = Field(50, ge=1, le=100)
-
-
-class DiscordCheckRequest(BaseModel):
-  """Request body for the internal discord/check endpoint: reports the bot token's setup, carrying no fields."""
-  model_config = ConfigDict(extra="forbid")
-
-
-# ---------------------------------------------------------------------------
-# Plan Registry Request Models
-# ---------------------------------------------------------------------------
-
-
-class PlanPresentRequest(BaseModel):
-  """Request body for the internal plan/present endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  file: str
-  title: str
-  base_repo: str | None = None
-  base_branch: str | None = None
-  base_sha: str | None = None
-
-
-PlanAmendTrigger = Literal["auto_amend", "feedback"]
-PlanCloseMode = Literal["superseded", "abandoned", "completed"]
-
-
-class PlanAmendRequest(BaseModel):
-  """Request body for the internal plan/amend endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  file: str
-  plan_id: int | None = None
-  trigger: PlanAmendTrigger = "feedback"
-  # Why this version differs from its predecessor; rides on the version record,
-  # never in the page body. Required: the author is an agent absent at read time.
-  note: str
-  base_repo: str | None = None
-  base_branch: str | None = None
-  base_sha: str | None = None
-
-
-class PlanApproveRequest(BaseModel):
-  """Request body for the internal plan/approve endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  plan_id: int | None = None
-
-
-class PlanCloseRequest(BaseModel):
-  """Request body for the internal plan/close endpoint."""
-  model_config = ConfigDict(extra="forbid")
-
-  session_id: str
-  plan_id: int
-  close_as: PlanCloseMode
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,35 @@
 """Internal API endpoints behind ``charliebot discord reply``, ``read`` and ``check``."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
 
 from src.infra.config import CharlieBotConfig
-from src.infra.models import DiscordCheckRequest, DiscordReadRequest, DiscordReplyRequest
 from src.runtime.api.deps import get_config_on_loop, get_session_manager
 from src.runtime.sessions import SessionManager
 
 router = APIRouter()
+
+
+class DiscordReplyRequest(BaseModel):
+  """Request body for the internal discord/reply endpoint: the calling session posts *text* to its own thread."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  text: str
+
+
+class DiscordReadRequest(BaseModel):
+  """Request body for the internal discord/read endpoint: the session reads its own thread, or the channel *url* names."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  url: str | None = None
+  limit: int = Field(50, ge=1, le=100)
+
+
+class DiscordCheckRequest(BaseModel):
+  """Request body for the internal discord/check endpoint: reports the bot token's setup, carrying no fields."""
+  model_config = ConfigDict(extra="forbid")
 
 
 @router.post("/discord/reply")

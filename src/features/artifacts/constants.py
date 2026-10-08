@@ -7,7 +7,7 @@ or the assertion machinery to do so.
 # Plan-registry verb vocabularies: the CLI's argparse choices (plan_cli) and the
 # registry verbs' validation (plans) share one tuple per vocabulary, so the
 # plan chain imports no pydantic to parse args. The request models' Literal types
-# (src.infra.models PlanAmendTrigger / PlanCloseMode) are the type home; a tuple
+# (src.features.artifacts.api PlanAmendTrigger / PlanCloseMode) are the type home; a tuple
 # here and its Literal there list the same values. The named close-mode spellings are the
 # home for the values plans derives and compares against (plans _derive_state,
 # _DERIVED_STATE_STR): a closed plan's derived state IS its close mode's spelling.

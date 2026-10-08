@@ -1,13 +1,29 @@
 """Internal API endpoints behind ``charliebot slack reply`` and ``charliebot slack ack``."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 from src.infra.config import CharlieBotConfig
-from src.infra.models import SlackAckRequest, SlackReplyRequest
 from src.runtime.api.deps import get_config_on_loop, get_session_manager
 from src.runtime.sessions import SessionManager
 
 router = APIRouter()
+
+
+class SlackReplyRequest(BaseModel):
+  """Request body for the internal slack/reply endpoint: the calling session posts *text* to its own thread."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  text: str
+
+
+class SlackAckRequest(BaseModel):
+  """Request body for the internal slack/ack endpoint: the calling session marks *message_ids* (Slack ts) as read."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  message_ids: list[str]
 
 
 @router.post("/slack/reply")

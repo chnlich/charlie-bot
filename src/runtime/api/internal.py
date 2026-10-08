@@ -1,6 +1,7 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
 import asyncio
+from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -10,7 +11,6 @@ from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     DelegateInvocationMetadata,
     DelegateRequest,
-    ImproveRequest,
     ScheduleTriggerRequest,
     SessionMessageRequest,
     TaskType,
@@ -66,8 +66,14 @@ def _delegate_invocation_event_payload(req: DelegateRequest) -> dict:
   return invocation.model_dump(mode="json")
 
 
+class _SpawnRequest(Protocol):
+  """The fields every spawn-style request body carries for ``_authorize_spawn_request``."""
+  session_id: str
+  backend: str | None
+
+
 async def _authorize_spawn_request(
-    req: DelegateRequest | ImproveRequest,
+    req: _SpawnRequest,
     session_mgr: SessionManager,
     task_mgr: TaskTreeManager,
 ) -> tuple[str | None, str | None]:

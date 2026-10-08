@@ -5,23 +5,70 @@ The one PlanRegistryManager of the process lives here, behind ``plan_manager`` (
 and ``get_plan_manager`` (the Depends form).
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, ConfigDict
 
 from src.features.artifacts.plans import PlanRegistryManager
 from src.infra import config
-from src.infra.models import (
-    PlanAmendRequest,
-    PlanApproveRequest,
-    PlanCloseRequest,
-    PlanPresentRequest,
-    SessionMetadata,
-)
+from src.infra.models import SessionMetadata
 from src.infra.responses import FastJsonResponse
 from src.runtime.api.deps import bad_request, get_session_manager, require_found, require_session, session_manager
 from src.runtime.sessions import SessionManager
 
 internal_router = APIRouter()
 sessions_router = APIRouter()
+
+
+class PlanPresentRequest(BaseModel):
+  """Request body for the internal plan/present endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  file: str
+  title: str
+  base_repo: str | None = None
+  base_branch: str | None = None
+  base_sha: str | None = None
+
+
+PlanAmendTrigger = Literal["auto_amend", "feedback"]
+PlanCloseMode = Literal["superseded", "abandoned", "completed"]
+
+
+class PlanAmendRequest(BaseModel):
+  """Request body for the internal plan/amend endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  file: str
+  plan_id: int | None = None
+  trigger: PlanAmendTrigger = "feedback"
+  # Why this version differs from its predecessor; rides on the version record,
+  # never in the page body. Required: the author is an agent absent at read time.
+  note: str
+  base_repo: str | None = None
+  base_branch: str | None = None
+  base_sha: str | None = None
+
+
+class PlanApproveRequest(BaseModel):
+  """Request body for the internal plan/approve endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  plan_id: int | None = None
+
+
+class PlanCloseRequest(BaseModel):
+  """Request body for the internal plan/close endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  plan_id: int
+  close_as: PlanCloseMode
+
 
 _plan_manager: PlanRegistryManager | None = None
 

@@ -94,8 +94,8 @@ def _build_request(
   )
 
 
-def _improve_request() -> internal.ImproveRequest:
-  return internal.ImproveRequest(
+def _improve_request() -> improve_api.ImproveRequest:
+  return improve_api.ImproveRequest(
       session_id="session-id",
       repo_path="/tmp/repo",
       base_branch="main",

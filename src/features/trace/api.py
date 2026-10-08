@@ -194,8 +194,8 @@ def _merge_executor() -> concurrent.futures.ProcessPoolExecutor | None:
     # One build per worker: a build's freed arenas stay mapped in the worker's
     # address space, and the next build's allocations only sometimes reuse them —
     # back-to-back builds in one worker measured 5.1 GB retained + 6.5 GB fresh
-    # against this host's 12 GiB session cgroup, an OOM kill the wave bound alone
-    # cannot prevent. A fresh worker starts every build at zero.
+    # against this host's 12 GiB session cgroup, an OOM kill. A fresh worker starts
+    # every build at zero.
     _merge_executor_instance = concurrent.futures.ProcessPoolExecutor(
         max_workers=_MERGE_POOL_WORKERS, mp_context=multiprocessing.get_context("spawn"), max_tasks_per_child=1)
   return _merge_executor_instance

@@ -15,7 +15,7 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.features.cron.scheduler import TASK_HANDLERS, Scheduler
+from src.features.cron.scheduler import Scheduler
 from src.infra import config
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
@@ -59,7 +59,7 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
   meta = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   task_cfg = config.ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe", session_id=meta.id)
 
-  with mock.patch.dict(TASK_HANDLERS, {"probe": mock.AsyncMock(return_value="done")}):
+  with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
 
   fresh = await session_mgr.get_session(meta.id)
@@ -79,7 +79,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> 
   meta = await conftest.create_scheduled_node(tree, name="probe", backend=conftest.OPUS_BACKEND_ID)
 
   task_cfg = config.ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe", session_id=meta.id)
-  with mock.patch.dict(TASK_HANDLERS, {"probe": mock.AsyncMock(return_value="done")}):
+  with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
 
   disk_lines = _count_event_lines(session_mgr.get_chat_events_path(meta.id))

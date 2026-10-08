@@ -9,10 +9,8 @@ auto-bind archives at migration.
 """
 
 import asyncio
-import functools
 import traceback
 from datetime import datetime, timedelta
-from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -27,6 +25,7 @@ from src.infra.config import (
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
+from src.runtime.hooks import scheduled_handlers
 from src.runtime.scheduled_sessions import write_cron_key
 from src.runtime.sessions import SessionManager
 
@@ -53,60 +52,6 @@ def load_croniter(namespace: dict[str, Any]) -> Any:
 
   namespace["croniter"] = croniter
   return croniter
-
-
-async def _backup_handler() -> str:
-  """Built-in handler: create a backup and apply retention policy."""
-  # backup (tarfile) rides the handler like croniter: the M99 server import
-  # floor carries no tar archive stack for a handler that may never fire.
-  from src.features.backup.backup import apply_retention, create_backup
-
-  loop = asyncio.get_running_loop()
-  archive = await loop.run_in_executor(None, create_backup)
-  await loop.run_in_executor(None, apply_retention)
-  log.info('backup_handler_done', archive=str(archive))
-  return str(archive)
-
-
-async def _cool_storage_handler() -> str:
-  """Built-in handler: reclaim cold sessions' readerless bytes (real run, no dry run)."""
-  # storage_cool (sqlite3, token_tally) rides the handler like croniter: the
-  # M99 server import floor carries no cold-sweep stack for a handler that may
-  # never fire.
-  from src.features.storage.storage_cool import format_sweep_line, run_cool_sweep
-
-  loop = asyncio.get_running_loop()
-  result = await loop.run_in_executor(None, functools.partial(run_cool_sweep, cfg=get_config()))
-  summary = format_sweep_line(result)
-  log.info('cool_storage_handler_done', total_bytes=result.total_bytes)
-  return summary
-
-
-async def _usage_ledger_handler() -> str:
-  """Built-in handler: capture this host's token usage into the usage ledger."""
-  # usage_ledger (sqlite3, token_tally) rides the handler like croniter: the
-  # M99 server import floor carries no ledger stack for a handler that may
-  # never fire.
-  from src.features.usage.token_tally import capture_local
-  from src.features.usage.usage_ledger import UsageLedger, default_ledger_path
-
-  loop = asyncio.get_running_loop()
-
-  def capture() -> dict[str, int]:
-    with UsageLedger(default_ledger_path()) as ledger:
-      return capture_local(ledger)
-
-  written = await loop.run_in_executor(None, capture)
-  summary = "; ".join(f"{source} {count}" for source, count in written.items())
-  log.info('usage_ledger_handler_done', sources=written)
-  return summary
-
-
-TASK_HANDLERS: dict[str, callable] = {
-    'backup': _backup_handler,
-    'cool_storage': _cool_storage_handler,
-    'usage_ledger': _usage_ledger_handler,
-}
 
 
 def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: CharlieBotConfig) -> str:
@@ -546,16 +491,12 @@ class Scheduler:
   ) -> tuple[str | None, str | None]:
     """The fire's prompt: the loop action's decision, or the task prompt verbatim.
 
-    Returns (prompt, action); prompt None means the loop decided nothing to do
-    (noop/stale_reset) and the fire is recorded as such.
+    Returns (prompt, action); prompt None means the registered loop action decided
+    nothing to do (noop/stale_reset) and the fire is recorded as such.
     """
     if task_cfg.loop:
-      from src.features.backlog.backlog_loop import determine_action
-      repo_path = Path(task_cfg.repo) if task_cfg.repo else None
-      if repo_path is None:
-        raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
-      action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
-      if action_type in ('noop', 'stale_reset'):
+      action_type, prompt = await scheduled_handlers.loop_action()(task_cfg)
+      if prompt is None:
         from src.runtime.api.deps import task_manager
         await task_manager().record_scheduled_fire(meta.id, last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
@@ -619,7 +560,7 @@ class Scheduler:
       meta: SessionMetadata,
   ) -> dict:
     """The built-in handler modes on a bound node: inline execution, bound bookkeeping."""
-    handler = TASK_HANDLERS.get(task_cfg.handler)
+    handler = scheduled_handlers.handler(task_cfg.handler)
     if handler is None:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
     session = meta

@@ -2,11 +2,6 @@
 # Rows only leave this table.
 #
 # One row per pair: importer file -> imported file. Paths are repo-relative and the rows are sorted.
-src/features/cron/scheduler.py -> src/features/backlog/backlog_loop.py
-src/features/cron/scheduler.py -> src/features/backup/backup.py
-src/features/cron/scheduler.py -> src/features/storage/storage_cool.py
-src/features/cron/scheduler.py -> src/features/usage/token_tally.py
-src/features/cron/scheduler.py -> src/features/usage/usage_ledger.py
 src/features/files/api.py -> src/app/pages.py
 src/features/files/api.py -> src/features/artifacts/plan_diff.py
 src/features/host_auth/api.py -> src/app/pages.py

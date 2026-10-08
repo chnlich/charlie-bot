@@ -229,3 +229,18 @@ async def determine_action(backlog_path: pathlib.Path, loop_cfg: config.Improvem
 
   # Nothing applies
   return ('noop', None)
+
+
+async def scheduled_loop_action(task_cfg: config.ScheduledTaskConfig) -> tuple[str, str | None]:
+  """Cron loop action: the next improvement-loop action for a loop task's backlog.
+
+  Returns (action_type, prompt_text). prompt_text is None for noop and stale_reset: the fire has
+  no worker to run.
+  """
+  if not task_cfg.repo:
+    raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
+  repo_path = pathlib.Path(task_cfg.repo)
+  action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
+  if action_type in ('noop', 'stale_reset'):
+    return action_type, None
+  return action_type, prompt

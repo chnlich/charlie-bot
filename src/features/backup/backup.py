@@ -1,5 +1,6 @@
 """Core backup logic for a CharlieBot profile's state directory."""
 
+import asyncio
 import datetime
 import pathlib
 import tarfile
@@ -148,3 +149,15 @@ def apply_retention() -> None:
         log.info('backup_deleted', name=backup_file.name, age_days=age)
       except Exception as e:
         log.warning('backup_delete_failed', name=backup_file.name, error=str(e))
+
+
+async def run_scheduled_backup() -> str:
+  """Built-in cron handler: create a backup and apply retention policy."""
+  # backup (tarfile) rides the handler like croniter: the registration holds this
+  # module's path and the scheduler imports it when the handler fires, so the M99
+  # server import floor carries no tar archive stack for a handler that may never fire.
+  loop = asyncio.get_running_loop()
+  archive = await loop.run_in_executor(None, create_backup)
+  await loop.run_in_executor(None, apply_retention)
+  log.info('backup_handler_done', archive=str(archive))
+  return str(archive)

@@ -253,6 +253,7 @@ from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from src.infra.home import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
+from src.runtime.hooks import scheduled_handlers  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
@@ -1476,6 +1477,20 @@ DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listene
 # _maybe_run/_reload_config resolve it at call time.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
+
+
+@contextlib.contextmanager
+def registered_cron_handler(name: str, handler: Callable[[], Awaitable[str]]) -> Iterator[None]:
+  """Register ``handler`` as cron handler ``name`` through the scheduled-handler hook for the body.
+
+  The hook resolves a module path and an attribute name, so the handler rides an attribute of this
+  module. The registry and the attribute return to their prior state on exit.
+  """
+  attr = f"_cron_handler_{name}"
+  with patch.dict(scheduled_handlers._HANDLERS), patch.object(sys.modules[__name__], attr, handler, create=True):
+    scheduled_handlers.register_handler(name, __name__, attr=attr)
+    yield
+
 
 # Import-path patch targets for the chat API's message bootstrap and cancel route.
 # src/runtime/api/chat.py defines run_and_finalize itself and binds create_logged_task

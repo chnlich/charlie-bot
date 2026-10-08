@@ -11,6 +11,7 @@ import importlib
 PACKAGES = (
     "src.features.artifacts",
     "src.features.backlog",
+    "src.features.backup",
     "src.features.code_server",
     "src.features.cron",
     "src.features.diag",

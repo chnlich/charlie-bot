@@ -39,8 +39,9 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING
 
-from src.infra import config, log_once, models
+from src.features.cron import config, loader
 from src.infra import event_types as ET
+from src.infra import log_once, models
 from src.runtime import control_events, review, runs, task_completion
 
 if TYPE_CHECKING:
@@ -81,7 +82,7 @@ def load_bound_task(task_name: str, cfg: object) -> config.ScheduledTaskConfig |
   if not path.is_file():
     return None
   try:
-    task, _mtimes = config._load_cron_file(path, cfg.charlie_bot_repo, task_name)
+    task, _mtimes = loader._load_cron_file(path, cfg.charlie_bot_repo, task_name)
   except Exception as exc:
     logging.getLogger(__name__).warning(
         "cron_sequence_task_config_unreadable", task=task_name, path=str(path), error=str(exc))
@@ -99,7 +100,7 @@ def bound_task_name(session_id: str, tasks: list[config.ScheduledTaskConfig] | N
   that already holds one (the sidebar lists' schedule join) reads a single
   generation; the default loads the current one.
   """
-  for task_cfg in (tasks if tasks is not None else config.get_scheduled_tasks()):
+  for task_cfg in (tasks if tasks is not None else loader.get_scheduled_tasks()):
     if task_cfg.session_id == session_id:
       return task_cfg.name
   return None

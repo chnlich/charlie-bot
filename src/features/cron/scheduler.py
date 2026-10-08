@@ -14,15 +14,11 @@ from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.cron_files import write_cron_key
+from src.features.cron.loader import get_scheduled_tasks
 from src.infra import event_types as ET
-from src.infra.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    get_config,
-    get_scheduled_tasks,
-    require_backend_option,
-)
+from src.infra.config import CharlieBotConfig, get_config, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
@@ -498,7 +494,8 @@ class Scheduler:
     nothing to do (noop/stale_reset) and the fire is recorded as such.
     """
     if task_cfg.loop:
-      action_type, prompt = await scheduled_handlers.loop_action()(task_cfg)
+      action_type, prompt = await scheduled_handlers.loop_action()(
+          name=task_cfg.name, repo=task_cfg.repo, loop=task_cfg.loop)
       if prompt is None:
         from src.runtime.api.deps import task_manager
         await task_manager().update_slot_fields(meta.id, "cron", last_run_status=LastRunStatus.SUCCESS)

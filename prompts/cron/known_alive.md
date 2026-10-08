@@ -83,10 +83,15 @@ Known-alive symbols:
   attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
   unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
-  in `src/infra/config.py`, registered with pydantic at class-definition time and invoked during
+  in `src/features/cron/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
+- `validate_loop_section` — pydantic `@field_validator('loop')` method on `ScheduledTaskConfig`
+  in `src/features/cron/config.py`, invoked during model validation: it builds the `loop:` mapping into the
+  model that the loop action registered. The method name has exactly zero whole-repo matches outside its
+  definition, so vulture flags it as an unused method. Same framework-registered class as the
+  `check_sources_and_mode` entry above.
 - `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
   flags it as an unused function. The only production caller is the Python heredoc in
   `scripts/setup.sh`, which runs `seed.seed_default_cron_tasks`. Python dead-code tools do not read
@@ -132,7 +137,7 @@ Known-alive symbols:
   `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
   `src/features/backlog/config.py`, `src/features/code_server/config.py`,
   `src/features/diag/api.py`, `src/features/discord/config.py`, `src/features/slack/config.py`,
-  `src/features/voice/config.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
+  `src/features/voice/config.py`, `src/features/cron/config.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
   consumes it by attribute name at class-definition time. Every assignment pins
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
   `TaskCreate` in `src/features/cron/api.py`, which pins
@@ -356,8 +361,8 @@ Known-alive symbols:
   memory-cap attribution off whatever backend the test installed. Both doubles return `None`
   (doubles never run inside a cgroup). Vulture flags the methods as unused.
 - `_cron_snapshot` — a production module-global cache reset through a bare module-attribute
-  write inside test setup (`core_config._cron_snapshot = core_config._CronSnapshot()` in
-  `tests/conftest.py`). The read lives in `src/infra/config.py`, so vulture flags the write as an
+  write inside test setup (`cron_loader._cron_snapshot = cron_loader._CronSnapshot()` in
+  `tests/conftest.py`). The read lives in `src/features/cron/loader.py`, so vulture flags the write as an
   unused attribute. Same class as the registry-reset fixtures above, minus the named-fixture wrapper.
 - `_reset_api_round_state` (`tests/test_host_auth.py`) — `@pytest.fixture(autouse=True)`
   fixture; pytest invokes it around every test in its module with no in-file reference,

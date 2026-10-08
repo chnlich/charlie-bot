@@ -51,9 +51,10 @@ import asyncio
 import os
 
 from src.app import registrations
-from src.infra.config import get_config, get_scheduled_tasks
+from src.infra.config import get_config
 from src.runtime import init_seed
 from src.features.cron import seed
+from src.features.cron.loader import get_scheduled_tasks
 from src.features.cron.scheduler import effective_scheduled_task_backend
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"

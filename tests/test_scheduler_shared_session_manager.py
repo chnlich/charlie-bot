@@ -15,6 +15,7 @@ from unittest import mock
 import conftest
 import pytest
 
+from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra import config
 from src.infra import event_types as ET
@@ -57,7 +58,7 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
   the injected instance, so the read paths' cache sees them."""
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
   meta = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
-  task_cfg = config.ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe", session_id=meta.id)
+  task_cfg = ScheduledTaskConfig(name="nightly", cron="* * * * *", handler="probe", session_id=meta.id)
 
   with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
@@ -78,7 +79,7 @@ async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> 
   _cfg, session_mgr, tree, scheduler, _monkeypatch = scheduler_env
   meta = await conftest.create_scheduled_node(tree, name="probe", backend=conftest.OPUS_BACKEND_ID)
 
-  task_cfg = config.ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe", session_id=meta.id)
+  task_cfg = ScheduledTaskConfig(name="probe", cron="* * * * *", handler="probe", session_id=meta.id)
   with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 import yaml
@@ -34,9 +35,10 @@ from conftest import (
 )
 
 from src.backends.claude_code import claude_accounts
+from src.features.cron.config import ScheduledTaskConfig, StepConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, ScheduledTaskConfig, StepConfig
+from src.infra.config import CharlieBotConfig
 from src.infra.models import RunRecord, TaskSpec
 from src.runtime.control_events import stable_run_id
 from src.runtime.task_sessions import TaskTreeManager
@@ -703,6 +705,30 @@ async def test_noop_loop_consumes_the_occurrence_and_advances_the_checkpoint(
   assert meta.last_scheduled_run is not None
   assert meta.last_scheduled_cron == task_cfg.cron
   assert str(meta.last_run_status) == "success"
+
+
+@pytest.mark.asyncio
+async def test_the_scheduler_calls_the_loop_action_with_the_task_name_repo_and_loop_section(
+    bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, tree = bound_env
+  manager = await make_manager(tree)
+  install_backends(monkeypatch, [], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  task_cfg = _bound_task(
+      "loop-args",
+      manager.id,
+      repo=str(cfg.charliebot_home),
+      loop={
+          "backlog": "backlog.yaml",
+          "role": "tester",
+          "scope_files": ["x"]
+      })
+  from src.features.backlog import backlog_loop
+
+  action = AsyncMock(return_value=("noop", None))
+  monkeypatch.setattr(backlog_loop, "scheduled_loop_action", action)
+  await Scheduler(cfg, session_mgr)._execute_task(task_cfg, record_handle=True, firing=FIRING)
+
+  action.assert_awaited_once_with(name="loop-args", repo=str(cfg.charliebot_home), loop=task_cfg.loop)
 
 
 # ---------------------------------------------------------------------------

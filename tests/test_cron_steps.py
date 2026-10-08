@@ -1,4 +1,4 @@
-"""Tests for the ``steps`` cron prompt source (src/infra/config.py).
+"""Tests for the ``steps`` cron prompt source (src/features/cron/loader.py).
 
 A ``steps`` cron file loads with each step's resolved body and preserved
 pointer, colliding prompt sources are load errors naming the key, and duplicate
@@ -12,7 +12,7 @@ import conftest
 import pytest
 import yaml
 
-from src.infra import config
+from src.features.cron import loader
 
 # --- (a) loader --------------------------------------------------------------
 
@@ -41,7 +41,7 @@ def test_load_cron_file_rejects_duplicate_step_names(tmp_path: pathlib.Path) -> 
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
   with pytest.raises(ValueError) as exc_info:
-    config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+    loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   assert "duplicate step name 'selector'" in str(exc_info.value)
 
 
@@ -54,7 +54,7 @@ def test_load_cron_file_rejects_empty_steps(tmp_path: pathlib.Path) -> None:
   # bool([]) is False, so an empty steps list fails the exactly-one-source check
   # before the non-empty check can name it.
   with pytest.raises(ValueError, match="task must have exactly one of"):
-    config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+    loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
 
 
 _STEP_PROMPT_SOURCE_CASES = [
@@ -79,7 +79,7 @@ def test_load_cron_file_rejects_step_prompt_source_violation(
   yaml_path = cron_dir / "chained.yaml"
   yaml_path.write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
   with pytest.raises(ValueError) as exc_info:
-    config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+    loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   error = str(exc_info.value)
   assert all(fragment in error for fragment in expected_fragments)
 
@@ -164,7 +164,7 @@ def test_load_cron_file_rejects_distinct_backend_violations(
   yaml_path = _write_chained(tmp_path, steps, task_backend)
   cfg = conftest.build_scheduler_cfg(tmp_path)
   with pytest.raises(ValueError) as exc_info:
-    config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+    loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   error = str(exc_info.value)
   assert all(fragment in error for fragment in expected_fragments)
 
@@ -183,7 +183,7 @@ def test_load_cron_file_accepts_distinct_written_backends(tmp_path: pathlib.Path
           }
       ])
   cfg = conftest.build_scheduler_cfg(tmp_path)
-  task, _mtimes = config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+  task, _mtimes = loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   assert task.steps[1].distinct_backend_from == "selector"
 
 
@@ -199,5 +199,5 @@ def test_load_cron_file_accepts_unset_backends_with_distinct_backend_from(tmp_pa
           "distinct_backend_from": "selector",
       }])
   cfg = conftest.build_scheduler_cfg(tmp_path)
-  task, _mtimes = config._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
+  task, _mtimes = loader._load_cron_file(yaml_path, cfg.charlie_bot_repo, "chained")
   assert task.steps[0].backend is None and task.steps[1].backend is None

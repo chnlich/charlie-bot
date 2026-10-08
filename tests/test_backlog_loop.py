@@ -8,8 +8,7 @@ import conftest
 import pytest
 import yaml
 
-from src.features.backlog import backlog_loop
-from src.infra import config
+from src.features.backlog import backlog_loop, config
 
 
 def _make_cfg(**overrides: object) -> config.ImprovementLoopConfig:

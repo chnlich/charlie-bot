@@ -2,6 +2,8 @@
 
 import copy
 
+from src.features.cron import loader
+from src.features.cron.config import ScheduledTaskConfig
 from src.infra import config, yaml_utils
 
 
@@ -24,7 +26,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   Creates ``config.d/cron.d/`` when absent. Writes through
   :func:`src.infra.yaml_utils.save_yaml` (the same writer ``src/features/cron/api.py``
   uses). Validates every default entry before writing: each must construct a
-  :class:`config.ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
+  :class:`ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
   entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
   task-level pointer) and every ``prompt_file`` must resolve to an existing
   file. Fails loudly without writing if validation fails, and fails loudly
@@ -50,12 +52,12 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
       raise ValueError(f"invalid default cron entry (not a mapping): {entry!r}")
     resolved = copy.deepcopy(entry)
     resolved.pop("name", None)
-    config._resolve_prompt_file(resolved, repo_root)  # raises ValueError
+    loader._resolve_prompt_file(resolved, repo_root)  # raises ValueError
     for step in resolved.get("steps") or []:
       if isinstance(step, dict):
-        config._resolve_prompt_file(step, repo_root)  # raises ValueError
-    config._resolve_local_timezone(resolved)
-    config.ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
+        loader._resolve_prompt_file(step, repo_root)  # raises ValueError
+    loader._resolve_local_timezone(resolved)
+    ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
 
   # A leftover legacy cron.yaml is a loud tripwire, never a silent fallback:
   # refuse to seed (and write nothing) until a human migrates and removes it.

@@ -4,7 +4,7 @@ Covers the seed mechanism in ``src/features/cron/seed.py::seed_default_cron_task
 seeded host file keeps the ``prompt_file`` pointer, never an inlined body), the
 loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 (and of a body with no prompt source at all), ``timezone: local`` resolution
-plus hot-reload in ``src/infra/config.py::get_scheduled_tasks`` /
+plus hot-reload in ``src/features/cron/loader.py::get_scheduled_tasks`` /
 ``get_scheduled_task_errors``, broken-entry ``path``/``enabled`` carrying, the
 per-file failure isolation of ``config.d/cron.d/<name>.yaml``, and the shipped
 ``configs/cron.default.yaml`` + ``prompts/cron/memory_curator/memory_selector.md`` /
@@ -18,7 +18,7 @@ import conftest
 import pytest
 import test_package_structure
 
-from src.features.cron import seed
+from src.features.cron import loader, seed
 from src.infra import config, yaml_utils
 from src.runtime import init
 
@@ -121,7 +121,7 @@ def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
 
 def test_loader_loads_prompt_file_pointer(temp_home: pathlib.Path) -> None:
   prompt_path = _write_healthy(temp_home, "t", "* * * * *", "body v1")
-  tasks = config.get_scheduled_tasks()
+  tasks = loader.get_scheduled_tasks()
   assert len(tasks) == 1
   assert tasks[0].name == "t"
   assert tasks[0].prompt == "body v1"
@@ -142,11 +142,31 @@ def test_loader_loads_prompt_file_pointer(temp_home: pathlib.Path) -> None:
 def test_loader_rejects_task_without_prompt_file(temp_home: pathlib.Path, task_yaml: dict) -> None:
   conftest.write_cron_task(temp_home, "t", conftest.dump_yaml(task_yaml))
 
-  assert not config.get_scheduled_tasks()
-  errors = config.get_scheduled_task_errors()
+  assert not loader.get_scheduled_tasks()
+  errors = loader.get_scheduled_task_errors()
   assert len(errors) == 1 and errors[0].name == "t"
   # the message the operator reads names prompt_file as the missing source
   assert "prompt_file" in errors[0].error
+
+
+def test_loader_fails_the_file_whose_loop_field_the_loop_model_rejects(temp_home: pathlib.Path) -> None:
+  _write_healthy(temp_home, "healthy", "* * * * *", "body")
+  conftest.write_cron_task(
+      temp_home, "looped",
+      conftest.dump_yaml(
+          {
+              "cron": "* * * * *",
+              "repo": str(temp_home),
+              "loop": {
+                  "backlog": "backlog/backlog.yaml",
+                  "role": "tester"
+              },
+          }))
+
+  assert [task.name for task in loader.get_scheduled_tasks()] == ["healthy"]
+  errors = loader.get_scheduled_task_errors()
+  assert [error.name for error in errors] == ["looped"]
+  assert "scope_files" in errors[0].error and "Field required" in errors[0].error
 
 
 # --- 6. shipped default is loadable and seeds per-job files ------------------

@@ -35,11 +35,6 @@ BASE_COMMAND: list[str] = [
     HEADLESS_DISALLOWED_TOOLS,
 ]
 
-# Subscription mode (cli_binary='claude-sub') drives an interactive `claude` TUI in
-# tmux and cannot answer arrow-key menus. Additionally disallow the tools that raise
-# such menus so the model emits plain-text choices instead of deadlocking the session.
-SUBSCRIPTION_DISALLOWED_TOOLS = "AskUserQuestion,ExitPlanMode"
-
 # Usage resolution re-derives the declared window per call while the environment a
 # degradation warning reports is fixed for the process's life, so the first sighting
 # of each reported shape is the whole alarm and every repeat re-fires it.
@@ -241,8 +236,6 @@ class ClaudeCodeBackend(base.AgentBackend):
     self._cmd: list[str] = list(BASE_COMMAND)
     if cli_binary:
       self._cmd[0] = cli_binary
-      if cli_binary == "claude-sub":
-        self._cmd += [base.DISALLOWED_TOOLS_FLAG, SUBSCRIPTION_DISALLOWED_TOOLS]
     if claude_session_id:
       self._cmd += ["--session-id", claude_session_id]
     if self._model:

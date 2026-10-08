@@ -11,7 +11,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 # The vocabulary single-homes in the stdlib-only constants module so readers that
-# need only the enum (src.runtime.runs, the claude-sub launch chain) skip the pydantic
+# need only the enum (src.runtime.runs) skip the pydantic
 # model construction this module exists for; this import is the re-export.
 from src.infra.constants import BackendType
 
@@ -19,7 +19,7 @@ from src.infra.constants import BackendType
 # Backend Models
 # ---------------------------------------------------------------------------
 
-MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
+MODEL_OPTIONAL_ROUTING_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.ANTIGRAVITY})
 
 
 class BackendBase(BaseModel):
@@ -104,17 +104,12 @@ class AntigravityBackend(BackendBase):
   print_timeout: str | None = None  # antigravity only: agy --print turn budget (Go duration, e.g. "1h")
 
 
-class TuiCliBackend(BackendBase):
-  type: Literal[BackendType.TUI_CLI] = BackendType.TUI_CLI
-  cli_binary: str | None = None
-
-
 # One class per type: a config entry validates against the subclass its ``type``
 # names, so illegal field/type combinations are unconstructable, and config.yaml
 # entries dispatch on their type tag (the same pattern as src.infra.models' WatchTarget).
 BackendOption = Annotated[
     CcClaudeBackend | CcKimiBackend | CcOpenAICompatibleBackend | CodexBackend | CharlieCodeBackend | GeminiBackend |
-    OpencodeBackend | AntigravityBackend | TuiCliBackend,
+    OpencodeBackend | AntigravityBackend,
     Field(discriminator="type"),
 ]
 

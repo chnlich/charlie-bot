@@ -192,9 +192,9 @@ TASK_IMPORTED = "task_imported"
 RUN_HEADER = "run_header"
 RUN_DELIVERY = "run_delivery"
 # An operator's durable confirmation that specific task inputs were actually
-# handled out-of-band (the terminal-driven TUI node's normal case). The event
-# names the exact input ids; the fold treats them like a successful run's
-# acknowledged batch, so they stop pending while anything later stays pending.
+# handled out-of-band. The event names the exact input ids; the fold treats
+# them like a successful run's acknowledged batch, so they stop pending while
+# anything later stays pending.
 TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 
 # -- LaTeX -------------------------------------------------------------------
@@ -214,9 +214,9 @@ FILE_WRITE = "file_write"
 # with a rate-limit status; workers persist it verbatim, so the quota-
 # detection chain consumes the same type on read-back. The event carries the
 # status object under the ``rate_limit_info`` payload key — a persisted wire
-# value the emit site (src/backends/claude_sub/claude_sub_bridge.py) and every reader
-# (src/backends/claude_code/claude_relay.py, src/runtime/worker.py,
-# src/features/improve/improve_command.py) share through this constant.
+# value every reader (src/backends/claude_code/claude_relay.py,
+# src/runtime/worker.py, src/features/improve/improve_command.py) shares
+# through this constant.
 RATE_LIMIT_EVENT = "rate_limit_event"
 RATE_LIMIT_INFO = "rate_limit_info"
 
@@ -270,9 +270,9 @@ USAGE_OUTPUT_TOKENS = "output_tokens"
 USAGE_CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
 USAGE_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
 # Top-level cost field of a result event (the same CC-compatible envelope
-# make_result_event builds; src/backends/claude_sub/claude_sub.py emits the same shape). A
-# persisted wire value the cost fold re-reads (src/runtime/session_usage.py);
-# the resolver's usage dict reuses the name for the panel.
+# make_result_event builds). A persisted wire value the cost fold re-reads
+# (src/runtime/session_usage.py); the resolver's usage dict reuses the name
+# for the panel.
 RESULT_TOTAL_COST_USD = "total_cost_usd"
 
 # -- Shared event predicates -------------------------------------------------
@@ -287,8 +287,8 @@ def is_real_user_message(event: dict) -> bool:
 
   Excludes trigger events (a different type) and the Claude CLI's tool-result
   echoes: the CLI persists each tool result as a ``user``-type event whose
-  content is a list of tool_result blocks (src/backends/claude_sub/claude_sub_bridge.py), and
-  that echo is tool output, never a message someone sent.
+  content is a list of tool_result blocks, and that echo is tool output, never
+  a message someone sent.
   """
   if event.get("type") != USER:
     return False

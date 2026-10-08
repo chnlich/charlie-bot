@@ -596,7 +596,6 @@ function renderGroupedSessionList(sessions, filter, options = {}) {
   // Parent rows take their collapsed-subtree stand-ins now that the rows exist.
   if (typeof Sidebar.refreshTreeIndicators === 'function') Sidebar.refreshTreeIndicators();
   updateRelativeTimes();
-  refreshTuiDots();
 }
 
 function toggleSessionGroup(key) {
@@ -876,7 +875,6 @@ function renderSessionItem(s, filter, options = {}) {
       renderPendingTriggerIndicator(s),
       renderPendingPlanApprovalIndicator(s),
       s.schedule_task ? renderScheduledBadge(s) : '',
-      renderTuiStatusDot(s),
   ].join('\n    ');
   // Every tree row leads with one 12px marker so a level's markers line up
   // in one column: a logical row draws the chevron even with no children
@@ -947,7 +945,6 @@ function renderSessionList(sessions, filter, options = {}) {
   nav.innerHTML = sessions.map(s => renderSessionItem(s, filter)).join('') + truncationHint;
   resyncSessionUnread(sessions);
   updateRelativeTimes();
-  refreshTuiDots();
 }
 
 // The rows an inline delete takes with it: the session plus every row whose

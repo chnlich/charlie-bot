@@ -1,5 +1,5 @@
 // ---------------------------------------------------------------------------
-// A hidden tab must do no periodic work: no session-status, TUI-status,
+// A hidden tab must do no periodic work: no session-status,
 // active-session-view, transcript or ext-usage poll, and no thinking tick.
 // Every timer goes through the page-timers registry, so this exercises the
 // real registry plus the real call sites in app.js, the sidebar modules and
@@ -185,7 +185,6 @@ test('sidebar timers stay dormant while hidden and all start on show', () => {
   document.elements.set('send-btn', {disabled: false, classList: {add() {}, remove() {}}});
   document.hidden = true;
 
-  context.startTuiStatusPolling();
   context.startThinking({keepSendEnabled: true});
   context.THINKING_SINCE = '2026-08-02T00:00:00Z';
   context.ensureActiveSessionViewPolling();
@@ -197,8 +196,8 @@ test('sidebar timers stay dormant while hidden and all start on show', () => {
 
   assert.deepEqual(
     timers.live().map((t) => t.ms).sort((a, b) => a - b),
-    [1000, 3000, 3000],
-    'thinking tick plus the 3s sidebar and session-view polls resume together'
+    [1000, 3000],
+    'thinking tick plus the 3s session-view poll resume together'
   );
 });
 
@@ -252,7 +251,6 @@ function buildAppContext() {
     initSidebarResize: noop('initSidebarResize'),
     initLatexResize: noop('initLatexResize'),
     initBacklogResize: noop('initBacklogResize'),
-    startTuiStatusPolling: noop('startTuiStatusPolling'),
     restoreSidebarFromUrl: noop('restoreSidebarFromUrl'),
     updateRelativeTimes: noop('updateRelativeTimes'),
     postProcessRenderedMessages: noop('postProcessRenderedMessages'),
@@ -262,7 +260,6 @@ function buildAppContext() {
     scheduleLazySessionDataLoad: noop('scheduleLazySessionDataLoad'),
     ensureActiveSessionViewPolling: noop('ensureActiveSessionViewPolling'),
     refreshSessionStatusNow: noop('refreshSessionStatusNow'),
-    fetchTuiStatus: noop('fetchTuiStatus'),
     pollActiveSessionView: noop('pollActiveSessionView'),
     updateThinkingTime: noop('updateThinkingTime'),
     resumeThinkingIfMidThought: noop('resumeThinkingIfMidThought'),
@@ -293,7 +290,6 @@ test('app.js schedules no sidebar-status poll while the tab loads hidden', () =>
   assert.equal(live.length, 1);
   assert.equal(live[0].ms, 3000, 'the poll resumes on the cadence it was registered with');
   assert.ok(calls.includes('refreshSessionStatusNow'), 'the sidebar scope is refreshed immediately on show');
-  assert.ok(calls.includes('fetchTuiStatus'), 'TUI dots are refreshed immediately on show');
   assert.ok(calls.includes('updateThinkingTime'), 'the thinking display is recomputed on show');
 });
 

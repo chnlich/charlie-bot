@@ -19,10 +19,9 @@ from src.infra.config import CharlieBotConfig
 from src.infra.constants import BackendType
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
-from src.infra.models import CcClaudeBackend, RunRecord, ThreadMetadata, TuiCliBackend, WorkerEvent
+from src.infra.models import RunRecord, ThreadMetadata, WorkerEvent
 from src.infra.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.infra.responses import FastJsonResponse, fast_json_bytes, gzip_body_response
-from src.runtime.agent_process.pty_common import _TMUX_SOCKET, tmux_session_exists, tmux_session_name
 from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
@@ -95,7 +94,6 @@ async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread
 @dataclass(frozen=True)
 class _BackendDispatch:
   type: str
-  cli_binary: str | None = None
 
 
 def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _BackendDispatch | None:
@@ -104,29 +102,8 @@ def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _
   if cfg is not None:
     option = cfg.get_backend_option(thread.backend)
     if option is not None:
-      # cli_binary is declared on the cc-claude and tui-cli option models only;
-      # every other member of the discriminated union must read None — a bare
-      # attribute read raises AttributeError on pydantic's extra='forbid' models.
-      return _BackendDispatch(
-          type=option.type,
-          cli_binary=option.cli_binary if isinstance(option, (CcClaudeBackend, TuiCliBackend)) else None)
+      return _BackendDispatch(type=option.type)
   return _BackendDispatch(type=thread.backend)
-
-
-def _tmux_attach_command(session_id: str, *, read_only: bool = False) -> str:
-  command = ["tmux", "-L", _TMUX_SOCKET, "attach"]
-  if read_only:
-    command.append("-r")
-  command.extend(["-t", tmux_session_name(session_id)])
-  return shlex.join(command)
-
-
-def _tmux_attach_id(thread: ThreadMetadata, dispatch: _BackendDispatch) -> str | None:
-  if dispatch.type == BackendType.TUI_CLI:
-    return thread.session_id
-  if dispatch.type == BackendType.CC_CLAUDE and dispatch.cli_binary == "claude-sub":
-    return thread.claude_session_id
-  return None
 
 
 def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> str | None:
@@ -135,17 +112,9 @@ def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -
     return None
 
   if dispatch.type == BackendType.CC_CLAUDE:
-    tmux_id = _tmux_attach_id(thread, dispatch)
-    if tmux_id:
-      return _tmux_attach_command(tmux_id, read_only=dispatch.cli_binary == "claude-sub")
     if not thread.worktree_path or not thread.claude_session_id:
       return None
     return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(thread.claude_session_id)}"
-  if dispatch.type == BackendType.TUI_CLI:
-    tmux_id = _tmux_attach_id(thread, dispatch)
-    if tmux_id is None:
-      return None
-    return _tmux_attach_command(tmux_id)
   return None
 
 
@@ -155,13 +124,7 @@ async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bo
     return False
 
   if dispatch.type == BackendType.CC_CLAUDE:
-    tmux_id = _tmux_attach_id(thread, dispatch)
-    if tmux_id:
-      return await tmux_session_exists(tmux_id)
     return bool(thread.claude_session_id and thread.worktree_path and os.path.isdir(thread.worktree_path))
-  if dispatch.type == BackendType.TUI_CLI:
-    tmux_id = _tmux_attach_id(thread, dispatch)
-    return bool(tmux_id and await tmux_session_exists(tmux_id))
   return False
 
 

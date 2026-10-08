@@ -78,12 +78,12 @@ def test_credentials_shape_errors_name_the_offending_depth(
 
 EXAMPLE_PATH = ROOT / "configs" / "config.example.yaml"
 
-STARTER_BACKEND_IDS = ["claude-fable", "claude-opus", "claude-sonnet", "claude-tui"]
+STARTER_BACKEND_IDS = ["claude-fable", "claude-opus", "claude-sonnet"]
 
 
 def test_example_config_loads_to_the_model_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The shipped example is the default config: loading it equals constructing
-  CharlieBotConfig, modulo backends.options (the example ships the four starter
+  CharlieBotConfig, modulo backends.options (the example ships the three starter
   entries where the model default is empty)."""
   home = tmp_path / "home"
   home.mkdir()

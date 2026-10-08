@@ -22,7 +22,6 @@ function buildContext() {
   const nav = {innerHTML: ''};
   context.document = {getElementById: (id) => (id === 'session-list' ? nav : null)};
   context.updateRelativeTimes = () => {};
-  context.refreshTuiDots = () => {};
   return {context, nav};
 }
 

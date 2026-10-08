@@ -417,13 +417,6 @@ async function switchSession(sessionId) {
   if (!SESSION_ID) { location.href = '/?session=' + sessionId; return; }
   // Already on this session
   if (sessionId === SESSION_ID) {
-    // Same session — but if it's a stopped TUI, force WS reconnect to respawn tmux/claude.
-    if (globalThis.TuiStatusMap[sessionId]?.running === false) {
-      disconnectWS();
-      cancelReconnect();
-      connectWS();
-      setTimeout(() => { if (typeof fetchTuiStatus === 'function') fetchTuiStatus(); }, 1500);
-    }
     return;
   }
 
@@ -576,12 +569,7 @@ function renderSessionView(data) {
   setSwitchableBackends(data.switchable_backends);
   setActiveRoundRatings(session.round_ratings || {});
   const backendType = data.active_backend_type || (BACKEND_TYPES ? BACKEND_TYPES[data.active_backend] : '') || '';
-  if (globalThis.TuiSession) {
-    globalThis.TuiSession.syncBackend(backendType, session.id);
-  } else {
-    globalThis.ACTIVE_BACKEND_TYPE = backendType;
-  }
-  updateBackendHeaderControls(backendType, session.id);
+  updateBackendHeaderControls(backendType);
 
   // Store the raw-event cursor from the tail-loaded response.
   sessionHasMore = !!data.has_more;

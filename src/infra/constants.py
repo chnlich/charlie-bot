@@ -157,4 +157,3 @@ class BackendType(StrEnum):
   GEMINI = "gemini"
   OPENCODE = "opencode"
   ANTIGRAVITY = "antigravity"
-  TUI_CLI = "tui-cli"

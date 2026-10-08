@@ -3,7 +3,6 @@ const test = require('node:test');
 const vm = require('node:vm');
 
 const { readStatic } = require('./read_static');
-const { loadSidebarStatusContext } = require('./sidebar_status_context_stub');
 
 // ---------------------------------------------------------------------------
 // A DOM node that counts every write to `class`/`title`, mirroring the real
@@ -152,40 +151,4 @@ test('restoreBottomPin raises the jump button instead of scrolling when the read
   context.restoreBottomPin(container, false, false);
   assert.equal(container.scrollTop, 0);
   assert.equal(btn.classList.contains('hidden'), false);
-});
-
-// ---------------------------------------------------------------------------
-// sidebar/status.js: refreshTuiDots
-// ---------------------------------------------------------------------------
-test('refreshTuiDots writes nothing when every dot already matches its live status', () => {
-  const dot = makeCountingElement(['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0', 'running'], 'Claude idle');
-  dot.dataset.sessionId = 's1';
-  const context = loadSidebarStatusContext({
-    document: {
-      getElementById: () => null,
-      querySelectorAll: (sel) => (sel === '.tui-status-dot[data-session-id]' ? [dot] : []),
-    },
-  });
-  context.TuiStatusMap = { s1: { running: true, busy: false } };
-  context.refreshTuiDots();
-  assert.equal(dot.counts.classWrites, 0);
-  assert.equal(dot.counts.titleWrites, 0);
-});
-
-test('refreshTuiDots writes class and title when the dot status actually changed', () => {
-  const dot = makeCountingElement(['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0'], '');
-  dot.dataset.sessionId = 's1';
-  const context = loadSidebarStatusContext({
-    document: {
-      getElementById: () => null,
-      querySelectorAll: (sel) => (sel === '.tui-status-dot[data-session-id]' ? [dot] : []),
-    },
-  });
-  context.TuiStatusMap = { s1: { running: true, busy: true } };
-  context.refreshTuiDots();
-  assert.ok(dot.counts.classWrites > 0);
-  assert.ok(dot.counts.titleWrites > 0);
-  assert.equal(dot.classList.contains('running'), true);
-  assert.equal(dot.classList.contains('busy'), true);
-  assert.equal(dot.title, 'Claude busy');
 });

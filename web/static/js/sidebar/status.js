@@ -4,18 +4,13 @@
 // ---------------------------------------------------------------------------
 // Sidebar spinner (running tasks indicator)
 // ---------------------------------------------------------------------------
-// Tmux liveness and recent jsonl activity per tui-cli session id
-// ({running, busy}), as returned by the /api/sessions/tui/status poll.
-globalThis.TuiStatusMap = globalThis.TuiStatusMap || {};
-
 // Status polls are scoped to the sessions the sidebar is actually rendering.
 // The URL stays well under the 8 KB request-line budget at the ~23 sessions the
 // sidebar shows, but a longer list is split so no single request can overflow.
 const STATUS_QUERY_MAX_BYTES = 8192;
 
-// Status of every rendered sidebar row, keyed by session id — the same
-// rendered-truth pattern as renderedSessionBackendTypes below. The status/tui
-// polls skip archived rows through it: their server probe is the constant-False
+// Status of every rendered sidebar row, keyed by session id. The status
+// poll skips archived rows through it: their server probe is the constant-False
 // shortcut (src/runtime/sessions.py populate_sidebar_state), so per-cycle request
 // volume tracks the active rows on screen, not the archived list length.
 const renderedSessionStatuses = {};
@@ -103,89 +98,13 @@ async function fetchScopedStatus(path, ids) {
   return merged;
 }
 
-function sessionBackendType(session) {
-  return session && session.backend && typeof BACKEND_TYPES !== 'undefined' ? (BACKEND_TYPES[session.backend] || '') : '';
-}
-
-function isTuiSession(session) {
-  return sessionBackendType(session) === 'tui-cli';
-}
-
-// Backend type of every rendered sidebar row, keyed by session id. The sidebar
-// re-renders its rows wholesale on every refresh, and each row render flows
-// through renderTuiStatusDot, so this map tracks the rendered truth; the
-// tui/status poll reads it to request only tui-cli rows.
-const renderedSessionBackendTypes = {};
-
-function renderTuiStatusDot(session) {
-  renderedSessionBackendTypes[session.id] = sessionBackendType(session);
-  if (!isTuiSession(session)) return '';
-  const status = globalThis.TuiStatusMap[session.id] || {running: false, busy: false};
-  const classes = ['tui-status-dot', 'w-2', 'h-2', 'rounded-full', 'flex-shrink-0'];
-  if (status.running) classes.push('running');
-  if (status.running && status.busy) classes.push('busy');
-  const title = !status.running ? 'Claude stopped' : (status.busy ? 'Claude busy' : 'Claude idle');
-  return `<span class="${classes.join(' ')}" data-session-id="${escapeHtmlAttr(session.id)}" title="${title}"></span>`;
-}
-
-// The poll goes out only for sessions that can consume the answer: rows
-// rendered as tui-cli, plus the active session whenever its current backend
-// type is tui-cli — the Stop button reads TuiStatusMap[SESSION_ID] and the
-// active session's row can be missing or stale right after a backend switch.
-// With no tui-cli sessions the request is skipped entirely.
-function tuiSidebarSessionIds() {
-  const ids = sidebarSessionIds().filter(sid => renderedSessionBackendTypes[sid] === 'tui-cli');
-  if (typeof SESSION_ID !== 'undefined' && SESSION_ID &&
-      globalThis.ACTIVE_BACKEND_TYPE === 'tui-cli' && !ids.includes(SESSION_ID)) {
-    ids.unshift(SESSION_ID);
-  }
-  return ids;
-}
-
-async function fetchTuiStatus() {
-  try {
-    globalThis.TuiStatusMap = await fetchScopedStatus('/api/sessions/tui/status', tuiSidebarSessionIds());
-    refreshTuiDots();
-  } catch (err) {
-    console.error('fetchTuiStatus failed:', err);
-  }
-}
-
-function refreshTuiDots() {
-  document.querySelectorAll('.tui-status-dot[data-session-id]').forEach(dot => {
-    const id = dot.dataset.sessionId;
-    const status = globalThis.TuiStatusMap[id] || {running: false, busy: false};
-    const running = !!status.running;
-    const busy = running && !!status.busy;
-    if (dot.classList.contains('running') !== running) dot.classList.toggle('running', running);
-    if (dot.classList.contains('busy') !== busy) dot.classList.toggle('busy', busy);
-    const title = !running ? 'Claude stopped' : (busy ? 'Claude busy' : 'Claude idle');
-    if (dot.title !== title) dot.title = title;
-  });
-  updateBackendHeaderControls(globalThis.ACTIVE_BACKEND_TYPE || '', SESSION_ID);
-}
-
-function startTuiStatusPolling() {
-  if (pageTimerRegistered('tui-status')) return;
-  fetchTuiStatus();
-  startPageTimer('tui-status', fetchTuiStatus, 3000);
-}
-
 function compactButtonTitle(backendType) {
   if (backendType === 'cc-claude') return '';
   if (backendType === 'codex') return 'codex only compacts automatically — tune model_auto_compact_token_limit';
   return 'Manual compaction is not supported on this backend';
 }
 
-function updateBackendHeaderControls(backendType, sessionId) {
-  const stopBtn = document.getElementById('stop-tui-btn');
-  if (stopBtn) {
-    const isTui = backendType === 'tui-cli';
-    const stopped = isTui && globalThis.TuiStatusMap[sessionId]?.running === false;
-    stopBtn.classList.toggle('hidden', !isTui || stopped);
-    stopBtn.dataset.sessionId = isTui ? sessionId : '';
-  }
-
+function updateBackendHeaderControls(backendType) {
   const compactBtn = document.getElementById('compact-btn');
   if (compactBtn) {
     compactBtn.disabled = backendType !== 'cc-claude';
@@ -671,10 +590,6 @@ async function cancelMaster() {
 
 const API = {
   recordRenderedSessionStatus,
-  renderTuiStatusDot,
-  fetchTuiStatus,
-  refreshTuiDots,
-  startTuiStatusPolling,
   updateBackendHeaderControls,
   updateSidebarSessionName,
   getSessionIndicatorState,
@@ -708,7 +623,6 @@ const API = {
   cancelMaster,
 };
 Sidebar.wire(API, {
-  tuiSidebarSessionIds,
   sidebarSessionIds,
   updateSpinner,
   PENDING_TRIGGER_BELL_SVG_PATH,

@@ -47,13 +47,11 @@ function loadGroups() {
     currentFilter: 'all',
     sessionUnread: {},
     updateRelativeTimes: () => {},
-    refreshTuiDots: () => {},
     relativeTime: () => '',
     formatBubbleTime: () => '',
     getSessionIndicatorState: () => 'idle',
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
-    renderTuiStatusDot: () => '',
   };
   context.globalThis = context;
   vm.createContext(context);

@@ -143,29 +143,6 @@ async function unarchiveSession(id) {
   }
 }
 
-async function stopActiveTui() {
-  if (!SESSION_ID) return;
-  if (!confirm('Stop the claude process for this session? You can reopen to resume.')) return;
-  const sessionId = SESSION_ID;
-  try {
-    const res = await fetch(`/api/sessions/${sessionId}/tui/stop`, { method: 'POST' });
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
-      throw new Error(body.detail || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    if (data.stopped !== true) throw new Error('Stop endpoint did not return stopped=true');
-    globalThis.TuiStatusMap[sessionId] = {running: false, busy: false};
-    refreshTuiDots();
-    if (globalThis.TuiSession && globalThis.TuiSession.showStoppedBanner) {
-      globalThis.TuiSession.showStoppedBanner();
-    }
-  } catch (err) {
-    showToast('Stop Claude failed: ' + err.message, true);
-    console.error('Stop Claude failed:', err);
-  }
-}
-
 let deleteConfirmKeyHandler = null;
 
 function closeDeleteConfirmModal() {
@@ -374,7 +351,6 @@ async function toggleSessionStar(id, currentlyStarred) {
 const GLOBALS = {
   archiveSession,
   unarchiveSession,
-  stopActiveTui,
   confirmDeletePermanently,
   setSidebarFilterPill,
   switchSidebarFilter,

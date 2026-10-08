@@ -1,9 +1,8 @@
 // ---------------------------------------------------------------------------
-// Shared xterm.js mount for the terminal surfaces (tui_session.js,
-// terminal_panel.js): both mount identical Terminal options, the same
-// open/clipboard/focus sequence, the same touch-drag scroll wiring, the same
-// fit-then-send-resize timing, and the same pty_input / pty_resize message
-// shapes.
+// Shared xterm.js mount for the terminal surfaces (terminal_panel.js): the
+// Terminal options, the open/clipboard/focus sequence, the touch-drag scroll
+// wiring, the fit-then-send-resize timing, and the pty_input / pty_resize
+// message shapes.
 // ---------------------------------------------------------------------------
 
 // Both mounts bail when the xterm.js script tags failed to load; a missing
@@ -64,7 +63,7 @@ globalThis.makePtySenders = function(sendJson) {
 // fitted grid over its socket. The surfaces keep their own terminal refs, so
 // the bridge reads them through the getters instead of holding copies;
 // mayFit carries the surface's extra guard — the panel only fits while its
-// tab is open, the TUI surface always fits.
+// tab is open.
 globalThis.makeTerminalFitBridge = function(sendResize, getTerm, getFitAddon, mayFit) {
   function fitAndSendResize() {
     if (mayFit && !mayFit()) return;

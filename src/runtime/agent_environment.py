@@ -12,8 +12,8 @@ command in a worktree re-points the server venv's editable install at it.
 The server therefore removes the activation once at start and puts
 ``ENTRY_POINT_DIR`` on PATH in place of the venv bin. That directory holds one
 shim per ``[project.scripts]`` entry, each exec'ing the same-named script in
-``$CHARLIEBOT_VENV_BIN``, so ``charliebot`` and ``claude-sub`` resolve by name
-while no venv interpreter is left on PATH.
+``$CHARLIEBOT_VENV_BIN``, so ``charliebot`` resolves by name while no venv
+interpreter is left on PATH.
 """
 
 import os

@@ -7,10 +7,6 @@ string, and land that edit in the same PR. Entries anchor each symbol by name an
 code_health.md Step 1 bans coordinate citations, so no line numbers appear here.
 
 Known-alive symbols:
-- `kill_tmux_session` (`src/runtime/agent_process/pty_common.py`; re-exported with `# noqa` by
-  `src/backends/tui/tui.py`) — reached by string: `TUI_KILL_TMUX_SESSION_PATCH_TARGET`
-  (`tests/conftest.py`) names the `src.backends.tui.tui` path, so the re-export is the
-  path the monkeypatch resolves through.
 - `_clean_ceiling_env` — pytest fixture in `tests/test_session_usage.py`, reached by string via
   `@pytest.mark.usefixtures("_clean_ceiling_env")`; invisible to static dead-code tools.
 - `_handle_agent_message`, `_handle_reasoning`, `_handle_tool_item`, `_handle_file_change`,
@@ -40,8 +36,7 @@ Known-alive symbols:
   warm-renderer singleton around `tests/core/test_headless_render.py`, the second is the
   suite-wide conftest autouse that reshapes `headless_render.render_height` into the
   dump-dom drive seam every artifact/plan-height test relies on,
-  `_clear_events_cache` (`tests/test_thread_worker_events.py`),
-  `_clear_jsonl_memo` (`tests/test_tui_backend.py`)
+  `_clear_events_cache` (`tests/test_thread_worker_events.py`)
   — pytest `autouse=True` fixtures,
   reached by pytest's fixture-name discovery only: zero whole-repo matches outside their
   definitions, so vulture flags them as unused functions. Most are single-line
@@ -349,10 +344,6 @@ Known-alive symbols:
   fetch and Web-API paths call `response.raise_for_status()`, and the proxy paths await
   `response.aclose()`. Each double name matches only its own definition, so vulture flags the
   methods as unused.
-- `resize` (the pty attachment double `ScriptedTtyAttachment` in
-  `tests/test_tui_task_completion.py`) — the resize path calls `attachment.resize(cols, rows)`
-  (`src/runtime/agent_process/pty_common.py`), dispatching on the injected double. Vulture flags the
-  method as unused.
 - `_proc`, `_ws` (the fake `_launch` in `tests/core/test_headless_render.py`) —
   `_WarmRenderer._render_once`/`close` read `self._proc`/`self._ws`
   (`src/features/artifacts/headless_render.py`); the fake installs them by attribute write, which vulture

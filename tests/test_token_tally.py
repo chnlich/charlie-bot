@@ -297,8 +297,6 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
   assert tt.backend_page_source("clc-master", {}) == USAGE_SOURCE_CHARLIE_CODE
   with pytest.raises(ValueError, match="ag-1"):
     tt.backend_page_source("ag-1", {"ag-1": _Option("ag-1", "antigravity", "model")})
-  with pytest.raises(ValueError, match="tui-1"):
-    tt.backend_page_source("tui-1", {"tui-1": _Option("tui-1", "tui-cli", "model")})
   with pytest.raises(ValueError, match="gem-1"):
     tt.backend_page_source("gem-1", {})
 

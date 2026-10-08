@@ -2,11 +2,12 @@
 
 import asyncio
 import contextlib
+import importlib
 import inspect
 import io
 import json
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -28,30 +29,12 @@ with gc_off(collect=False):
   from starlette.responses import Response
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-  from src.app import pages
-  from src.backends.openai_compatible import anthropic_proxy
-  from src.features.backlog import api as backlog
-  from src.features.code_server import api as code_server
-  from src.features.cron import api as cron
-  from src.features.cron.scheduler import Scheduler
-  from src.features.diag import api as diag
-  from src.features.diff_view import api as git
-  from src.features.files import api as files
-  from src.features.host_auth import api as host_auth
-  from src.features.latex import api as latex
+  from src.app import pages, registrations
   from src.features.usage import ext_usage
-  from src.features.voice import api as voice
   from src.infra import responses, timeouts
   from src.infra.buildinfo import init_build_info
-  from src.infra.config import (
-      CharlieBotConfig,
-      configured_access_key,
-      get_config,
-      get_credentials,
-      get_scheduled_tasks,
-      require_backends,
-  )
-  from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
+  from src.infra.config import CharlieBotConfig, get_config, get_scheduled_tasks, require_backends
+  from src.infra.constants import PERFETTO_MERGED_PATH, REPO_ROOT
   from src.infra.http import close_http_client
   from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
   from src.infra.models import SessionMetadata, utc_now
@@ -60,14 +43,19 @@ with gc_off(collect=False):
   from src.runtime import init_master_recovery, init_seed
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
-  from src.runtime.api.auth import AuthMiddleware, _credential_matches
+  from src.runtime.api.auth import AuthMiddleware, check_ws_auth
   from src.runtime.api.deps import session_manager, set_trigger_manager, task_manager
+  from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
   from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
   from src.runtime.triggers import TriggerManager
 
 log = LazyStructlogLogger()
+
+# Every registered router, command and service exists because its package's line in
+# registrations.PACKAGES ran register(); the routers below are read from that registry.
+registrations.register_all()
 
 # Catchup replay slicing: events walked and frames rendered per on-loop slice.
 # The walk measures ~1.2 µs per event; a ticker waking mid-slice waits out the
@@ -243,22 +231,6 @@ class _RequestLogMiddleware:
     )
 
 
-async def _check_ws_auth(websocket: WebSocket) -> bool:
-  """Validate access-key auth for WebSocket connections.
-
-  Returns True if the connection is authorized, False otherwise
-  (and closes the socket with code 4401).
-  """
-  access_key = configured_access_key()
-  if not access_key:
-    return True
-  token = websocket.query_params.get("token", "")
-  if _credential_matches(token, access_key):
-    return True
-  await websocket.close(code=4401)
-  return False
-
-
 async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: object) -> None:
   """Hold a WebSocket open with periodic pings until the client disconnects."""
   try:
@@ -271,35 +243,6 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
     pass
   except Exception as e:
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
-
-
-def _provision_speech_models(cfg: CharlieBotConfig) -> None:
-  """Provision the speech models on a worker thread, then warm the decode path.
-
-  src.features.voice.transcriber carries the numpy import (~90 ms), so the module loads
-  here instead of the event loop's startup path: the M99 import floor
-  (docs/perf_baseline.md@5175adf09) prices the import's wall, and this thread's span is
-  exactly the cost the metric does not see.
-
-  After provisioning opens readiness, the same thread builds the resident bundle
-  (single-flight, so a concurrent first request shares it) and decodes one
-  synthetic sine, moving the ~12 s one-time cold cost off the first request. A
-  warm failure only logs: readiness stays exactly as provisioning published it
-  and the endpoints keep their lazy path as the fallback.
-  """
-  from src.features.voice import transcriber
-
-  transcriber.provision_models(cfg)
-  started = time.monotonic()
-  try:
-    bundle = transcriber.get_transcription_bundle(cfg)
-    transcriber.warm_up_bundle(bundle)
-  except Exception:
-    # Includes the not-ready raise of a parked provisioning failure: log it loudly
-    # and keep booting — a warm failure never parks readiness nor kills the thread.
-    log.exception("voice_warmup_failed")
-    return
-  log.info("voice_warmup_complete", elapsed_ms=round((time.monotonic() - started) * 1000))
 
 
 async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
@@ -318,24 +261,6 @@ async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identi
     log.info("crash_recovery_done", elapsed_ms=elapsed_ms)
   except Exception:
     log.exception("crash_recovery_failed")
-
-
-async def _run_backfill(
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
-    recovery_task: asyncio.Task,
-    backfill_lost_summons: Callable[[CharlieBotConfig, SessionManager], Awaitable[int]],
-    platform: str,
-) -> None:
-  """Report one platform's summons lost across the restart, once recovery has had its chance.
-
-  Waits on the crash-recovery task first so re-attach and the user-message
-  replay have already answered everything they can; whatever is still
-  unanswered after that is genuinely lost and gets a notice in its thread.
-  """
-  await recovery_task
-  reported = await backfill_lost_summons(cfg, session_mgr)
-  log.info(f"{platform}_backfill_done", count=reported)
 
 
 @asynccontextmanager
@@ -390,8 +315,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # The master_run identity judgment is the exception: master_run is a single
     # slot per session that a new turn overwrites unconditionally, so the
     # judgment must complete before any door that can start a new turn — the
-    # worker-finalize chain dispatched by this same background task,
-    # scheduler.start(), and trigger_mgr.recover_pending() below. Barrier on it
+    # worker-finalize chain dispatched by this same background task, the ready
+    # services (the scheduler among them), and trigger_mgr.recover_pending()
+    # below. Barrier on it
     # with a timeout; the shield keeps the one judgment running past the bound
     # and the recovery task re-awaits that same task for the replay pass.
     session_mgr = session_manager()
@@ -403,14 +329,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
       pass  # reported where the task is awaited: crash recovery logs it loudly
     app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
-    app.state.speech_model_task = create_logged_task(
-        asyncio.to_thread(_provision_speech_models, cfg), name="speech-model-provisioning")
+    service_ctx = wiring.ServiceContext(app, cfg, session_mgr, app.state.recovery_task)
+    for _, start_service in wiring.service_starts("early"):
+      await start_service(service_ctx)
 
     # The tally stack loads here, not on the request path: a request-time
     # first-import reads whatever files a mid-flight deploy left under a server
     # whose in-memory modules are the started code, and the mixed-version import
     # 500s the usage page (and the ledger cron handler) until restart. Same
-    # thread pattern as speech provisioning: the M99 import floor stays.
+    # thread pattern as the speech service: the M99 import floor stays.
     app.state.usage_tally_warmup_task = create_logged_task(
         asyncio.to_thread(pages.preload_usage_tally_stack), name="usage-tally-warmup")
 
@@ -428,50 +355,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception:
       log.exception("task_tree_recovery_failed")
 
-    scheduler = Scheduler(cfg, session_mgr)
-    app.state.scheduler = scheduler
-    await scheduler.start()
-
     trigger_mgr = TriggerManager(cfg, session_mgr)
     set_trigger_manager(trigger_mgr)
     app.state.trigger_mgr = trigger_mgr
     await trigger_mgr.recover_pending()
 
+    for _, start_service in wiring.service_starts("ready"):
+      await start_service(service_ctx)
+
     await ext_usage.start_poller()
-    await host_auth.start_poller()
-
-    slack_listener_task = None
-    creds = get_credentials()
-    if creds.get("slack", "bot_token") and creds.get("slack", "app_token") and cfg.slack.allowed_user_ids:
-      from src.features.slack.slack_listener import (  # lazy: avoids import cycle at module scope
-          backfill_lost_summons,
-          run_listener,
-      )
-
-      slack_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="slack-listener")
-      app.state.slack_listener_task = slack_listener_task
-      app.state.slack_backfill_task = create_logged_task(
-          _run_backfill(cfg, session_mgr, app.state.recovery_task, backfill_lost_summons, "slack"),
-          name="slack-backfill")
-      log.info("slack_entrypoint_started")
-    else:
-      log.info("slack_entrypoint_off")
-
-    discord_listener_task = None
-    if creds.get("discord", "bot_token") and cfg.discord.allowed_users:
-      from src.features.discord.discord_listener import (  # lazy: avoids import cycle at module scope
-          backfill_lost_summons,
-          run_listener,
-      )
-
-      discord_listener_task = create_logged_task(run_listener(cfg, session_mgr), name="discord-listener")
-      app.state.discord_listener_task = discord_listener_task
-      app.state.discord_backfill_task = create_logged_task(
-          _run_backfill(cfg, session_mgr, app.state.recovery_task, backfill_lost_summons, "discord"),
-          name="discord-backfill")
-      log.info("discord_entrypoint_started")
-    else:
-      log.info("discord_entrypoint_off")
 
     log.info("server_ready", ready_in_ms=round((utc_now() - boot_time).total_seconds() * 1000))
     yield
@@ -489,17 +381,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await result
       step_ms[name] = round((time.monotonic() - started) * 1000)
 
-    speech_model_task = getattr(app.state, "speech_model_task", None)
-    await timed_step("speech_ms", lambda: cancel_and_wait(speech_model_task))
     await timed_step("usage_tally_ms", lambda: cancel_and_wait(getattr(app.state, "usage_tally_warmup_task", None)))
-    await timed_step("slack_listener_ms", lambda: cancel_and_wait(getattr(app.state, "slack_listener_task", None)))
-    await timed_step("slack_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "slack_backfill_task", None)))
-    await timed_step("discord_listener_ms", lambda: cancel_and_wait(getattr(app.state, "discord_listener_task", None)))
-    await timed_step("discord_backfill_ms", lambda: cancel_and_wait(getattr(app.state, "discord_backfill_task", None)))
     await timed_step("ext_usage_ms", ext_usage.stop_poller)
-    await timed_step("host_auth_ms", host_auth.stop_poller)
+    for name, stop_service in wiring.service_stops():
+      await timed_step(f"{name}_ms", stop_service)
     await timed_step("http_client_ms", close_http_client)
-    await timed_step("scheduler_ms", scheduler.stop)
     await timed_step("ws_close_ms", streaming_manager.close_all)
     await timed_step("merge_pool_ms", pages.shutdown_merge_executor)
   finally:
@@ -530,43 +416,12 @@ with gc_off(collect=False):
 
   # Page router (GET / — Jinja2 rendered)
   app.include_router(pages.router, tags=["pages"])
-  app.include_router(host_auth.router, tags=["host-auth"])
 
-  # API routers
+  # Runtime API routers
   app.include_router(sessions.router, prefix="/api/sessions", tags=["sessions"])
   app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
   app.include_router(threads.router, prefix="/api/threads", tags=["threads"])
-  app.include_router(latex.router, prefix="/api/latex", tags=["latex"])
-  app.include_router(backlog.router, prefix="/api/backlog", tags=["backlog"])
   app.include_router(internal.router, prefix="/api/internal", tags=["internal"])
-  app.include_router(cron.router, prefix="/api/cron", tags=["cron"])
-  app.include_router(diag.router, prefix="/api/diag", tags=["diag"])
-  app.include_router(git.router, prefix="/api/git", tags=["git"])
-  app.include_router(code_server.router, prefix="/api/code-server", tags=["code-server"])
-  app.include_router(ext_usage.router, prefix="/api", tags=["ext-usage"])
-  app.include_router(anthropic_proxy.router, prefix="/api/anthropic-proxy", tags=["anthropic-proxy"])
-  app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
-
-  # File server (filesystem browser), mounted under the one canonical prefix FILE_SERVER_MOUNTS
-  # holds: "/absolute_filepath", the form written into chat text — the prefix names what has to
-  # follow it, so a link missing its absolute prefix reads as wrong where it is written. The
-  # legacy "/files" and "/file" spellings are unmounted: nothing answers there, both 404.
-  for mount in FILE_SERVER_MOUNTS:
-    app.include_router(files.router, prefix=mount, tags=["files"])
-
-# ---------------------------------------------------------------------------
-# WebSocket preview relay for voice input (one streaming transcription backend's
-# live partials for one recording; the handler lives with the voice endpoints)
-# ---------------------------------------------------------------------------
-
-
-@app.websocket("/ws/voice/{session_id}")
-async def voice_preview_websocket(websocket: WebSocket, session_id: str, backend: str = "") -> None:
-  """Stream one recording's live partials from the ?backend= transcription backend."""
-  if not await _check_ws_auth(websocket):
-    return
-  await voice.voice_preview_relay(websocket, session_id, backend)
-
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint for session-level events (master CC + worker summaries)
@@ -578,7 +433,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
   """Push session-level events (master CC output, worker summaries) to the browser."""
   # Auth + accept happen inline here because cursor negotiation (unique to this
   # endpoint) must read a message from the accepted socket before subscribing.
-  if not await _check_ws_auth(websocket):
+  if not await check_ws_auth(websocket):
     return
   await websocket.accept()
   log.info("session_ws_connected", session_id=session_id)
@@ -763,24 +618,19 @@ async def _replay_aggregated_catchup(
 
 
 # ---------------------------------------------------------------------------
-# WebSocket endpoint for the host-global terminal
+# Registered routers: every package's HTTP and websocket routes, in registration order
 # ---------------------------------------------------------------------------
 
-
-@app.websocket("/ws/terminal")
-async def terminal_websocket(websocket: WebSocket) -> None:
-  """Attach the browser to the host-global tmux terminal."""
-  if not await _check_ws_auth(websocket):
-    return
-  await websocket.accept()
-  log.info("terminal_ws_connected")
-  try:
-    from src.features.terminal.terminal import run_terminal_attachment
-
-    await run_terminal_attachment(websocket)
-  finally:
-    log.info("terminal_ws_disconnected")
-
+# The same bulk build as the assembly above: importing each router module registers its
+# routes against pydantic models. The file server's catch-all routes register last, so
+# every other route answers first.
+with gc_off(collect=False):
+  for router_module, router_prefix, router_tags, router_attr in wiring.routers():
+    app.include_router(
+        getattr(importlib.import_module(router_module), router_attr),
+        prefix=router_prefix,
+        tags=list(router_tags),
+    )
 
 # ---------------------------------------------------------------------------
 # Static files (CSS, JS, images — NOT the SPA)

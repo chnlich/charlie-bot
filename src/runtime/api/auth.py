@@ -4,7 +4,7 @@ import hmac
 import json
 from http import cookies
 
-from starlette import types
+from starlette import types, websockets
 
 from src.infra import config, constants
 from src.runtime import run_token
@@ -166,6 +166,22 @@ async def _send_unauthorized(send: types.Send, html: bool) -> None:
     body, headers = _JSON_401_BODY, _JSON_401_HEADERS
   await send({"type": "http.response.start", "status": 401, "headers": headers})
   await send({"type": "http.response.body", "body": body})
+
+
+async def check_ws_auth(websocket: websockets.WebSocket) -> bool:
+  """Validate access-key auth for WebSocket connections.
+
+  Returns True if the connection is authorized, False otherwise
+  (and closes the socket with code 4401).
+  """
+  access_key = config.configured_access_key()
+  if not access_key:
+    return True
+  token = websocket.query_params.get("token", "")
+  if _credential_matches(token, access_key):
+    return True
+  await websocket.close(code=4401)
+  return False
 
 
 class AuthMiddleware:

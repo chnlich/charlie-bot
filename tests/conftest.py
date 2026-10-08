@@ -261,6 +261,11 @@ from src.runtime.threads import ThreadManager  # noqa: E402
 from src.runtime.triggers import TriggerManager  # noqa: E402
 
 from src.features.artifacts import headless_render  # noqa: E402
+from src.app import registrations  # noqa: E402
+
+# Tests that build an app or run the CLI see the registered routers, commands and services
+# the way the server does; the registry fills before collection.
+registrations.register_all()
 
 # The pytester fixture: the budget mechanism's own test drives inner pytest
 # sessions (tests/test_pytest_budget.py).

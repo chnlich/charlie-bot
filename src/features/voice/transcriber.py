@@ -142,7 +142,7 @@ def voice_model_paths(cfg: CharlieBotConfig) -> VoiceModelPaths:
 def provision_models(cfg: CharlieBotConfig) -> None:
   """Provision the speech models once per process; failures park the error.
 
-  Runs on a worker thread (server._provision_speech_models): this module's numpy
+  Runs on a worker thread (src.features.voice.service._provision_speech_models): this module's numpy
   import and everything torch-adjacent behind it must stay off the event loop's
   startup path, so the caller imports this module inside its thread. A provisioning
   failure lands in _provisioning_error for get_ready_model_paths to raise.
@@ -594,7 +594,7 @@ WARMUP_FREQUENCY_HZ = 440.0
 def warm_up_bundle(bundle: _SpeechModelBundle) -> None:
   """Decode one deterministic 0.5 s 440 Hz sine through every pool instance.
 
-  Serves server._provision_speech_models: it moves each instance's first-decode
+  Serves src.features.voice.service._provision_speech_models: it moves each instance's first-decode
   cold cost (CUDA kernel init + memory allocation on the GPU engine, measured ~5 s;
   ONNX arena allocation on the CPU engine, measured ~0.5 s) from the first real
   request to boot. The decoded text carries no signal — a same-shape sine pays the

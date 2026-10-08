@@ -20,8 +20,9 @@ Known-alive symbols:
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
 - Every FastAPI route handler in `src/runtime/api/*.py` and the feature `api.py` modules (functions under `@router.get/post/patch/put/
   delete/websocket` decorators, e.g. `get_backlog`, `list_cron_tasks`,
-  `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` mounts
-  each router with `include_router(prefix=...)` and `web/static/js/` fetches the composed paths
+  `rate_round`, `get_events_jsonl`) — reached by URL string: `server.py` includes
+  each router with `include_router(prefix=...)` (the package routers through the wiring registry,
+  `src/app/registrations.py`) and `web/static/js/` fetches the composed paths
   (e.g. `/rounds/{id}/rate` from `chat/ratings-recap.js`). The Python function names have exactly zero whole-repo matches outside
   their definitions, so vulture flags each one as an unused function; they must never be deleted on
   that evidence alone. `openai_compatible_messages` above is the same class, kept as its own entry
@@ -70,20 +71,21 @@ Known-alive symbols:
   Python name has exactly zero whole-repo matches outside its definition, so vulture flags it as
   an unused function. Same class as the route handlers above, kept as its own entry
   because these live in `server.py` itself.
-  (`terminal_websocket` needs no entry: `tests/test_terminal_backend.py` imports it by name, so the
-  Step 3 grep finds it.)
-- `voice_preview_websocket` — `@app.websocket` handler in `server.py` (`/ws/voice/{session_id}`),
+  (`terminal_websocket`, in `src/features/terminal/api.py`, needs no entry: `tests/test_terminal_backend.py`
+  imports it by name, so the Step 3 grep finds it.)
+- `voice_preview_websocket` — `@ws_router.websocket` handler in `src/features/voice/api.py` (`/ws/voice/{session_id}`),
   reached by URL string: `web/static/js/voice-input.js` dials `/ws/voice/${sessionId}` with the
   transcription backend named in the `?backend=` query, and `tests/voice_input_run.test.js`
   asserts the composed URL. The Python name has exactly zero whole-repo matches outside its
   definition, so vulture flags it as an unused function. Same class as the `session_websocket`
-  entry above. The recording and upload endpoints themselves are `src/features/voice/api.py` route
-  handlers, covered by the route-handler entry.
-- `slack_listener_task`, `slack_backfill_task` — `app.state` task handles assigned in the root
-  `server.py` lifespan and read by string: the shutdown loop iterates
-  `for attr in ("slack_listener_task", "slack_backfill_task")` and fetches each via
-  `getattr(app.state, attr, None)`. Vulture flags the `slack_backfill_task` assignment as an unused
-  attribute; the names appear only at the write and inside the string tuple.
+  entry above. The recording and upload endpoints are `router` handlers in the same file, covered by
+  the route-handler entry.
+- `register` (the `__init__.py` of each package listed in `src/app/registrations.py`), `start_service`
+  and `stop_service` (each module named in a `wiring.register_service` call), and `ws_router` and
+  `mounted_router` (the router attributes named in a `wiring.register_router` call) — reached by
+  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, and the router loop
+  in `server.py` import the module from its path string and read the attribute by name. The names
+  have zero whole-repo matches outside their definitions, so vulture flags them as unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/infra/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has

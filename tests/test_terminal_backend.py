@@ -4,12 +4,11 @@ import pytest
 from src.infra import constants
 from src.runtime.agent_process import pty_common
 
-# Import-path patch targets for the server's terminal websocket. server.py defines _check_ws_auth
-# and its websocket handlers read it as a module global at call time, and the terminal handler
-# imports run_terminal_attachment at call time (`from src.features.terminal.terminal import
-# run_terminal_attachment` inside terminal_websocket), so monkeypatch.setattr lands both stand-ins
-# on their defining module attributes and the handler's reads resolve them.
-SERVER_CHECK_WS_AUTH_PATCH_TARGET = "server._check_ws_auth"
+# Import-path patch targets for the terminal websocket. The handler reads check_ws_auth off
+# src.runtime.api.auth and run_terminal_attachment off src.features.terminal.terminal at call time,
+# so monkeypatch.setattr lands both stand-ins on their defining module attributes and the
+# handler's reads resolve them.
+CHECK_WS_AUTH_PATCH_TARGET = "src.runtime.api.auth.check_ws_auth"
 TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET = "src.features.terminal.terminal.run_terminal_attachment"
 
 
@@ -51,7 +50,7 @@ async def test_run_tmux_strips_session_env(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.parametrize("auth_ok", [True, False], ids=["accepts", "rejects"])
 async def test_terminal_websocket_ws_auth_gate(monkeypatch: pytest.MonkeyPatch, auth_ok: bool) -> None:
   """The attach runs only behind one auth check: a failed check neither accepts the socket nor attaches."""
-  import server
+  from src.features.terminal import api as terminal_api
 
   ws = _AcceptingWebSocket()
   checked = []
@@ -64,10 +63,10 @@ async def test_terminal_websocket_ws_auth_gate(monkeypatch: pytest.MonkeyPatch, 
   async def fake_run_terminal_attachment(websocket: fastapi.WebSocket) -> None:
     attached.append(websocket)
 
-  monkeypatch.setattr(SERVER_CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
+  monkeypatch.setattr(CHECK_WS_AUTH_PATCH_TARGET, fake_check_ws_auth)
   monkeypatch.setattr(TERMINAL_RUN_TERMINAL_ATTACHMENT_PATCH_TARGET, fake_run_terminal_attachment)
 
-  await server.terminal_websocket(ws)
+  await terminal_api.terminal_websocket(ws)
 
   assert checked == [ws]
   assert ws.accepted is auth_ok

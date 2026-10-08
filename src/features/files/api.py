@@ -544,3 +544,12 @@ async def serve_file(path: str, request: fastapi.Request) -> responses.Response:
     return _ServedFileResponse(str(fs_path), media_type=media_type)
   except PermissionError as e:
     raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
+
+
+# The file server answers under the one canonical prefix FILE_SERVER_MOUNTS holds: "/absolute_filepath",
+# the form written into chat text. The prefix names what has to follow it, so a link missing its absolute
+# prefix reads as wrong where it is written. The "/files" and "/file" spellings are unmounted: nothing
+# answers there, both 404. The routes list is complete here, after every route of `router` is declared.
+mounted_router = fastapi.APIRouter()
+for _mount in constants.FILE_SERVER_MOUNTS:
+  mounted_router.include_router(router, prefix=_mount)

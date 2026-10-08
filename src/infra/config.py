@@ -245,15 +245,6 @@ class _CronSnapshot:
     self.fingerprint: object = None
 
 
-class BacklogRepoConfig(BaseModel):
-  """A single backlog repo entry: label + path."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  label: str
-  path: str
-
-
 class HomeService(BaseModel):
   """A service this host runs, listed on the /home page and probed for reachability."""
 
@@ -344,123 +335,14 @@ class BackendsConfig(BaseModel):
   options: list[Annotated[SerializeAsAny[BackendOption], BeforeValidator(parse_option)]] = []
 
 
-class VoiceConfig(BaseModel):
-  """``voice:`` section: transcription backend and local-engine selection."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # Voice transcription engine. 'sherpa' runs the CPU ONNX pipeline everywhere; 'qwen3_hf'
-  # runs the official transformers Qwen3-ASR weights on NVIDIA GPUs (gpu-voice dependency
-  # group + weights, provisioned by scripts/setup.sh on hosts with nvidia-smi). Engine
-  # changes take effect on server restart. Selects the transcription backend id 'local'
-  # engine only; the cloud backends ignore it.
-  engine: Literal['sherpa', 'qwen3_hf'] = 'sherpa'
-
-  # Model repository id for the qwen3_hf engine; switching tiers (1.7B <-> 0.6B) is a
-  # one-value change.
-  model_id: str = 'Qwen/Qwen3-ASR-1.7B-hf'
-
-  # Transcription backend used before the user picks one in the page's dropdown. One of
-  # the transcription registry's ids (src/features/voice/transcription/registry.py); the voice
-  # package's config check (src/features/voice/config_check.py) fails config load on a typo.
-  default_backend: str = 'local'
-
-  # Proper-noun vocabulary passed to the backends that support it (Gemini's
-  # customVocabulary, Muse's keywords); the local engine ignores it.
-  vocabulary: list[str] = []
-
-  # Language hints as BCP-47 base codes (zh, en), mapped by each backend to its own wire
-  # format; empty lets every backend auto-detect.
-  languages: list[str] = []
-
-  # aigw gateway root URL for the 'gemini-aigw' backend, which sends the whole
-  # recording through the gateway's /gemini pass-through to Gemini 3.5 Transcribe.
-  # Empty leaves that backend unavailable. Credential: credentials.yaml aigw.api_key.
-  aigw_base_url: str = ''
-
-
-class CodeServerConfig(BaseModel):
-  """``code_server:`` section: code-server integration."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # code-server integration
-  bin: str | None = None
-  config: str = "configs/code-server.yaml"
-
-
 class UiConfig(BaseModel):
-  """``ui:`` section: the backlog panel and the /home page service cards."""
+  """``ui:`` section: the /home page service cards."""
 
   model_config = ConfigDict(extra='forbid')
-
-  # Backlog panel
-  backlog_repos: list[BacklogRepoConfig] = []
 
   # Home page — services this host runs, probed for reachability; default empty. Each card
   # links to the URL and the probe connects to the same host and port.
   home_services: list[HomeService] = []
-
-  @model_validator(mode="after")
-  def _expand_tilde(self) -> UiConfig:
-    """Expand ``~`` in each backlog repo path."""
-    for entry in self.backlog_repos:
-      entry.path = os.path.expanduser(entry.path)
-    return self
-
-
-class SlackConfig(BaseModel):
-  """``slack:`` section: the summon entrypoint's user allow-list."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # Slack summon entrypoint
-  allowed_user_ids: list[str] = []  # Slack user ids allowed to summon; empty = nobody
-
-
-class DiscordConfig(BaseModel):
-  """``discord:`` section: the summon entrypoint's account map."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # Discord summon entrypoint
-  allowed_users: dict[str, str] = {}  # Discord user id -> the person that account belongs to; empty = nobody
-
-  @model_validator(mode="before")
-  @classmethod
-  def _reject_legacy_allow_list(cls, data: Any) -> Any:
-    """Reject the retired ``allowed_user_ids`` list, naming its successor.
-
-    The id -> person map replaced the plain id list: who asks is judged by the
-    person an account maps to, so a bare id list carries too little. No
-    compatibility path reads the old key.
-    """
-    if isinstance(data, dict) and "allowed_user_ids" in data:
-      raise ValueError(
-          "discord.allowed_user_ids is retired: move each allowed Discord user id into "
-          "discord.allowed_users as <user id>: <the person that account belongs to>")
-    return data
-
-
-class PublishConfig(BaseModel):
-  """``publish:`` section: the outbound static publish lane."""
-
-  model_config = ConfigDict(extra='forbid')
-
-  # Publish lane — the pair the outbound-link rewrite consumes (src/features/artifacts/publish.py):
-  # dir is the directory the host serves (a `tailscale serve` path, or a host-local
-  # static server a serve rule proxies to), and public_base_url is the base of the
-  # links readers outside the operator's devices open. Unconfigured (either one) makes
-  # publish unavailable; the reply path then refuses instead of falling back to a server-port link.
-  dir: Path | None = None
-  public_base_url: str | None = None
-
-  @model_validator(mode="after")
-  def _expand_tilde(self) -> PublishConfig:
-    """Expand ``~`` in the publish directory."""
-    if self.dir is not None:
-      self.dir = self.dir.expanduser()
-    return self
 
 
 class TelegramConfig(BaseModel):
@@ -521,12 +403,7 @@ class CharlieBotConfig(BaseModel):
   server: ServerConfig = Field(default_factory=ServerConfig)
   paths: PathsConfig = Field(default_factory=PathsConfig)
   backends: BackendsConfig = Field(default_factory=BackendsConfig)
-  voice: VoiceConfig = Field(default_factory=VoiceConfig)
-  code_server: CodeServerConfig = Field(default_factory=CodeServerConfig)
   ui: UiConfig = Field(default_factory=UiConfig)
-  slack: SlackConfig = Field(default_factory=SlackConfig)
-  discord: DiscordConfig = Field(default_factory=DiscordConfig)
-  publish: PublishConfig = Field(default_factory=PublishConfig)
   telegram: TelegramConfig = Field(default_factory=TelegramConfig)
 
   @classmethod
@@ -621,27 +498,6 @@ class CharlieBotConfig(BaseModel):
     return REPO_ROOT
 
   @property
-  def code_server_config_path(self) -> Path:
-    path = Path(self.code_server.config).expanduser()
-    if path.is_absolute():
-      return path
-    return self.charlie_bot_repo / path
-
-  @property
-  def code_server_listen_port(self) -> int:
-    data = load_yaml(self.code_server_config_path, default={})
-    if not isinstance(data, dict):
-      raise ValueError(f"code-server config must be a YAML mapping: {self.code_server_config_path}")
-    bind_addr = data.get("bind-addr")
-    if not isinstance(bind_addr, str) or ":" not in bind_addr:
-      raise ValueError(f"code-server config must define bind-addr: {self.code_server_config_path}")
-    port_text = bind_addr.rsplit(":", 1)[1]
-    try:
-      return int(port_text)
-    except ValueError as exc:
-      raise ValueError(f"code-server bind-addr port must be an integer: {bind_addr}") from exc
-
-  @property
   def config_file(self) -> Path:
     return self.charliebot_home / CONFIG_FILENAME
 
@@ -730,17 +586,7 @@ LEGACY_KEYS: dict[str, str] = {
     "worktree_dir": "paths.worktree_dir",
     "backend_options": "backends.options",
     "model_preference": "backends.preference",
-    "voice_engine": "voice.engine",
-    "voice_model_id": "voice.model_id",
-    "code_server_bin": "code_server.bin",
-    "code_server_config": "code_server.config",
-    "backlog_repos": "ui.backlog_repos",
     "home_services": "ui.home_services",
-    "backlog_repo": "removed (list the repo under ui.backlog_repos)",
-    "backlog_label": "removed",
-    "slack_allowed_user_ids": "slack.allowed_user_ids",
-    "publish_dir": "publish.dir",
-    "public_base_url": "publish.public_base_url",
     "telegram_chat_id": "telegram.chat_id",
     CREDENTIALS_PREFIX + "slack_bot_token": "slack.bot_token",
     CREDENTIALS_PREFIX + "slack_app_token": "slack.app_token",

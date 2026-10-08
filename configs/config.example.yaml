@@ -105,10 +105,13 @@ code_server:
 # Plan page-height gate: absolute path of a headless-chromium-compatible binary.
 headless_chrome_bin: ""
 
-# UI: the backlog panel and the /home page service cards.
+# UI: the /home page service cards.
 ui:
-  backlog_repos: []
   home_services: []
+
+# Backlog: the repos the backlog panel lists.
+backlog:
+  repos: []
 
 # Slack: the summon entrypoint's user allow-list.
 slack:

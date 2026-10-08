@@ -54,14 +54,14 @@
       {% endfor %}
     };
     const VOICE_BACKENDS = [
-      {% for backend in voice_backends %}
+      {% for backend in (voice_backends() if voice_backends is defined else []) %}
       {id: {{ backend.id|tojson }}, label: {{ backend.label|tojson }}, livePartials: {{ backend.live_partials|tojson }}, unavailableReason: {{ backend.unavailable_reason|tojson }}},
       {% endfor %}
     ];
-    const VOICE_DEFAULT_BACKEND = {{ voice_default_backend|tojson }};
+    const VOICE_DEFAULT_BACKEND = {{ (voice_default_backend() if voice_default_backend is defined else none)|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
-    const PREVIEW_MODE = {{ preview_mode|tojson }};
+    const PREVIEW_MODE = {{ (preview_mode() if preview_mode is defined else false)|tojson }};
     globalThis.__CHARLIEBOT_PREVIEW__ = PREVIEW_MODE;
   </script>
 </head>
@@ -96,7 +96,7 @@
       <!-- Logo -->
       <div class="p-4 border-b border-slate-700">
         <h1 class="text-lg font-bold text-blue-400">CharlieBot{% if version %} <span class="text-xs text-slate-500 font-normal hidden sm:inline">{{ version }}</span>{% endif %}</h1>
-        {% if preview_mode %}
+        {% if preview_mode is defined and preview_mode() %}
         <p id="preview-indicator" class="mt-1 text-xs font-medium text-amber-300">Preview — isolated trial instance</p>
         {% endif %}
       </div>
@@ -212,7 +212,7 @@
           </svg>
         </a>
         <div id="tab-buttons" class="flex gap-1">
-          {% if not preview_mode %}
+          {% if preview_mode is not defined or not preview_mode() %}
           <button onclick="switchTab('terminal')" id="btn-terminal" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Terminal</button>
           {% endif %}
           <button onclick="switchTab('chat-tex')" id="btn-chat-tex" class="tab-btn px-3 py-2 text-sm rounded-lg font-medium transition-colors text-slate-400 hover:text-slate-200">Chat w/ TeX</button>

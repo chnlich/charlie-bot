@@ -129,8 +129,10 @@ Known-alive symbols:
   delete.
 - `model_config` (the pydantic v2 `ConfigDict` class attribute, assigned on the pydantic
   `BaseModel` classes of `src/infra/backend_models.py`, `src/infra/config.py`, `src/infra/models.py`,
-  `src/backends/claude_code/claude_config.py`, `src/features/diag/api.py`, and
-  `src/features/cron/api.py`) — `ModelMetaclass`
+  `src/backends/claude_code/claude_config.py`, `src/features/artifacts/config.py`,
+  `src/features/backlog/config.py`, `src/features/code_server/config.py`,
+  `src/features/diag/api.py`, `src/features/discord/config.py`, `src/features/slack/config.py`,
+  `src/features/voice/config.py`, and `src/features/cron/api.py`) — `ModelMetaclass`
   consumes it by attribute name at class-definition time. Every assignment pins
   `extra='forbid'`, which turns an unknown config or request key into a validation error, except
   `TaskCreate` in `src/features/cron/api.py`, which pins
@@ -268,7 +270,8 @@ Known-alive symbols:
   `option_default_model` docstring's reference (`src/infra/backend_models.py`), so vulture
   flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
-- `_expand_tilde` (`src/infra/config.py`, on `PathsConfig`, `UiConfig`, and `PublishConfig`) —
+- `_expand_tilde` (`PathsConfig` in `src/infra/config.py`, `BacklogConfig` in
+  `src/features/backlog/config.py`, and `PublishConfig` in `src/features/artifacts/config.py`) —
   pydantic `@model_validator(mode='after')` methods, registered with pydantic at
   class-definition time and invoked during model validation: each expands `~` in its
   section's path settings against the process HOME. The method name has exactly zero
@@ -428,7 +431,7 @@ Known-alive symbols:
   installs neither attribute raises AttributeError on the first help render. Vulture flags
   each as an unused attribute and a whole-repo grep finds only the assignment lines. Never
   delete them on that evidence.
-- `_reject_legacy_allow_list` (`src/infra/config.py`, on `DiscordConfig`) — pydantic
+- `_reject_legacy_allow_list` (`DiscordConfig` in `src/features/discord/config.py`) — pydantic
   `@model_validator(mode="before")` classmethod: it rejects the retired
   `discord.allowed_user_ids` list at startup, naming `discord.allowed_users` as its
   successor. The name has exactly zero whole-repo matches outside its definition, so

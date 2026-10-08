@@ -7,7 +7,7 @@
 <div class="flex-1 flex items-center justify-center">
   <div class="text-center">
     <h2 class="text-xl font-semibold text-slate-400 mb-2">Welcome to CharlieBot</h2>
-    {% if preview_mode %}
+    {% if preview_mode is defined and preview_mode() %}
     <p class="text-slate-500 mb-4">Create or select a task to get started</p>
     {% else %}
     <p class="text-slate-500 mb-4">Create or select a session to get started</p>

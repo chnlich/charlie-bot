@@ -244,6 +244,39 @@ def seed_memory_store(home: Path) -> None:
       encoding="utf-8")
 
 
+def first_registered_origin() -> tuple[str, BaseModel]:
+  """The field name and one built model of the first registered session-metadata ``*_origin`` field.
+
+  The model's required ``str`` fields take synthetic digit strings. Called after
+  ``registrations.register_all()``, so every feature package's registration is visible.
+  """
+  from typing import get_args
+
+  from pydantic import BaseModel
+
+  from src.infra import metadata_slot_registration
+  from src.infra.deferred import import_attr
+
+  for registration in metadata_slot_registration.registered():
+    if registration.on != metadata_slot_registration.ON_SESSION:
+      continue
+    model = import_attr(registration.model)
+    for field_name, field in model.model_fields.items():
+      if not field_name.endswith("_origin"):
+        continue
+      candidates = get_args(field.annotation) or (field.annotation,)
+      origin_model = next((c for c in candidates if isinstance(c, type) and issubclass(c, BaseModel)), None)
+      if origin_model is None:
+        continue
+      values = {
+          name: str(900_000_000_000_000_010 + index)
+          for index, (name, info) in enumerate(origin_model.model_fields.items())
+          if info.is_required() and info.annotation is str
+      }
+      return field_name, origin_model(**values)
+  raise RuntimeError("no registered session-metadata model has an *_origin field")
+
+
 async def seed_scenario(home: Path) -> dict:
   """Create the acceptance scenario's task tree and recorded run facts.
 
@@ -829,32 +862,28 @@ async def seed_scenario(home: Path) -> dict:
     await session_mgr.star_session(feature.id)
 
     # --- the Threads view's chat-thread subtree (S25b) ------------------
-    # One discord-origin session in the group named for its channel, with
-    # one delegated child: Workspace lists neither, the Threads pill lists
-    # the pair nested, and no group-header plus button renders there.
-    from src.features.discord.metadata import DiscordOrigin
-    discord_thread = await tree.create_task(
-        request_id="seed-discord-thread",
+    # One chat-origin session in the group named for its channel, with one
+    # delegated child: Workspace lists neither, the Threads pill lists the
+    # pair nested, and no group-header plus button renders there. The origin
+    # is the first registered session-metadata ``*_origin`` field's model,
+    # built with synthetic digit strings, so the fixture names no platform.
+    origin_field, origin = first_registered_origin()
+    chat_thread = await tree.create_task(
+        request_id="seed-chat-thread",
         task_parent_id=None,
         profile="manager",
         task=None,
-        name="Discord #general 2026",
+        name="Chat #general 2026",
         backend=None,
-        group="Discord #general",
-        slot_values={
-            "discord_origin":
-                DiscordOrigin(
-                    guild_id="900000000000000010",
-                    parent_channel_id="900000000000000011",
-                    thread_id="900000000000000012")
-        },
+        group="Chat #general",
+        slot_values={origin_field: origin},
         caller=OP)
-    discord_thread_child = await tree.create_task(
-        request_id="seed-discord-child",
-        task_parent_id=discord_thread.id,
+    chat_thread_child = await tree.create_task(
+        request_id="seed-chat-child",
+        task_parent_id=chat_thread.id,
         profile="manager",
         task=TaskSpec(goal="the thread session's delegated child"),
-        name="Discord thread child",
+        name="Chat thread child",
         backend=None,
         caller=OP)
 
@@ -969,8 +998,8 @@ async def seed_scenario(home: Path) -> dict:
         "archived_root": archived_root.id,
         "grouped_root": grouped_root.id,
         "group_name": "Alpha team",
-        "discord_thread": discord_thread.id,
-        "discord_thread_child": discord_thread_child.id,
+        "chat_thread": chat_thread.id,
+        "chat_thread_child": chat_thread_child.id,
         "alpha_second": alpha_second.id,
         "alpha_third": alpha_third.id,
         "live_run": "run-live",
@@ -2397,8 +2426,8 @@ async def run_harness(args: argparse.Namespace) -> None:
 
       # ---- S25b: the Threads pill — the chat-thread subtree's own view --
       # Workspace (the first paint's own list) lists neither the
-      # discord-origin session nor its delegated child; clicking Threads
-      # lists the pair nested under "Discord #general" with no
+      # chat-origin session nor its delegated child; clicking Threads
+      # lists the pair nested under "Chat #general" with no
       # group-header plus button (the Settings gear stays); reloading
       # with filter=threads in the URL stays on Threads.
       try:
@@ -2410,30 +2439,30 @@ async def run_harness(args: argparse.Namespace) -> None:
                     [...document.querySelectorAll('#session-list .session-name')].map(el => el.textContent)
                 """)
         assert_true(
-            not any("Discord #general 2026" in n or "Discord thread child" in n for n in workspace_names),
+            not any("Chat #general 2026" in n or "Chat thread child" in n for n in workspace_names),
             f"Workspace lists neither the thread session nor its child ({workspace_names})")
 
         await evaluate(cdp, session_id, "document.getElementById('filter-threads').click()")
         await wait_for(
             cdp,
             session_id, "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
-            f" && !!document.getElementById('session-{ids['discord_thread']}')",
+            f" && !!document.getElementById('session-{ids['chat_thread']}')",
             timeout=12,
             label="Threads renders the thread session")
         nesting = json.loads(
             await evaluate(
                 cdp, session_id, f"""
                     (() => {{
-                      const child = document.getElementById('session-{ids['discord_thread_child']}');
+                      const child = document.getElementById('session-{ids['chat_thread_child']}');
                       const group = child && child.closest('.session-group');
                       return JSON.stringify({{
                         group: group ? group.dataset.sgroupKey : null,
-                        nested: !!child && child.closest('[data-tree-children="{ids['discord_thread']}"]') !== null,
+                        nested: !!child && child.closest('[data-tree-children="{ids['chat_thread']}"]') !== null,
                       }});
                     }})()
                 """))
         assert_true(
-            nesting["group"] == "Discord #general" and nesting["nested"],
+            nesting["group"] == "Chat #general" and nesting["nested"],
             f"the child nests under its parent in the channel group ({nesting})")
         header_buttons = json.loads(
             await evaluate(
@@ -2459,7 +2488,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         await wait_for(
             cdp,
             session_id, "document.getElementById('filter-threads').classList.contains('bg-blue-600/20')"
-            f" && !!document.getElementById('session-{ids['discord_thread']}')",
+            f" && !!document.getElementById('session-{ids['chat_thread']}')",
             timeout=12,
             label="the reload stays on Threads")
         shot = await screenshot(cdp, session_id, results, "s25b_threads_reload")

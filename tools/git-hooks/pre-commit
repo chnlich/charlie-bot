@@ -4,18 +4,33 @@ set -euo pipefail
 repo_root=$(git rev-parse --show-toplevel)
 cd "$repo_root"
 
+# A feature package's leak_scan_files.txt names extra leak-scanned files; the
+# staged set rides the same manifests as check-skills-host-leak.sh.
+manifest_scan=()
+shopt -s nullglob
+for manifest in src/features/*/leak_scan_files.txt; do
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -n "$line" ]]; then
+      manifest_scan+=("$line")
+    fi
+  done < "$manifest"
+done
+shopt -u nullglob
+
 staged_files=()
 while IFS= read -r file; do
   case "$file" in
     skills/*.md | prompts/*.md)
       staged_files+=("$file")
-      ;;
-    # The host-auth panel files are leak-scanned too; the list mirrors
-    # check-skills-host-leak.sh's host_auth_scan.
-    src/features/host_auth/host_auth.py | src/features/host_auth/api.py | src/features/host_auth/templates/host_auth.html | tests/test_host_auth.py)
-      staged_files+=("$file")
+      continue
       ;;
   esac
+  for scan_file in "${manifest_scan[@]}"; do
+    if [[ "$file" == "$scan_file" ]]; then
+      staged_files+=("$file")
+      break
+    fi
+  done
 done < <(git diff --cached --name-only --diff-filter=ACMR)
 
 if [[ ${#staged_files[@]} -eq 0 ]]; then

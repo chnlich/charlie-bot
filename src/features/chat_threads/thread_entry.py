@@ -19,10 +19,9 @@ ack (``ack_messages``), the round-end audit (``deliver_done`` over
 The follow side wakes its session whatever the session's stored status: an
 archived thread session is revived first (unarchived, logged, its task-tree
 change broadcast), so any eligible thread message brings the session back to
-the sidebar's Threads view. Each per-platform entrypoint
-(``src.features.slack.slack_listener``, ``src.features.discord.discord_listener``) describes its
-platform with one ``ThreadPlatform`` instance built from its own constants and
-hands platform plus adapter to these functions. Imports point one way: the
+the sidebar's Threads view. Each platform listener describes its platform
+with one ``ThreadPlatform`` instance built from its own constants and hands
+platform plus adapter to these functions. Imports point one way: the
 entrypoint imports this module, never the reverse.
 """
 

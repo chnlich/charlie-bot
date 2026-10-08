@@ -380,36 +380,6 @@ def _slurm_label(host: str | None, job_id: int) -> str:
   return f"slurm:{job_id}" if host is None else f"{host}:slurm:{job_id}"
 
 
-# ---------------------------------------------------------------------------
-# Schema migration: legacy `watch_pids: list[int]` -> `watch_targets: list[WatchTarget]`
-# ---------------------------------------------------------------------------
-
-
-def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
-  """Parse a trigger JSON string, upgrading legacy watch fields in-memory.
-
-  Two legacy shapes are converged here (the single migration point):
-    - the original `watch_pids: list[int]` -> `watch_targets` of local pids;
-    - pre-discriminator `watch_targets` whose entries lack `kind` -> backfill
-      LOCAL_PID when host is None, REMOTE_PID when a host is set.
-
-  Returns (trigger, migrated). When `migrated` is True, the caller rewrites the
-  file once in the new schema.
-  """
-  data = json.loads(raw_text)
-  migrated = False
-  if "watch_pids" in data:
-    legacy = data.pop("watch_pids")
-    if "watch_targets" not in data:
-      data["watch_targets"] = [{"host": None, "pid": int(p)} for p in legacy] if legacy else []
-    migrated = True
-  for target in data.get("watch_targets") or []:
-    if "kind" not in target:
-      target["kind"] = (WatchKind.REMOTE_PID if target.get("host") is not None else WatchKind.LOCAL_PID).value
-      migrated = True
-  return PendingTrigger.model_validate(data), migrated
-
-
 class TriggerManager:
   """Manages delayed one-shot triggers that admit scheduled task inputs."""
 
@@ -616,7 +586,7 @@ class TriggerManager:
         for name in stale:
           path = triggers_dir / name
           try:
-            trigger, _ = _migrate_legacy_watch_pids(path.read_text(encoding="utf-8"))
+            trigger = PendingTrigger.model_validate(json.loads(path.read_text(encoding="utf-8")))
           except Exception as e:
             log.warning("trigger_load_failed", path=str(path), error=str(e))
             continue
@@ -658,14 +628,10 @@ class TriggerManager:
       for f in files:
         try:
           raw = await asyncio.to_thread(f.read_text, "utf-8")
-          trigger, migrated = _migrate_legacy_watch_pids(raw)
+          trigger = PendingTrigger.model_validate(json.loads(raw))
         except Exception as e:
           log.warning("trigger_recovery_load_failed", path=str(f), error=str(e))
           continue
-        if migrated:
-          # Rewrite the legacy file once with the new schema.
-          await write_model_json_atomically(f, trigger)
-          log.info("trigger_schema_migrated", path=str(f), trigger_id=trigger.id)
         if trigger.status == TriggerStatus.PENDING:
           self._start_task(trigger)
           log.info("trigger_recovered", trigger_id=trigger.id, session=trigger.session_id)
@@ -1097,9 +1063,9 @@ class TriggerManager:
     # failure drops the trigger from one poll).
     await write_model_json_atomically(self._trigger_path(trigger.session_id, trigger.id), trigger)
     # Schedule, cancel, and undeliverable all move a session's pending count through
-    # this method, so the sidebar snapshot is told here. recover_pending's schema
-    # migration writes trigger files directly and preserves each trigger's status,
-    # so the pending count cannot change there and no dirty mark is owed. The
+    # this method, so the sidebar snapshot is told here. recover_pending only
+    # reads trigger files, so the pending count cannot change there and no dirty
+    # mark is owed. The
     # mark stays path-less: a trigger save is user-action rare, and the status
     # re-probe it schedules refreshes the pending-trigger snapshot the sidebar
     # bell and the pending-triggers tray read.
@@ -1109,8 +1075,7 @@ class TriggerManager:
     path = self._trigger_path(session_id, trigger_id)
     async with aiofiles.open(path) as f:
       raw = await f.read()
-    trigger, _ = _migrate_legacy_watch_pids(raw)
-    return trigger
+    return PendingTrigger.model_validate(json.loads(raw))
 
 
 def _format_suffix(

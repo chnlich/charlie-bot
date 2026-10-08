@@ -25,25 +25,19 @@ if TYPE_CHECKING:
 
 log = LazyStructlogLogger()
 
-_NEXT_RUN_MEMO: dict[tuple[str, str], tuple[datetime, str]] = {}
 _ROW_SCHEDULE_MEMO: tuple[object, tuple[str, ...], dict[str, dict], datetime] | None = None
 _ROW_SCHEDULE_NO_FIRE = datetime.max.replace(tzinfo=UTC)
 
 
 def next_run_iso(cron_expr: str, timezone: str, now_utc: datetime) -> str:
-  """ISO next fire time of *cron_expr* in *timezone*, memoized until it passes."""
-  hit = _NEXT_RUN_MEMO.get((cron_expr, timezone))
-  if hit is not None and now_utc < hit[0]:
-    return hit[1]
+  """ISO next fire time of *cron_expr* in *timezone*, computed on every call."""
   from src.features.cron.scheduler import load_croniter
 
   if "croniter" not in globals():
     load_croniter(globals())
   tz = ZoneInfo(timezone)
-  next_run = croniter(cron_expr, datetime.now(tz)).get_next(datetime)  # noqa: F821  # bound by load_croniter
-  iso = next_run.isoformat()
-  _NEXT_RUN_MEMO[(cron_expr, timezone)] = (next_run, iso)
-  return iso
+  now = datetime.now(tz)
+  return croniter(cron_expr, now).get_next(datetime).isoformat()  # noqa: F821  # bound by load_croniter
 
 
 def scheduled_report_prefix(task_name: str) -> str:

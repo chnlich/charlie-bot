@@ -14,12 +14,12 @@ var MAX_EXPANDED_ARTIFACTS = 3;
 var htmlArtifactFetchCache = new Map();
 var expandedArtifactCards = [];
 
-// The one prefix the file server answers on (server.py mounts the router under
-// FILE_SERVER_MOUNTS's single element): "/absolute_filepath/", the form written into chat
-// text. The legacy "/files/" alias is unmounted server-side, so it is not a file-server
-// prefix here either. Every link below is normalized to the absolute path it names before
-// anything else looks at it, so cards, dedupe keys, cache keys and the plan version badge
-// see one path per file.
+// The one prefix the file server answers on (the files package mounts its router under the
+// single element of FILE_SERVER_MOUNTS in src/runtime/file_urls.py): "/absolute_filepath/", the
+// form written into chat text. The legacy "/files/" alias is unmounted server-side, so it is
+// not a file-server prefix here either. Every link below is normalized to the absolute path it
+// names before anything else looks at it, so cards, dedupe keys, cache keys and the plan
+// version badge see one path per file.
 var FILE_SERVER_PREFIXES = ['/absolute_filepath'];
 var FILE_SERVER_PREFIX = FILE_SERVER_PREFIXES[0];
 var FILE_SERVER_PREFIX_GROUP = '(?:' + FILE_SERVER_PREFIXES.join('|') + ')';
@@ -49,12 +49,11 @@ function parseLinkUrl(href) {
 
 // A link naming this page's hostname with a different scheme or port is pulled back to the
 // page origin only when its path sits under a file-server prefix: those are routes the page
-// origin itself serves (server.py mounts the one files router under FILE_SERVER_MOUNTS's
-// single prefix), so a link there whose scheme or port was written from memory is still
-// unambiguous. Any
-// other path names another frontend on this host (the publish lane and each neighboring
-// port serve their own server), and is left exactly as written. Another hostname is another
-// server, and is returned as written.
+// origin itself serves (the files package mounts its router under the single prefix of
+// FILE_SERVER_MOUNTS in src/runtime/file_urls.py), so a link there whose scheme or port was
+// written from memory is still unambiguous. Any other path names another frontend on this
+// host (the publish lane and each neighboring port serve their own server), and is left
+// exactly as written. Another hostname is another server, and is returned as written.
 function isFileServerPath(pathname) {
   for (var i = 0; i < FILE_SERVER_PREFIXES.length; i++) {
     if (pathname === FILE_SERVER_PREFIXES[i] || pathname.indexOf(FILE_SERVER_PREFIXES[i] + '/') === 0) return true;

@@ -39,7 +39,6 @@ from zoneinfo import ZoneInfo
 
 from src.infra import event_types as ET
 from src.infra.config import HOUSE_TIMEZONE, CharlieBotConfig
-from src.infra.constants import FILE_SERVER_MOUNTS
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     PendingTrigger,
@@ -52,6 +51,7 @@ from src.infra.tasks import create_logged_task
 from src.runtime.api import deps
 from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
+from src.runtime.file_urls import FILE_SERVER_MOUNTS
 from src.runtime.master_trigger import trigger_master
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import ArchivedSessionError, TriggerManager

@@ -241,6 +241,7 @@ from src.backends.codex.codex import CodexBackend  # noqa: E402
 from src.backends.gemini.gemini_cli import GeminiCliBackend  # noqa: E402
 from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
 from src.runtime.worker import Worker  # noqa: E402
+from src.features.cron import loader as cron_loader  # noqa: E402
 from src.features.cron.api import router as cron_router  # noqa: E402
 from src.runtime.api.deps import get_session_manager, get_task_manager, get_thread_manager  # noqa: E402
 from src.runtime.api.internal import router as internal_router  # noqa: E402
@@ -1491,8 +1492,9 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
 # Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py binds
-# both names at import scope (`from src.infra.config import get_config, get_scheduled_tasks`),
-# so monkeypatch.setattr lands the stand-in on the src.features.cron.scheduler module attribute and
+# both names at import scope (`from src.infra.config import get_config`,
+# `from src.features.cron.loader import get_scheduled_tasks`), so monkeypatch.setattr lands the
+# stand-in on the src.features.cron.scheduler module attribute and
 # _maybe_run/_reload_config resolve it at call time.
 SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.get_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
@@ -2266,7 +2268,7 @@ def dump_yaml(body: Any) -> str:
 
 
 def reset_config_caches() -> None:
-  """Clear src.infra.config's module-level caches so the next read reloads from disk.
+  """Clear the config and cron-loader module-level caches so the next read reloads from disk.
 
   The config cache and the cron snapshot both key freshness on a fingerprint,
   so an instance cached under an earlier test's profile would answer for the
@@ -2278,7 +2280,7 @@ def reset_config_caches() -> None:
   core_config._credentials_cache.reset()
   from src.infra import home as core_home
   core_home._home_cache.clear()
-  core_config._cron_snapshot = core_config._CronSnapshot()
+  cron_loader._cron_snapshot = cron_loader._CronSnapshot()
 
 
 def stub_credentials(sections: dict[str, dict[str, str | int]]) -> None:

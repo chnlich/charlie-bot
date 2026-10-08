@@ -18,7 +18,9 @@ from conftest import (
 )
 
 from src.features.cron import api as cron_api
-from src.infra.config import CharlieBotConfig, ScheduledTaskConfig, _load_cron_file
+from src.features.cron.config import ScheduledTaskConfig
+from src.features.cron.loader import _load_cron_file
+from src.infra.config import CharlieBotConfig
 from src.runtime.sessions import SessionManager
 
 
@@ -27,7 +29,7 @@ def _patch_cron_d(monkeypatch: pytest.MonkeyPatch, cron_dir: Path) -> None:
 
   src.features.cron.api binds cron_dir and cron_path as separate module globals, so
   both must move; patching cron_dir alone leaves cron_path resolving the real
-  profile directory through src.infra.config.
+  profile directory through src.features.cron.loader.
   """
   monkeypatch.setattr(cron_api, "cron_dir", lambda: cron_dir)
   monkeypatch.setattr(cron_api, "cron_path", lambda name: cron_dir / f"{name}.yaml")

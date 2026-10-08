@@ -15,8 +15,9 @@ from conftest import (
 )
 
 from src.features.backlog.backlog_loop import _handle_stale
+from src.features.backlog.config import ImprovementLoopConfig
+from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
-from src.infra.config import ImprovementLoopConfig, ScheduledTaskConfig
 from src.infra.models import parse_utc_datetime
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager

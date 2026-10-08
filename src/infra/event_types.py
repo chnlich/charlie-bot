@@ -198,10 +198,6 @@ TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"
 
-# -- Scheduled-task runs ------------------------------------------------------
-# TASK_TRIGGERED is the manual scheduled-task run endpoint's response type.
-TASK_TRIGGERED = "task_triggered"
-
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
 # Claude Code emits this raw-stream event when the subscription/API answers

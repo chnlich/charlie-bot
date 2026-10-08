@@ -18,6 +18,7 @@ import pytest
 import yaml
 from conftest import OPUS_BACKEND_ID, OPUS_BACKEND_OPTION
 
+from src.features.cron import event_types as cron_event_types
 from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
@@ -102,7 +103,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
     resp = client.post("/api/cron/tasks/nightly/run")
   assert resp.status_code == 202
   assert resp.json() == {
-      "type": ET.TASK_TRIGGERED,
+      "type": cron_event_types.TASK_TRIGGERED,
       "task": "nightly",
       "session_id": meta.id,
       "thread_id": None,

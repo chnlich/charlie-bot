@@ -1,6 +1,7 @@
 """Cron's startup check: every task and step `backend` names a `backends.options` id."""
 
-from src.infra.config import CharlieBotConfig, get_scheduled_tasks
+from src.features.cron.loader import get_scheduled_tasks
+from src.infra.config import CharlieBotConfig
 
 
 def check_backend_refs(cfg: CharlieBotConfig) -> None:

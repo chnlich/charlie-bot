@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
+from src.features.cron import loader
 from src.features.cron.cron_files import write_cron_key
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
@@ -146,7 +147,7 @@ class CronSequenceController(SequenceController):
     ids = tuple(sorted(set(session_ids)))
     global _ROW_SCHEDULE_MEMO
     hit = _ROW_SCHEDULE_MEMO
-    tasks, fingerprint = config.scheduled_tasks_snapshot()
+    tasks, fingerprint = loader.scheduled_tasks_snapshot()
     if (hit is not None and now_utc < hit[3] and hit[1] == ids and fingerprint == hit[0]):
       return hit[2]
     out: dict[str, dict] = {}

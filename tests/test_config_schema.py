@@ -10,6 +10,7 @@ from conftest import ROOT, backend_option
 from pydantic import ValidationError
 
 from src.app import registrations
+from src.features.cron import loader as cron_loader
 from src.infra import config as config_module
 from src.infra.config import CHARLIEBOT_HOME_ENV, CharlieBotConfig, require_backends
 from src.runtime.hooks import wiring
@@ -262,7 +263,7 @@ def _home_with_cron_tasks(home: Path, cron_tasks: dict[str, dict]) -> CharlieBot
       task["prompt_file"] = str(prompt_file)
     (cron_d / f"{name}.yaml").write_text(yaml.safe_dump(task), encoding="utf-8")
   cfg = config_module.load_config()
-  assert {task.name for task in config_module.get_scheduled_tasks()} == set(cron_tasks)
+  assert {task.name for task in cron_loader.get_scheduled_tasks()} == set(cron_tasks)
   return cfg
 
 

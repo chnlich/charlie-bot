@@ -13,6 +13,7 @@ import pathlib
 import conftest
 import pytest
 
+from src.features.cron import loader as cron_loader
 from src.infra import config as core_config
 
 # Both caches are keyed on nothing but their own mtimes, so a cached instance
@@ -98,7 +99,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   asyncio.run(core_init.init_seed.init_charliebot_home())
 
   cfg = core_config.get_config()
-  core_config.get_scheduled_tasks()
+  cron_loader.get_scheduled_tasks()
   api_cron.cron_dir().mkdir(parents=True, exist_ok=True)
   api_cron._write_cron_yaml("probe", {"cron": "* * * * *", "prompt": "p"})
   assert api_cron._read_cron_yaml("probe") == {"cron": "* * * * *", "prompt": "p"}

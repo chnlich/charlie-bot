@@ -1,6 +1,6 @@
 """Acceptance tests for cron load-failure Telegram alerting.
 
-At every cron snapshot reload, ``src/infra/config.py::_fire_cron_error_alert``
+At every cron snapshot reload, ``src/features/cron/loader.py::_fire_cron_error_alert``
 compares the fresh broken-task name set against the last-alerted set persisted
 at ``<CHARLIEBOT_HOME>/state/cron_alert_fingerprint.json``: a transition to a
 non-empty set fires one ``"⚠️ cron tasks failed to load: <names>"``, a transition back
@@ -18,10 +18,11 @@ import pathlib
 import conftest
 import pytest
 
+from src.features.cron import loader
 from src.infra import config
 
 # Import-path patch target for the Telegram delivery the cron-load alert posts. The alert helper
-# in src/infra/config.py imports send_telegram at call time (lazy, notifications imports config),
+# in src/features/cron/loader.py imports send_telegram at call time (lazy: only the alert send needs it),
 # so that import resolves the stand-in landed on the src.infra.notifications module attribute;
 # import-scope binders of the same function keep their own bound object and
 # are not intercepted through this route.
@@ -48,7 +49,7 @@ def _fire(error_names: list[str]) -> None:
   """Run one alert evaluation on a fresh loop, draining the fired send task."""
 
   async def go() -> None:
-    config._fire_cron_error_alert(error_names)
+    loader._fire_cron_error_alert(error_names)
     await asyncio.sleep(0)
     await asyncio.sleep(0)
 
@@ -84,7 +85,7 @@ def test_no_event_loop_skips_send_without_persisting(
 ) -> None:
   # Synchronous CLI context: no running loop, so nothing is sent and nothing is
   # persisted — the next looped evaluation transitions again and fires.
-  config._fire_cron_error_alert(["x"])
+  loader._fire_cron_error_alert(["x"])
   assert not sent
   assert not _state_file(temp_home).exists()
 

@@ -4,7 +4,8 @@ import datetime
 import pathlib
 import re
 
-from src.infra import config, git, models, yaml_utils
+from src.features.backlog import config
+from src.infra import git, models, yaml_utils
 
 _PRIORITY_ORDER = {'high': 0, 'medium': 1, 'low': 2}
 _BACKLOG_DESCRIPTION_RULE = (
@@ -231,16 +232,17 @@ async def determine_action(backlog_path: pathlib.Path, loop_cfg: config.Improvem
   return ('noop', None)
 
 
-async def scheduled_loop_action(task_cfg: config.ScheduledTaskConfig) -> tuple[str, str | None]:
+async def scheduled_loop_action(*, name: str, repo: str | None,
+                                loop: config.ImprovementLoopConfig) -> tuple[str, str | None]:
   """Cron loop action: the next improvement-loop action for a loop task's backlog.
 
-  Returns (action_type, prompt_text). prompt_text is None for noop and stale_reset: the fire has
-  no worker to run.
+  `name` and `repo` are the task's; `loop` is its `loop:` section. Returns (action_type, prompt_text).
+  prompt_text is None for noop and stale_reset: the fire has no worker to run.
   """
-  if not task_cfg.repo:
-    raise ValueError(f"loop task '{task_cfg.name}' requires 'repo'")
-  repo_path = pathlib.Path(task_cfg.repo)
-  action_type, prompt = await determine_action(repo_path / task_cfg.loop.backlog, task_cfg.loop, repo_path)
+  if not repo:
+    raise ValueError(f"loop task '{name}' requires 'repo'")
+  repo_path = pathlib.Path(repo)
+  action_type, prompt = await determine_action(repo_path / loop.backlog, loop, repo_path)
   if action_type in ('noop', 'stale_reset'):
     return action_type, None
   return action_type, prompt

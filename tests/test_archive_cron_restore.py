@@ -99,7 +99,7 @@ async def test_auto_bind_restore_leaves_the_legacy_status_branch_alone(cron_env)
   assert tree.task_state(node.id) == "open"
 
   scheduler = Scheduler(cfg, session_mgr)
-  from src.infra.config import ScheduledTaskConfig
+  from src.features.cron.config import ScheduledTaskConfig
 
   task_cfg = ScheduledTaskConfig(
       name="nightly", cron="0 3 * * *", prompt="run nightly", enabled=True, timezone="America/Los_Angeles")

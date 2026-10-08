@@ -9,13 +9,9 @@ from pydantic import BaseModel, ConfigDict
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from src.features.cron.scheduler import effective_scheduled_task_backend
-from src.infra import event_types as ET
-from src.infra.compression import gzip_level1
-from src.infra.config import (
-    CharlieBotConfig,
-    ScheduledTaskConfig,
-    ScheduledTaskFields,
+from src.features.cron import event_types as ET
+from src.features.cron.config import ScheduledTaskConfig, ScheduledTaskFields
+from src.features.cron.loader import (
     _load_cron_file,
     _valid_cron_name,
     _validate_cron_body,
@@ -23,8 +19,10 @@ from src.infra.config import (
     cron_path,
     get_scheduled_task_errors,
     get_scheduled_tasks,
-    require_backend_option,
 )
+from src.features.cron.scheduler import effective_scheduled_task_backend
+from src.infra.compression import gzip_level1
+from src.infra.config import CharlieBotConfig, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
 from src.infra.responses import GZIP_RESPONSE_HEADERS, PreencodedJSONResponse, fast_json_bytes, request_wants_gzip
@@ -53,7 +51,7 @@ def _write_cron_yaml(name: str, data: dict) -> None:
 
 
 def _validate_cron_name(name: str) -> None:
-  """Raise the routes' 400 unless *name* passes :func:`src.infra.config._valid_cron_name`, the rule's one home."""
+  """Raise the routes' 400 unless *name* passes :func:`src.features.cron.loader._valid_cron_name`, the rule's one home."""
   if not _valid_cron_name(name):
     raise HTTPException(status_code=400, detail=f'invalid cron name: {name!r}')
 

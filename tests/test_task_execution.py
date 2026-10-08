@@ -661,8 +661,9 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # second process for their operation.
   assert len(builds) == 3
   captured_envs = [build["backend"].env or {} for build in builds]
-  assert {env.get(SESSION_ID_ENV_VAR) for env in captured_envs} == {
-      child_id, first_named.json()["session_id"], sibling.json()["session_id"]}
+  assert {env.get(SESSION_ID_ENV_VAR) for env in captured_envs
+         } == {child_id, first_named.json()["session_id"],
+               sibling.json()["session_id"]}
   assert all(env.get(RUN_TOKEN_ENV) for env in captured_envs)
   assert all(env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home) for env in captured_envs)
   worker_run = await tree.runs.get_run(child_id, run_id)

@@ -89,7 +89,8 @@ async def test_master_child_environment_carries_its_own_session_id(
   # A server started from inside another session's shell hands down a stale id.
   monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
 
-  item = make_work_item(cfg, models.SessionMetadata(profile="manager", id="live-session", name="Live"), cfg.backends.options[0])
+  item = make_work_item(
+      cfg, models.SessionMetadata(profile="manager", id="live-session", name="Live"), cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 
   assert _read_env_dump(dump)[SESSION_ID_ENV_VAR] == "live-session"

@@ -104,7 +104,10 @@ async def test_improve_stays_blocked_without_takeoff() -> None:
 
   with pytest.raises(HTTPException) as exc_info:
     await improve_api.start_improve_loop(
-        req, cfg=CharlieBotConfig(charliebot_home=Path("/tmp/improve-stub")), session_mgr=session_mgr, task_mgr=task_mgr)
+        req,
+        cfg=CharlieBotConfig(charliebot_home=Path("/tmp/improve-stub")),
+        session_mgr=session_mgr,
+        task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 403
   assert exc_info.value.detail == "blocked"

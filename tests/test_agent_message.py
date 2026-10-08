@@ -48,7 +48,11 @@ async def test_session_message_refuses_an_archived_task_node(tmp_path: pathlib.P
   with conftest.make_internal_router_client(cfg, session_mgr, tree) as client:
     response = client.post(
         "/api/internal/session-message",
-        json={"session_id": caller.id, "target_session_id": target.id, "content": "status please"},
+        json={
+            "session_id": caller.id,
+            "target_session_id": target.id,
+            "content": "status please"
+        },
     )
 
   assert response.status_code == 409

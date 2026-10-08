@@ -162,4 +162,3 @@ class BackendLifecycle:
   def assign_thread_native_id(self, thread: ThreadMetadata, native_id: str | None) -> None:
     """Record on ``thread`` the conversation id that the runtime chose for the task."""
     return
-

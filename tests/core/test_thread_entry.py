@@ -75,9 +75,7 @@ def fakechat_metadata_access(monkeypatch: pytest.MonkeyPatch) -> None:
 
   def fields_of(meta, owner: str):
     if owner == "fakechat":
-      return SimpleNamespace(
-          fakechat_origin=meta.fakechat_origin,
-          fakechat_watermark_id=meta.fakechat_watermark_id)
+      return SimpleNamespace(fakechat_origin=meta.fakechat_origin, fakechat_watermark_id=meta.fakechat_watermark_id)
     return real_fields_of(meta, owner)
 
   def set_fields(meta, owner: str, **values: object) -> None:

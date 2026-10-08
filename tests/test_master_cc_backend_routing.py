@@ -111,7 +111,8 @@ async def test_run_cc_thread_session_pins_clc_context_window(tmp_path: Path, mon
   captured: dict[str, object] = {}
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
 
-  session_meta = models.SessionMetadata(profile="manager",
+  session_meta = models.SessionMetadata(
+      profile="manager",
       id="session-id",
       name="Thread",
       backend="charlie-code-kimi-k3",
@@ -208,7 +209,8 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   assert error_msg is None
 
   # Run 2: the anchored session passes the anchor through as the resume id.
-  anchored_meta = models.SessionMetadata(profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
+  anchored_meta = models.SessionMetadata(
+      profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
   item2 = make_work_item(cfg, anchored_meta, cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item2)
 
@@ -221,7 +223,8 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = build_antigravity_cfg(tmp_path)
-  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
+  session_meta = models.SessionMetadata(
+      profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())
 

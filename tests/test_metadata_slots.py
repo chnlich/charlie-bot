@@ -149,8 +149,7 @@ def test_fields_of_and_set_fields_validate_types() -> None:
   assert metadata_slots.fields_of(meta, "probe").probe_count == 3, "a refused write changes nothing"
 
   # A stored value of the wrong type still loads; reading it through the owner's view is what fails.
-  loaded = models.SessionMetadata.model_validate_json(
-      '{"name": "s", "profile": "manager", "probe_count": "many"}')
+  loaded = models.SessionMetadata.model_validate_json('{"name": "s", "profile": "manager", "probe_count": "many"}')
   with pytest.raises(ValidationError):
     metadata_slots.fields_of(loaded, "probe")
 

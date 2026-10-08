@@ -165,8 +165,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
   async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        run_task_manager_message(
-            cfg, SessionMetadata(id=session_id, name="t", profile="manager"), "first", callbacks))
+        run_task_manager_message(cfg, SessionMetadata(id=session_id, name="t", profile="manager"), "first", callbacks))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
     # For injections fired during the consumer's teardown awaits, the work item
@@ -224,8 +223,6 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
 # ---------------------------------------------------------------------------
 # Zero-output guard: a settled run with all-zero usage and no output fails loudly
 # ---------------------------------------------------------------------------
-
-
 class _EventsBackend(TerminateFlagBackend):
   """Backend double that yields a fixed event stream, then exits with the given code."""
 
@@ -331,7 +328,8 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   session = await mgr.create_session(CreateSessionRequest(name="anchor-preserved"))
   await mgr.persist_cc_session_id(session.id, "kept-anchor")
 
-  snapshot = SessionMetadata(profile="manager", id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)
+  snapshot = SessionMetadata(
+      profile="manager", id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = "kept-anchor"
   item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 

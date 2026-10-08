@@ -201,7 +201,7 @@ async def test_subtree_map_rederives_after_a_metadata_write(tmp_path: pathlib.Pa
   """The derived map rides the listings memo's staleness bounds, so a write
   between two reads must be visible to the second read and not to a stale map."""
   fx = await _build_fixture(tmp_path)
-  warmed = await fx.session_mgr.cron_subtree_roots()
+  warmed = await fx.session_mgr.sequence_subtree_roots()
   assert fx.worker.id in warmed and fx.ordinary.id not in warmed
   # Attach the plain session under the cron session: the write funnel bumps the
   # listings revision, the next listing rebuilds its list, and the map keyed on
@@ -209,11 +209,11 @@ async def test_subtree_map_rederives_after_a_metadata_write(tmp_path: pathlib.Pa
   meta = await fx.session_mgr.get_session(fx.ordinary.id)
   meta.task_parent_id = fx.cron.id
   await fx.session_mgr.save_metadata(meta)
-  attached = await fx.session_mgr.cron_subtree_roots()
+  attached = await fx.session_mgr.sequence_subtree_roots()
   assert attached[fx.ordinary.id] == fx.cron.id
   # Detach again: the map drops the member on the next read.
   meta = await fx.session_mgr.get_session(fx.ordinary.id)
   meta.task_parent_id = None
   await fx.session_mgr.save_metadata(meta)
-  detached = await fx.session_mgr.cron_subtree_roots()
+  detached = await fx.session_mgr.sequence_subtree_roots()
   assert fx.ordinary.id not in detached

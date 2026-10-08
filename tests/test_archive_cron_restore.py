@@ -50,7 +50,7 @@ async def test_cron_editor_enable_restores_the_bound_archived_node(cron_env) -> 
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   node = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   # Bind, then let the user archive the node (its cron task stops with it).
-  from src.runtime.scheduled_sessions import write_cron_key
+  from src.features.cron.cron_files import write_cron_key
   write_cron_key("nightly", "session_id", node.id)
   await tree.archive_subtree(node.id, caller=OPERATOR)
   assert tree.task_state(node.id) == "archived"

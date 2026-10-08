@@ -1,4 +1,4 @@
-"""Tests for SessionManager.recycle_scheduled_session and global event_index."""
+"""Tests for SessionManager.recycle_history_before and global event_index."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ async def test_recycle_deletes_only_old_terminal_threads(tmp_path: pathlib.Path)
   (bad_dir / "metadata.json").write_text("{not valid json", encoding="utf-8")
   (bad_dir / "sentinel.txt").write_text("x", encoding="utf-8")
 
-  result = await mgr.recycle_scheduled_session(session.id, cutoff)
+  result = await mgr.recycle_history_before(session.id, cutoff)
 
   assert result["threads_deleted"] == 3
   assert not (threads_dir / "old-completed").exists()
@@ -73,7 +73,7 @@ async def test_recycle_archives_old_chat_events_and_advances_offset(tmp_path: pa
   live_path = mgr.get_chat_events_path(session.id)
   conftest.append_events(live_path, events)
 
-  result = await mgr.recycle_scheduled_session(session.id, cutoff)
+  result = await mgr.recycle_history_before(session.id, cutoff)
 
   assert result["events_archived"] == 5
   archive_path = pathlib.Path(result["archive_file"])
@@ -122,7 +122,7 @@ async def test_recycle_noop_when_nothing_old(tmp_path: pathlib.Path) -> None:
   live_path = mgr.get_chat_events_path(session.id)
   conftest.append_events(live_path, events)
 
-  result = await mgr.recycle_scheduled_session(session.id, cutoff)
+  result = await mgr.recycle_history_before(session.id, cutoff)
 
   assert result["events_archived"] == 0
   assert result["archive_file"] is None

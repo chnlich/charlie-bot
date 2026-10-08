@@ -3,7 +3,6 @@
 import asyncio
 import json
 import uuid
-from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import get_args
@@ -13,94 +12,94 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, TypeAdapter, field_validator
 from starlette.responses import Response
 
-from src.features.cron.api import next_run_iso
 from src.infra import event_types as ET
 from src.infra.compression import gzip_level1
-from src.infra.config import CharlieBotConfig, get_config, scheduled_tasks_snapshot
+from src.infra.config import CharlieBotConfig, get_config
 from src.infra.event_types import BACKEND_SWITCHED
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
 from src.infra.models import (
-    AcknowledgeTaskInputsRequest,
-    AncestorRef,
-    CancelRunRequest,
-    CancelTaskRequest,
-    CompleteTaskRequest,
-    CreateSessionRequest,
-    DeleteGroupRequest,
-    EloneSessionRequest,
-    ForkSessionRequest,
-    PatchSessionTaskRequest,
-    RateRoundRequest,
-    RenameGroupRequest,
-    RetryRunRequest,
-    RunCancelResponse,
-    RunKind,
-    RunPage,
-    RunRow,
-    SessionMetadata,
-    SessionRow,
-    SessionStatus,
-    SetGroupRequest,
-    SwitchBackendRequest,
-    TaskState,
-    ThreadMetadata,
-    TriggerStatus,
-    UtcDatetime,
-    WorkerThreadRef,
-    WorkState,
+  AcknowledgeTaskInputsRequest,
+  AncestorRef,
+  CancelRunRequest,
+  CancelTaskRequest,
+  CompleteTaskRequest,
+  CreateSessionRequest,
+  DeleteGroupRequest,
+  EloneSessionRequest,
+  ForkSessionRequest,
+  PatchSessionTaskRequest,
+  RateRoundRequest,
+  RenameGroupRequest,
+  RetryRunRequest,
+  RunCancelResponse,
+  RunKind,
+  RunPage,
+  RunRow,
+  SessionMetadata,
+  SessionRow,
+  SessionStatus,
+  SetGroupRequest,
+  SwitchBackendRequest,
+  TaskState,
+  ThreadMetadata,
+  TriggerStatus,
+  UtcDatetime,
+  WorkerThreadRef,
+  WorkState,
 )
 from src.infra.responses import (
-    GZIP_RESPONSE_HEADERS,
-    FastJsonResponse,
-    PreencodedJSONResponse,
-    fast_json_bytes,
-    gzip_body_response,
-    gzip_file_fresh,
-    request_wants_gzip,
+  GZIP_RESPONSE_HEADERS,
+  FastJsonResponse,
+  PreencodedJSONResponse,
+  fast_json_bytes,
+  gzip_body_response,
+  gzip_file_fresh,
+  request_wants_gzip,
 )
 from src.runtime import sidebar_state, thinking_state
 from src.runtime.api.deps import (
-    SESSION_NOT_FOUND_DETAIL,
-    bad_request,
-    get_config_on_loop,
-    get_run_store,
-    get_session_manager,
-    get_task_manager,
-    get_thread_manager,
-    get_trigger_manager,
-    require_caller,
-    require_found,
-    require_session,
+  SESSION_NOT_FOUND_DETAIL,
+  bad_request,
+  get_config_on_loop,
+  get_run_store,
+  get_session_manager,
+  get_task_manager,
+  get_thread_manager,
+  get_trigger_manager,
+  require_caller,
+  require_found,
+  require_session,
 )
 from src.runtime.api.message_utils import (
-    SessionBootstrapData,
-    build_session_bootstrap_data,
-    events_to_messages,
-    get_message_projection_fast,
+  SessionBootstrapData,
+  build_session_bootstrap_data,
+  events_to_messages,
+  get_message_projection_fast,
 )
 from src.runtime.api.threads import view_thread_rows
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import backend_types
+from src.runtime.hooks.sequence_controllers import binding_for, sequence_listing_fields
 from src.runtime.message_aggregator import tool_preview
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
-from src.runtime.scheduled_sessions import cron_subtree_roots
+from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_sessions import (
-    AGENT_CREATE_SCOPE_REFUSAL,
-    TASK_CREATE_REQUEST_ID_REQUIRED,
-    TaskArchivedError,
-    TaskConflictError,
-    TaskForbiddenError,
-    TaskInvalidError,
-    TaskNotFoundError,
-    TaskTreeManager,
-    not_task_node_detail,
+  AGENT_CREATE_SCOPE_REFUSAL,
+  TASK_CREATE_REQUEST_ID_REQUIRED,
+  TaskArchivedError,
+  TaskConflictError,
+  TaskForbiddenError,
+  TaskInvalidError,
+  TaskNotFoundError,
+  TaskTreeManager,
+  not_task_node_detail,
 )
 from src.runtime.thinking_state import run_backend
 from src.runtime.threads import ThreadManager
@@ -125,7 +124,7 @@ def _default_backend_id(cfg: CharlieBotConfig) -> str:
 def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dict:
   # A worker node displays its newest Run's backend (the delegation's target
   # model), never the inherited creation value the persisted field carries.
-  from src.features.cron.cron_sequence import bound_task_name
+  binding = binding_for(meta.id)
   active_backend = (meta.run_backend or meta.backend) or _default_backend_id(cfg)
   active_backend_opt = cfg.get_backend_option(active_backend)
   return {
@@ -134,7 +133,8 @@ def _active_backend_payload(meta: SessionMetadata, cfg: CharlieBotConfig) -> dic
       "active_backend_type":
           active_backend_opt.type if active_backend_opt else "",
       "switchable_backends":
-          _switchable_backend_ids(active_backend, cfg, dedicated=bound_task_name(meta.id) is not None),
+          _switchable_backend_ids(
+              active_backend, cfg, dedicated=binding is not None and binding.dedicated_backend),
   }
 
 
@@ -345,10 +345,9 @@ async def project_worker_threads(
   return out
 
 
-# The model's transient schedule fields ride every row dump as nulls (they were
-# the deleted Scheduled listing's overlay slots); the join's answer replaces
-# them wholesale, so an unbound row carries none of them.
-_SCHEDULE_MODEL_NULLS = (
+# The model's transient schedule fields ride every row dump as nulls; the
+# registered controllers' listing fields replace them when a package owns them.
+_CONTROLLER_LISTING_MODEL_NULLS = (
     "schedule_cron",
     "schedule_timezone",
     "schedule_enabled",
@@ -357,74 +356,9 @@ _SCHEDULE_MODEL_NULLS = (
     "schedule_allow_failure",
 )
 
-# The join's one-entry memo. The fields map is a pure function of the id set
-# and the cron snapshot's fingerprint (scheduled_tasks_snapshot returns it, the
-# freshness key get_scheduled_tasks itself answers on), except schedule_next_run whose
-# answer stays valid until the fire time it names — the _NEXT_RUN_MEMO rule —
-# so the entry carries the earliest served fire and re-derives once now
-# crosses it. Callers read the map and never mutate it (apply_row_schedule
-# updates the row dump from it).
-_ROW_SCHEDULE_MEMO: tuple[object, tuple[str, ...], dict[str, dict], datetime] | None = None
-# An all-unbound answer holds no time-dependent field, so only the fingerprint
-# can retire it.
-_ROW_SCHEDULE_NO_FIRE = datetime.max.replace(tzinfo=UTC)
-
-
-def row_schedule_fields(session_ids: Iterable[str], now_utc: datetime) -> dict[str, dict]:
-  """The schedule payload per listed row, keyed on ``bound_task_name`` (plan 4.1).
-
-  The one join every sidebar list producer calls: a node a loaded task binds —
-  ``bound_task_name``, the loaded task whose ``session_id`` names the node —
-  carries ``schedule_task`` plus the four schedule fields computed from that
-  config the way the deleted Scheduled listing computed them; an unbound node
-  carries ``schedule_task: null`` and none of the four. ``next_run_iso`` serves
-  each occurrence until it passes, so a delivered next run never goes stale.
-  One snapshot of the task configs feeds both the predicate and the field
-  values, so a hot reload between the two reads cannot split the answer. A
-  repeat of an unchanged question (same id set, snapshot fingerprint, and no
-  served fire passed) serves the stored map whole.
-  """
-  ids = tuple(sorted(set(session_ids)))
-  global _ROW_SCHEDULE_MEMO
-  hit = _ROW_SCHEDULE_MEMO
-  tasks, fingerprint = scheduled_tasks_snapshot()
-  if (hit is not None and now_utc < hit[3] and hit[1] == ids and fingerprint == hit[0]):
-    return hit[2]
-  out: dict[str, dict] = {}
-  from src.features.cron.cron_sequence import bound_task_name  # the M99 import floor carries no schedule chain
-  for session_id in ids:
-    task_name = bound_task_name(session_id, tasks)
-    if task_name is None:
-      out[session_id] = {"schedule_task": None}
-      continue
-    # bound_task_name answered from this same snapshot, so the config exists.
-    task = next(t for t in tasks if t.name == task_name)
-    out[session_id] = {
-        "schedule_task": task.name,
-        "schedule_cron": task.cron,
-        "schedule_timezone": task.timezone,
-        "schedule_enabled": task.enabled,
-        "schedule_next_run": next_run_iso(task.cron, task.timezone, now_utc),
-        "schedule_allow_failure": task.allow_failure,
-    }
-  fires = [
-      datetime.fromisoformat(fields["schedule_next_run"])
-      for fields in out.values()
-      if fields["schedule_task"] is not None
-  ]
-  _ROW_SCHEDULE_MEMO = (fingerprint, ids, out, min(fires) if fires else _ROW_SCHEDULE_NO_FIRE)
-  return out
-
-
-def apply_row_schedule(dump: dict, fields: dict) -> dict:
-  """One listed row's payload: the model dump with the join's schedule fields.
-
-  Drops the model's always-null schedule slots first, so an unbound row carries
-  ``schedule_task: null`` and none of the four (the "unbound carries none"
-  half of the plan 4.1 table), then applies the bound overlay. Mutates *dump*
-  in place and returns it.
-  """
-  for key in _SCHEDULE_MODEL_NULLS:
+def apply_listing_fields(dump: dict, fields: dict) -> dict:
+  """One listed row's payload: the model dump with controller listing fields."""
+  for key in _CONTROLLER_LISTING_MODEL_NULLS:
     dump.pop(key, None)
   dump.update(fields)
   return dump
@@ -457,7 +391,7 @@ class _SessionsListMemos:
     # moves, so a slot can never serve a stale row's fields, and the two state
     # tuples in the slot re-state the render's remaining inputs. Payload dicts
     # are handed to the JSON renderer uncopied and never mutated after the
-    # schedule join, which is what keeps a shared slot read-only. Pruned to
+    # controller listing join, which keeps a shared slot read-only. Pruned to
     # the current projection after each changed round.
     self.row_render: dict[int, tuple[tuple, tuple, SessionMetadata, dict]] = {}
 
@@ -501,18 +435,18 @@ async def _sessions_list_response(
   identity-stable across requests, so the rendered body keys on the row
   identities plus the overlay states: a repeat of an unchanged corpus re-runs
   zero dumps (the search route's whole-body memo mechanism) and a reloaded
-  meta or moved overlay state re-renders. The schedule join rides the same
-  key, so a cron config change or a passing next-run re-renders the bound
+  meta or moved overlay state re-renders. The controller fields ride the same
+  key, so a controller config change or a passing next-run re-renders the bound
   rows. A worker_thread row's fields are construction-fixed, so only the
   parent rows carry overlay state.
   """
   projected = await project_worker_threads(rows, cfg, thread_mgr)
-  schedule_fields = row_schedule_fields((row.id for row in projected), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in projected), datetime.now(UTC))
   rendered: list[tuple[SessionMetadata, tuple, tuple]] = []
   for row in projected:
-    schedule_state = tuple(schedule_fields[row.id].items())
+    listing_state = tuple(listing_fields[row.id].items())
     if row.worker_thread is not None:
-      rendered.append((row, (), schedule_state))
+      rendered.append((row, (), listing_state))
       continue
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
@@ -532,17 +466,17 @@ async def _sessions_list_response(
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
                 _UTC_DATETIME_JSON.dump_python(next_trigger, mode="json") if next_trigger is not None else None,
                 entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL], display_backend, entry.get(sidebar_state.WORK_STATE)),
-            schedule_state))
+            listing_state))
   list_rows = tuple(row for row, _s, _sched in rendered)
-  list_states = tuple((state, schedule_state) for _row, state, schedule_state in rendered)
+  list_states = tuple((state, listing_state) for _row, state, listing_state in rendered)
   cached = memos.whole_body
   if (cached is not None and len(cached[0]) == len(list_rows) and
       all(c is r for c, r in zip(cached[0], list_rows, strict=True)) and cached[1] == list_states):
     return await gzip_body_response(request, cached[2], {}, memos.gzip_memo)
   payload = []
-  for row, (state, schedule_state) in zip(list_rows, list_states, strict=True):
+  for row, (state, listing_state) in zip(list_rows, list_states, strict=True):
     rendered = memos.row_render.get(id(row))
-    if rendered is not None and rendered[0] == state and rendered[1] == schedule_state:
+    if rendered is not None and rendered[0] == state and rendered[1] == listing_state:
       payload.append(rendered[3])
       continue
     dump = row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE)
@@ -556,8 +490,8 @@ async def _sessions_list_response(
         # running/waiting icons without a poll. A legacy row's key
         # set stays byte-identical (the dump already carries the field's null).
         dump[sidebar_state.WORK_STATE] = work_state
-    payload.append(apply_row_schedule(dump, dict(schedule_state)))
-    memos.row_render[id(row)] = (state, schedule_state, row, payload[-1])
+    payload.append(apply_listing_fields(dump, dict(listing_state)))
+    memos.row_render[id(row)] = (state, listing_state, row, payload[-1])
   if len(memos.row_render) > len(list_rows):
     # A row that left the projection (archived, completed, filtered) holds a
     # slot nothing will ever consult again; drop it so the map stays at the
@@ -581,17 +515,17 @@ async def list_sessions(
 ) -> Response:
   """List active sessions newest first, each legacy row followed by its worker-leaf rows.
 
-  Cron-subtree rows and the chat-thread subtree ride no listing: a firing leaf
+  Sequence-subtree rows and the chat-thread subtree ride no listing: a firing leaf
   whose parent chain reaches a cron session stays out, and so does every
   Slack/Discord thread session with the descendants its ``task_parent_id``
   chains reach (the sidebar's Threads view lists that subtree through
   /chat-threads), so a parentless leaf never flattens into a top-level row.
-  Every row's schedule fields come from the one join (row_schedule_fields).
+  Every row's controller fields come from the one listing join.
   """
   rows, derived = await _active_listing_corpus(session_mgr)
-  cron_subtree = await session_mgr.cron_subtree_roots()
+  sequence_subtree = await session_mgr.sequence_subtree_roots()
   chat_threads = await session_mgr.chat_thread_subtree_roots()
-  rows = [row for row in rows if row.id not in cron_subtree and row.id not in chat_threads]
+  rows = [row for row in rows if row.id not in sequence_subtree and row.id not in chat_threads]
   return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _workspace_list_memos)
 
 
@@ -608,7 +542,7 @@ async def list_chat_threads(
   only rows kept are the Slack/Discord thread sessions — a session carrying a
   chat-thread origin — and every descendant their
   ``task_parent_id`` chains reach, the projected legacy worker-thread leaves
-  included. Row shape, projection, schedule join, and render are the shared
+  included. Row shape, projection, controller listing fields, and render are the shared
   helper's; the render memos are this route's own, so the two lists never
   evict each other.
   """
@@ -706,11 +640,11 @@ async def list_archived_sessions(
     raise HTTPException(status_code=422, detail=str(e)) from e
   rows = await project_worker_threads(page["sessions"], cfg, thread_mgr)
   # The projection above appends each legacy row's worker-thread leaves; under
-  # an archived cron session those leaves are cron-subtree rows and stay out.
+  # an archived sequence owner those leaves are subtree rows and stay out.
   # Every leaf's parent rides the page, so the membership walk classifies the
   # projected rows from the page's own rows.
-  cron_subtree = cron_subtree_roots(rows)
-  rows = [row for row in rows if row.id not in cron_subtree]
+  sequence_subtree = sequence_subtree_roots(rows)
+  rows = [row for row in rows if row.id not in sequence_subtree]
   context = await session_mgr.archived_context_rows(rows)
   # One page list, newest first: the stable sort keeps the archived rows in
   # their keyset order and interleaves the context rows by the same key.
@@ -718,10 +652,10 @@ async def list_archived_sessions(
       [*((False, row) for row in rows), *((True, row) for row in context)],
       key=lambda pair: (pair[1].updated_at, pair[1].id),
       reverse=True)
-  schedule_fields = row_schedule_fields((row.id for _context_only, row in merged), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for _context_only, row in merged), datetime.now(UTC))
   page["sessions"] = []
   for context_only, row in merged:
-    dump = apply_row_schedule(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), schedule_fields[row.id])
+    dump = apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
     if context_only:
       dump["context_only"] = True
     page["sessions"].append(dump)
@@ -746,9 +680,9 @@ async def list_starred_sessions(
       include_pending_trigger_status=True,
   )
   projected = await project_worker_threads(sessions, cfg, thread_mgr)
-  schedule_fields = row_schedule_fields((row.id for row in projected), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in projected), datetime.now(UTC))
   return [
-      apply_row_schedule(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), schedule_fields[row.id])
+      apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
       for row in projected
   ]
 
@@ -1511,9 +1445,8 @@ async def switch_session_backend(
   id: the target backend starts its own native conversation when it cannot
   continue the held one (``backend_types.same_continuation_domain`` judges
   that at turn start), and catches up from the session's chat log. A
-  cron-dedicated session keeps the in-domain restriction — the scheduler
-  re-aligns it to its task config on every trigger, so its backend is decided
-  by that config, and an out-of-domain target is refused.
+  A sequence-dedicated session keeps the in-domain restriction through its
+  registered binding's backend policy.
 
   A session from before the native_backend rule (a held id with no recorded
   producer) is backfilled here, before the backend field changes, so the next
@@ -1527,16 +1460,12 @@ async def switch_session_backend(
   if body.backend == effective_current:
     return parent
 
-  from src.features.cron.cron_sequence import bound_task_name
-  bound_task = bound_task_name(parent.id)
-  if bound_task is not None and not backend_types.same_continuation_domain(effective_current, body.backend, cfg):
+  binding = binding_for(parent.id)
+  if (binding is not None and binding.dedicated_backend and
+      not backend_types.same_continuation_domain(effective_current, body.backend, cfg)):
     raise HTTPException(
         status_code=400,
-        detail=(
-            f"backend '{body.backend}' cannot be switched to in place: this session is the bound node "
-            f"of scheduled task '{bound_task}', whose cron config decides its backend and whose "
-            "scheduler re-aligns the node to that config on every tick. Edit the task's config in the "
-            "cron editor, or clone/fork the session with the target backend instead."),
+        detail=binding.backend_lock_detail(body.backend),
     )
 
   # The pre-rule backfill: record the effective current backend as the held

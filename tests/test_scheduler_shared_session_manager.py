@@ -3,7 +3,7 @@
 A private SessionManager inside Scheduler keeps its own chat-event cache, so a cron
 round would land on disk while /bootstrap and WS catchup — which all read the
 process-wide instance's cache — keep serving the pre-cron history. The scheduler's
-bookkeeping goes through the task-tree owner (record_scheduled_fire) and its events
+bookkeeping goes through the task-tree owner (update_slot_fields) and its events
 through persist_and_broadcast, so both singletons must be the injected instances.
 """
 

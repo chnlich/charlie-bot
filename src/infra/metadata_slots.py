@@ -149,6 +149,20 @@ def set_fields(meta: SessionMetadata | ThreadMetadata, owner: str, **values: Any
     setattr(meta, name, getattr(validated, name))
 
 
+def copy_fields(
+    source: SessionMetadata | ThreadMetadata,
+    target: SessionMetadata | ThreadMetadata,
+    owner: str,
+    *,
+    names: tuple[str, ...] | None = None,
+) -> None:
+  """Copy all or selected fields of one registered owner from *source* to *target*."""
+  values = fields_of(source, owner).model_dump()
+  if names is not None:
+    values = {name: values[name] for name in names}
+  set_fields(target, owner, **values)
+
+
 def _owned_names(on: str) -> dict[str, str]:
   return {name: owner for owner, slot in _slots[on].items() for name in slot.names}
 

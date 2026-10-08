@@ -113,7 +113,7 @@ async def test_snapshot_folds_segments_before_the_live_file(
   await tree.archive_subtree(node.id, caller=OPERATOR)  # the close fact, live file
   # The real segment writer: the rotation moves the closed-period events into
   # data/archives/chat_events.<iso-year>-W<week>.jsonl.
-  await session_mgr.recycle_scheduled_session(node.id, datetime.now(UTC) + timedelta(seconds=1))
+  await session_mgr.recycle_history_before(node.id, datetime.now(UTC) + timedelta(seconds=1))
   segments = sorted((cfg.sessions_dir / node.id / "data" / "archives").glob("chat_events.*.jsonl"))
   assert segments, "the rotation wrote no segment"
   segment_types = [

@@ -817,7 +817,7 @@ async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) ->
   cutoff, events = archive_cutoff_events()
   live_path = mgr.get_chat_events_path(session_id)
   append_events(live_path, events)
-  await mgr.recycle_scheduled_session(session_id, cutoff)
+  await mgr.recycle_history_before(session_id, cutoff)
   return cutoff, live_path
 
 

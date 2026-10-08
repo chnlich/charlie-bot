@@ -18,7 +18,7 @@ from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.cron_files import write_cron_key
 from src.features.cron.loader import get_scheduled_tasks
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config, require_backend_option
+from src.infra.config import CharlieBotConfig, load_config, require_backend_option
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
@@ -593,15 +593,9 @@ class Scheduler:
   # ---------------------------------------------------------------------------
 
   def _reload_config(self) -> CharlieBotConfig:
-    """Refresh the process-wide config so new tasks are picked up dynamically.
-
-    Routes through the fingerprint-cached ``get_config``: an unchanged
-    ``config.yaml`` costs one stat-key comparison per tick instead of a full
-    YAML parse on the event loop, and a changed file still lands within one
-    tick — the same freshness the per-tick disk read guaranteed.
-    """
+    """Re-read config.yaml from disk so new tasks are picked up dynamically."""
     try:
-      self._cfg = get_config()
+      self._cfg = load_config()
       return self._cfg
     except Exception as e:
       log.warning("scheduler_config_reload_failed", error=str(e))

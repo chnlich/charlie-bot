@@ -25,7 +25,7 @@ from conftest import (
     CODEX_BACKEND_OPTION,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
-    SCHEDULER_GET_CONFIG_PATCH_TARGET,
+    SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
     bind_deps_managers,
     init_repo_with_origin,
     make_cron_sessions_client,
@@ -76,7 +76,7 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       charliebot_home=tmp_path / "charliebot-home",
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  monkeypatch.setattr(SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
   session_mgr = SessionManager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)

@@ -1524,11 +1524,11 @@ SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.slack.slack_listener._bot
 DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET = "src.features.discord.discord_listener._bot_client"
 
 # Import-path patch targets for the scheduler's config reads. src/features/cron/scheduler.py binds
-# both names at import scope (`from src.infra.config import get_config`,
+# both names at import scope (`from src.infra.config import load_config`,
 # `from src.features.cron.loader import get_scheduled_tasks`), so monkeypatch.setattr lands the
 # stand-in on the src.features.cron.scheduler module attribute and
 # _maybe_run/_reload_config resolve it at call time.
-SCHEDULER_GET_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.get_config"
+SCHEDULER_LOAD_CONFIG_PATCH_TARGET = "src.features.cron.scheduler.load_config"
 SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET = "src.features.cron.scheduler.get_scheduled_tasks"
 
 

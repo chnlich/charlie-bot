@@ -334,7 +334,7 @@ async def test_manual_run_is_outside_and_leaves_handle_unchanged(
   scheduler._handles["code-health"] = scheduled_handle
 
   monkeypatch.setattr(scheduler, "_execute_task", mock.AsyncMock(return_value={"session_id": "s", "thread_id": "t"}))
-  monkeypatch.setattr(conftest.SCHEDULER_GET_CONFIG_PATCH_TARGET, lambda: cfg)
+  monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   monkeypatch.setattr(conftest.SCHEDULER_GET_SCHEDULED_TASKS_PATCH_TARGET, lambda: [_task()])
 
   result = await scheduler.run_task_now("code-health")

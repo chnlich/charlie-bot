@@ -316,22 +316,19 @@ class PendingTrigger(BaseModel):
 
 
 class MasterRunRecord(BaseModel):
-  """Identity of one in-flight master turn, persisted for restart reconciliation.
+  """Identity of one in-flight master turn at restart re-attach.
 
-  Written when the turn's backend process spawns, cleared when the turn's
-  MASTER_DONE lands. A record still present at server start means the turn's
-  outcome is unresolved: startup reconcile resolves it through
-  ``runs.resolve_run``'s outcome table (re-attach, drain, or clear); only a
-  cleared record keeps the turn's input events (user_event_ids) eligible for
-  replay.
+  ``task_execution._resume_manager_turn`` builds the record from the
+  persisted v2 Run's fields; ``master_cc_run._resume_cc`` drains the raw log
+  it names, and the queue opens the follow's busy interval at its start
+  time. The record never leaves the process.
   """
   pid: int | None = None
   pid_start: str | None = None  # /proc/<pid>/stat field 22 at spawn time
   started_at: UtcDatetime
   raw_log: str  # absolute path to this turn's raw NDJSON transport file
   # Chat events this turn answers, in arrival order: one event on every
-  # single-input turn, the whole batch on a merged one. The whole list is the
-  # restart-replay exclusion set and the chat-thread reply binding's fallback.
+  # single-input turn, the whole batch on a merged one.
   user_event_ids: list[str] = Field(default_factory=list)
 
   @model_validator(mode="before")

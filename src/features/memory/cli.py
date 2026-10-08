@@ -36,12 +36,14 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.features.memory import memory, memory_proposal
 from src.features.memory.store_root import store_root
+from src.infra.credentials import configured_access_key
 from src.infra.help_formatter import CliHelpFormatter
 from src.infra.home import charliebot_home_dir
-
-# The store and token stacks ride the verbs that read them: --help and parser
-# errors must not pay their import chain (the M137 dispatch floor).
+from src.infra.json_utils import load_json_meta
+from src.runtime.run_identity import SESSION_METADATA_NAME, run_scoped_refusal
+from src.runtime.run_token import RunTokenError, load_run_token, verify_run_token
 
 
 def _memory_dir() -> Path:
@@ -117,9 +119,6 @@ def main() -> None:
 
 
 def _cmd_query(args: argparse.Namespace) -> None:
-  from src.features.memory import memory
-  from src.runtime.run_token import load_run_token
-
   token = load_run_token()
   if token is not None:
     audience = _resolve_run_scoped_audience(token)
@@ -172,10 +171,6 @@ def _resolve_run_scoped_audience(token: str) -> str:
   token names a session this home's sessions directory has never heard of,
   which is the same visible unknown-run refusal.
   """
-  from src.infra.credentials import configured_access_key
-  from src.infra.json_utils import load_json_meta
-  from src.runtime.run_identity import SESSION_METADATA_NAME, run_scoped_refusal
-  from src.runtime.run_token import RunTokenError, verify_run_token
   root = _sessions_root()
   key = configured_access_key()
   if not key:
@@ -207,8 +202,6 @@ def _resolve_run_scoped_audience(token: str) -> str:
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
-  from src.features.memory import memory
-
   body = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
   lines = body.split("\n")
   if not lines or not lines[0].startswith("# "):
@@ -239,8 +232,6 @@ def _store_root(args: argparse.Namespace) -> Path:
 
 
 def _cmd_lint(args: argparse.Namespace) -> None:
-  from src.features.memory import memory
-
   violations = memory.lint(_store_root(args))
   if violations:
     for v in violations:
@@ -250,11 +241,6 @@ def _cmd_lint(args: argparse.Namespace) -> None:
 
 
 def _cmd_proposal(args: argparse.Namespace) -> None:
-  # Deferred off the module wall: only the proposal verbs import the store's PR
-  # machinery (tarfile + tempfile ride its import chain); query/add/lint never
-  # touch it.
-  from src.features.memory import memory, memory_proposal
-
   live = _memory_dir()
   memory.ensure_store(live)
   try:

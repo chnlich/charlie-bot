@@ -238,17 +238,6 @@ async def _salvage_silent_turn(
 # notice detector.
 _ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
 
-_VOICE_DISCLAIMER = (
-    "[Voice input: this message was dictated via speech transcription and may "
-    "contain recognition errors. Interpret unclear words from context; ask only "
-    "when the intent is genuinely ambiguous.]")
-
-
-def _build_prompt(user_content: str, is_voice: bool) -> str:
-  if is_voice:
-    return _VOICE_DISCLAIMER + "\n" + user_content
-  return user_content
-
 
 def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
   """Return CLI resume flags and native resume ID for a backend type."""
@@ -485,8 +474,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # selected home) rides on top of the supervisor env.
     env.update(item.extra_env)
 
-  prompt = _build_prompt(item.user_content, item.is_voice)
-
   # A fresh task turn starts a new conversation, so its state starts empty: a
   # new id from the backend is adoptable, and a round that lands none returns
   # None, so the consumer's persist leaves the disk's old id and producer
@@ -547,7 +534,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if backend is not None:
       record_persisted = False
     raw_log = str(log_dir / runs.RAW_LOG_NAME)
-    process_prompt = prompt
+    process_prompt = item.user_content
     if relays_before == 0:
       resume_id = process_launch.resume_id
       # Pre-flight catches a missing transcript when a durable anchor exists.

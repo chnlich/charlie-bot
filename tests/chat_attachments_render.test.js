@@ -147,9 +147,16 @@ test('normalizeUserMessage strips legacy attachment footers and keeps file names
     {filename: 'report.pdf', path: '/tmp/report.pdf'},
   ]));
 
-  const html = context.renderUserMessageBubble('', false, null, normalized.uploadedFiles);
+  const html = context.renderUserMessageBubble('', null, null, normalized.uploadedFiles);
   assert.match(html, /message-attachment/);
   assert.match(html, /report\.pdf/);
+});
+
+test('renderUserMessageBubble shows the voice marker for a dictated message only', () => {
+  const context = loadChatScript();
+
+  assert.match(context.renderUserMessageBubble('hello', 'voice', null, null), /Voice/);
+  assert.doesNotMatch(context.renderUserMessageBubble('hello', null, null, null), /Voice/);
 });
 
 test('uploadFile marks failed uploads visibly and excludes them from payload', async () => {

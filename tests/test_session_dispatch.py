@@ -21,7 +21,7 @@ from src.infra import event_types as ET
 from src.infra.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
 from src.runtime.api.message_utils import events_to_view
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.runtime.task_errors import TaskConflictError, TaskForbiddenError
+from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError
 from src.runtime.task_sessions import TaskTreeManager
 
 
@@ -465,6 +465,46 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       assert roles.count("user") == 1 and roles.count("agent_message") == 0
   finally:
     session_events_module.streaming_manager = original_streaming  # type: ignore[assignment]
+
+
+@pytest.mark.asyncio
+async def test_message_route_stores_input_mode_only_when_the_post_carries_it(tmp_path: Path) -> None:
+  from fastapi import FastAPI
+  from fastapi.testclient import TestClient
+
+  import src.runtime.api.chat as chat_api
+  from src.infra import config
+  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
+
+  cfg, session_blocks, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root", name="Root")
+  app = FastAPI()
+  app.include_router(chat_api.router, prefix="/api/chat")
+  app.dependency_overrides[config.get_config] = lambda: cfg
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[get_task_manager] = lambda: tree
+  app.dependency_overrides[get_run_store] = lambda: tree.runs
+
+  with TestClient(app) as client:
+    dictated = client.post(f"/api/chat/{root.id}/message", json={"content": "said aloud", "input_mode": "voice"})
+    typed = client.post(f"/api/chat/{root.id}/message", json={"content": "typed in"})
+
+  assert dictated.status_code == 202 and typed.status_code == 202
+  users = {e["content"]: e for e in tree.events.load_events(root.id) if e["type"] == ET.USER}
+  assert users["said aloud"]["input_mode"] == "voice"
+  assert "input_mode" not in users["typed in"]
+
+
+@pytest.mark.asyncio
+async def test_input_mode_on_a_non_user_input_is_refused(tmp_path: Path) -> None:
+  _cfg, _blocks, tree = build_env(tmp_path)
+  root = await create_task(tree, parent=None, request_id="root", name="Root")
+
+  with pytest.raises(TaskInvalidError, match="input_mode"):
+    await admit(
+        tree, root.id, "relayed", event_type=ET.AGENT_MESSAGE, actor="agent", from_session="peer", input_mode="voice")
+
+  assert not [e for e in tree.events.load_events(root.id) if e["type"] == ET.AGENT_MESSAGE]
 
 
 @pytest.mark.asyncio

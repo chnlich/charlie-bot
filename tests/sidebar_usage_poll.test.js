@@ -73,8 +73,8 @@ function buildContext(overrides = {}) {
   context.document.querySelectorAll = overrides.querySelectorAll || (() => []);
   context.document.querySelector = overrides.querySelector || (() => null);
   context.renderSessionView = () => {};
-  context.renderUserMessageBubble = (content, isVoice, timestamp, uploadedFiles) =>
-    `<div data-content="${content || ''}" data-voice="${isVoice ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`;
+  context.renderUserMessageBubble = (content, inputMode, timestamp, uploadedFiles) =>
+    `<div data-content="${content || ''}" data-voice="${inputMode === 'voice' ? '1' : '0'}" data-ts="${timestamp || ''}" data-files="${(uploadedFiles || []).length}"></div>`;
   context.alert = (message) => {
     alerts.push(message);
   };

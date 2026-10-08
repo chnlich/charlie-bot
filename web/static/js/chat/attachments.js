@@ -68,7 +68,7 @@ function renderUserAttachments(uploadedFiles, withTopMargin) {
     + '</div>';
 }
 
-function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
+function renderUserMessageBubble(content, inputMode, timestamp, uploadedFiles) {
   const normalized = normalizeUserMessage(content, uploadedFiles);
   const timeHtml = timestamp ? '<div class="text-[10px] text-slate-400/60 mt-1">' + formatBubbleTime(timestamp) + '</div>' : '';
   const textHtml = normalized.content
@@ -76,7 +76,7 @@ function renderUserMessageBubble(content, isVoice, timestamp, uploadedFiles) {
     : '';
   const attachmentsHtml = renderUserAttachments(normalized.uploadedFiles, Boolean(textHtml));
   return `<div class="max-w-[75%] overflow-hidden bg-blue-600 rounded-2xl rounded-br-md px-4 py-2.5 text-sm">`
-    + (isVoice ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '')
+    + (inputMode === 'voice' ? '<span class="text-xs text-blue-200 block mb-1">&#127908; Voice</span>' : '')
     + textHtml
     + attachmentsHtml
     + timeHtml

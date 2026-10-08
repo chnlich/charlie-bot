@@ -81,6 +81,7 @@ async def send_message(
         uploaded_files=uploaded_files,
         from_session=from_session,
         from_session_name=from_session_name,
+        input_mode=req.input_mode,
     )
     decision = await task_mgr.dispatch.dispatch_pending(session_id)
   except (TaskConflictError, TaskForbiddenError, TaskInvalidError) as e:

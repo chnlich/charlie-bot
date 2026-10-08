@@ -43,7 +43,7 @@ def build_scheduled_trigger_event(content: str) -> dict:
   """Build the persisted scheduled-trigger auto-wake event.
 
   Carries the dedicated ``ET.SCHEDULED_TRIGGER`` type and never accepts
-  attachments or voice flags -- scheduled-trigger events are system self-wakes,
+  attachments or an input mode -- scheduled-trigger events are system self-wakes,
   not real user messages.
   """
   return {

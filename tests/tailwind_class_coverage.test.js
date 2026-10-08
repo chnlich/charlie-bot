@@ -163,7 +163,7 @@ const LONG_TOOL_OUTPUT = Array.from({ length: 30 }, (_, i) => `line ${i}: some t
 
 const CHAT_MESSAGES = [
   {
-    role: 'user', id: 'u1', timestamp: '2026-07-30T12:00:00Z', is_voice: true,
+    role: 'user', id: 'u1', timestamp: '2026-07-30T12:00:00Z', input_mode: 'voice',
     content: 'Please check the build script', uploaded_files: [{ filename: 'notes.txt', path: '/tmp/notes.txt' }],
   },
   {

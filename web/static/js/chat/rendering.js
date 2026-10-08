@@ -691,7 +691,7 @@ function renderMessage(msg, sessionId) {
 
   if (msg.role === "user") {
     return openMessageWrapper("flex justify-end", msg)
-      + renderUserMessageBubble(msg.content, msg.is_voice, msg.timestamp, msg.uploaded_files) + "</div>";
+      + renderUserMessageBubble(msg.content, msg.input_mode, msg.timestamp, msg.uploaded_files) + "</div>";
   }
   if (msg.role === "assistant") {
     var content = msg.content || "";
@@ -883,11 +883,11 @@ function appendMessageObject(msg, sessionId, forceScroll) {
   _appendRenderedMessage(globalThis.renderMessage(msg, sessionId || SESSION_ID), follow);
 }
 
-function appendMessage(role, content, isVoice, timestamp, uploadedFiles) {
+function appendMessage(role, content, inputMode, timestamp, uploadedFiles) {
   var msg = {
     role: role,
     content: content || "",
-    is_voice: !!isVoice,
+    input_mode: inputMode || null,
     timestamp: timestamp || null,
     uploaded_files: uploadedFiles || null,
   };

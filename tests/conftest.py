@@ -402,7 +402,6 @@ def make_work_item(
     *,
     user_content: str = "hello",
     callbacks: models.SessionCallbacks | None = None,
-    is_voice: bool = False,
     user_event_id: str | None = None,
 ) -> master_cc_state._WorkItem:
   """Task manager Run item with the field values shared by backend tests."""
@@ -414,7 +413,6 @@ def make_work_item(
       session_meta=session_meta,
       user_content=user_content,
       callbacks=callbacks if callbacks is not None else mock_session_callbacks(),
-      is_voice=is_voice,
       auto_trigger=False,
       backend_option=backend_option,
       extra_claude_flags=None,
@@ -452,7 +450,6 @@ async def run_task_manager_message(
     auto_trigger: bool = False,
     backend_option: models.BackendOption | None = None,
     uploaded_files: list[dict] | None = None,
-    is_voice: bool = False,
 ) -> str | None:
   """Queue one task manager Run for consumer tests without launching its TaskTree owner."""
   run_id = str(uuid.uuid4())
@@ -472,7 +469,6 @@ async def run_task_manager_message(
       auto_trigger=auto_trigger,
       backend_option=backend_option,
       uploaded_files=uploaded_files,
-      is_voice=is_voice,
   )
 
 

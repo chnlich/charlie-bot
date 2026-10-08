@@ -8,8 +8,6 @@ from src.infra import event_types as ET
 from src.runtime import message_aggregator
 from src.runtime.api import message_utils
 
-VOICE_KEY = "is_voice"
-
 
 def test_user_event_emits_a_user_message_delta() -> None:
   agg = message_aggregator.MessageAggregator()
@@ -22,15 +20,29 @@ def test_user_event_emits_a_user_message_delta() -> None:
       "role": "user",
       "content": "hello",
       "uploaded_files": [],
+      "input_mode": None,
       "event_index": 0,
       "id": "legacy:0",
       "timestamp": "2026-04-29T00:00:00Z",
   }
-  expected_message[VOICE_KEY] = False
   assert deltas == [{
       "type": "message",
       "message": expected_message,
   }]
+
+
+def test_user_event_with_an_input_mode_renders_a_message_that_carries_it() -> None:
+  agg = message_aggregator.MessageAggregator()
+
+  deltas = list(
+      agg.feed({
+          "type": "user",
+          "content": "hello",
+          "input_mode": "voice",
+          "timestamp": "2026-04-29T00:00:00Z",
+      }))
+
+  assert [delta["message"]["input_mode"] for delta in deltas] == ["voice"]
 
 
 def test_assistant_text_then_master_done_commits_message() -> None:

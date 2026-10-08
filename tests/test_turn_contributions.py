@@ -154,6 +154,20 @@ SECOND = _Names("second.md", 2000, {"second_event": _row})
 SILENT = _Names(None, None, {})
 
 
+class _Opens(turn_contributions.TurnContribution):
+  """A contribution that opens every user input with one preamble."""
+
+  def __init__(self, preamble: str) -> None:
+    self._preamble = preamble
+
+  def input_preamble(self, meta: SessionMetadata, input_event: dict) -> str | None:
+    return self._preamble
+
+
+OPENS_A = _Opens("note A")
+OPENS_B = _Opens("note B")
+
+
 @pytest.fixture
 def empty_registry(monkeypatch: pytest.MonkeyPatch) -> None:
   """A registry with no contribution; the real registrations come back at teardown."""
@@ -199,6 +213,19 @@ def test_two_named_rule_files_or_two_context_windows_raise(empty_registry: None)
     turn_contributions.resolve_workflow_rules_file(meta)
   with pytest.raises(ValueError, match="context window"):
     turn_contributions.resolve_context_window(meta)
+
+
+def test_one_input_preamble_wins_and_two_raise(empty_registry: None) -> None:
+  meta = SessionMetadata(profile="manager", id="s", name="s")
+  event = {"type": ET.USER, "content": "hello"}
+  assert turn_contributions.resolve_input_preamble(meta, event) is None
+
+  register(silent="SILENT", opens_a="OPENS_A")
+  assert turn_contributions.resolve_input_preamble(meta, event) == "note A"
+
+  register(opens_b="OPENS_B")
+  with pytest.raises(ValueError, match="input preamble"):
+    turn_contributions.resolve_input_preamble(meta, event)
 
 
 def test_two_named_rule_files_fail_the_task_path_build(empty_registry: None, tmp_path: Path) -> None:

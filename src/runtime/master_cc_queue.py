@@ -351,7 +351,6 @@ async def run_message(
     backend_option: models.BackendOption | None = None,
     extra_claude_flags: list[str] | None = None,
     uploaded_files: list[dict] | None = None,
-    is_voice: bool = False,
     extra_env: dict[str, str] | None = None,
 ) -> str | None:
   """Queue one task manager Run through the shared CC process harness."""
@@ -368,7 +367,6 @@ async def run_message(
       session_meta=session_meta,
       user_content=user_content,
       callbacks=callbacks,
-      is_voice=is_voice,
       auto_trigger=auto_trigger,
       backend_option=backend_option,
       extra_claude_flags=extra_claude_flags,
@@ -413,7 +411,6 @@ async def enqueue_master_resume(
       session_meta=session_meta,
       user_content="",
       callbacks=callbacks,
-      is_voice=False,
       auto_trigger=False,
       backend_option=None,
       extra_claude_flags=None,

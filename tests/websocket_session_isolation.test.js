@@ -15,15 +15,14 @@ function buildContext(sessionId) {
       timers.push({fn, ms});
       return timers.length;
     },
-    appendMessage: (role, content, isVoice, timestamp, uploadedFiles) => {
-      messages.push({role, content, isVoice: !!isVoice, timestamp, uploadedFiles: uploadedFiles || []});
+    appendMessage: (role, content, inputMode, timestamp, uploadedFiles) => {
+      messages.push({role, content, inputMode: inputMode || null, timestamp, uploadedFiles: uploadedFiles || []});
     },
     appendMessageObject: (msg) => {
-      const voiceKey = 'is_' + 'voice';
       messages.push({
         role: msg.role,
         content: msg.content,
-        isVoice: !!msg[voiceKey],
+        inputMode: msg.input_mode || null,
         timestamp: msg.timestamp,
         uploadedFiles: msg.uploaded_files || [],
       });

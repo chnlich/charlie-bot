@@ -50,9 +50,10 @@ from fastapi.testclient import TestClient
 
 import src.runtime.task_execution as task_execution_module
 from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
+from src.features.voice.turn_contribution import VOICE_NOTE
 from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
-from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
+from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, SessionMetadata, TaskSpec
 from src.runtime.runs import RAW_LOG_NAME
 from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
@@ -1337,6 +1338,36 @@ async def test_manager_turn_launch_delivers_the_snapshot_bytes(tmp_path: Path, m
   launch_text = (tree.runs.run_dir(manager.id, run_id) / "launch_prompt.md").read_text(encoding="utf-8")
   assert "Take off." in launch_text
   assert "the node rule" not in launch_text
+
+
+def test_the_voice_note_opens_a_dictated_user_input_only() -> None:
+  meta = SessionMetadata(id="node", name="node", profile="manager")
+  dictated = {"type": ET.USER, "content": "said aloud", "input_mode": "voice"}
+  typed = {"type": ET.USER, "content": "typed in"}
+  relayed = {"type": ET.AGENT_MESSAGE, "content": "from a peer", "from_session_name": "peer"}
+
+  prompt, _uploads = task_execution_module.compose_input_prompt(meta, [dictated, typed, relayed])
+
+  assert prompt == "\n\n".join([f"{VOICE_NOTE}\nsaid aloud", "typed in", "[Message from session peer] from a peer"])
+
+
+@pytest.mark.asyncio
+async def test_a_dictated_message_launches_a_manager_turn_whose_prompt_opens_with_the_voice_note(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  manager = await create_task(tree, parent=None, request_id="root")
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  backend = ScriptedRelayBackend([result_event("heard")], exit_code=0)
+  install_scripted_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
+
+  await tree.dispatch.admit_input(
+      manager.id, event_type=ET.USER, content="open the settings page", actor="user", input_mode="voice")
+  decision = await tree.dispatch.dispatch_pending(manager.id)
+  assert decision.get("launch") is True, decision
+  _run, outcome = await wait_for_terminal_run(tree, manager.id, decision["run_id"])
+
+  assert outcome == "success"
+  assert backend.prompt == f"{VOICE_NOTE}\nopen the settings page"
 
 
 @pytest.mark.asyncio

@@ -5,8 +5,6 @@ import pytest
 
 import server
 
-VOICE_KEY = "is_voice"
-
 
 def _assistant_event(text: str, ts: str) -> dict:
   return {**conftest.assistant_text_event(text), "timestamp": ts}
@@ -70,11 +68,11 @@ async def test_replay_uses_global_cursor_after_archive_offset() -> None:
       "role": "user",
       "content": "missed",
       "uploaded_files": [],
+      "input_mode": None,
       "event_index": 6,
       "id": "legacy:6",
       "timestamp": "t1",
   }
-  expected_message[VOICE_KEY] = False
   assert sent == 1
   assert ws.sent == [{
       "type": "message",

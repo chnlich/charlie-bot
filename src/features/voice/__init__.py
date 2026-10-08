@@ -1,4 +1,4 @@
-"""Voice dictation: the recording endpoints, the transcription backends and the engine setup.
+"""Voice dictation: the recording endpoints, the transcription backends, the engine setup and the turn note.
 
 Deleting this package also deletes ``skills/voice-notes/``: the skill's
 ``scripts/decode_audio.py`` imports the voice transcriber, so the skill goes
@@ -6,13 +6,14 @@ with the package.
 """
 
 from src.infra import config_registry
-from src.runtime.hooks import page_render, wiring
+from src.runtime.hooks import page_render, turn_contributions, wiring
 
 
 def register() -> None:
   wiring.register_command("voice-replay-eval", "src.features.voice.replay_eval")
   wiring.register_router("src.features.voice.api", prefix="/api/voice", tags=("voice",))
   wiring.register_router("src.features.voice.api", attr="ws_router")
+  turn_contributions.register_turn_contribution("voice", "src.features.voice.turn_contribution:CONTRIBUTION")
   wiring.register_service("speech", "src.features.voice.service", phase="early")
   page_render.register_template_global("voice_backends", "src.features.voice.page_globals", attr="voice_backends")
   page_render.register_template_global(

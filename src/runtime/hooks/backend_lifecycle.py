@@ -67,6 +67,9 @@ class LaunchContext:
   cwd: str
   held_native_id: str | None  # the conversation this run may resume; None starts fresh
   emit: Callable[[dict], Awaitable[None]]
+  #   turn: persist and broadcast one session event.
+  #   task: write the event to the run's raw log through its fd AND to the session's successor
+  #         chain (worker.py binds both).
   record_account: Callable[[str], Awaitable[None]]  # persist the account label on the session
   context_state: Callable[[], Awaitable[tuple[int | None, datetime | None]]]  # (context tokens, last request time)
 

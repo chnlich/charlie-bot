@@ -804,18 +804,18 @@ def wrap_build_backend(original: Callable[..., Any], clc_sessions: Path) -> Call
 def install_native_session_isolation(clc_sessions: Path) -> None:
   """Route every charlie-code build in this process through the home's own session dir.
 
-  The registry is the one backend construction path (manager turns, worker work
-  and review runs, retries, continuations all resolve through it), and the
-  worker module's bound name is its other documented patch target. The flag is
-  the CLI's own session-directory override — the host installation and its
-  config are never modified.
+  The backend type table is the one backend construction path (manager turns,
+  worker work and review runs, retries, continuations all resolve through it),
+  and the worker module's bound name is its other documented patch target. The
+  flag is the CLI's own session-directory override — the host installation and
+  its config are never modified.
   """
   import importlib
 
-  registry = importlib.import_module("src.runtime.agent_process.registry")
+  backend_types = importlib.import_module("src.runtime.hooks.backend_types")
   worker_module = importlib.import_module("src.runtime.worker")
-  wrapped = wrap_build_backend(registry.build_backend, clc_sessions)
-  registry.build_backend = wrapped
+  wrapped = wrap_build_backend(backend_types.build_backend, clc_sessions)
+  backend_types.build_backend = wrapped
   worker_module.build_backend = wrapped
   log.info("preview_native_session_isolation_installed", clc_sessions=str(clc_sessions))
 

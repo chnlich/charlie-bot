@@ -11,6 +11,7 @@ from src.runtime.hooks import (
     backend_type_registration,
     turn_contributions,
     usage_source_registration,
+    wiring,
 )
 
 OWNER = "claude_code"
@@ -21,7 +22,7 @@ USAGE_SOURCE = "Claude Code"
 
 def register() -> None:
   """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
-  its metadata keys and its credential variables with the runtime."""
+  its metadata keys, its credential variables and its setup check with the runtime."""
   turn_contributions.register_turn_contribution(
       "claude_code", "src.backends.claude_code.turn_contribution:CONTRIBUTION")
   backend_type_registration.register_backend_type(
@@ -69,3 +70,4 @@ def register() -> None:
       after="exit_code")
   identity_env.register_identity_env_var("CLAUDE_CODE_OAUTH_TOKEN")
   identity_env.register_identity_env_var("ANTHROPIC_API_KEY")
+  wiring.register_setup_step("src.backends.claude_code.setup_check", attr="setup_step")

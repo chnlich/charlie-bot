@@ -1,5 +1,5 @@
-"""Wiring registry: packages register their routers, CLI commands, background services, file views, startup checks
-and diff roots.
+"""Wiring registry: packages register their routers, CLI commands, background services, file views, startup checks,
+setup steps and diff roots.
 
 Each registration holds module path strings. The server and the CLI import a registered
 module when they use it, so this module imports nothing heavy and a CLI command loads
@@ -25,6 +25,7 @@ _COMMANDS: dict[str, str] = {}
 _SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
 _FILE_VIEWS: list[tuple[str, str]] = []  # (module, attr)
 _STARTUP_CHECKS: list[tuple[str, str]] = []  # (module, attr)
+_SETUP_STEPS: list[tuple[str, str]] = []  # (module, attr)
 _DIFF_ROOTS: list[tuple[str, str]] = []  # (module, attr)
 
 
@@ -102,6 +103,19 @@ def register_startup_check(module: str, *, attr: str) -> None:
   _STARTUP_CHECKS.append((module, attr))
 
 
+def register_setup_step(module: str, *, attr: str) -> None:
+  """scripts/setup.sh runs getattr(import_module(module), attr)(cfg, dry_run=dry_run) once per run.
+
+  cfg is the CharlieBotConfig after the home layout step. With dry_run True the step writes
+  nothing and prints what it would do. The step prints its own report, headed by one "==> " line.
+  Steps run in registration order. An exception from a step stops setup with a non-zero exit.
+  A second registration of one (module, attr) raises ValueError.
+  """
+  if (module, attr) in _SETUP_STEPS:
+    raise ValueError(f"setup step {module}:{attr} is already registered")
+  _SETUP_STEPS.append((module, attr))
+
+
 def register_diff_root(module: str, *, attr: str) -> None:
   """The diff view also accepts repositories under getattr(import_module(module), attr)(cfg), a Path.
 
@@ -157,6 +171,11 @@ def file_views() -> list[object]:
 def startup_checks() -> list[Callable[[CharlieBotConfig], None]]:
   """The registered startup check functions, imported, in registration order."""
   return [getattr(importlib.import_module(module), attr) for module, attr in _STARTUP_CHECKS]
+
+
+def setup_steps() -> list[Callable[..., None]]:
+  """The registered setup step functions, imported, in registration order."""
+  return [getattr(importlib.import_module(module), attr) for module, attr in _SETUP_STEPS]
 
 
 def diff_roots() -> list[Callable[[CharlieBotConfig], Path]]:

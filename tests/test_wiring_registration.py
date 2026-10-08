@@ -56,6 +56,7 @@ def test_a_second_registration_of_one_name_raises() -> None:
   commands_before = wiring.commands()
   views_before = wiring.file_views()
   checks_before = wiring.startup_checks()
+  steps_before = wiring.setup_steps()
   roots_before = wiring.diff_roots()
 
   with pytest.raises(ValueError, match=command):
@@ -64,6 +65,8 @@ def test_a_second_registration_of_one_name_raises() -> None:
     wiring.register_file_view("src.features.artifacts.artifact_view", attr="serve_artifact_path")
   with pytest.raises(ValueError, match="check_backend_refs"):
     wiring.register_startup_check("src.features.cron.backend_refs", attr="check_backend_refs")
+  with pytest.raises(ValueError, match="setup_step"):
+    wiring.register_setup_step("src.features.cron.seed", attr="setup_step")
   with pytest.raises(ValueError, match="memory_dir"):
     wiring.register_diff_root("src.features.memory.store_root", attr="memory_dir")
   with pytest.raises(ValueError, match=service):
@@ -74,6 +77,7 @@ def test_a_second_registration_of_one_name_raises() -> None:
   assert wiring.commands() == commands_before
   assert wiring.file_views() == views_before
   assert wiring.startup_checks() == checks_before
+  assert wiring.setup_steps() == steps_before
   assert wiring.diff_roots() == roots_before
   assert "not_registered" not in [name for name, _ in wiring.service_stops()]
 

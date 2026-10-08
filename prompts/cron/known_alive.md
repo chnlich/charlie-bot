@@ -77,10 +77,11 @@ Known-alive symbols:
   and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
   `mounted_router` (the router attributes named in a `wiring.register_router` call), and
   `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call), and
-  `check_backend_refs` (the attribute named in a `wiring.register_startup_check` call) — reached by
+  `check_backend_refs` (the attribute named in a `wiring.register_startup_check` call), and
+  `setup_step` (the attribute named in a `wiring.register_setup_step` call) — reached by
   string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`,
-  `wiring.startup_checks()` and the router loop in `server.py` import the module from its path string and read the
-  attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
+  `wiring.startup_checks()`, `wiring.setup_steps()` and the router loop in `server.py` import the module from its
+  path string and read the attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
   unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/features/cron/config.py`, registered with pydantic at class-definition time and invoked during
@@ -93,10 +94,9 @@ Known-alive symbols:
   definition, so vulture flags it as an unused method. Same framework-registered class as the
   `check_sources_and_mode` entry above.
 - `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
-  flags it as an unused function. The only production caller is the Python heredoc in
-  `scripts/setup.sh`, which runs `seed.seed_default_cron_tasks`. Python dead-code tools do not read
-  shell scripts. The server-start path never calls the function, by design: only the setup command
-  seeds cron config. `tests/test_cron_defaults.py` asserts that the name stays out of
+  can flag it as an unused function. The only production caller is `setup_step` in the same file,
+  which `scripts/setup.sh` runs through `src.app.setup`. The server-start path never calls the function,
+  by design: only the setup command seeds cron config. `tests/test_cron_defaults.py` asserts that the name stays out of
   `init_charliebot_home.__code__.co_names`.
 - `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
   `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the
@@ -414,10 +414,12 @@ Known-alive symbols:
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.
-- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only from a shell heredoc:
-  on GPU hosts, `scripts/setup.sh` runs `from src.features.voice import voice_setup` and
-  `voice_setup.enable()` inside a Python heredoc. No `.py` or `.js` file references the module, so a
-  reference scan restricted to those sources reads it as an unreferenced module.
+- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only by string:
+  the `register()` of the voice package passes `"src.features.voice.voice_setup"` to
+  `wiring.register_setup_step`, and `setup_step` starts `enable_step` with
+  `python -m src.app.setup --step src.features.voice.voice_setup:enable_step`. No `.py` or `.js` file
+  imports the module, so a reference scan restricted to those sources reads it as an unreferenced module.
+  `enable_step` has no whole-repo match outside its definition and that command string.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
   `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /

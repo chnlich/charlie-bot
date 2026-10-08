@@ -39,124 +39,12 @@ else
   "$SCRIPT_DIR/sync-skills.sh"
 fi
 
-# Provision ~/.charliebot/ and seed repo-default cron tasks. init_charliebot_home
-# provisions the home layout (dirs, config.yaml, credentials.yaml) and is the same
-# path the server runs at startup; seed.seed_default_cron_tasks is the ONLY writer of
-# per-job cron config and is never called from the server startup path — so running
-# setup is the only way repo-default cron skeletons reach the host. The memory store
-# creates its own scaffold at first use, so setup leaves ~/.charliebot/memory/ alone.
-echo "==> Provisioning ~/.charliebot and seeding default cron tasks"
-DRY_RUN_VAL=$DRY_RUN uv run python - <<'PY'
-import asyncio
-import os
-
-from src.app import registrations
-from src.infra.config import get_config
-from src.runtime import init_seed
-from src.features.cron import seed
-from src.features.cron.loader import get_scheduled_tasks
-from src.features.cron.scheduler import effective_scheduled_task_backend
-
-dry = os.environ.get("DRY_RUN_VAL") == "1"
-registrations.register_all()
-cfg = get_config()
-
-# Per-item created/exists for the home layout. init_charliebot_home() is the
-# single source of truth for this layout; in dry-run we only report what already
-# exists vs what would be created, and write nothing.
-home_items = [
-    ("dir", "~/.charliebot/", cfg.charliebot_home),
-    ("dir", "~/.charliebot/sessions/", cfg.sessions_dir),
-    ("dir", "~/.charliebot/config.d/", cfg.config_d_dir),
-    ("file", "~/.charliebot/config.yaml", cfg.config_file),
-    ("file", "~/.charliebot/credentials.yaml", cfg.credentials_file),
-]
-existed_before = {str(p): p.exists() for _, _, p in home_items}
-if not dry:
-    asyncio.run(init_seed.init_charliebot_home())
-for label, path in [(lbl, p) for _, lbl, p in home_items]:
-    now_exists = path.exists()
-    if dry:
-        status = "exists" if now_exists else "would-create"
-    else:
-        status = "exists" if existed_before[str(path)] else "created"
-    print(f"  home {label}: {status}")
-
-# Per-task created/exists for repo-default cron entries, keyed on whether the
-# per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
-# same validation and legacy tripwire as the real run and writes nothing, so
-# the preview fails exactly where the real run would.
-for item in seed.seed_default_cron_tasks(cfg, dry_run=dry):
-    print(f"  cron {item['name']}: {item['status']}")
-
-# Effective scheduled task list: name / cron / resolved timezone / resolved
-# backend. If backend resolution raises (e.g. empty backends.options on a fresh
-# host), print the reason instead of aborting setup.
-print("  effective scheduled tasks:")
-tasks = get_scheduled_tasks()
-if not tasks:
-    print("    (none)")
-for t in tasks:
-    try:
-        backend = effective_scheduled_task_backend(t, cfg)
-    except Exception as e:
-        backend = f"unresolved: {e}"
-    print(f"    - {t.name} | cron={t.cron} | tz={t.timezone} | backend={backend}")
-PY
-echo "  Reminder: fill in the secret key charliebot_access_key before first start."
-
-# Smoke-check the Claude Code backend command for headless-unsafe tools.
-echo "==> Checking Claude Code backend tools"
-uv run python - <<'PY'
-from src.backends.claude_code.claude_code import BASE_COMMAND
-
-required = ["Monitor", "ScheduleWakeup", "CronCreate", "CronDelete", "CronList"]
-
-try:
-  disallowed_index = BASE_COMMAND.index("--disallowed-tools")
-except ValueError as exc:
-  raise SystemExit("missing --disallowed-tools in BASE_COMMAND") from exc
-
-try:
-  disallowed_tools = set(BASE_COMMAND[disallowed_index + 1].split(","))
-except IndexError as exc:
-  raise SystemExit("--disallowed-tools has no value in BASE_COMMAND") from exc
-
-missing = set(required) - disallowed_tools
-if missing:
-  raise SystemExit(f"missing disallowed tools: {','.join(sorted(missing))}")
-
-print("OK: backend disallows " + ",".join(required))
-PY
-
-# GPU voice engine: on hosts with an NVIDIA GPU, install the optional gpu-voice
-# dependency group, then download the official Qwen3-ASR weights and preflight-assert
-# the GPU decode path (imports, cuda load, measured decode timing, free VRAM). Only
-# after a full preflight pass does the enable step flip voice_engine to qwen3_hf in the
-# deployment config (idempotent). Non-GPU hosts skip the branch and keep the default
-# sherpa CPU engine.
-if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "==> NVIDIA GPU detected: provisioning the qwen3_hf voice engine"
-  if (( DRY_RUN )); then
-    echo "  dry-run: would run: uv sync --group gpu-voice; then register_all() + voice_setup.enable()"
-  else
-    uv sync --group gpu-voice
-    # The enable flow parses config.yaml; the backend packages register their option models
-    # and the accounts section before the first parse (python -m src.features.voice.voice_setup
-    # would skip the registration and refuse the config's backend keys).
-    uv run --no-sync python - <<'PY'
-from src.app import registrations
-
-registrations.register_all()
-from src.features.voice import voice_setup
-
-report = voice_setup.enable()
-for key, value in report.items():
-  print(f"{key}: {value}")
-PY
-  fi
+# Run the setup steps: the ~/.charliebot home layout, then each step a package registers
+# (register_setup_step in src/runtime/hooks/wiring.py), in registration order.
+if (( DRY_RUN )); then
+  uv run python -m src.app.setup --dry-run
 else
-  echo "==> No NVIDIA GPU detected: voice engine stays sherpa (CPU)"
+  uv run python -m src.app.setup
 fi
 
 echo "Setup complete."

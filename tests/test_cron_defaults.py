@@ -99,13 +99,14 @@ def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
   after = path.read_bytes()
   assert before == after
   assert "seed_default_cron_tasks" not in init.init_seed.init_charliebot_home.__code__.co_names
-  # Only scripts/setup.sh reaches the seed module: no file of src or server.py imports it.
+  # Only the setup step reaches the seed module: the cron package names it for register_setup_step, and
+  # no other file of src or server.py imports it.
   importers = [
       ref.importer
       for ref in test_package_structure.scan(conftest.ROOT).references
       if ref.target == "src/features/cron/seed.py"
   ]
-  assert importers == []
+  assert importers == ["src/features/cron/__init__.py"]
 
 
 # --- 4. get_scheduled_tasks is read-only -------------------------------------

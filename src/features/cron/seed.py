@@ -4,6 +4,8 @@ import copy
 
 from src.features.cron import loader
 from src.features.cron.config import ScheduledTaskConfig
+from src.features.cron.loader import get_scheduled_tasks
+from src.features.cron.scheduler import effective_scheduled_task_backend
 from src.infra import config, yaml_utils
 
 
@@ -36,7 +38,7 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
   Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}]``
   (``dry_run`` reports ``would-create`` instead of ``created``).
 
-  This is a library function invoked only by ``./scripts/setup.sh``. The server
+  This is a library function invoked only by :func:`setup_step`, which ``./scripts/setup.sh`` runs. The server
   startup path (:func:`src.runtime.init_seed.init_charliebot_home`) never calls
   it, so the server never writes cron config — that is an invariant the tests
   assert directly.
@@ -87,3 +89,28 @@ def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = Fal
     yaml_utils.save_yaml(path, body)
     report.append({"name": name, "status": "created"})
   return report
+
+
+def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
+  """Seed the default cron tasks, then list the effective scheduled tasks. Registered with ``register_setup_step``."""
+  print("==> Seeding default cron tasks")
+  # Per-task created/exists for repo-default cron entries, keyed on whether the
+  # per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
+  # same validation and legacy tripwire as the real run and writes nothing, so
+  # the preview fails exactly where the real run would.
+  for item in seed_default_cron_tasks(cfg, dry_run=dry_run):
+    print(f"  cron {item['name']}: {item['status']}")
+
+  # Effective scheduled task list: name / cron / resolved timezone / resolved
+  # backend. If backend resolution raises (e.g. empty backends.options on a fresh
+  # host), print the reason instead of aborting setup.
+  print("  effective scheduled tasks:")
+  tasks = get_scheduled_tasks()
+  if not tasks:
+    print("    (none)")
+  for t in tasks:
+    try:
+      backend = effective_scheduled_task_backend(t, cfg)
+    except Exception as e:
+      backend = f"unresolved: {e}"
+    print(f"    - {t.name} | cron={t.cron} | tz={t.timezone} | backend={backend}")

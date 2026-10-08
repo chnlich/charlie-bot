@@ -18,3 +18,4 @@ def register() -> None:
       },
   )
   config_registry.register_config_check("src.features.voice.config_check:check_default_backend")
+  wiring.register_setup_step("src.features.voice.voice_setup", attr="setup_step")

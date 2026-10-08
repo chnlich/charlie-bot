@@ -100,8 +100,45 @@ def test_assemble_master_resident_full_and_others_index(tmp_path: pathlib.Path) 
   assert memory.INDEX_HEADER in block
 
 
-def test_assemble_master_missing_dir_returns_none(tmp_path: pathlib.Path) -> None:
-  assert memory.assemble_master(tmp_path / "nope") is None
+# --- ensure_store: the store creates its own scaffold -------------------------
+
+_SCAFFOLD_NAMES = (".git", "topics", ".gitignore", "entries", "staging")
+
+
+def _assert_fresh_scaffold(memory_dir: pathlib.Path) -> None:
+  for name in _SCAFFOLD_NAMES:
+    assert (memory_dir / name).exists(), name
+  assert (memory_dir / "topics").read_text(encoding="utf-8") == memory.DEFAULT_MEMORY_TOPICS
+  assert (memory_dir / ".gitignore").read_text(encoding="utf-8") == memory.DEFAULT_MEMORY_GITIGNORE
+
+
+def _snapshot(root: pathlib.Path) -> dict[str, bytes | None]:
+  """Every path under *root* with its bytes (None for a directory)."""
+  return {p.relative_to(root).as_posix(): (p.read_bytes() if p.is_file() else None) for p in sorted(root.rglob("*"))}
+
+
+def test_select_master_memory_on_missing_dir_creates_scaffold(tmp_path: pathlib.Path) -> None:
+  mem = tmp_path / "nope"
+  assert memory.select_master_memory(mem) is None
+  _assert_fresh_scaffold(mem)
+
+
+def test_ensure_store_twice_leaves_files_unchanged(tmp_path: pathlib.Path) -> None:
+  mem = tmp_path / "store"
+  memory.ensure_store(mem)
+  # A curated vocabulary replaces the seeded one; a repeat call must keep it.
+  (mem / "topics").write_text("alpha resident\n", encoding="utf-8")
+  before = _snapshot(mem)
+  memory.ensure_store(mem)
+  assert _snapshot(mem) == before
+  assert (mem / "topics").read_text(encoding="utf-8") == "alpha resident\n"
+
+
+def test_lint_reports_a_missing_topics_file_without_creating_the_scaffold(tmp_path: pathlib.Path) -> None:
+  mem = tmp_path / "bare"
+  mem.mkdir()
+  assert any("topics" in v for v in memory.lint(mem))
+  assert not (mem / "topics").exists() and not (mem / ".git").exists()
 
 
 # --- assemble_worker ----------------------------------------------------------
@@ -156,6 +193,38 @@ def test_cli_add_creates_one_staging_file(tmp_path: pathlib.Path, monkeypatch: p
   # entries/ untouched
   entries = cfg.memory_dir / "entries"
   assert not entries.exists() or not list(entries.glob("**/*.md"))
+
+
+def _fresh_cli_home(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> pathlib.Path:
+  """Point the memory CLI at a home with no store yet and return the store root it will use."""
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setattr(conftest.CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  return home / "memory"
+
+
+def test_cli_add_on_a_fresh_home_creates_the_scaffold_and_the_capture(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  mem = _fresh_cli_home(monkeypatch, tmp_path)
+  body = "# Fresh Capture\n\nA fact to record.\n"
+  monkeypatch.setattr("sys.stdin", io.StringIO(body))
+  from src.features.memory import cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "add"])
+  cli.main()
+  _assert_fresh_scaffold(mem)
+  captures = list((mem / "staging").glob("*.md"))
+  assert len(captures) == 1
+  assert captures[0].read_text(encoding="utf-8") == body
+
+
+def test_cli_query_index_on_a_fresh_home_runs(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+  mem = _fresh_cli_home(monkeypatch, tmp_path)
+  from src.features.memory import cli
+  monkeypatch.setattr("sys.argv", ["charliebot memory", "query", "--topic", "profile", "--index"])
+  cli.main()
+  assert capsys.readouterr().out == ""
+  _assert_fresh_scaffold(mem)
 
 
 def test_cli_query_audience_filter_is_membership(

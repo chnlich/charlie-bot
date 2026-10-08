@@ -1,6 +1,6 @@
 """Acceptance tests for repo-owned default cron tasks and the per-job loader.
 
-Covers the seed mechanism in ``src/runtime/init_seed.py::seed_default_cron_tasks`` (the
+Covers the seed mechanism in ``src/features/cron/seed.py::seed_default_cron_tasks`` (the
 seeded host file keeps the ``prompt_file`` pointer, never an inlined body), the
 loader's acceptance of ``prompt_file``, its rejection of an inline ``prompt``
 (and of a body with no prompt source at all), ``timezone: local`` resolution
@@ -16,7 +16,9 @@ import pathlib
 
 import conftest
 import pytest
+import test_package_structure
 
+from src.features.cron import seed
 from src.infra import config, yaml_utils
 from src.runtime import init
 
@@ -49,7 +51,7 @@ def test_seed_idempotence(temp_home: pathlib.Path) -> None:
   cron_d = cfg.config_d_dir / "cron.d"
   assert not cron_d.exists()
 
-  report1 = init.init_seed.seed_default_cron_tasks(cfg)
+  report1 = seed.seed_default_cron_tasks(cfg)
   created = next(it for it in report1 if it["status"] == "created")
   seeded_path = cron_d / f"{created['name']}.yaml"
   assert seeded_path.exists()
@@ -80,7 +82,7 @@ def test_seed_idempotence(temp_home: pathlib.Path) -> None:
   assert "backend" not in body1
   assert "name" not in body1
 
-  report2 = init.init_seed.seed_default_cron_tasks(cfg)
+  report2 = seed.seed_default_cron_tasks(cfg)
   bytes2 = seeded_path.read_bytes()
   assert bytes1 == bytes2
   assert all(it["status"] == "exists" for it in report2)
@@ -97,6 +99,13 @@ def test_startup_never_writes_cron(temp_home: pathlib.Path) -> None:
   after = path.read_bytes()
   assert before == after
   assert "seed_default_cron_tasks" not in init.init_seed.init_charliebot_home.__code__.co_names
+  # Only scripts/setup.sh reaches the seed module: no file of src or server.py imports it.
+  importers = [
+      ref.importer
+      for ref in test_package_structure.scan(conftest.ROOT).references
+      if ref.target == "src/features/cron/seed.py"
+  ]
+  assert importers == []
 
 
 # --- 4. get_scheduled_tasks is read-only -------------------------------------
@@ -148,7 +157,7 @@ def test_seed_fails_loud_on_legacy_cron(temp_home: pathlib.Path) -> None:
   _write_legacy_cron(temp_home)
   assert not (cfg.config_d_dir / "cron.d").exists()
   with pytest.raises(ValueError, match="legacy"):
-    init.init_seed.seed_default_cron_tasks(cfg)
+    seed.seed_default_cron_tasks(cfg)
   assert not (cfg.config_d_dir / "cron.d").exists(), "nothing written on legacy tripwire"
 
 

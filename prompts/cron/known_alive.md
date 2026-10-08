@@ -87,11 +87,11 @@ Known-alive symbols:
   model validation (it enforces the prompt-source and mode rules). The method name has
   exactly zero whole-repo matches outside its definition, so vulture flags it as an unused
   method.
-- `seed_default_cron_tasks` (`src/runtime/init_seed.py`) — production-scope vulture (`src/ server.py`)
-  flags it as an unused function because its only production caller is the Python heredoc embedded
-  in `scripts/setup.sh` (a shell script, invisible to Python dead-code tools). The absence from the
-  server-start path is deliberate: seeding belongs to the explicitly invoked setup command, and
-  `tests/test_cron_defaults.py` asserts the name stays out of
+- `seed_default_cron_tasks` (`src/features/cron/seed.py`) — production-scope vulture (`src/ server.py`)
+  flags it as an unused function. The only production caller is the Python heredoc in
+  `scripts/setup.sh`, which runs `seed.seed_default_cron_tasks`. Python dead-code tools do not read
+  shell scripts. The server-start path never calls the function, by design: only the setup command
+  seeds cron config. `tests/test_cron_defaults.py` asserts that the name stays out of
   `init_charliebot_home.__code__.co_names`.
 - `threshold`, `min_silence_duration`, `min_speech_duration`, `max_speech_duration` (on
   `vad_config.silero_vad`) and `sample_rate` (on `vad_config`) — attribute writes on the

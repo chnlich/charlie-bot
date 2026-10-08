@@ -27,20 +27,34 @@ migrated: a missing frontmatter ``title`` falls back to a body first line of
 
 All logic lives here; the CLI (``src/features/memory/cli.py``) is a thin wrapper, and the
 spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
+
+The store creates its own scaffold: :func:`ensure_store` runs first in every entry
+point that reads or writes the live store (:func:`load_store`, ``memory add``, the
+``memory proposal`` verbs), so a fresh home has no store until its first use.
+:func:`lint` reports the tree as it finds it and never calls it.
 """
 
 import os
 import pathlib
 import re
+import subprocess
 from collections.abc import Callable
 
-from src.infra import log_once, memo
-
-log = log_once.LazyStructlogLogger()
+from src.infra import memo
 
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"
 _STAGING_DIRNAME = "staging"
+
+DEFAULT_MEMORY_TOPICS = (
+    "profile resident\n"
+    "communication resident\n"
+    "workflow resident\n"
+    "rulings resident\n"
+    "host resident\n"
+    "charliebot\n")
+
+DEFAULT_MEMORY_GITIGNORE = "staging/\n"
 
 # Bound on _store_memo in memory dirs, not entries: a host serves one memory
 # dir in steady state (tests hold several), so a small cap bounds memoized
@@ -392,16 +406,41 @@ def _store_signature(memory_dir: pathlib.Path) -> tuple[tuple[str, int, int], ..
   return tuple(sig)
 
 
+def _seed_if_missing(path: pathlib.Path, content: str) -> None:
+  """Write content to path only if the file does not already exist."""
+  if not path.exists():
+    path.write_text(content, encoding="utf-8")
+
+
+def ensure_store(memory_dir: pathlib.Path) -> None:
+  """Create the labeled-entry store scaffold at *memory_dir* (idempotent).
+
+  Creates the directory, runs ``git init`` when it is not already a repo, seeds
+  the topics vocabulary and .gitignore (never overwriting existing files), and
+  creates the ``entries/`` and ``staging/`` directories. The canon (entries/
+  and topics) is populated only by user-approved curation diffs, never here.
+  """
+  memory_dir.mkdir(parents=True, exist_ok=True)
+  if not (memory_dir / ".git").exists():
+    subprocess.run(["git", "init"], cwd=str(memory_dir), check=True, capture_output=True)
+  _seed_if_missing(memory_dir / _TOPICS_FILENAME, DEFAULT_MEMORY_TOPICS)
+  _seed_if_missing(memory_dir / ".gitignore", DEFAULT_MEMORY_GITIGNORE)
+  (memory_dir / _ENTRIES_DIRNAME).mkdir(exist_ok=True)
+  (memory_dir / _STAGING_DIRNAME).mkdir(exist_ok=True)
+
+
 def load_store(memory_dir: pathlib.Path) -> Store:
   """Read the topics vocabulary and all entries; raise on any violation.
+
+  Calls :func:`ensure_store` first, so a missing store directory or ``topics``
+  file is created from the scaffold defaults and loads as the valid empty store.
 
   Fail-loud: an unknown topic, a directory/topic mismatch, a bad filename
   charset, an unresolvable title (no frontmatter ``title`` and no ``# ``
   body opener), or ``revises`` in entries/ all raise
   :class:`MemoryFormatError`. Validation stays dual-read: legacy
   ``created``/``source``/``both``/body-title entries still load (only lint is
-  v2-strict). A missing ``entries/`` directory yields an empty (but valid)
-  store; a missing ``topics`` file raises.
+  v2-strict).
 
   Repeat loads of an unchanged store are served from a process-wide memo
   keyed on :func:`_store_signature`'s (path, mtime_ns, size) read of every
@@ -413,6 +452,7 @@ def load_store(memory_dir: pathlib.Path) -> Store:
   A rewrite to a malformed store drops the stale hit, so the failure never
   lingers as an entry the next call could confuse with the current bytes.
   """
+  ensure_store(memory_dir)
   sig = _store_signature(memory_dir)
   if sig is not None:
     hit = _store_memo.get(memory_dir)
@@ -598,14 +638,6 @@ WORKER_USAGE_LINE = (
     "never entries/).")
 
 
-def _load_selection_store(memory_dir: pathlib.Path) -> Store | None:
-  """The store for a selection, or None when the memory dir is missing (logged)."""
-  if not memory_dir.is_dir():
-    log.error("memory_dir_missing", path=str(memory_dir))
-    return None
-  return load_store(memory_dir)
-
-
 def _selection_from_parts(
     audience: str,
     repo_basename: str | None,
@@ -660,14 +692,11 @@ def select_master_memory(memory_dir: pathlib.Path) -> MemorySelection | None:
 
   Full bodies of entries in resident topics whose audience contains ``master``,
   then the index lines for all other master-audience entries, each group
-  stably sorted by ``(topic, slug)``. Returns None when the memory dir is
-  missing (logged) or when the store has no master-audience entries to inject.
-  A malformed store propagates :class:`MemoryFormatError` (fail-loud); only a
-  missing dir is tolerated.
+  stably sorted by ``(topic, slug)``. Returns None when the store has no
+  master-audience entries to inject. A malformed store propagates
+  :class:`MemoryFormatError` (fail-loud).
   """
-  store = _load_selection_store(memory_dir)
-  if store is None:
-    return None
+  store = load_store(memory_dir)
   resident_names = resident_topic_names(store)
   full_body_entries: list[Entry] = []
   index_entries: list[Entry] = []
@@ -683,20 +712,16 @@ def select_master_memory(memory_dir: pathlib.Path) -> MemorySelection | None:
   return _selection_from_parts("master", None, full_body_entries, index_entries, usage_line=None)
 
 
-def select_worker_memory(memory_dir: pathlib.Path, repo_basename: str) -> MemorySelection | None:
+def select_worker_memory(memory_dir: pathlib.Path, repo_basename: str) -> MemorySelection:
   """Select the worker-audience memory for *repo_basename* (the provenance-bearing result).
 
   Full bodies of entries whose topic equals *repo_basename* and whose audience
   contains ``worker``, then index lines for all other worker-audience entries,
-  then the worker usage line. Returns None when the memory dir is missing
-  (logged); when the store exists the selection is always non-None (the usage
-  line is present). A malformed store propagates :class:`MemoryFormatError`
-  (fail-loud). Staging candidates never enter: :func:`load_store` reads
-  ``entries/`` only.
+  then the worker usage line, which keeps the selection non-empty. A malformed
+  store propagates :class:`MemoryFormatError` (fail-loud). Staging candidates
+  never enter: :func:`load_store` reads ``entries/`` only.
   """
-  store = _load_selection_store(memory_dir)
-  if store is None:
-    return None
+  store = load_store(memory_dir)
   full_body_entries: list[Entry] = []
   index_entries: list[Entry] = []
   for e in store.entries:
@@ -737,9 +762,8 @@ def assemble_master(memory_dir: pathlib.Path) -> str | None:
   (``<topic>/<slug> · <title>``) for all other master-audience entries, each
   group stably sorted by ``(topic, slug)``.
 
-  Returns None when the memory dir is missing (logged) or when the store has
-  no master-audience entries to inject. A malformed store propagates
-  :class:`MemoryFormatError` (fail-loud); only a missing dir is tolerated.
+  Returns None when the store has no master-audience entries to inject. A
+  malformed store propagates :class:`MemoryFormatError` (fail-loud).
   """
   selection = select_master_memory(memory_dir)
   return selection.text if selection is not None else None
@@ -754,9 +778,7 @@ def assemble_worker(memory_dir: pathlib.Path, repo_basename: str) -> str | None:
   ``charliebot memory query`` and ``charliebot memory add`` (workers may stage
   captures).
 
-  Returns None when the memory dir is missing (logged). When the store exists
-  the usage line is always present, so the result is non-None. A malformed
+  The usage line is always present, so the result is non-None. A malformed
   store propagates :class:`MemoryFormatError` (fail-loud).
   """
-  selection = select_worker_memory(memory_dir, repo_basename)
-  return selection.text if selection is not None else None
+  return select_worker_memory(memory_dir, repo_basename).text

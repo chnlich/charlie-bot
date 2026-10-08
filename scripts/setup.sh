@@ -40,10 +40,11 @@ else
 fi
 
 # Provision ~/.charliebot/ and seed repo-default cron tasks. init_charliebot_home
-# provisions the home layout (dirs, memory store scaffold, config.yaml) and is the same
-# path the server runs at startup; seed_default_cron_tasks is the ONLY writer of
+# provisions the home layout (dirs, config.yaml, credentials.yaml) and is the same
+# path the server runs at startup; seed.seed_default_cron_tasks is the ONLY writer of
 # per-job cron config and is never called from the server startup path — so running
-# setup is the only way repo-default cron skeletons reach the host.
+# setup is the only way repo-default cron skeletons reach the host. The memory store
+# creates its own scaffold at first use, so setup leaves ~/.charliebot/memory/ alone.
 echo "==> Provisioning ~/.charliebot and seeding default cron tasks"
 DRY_RUN_VAL=$DRY_RUN uv run python - <<'PY'
 import asyncio
@@ -52,6 +53,7 @@ import os
 from src.app import registrations
 from src.infra.config import get_config, get_scheduled_tasks
 from src.runtime import init_seed
+from src.features.cron import seed
 from src.features.cron.scheduler import effective_scheduled_task_backend
 
 dry = os.environ.get("DRY_RUN_VAL") == "1"
@@ -67,11 +69,6 @@ home_items = [
     ("dir", "~/.charliebot/config.d/", cfg.config_d_dir),
     ("file", "~/.charliebot/config.yaml", cfg.config_file),
     ("file", "~/.charliebot/credentials.yaml", cfg.credentials_file),
-    ("dir", "~/.charliebot/memory/", cfg.memory_dir),
-    ("file", "~/.charliebot/memory/topics", cfg.memory_dir / "topics"),
-    ("file", "~/.charliebot/memory/.gitignore", cfg.memory_dir / ".gitignore"),
-    ("dir", "~/.charliebot/memory/entries/", cfg.memory_dir / "entries"),
-    ("dir", "~/.charliebot/memory/staging/", cfg.memory_dir / "staging"),
 ]
 existed_before = {str(p): p.exists() for _, _, p in home_items}
 if not dry:
@@ -88,7 +85,7 @@ for label, path in [(lbl, p) for _, lbl, p in home_items]:
 # per-job host file config.d/cron.d/<name>.yaml exists. The dry-run runs the
 # same validation and legacy tripwire as the real run and writes nothing, so
 # the preview fails exactly where the real run would.
-for item in init_seed.seed_default_cron_tasks(cfg, dry_run=dry):
+for item in seed.seed_default_cron_tasks(cfg, dry_run=dry):
     print(f"  cron {item['name']}: {item['status']}")
 
 # Effective scheduled task list: name / cron / resolved timezone / resolved

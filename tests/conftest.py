@@ -253,7 +253,7 @@ from src.runtime import init_worker_recovery as worker_recovery_module  # noqa: 
 from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
 from src.runtime import streaming  # noqa: E402
-from src.runtime.init_seed import DEFAULT_MEMORY_TOPICS  # noqa: E402
+from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import get_config_on_loop  # noqa: E402
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
@@ -1939,8 +1939,9 @@ class FakeSlackClient:
 def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
   reads "BASE PROMPT", with the two second rule files the builder reads after it. claude_md_file
-  and memory_dir name paths that do not exist, so the built instructions carry neither host
-  override nor memory block."""
+  names a path that does not exist, so the built instructions carry no host override. memory_dir
+  names a path that does not exist yet: the build creates the empty scaffold there, so the
+  instructions carry no memory block."""
   home = tmp_path / "home"
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)

@@ -1,14 +1,21 @@
 """Session explain API: register a divider's explain task, read one entry, read every entry's status."""
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 
 from src.infra.config import CharlieBotConfig
-from src.infra.models import ExplainRequest, SessionMetadata
+from src.infra.models import SessionMetadata
 from src.infra.responses import FastJsonResponse
 from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager, require_session
 from src.runtime.sessions import SessionManager
 
 router = APIRouter()
+
+
+class ExplainRequest(BaseModel):
+  """One explain (btw-style) request for a divider: the chosen backend is required."""
+  event_index: int
+  backend: str
 
 
 @router.post('/{session_id}/explain')

@@ -3,6 +3,7 @@
 import time
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict
 
 from src.features.improve.improve_command import (
     ImproveLoopAlreadyRunningError,
@@ -15,7 +16,6 @@ from src.features.improve.improve_command import (
 )
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import ImproveRequest, ImproveStopRequest
 from src.infra.tasks import create_logged_task
 from src.runtime import spawner_backends
 from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager, get_task_manager, require_found
@@ -27,6 +27,28 @@ from src.runtime.task_sessions import TaskTreeManager
 log = LazyStructlogLogger()
 
 router = APIRouter()
+
+
+class ImproveRequest(BaseModel):
+  """Request body for the internal improve endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
+  repo_path: str
+  base_branch: str
+  backend: str | None = None
+  iterations: int = 3
+  goal: str
+  plan: str | None = None
+  work_branch: str | None = None
+  merge_back: bool = False
+
+
+class ImproveStopRequest(BaseModel):
+  """Request body for the internal improve-stop endpoint."""
+  model_config = ConfigDict(extra="forbid")
+
+  session_id: str
 
 
 @router.post("/improve/stop")

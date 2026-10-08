@@ -172,7 +172,7 @@ Known-alive symbols:
   of the stdlib `BaseHTTPRequestHandler.log_message(self, format, *args)` signature.
   Vulture flags it at 100% confidence as an unused variable.
 - `panel-summary`, `panel-details`, `panel-roofline`, `panel-source`, `panel-session`,
-  `panel-raw` (`web/templates/ncu.html`, the six tab-panel element ids) — reached by
+  `panel-raw` (`src/features/ncu/templates/ncu.html`, the six tab-panel element ids) — reached by
   string construction: the inline tab switcher activates panels with
   ``p.classList.toggle('active', p.id === `panel-${name}`)``, where `name` is each tab
   button's `data-tab` attribute. A whole-repo grep for any full id finds only its
@@ -206,7 +206,7 @@ Known-alive symbols:
 - `postCommentMessage` (`web/static/js/comment_post.js`) — cross-file browser global:
   `diff_comments.js` and `artifact-comments.js` call it as a bare identifier resolved
   through the page's script-tag global scope, each page loading the file before the
-  widget (`web/templates/diff.html`, and the `_inject_artifact_ui` tags in
+  widget (`src/features/diff_view/templates/diff.html`, and the `_inject_artifact_ui` tags in
   `src/features/files/api.py` for artifact pages). A per-file dead-function scan finds only the
   definition, so it flags the function as unused.
 - `render` (`FastJsonResponse` in `src/infra/responses.py`) — template-method override of

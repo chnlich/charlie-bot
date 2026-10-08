@@ -112,11 +112,11 @@ OPENCODE_COMPACT_OUTPUT_RESERVE = 20_000
 # mirrors the single element.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
-# Viewer route paths: pages.py declares each route with its spelling. The auth
+# Viewer route paths: the trace and ncu packages declare each route with its spelling. The auth
 # whitelist (src.runtime.api.auth) does not admit them — they read local trace/report files, so
 # they sit behind the access key like the file server. The merged path is additionally the
 # special case server.py's gzip middleware skips (the body is already-compressed
-# trace bytes) and the URL pages.py builds for merged traces.
+# trace bytes) and the URL the trace package builds for merged traces.
 PERFETTO_VIEWER_PATH = "/perfetto"
 PERFETTO_MERGED_PATH = "/perfetto/merged"
 NCU_VIEWER_PATH = "/ncu"

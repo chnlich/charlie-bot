@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from src.app import pages
+from src.features.trace import api as trace_api
 from src.features.trace import trace_merge, trace_merge_child
 from src.features.trace.trace_merge import NotATraceError, merge_traces
 from tests.core.test_multi_trace_merge import _write_pretty_trace
 
-REPO_ROOT = str(Path(pages.__file__).resolve().parents[2])
+REPO_ROOT = str(Path(trace_api.__file__).resolve().parents[3])
 
 
 def _write_trace(path: Path, marker: str = "event") -> None:
@@ -83,13 +83,13 @@ def test_route_build_maps_the_child_exits_back(tmp_path: Path) -> None:
   trace = tmp_path / "rank0.json"
   _write_trace(trace)
   out = tmp_path / "out.json.gz"
-  pages._build_single_trace_merge([trace], out, slim=False)
+  trace_api._build_single_trace_merge([trace], out, slim=False)
   assert out.is_file()
 
   manifest = tmp_path / "manifest.json"
   manifest.write_text(json.dumps({"A": []}), encoding="utf-8")
   with pytest.raises(NotATraceError):
-    pages._build_single_trace_merge([manifest], tmp_path / "no.json.gz", slim=False)
+    trace_api._build_single_trace_merge([manifest], tmp_path / "no.json.gz", slim=False)
 
 
 # The real sequential build runs the full merge path per output; measured

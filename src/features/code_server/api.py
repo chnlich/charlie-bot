@@ -31,6 +31,11 @@ def is_code_server_available(cfg: config.CharlieBotConfig) -> bool:
   return _resolve_code_server_executable(cfg) is not None
 
 
+def code_server_enabled() -> bool:
+  """The template global of that name: whether the current config can open code-server."""
+  return is_code_server_available(config.get_config())
+
+
 def _resolve_folder_under_allowed_root(folder: str, cfg: config.CharlieBotConfig) -> pathlib.Path:
   folder_path = pathlib.Path(folder).expanduser().resolve()
   if not folder_path.is_dir():

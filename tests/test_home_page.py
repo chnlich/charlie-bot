@@ -10,7 +10,9 @@ import pytest
 
 from src.app import pages
 from src.infra import config
+from src.infra.constants import FILE_SERVER_MOUNTS
 from src.runtime.api import auth
+from src.runtime.hooks import page_render
 
 
 def _cfg(home: pathlib.Path, services: list[dict[str, str]]) -> config.CharlieBotConfig:
@@ -71,6 +73,20 @@ async def test_home_bad_url_entry_does_not_break_the_page(tmp_path: pathlib.Path
   assert _external_statuses(body) == ["down", "down"]
   for service in services:
     assert service["name"] in body
+
+
+@pytest.mark.asyncio
+async def test_home_page_lists_the_app_cards_then_each_package_card(tmp_path: pathlib.Path) -> None:
+  """The app's own cards come first; each package's card follows in PACKAGES order."""
+  response = await pages.home_page(conftest.make_page_request("/home"), _cfg(tmp_path / "h", []))
+  names = re.findall(r'<span class="nm">([^<]*)</span>', response.body.decode("utf-8"))
+  assert names == ["Chat", "Token usage by model", "Host login authorization", "Diff viewer", "File browser"]
+
+
+def test_the_file_browser_card_links_to_the_file_server_mount() -> None:
+  """files.register() spells the URL out to stay import-free; the spelling follows FILE_SERVER_MOUNTS."""
+  card = next(card for card in page_render.home_cards() if card["name"] == "File browser")
+  assert card["url"] == FILE_SERVER_MOUNTS[0] + "/"
 
 
 @pytest.mark.asyncio

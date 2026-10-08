@@ -7,11 +7,11 @@ import fastapi
 import pytest
 from fastapi import testclient
 
-from src.app import pages as pages_api
 from src.features.files import api as files_api
 from src.infra import config
+from src.runtime import templating
 
-SCRIPT = f"<script src=/static/js/artifact-comments.js?v={pages_api._static_asset_version()}></script>"
+SCRIPT = f"<script src=/static/js/artifact-comments.js?v={templating.static_asset_version()}></script>"
 
 
 @pytest.fixture

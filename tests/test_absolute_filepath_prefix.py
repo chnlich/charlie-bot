@@ -25,8 +25,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import server
-from src.app import pages
 from src.features.files import api as files_api
+from src.features.trace import api as trace_api
 from src.infra import config
 from src.runtime.api import auth
 
@@ -136,7 +136,7 @@ async def test_the_viewer_resolves_a_trace_under_the_prefix_to_the_same_url(
 ) -> None:
   trace = tmp_path / "rank0.json"
   trace.write_text(json.dumps({"traceEvents": []}), encoding="utf-8")
-  response = await pages.perfetto_viewer(
+  response = await trace_api.perfetto_viewer(
       make_page_request("/perfetto"),
       trace=[f"{prefix}{trace}"],
       dir_path=None,

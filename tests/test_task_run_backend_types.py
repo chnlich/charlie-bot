@@ -27,10 +27,9 @@ def build_env(tmp_path: pathlib.Path, backend_type: backend_models.BackendType):
   import src.infra.config as core_config
 
   home = tmp_path / "home"
-  model = None if backend_type in (
-      backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI) else "fake-model"
+  model = None if backend_type is backend_models.BackendType.ANTIGRAVITY else "fake-model"
   kwargs: dict = {"id": "type-under-test", "label": "Type", "type": backend_type.value}
-  if backend_type not in (backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI):
+  if backend_type is not backend_models.BackendType.ANTIGRAVITY:
     kwargs["model"] = model
   if backend_type in (backend_models.BackendType.CC_OPENAI_COMPATIBLE, backend_models.BackendType.CHARLIE_CODE):
     kwargs["api_base"] = "http://127.0.0.1:9"
@@ -57,14 +56,10 @@ def session_attached_event(native_id: str) -> dict:
 
 
 BACKEND_TYPES = list(backend_models.BackendType)
-# The master queue only runs streaming backends: a manager turn on a TUI
-# backend is refused by the existing guard (recorded in the manager-queue
-# tests), so the identity assertions cover the eight executable types.
-STREAMING_BACKEND_TYPES = [t for t in backend_models.BackendType if t is not backend_models.BackendType.TUI_CLI]
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("backend_type", STREAMING_BACKEND_TYPES, ids=lambda t: t.value)
+@pytest.mark.parametrize("backend_type", BACKEND_TYPES, ids=lambda t: t.value)
 async def test_run_records_stream_identity_and_result_truth(
     tmp_path: pathlib.Path, backend_type: backend_models.BackendType, monkeypatch: pytest.MonkeyPatch) -> None:
   from tests import test_task_execution
@@ -89,7 +84,7 @@ async def test_run_records_stream_identity_and_result_truth(
 
   # The Run records the configured model, the stream's native session id,
   # and its own transport refs.
-  if backend_type not in (backend_models.BackendType.ANTIGRAVITY, backend_models.BackendType.TUI_CLI):
+  if backend_type is not backend_models.BackendType.ANTIGRAVITY:
     assert run.model == "fake-model"
   assert run.native_session_id == "native-xyz-1"
   run_dir = tree.runs.run_dir(root.id, run_id)
@@ -113,9 +108,6 @@ async def test_zero_output_and_error_results_fail_across_types(
   # Zero output: a settled result event with all-zero usage and no
   # assistant text — the master queue's zero-output guard must turn it into
   # a nonzero exit so the run fails instead of consuming the input silently.
-  # A tui-cli manager never reaches this: its turns are the terminal's, so
-  # the dispatcher refuses before any Run exists (no headless failure, the
-  # input stays pending).
   from src.runtime.agent_process import base as backend_base
   empty = test_task_execution.SpawningScriptedBackend([backend_base.make_result_event(0, 0)])
   test_task_execution.install_backends(monkeypatch, [empty], conftest.BUILD_BACKEND_PATCH_TARGET)
@@ -123,13 +115,6 @@ async def test_zero_output_and_error_results_fail_across_types(
   tree.dispatch.executor = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Stay silent.", actor="user")
   decision = await asyncio.wait_for(tree.dispatch.dispatch_pending(root.id), 5)
-  if backend_type is backend_models.BackendType.TUI_CLI:
-    assert decision["launch"] is False
-    assert "terminal" in decision["reason"]
-    assert "run_id" not in decision
-    assert tree.runs.list_run_records_sync(root.id) == []
-    assert [e for e in tree.events.load_events(root.id) if e.get("type") == ET.RUN_FINISHED] == []
-    return
   run_id = decision["run_id"]
   _run, outcome = await test_task_execution.wait_for_terminal_run(tree, root.id, run_id, timeout=10.0)
   assert outcome == "failed"

@@ -875,7 +875,7 @@ def resolve_session_id(arg_session: str | None) -> str:
   identity wherever it cd's to; that variable is the authoritative source. An
   explicit ``--session`` must agree with it and a mismatch exits 2 naming both,
   because either value can carry a caller's intent. cwd serves as the fallback
-  for an invocation the server did not start (a hand-run shell, a tmux backend):
+  for an invocation the server did not start (a hand-run shell):
   with the variable absent, ~/.charliebot/sessions/{session_id} supplies the id
   exactly as it does today. With the variable present, a cwd sitting in another
   session's directory routes by the variable and prints a non-fatal warning

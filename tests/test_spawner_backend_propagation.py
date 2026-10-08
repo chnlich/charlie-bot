@@ -27,7 +27,7 @@ def _build_cfg() -> CharlieBotConfig:
                       type="cc-claude",
                       model="claude-opus-4-6",
                       effort="max",
-                      cli_binary="claude-sub",
+                      cli_binary="claude-alt",
                   ),
                   CODEX_BACKEND_OPTION,
               ]
@@ -41,7 +41,7 @@ def test_resolve_backend_option_requires_valid_backend_and_model() -> None:
   assert opt.id == OPUS_BACKEND_ID
   assert opt.model == "claude-opus-4-6"
   assert opt.effort == "max"
-  assert opt.cli_binary == "claude-sub"
+  assert opt.cli_binary == "claude-alt"
 
   with pytest.raises(ValueError, match=r"is not in backends.options"):
     spawner.spawner_backends.resolve_backend_option(cfg, "missing", "o3")

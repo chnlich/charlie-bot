@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 
 import conftest
 import pytest
 
+from src.infra import config as core_config
 from src.infra import models
-from src.runtime import sessions
+from src.runtime import sessions, spawner_backends
 
 
 def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:
@@ -46,3 +48,27 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
   assert [meta.model_dump(mode="json") for meta in batch_result
          ] == [meta.model_dump(mode="json") for meta in sequential_result]
   assert {meta.id for meta in batch_result} == {active.id, archived.id, legacy.id}
+
+
+@pytest.mark.asyncio
+async def test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_lists_and_refuses_a_new_run(
+    tmp_path: pathlib.Path) -> None:
+  """Stored sessions carry removed subscription backend ids; they stay readable and a new run is refused."""
+  cfg = core_config.CharlieBotConfig(
+      charliebot_home=tmp_path / "home", backends={"options": [conftest.OPUS_BACKEND_OPTION]})
+  mgr = sessions.SessionManager(cfg)
+  stored = models.SessionMetadata(name="stored", backend="claude-fable-sub")
+  _write_metadata(mgr, stored)
+  events_path = mgr.get_chat_events_path(stored.id)
+  events_path.parent.mkdir(parents=True, exist_ok=True)
+  events_path.write_text(json.dumps(conftest.user_event("hello")) + "\n", encoding="utf-8")
+
+  loaded = await mgr.get_session(stored.id)
+  listed = await mgr.list_sessions()
+
+  assert loaded is not None
+  assert loaded.backend == "claude-fable-sub"
+  assert [meta.id for meta in listed] == [stored.id]
+  assert [event["content"] for event in mgr.load_chat_events_sync(stored.id)] == ["hello"]
+  with pytest.raises(ValueError, match="refusing to substitute"):
+    spawner_backends._resolve_session_default_backend_model(cfg, loaded)

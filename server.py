@@ -51,7 +51,7 @@ with gc_off(collect=False):
       get_scheduled_tasks,
       require_backends,
   )
-  from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT, BackendType
+  from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, REPO_ROOT
   from src.infra.http import close_http_client
   from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
   from src.infra.models import SessionMetadata, utc_now
@@ -377,14 +377,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Session memory-cap cgroups: the one boot line stating whether
     # the feature is on for this host (off when the cap is 0 or the delegated
-    # app.slice is missing/unwritable), plus a warning when a configured backend
-    # spawns through the shared tmux server (claude-sub / tui-cli) and therefore
-    # escapes fork-time cgroup placement. Then sweep cgroup directories a
+    # app.slice is missing/unwritable). Then sweep cgroup directories a
     # previous server life left behind (empty ones only).
-    uncovered_backends = any(
-        option.type == BackendType.TUI_CLI or
-        (option.type == BackendType.CC_CLAUDE and option.cli_binary == "claude-sub") for option in cfg.backends.options)
-    log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb, uncovered_backends)
+    log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb)
     sweep_stale_session_cgroups()
 
     # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
@@ -620,13 +615,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
     except Exception as e:
       log.warning("session_ws_catchup_failed", session_id=session_id, error=str(e))
 
-    cfg = get_config()
-    backend_option = cfg.get_backend_option(meta.backend) if meta and meta.backend else None
-    if backend_option is not None and backend_option.type == BackendType.TUI_CLI:
-      from src.backends.tui.tui import run_tui_attachment
-      await run_tui_attachment(websocket, session_id, cfg, task_manager())
-    else:
-      await _ws_keepalive(websocket, "session_ws", session_id=session_id)
+    await _ws_keepalive(websocket, "session_ws", session_id=session_id)
   finally:
     await streaming_manager.unsubscribe(channel, websocket)
     await streaming_manager.unsubscribe(SIDEBAR_CHANNEL, websocket)

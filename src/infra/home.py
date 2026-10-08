@@ -15,20 +15,16 @@ import pathlib
 CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 
 # Claude Code's login-directory env var, a cross-process wire contract: the server
-# writes it onto a cc-claude child (claude_code._prepare_env, the tmux spawn in
-# src/backends/claude_sub/claude_sub.py), the pool strips any inherited value where it pinned the
-# directory itself (master_cc_run, claude_compaction.compaction_env), and the
-# in-process readers in src.infra.config.claude_config_dir, tui/_claude_config_path,
-# and claude_sub read it back. One spelling everywhere. It lives beside the profile
-# home so the worker binary's launch path (src.backends.claude_sub.claude_sub) resolves it without
-# the config model stack.
+# writes it onto a cc-claude child (claude_code._prepare_env), the pool strips
+# any inherited value where it pinned the directory itself (master_cc_run,
+# claude_compaction.compaction_env), and the in-process reader
+# src.infra.config.claude_config_dir reads it back. One spelling everywhere.
+# It lives beside the profile home so it resolves without the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
 
-# The OAuth credential filename inside a login directory: claude-sub snapshots it
-# into the session-only config overlay, the account pool reads it for health, and
-# the usage provider derives its per-account path from it. It lives beside the
-# login-dir names so the claude-sub launch resolves it without the account pool's
-# pydantic models.
+# The OAuth credential filename inside a login directory: the account pool reads
+# it for health, and the usage provider derives its per-account path from it.
+# It lives beside the login-dir names.
 CREDENTIALS_FILE = ".credentials.json"
 
 
@@ -36,9 +32,9 @@ def default_claude_dir() -> pathlib.Path:
   """The default claude login directory (``~/.claude``), read from HOME on every call.
 
   The terminal fallback of :func:`src.infra.config.claude_config_dir`'s order and
-  the root the cold-storage, autonamer, tui, and claude-sub readers re-derive per
-  call, so those honor a redirected HOME (tests isolate stores that way); the
-  tally layer freezes an import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
+  the root the cold-storage reader re-derives per call, so it honors a
+  redirected HOME (tests isolate stores that way); the tally layer freezes an
+  import-time copy in ``token_tally.DEFAULT_CLAUDE_DIR``.
   """
   return pathlib.Path.home() / ".claude"
 

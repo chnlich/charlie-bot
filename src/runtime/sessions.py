@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 from src.features.artifacts import plan_paths
 from src.features.artifacts.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.infra.config import CharlieBotConfig
-from src.infra.constants import BackendType
 from src.infra.gc_control import gc_off
 from src.infra.json_utils import atomic_write_stream, atomic_write_text, load_json_meta, write_json_atomically
 from src.infra.locks import lock_for
@@ -31,7 +30,6 @@ from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
 from src.infra.models import (
     TERMINAL_THREAD_STATUSES,
-    BackendOption,
     CreateSessionRequest,
     MasterRunRecord,
     SessionCallbacks,
@@ -1151,38 +1149,9 @@ class SessionManager:
     # that already holds it.
     if self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
-    await self._backend_create_hook(meta)
 
     log.info("session_created", session_id=meta.id, name=meta.name)
     return _stamp_thinking_since(meta)
-
-  def _tui_cli_option(self, backend_id: str) -> BackendOption | None:
-    # Only tui-cli backends carry tmux lifecycle state, and the create and
-    # destroy hooks must agree on which sessions that covers.
-    option = self._cfg.get_backend_option(backend_id)
-    return option if option is not None and option.type == BackendType.TUI_CLI else None
-
-  async def _backend_create_hook(self, meta: SessionMetadata) -> None:
-    """Run backend-specific session-create work (e.g. spawn tmux for tui-cli)."""
-    if self._tui_cli_option(meta.backend) is None:
-      return
-    from src.backends.tui.tui import ensure_tmux_session
-    try:
-      await ensure_tmux_session(meta.id, self._session_dir(meta.id))
-    except Exception:
-      log.exception("backend_create_hook_failed", session_id=meta.id, backend=meta.backend)
-      raise
-
-  async def _backend_destroy_hook(self, session_id: str, meta: SessionMetadata | None) -> None:
-    """Run backend-specific teardown (e.g. kill tmux for tui-cli)."""
-    # Only called on permanent delete. Archive is a status-only flag and must
-    # NOT kill the underlying tmux/claude process for tui-cli sessions.
-    if meta is None:
-      return
-    if self._tui_cli_option(meta.backend) is None:
-      return
-    from src.backends.tui.tui import kill_tmux_session
-    await kill_tmux_session(session_id)
 
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
@@ -2057,8 +2026,6 @@ class SessionManager:
       session_dir = self._session_dir(session_id)
       if not session_dir.exists():
         return False
-      meta = await self.get_session(session_id)
-      await self._backend_destroy_hook(session_id, meta)
       await asyncio.to_thread(shutil.rmtree, session_dir)
       # The session's memory-cap cgroup: removed only when empty (no live
       # member left); a retained directory is logged debug and reclaimed by

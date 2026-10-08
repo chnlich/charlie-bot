@@ -21,7 +21,6 @@ if TYPE_CHECKING:
       CcClaudeBackend,
       ClaudeAccount,
       ClaudeCompactionConfig,
-      TuiCliBackend,
       backend_type_allows_missing_model,
       option_default_model,
   )
@@ -39,7 +38,6 @@ _BACKEND_REEXPORTS = frozenset(
         "CcClaudeBackend",
         "ClaudeAccount",
         "ClaudeCompactionConfig",
-        "TuiCliBackend",
         "backend_type_allows_missing_model",
         "option_default_model",
     })

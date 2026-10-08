@@ -33,9 +33,8 @@ _PTY_READ_CHUNK = 4096
 # terminfo advertises `Ms`, which screen-256color does not.
 _PTY_CLIENT_TERM = "xterm-256color"
 
-# fastapi rides every claude-sub launch (the worker binary imports this module for
-# the tmux helpers); the WS-facing relay below is the only fastapi consumer, so its
-# imports stay inside that function and the WebSocket type rides TYPE_CHECKING.
+# The WS-facing relay below is the only fastapi consumer, so its import stays
+# inside that function and the WebSocket type rides TYPE_CHECKING.
 if TYPE_CHECKING:
   import fastapi
 
@@ -44,7 +43,7 @@ def _tmux_binary() -> str:
   """Resolve the tmux binary path, raising a clear error if missing."""
   path = shutil.which("tmux")
   if not path:
-    raise RuntimeError("tmux binary not found on PATH — install tmux for tui-cli backend")
+    raise RuntimeError("tmux binary not found on PATH — install tmux")
   return path
 
 
@@ -125,37 +124,10 @@ async def _start_tmux_session(name: str, cwd: str, env_args: list[str], command_
   await _run_tmux("set-option", "-t", name, "history-limit", str(_HISTORY_LIMIT))
 
 
-async def tmux_pane_pid(session_id: str) -> int | None:
-  """The first pane's process pid of this session's tmux session, or None.
-
-  The TUI Run's process identity: the claude CLI lives in the pane, so its pid
-  (pinned with its /proc start marker by the caller) is what the Run records
-  and the caller-identity checks verify — the same Run/pid owners as a
-  headless launch.
-  """
-  rc, out = await _run_tmux("list-panes", "-t", tmux_session_name(session_id), "-F", "#{pane_pid}", capture=True)
-  if rc != 0 or not out.strip():
-    return None
-  try:
-    return int(out.strip().split("\n")[0])
-  except ValueError as e:
-    raise RuntimeError(f"tmux pane pid unparsable for {session_id}: {out!r}") from e
-
-
 async def tmux_session_exists(session_id: str) -> bool:
   """Return True if the tmux session for *session_id* exists on the charliebot socket."""
   rc, _ = await _run_tmux("has-session", "-t", tmux_session_name(session_id))
   return rc == 0
-
-
-async def kill_tmux_session(session_id: str) -> None:
-  """Best-effort kill of the tmux session for *session_id*."""
-  name = tmux_session_name(session_id)
-  rc, stderr = await _run_tmux("kill-session", "-t", name)
-  if rc == 0:
-    log.info("tui_tmux_session_killed", session_id=session_id, name=name)
-  else:
-    log.debug("tui_tmux_session_kill_noop", session_id=session_id, name=name, stderr=stderr.strip())
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:

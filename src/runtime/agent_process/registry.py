@@ -10,7 +10,6 @@ from src.backends.gemini import gemini_cli
 from src.backends.kimi import kimi
 from src.backends.openai_compatible import openai_compatible_claude
 from src.backends.opencode import opencode
-from src.backends.tui import tui
 from src.infra import config, constants, models
 from src.runtime.agent_process import base
 
@@ -86,6 +85,4 @@ def build_backend(
         model=models.option_default_model(option, subject="backend "), proxy_url=option.proxy_url, **kwargs)
   if option.type == constants.BackendType.ANTIGRAVITY:
     return antigravity_cli.AntigravityCliBackend(print_timeout=option.print_timeout, **kwargs)
-  if option.type == constants.BackendType.TUI_CLI:
-    return tui.TuiBackend(**kwargs)
   raise ValueError(f"Unknown backend type: {option.type}")

@@ -87,12 +87,10 @@ test('updateBackendHeaderControls gates #compact-btn to exactly cc-claude, for e
     'claude-opus-4.6': 'cc-claude',
     'claude-sonnet-5': 'cc-claude',
     'codex-o3': 'codex',
-    'legacy-tui': 'tui-cli',
     'opencode-glm': 'opencode',
   };
   const compactBtn = fakeHeaderButton();
-  const stopBtn = fakeHeaderButton();
-  const elements = new Map([['compact-btn', compactBtn], ['stop-tui-btn', stopBtn]]);
+  const elements = new Map([['compact-btn', compactBtn]]);
   const context = loadSidebarStatusContext({
     document: { getElementById: (id) => elements.get(id) || null },
   });
@@ -101,7 +99,7 @@ test('updateBackendHeaderControls gates #compact-btn to exactly cc-claude, for e
   assert.ok(uniqueTypes.length >= 3, 'fixture should exercise more than one non-cc-claude type');
 
   for (const type of uniqueTypes) {
-    context.updateBackendHeaderControls(type, 'session-a');
+    context.updateBackendHeaderControls(type);
     assert.equal(compactBtn.disabled, type !== 'cc-claude', `type ${type}`);
     const expectedTitle = type === 'cc-claude'
       ? ''

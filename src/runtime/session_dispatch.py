@@ -339,21 +339,12 @@ class TaskInputDispatcher:
         """
 
     tree = self._tree
-    meta = await tree.load_task_meta(session_id)
+    await tree.load_task_meta(session_id)  # raises for an absent or non-task session
     pending = self.pending_inputs(session_id)
     decision: dict = {"session_id": session_id, "pending": len(pending)}
     if tree.task_state(session_id) != "open":
       decision["launch"] = False
       decision["reason"] = "task is closed; input retained as history"
-      return decision
-    tui_refusal = self._tui_manager_refusal(meta)
-    if tui_refusal is not None:
-      # A tui-cli manager node takes input through the terminal, not a
-      # headless SDK turn. No Run is reserved and none fails: the input
-      # stays durable and pending, the decision names the transport
-      # limit, and the terminal remains the node's execution surface.
-      decision["launch"] = False
-      decision["reason"] = tui_refusal
       return decision
     events = tree.runs.load_events_sync(session_id)
     queued: list[RunRecord] = []
@@ -455,26 +446,6 @@ class TaskInputDispatcher:
     return create_logged_task(
         trigger_master(parent_id, text, tree._cfg, tree.sessions, ET.CHILD_REPORT),
         name=f"legacy-parent-wake-{parent_id[:8]}")
-
-  def _tui_manager_refusal(self, meta) -> str | None:
-    """Why a headless manager turn must not start on *meta*, or None.
-
-        Only a tui-cli-backed MANAGER node refuses: its turns are the user's
-        terminal session (tmux takes input through the browser terminal, not
-        the SDK), so a dispatched input can never be executed headlessly.
-        Worker nodes keep their ordinary adapters; a tui worker is a launch
-        failure, not a terminal-driven node.
-        """
-    from src.infra.backend_models import BackendType
-
-    if meta.profile != "manager" or not meta.backend:
-      return None
-    option = self._tree._cfg.get_backend_option(meta.backend)
-    if option is None or option.type is not BackendType.TUI_CLI:
-      return None
-    return (
-        "tui-cli manager takes input through the terminal; no headless "
-        "manager turn is started and the input stays pending")
 
   async def finish_run(
       self,

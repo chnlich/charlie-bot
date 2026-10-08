@@ -768,12 +768,6 @@ def _parse_session_ids(ids: str) -> list[str]:
   return parsed
 
 
-async def _load_requested_sessions(session_mgr: SessionManager, ids: str) -> list[SessionMetadata]:
-  """Resolve the requested ids to metadata, dropping ids that no longer exist."""
-  loaded = await asyncio.gather(*(session_mgr.get_session(sid) for sid in _parse_session_ids(ids)))
-  return [meta for meta in loaded if meta is not None]
-
-
 # The /status poll's whole-body memo: (requested ids, sidebar generation) -> the
 # rendered body bytes. Every payload input sits behind the sidebar generation
 # (mark_sidebar_dirty bumps it for busy flips, every metadata write through
@@ -855,71 +849,6 @@ async def all_sessions_status(
   # The sidebar's 3 s poll is this host's second-busiest route; the gzip form
   # rides the body-keyed memo (_switch_payload_response's memo).
   return await gzip_body_response(request, body, {}, _switch_gzip_memo)
-
-
-@router.get('/tui/status')
-async def tui_status_all(
-    ids: str = Query(..., description=_SIDEBAR_IDS_QUERY_DESC),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> dict:
-  """Return tmux liveness and recent Claude jsonl activity for the requested tui-cli sessions."""
-  sessions = await _load_requested_sessions(session_mgr, ids)
-  tui_sessions = []
-  for meta in sessions:
-    option = cfg.get_backend_option(meta.backend)
-    if option is not None and option.type == BackendType.TUI_CLI:
-      tui_sessions.append(meta)
-  if not tui_sessions:
-    return {}
-
-  from src.backends.tui.tui import _claude_jsonl_busy, tmux_session_exists
-  statuses = await asyncio.gather(*(tmux_session_exists(meta.id) for meta in tui_sessions))
-  busy_flags = await asyncio.gather(
-      *(
-          asyncio.to_thread(_claude_jsonl_busy, meta.id) if running else _not_busy()
-          for meta, running in zip(tui_sessions, statuses, strict=True)))
-  return {
-      meta.id: {
-          "running": running,
-          "busy": busy
-      } for meta, running, busy in zip(tui_sessions, statuses, busy_flags, strict=True)
-  }
-
-
-async def _not_busy() -> bool:
-  return False
-
-
-@router.post('/{session_id}/tui/stop')
-async def stop_tui(
-    session_id: str,
-    meta: SessionMetadata = Depends(require_session),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    task_mgr: TaskTreeManager = Depends(get_task_manager),
-) -> dict:
-  option = cfg.get_backend_option(meta.backend)
-  if option is None or option.type != BackendType.TUI_CLI:
-    raise HTTPException(status_code=400, detail="Session backend is not tui-cli")
-
-  from src.backends.tui.tui import kill_tmux_session
-  await kill_tmux_session(session_id)
-  # The explicit stop is a real terminal outcome, not a completion: the TUI
-  # Run's process ended without a result, and its durable terminal fact is the
-  # same first-fact-wins record every other Run uses. Silence or detach alone
-  # lands nothing.
-  if meta.profile is not None:
-    for run in await asyncio.to_thread(task_mgr.runs.list_run_records_sync, session_id):
-      if run.kind != "manager_turn" or run.pid is None:
-        continue
-      events = task_mgr.runs.load_events_sync(session_id)
-      if task_mgr.runs.run_has_terminal_fact(run, events):
-        continue
-      try:
-        await task_mgr.runs.record_finish(session_id, run.id, "interrupted")
-      except RunNotFoundError as e:
-        raise HTTPException(status_code=404, detail=str(e)) from e
-  return {"stopped": True}
 
 
 _SEARCH_ROW_FRAGMENT_CAP = 512
@@ -2190,8 +2119,7 @@ async def acknowledge_task_inputs(
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
-  """Resolve exact task inputs the operator handled out-of-band (the terminal-driven
-  node's normal case), durably and idempotently.
+  """Resolve exact task inputs the operator handled out-of-band, durably and idempotently.
 
   Operator credentials only; every id must be a currently-pending input of this
   task (already-acknowledged ids replay as a no-op, unknown or claimed ids

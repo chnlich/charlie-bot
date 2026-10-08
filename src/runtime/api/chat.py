@@ -9,7 +9,6 @@ from fastapi.responses import JSONResponse
 
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.constants import BackendType
 from src.infra.deferred import deferred_import_loader, deferred_module_getattr
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SendMessageRequest, SessionMetadata, SessionStatus
@@ -83,19 +82,12 @@ async def send_message(
     caller: CallerIdentity = Depends(require_caller),
 ) -> JSONResponse:
   """Send a message to the master CC agent. Returns 202; response streams via WebSocket."""
-  backend_option = cfg.get_backend_option(meta.backend) if meta.backend else None
-  is_tui = backend_option is not None and backend_option.type == BackendType.TUI_CLI
-  if is_tui and meta.profile is None:
-    raise HTTPException(status_code=400, detail="Chat input is not supported for tui-cli sessions; use the terminal.")
-
   # A v2 task node routes input through the durable dispatcher: browser and
   # operator input are real user input, a run-token agent on the same route
   # stays agent input with its own provenance. An archived node refuses the
   # agent input with 409 and restores for the user's own message before the
-  # admission; the executor seam (next stage) decides any launch. A tui-cli
-  # manager task's input is durable and pending (the terminal is its execution
-  # surface — no headless turn is started), so the response carries the
-  # decision that names the transport limit.
+  # admission; the executor seam (next stage) decides any launch. The response
+  # carries the dispatcher's decision.
   if meta.profile is not None:
     from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError
 

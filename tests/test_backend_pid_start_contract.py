@@ -14,8 +14,8 @@ Enumeration is package-driven (pkgutil walk of ``src.backends`` and ``src.runtim
 a hardcoded class list, and the fail-loud test below requires the enumerated
 subclass set to equal the harness-key set EXACTLY: adding a concrete
 AgentBackend subclass without a harness entry turns this file RED, so no
-turn-driving backend can silently skip the pin contract. terminal/tui are not
-AgentBackend subclasses and never enter the enumeration.
+turn-driving backend can silently skip the pin contract. terminal is not an
+AgentBackend subclass and never enters the enumeration.
 """
 
 from __future__ import annotations

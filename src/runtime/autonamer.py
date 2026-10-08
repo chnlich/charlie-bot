@@ -1,26 +1,15 @@
 """Session auto-naming.
 
-Two strategies, picked by who triggers them:
+Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.):
+- Entry: name_after_round(...) — fired by the per-session queue consumer via
+  SessionManager.name_after_round after a master round; it assembles the
+  prompt from the chat log and delegates to maybe_auto_name(...).
+- Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
+- Picks resolved light backends from backends.preference in order
+  (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
+- Group may reuse an existing group name from other sessions.
 
-1. Light-backend one-shot (SDK sessions: cc-claude / codex / opencode / etc.)
-   - Entry: name_after_round(...) — fired by the per-session queue consumer via
-     SessionManager.name_after_round after a master round; it assembles the
-     prompt from the chat log and delegates to maybe_auto_name(...).
-   - Reads CharlieBot's chat_events.jsonl (user message + assistant_text).
-   - Picks resolved light backends from backends.preference in order
-     (iter_light_backends) and asks them, via one_shot_text, for {name, group}.
-   - Group may reuse an existing group name from other sessions.
-
-2. Claude ai-title (TUI sessions, backend.type = "tui-cli")
-   - Entry: maybe_auto_name_from_claude_ai_title(...) — called from
-     src/backends/tui/tui.py at the end of run_tui_attachment().
-   - Reads ~/.claude/projects/<encoded-cwd>/<session-id>.jsonl looking for the first
-     event with {"type": "ai-title", "aiTitle": "..."}.
-   - Uses aiTitle as the base session name, preserving the original session number
-     for default "Session N" names. No group inference (left empty).
-   - No external API call (Claude writes the title itself).
-
-Both strategies share _apply_name_to_session(), which guards against overwriting
+The result goes through _apply_name_to_session(), which guards against overwriting
 a name the user has already set (matched via is_default_session_name).
 """
 
@@ -30,7 +19,6 @@ import re
 from collections.abc import Iterator
 from typing import Any
 
-from src.backends.claude_code import claude_accounts
 from src.infra import config, deferred, log_once, models, timeouts
 from src.infra import event_types as ET
 from src.runtime import message_aggregator, sessions, streaming
@@ -56,8 +44,8 @@ _MARKDOWN_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?\s*```$", re.DOTALL
 def _prefix_session_number_if_default(session_name: str, name: str) -> str:
   """If session_name matches the default 'Session N' pattern (optionally carrying
   clone/elone C/E prefixes), return f"{prefix}{N}: {name}". Otherwise return name
-  unchanged. Used by both autonaming strategies so the generated title carries the
-  original session number for easier reference."""
+  unchanged. Used so the generated title carries the original session number for
+  easier reference."""
   m = _SESSION_NUMBER_RE.match(session_name)
   return f"{m.group(1)}{m.group(2)}: {name}" if m else name
 
@@ -283,65 +271,3 @@ async def maybe_auto_name(
 
   except Exception as e:
     log.warning("autonamer_failed", session_id=session_meta.id, error=str(e))
-
-
-async def maybe_auto_name_from_claude_ai_title(
-    session_meta: models.SessionMetadata,
-    session_mgr: sessions.SessionManager,
-) -> None:
-  """Claude ai-title strategy. For TUI sessions only.
-
-  Locates the claude jsonl for this session by globbing
-  ~/.claude/projects/*/<session_id>.jsonl. If found, scans for the first
-  {"type": "ai-title", "aiTitle": "<title>"} event and applies the title
-  via _apply_name_to_session.
-
-  Idempotent: safe to call repeatedly. Does nothing if:
-    - No jsonl found (claude hasn't started yet or no conversation).
-    - No ai-title event in the jsonl yet (conversation too short).
-    - Session name is no longer the default (user already renamed).
-
-  Group is intentionally left empty for TUI sessions in this version.
-  """
-  session_id = session_meta.id
-  matches = claude_accounts.transcript_matches(config.default_claude_dir(), session_id)
-  if not matches:
-    return
-
-  if len(matches) == 1:
-    jsonl_path = matches[0]
-  else:
-    try:
-      jsonl_path = max(matches, key=lambda path: path.stat().st_mtime)
-    except OSError:
-      log.warning("claude_ai_title_stat_failed", session_id=session_id, exc_info=True)
-      return
-
-  title: str | None = None
-  try:
-    with jsonl_path.open("r", encoding="utf-8") as f:
-      for line_number, line in enumerate(f, start=1):
-        try:
-          data = json.loads(line)
-        except json.JSONDecodeError as e:
-          log.debug(
-              "claude_ai_title_json_parse_failed",
-              session_id=session_id,
-              path=str(jsonl_path),
-              line=line_number,
-              error=str(e),
-          )
-          continue
-        if not isinstance(data, dict) or data.get("type") != "ai-title":
-          continue
-        ai_title = data.get("aiTitle")
-        if isinstance(ai_title, str) and ai_title.strip():
-          title = ai_title
-          break
-  except (OSError, UnicodeDecodeError):
-    log.warning("claude_ai_title_read_failed", session_id=session_id, path=str(jsonl_path), exc_info=True)
-    return
-
-  if title:
-    title = _prefix_session_number_if_default(session_meta.name, title)
-    await _apply_name_to_session(session_mgr, session_meta, name=title, group=None)

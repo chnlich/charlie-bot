@@ -6,7 +6,6 @@ document.addEventListener('DOMContentLoaded', () => {
   initSidebarResize();
   initLatexResize();
   initBacklogResize();
-  startTuiStatusPolling();
   restoreSidebarFromUrl();
   updateRelativeTimes();
 
@@ -92,7 +91,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // paused timers would have refreshed, before their cadences restart.
   onPageResume(() => {
     refreshSessionStatusNow();
-    fetchTuiStatus();
     pollActiveSessionView();
     updateThinkingTime();
   });

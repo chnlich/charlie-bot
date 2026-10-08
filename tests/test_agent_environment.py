@@ -3,7 +3,7 @@
 The server runs under `uv run`, whose venv activation every agent process
 would copy; uv then installs into the server venv from any checkout. These
 tests pin the mapping that removes the activation, the entry-point shims that
-keep `charliebot` and `claude-sub` resolvable, and the call in server.main().
+keep `charliebot` resolvable, and the call in server.main().
 """
 
 import os
@@ -62,8 +62,8 @@ def test_entry_point_dir_holds_one_executable_shim_per_project_script() -> None:
   assert all(os.access(shim, os.X_OK) for shim in shims)
 
 
-@pytest.mark.parametrize("name", ["charliebot", "claude-sub"])
-def test_shim_execs_the_same_named_venv_script(tmp_path: pathlib.Path, name: str) -> None:
+def test_shim_execs_the_same_named_venv_script(tmp_path: pathlib.Path) -> None:
+  name = "charliebot"
   venv_bin = tmp_path / "bin"
   venv_bin.mkdir()
   stub = venv_bin / name

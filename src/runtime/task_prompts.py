@@ -1,7 +1,7 @@
 """The one v2 task-context assembly owner: managed instruction blocks, snapshots, hashes.
 
 Every v2 Run kind (manager turn, work, review, verify, improve iteration, cron
-scheduled step) and the TUI terminal launch draw their managed instructions from
+scheduled step) draws its managed instructions from
 this module, and so does the preview API — one assembly path, never a
 preview-only selector. The legacy (v1) master/worker assemblies in
 ``master_cc_run`` and ``spawner_prompt`` stay compatibility callers during the

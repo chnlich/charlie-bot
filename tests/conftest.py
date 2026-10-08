@@ -1569,16 +1569,6 @@ BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET = "src.features.backlog.backlog_lo
 # call-time read picks it up.
 JSON_UTILS_OS_REPLACE_PATCH_TARGET = "src.infra.json_utils.os.replace"
 
-# Import-path patch targets for the tmux seams the TUI session handlers read. The handlers
-# bind the names with call-time `from src.backends.tui.tui import ...`
-# (src/runtime/api/sessions.py's tui status/stop handlers, src/runtime/sessions.py's delete path). The
-# import resolves the src.backends.tui.tui module attribute at call time, so
-# monkeypatch.setattr lands the stand-in exactly there. kill_tmux_session and
-# tmux_session_exists are pty_common re-exports on that namespace; _claude_jsonl_busy is
-# defined in tui.py itself. src/runtime/api/threads.py binds tmux_session_exists at import scope and
-# keeps its own route.
-TUI_KILL_TMUX_SESSION_PATCH_TARGET = "src.backends.tui.tui.kill_tmux_session"
-
 # Patch target for the ssh control-master directory. src/infra/ssh.py derives it from the
 # operator's home at import scope and the argv builder reads the module global at call time,
 # so monkeypatch.setattr redirects the dir onto the src.infra.ssh module attribute and keeps
@@ -1951,18 +1941,6 @@ def build_two_backend_cfg(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
-  )
-
-
-def build_tui_sessions_cfg(tmp_path: Path) -> CharlieBotConfig:
-  """CharlieBotConfig for sessions-API TUI tests: the .charliebot home lives under tmp_path and the backend list
-  registers opus plus the claude-tui terminal backend the TUI handlers resolve a session against."""
-  return CharlieBotConfig(
-      charliebot_home=tmp_path / ".charliebot",
-      backends={"options": [
-          OPUS_BACKEND_OPTION,
-          backend_option(id="claude-tui", label="Claude TUI", type="tui-cli"),
-      ]},
   )
 
 
@@ -2888,24 +2866,6 @@ def shut_down_trigger_tasks(trigger_mgr: TriggerManager) -> None:
   """
   for task in list(trigger_mgr._tasks.values()):
     task.cancel()
-
-
-def make_fake_run_tmux(calls: list[tuple[str, ...]]) -> Callable[..., Awaitable[tuple[int, str]]]:
-  """A `_run_tmux` stand-in that answers "has-session" as missing and records every call.
-
-  "has-session" exits rc 1 so the patched session-setup path takes its create branch;
-  every other tmux invocation exits rc 0 with empty stderr. The signature mirrors
-  src.runtime.agent_process.pty_common._run_tmux so the monkeypatched attribute stays a
-  drop-in replacement.
-  """
-
-  async def fake_run_tmux(*args: str, capture: bool = False) -> tuple[int, str]:
-    calls.append(args)
-    if args[0] == "has-session":
-      return 1, ""
-    return 0, ""
-
-  return fake_run_tmux
 
 
 # Captured before any patch window opens: the os.replace spies below delegate through it, so a

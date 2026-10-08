@@ -60,7 +60,6 @@
     ];
     const VOICE_DEFAULT_BACKEND = {{ voice_default_backend|tojson }};
     globalThis.ACTIVE_BACKEND_ID = {{ active_backend|tojson }};
-    globalThis.ACTIVE_BACKEND_TYPE = {{ (active_backend_type or '')|tojson }};
     const AUTH_ENABLED = {{ auth_enabled|tojson }};
     const PREVIEW_MODE = {{ preview_mode|tojson }};
     globalThis.__CHARLIEBOT_PREVIEW__ = PREVIEW_MODE;
@@ -190,10 +189,6 @@
                   onclick="setPageDepth('expanded')" aria-pressed="false"
                   title="Open every turn and every step fold">Expand all</button>
         </div>
-        <button id="stop-tui-btn"
-                onclick="stopActiveTui()"
-                class="ml-2 text-xs px-2 py-1 rounded bg-red-900/40 text-red-200 border border-red-700/50 hover:bg-red-800/60 transition-colors whitespace-nowrap {% if active_backend_type != 'tui-cli' %}hidden{% endif %}"
-                title="Stop Claude">Stop Claude</button>
         <!-- Context usage indicator — starts hidden; the first /usage render fills it -->
         <div id="usage-indicator" class="flex items-center gap-2 ml-3 mr-2 hidden">
           <div class="flex items-center gap-1.5" title="Context window usage">
@@ -240,8 +235,6 @@
         <div id="tab-terminal" class="hidden flex-1 min-h-0 min-w-0 bg-black"></div>
       <!-- ===== CHAT TAB ===== -->
       <div id="tab-chat" class="flex-1 flex flex-col min-h-0 min-w-0 relative">
-        <!-- TUI terminal container (hidden unless backend.type === 'tui-cli') -->
-        <div id="tui-container" class="hidden flex-1 min-h-0 bg-black"></div>
         <!-- Messages -->
         <div id="messages" class="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-3">
           <!-- Streaming target (initialized from pending_draft if present) -->
@@ -465,7 +458,6 @@
   <script src="/static/js/terminal_b64.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_clipboard.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_mount.js?v={{ static_asset_version|urlencode }}"></script>
-  <script src="/static/js/tui_session.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/terminal_panel.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/websocket.js?v={{ static_asset_version|urlencode }}"></script>
   <script src="/static/js/usage.js?v={{ static_asset_version|urlencode }}"></script>

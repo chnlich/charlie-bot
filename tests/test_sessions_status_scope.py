@@ -1,7 +1,7 @@
-"""GET /api/sessions/status and /api/sessions/tui/status are scoped to requested ids.
+"""GET /api/sessions/status is scoped to requested ids.
 
 The sidebar renders a couple of dozen sessions but the session directory holds
-hundreds; both handlers must resolve exactly the ids the client asks for and
+hundreds; the handler must resolve exactly the ids the client asks for and
 never enumerate the whole directory.
 """
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import orjson
 import pytest
-from conftest import build_tui_sessions_cfg
+from conftest import build_two_backend_cfg
 from conftest import make_sessions_client as _build_client
 
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
@@ -33,7 +33,7 @@ async def test_status_returns_exactly_the_requested_ids(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   wanted = await session_mgr.create_session(CreateSessionRequest(name="Sidebar"))
   other = await session_mgr.create_session(CreateSessionRequest(name="Off screen"))
@@ -67,7 +67,7 @@ async def test_status_derived_map_serves_whole_between_state_bumps(tmp_path: Pat
   rebuild the fold used to pay.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Memo"))
   flags = {
@@ -111,7 +111,7 @@ async def test_status_body_memo_serves_whole_between_state_bumps(
   the poll to the per-request render it used to pay.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Body memo"))
   renders: list[object] = []
@@ -161,7 +161,7 @@ async def test_status_body_memo_serves_no_ghost_row_after_delete(tmp_path: Path,
   session's ghost row for a full memo lifetime.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   kept = await session_mgr.create_session(CreateSessionRequest(name="Survivor"))
   gone = await session_mgr.create_session(CreateSessionRequest(name="Deleted"))
@@ -196,7 +196,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   later listing.
   """
   sidebar_state.reset_for_tests()
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   session = await session_mgr.create_session(CreateSessionRequest(name="Stamped"))
   thinking_state.mark_busy(session.id)
@@ -253,7 +253,7 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
   sidebar_state.reset_for_tests()
   sessions_api._workspace_list_memos.whole_body = None
   sessions_api._workspace_list_memos.row_render.clear()
-  cfg = build_tui_sessions_cfg(tmp_path)
+  cfg = build_two_backend_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
   await session_mgr.create_session(CreateSessionRequest(name="Steady"))
   mover = await session_mgr.create_session(CreateSessionRequest(name="Churning"))

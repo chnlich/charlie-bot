@@ -91,7 +91,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
   monkeypatch.setenv("CHARLIEBOT_HOME", str(profile))
 
   from src.app import pages as api_pages
-  from src.backends.claude_sub import claude_sub
   from src.features.backup import backup as core_backup
   from src.features.cron import api as api_cron
   from src.runtime import init as core_init
@@ -114,7 +113,6 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       api_cron.cron_dir(),
       api_pages._perfetto_merge_cache_dir(),
       core_backup.charliebot_dir(),
-      claude_sub._session_marker_dir(),
   ]
   for path in owned:
     assert path == profile or profile in path.parents, f"{path} is outside the profile"

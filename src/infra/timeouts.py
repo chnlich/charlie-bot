@@ -146,16 +146,6 @@ HTTP_MODEL_DOWNLOAD_TIMEOUT = 60  # seconds
 SSH_LAUNCH_TIMEOUT = 30  # seconds
 
 # ---------------------------------------------------------------------------
-# Claude-sub hook bridge (unix socket)
-# ---------------------------------------------------------------------------
-
-# Whole round trip of the claude-sub command-hook helper over its unix socket:
-# connect, sendall, and the one-line response recv. The bridge answers from an
-# in-process queue, so a healthy round trip is milliseconds; the bound only
-# caps how long a hung bridge can stall Claude's hook.
-CLAUDE_SUB_HOOK_SOCKET_TIMEOUT = 30.0  # seconds
-
-# ---------------------------------------------------------------------------
 # Session websocket (browser push channel)
 # ---------------------------------------------------------------------------
 
@@ -193,23 +183,6 @@ CODE_SERVER_START_TIMEOUT = 5.0  # seconds
 # Receive wait on the PTY websocket; expiry sends the client a {"type": "ping"}
 # keepalive instead of closing, the same shape as WS_KEEPALIVE_TIMEOUT.
 PTY_WS_RECV_TIMEOUT = 30.0  # seconds
-
-# ---------------------------------------------------------------------------
-# Claude-sub CLI submission
-# ---------------------------------------------------------------------------
-
-# Wait for the hook bridge to confirm Claude received the submitted prompt; also
-# the UserPromptSubmit hook's own timeout, so the hook cannot outlive the wait
-# that depends on it.
-CLAUDE_SUB_CONFIRMATION_TIMEOUT = 30.0  # seconds
-
-# Whole claude-sub turn budget; expiry terminates the foreground Claude and
-# raises ClaudeSubError.
-CLAUDE_SUB_TURN_TIMEOUT = 7200.0  # seconds
-
-# Per-signal wait while terminating the foreground Claude: SIGTERM gets this
-# window, then SIGKILL gets another before the error is raised.
-CLAUDE_SUB_TERMINATE_TIMEOUT = 5.0  # seconds
 
 # ---------------------------------------------------------------------------
 # Remote-trigger ssh probes

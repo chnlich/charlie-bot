@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.backends.claude_code import claude_accounts
 from src.features.latex import latex
-from src.infra import config, constants, log_once, models, process, tasks
+from src.infra import config, log_once, models, process, tasks
 from src.infra import event_types as ET
 from src.runtime import master_cc_run, master_cc_state, runs, session_dispatch, sidebar_state, streaming, thinking_state
 from src.runtime.agent_process import base
@@ -502,15 +502,6 @@ async def run_message(
   Returns:
     The CC session ID (for --resume on subsequent messages), or None.
   """
-  # tui-cli sessions are interactive terminal sessions: messages flow through
-  # tmux, not the SDK. Skip the master agent entirely so we never spawn a
-  # claude SDK subprocess for them.
-  backend_id = session_meta.backend or (cfg.backends.options[0].id if cfg.backends.options else "")
-  backend_lookup = cfg.get_backend_option(backend_id)
-  if backend_lookup is not None and backend_lookup.type == constants.BackendType.TUI_CLI:
-    log.info("master_cc_skip_tui_backend", session=session_meta.id, backend=backend_id)
-    return None
-
   session_dir = cfg.sessions_dir / session_meta.id
   session_dir.mkdir(parents=True, exist_ok=True)
 

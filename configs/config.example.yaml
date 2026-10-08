@@ -68,9 +68,6 @@ backends:
       type: cc-claude
       model: claude-sonnet-5
       effort: xhigh
-    - id: claude-tui
-      label: "Claude TUI"
-      type: tui-cli
 
 # Accounts: the Claude subscription pool and its compaction floors.
 accounts:

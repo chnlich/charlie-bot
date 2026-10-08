@@ -39,7 +39,6 @@ function loadGroups() {
     renderSessionIndicators: () => '',
     renderPendingTriggerIndicator: () => '',
     renderPendingPlanApprovalIndicator: () => '',
-    renderTuiStatusDot: () => '',
     recordRenderedSessionStatus: () => {},
   };
   context.globalThis = context;

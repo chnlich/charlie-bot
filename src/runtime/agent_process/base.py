@@ -850,9 +850,8 @@ class AgentBackend(ABC):
     """
     if self._cgroup_session_id is None:
       return None
-    # The config model stack (~107 ms fresh-process, the claude-sub launch floor's
-    # largest slice) serves only this cgroup read; the backend ABC rides the
-    # worker binary's import, so the stack loads on the spawn path that needs it.
+    # The config model stack (~107 ms fresh-process) serves only this cgroup
+    # read, so the stack loads on the spawn path that needs it.
     from src.infra.config import get_config
 
     cfg = get_config()

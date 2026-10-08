@@ -1,11 +1,8 @@
 """Claude CLI launch vocabulary: permission flags, argv assembly, headless env.
 
-Stdlib-only by contract: the claude-sub worker binary imports this module on
-every launch (the M108 floor, docs/perf_baseline.md@5175adf09), so nothing here may
-reach the backend ABC, the config model stack, or pydantic. Consumers read
-these names from two homes: base (src.runtime.agent_process.base) re-exports the
-two permission flags for its established import path, and every other reader
--- claude_code (src.backends.claude_code.claude_code), session_usage,
+Consumers read these names from two homes: base (src.runtime.agent_process.base)
+re-exports the two permission flags for its established import path, and every
+other reader -- claude_code (src.backends.claude_code.claude_code), session_usage,
 claude_compaction, the session-usage tests included -- imports from here.
 """
 
@@ -13,26 +10,22 @@ import os
 
 # The flag that suppresses the CLI's interactive permission prompt. Its
 # spelling is fixed by the vendor CLI contract, not by this repo, so every
-# Claude-compatible launcher here (claude headless/TUI, claude-sub, agy,
-# opencode) must pass the same literal.
+# Claude-compatible launcher here (claude headless, agy, opencode) must pass
+# the same literal.
 SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
 
 # Settings-side companion of SKIP_PERMISSIONS_FLAG: with the flag passed, an
 # interactive launch still pops a one-time dangerous-mode confirmation unless
-# this key is set. Same vendor-fixed spelling, so the claude TUI and
-# claude-sub both pin the same dict.
+# this key is set. Same vendor-fixed spelling.
 SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
 
 # CharlieBot sessions must not sync claude.ai connectors at all: the CLI
 # announces every unauthorized connector at startup, and its announce-once
-# dedup cache (mcp-needs-auth-cache.json) lives in the config directory —
-# claude-sub gives each session a fresh CLAUDE_CONFIG_DIR, so the cache never
-# carries over and the announcement would replay every launch. Every Claude
-# launch path merges this into its single --settings JSON.
+# dedup cache (mcp-needs-auth-cache.json) lives in the config directory.
+# Every Claude launch path merges this into its single --settings JSON.
 DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
 
-# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's; the
-# CLI also accepts a camelCase alias, which only the claude-sub parser mirrors.
+# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's.
 DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
 
 

@@ -1,6 +1,6 @@
 // ---------------------------------------------------------------------------
 // Shared base64 byte-bridge helpers for the xterm.js terminal surfaces
-// (tui_session.js, terminal_panel.js): pty_input frames carry base64 UTF-8
+// (terminal_panel.js): pty_input frames carry base64 UTF-8
 // bytes, pty_output frames decode back to bytes for term.write.
 // ---------------------------------------------------------------------------
 globalThis.encodeBytesB64 = function(strOrBytes) {

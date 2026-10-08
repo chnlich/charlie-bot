@@ -46,8 +46,8 @@ from src.infra.home import CREDENTIALS_FILE
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption, CcClaudeBackend, ClaudeAccount
 
-# future-annotations keep every cfg: CharlieBotConfig hint unevaluated; the config
-# model stack must stay out of the claude-sub worker binary's import.
+# future-annotations keep every cfg: CharlieBotConfig hint unevaluated, so the config
+# model stack stays out of this module's import.
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
 
@@ -213,8 +213,7 @@ def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
   if option.type == BackendType.CC_CLAUDE:
     if is_pooled(option, cfg):
       return POOL_DOMAIN
-    # Lazy: the config model stack stays out of this module's import (the
-    # claude-sub worker binary imports it; see the module docstring).
+    # Lazy: the config model stack stays out of this module's import.
     from src.infra.config import claude_config_dir
 
     return str(claude_config_dir())

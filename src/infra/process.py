@@ -319,14 +319,8 @@ def sweep_stale_session_cgroups() -> int:
   return removed
 
 
-def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, uncovered_backends: bool) -> None:
-  """The one startup line stating whether session cgroup control is on (the host guard).
-
-  *uncovered_backends* is the caller's judgment that a configured backend
-  spawns through the shared tmux server (claude-sub / tui-cli): those agent
-  processes re-parent onto a pre-existing daemon, so the fork-time preexec
-  cannot move them into the session's cgroup.
-  """
+def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int) -> None:
+  """The one startup line stating whether session cgroup control is on (the host guard)."""
   if memory_max_mb <= 0:
     log.info("session_cgroup_disabled", reason="server.session_memory_max_mb is 0")
     return
@@ -337,9 +331,4 @@ def log_session_cgroup_startup(memory_max_mb: int, swap_max_mb: int, uncovered_b
   if not os.access(base, os.W_OK):
     log.info("session_cgroup_disabled", reason=f"{CGROUP_V2_APP_SLICE} not writable by this user")
     return
-  if uncovered_backends:
-    log.warning(
-        "session_cgroup_partial_coverage",
-        detail="tmux-mediated backends (claude-sub / tui-cli) spawn under the shared tmux server "
-        "and are not cgroup-covered")
   log.info("session_cgroup_enabled", memory_max_mb=memory_max_mb, swap_max_mb=swap_max_mb)

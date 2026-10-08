@@ -83,12 +83,11 @@ EVENTS_LOG_NAME = "events.jsonl"
 from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
 # Backend types whose event transport does not go through the shared base read
-# loop (opencode serves events over its own HTTP SSE; antigravity and tui-cli
-# manage their own pipes). A restart cannot attach to those, so an interrupted
+# loop (opencode serves events over its own HTTP SSE; antigravity
+# manages its own pipes). A restart cannot attach to those, so an interrupted
 # run on one of them still fails — but with this explicit reason, never
 # disguised as a crash.
-UNCOVERED_BACKEND_TYPES: frozenset[BackendType] = frozenset(
-    {BackendType.OPENCODE, BackendType.ANTIGRAVITY, BackendType.TUI_CLI})
+UNCOVERED_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.OPENCODE, BackendType.ANTIGRAVITY})
 TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe runtime"
 
 LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"

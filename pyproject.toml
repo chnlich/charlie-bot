@@ -44,7 +44,6 @@ gpu-voice = [
 
 [project.scripts]
 charliebot = "src.app.main:main"
-claude-sub = "src.backends.claude_sub.claude_sub:main"
 
 [build-system]
 requires = ["setuptools>=80"]

@@ -343,7 +343,7 @@ with gc_off(collect=False):
       lifespan=lifespan,
   )
 
-  # The deflate sits on the client-visible send path (send awaits the off-loop
+  # The deflate sits on the client-visible send path (send awaits the
   # compression), so every big page pays it per fetch: the 633 KB events page
   # measures 15.0 ms at level 6 vs 5.5 ms at level 1 (wire 165.7 KB vs 201.1 KB).
   app.add_middleware(_CharlieBotGZipMiddleware, minimum_size=1000, compresslevel=1)

@@ -1,4 +1,4 @@
-"""Wiring registry: packages register their routers, CLI commands and background services.
+"""Wiring registry: packages register their routers, CLI commands, background services and file views.
 
 Each registration holds module path strings. The server and the CLI import a registered
 module when they use it, so this module imports nothing heavy and a CLI command loads
@@ -15,6 +15,7 @@ PHASES = ("early", "ready")
 _ROUTERS: list[tuple[str, str, tuple[str, ...], str]] = []
 _COMMANDS: dict[str, str] = {}
 _SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
+_FILE_VIEWS: list[tuple[str, str]] = []  # (module, attr)
 
 
 class ServiceContext:
@@ -56,6 +57,19 @@ def register_service(name: str, module: str, *, phase: str = "ready") -> None:
   _SERVICES[name] = (module, phase)
 
 
+def register_file_view(module: str, *, attr: str) -> None:
+  """The file server awaits getattr(import_module(module), attr)(request, path) before it serves a path.
+
+  path is the route's path parameter: the absolute filesystem path without its leading "/".
+  The view returns a Response to answer the request, or None to pass. It may raise
+  fastapi.HTTPException. Views run in registration order; the first Response answers.
+  A second registration of one (module, attr) raises ValueError.
+  """
+  if (module, attr) in _FILE_VIEWS:
+    raise ValueError(f"file view {module}:{attr} is already registered")
+  _FILE_VIEWS.append((module, attr))
+
+
 def routers() -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
   """(module, prefix, tags, attr) in registration order."""
   return tuple(_ROUTERS)
@@ -90,3 +104,8 @@ def service_stops() -> list[tuple[str, object]]:
         for name, (module, service_phase) in reversed(_SERVICES.items())
         if service_phase == phase)
   return stops
+
+
+def file_views() -> list[object]:
+  """The registered view coroutine functions, imported, in registration order."""
+  return [getattr(importlib.import_module(module), attr) for module, attr in _FILE_VIEWS]

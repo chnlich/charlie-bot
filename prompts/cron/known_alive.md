@@ -81,10 +81,11 @@ Known-alive symbols:
   entry above. The recording and upload endpoints are `router` handlers in the same file, covered by
   the route-handler entry.
 - `register` (the `__init__.py` of each package listed in `src/app/registrations.py`), `start_service`
-  and `stop_service` (each module named in a `wiring.register_service` call), and `ws_router` and
-  `mounted_router` (the router attributes named in a `wiring.register_router` call) — reached by
-  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, and the router loop
-  in `server.py` import the module from its path string and read the attribute by name. The names
+  and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
+  `mounted_router` (the router attributes named in a `wiring.register_router` call), and
+  `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call) — reached by
+  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`
+  and the router loop in `server.py` import the module from its path string and read the attribute by name. The names
   have zero whole-repo matches outside their definitions, so vulture flags them as unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/infra/config.py`, registered with pydantic at class-definition time and invoked during
@@ -207,7 +208,7 @@ Known-alive symbols:
   `diff_comments.js` and `artifact-comments.js` call it as a bare identifier resolved
   through the page's script-tag global scope, each page loading the file before the
   widget (`src/features/diff_view/templates/diff.html`, and the `_inject_artifact_ui` tags in
-  `src/features/files/api.py` for artifact pages). A per-file dead-function scan finds only the
+  `src/features/artifacts/artifact_view.py` for artifact pages). A per-file dead-function scan finds only the
   definition, so it flags the function as unused.
 - `render` (`FastJsonResponse` in `src/infra/responses.py`) — template-method override of
   starlette `JSONResponse.render`: the base `Response.__init__` calls `self.render(content)`

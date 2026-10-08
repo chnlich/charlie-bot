@@ -25,7 +25,8 @@ code-fixed types (None, bool, int, ASCII strings).
 
 import asyncio
 import pathlib
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 import orjson
 from fastapi import responses
@@ -99,6 +100,25 @@ def gzip_file_fresh(
     return hit
   compressed = compression.gzip_level1(path.read_bytes())
   memo.record(path, st, compressed)
+  return compressed
+
+
+_K = TypeVar("_K")
+
+
+def gzip_form(gzip_memo: BoundedMemo[_K, bytes], key: _K, build: Callable[[], bytes]) -> bytes:
+  """The level-1 gzip form of the plain body *build* yields, memoized under *key*.
+
+  A hit returns the stored bytes and never calls *build*; a miss deflates
+  *build()* once, stores, and returns. The route ships the result with
+  Content-Encoding: gzip set upstream, which is what makes the server's gzip
+  middleware skip its own whole-body deflate.
+  """
+  hit = gzip_memo.get(key)
+  if hit is not None:
+    return hit
+  compressed = compression.gzip_level1(build())
+  gzip_memo.store(key, compressed)
   return compressed
 
 

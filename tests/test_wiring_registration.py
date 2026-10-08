@@ -52,15 +52,19 @@ def test_a_second_registration_of_one_name_raises() -> None:
   command = next(iter(wiring.commands()))
   service = next(name for name, _ in wiring.service_starts("ready"))
   commands_before = wiring.commands()
+  views_before = wiring.file_views()
 
   with pytest.raises(ValueError, match=command):
     wiring.register_command(command, "src.features.memory.cli")
+  with pytest.raises(ValueError, match="serve_artifact_path"):
+    wiring.register_file_view("src.features.artifacts.artifact_view", attr="serve_artifact_path")
   with pytest.raises(ValueError, match=service):
     wiring.register_service(service, "src.features.cron.service")
   with pytest.raises(ValueError, match="phase"):
     wiring.register_service("not_registered", "src.features.cron.service", phase="late")
 
   assert wiring.commands() == commands_before
+  assert wiring.file_views() == views_before
   assert "not_registered" not in [name for name, _ in wiring.service_stops()]
 
 
@@ -119,6 +123,41 @@ def test_the_diff_page_renders_without_the_code_server_package(tmp_path: Path) -
 
   assert without_package == {"status": 200, "button": False, "global": False}
   assert "code_server_enabled" in templating.templates().env.globals
+
+
+# The probe process deletes the artifacts line, registers, then asks the real app for a session artifact page.
+ARTIFACT_PAGE_PROBE = """
+import json
+from src.app import registrations
+registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != "src.features.artifacts")
+registrations.register_all()
+import server
+from fastapi.testclient import TestClient
+response = TestClient(server.app).get("/absolute_filepath" + {page!r})
+print(json.dumps({{"status": response.status_code, "body": response.text}}))
+"""
+
+
+def test_a_session_artifact_page_is_a_plain_file_without_the_artifacts_package(tmp_path: Path) -> None:
+  home = tmp_path / "home"
+  page = home / "sessions" / "S" / "artifacts" / "plan_01.html"
+  page.parent.mkdir(parents=True)
+  page_html = "<html><body><h1>Plan</h1></body></html>"
+  page.write_text(page_html, encoding="utf-8")
+
+  probe = subprocess.run(
+      [sys.executable, "-c", ARTIFACT_PAGE_PROBE.format(page=str(page))],
+      cwd=conftest.ROOT,
+      capture_output=True,
+      text=True,
+      timeout=60,
+      check=False,
+      env={
+          **os.environ, "CHARLIEBOT_HOME": str(home)
+      })
+
+  assert probe.returncode == 0, probe.stderr
+  assert json.loads(probe.stdout.splitlines()[-1]) == {"status": 200, "body": page_html}
 
 
 def test_a_second_registration_of_one_template_global_raises() -> None:

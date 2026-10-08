@@ -1,0 +1,279 @@
+"""The artifact view of the file server: the comment tray on session artifact pages and the ?diff= compare page.
+
+The artifacts package registers serve_artifact_path as a file view, so the file server reaches
+it only through the wiring registry. Without this package the file server serves an artifact
+page as the plain HTML file it is.
+"""
+
+import asyncio
+import json
+import pathlib
+import stat
+
+import fastapi
+from fastapi import responses
+
+from src.infra import config, memo
+from src.infra import responses as responses_api
+from src.runtime import templating
+
+# Bound on _annotate_memo in annotated diff pages: one compare view reads one
+# page against one base at a time, so the cap covers every compare view open
+# across tabs, and one slot holds the ~1.5 MB worst annotated page.
+_DIFF_ANNOTATE_MEMO_LIMIT = 8
+
+# Bound on _clean_view_memo: one open artifact tab serves one page, so the cap
+# covers every clean view open across tabs, and one slot holds the ~1.5 MB
+# worst injected page.
+_CLEAN_VIEW_MEMO_LIMIT = 8
+
+# Memo key for one annotated diff page: both resolved paths plus each file's
+# (mtime_ns, size) taken before its read. The marks are a pure function of the
+# two files' bytes and an artifact page is only ever written whole, so an
+# unchanged signature pair proves the stored page current; an entry keyed from
+# bytes read before a concurrent rewrite is unreachable for the newer bytes.
+# Served strings are shared across responses, the no-defensive-copy idiom of
+# the sibling memos.
+_AnnotateKey = tuple[str, int, int, str, int, int]
+
+_annotate_memo: memo.BoundedMemo[_AnnotateKey, str] = memo.BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+
+# The gzip form of the same annotated page, keyed and bounded alike. It lives in
+# its own memo so a client that sends no Accept-Encoding: gzip never pays the
+# deflate.
+_annotate_gzip_memo: memo.BoundedMemo[_AnnotateKey, bytes] = memo.BoundedMemo(_DIFF_ANNOTATE_MEMO_LIMIT)
+
+# Memo key for one clean artifact view: the resolved path plus the page's
+# (mtime_ns, size) taken before its read. The injection is a pure function of
+# the page bytes — the session id derives from the path and the static asset
+# version is a per-process constant — and an artifact page is only ever written
+# whole, so an unchanged signature proves the stored body current; an entry
+# keyed from bytes read before a concurrent rewrite is unreachable for the
+# newer bytes. Served bodies are shared across responses, the no-defensive-copy
+# idiom of the sibling memos.
+_CleanViewKey = tuple[str, int, int]
+
+_clean_view_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
+
+# The gzip form of the same body, keyed and bounded alike. It lives in its own
+# memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
+_clean_view_gzip_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
+
+# Client-visible error details of the artifact view's diff arm. The
+# "not a session artifact page" sentence is a wire contract the tests pin, so
+# each spelling has one home here; the base-side sibling in _resolve_diff_base
+# and deps.SESSION_NOT_FOUND_DETAIL are distinct deliberate wordings.
+_DIFF_TARGET_DETAIL = "diff target is not a session artifact page: {}"
+_DIFF_BASE_NOT_FOUND_DETAIL = "diff base not found: {}"
+
+# Session artifact pages carry injected per-session state (the comment tray and
+# its inline session id), so no stored copy may outlive the request that read
+# it: the plain and the gzip artifact responses alike set Cache-Control:
+# no-store, the gzip one on top of the pre-compressed headers.
+_NO_STORE_HEADERS = {"Cache-Control": "no-store"}
+_ARTIFACT_GZIP_HEADERS = {**responses_api.GZIP_RESPONSE_HEADERS, **_NO_STORE_HEADERS}
+
+
+def _file_signature(path: pathlib.Path) -> tuple[int, int]:
+  """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
+  st = path.stat()
+  return (st.st_mtime_ns, st.st_size)
+
+
+def _annotate_key(base_path: pathlib.Path, page_path: pathlib.Path) -> _AnnotateKey:
+  """Both resolved paths plus each file's (mtime_ns, size) taken before its read.
+
+  The base's missing file is the same 404 the annotate raises, so the key's one
+  caller contract holds for both memos.
+  """
+  try:
+    base_sig = (str(base_path), *_file_signature(base_path))
+  except OSError as e:
+    raise fastapi.HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
+  page_sig = (str(page_path), *_file_signature(page_path))
+  return (*base_sig, *page_sig)
+
+
+def _annotated_diff_page(base_path: pathlib.Path, page_path: pathlib.Path, session_id: str) -> str:
+  """The diff page's target annotated against its base, comment tray wrapped on, repeats served from the memo.
+
+  A cold annotate parses both pages end to end (~0.25 s on a 1 MB pair,
+  measured) — work per request no repeat view must re-run, since neither bytes
+  nor marks can change between views. The comment layer rides every diff view:
+  the auth middleware owns the credential gate, so the route never branches on
+  the request to decide whether the tray appears.
+  """
+  key = _annotate_key(base_path, page_path)
+  hit = _annotate_memo.get(key)
+  if hit is not None:
+    return hit
+  try:
+    base_text = base_path.read_text(encoding="utf-8")
+  except OSError as e:
+    raise fastapi.HTTPException(status_code=404, detail=_DIFF_BASE_NOT_FOUND_DETAIL.format(base_path)) from e
+  page_text = page_path.read_text(encoding="utf-8")
+  # plan_diff drags html.parser and difflib and serves only this compare view;
+  # the server import floor (docs/perf_baseline.md@5175adf09 M99) depends on it staying
+  # off the module import.
+  from src.features.artifacts import plan_diff
+  page = plan_diff.annotate(base_text, page_text)
+  page = _inject_artifact_ui(page, session_id)
+  _annotate_memo.store(key, page)
+  return page
+
+
+def _annotated_diff_page_gzip(base_path: pathlib.Path, page_path: pathlib.Path, session_id: str) -> bytes:
+  """The annotated diff page's gzip form, memoized beside the plain body.
+
+  Level 1 over the multi-MB worst compare view is the per-click cost the memo
+  removes.
+  """
+  key = _annotate_key(base_path, page_path)
+  return responses_api.gzip_form(
+      _annotate_gzip_memo, key, lambda: _annotated_diff_page(base_path, page_path, session_id).encode("utf-8"))
+
+
+def _injected_artifact_page(fs_path: pathlib.Path, session_id: str) -> bytes:
+  """The artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
+
+  A repeat view of an unchanged page pays one stat and zero file bytes — the
+  read re-ran on every view before the memo (~4.8 ms on the 1 MB worst
+  artifact, measured, of an ~11.5 ms repeat view). The signature is taken
+  before the read, the same ground as _annotate_memo.
+  """
+  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
+  hit = _clean_view_memo.get(key)
+  if hit is not None:
+    return hit
+  page = _inject_artifact_ui(fs_path.read_text(encoding="utf-8"), session_id)
+  body = page.encode("utf-8")
+  _clean_view_memo.store(key, body)
+  return body
+
+
+def _injected_artifact_page_gzip(fs_path: pathlib.Path, session_id: str) -> bytes:
+  """The artifact view's gzip form, memoized beside the plain body.
+
+  Level 1 over the ~1 MB worst page measures ~27 ms per view.
+  """
+  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
+  return responses_api.gzip_form(_clean_view_gzip_memo, key, lambda: _injected_artifact_page(fs_path, session_id))
+
+
+def _artifact_session_id(fs_path: pathlib.Path) -> str | None:
+  """Return the session id owning an artifact page, or None when it belongs to no session.
+
+  Anchored on the configured sessions root, not on the path's shape: a page counts only
+  when it sits under ``<sessions_dir>/<session>/...`` with ``artifacts`` as its immediate
+  parent directory, so ``<root>/artifacts/x.html`` (no session component) and any
+  artifact-shaped path outside the root are excluded. Both sides are resolved — fs_path
+  by ``serve_file``, the root here — so a symlink on either side cannot misjudge.
+  """
+  root = config.get_config().sessions_dir.resolve()
+  try:
+    rel = fs_path.relative_to(root)
+  except ValueError:
+    return None
+  if fs_path.parent.name != "artifacts":
+    return None
+  if len(rel.parts) < 3:
+    return None
+  return rel.parts[0]
+
+
+def _inject_artifact_ui(html_text: str, session_id: str) -> str:
+  """Insert the session-id assignment and the comment scripts before the last
+  </body>, or append without one. The inline assignment precedes the external
+  script tags so the id is set before the comment scripts run."""
+  # One version per body: two walks could straddle a tree edit and ship mixed
+  # tokens in one page.
+  version = templating.static_asset_version()
+  tags = (
+      f"<script>window.__cbcServerSessionId={json.dumps(session_id)};</script>\n"
+      f"<script src=/static/js/comment_post.js?v={version}></script>\n"
+      f"<script src=/static/js/artifact-comments.js?v={version}></script>")
+  idx = html_text.rfind("</body>")
+  if idx == -1:
+    return html_text + "\n" + tags + "\n"
+  return html_text[:idx] + tags + "\n" + html_text[idx:]
+
+
+def _resolve_diff_base(session_id: str, diff_param: str) -> pathlib.Path:
+  """Resolve the ``?diff=`` query parameter of a diff request to the base page's path.
+
+  The parameter is a session-relative artifact path — the plan registry's ``versions[].file``
+  form, e.g. ``artifacts/plan_01_v1.html``. It must resolve to a ``.html`` page whose
+  immediate parent is a session's ``artifacts`` directory (the same predicate the target
+  passes); anything else is a malformed request → 400. A base that is missing or unreadable
+  is 404 naming it — a reader who sees no marks has to be able to trust there are none, so
+  a broken diff never falls back to the clean page.
+  """
+  candidate = (config.get_config().sessions_dir / session_id / diff_param).resolve()
+  if candidate.suffix.lower() != ".html" or _artifact_session_id(candidate) is None:
+    raise fastapi.HTTPException(status_code=400, detail=f"diff base is not a session artifact page: {diff_param}")
+  return candidate
+
+
+def _resolve_target(path: str, diff_param: str | None) -> tuple[pathlib.Path, str] | None:
+  """The resolved path and the owning session of the artifact page the request addresses, or None to pass.
+
+  One executor hop carries the resolve and every stat. None leaves the answer to the file
+  server: a path that is no artifact page, a directory (its listing) and a missing path (its
+  404). A ``?diff=`` request that addresses anything but an existing artifact page is the 400
+  below; a missing path still passes, since the file server's 404 precedes every diff check.
+  """
+  fs_path = (pathlib.Path("/") / path).resolve()
+  session_id = _artifact_session_id(fs_path) if fs_path.suffix.lower() == ".html" else None
+  if diff_param is None:
+    return (fs_path, session_id) if session_id is not None and fs_path.is_file() else None
+  try:
+    st_mode = fs_path.stat().st_mode
+  except (FileNotFoundError, NotADirectoryError):
+    return None
+  except PermissionError:
+    # The diff 400 outranks the unreadable 403: the diff target is checked before
+    # the path is read.
+    st_mode = None
+  # A diff request addresses two artifact pages. Both must pass the artifact
+  # predicate before anything is served, so a malformed address is rejected
+  # rather than silently answered with the clean page.
+  if session_id is None or st_mode is None or stat.S_ISDIR(st_mode):
+    raise fastapi.HTTPException(status_code=400, detail=_DIFF_TARGET_DETAIL.format(fs_path))
+  return fs_path, session_id
+
+
+async def serve_artifact_path(request: fastapi.Request, path: str) -> responses.Response | None:
+  """Answer a session artifact page or a ``?diff=`` compare request; None passes every other path to the file server.
+
+  A request with no ``diff`` parameter whose path does not end in ``.html`` is no artifact
+  page: it passes with no executor hop, so a plain file or a listing pays nothing here.
+  """
+  diff_param = request.query_params.get("diff")
+  if diff_param is None and not path.lower().endswith(".html"):
+    return None
+  # Standalone artifact HTML gets the review UI injected here — the single chokepoint
+  # that serves every artifact page — regardless of how the artifact was authored and
+  # unconditionally: the auth middleware owns the credential gate (an uncredentialed
+  # reader is answered 401 before this route runs), so a per-request credential branch
+  # here could only ever make the comment tray silently vanish behind a stale cookie.
+  target = await asyncio.to_thread(_resolve_target, path, diff_param)
+  if target is None:
+    return None
+  fs_path, session_id = target
+  if diff_param is not None:
+    # The marks themselves are spliced into the response before the comment layer wraps them.
+    base_path = _resolve_diff_base(session_id, diff_param)
+    if responses_api.request_wants_gzip(request):
+      body = await asyncio.to_thread(_annotated_diff_page_gzip, base_path, fs_path, session_id)
+      return responses.Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
+    # A cold annotate parses both pages whole (~0.25 s on a 1 MB pair), so the
+    # build runs off the event loop; a memo hit answers with zero file bytes.
+    html_text = await asyncio.to_thread(_annotated_diff_page, base_path, fs_path, session_id)
+    return responses.HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)
+
+  if responses_api.request_wants_gzip(request):
+    body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
+    return responses.Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
+  # One executor hop: signature, memo hit, and on a miss the read+inject+store.
+  body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
+  return responses.HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)

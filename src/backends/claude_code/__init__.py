@@ -1,9 +1,32 @@
-"""The cc-claude backend package."""
+"""The cc-claude backend package.
+
+The package owns two groups of metadata keys, declared here because ``register()`` reads their
+field names and registering imports no backend module: ``ClaudeSessionFields`` are keys of a
+session's ``metadata.json`` and ``ClaudeThreadFields`` are keys of a thread's. They are read and
+written through ``src/backends/claude_code/claude_metadata.py``.
+"""
+
+from pydantic import BaseModel
+
+OWNER = "claude_code"
+
+
+class ClaudeSessionFields(BaseModel):
+  # Label (claude_accounts[].label) of the pool account whose transcript store
+  # holds this session's Claude Code conversation. None until the pool assigns
+  # one, and always None for a pinned or non-cc-claude backend.
+  claude_account: str | None = None
+
+
+class ClaudeThreadFields(BaseModel):
+  # The Claude Code session id the runtime chose for the task before its first process started.
+  claude_session_id: str | None = None
 
 
 def register() -> None:
-  """Register the cc-claude backend type, the Claude Code usage source and the accounts section."""
-  from src.infra import config_registry
+  """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
+  its metadata keys and its credential variables with the runtime."""
+  from src.infra import config_registry, identity_env, metadata_slots
   from src.runtime.hooks import backend_lifecycle, backend_types, usage_sources
 
   backend_types.register_backend_type(
@@ -38,3 +61,12 @@ def register() -> None:
       },
   )
   config_registry.register_config_check("src.backends.claude_code.claude_config:check_claude_pools")
+  metadata_slots.register_metadata_fields(
+      OWNER,
+      "src.backends.claude_code:ClaudeSessionFields",
+      on=metadata_slots.ON_SESSION,
+      after="cc_session_started_at")
+  metadata_slots.register_metadata_fields(
+      OWNER, "src.backends.claude_code:ClaudeThreadFields", on=metadata_slots.ON_THREAD, after="exit_code")
+  identity_env.register_identity_env_var("CLAUDE_CODE_OAUTH_TOKEN")
+  identity_env.register_identity_env_var("ANTHROPIC_API_KEY")

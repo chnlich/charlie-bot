@@ -169,13 +169,11 @@ class Worker:
           "cgroup_session_id": self._thread.session_id,
           **launch_kwargs,
       }
-      if backend_types.traits_for(self._backend_option.type).preassigned_session_id:
-        # The runtime chose this task's session id before the first process: a relay resumes it
-        # with --resume, and the first process opens it.
-        if launch is not None and launch.resume_id:
-          extra_flags = ["--resume", launch.resume_id, *extra_flags]
-        else:
-          backend_kwargs["claude_session_id"] = self._thread.claude_session_id
+      # The runtime chose this task's session id before the first process (the lifecycle hands it
+      # to that process): a relay resumes it with --resume.
+      if (backend_types.traits_for(self._backend_option.type).preassigned_session_id and launch is not None and
+          launch.resume_id):
+        extra_flags = ["--resume", launch.resume_id, *extra_flags]
       if extra_flags:
         backend_kwargs["extra_flags"] = extra_flags
       try:
@@ -203,6 +201,7 @@ class Worker:
   def _launch_context(self, fd: int) -> backend_lifecycle.LaunchContext:
     """The ``LaunchContext`` of this task run: events go to the events log and the session's chat."""
     assert self._backend_option is not None and self._session_meta is not None
+    lifecycle = backend_types.lifecycle_for(self._backend_option)
 
     async def emit(event: dict) -> None:
       await self._persist_and_broadcast(fd, event)
@@ -222,6 +221,7 @@ class Worker:
         kind="task",
         cwd=str(self._worktree),
         held_native_id=None,
+        preassigned_native_id=lifecycle.thread_native_id(self._thread),
         emit=emit,
         record_account=record_account,
         context_state=context_state)
@@ -297,7 +297,7 @@ class Worker:
             ctx,
             lifecycle,
             run_process=_run_process,
-            native_id=lambda: self._thread.claude_session_id,
+            native_id=lambda: lifecycle.thread_native_id(self._thread),
             on_relay=_on_relay,
         )
     finally:

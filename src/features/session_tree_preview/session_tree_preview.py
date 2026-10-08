@@ -85,7 +85,8 @@ from src.infra.config import (
     load_config,
     load_credentials,
 )
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS, REPO_ROOT
+from src.infra.constants import REPO_ROOT
+from src.infra.identity_env import inherited_identity_env_vars
 from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
@@ -761,7 +762,7 @@ def seed_or_validate_preview_home(setup: PreviewSetup) -> None:
 def activate_preview_environment(setup: PreviewSetup) -> None:
   """Select the preview profile before any cached config or singleton binds to the old home."""
   os.environ[CHARLIEBOT_HOME_ENV] = str(setup.home)
-  for var in INHERITED_IDENTITY_ENV_VARS:
+  for var in inherited_identity_env_vars():
     os.environ.pop(var, None)
   resolved = charliebot_home_dir()
   if resolved != setup.home:

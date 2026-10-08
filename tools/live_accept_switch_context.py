@@ -16,7 +16,7 @@ of the default test run) and must be reviewed for isolation before it runs:
   server binds one explicit unused local port, runs without the normal lifespan
   (no crash recovery, scheduler or trigger scans), and its uvicorn instance is
   torn down at the end. Inherited production identity/credential environment
-  variables (INHERITED_IDENTITY_ENV_VARS) are cleared from the harness
+  variables (inherited_identity_env_vars()) are cleared from the harness
   environment; the shell HOME variable is never repurposed. Native CLC session
   state is isolated too: the harness installs the proven ``--session-dir``
   seam (session_tree_preview.install_native_session_isolation) so every
@@ -75,8 +75,9 @@ import time  # noqa: E402
 from dataclasses import dataclass, field  # noqa: E402
 from typing import NoReturn  # noqa: E402
 
+from src.app import registrations  # noqa: E402
 from src.infra import event_types as ET  # noqa: E402
-from src.infra.constants import INHERITED_IDENTITY_ENV_VARS  # noqa: E402
+from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
 from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
@@ -716,7 +717,8 @@ async def accept(out_path: Path, keep: bool) -> int:
   home = Path(tempfile.mkdtemp(prefix="charliebot-switch-accept-"))
   port, access_key = build_synthetic_home(home, entries)
   os.environ["CHARLIEBOT_HOME"] = str(home)
-  for var in INHERITED_IDENTITY_ENV_VARS:
+  registrations.register_all()
+  for var in inherited_identity_env_vars():
     os.environ.pop(var, None)
 
   base = f"http://127.0.0.1:{port}"

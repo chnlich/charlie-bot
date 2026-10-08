@@ -35,6 +35,7 @@ from conftest import (
 
 from src.backends.claude_code import claude_accounts, claude_lifecycle, claude_relay
 from src.infra import event_types as ET
+from src.infra import identity_env
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata, ThreadMetadata
 from src.runtime import master_cc_run
@@ -109,6 +110,18 @@ def test_registering_the_packages_imports_no_backend_module() -> None:
       [sys.executable, "-c", script], cwd=conftest.ROOT, capture_output=True, text=True, check=True, timeout=60)
 
   assert result.stdout.strip() == f"{len(backend_types.registered_types())} [] []"
+
+
+def test_the_packages_register_the_credential_variables_an_isolated_trial_must_not_inherit() -> None:
+  assert identity_env.inherited_identity_env_vars() == (
+      "CHARLIEBOT_SESSION_ID",
+      "CHARLIEBOT_RUN_TOKEN",
+      "CHARLIE_CODE_API_KEY",
+      "CLAUDE_CODE_OAUTH_TOKEN",
+      "ANTHROPIC_API_KEY",
+  )
+  with pytest.raises(ValueError, match="already registered"):
+    identity_env.register_identity_env_var("ANTHROPIC_API_KEY")
 
 
 # ---------------------------------------------------------------------------

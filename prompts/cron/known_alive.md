@@ -139,7 +139,7 @@ Known-alive symbols:
   Vulture flags each production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
   `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
-  `callbacks.persist_claude_account.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
+  `callbacks.persist_account_label.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
   configuration attributes the library reads when the configured mock is called
   (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
   callable, or exception). Nothing in the repo reads the names back, so vulture flags such

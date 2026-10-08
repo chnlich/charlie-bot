@@ -27,7 +27,7 @@ from src.infra.deferred import import_attr
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
-  from src.infra.models import BackendOption
+  from src.infra.models import BackendOption, SessionMetadata
   from src.runtime.agent_process.base import AgentBackend
   from src.runtime.hooks import backend_lifecycle
 
@@ -130,12 +130,11 @@ def traits_for(backend_type: str) -> BackendTraits:
   return _registration(backend_type).traits
 
 
-def lifecycle_for(option: BackendOption) -> backend_lifecycle.BackendLifecycle:
-  """The lifecycle of ``option.type``; the default lifecycle when the type registered none."""
+def _lifecycle_at(path: str | None) -> backend_lifecycle.BackendLifecycle:
+  """The lifecycle instance a registered path names; the default lifecycle for None."""
   global _DEFAULT_LIFECYCLE
   from src.runtime.hooks import backend_lifecycle
 
-  path = _registration(option.type).lifecycle
   if path is None:
     if _DEFAULT_LIFECYCLE is None:
       _DEFAULT_LIFECYCLE = backend_lifecycle.BackendLifecycle()
@@ -143,6 +142,37 @@ def lifecycle_for(option: BackendOption) -> backend_lifecycle.BackendLifecycle:
   if path not in _lifecycles:
     _lifecycles[path] = import_attr(path)()
   return _lifecycles[path]
+
+
+def lifecycle_for(option: BackendOption) -> backend_lifecycle.BackendLifecycle:
+  """The lifecycle of ``option.type``; the default lifecycle when the type registered none."""
+  return _lifecycle_at(_registration(option.type).lifecycle)
+
+
+def lifecycle_for_type(backend_type: str) -> backend_lifecycle.BackendLifecycle:
+  """The lifecycle of ``backend_type``; ValueError when the type is unregistered."""
+  return _lifecycle_at(_registration(backend_type).lifecycle)
+
+
+def lifecycles() -> tuple[backend_lifecycle.BackendLifecycle, ...]:
+  """Every registered lifecycle, each once, in registration order; types without one are left out."""
+  paths = dict.fromkeys(r.lifecycle for r in _registry.values() if r.lifecycle is not None)
+  return tuple(_lifecycle_at(path) for path in paths)
+
+
+# The account label is a fact of the session, not of one turn: a turn on any backend carries the
+# label of the pool login that holds the session's transcript. These functions read and write it
+# through every lifecycle that keeps one.
+
+
+def account_keeper(meta: SessionMetadata) -> backend_lifecycle.BackendLifecycle | None:
+  """The lifecycle whose account label ``meta`` carries; None when ``meta`` carries none."""
+  return next((lifecycle for lifecycle in lifecycles() if lifecycle.account_label(meta) is not None), None)
+
+
+def record_account_label(meta: SessionMetadata, label: str | None) -> bool:
+  """Record ``label`` on ``meta`` through every lifecycle that keeps account labels; True when any label changed."""
+  return any([lifecycle.record_account_label(meta, label) for lifecycle in lifecycles()])
 
 
 def type_for_family_prefix(backend_id: str) -> str | None:

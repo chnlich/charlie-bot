@@ -19,7 +19,7 @@ def _corrections(logs: list[dict]) -> list[dict]:
 
 async def _seed_anchors(mgr: sessions.SessionManager, session_id: str, *, cc: str, label: str) -> None:
   await mgr.persist_cc_session_id(session_id, cc)
-  await mgr.persist_claude_account(session_id, label)
+  await mgr.persist_account_label(session_id, label)
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.cc_session_id == "cc-2" and disk.cc_session_started_at is not None
 
-  await mgr.persist_claude_account(session.id, "pool-c")
+  await mgr.persist_account_label(session.id, "pool-c")
   disk = await mgr.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-c" and disk.cc_session_id == "cc-2"
 

@@ -1,0 +1,161 @@
+"""The metadata slot registry (src/infra/metadata_slots.py): packages own top-level keys of the metadata files.
+
+The keys never move on disk: a file the base writer produced loads and saves byte-identically, a key no
+owner registers survives load and save, and a create request carries only registered keys.
+"""
+
+import json
+import pathlib
+
+import conftest
+import pytest
+from pydantic import BaseModel, ValidationError
+
+from src.infra import metadata_slots, models
+from src.runtime import sessions, task_sessions
+
+DATA = pathlib.Path(__file__).parent / "data"
+
+
+class ProbeSessionFields(BaseModel):
+  probe_note: str | None = None
+  probe_count: int = 0
+
+
+class ProbeThreadFields(BaseModel):
+  probe_tag: str | None = None
+
+
+class FieldOfTheMetadataModel(BaseModel):
+  group: str | None = None
+
+
+class FieldOfAnotherOwner(BaseModel):
+  probe_note: str | None = None
+
+
+def _probe(name: str) -> str:
+  return f"{__name__}:{name}"
+
+
+@pytest.fixture
+def probe_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+  """A private registry holding the production owners plus a probe owner on both files."""
+  monkeypatch.setattr(metadata_slots, "_slots", {on: dict(owners) for on, owners in metadata_slots._slots.items()})
+  metadata_slots.register_metadata_fields("probe", _probe("ProbeSessionFields"), after="group")
+  metadata_slots.register_metadata_fields("probe", _probe("ProbeThreadFields"), on="thread")
+
+
+@pytest.mark.usefixtures("probe_slots")
+class TestRegistration:
+
+  def test_a_field_named_like_a_field_of_the_metadata_model_raises(self) -> None:
+    with pytest.raises(ValueError, match="collides with a field of SessionMetadata"):
+      metadata_slots.register_metadata_fields("greedy", _probe("FieldOfTheMetadataModel"))
+
+  def test_a_field_named_like_another_owners_field_raises(self) -> None:
+    with pytest.raises(ValueError, match="collides with a field of 'probe'"):
+      metadata_slots.register_metadata_fields("copycat", _probe("FieldOfAnotherOwner"))
+
+  def test_a_second_registration_of_one_owner_raises(self) -> None:
+    with pytest.raises(ValueError, match="already registered"):
+      metadata_slots.register_metadata_fields("probe", _probe("ProbeSessionFields"))
+
+  def test_the_after_field_must_be_declared_by_the_metadata_model(self) -> None:
+    with pytest.raises(ValueError, match="not a declared field"):
+      metadata_slots.register_metadata_fields("lost", _probe("FieldOfAnotherOwner"), after="no_such_field")
+
+
+@pytest.mark.usefixtures("probe_slots")
+def test_fields_of_and_set_fields_validate_types() -> None:
+  meta = models.SessionMetadata(name="s")
+  assert metadata_slots.fields_of(meta, "probe") == ProbeSessionFields()
+
+  metadata_slots.set_fields(meta, "probe", probe_note="hello", probe_count=3)
+  assert metadata_slots.fields_of(meta, "probe") == ProbeSessionFields(probe_note="hello", probe_count=3)
+
+  with pytest.raises(ValidationError):
+    metadata_slots.set_fields(meta, "probe", probe_count="many")
+  with pytest.raises(ValueError, match="no fields"):
+    metadata_slots.set_fields(meta, "probe", not_a_field=1)
+  assert metadata_slots.fields_of(meta, "probe").probe_count == 3, "a refused write changes nothing"
+
+  # A stored value of the wrong type still loads; reading it through the owner's view is what fails.
+  loaded = models.SessionMetadata.model_validate_json('{"name": "s", "probe_count": "many"}')
+  with pytest.raises(ValidationError):
+    metadata_slots.fields_of(loaded, "probe")
+
+  thread = models.ThreadMetadata(session_id="s", description="d")
+  metadata_slots.set_fields(thread, "probe", probe_tag="t")
+  assert metadata_slots.fields_of(thread, "probe") == ProbeThreadFields(probe_tag="t")
+
+
+@pytest.mark.usefixtures("probe_slots")
+def test_an_unregistered_key_survives_load_and_save() -> None:
+  raw = {"id": "a", "name": "n", "left_by_a_deleted_package": {"nested": [1, 2]}}
+  meta = models.SessionMetadata.model_validate_json(json.dumps(raw))
+  thread = models.ThreadMetadata.model_validate_json(
+      json.dumps({
+          "session_id": "s",
+          "description": "d",
+          "left_by_a_deleted_package": 7
+      }))
+
+  assert json.loads(meta.model_dump_json())["left_by_a_deleted_package"] == {"nested": [1, 2]}
+  assert json.loads(thread.model_dump_json())["left_by_a_deleted_package"] == 7
+
+
+@pytest.mark.usefixtures("probe_slots")
+def test_registered_keys_save_after_their_declared_neighbour_with_defaults_filled() -> None:
+  meta = models.SessionMetadata(name="s")
+  metadata_slots.set_fields(meta, "probe", probe_note="hello")
+  meta.stray = "kept"  # a key no owner registers goes last
+  keys = list(json.loads(meta.model_dump_json()))
+
+  assert keys[keys.index("group") + 1:keys.index("group") + 3] == ["probe_note", "probe_count"]
+  assert keys[-1] == "stray"
+  assert json.loads(meta.model_dump_json())["probe_count"] == 0
+
+
+@pytest.mark.parametrize(
+    ("name", "model"), [
+        ("session_metadata_v2_manager.json", models.SessionMetadata),
+        ("thread_metadata_worker.json", models.ThreadMetadata),
+    ])
+def test_files_the_base_writer_produced_save_byte_identically(name: str, model: type[BaseModel]) -> None:
+  """The Claude keys sit where the declared fields sat: a manager with its account label and a worker thread
+  with its session id, written before the keys moved to a registry, load and save to the same bytes."""
+  written = (DATA / name).read_text()
+
+  saved = model.model_validate_json(written).model_dump_json(indent=2, exclude=sessions._TRANSIENT_METADATA_FIELDS)
+
+  assert saved == written
+
+
+@pytest.fixture
+def create_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, probe_slots: None):
+  cfg = conftest.build_two_backend_cfg(tmp_path)
+  session_mgr = sessions.SessionManager(cfg)
+  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
+  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  return cfg, session_mgr
+
+
+@pytest.mark.asyncio
+async def test_a_create_request_sets_registered_fields_and_refuses_unknown_keys(create_env) -> None:
+  cfg, session_mgr = create_env
+
+  with conftest.make_sessions_client(cfg, session_mgr) as client:
+    created = client.post("/api/sessions/", json={"name": "probed", "probe_note": "hello", "probe_count": 2})
+    unknown = client.post("/api/sessions/", json={"name": "stray", "no_such_key": 1})
+    mistyped = client.post("/api/sessions/", json={"name": "mistyped", "probe_count": "many"})
+
+  assert created.status_code == 200
+  assert created.json()["probe_note"] == "hello"
+  stored = await session_mgr.read_metadata_fresh(created.json()["id"])
+  assert metadata_slots.fields_of(stored, "probe") == ProbeSessionFields(probe_note="hello", probe_count=2)
+  assert unknown.status_code == 422
+  assert mistyped.status_code == 422
+
+  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="legacy", probe_note="direct"))
+  assert metadata_slots.fields_of(legacy, "probe").probe_note == "direct"

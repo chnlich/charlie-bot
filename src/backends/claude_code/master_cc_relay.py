@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import datetime
 
-from src.backends.claude_code import claude_accounts, claude_compaction, claude_relay
+from src.backends.claude_code import claude_accounts, claude_compaction, claude_metadata, claude_relay
 from src.backends.claude_code.claude_config import ClaudeAccount
 from src.infra import config, log_once, models
 from src.runtime import master_cc_state
@@ -87,12 +87,12 @@ def choose_turn_account(
   is busy the choice falls back to all of them.
   """
   moment = claude_accounts.now_or(now)
-  current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
+  current = claude_accounts.account_by_label(cfg, claude_metadata.account_of(session_meta))
   cold = claude_compaction.cache_expired(last_request_at, moment)
   busy = {
-      item.session_meta.claude_account
+      claude_metadata.account_of(item.session_meta)
       for sid, item in master_cc_state._current_items.items()
-      if sid != session_meta.id and item.session_meta and item.session_meta.claude_account
+      if sid != session_meta.id and item.session_meta and claude_metadata.account_of(item.session_meta)
   }
   if (current is not None and claude_accounts.in_pool(cfg, current.label, account_pool) and
       current.label not in busy and not cold and claude_accounts.healthy(current, moment)):
@@ -127,7 +127,7 @@ async def adopt_transcript_holder(
   """
   session_meta = ctx.session_meta
   await ctx.record_account(holder.label)
-  session_meta.claude_account = holder.label
+  claude_metadata.set_account(session_meta, holder.label)
   log.warning(
       "master_cc_account_label_reconciled",
       session=session_meta.id,
@@ -153,7 +153,7 @@ async def _probe_reconcile_label(ctx: backend_lifecycle.LaunchContext, cc_sessio
   """
   if not cc_session_id:
     return
-  label = claude_accounts.account_by_label(ctx.cfg, ctx.session_meta.claude_account)
+  label = claude_accounts.account_by_label(ctx.cfg, claude_metadata.account_of(ctx.session_meta))
   if label is None:
     return
   label_copy = claude_accounts.transcript_path(label.config_dir, cc_session_id)
@@ -189,7 +189,7 @@ async def place_turn(
   if chosen is None:
     raise backend_lifecycle.LaunchRefused(
         claude_relay.pool_exhausted_message(cfg, now, account_pool), quota_exhausted=True)
-  previous = claude_accounts.account_by_label(cfg, session_meta.claude_account)
+  previous = claude_accounts.account_by_label(cfg, claude_metadata.account_of(session_meta))
   if previous is None or previous.label != chosen.label:
     if resume_id and previous is not None:
       try:
@@ -202,7 +202,7 @@ async def place_turn(
         # defect). The move layer never redirects -- this consumer reconciles:
         # adopt the newer holder and continue the turn from it with no copy.
         await adopt_transcript_holder(ctx, resume_id, chosen, previous.label, reason=GUARD_REFUSED_NEWER_TRANSCRIPT)
-    session_meta.claude_account = chosen.label
+    claude_metadata.set_account(session_meta, chosen.label)
     await ctx.record_account(chosen.label)
     log.info(
         "master_cc_account_chosen",

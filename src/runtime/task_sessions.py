@@ -36,11 +36,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import orjson
 
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.event_types import is_real_user_message
 from src.infra.json_utils import atomic_write_text, load_model_meta
@@ -1100,6 +1101,7 @@ class TaskTreeManager:
       session_id: str | None = None,
       slack_origin: SlackOrigin | None = None,
       discord_origin: DiscordOrigin | None = None,
+      slot_values: dict[str, Any] | None = None,
       caller: object,
   ) -> SessionMetadata:
     """Create one task node; a replayed request returns the original product.
@@ -1107,7 +1109,8 @@ class TaskTreeManager:
     The node id is (parent, request_id)-stable unless *session_id* names it:
     the summon and the operator's create bind a node to an id that exists
     before the node does, and only the operator and the server may name one.
-    The origin fields ride the same atomic publish as the metadata. Metadata
+    The origin fields and *slot_values* (keys a package registered on the session
+    file) ride the same atomic publish as the metadata. Metadata
     plus the task_created fact are written into a temp directory and published
     with one rename, so a crash leaves either no node or a complete one.
     """
@@ -1165,6 +1168,7 @@ class TaskTreeManager:
           group=group,
           slack_origin=slack_origin,
           discord_origin=discord_origin,
+          slot_values=slot_values or {},
           parent_meta=parent_meta,
           actor=_create_actor_for(caller),
       )
@@ -1248,6 +1252,7 @@ class TaskTreeManager:
       group: str | None,
       slack_origin: SlackOrigin | None,
       discord_origin: DiscordOrigin | None,
+      slot_values: dict[str, Any],
       parent_meta: SessionMetadata | None,
       actor: str,
   ) -> SessionMetadata:
@@ -1267,6 +1272,7 @@ class TaskTreeManager:
         slack_origin=slack_origin,
         discord_origin=discord_origin,
     )
+    metadata_slots.set_registered(meta, slot_values)
     try:
       (temp_dir / DATA_DIR_NAME).mkdir(parents=True)
       (temp_dir / THREADS_DIR_NAME).mkdir()

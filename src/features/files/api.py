@@ -1,12 +1,11 @@
 """File server router — serves files and directory listings from the filesystem."""
 
 import asyncio
+import datetime
 import html
-import math
 import mimetypes
 import os
 import pathlib
-import re
 from urllib import parse
 
 import fastapi
@@ -64,45 +63,6 @@ _served_file_gzip_memo: memo.StatSignatureMemo[pathlib.Path,
 # Client-visible detail of the listing's and the read's 403.
 _PERMISSION_DENIED_DETAIL = "Permission denied"
 
-
-def _format_mtime(epoch: float) -> str:
-  """The listing's UTC minute text, "YYYY-MM-DD HH:MM", from an epoch-seconds float.
-
-  The seconds floor toward minus infinity — the rounding ``time.gmtime`` applies
-  to a fractional epoch — and the calendar date comes from integer civil-from-days
-  arithmetic, so no per-entry ``gmtime``/``strftime`` pair is needed. The suite
-  pins the output byte-identical to ``strftime("%Y-%m-%d %H:%M", gmtime(epoch))``
-  over boundary and randomized epochs; the year renders unpadded wherever
-  ``gmtime``'s struct year and the reference agree, which the fuzz sweeps from
-  negative years through the five-digit zone.
-  """
-  days, secs_of_day = divmod(math.floor(epoch), 86400)
-  hh, rem = divmod(secs_of_day, 3600)
-  # days since 1970-01-01 -> (y, m, d), Howard Hinnant's civil_from_days; the
-  # era takes plain floor division — Python's // already floors, and carrying
-  # the C form's negative-z adjustment here shifts dates before 0000-03-01.
-  z = days + 719468
-  era = z // 146097
-  doe = z - era * 146097
-  yoe = (doe - doe // 1460 + doe // 36524 - doe // 146096) // 365
-  y = yoe + era * 400
-  doy = doe - (365 * yoe + yoe // 4 - yoe // 100)
-  mp = (5 * doy + 2) // 153
-  d = doy - (153 * mp + 2) // 5 + 1
-  m = mp + 3 if mp < 10 else mp - 9
-  y += m <= 2
-  # The year renders unpadded: the C reference's %Y carries no width, so year
-  # 999 is "999", not "0999".
-  return f"{y}-{m:02d}-{d:02d} {hh:02d}:{rem // 60:02d}"
-
-
-# A name over [A-Za-z0-9_.~-] is its own html.escape output and its own
-# urllib.parse.quote(safe="") output — both functions' always-safe sets — so a
-# matching entry renders by interpolation and only the rest pay the per-entry
-# escape/quote calls. Session ids (UUIDs) and artifact names match; the
-# charliebot corpus is almost entirely safe names.
-_SAFE_ENTRY_RE = re.compile(r"[A-Za-z0-9_.~-]+")
-
 # One home for the listing page's chrome (the rows are built per walk).
 _DIR_LISTING_TEMPLATE = """<!DOCTYPE html>
 <html>
@@ -129,54 +89,51 @@ def _dir_listing_page(dir_path: pathlib.Path, url_prefix: str) -> str | None:
   """The listing page, or None when *dir_path* is not a directory.
 
   Carries the route's dir contract: the unreadable-directory 403.
-  One scandir pass answers is_dir from the directory record and stats each
-  entry once.
+  The walk is Path.iterdir with an is_dir in the sort key and a stat and an
+  is_dir per child; each row is escaped, quoted and appended in turn.
   """
+  entries: list[dict] = []
   try:
-    scandir_iter = os.scandir(os.fspath(dir_path))
+    for child in sorted(dir_path.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+      try:
+        stat = child.stat()
+      except OSError:
+        continue
+      entries.append(
+          {
+              "name": child.name,
+              "is_dir": child.is_dir(),
+              "size": stat.st_size,
+              "mtime": datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.UTC),
+          })
   except NotADirectoryError:
     return None
   except PermissionError as e:
     raise fastapi.HTTPException(status_code=403, detail=_PERMISSION_DENIED_DETAIL) from e
-  entries: list[tuple[bool, str, int, float]] = []
-  with scandir_iter:
-    for entry in scandir_iter:
-      try:
-        stat = entry.stat()
-        is_dir = entry.is_dir()
-      except OSError:
-        continue
-      entries.append((is_dir, entry.name, stat.st_size, stat.st_mtime))
-  entries.sort(key=lambda e: (not e[0], e[1].lower()))
 
-  rows = []
-  prefix = url_prefix.rstrip("/")
+  rows = ""
   # Parent directory link (unless at a mount root)
-  if prefix != FILE_SERVER_MOUNTS[0]:
-    parent = "/".join(prefix.split("/")[:-1]) or FILE_SERVER_MOUNTS[0]
-    rows.append('<tr>'
-                f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
-                '<td></td><td></td>'
-                '</tr>\n')
+  if url_prefix.rstrip("/") != FILE_SERVER_MOUNTS[0]:
+    parent = "/".join(url_prefix.rstrip("/").split("/")[:-1]) or FILE_SERVER_MOUNTS[0]
+    rows += ('<tr>'
+             f'<td>📁</td><td><a href="{html.escape(parent)}">..</a></td>'
+             '<td></td><td></td>'
+             '</tr>\n')
 
-  escaped_prefix = html.escape(prefix)
-  for is_dir, name, size, mtime in entries:
-    icon = "📁" if is_dir else "📄"
-    name_text = name + ("/" if is_dir else "")
-    href = f"{escaped_prefix}/{name}"
-    if _SAFE_ENTRY_RE.fullmatch(name) is None:
-      name_text = html.escape(name_text)
-      href = html.escape(f"{prefix}/{parse.quote(name, safe='')}")
-    size_text = "" if is_dir else human_size.format_size(size)
-    mtime_text = _format_mtime(mtime)
-    rows.append(
+  for e in entries:
+    icon = "📁" if e["is_dir"] else "📄"
+    name = html.escape(e["name"] + ("/" if e["is_dir"] else ""))
+    href = html.escape(f"{url_prefix.rstrip('/')}/{parse.quote(e['name'], safe='')}")
+    size = "" if e["is_dir"] else human_size.format_size(e["size"])
+    mtime = e["mtime"].strftime("%Y-%m-%d %H:%M")
+    rows += (
         f'<tr>'
-        f'<td>{icon}</td><td><a href="{href}">{name_text}</a></td>'
-        f'<td style="text-align:right">{size_text}</td><td>{mtime_text}</td>'
+        f'<td>{icon}</td><td><a href="{href}">{name}</a></td>'
+        f'<td style="text-align:right">{size}</td><td>{mtime}</td>'
         f'</tr>\n')
 
   display_path = html.escape("/" + dir_path.as_posix().lstrip("/"))
-  return _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=''.join(rows))
+  return _DIR_LISTING_TEMPLATE.format(display_path=display_path, rows=rows)
 
 
 def _resolve_and_list(path: str, url_prefix: str) -> tuple[pathlib.Path, str | None, bool]:

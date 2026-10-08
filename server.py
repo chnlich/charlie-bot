@@ -39,7 +39,7 @@ with gc_off(collect=False):
   from src.infra.config import CharlieBotConfig, get_config, require_backends
   from src.infra.constants import PERFETTO_MERGED_PATH, REPO_ROOT
   from src.infra.http import close_http_client
-  from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
+  from src.infra.log_once import LazyStructlogLogger
   from src.infra.models import SessionMetadata, utc_now
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
   from src.runtime import init_seed
@@ -157,14 +157,12 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
 
 
 class _RequestLogMiddleware:
-  """Emit exactly one http_request log line per HTTP response.
+  """Emit exactly one structlog http_request event per HTTP response.
 
   Pure ASGI like the GZip middleware above: send is wrapped only to capture the
   status off http.response.start (nothing is buffered, so streaming and
-  StaticFiles bodies still log exactly once), and the line renders when the
-  inner app returns — through log_http_request_line's direct render, not
-  structlog's event dispatch (capture-based readers see the line on stdout).
-  The query string is deliberately excluded from `path` —
+  StaticFiles bodies still log exactly once), and the event fires when the
+  inner app returns. The query string is deliberately excluded from `path` —
   the terminal WS carries its access credential in ?token= — so credentials
   never reach the log. Mounted last, hence outermost, so AuthMiddleware's 401s
   are logged too. An inner-app exception logs status=500 with the exception's
@@ -199,14 +197,16 @@ class _RequestLogMiddleware:
   def _log_http_request(self, scope: Scope, status: int | None, started: float, *, error: str | None = None) -> None:
     """The one http_request log site: five fields, plus `error` on the exception path only."""
     client = scope.get("client")
-    log_http_request_line(
-        method=scope["method"],
-        path=scope["path"],
-        status=status,
-        duration_ms=round((time.monotonic() - started) * 1000),
-        client=client[0] if client else "-",
-        error=error,
-    )
+    fields: dict[str, object] = {
+        "method": scope["method"],
+        "path": scope["path"],
+        "status": status,
+        "duration_ms": round((time.monotonic() - started) * 1000),
+        "client": client[0] if client else "-",
+    }
+    if error is not None:
+      fields["error"] = error
+    log.info("http_request", **fields)
 
 
 async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: object) -> None:
@@ -238,9 +238,6 @@ async def _run_task_recovery(cfg: CharlieBotConfig, tree) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
   """Application lifespan: startup and shutdown tasks."""
-  # Before the first startup log line: every http_request line the server
-  # renders rides this renderer (see src/infra/log_once.py).
-  ensure_lean_renderer()
   cfg = get_config()
   boot_time = utc_now()
 

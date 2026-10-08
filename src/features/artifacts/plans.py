@@ -18,7 +18,6 @@ import posixpath
 from typing import TYPE_CHECKING
 
 from src.features.artifacts import constants, plan_paths
-from src.infra import memo
 from src.runtime import sidebar_state
 
 if TYPE_CHECKING:
@@ -162,36 +161,9 @@ def _project_registry(data: dict) -> dict:
 # Tolerant read — single authority for listing/probe surfaces
 # ---------------------------------------------------------------------------
 
-# Bound on the tolerant-read memo in sessions. Registry writes go through
-# json_utils.write_json_atomically, so any content change moves mtime_ns and an unchanged
-# (mtime_ns, size) proves the content current (the stat-before-read race
-# contract is memo.StatSignatureMemo's). Callers (the list endpoint, the sidebar
-# probe) only read the returned structure. ~0.3 ms read+derive per call on the
-# heaviest on-disk corpus; the list endpoint serves it on every plan-panel poll.
-_TOLERANT_READ_MEMO_LIMIT = 32
-_tolerant_read_memo: memo.StatSignatureMemo[str, dict] = memo.StatSignatureMemo(_TOLERANT_READ_MEMO_LIMIT)
-
-
-def tolerant_memo_hit(plans_path: pathlib.Path) -> dict | None:
-  """The memo-hit half of :func:`read_plans_tolerant`: one stat plus a lookup.
-
-  Returns the memoized result when the file's (mtime_ns, size) still matches,
-  else None — the caller then owes the full read. Kept separate so an async
-  caller on the event loop can serve a hit without an executor round-trip
-  (~170 us measured per hop against a ~9 us hit) and pay the thread only on a
-  miss.
-  """
-  try:
-    st = plans_path.stat()
-  except OSError:
-    # Every stat failure maps to the missing-file answer downstream, and that
-    # answer is never memoized, so there is nothing to serve here.
-    return None
-  return _tolerant_read_memo.fresh(str(plans_path), st)
-
 
 def read_plans_tolerant(plans_path: pathlib.Path, session_id: str) -> dict:
-  """Tolerant read of a session's plans.json, memoized on the file signature.
+  """Tolerant read of a session's plans.json.
 
   Returns ``{"plans": [<projected plan enriched with "state">...], "errors": [<entry>...]}``.
 
@@ -204,45 +176,22 @@ def read_plans_tolerant(plans_path: pathlib.Path, session_id: str) -> dict:
 
   Catches exactly ``(OSError, ValueError)`` — ``json.JSONDecodeError`` is a ``ValueError``
   subclass. Never raises for expected corruption; the caller may iterate the result directly.
-  A repeat read of an unchanged file pays one stat and serves the memoized result.
   """
-  hit = tolerant_memo_hit(plans_path)
-  if hit is not None:
-    return hit
   errors: list[dict] = []
-  try:
-    st = plans_path.stat()
-  except OSError:
-    # One stat drives both the missing-file answer and the memo key; every
-    # stat failure maps to the missing-file answer, mirroring task-tree metadata scans.
+  if not plans_path.exists():
     return {"plans": [], "errors": errors}
-  result, cacheable = _read_plans_uncached(plans_path, session_id)
-  if cacheable:
-    _tolerant_read_memo.record(str(plans_path), st, result)
-  return result
-
-
-def _file_level_error(session_id: str, error: Exception) -> dict:
-  return {"plans": [], "errors": [{"session_id": session_id, "plan_id": None, "error": str(error)}]}
-
-
-def _read_plans_uncached(plans_path: pathlib.Path, session_id: str) -> tuple[dict, bool]:
-  """The read+derive half of ``read_plans_tolerant``, minus the memo.
-
-  The bool reports cacheability: an OSError reflects the file's environment
-  (permissions, transient IO), not its bytes, and fixing the cause does not
-  move (mtime_ns, size), so it is never memoized — the same policy the
-  trigger-list memo and the search miss-memo state. Every other outcome is a
-  pure function of the file content.
-  """
-  errors: list[dict] = []
   try:
     raw = plans_path.read_text(encoding="utf-8")
     data = json.loads(raw)
-  except OSError as e:
-    return _file_level_error(session_id, e), False
-  except ValueError as e:
-    return _file_level_error(session_id, e), True
+  except (OSError, ValueError) as e:
+    return {
+        "plans": [],
+        "errors": [{
+            "session_id": session_id,
+            "plan_id": None,
+            "error": str(e)
+        }],
+    }
   if not isinstance(data, dict):
     return {
         "plans": [],
@@ -254,7 +203,7 @@ def _read_plans_uncached(plans_path: pathlib.Path, session_id: str) -> tuple[dic
                     "error": f"registry top level is {type(data).__name__}, expected dict",
                 }
             ],
-    }, True
+    }
   plans_out: list[dict] = []
   for plan in data.get("plans", []):
     try:
@@ -264,7 +213,7 @@ def _read_plans_uncached(plans_path: pathlib.Path, session_id: str) -> tuple[dic
     except (OSError, ValueError) as e:
       plan_id = plan.get("id") if isinstance(plan, dict) else None
       errors.append({"session_id": session_id, "plan_id": plan_id, "error": str(e)})
-  return {"plans": plans_out, "errors": errors}, True
+  return {"plans": plans_out, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
@@ -509,13 +458,7 @@ class PlanRegistryManager:
     The strict ``_load`` used by verbs is unchanged; this is the only read path for listing
     and probe surfaces. Errors are returned (never raised) so a corrupt single-session file
     cannot 5xx the sidebar poll for all sessions.
-
-    A memo hit answers on the event loop from one stat; only a miss (cold, changed, or
-    missing file) pays the executor hop into :func:`read_plans_tolerant`.
     """
     plans_path = self._plans_path(session_id)
-    hit = tolerant_memo_hit(plans_path)
-    if hit is not None:
-      return hit
     import asyncio
     return await asyncio.to_thread(read_plans_tolerant, plans_path, session_id)

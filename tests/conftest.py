@@ -339,8 +339,8 @@ def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
   return models.SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
       **mocked_callback_fields(
-      persist_cc_session_id=mgr.persist_cc_session_id,
-      task_tree_activity=mgr.task_tree_activity,
+          persist_cc_session_id=mgr.persist_cc_session_id,
+          task_tree_activity=mgr.task_tree_activity,
       ),
       persist_account_label=mgr.persist_account_label,
       context_state=AsyncMock(return_value=(None, None)),
@@ -567,8 +567,7 @@ async def run_resume_round(
         record,
         callbacks,
         is_alive=is_alive,
-        task_run=master_cc_state.TaskRunBinding(
-            session_id=meta.id, run_id=run_id, transport_dir=str(transport_dir)),
+        task_run=master_cc_state.TaskRunBinding(session_id=meta.id, run_id=run_id, transport_dir=str(transport_dir)),
         on_task_spawn=_noop_task_spawn,
         on_task_finish=_noop_task_finish,
     )
@@ -2130,8 +2129,7 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManag
 
 
 async def make_plan_setup(
-    tmp_path: Path,
-) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
+    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
   """Session and plan managers plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
   session_mgr = SessionManager(cfg)

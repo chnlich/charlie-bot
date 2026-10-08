@@ -107,8 +107,7 @@ async def list_threads(
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
   if etag == etag_value:
     return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return await gzip_body_response(
-      request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _RUN_LIST_GZIP_MEMO)
+  return await gzip_body_response(request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _RUN_LIST_GZIP_MEMO)
 
 
 async def _resolve_run(owner_session_id: str, thread_id: str) -> tuple[str, str] | None:
@@ -269,7 +268,10 @@ def _append_worker_events(
               WorkerEvent(
                   type=ET.TOOL_USE,
                   tool_name=block["name"],
-                  input=tool_preview({"name": block["name"], "input": block.get("input", {})})["input"],
+                  input=tool_preview({
+                      "name": block["name"],
+                      "input": block.get("input", {})
+                  })["input"],
                   timestamp=event_timestamp,
               ))
     elif event_type == ET.USER and isinstance(data.get("message"), dict):
@@ -329,11 +331,12 @@ async def get_thread_events(
     events = await asyncio.to_thread(read_thread_worker_events, events_path)
   reset = after > len(events)
   start = 0 if reset else after
-  return FastJsonResponse({
-      "events": [e.model_dump(mode="json") for e in events[start:]],
-      "total": len(events),
-      "reset": reset,
-  })
+  return FastJsonResponse(
+      {
+          "events": [e.model_dump(mode="json") for e in events[start:]],
+          "total": len(events),
+          "reset": reset,
+      })
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")

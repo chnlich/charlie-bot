@@ -270,7 +270,6 @@ def _resolve_requested_backend(
 # render keeps it.
 _RESPONSE_ROW_EXCLUDE = {"task": {"goal"}}
 
-
 # The model's transient schedule fields ride every row dump as nulls; the
 # registered controllers' listing fields replace them when a package owns them.
 _CONTROLLER_LISTING_MODEL_NULLS = (
@@ -547,9 +546,7 @@ async def list_archived_sessions(
 
 
 @router.get("/starred")
-async def list_starred_sessions(
-    session_mgr: SessionManager = Depends(get_session_manager),
-) -> list[dict]:
+async def list_starred_sessions(session_mgr: SessionManager = Depends(get_session_manager),) -> list[dict]:
   """List starred task nodes, newest first.
 
   Row shape matches the other sidebar lists: the model dump with the schedule

@@ -57,7 +57,11 @@ async def test_metadata_without_profile_names_the_file_and_conversion_tool(tmp_p
   path = _write_metadata(
       mgr,
       models.SessionMetadata(profile="manager", id=session_id, name="will be replaced"),
-      raw=json.dumps({"id": session_id, "name": "old session", "schema_version": 1}),
+      raw=json.dumps({
+          "id": session_id,
+          "name": "old session",
+          "schema_version": 1
+      }),
   )
 
   with pytest.raises(ValueError) as excinfo:

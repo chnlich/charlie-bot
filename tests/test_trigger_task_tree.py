@@ -68,9 +68,7 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
 
-  with (
-      patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-  ):
+  with (patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),):
     await trigger_mgr._wait_and_fire(trigger)
 
   # The trigger lands as ONE durable scheduled input with the trigger's own id,

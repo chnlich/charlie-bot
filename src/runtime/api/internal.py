@@ -361,7 +361,7 @@ async def session_message(
     from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
   log.info(
-        "session_message_dispatched",
+      "session_message_dispatched",
       session=req.session_id,
       target_session=req.target_session_id,
       content_chars=len(req.content),

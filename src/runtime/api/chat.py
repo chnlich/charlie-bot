@@ -27,6 +27,7 @@ log = LazyStructlogLogger()
 
 router = APIRouter()
 
+
 @router.post("/{session_id}/upload")
 async def upload_file(
     session_id: str,
@@ -96,7 +97,9 @@ async def send_message(
           "status": "accepted",
           "input_event_id": str(admitted.get("id")),
           "launch": bool(decision.get("launch")),
-          **({"reason": decision["reason"]} if decision.get("reason") else {}),
+          **({
+              "reason": decision["reason"]
+          } if decision.get("reason") else {}),
       })
 
 

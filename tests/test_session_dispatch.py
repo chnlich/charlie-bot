@@ -306,7 +306,6 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 # Input candidacy and handling: tool echoes, stopped/failed/interrupted rounds
 # ---------------------------------------------------------------------------
 
-
 # ---------------------------------------------------------------------------
 # Permanent delete: every reference category, one locked operation
 # ---------------------------------------------------------------------------

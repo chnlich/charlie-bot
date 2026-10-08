@@ -288,8 +288,13 @@ async def test_turn_refusal_writes_an_error_event_carrying_quota_exhausted(
     fragment: str) -> None:
   cfg, backends = scenario(tmp_path, monkeypatch)
   make_transcript(tmp_path / "claude-main", CC_ID)
-  meta = SessionMetadata(profile="manager",
-      id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=CC_ID if held_id else None, claude_account="main")
+  meta = SessionMetadata(
+      profile="manager",
+      id="s1",
+      name="t",
+      backend=POOLED_FABLE_ID,
+      cc_session_id=CC_ID if held_id else None,
+      claude_account="main")
   install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
   item = make_work_item(cfg, meta, cfg.get_backend_option(POOLED_FABLE_ID))
 

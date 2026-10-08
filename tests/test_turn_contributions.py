@@ -374,8 +374,8 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
   slack.assert_awaited_once_with(meta.id, done, cfg, mgr)
   discord.assert_awaited_once_with(meta.id, done, cfg, mgr)
   assert len(tasks) == len(real) + 1
-  assert [e["type"] for e in mgr.load_chat_events_sync(meta.id)] == [
-      ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
+  assert [e["type"] for e in mgr.load_chat_events_sync(meta.id)
+         ] == [ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
 
 
 # ---------------------------------------------------------------------------
@@ -488,8 +488,7 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   monkeypatch.setattr("src.runtime.sessions.create_logged_task", make_task_spawner(tasks))
 
   async with fresh_master_state(session.id):
-    queued = asyncio.create_task(
-        run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
+    queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
     for _ in range(1000):
       if session.id in master_cc_state._session_consumers:
         break

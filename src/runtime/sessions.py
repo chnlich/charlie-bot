@@ -321,7 +321,6 @@ def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionM
 # per probe group).
 # ---------------------------------------------------------------------------
 
-
 # Parsed trigger files keyed by path: the sidebar deep probe re-enters this scan on every poll
 # that follows any write to the session, and re-reading every trigger file
 # dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
@@ -3118,7 +3117,8 @@ class SessionManager:
       # A concurrent publish after this one replaces the inode; the next
       # expiry's stat then evicts and re-reads — the same bound the
       # signature-less entry paid on every expiry.
-      self._metadata_cache[meta.id] = (validate_session_metadata(serialized, str(self._metadata_path(meta.id))), time.monotonic(), sig)
+      self._metadata_cache[meta.id] = (
+          validate_session_metadata(serialized, str(self._metadata_path(meta.id))), time.monotonic(), sig)
       # The single funnel for every session-metadata write (35+ call sites, plus
       # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.

@@ -237,7 +237,6 @@ async def _salvage_silent_turn(
 # notice detector.
 _ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
 
-
 _VOICE_DISCLAIMER = (
     "[Voice input: this message was dictated via speech transcription and may "
     "contain recognition errors. Interpret unclear words from context; ask only "

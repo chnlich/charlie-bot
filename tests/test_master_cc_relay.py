@@ -41,7 +41,8 @@ def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRe
 
 
 def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionMetadata:
-  return SessionMetadata(profile="manager", id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
+  return SessionMetadata(
+      profile="manager", id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
 
 
 def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:

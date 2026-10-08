@@ -105,8 +105,8 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
 
   # The homepage's server-rendered sidebar carries the same answer.
   rows = {
-      row["id"]: row for row in page_initial_sessions(
-          make_sessions_listing_page_client(cfg, session_mgr, tree), unbound.id)
+      row["id"]: row
+      for row in page_initial_sessions(make_sessions_listing_page_client(cfg, session_mgr, tree), unbound.id)
   }
   _assert_bound_row(rows[bound.id], "synthetic-daily", enabled=True)
   _assert_bound_row(rows[disabled_node.id], "synthetic-paused", enabled=False)

@@ -235,7 +235,8 @@ async def test_unhandled_event_drops_with_no_side_effects(
 
 
 @pytest.mark.asyncio
-async def test_trigger_master_forwards_input_id_to_the_task_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_trigger_master_forwards_input_id_to_the_task_wake(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
   cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)

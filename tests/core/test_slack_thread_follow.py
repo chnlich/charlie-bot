@@ -262,9 +262,7 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   armed.fire_at = models.utc_now()
   await trigger_mgr._save_trigger(armed)
   boot_mgr = triggers.TriggerManager(cfg, session_mgr)
-  with (
-      mock.patch(conftest.TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()) as mock_delivery,
-  ):
+  with (mock.patch(conftest.TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()) as mock_delivery,):
     await boot_mgr.recover_pending()
     tasks = list(boot_mgr._tasks.values())
     assert len(tasks) == 1

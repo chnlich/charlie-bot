@@ -36,8 +36,8 @@ EVENTS = [
 ]
 
 
-async def _client_with_log(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> tuple[testclient.TestClient, str, pathlib.Path]:
+async def _client_with_log(tmp_path: pathlib.Path,
+                           monkeypatch: pytest.MonkeyPatch) -> tuple[testclient.TestClient, str, pathlib.Path]:
   cfg, session_mgr, tree = conftest.build_env(tmp_path)
   session = await session_mgr.create_session(CreateSessionRequest(name="Events"))
   run_id = "run-events"

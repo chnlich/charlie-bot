@@ -38,7 +38,7 @@ from conftest import (
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, ScheduledTaskConfig
+from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionStatus, utc_now_iso
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager

@@ -295,6 +295,7 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 
   _assert_no_context_tier(usage)
 
-  empty_meta = SessionMetadata(profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
+  empty_meta = SessionMetadata(
+      profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, empty_meta, [])
   assert await session_mgr.resolve_session_usage(empty_meta.id, empty_meta) is None

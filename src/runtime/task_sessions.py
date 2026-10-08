@@ -1069,7 +1069,7 @@ class TaskTreeManager:
       *,
       request_id: str,
       task_parent_id: str | None,
-    profile: str,
+      profile: str,
       task: TaskSpec | None,
       name: str | None,
       backend: str | None,

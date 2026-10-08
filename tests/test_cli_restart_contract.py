@@ -115,7 +115,6 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 # Gap 3(a) — readback determinism for improve, schedule-trigger, and plan
 # ---------------------------------------------------------------------------
 
-
 # ---------------------------------------------------------------------------
 # Session close readback -- a lost cancel/complete response reads back this
 # request's own close fact from the task's chat_events.jsonl.

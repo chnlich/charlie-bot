@@ -157,8 +157,8 @@ def _notices(events: list[dict]) -> list[dict]:
 
 
 @contextlib.contextmanager
-def _running_round(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str, user_event_id: str | None) -> Iterator[None]:
+def _running_round(cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
+                   user_event_id: str | None) -> Iterator[None]:
   """Expose one task manager work item as the currently running round."""
   master_cc_state._current_items[sid] = _running_item(cfg, session_mgr, sid, user_event_id)
   try:

@@ -162,7 +162,8 @@ async def test_run_cc_resume_gate_by_transcript_location(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
-  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="S", backend="cc", cc_session_id="conv-1")
+  session_meta = models.SessionMetadata(
+      profile="manager", id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
   monkeypatch.setattr(
       conftest.BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or conftest.FakeBackend())

@@ -559,7 +559,6 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
   assert len(reports) == 1
   assert reports[0]["outcome"] == "blocked"
   assert "blocked" in str(reports[0]["summary"])
-  assert "one more thing" in str(reports[0]["summary"]) or True
   assert tree.task_state(leaf.id) == "open"
 
   # Repeated recovery at the blocked-close window adds nothing.
@@ -574,7 +573,11 @@ async def test_recovered_successful_final_step_close_blocked_delivers_one_blocke
       monkeypatch, [SpawningScriptedBackend([result_event("answered")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   decision = await tree.dispatch.dispatch_pending(leaf.id)
   assert decision["launch"] is True
-  await _async_wait_for(lambda: tree.task_state(leaf.id) != "open", 15.0, "the repaired close never landed")
+  await _async_wait_for(
+      lambda: tree.task_state(leaf.id) != "open" and len(_child_reports(tree, manager.id)) == 2,
+      15.0,
+      "the repaired close and its parent report never landed",
+  )
   assert len(builds) == 1
   kinds = [
       (e.get("outcome"), str(e.get("summary"))[:60])

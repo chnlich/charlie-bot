@@ -45,9 +45,9 @@ log = LazyStructlogLogger()
 
 # Fixed house wall clock pinned by the chat-thread session-name timestamps
 # (src/features/chat_threads/thread_entry.py) and the Saturday-1AM weekly-recycle anchor
-# (src/runtime/master_trigger.py). Distinct from DEFAULT_TIMEZONE below, a per-task default
-# overridable via ``timezone: local`` or any IANA key, so retargeting the scheduled-task default
-# cannot shift these pins.
+# (src/features/cron/sequence_controller.py). Distinct from the scheduled-task default
+# (src/features/cron/config.py), overridable via ``timezone: local`` or any IANA key, so retargeting
+# that default cannot shift these pins.
 HOUSE_TIMEZONE = "America/Los_Angeles"
 
 # The profile's config filename, named once: the loader, the reload fingerprint,

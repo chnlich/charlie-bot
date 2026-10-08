@@ -29,9 +29,9 @@ from src.backends.opencode.opencode import (
 from src.infra import event_types as ET
 from src.runtime.agent_process.base import make_text_event
 
-# The opencode backend's httpx seam: the module's PEP 562 hook serves `httpx` as a
-# module attribute, so pytest's string-target resolution lands the stand-in on the
-# shared httpx module where the backend's local `import httpx` sites read it.
+# The opencode backend's httpx seam: the module imports httpx at top level, so the
+# string target resolves through its `httpx` global onto the shared httpx module,
+# and the stand-in lands on httpx.AsyncClient where the backend's call sites read it.
 _OPENCODE_HTTPX_ASYNC_CLIENT_PATCH_TARGET = "src.backends.opencode.opencode.httpx.AsyncClient"
 
 

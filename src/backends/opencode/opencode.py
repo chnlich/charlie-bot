@@ -10,8 +10,8 @@ import pathlib
 import re
 import ssl
 from collections.abc import AsyncIterator
-from typing import TYPE_CHECKING, Any
 
+import httpx
 import orjson
 
 from src.backends.opencode import opencode_limits
@@ -19,26 +19,7 @@ from src.infra import event_types as ET
 from src.infra import log_once, process, sse
 from src.runtime.agent_process import base
 
-if TYPE_CHECKING:
-  import httpx
-
 log = log_once.LazyStructlogLogger()
-
-
-def __getattr__(name: str) -> Any:
-  # httpx imports on first use: this module sits on no eager server import
-  # chain (the M99 deferrals keep every carrier off it — the import-weight
-  # contract pins the ban set), so only opencode runs pay httpx's import
-  # chain (~60 ms with rich) for its outbound client. The PEP 562 hook serves
-  # the external patch target
-  # `src.backends.opencode.opencode.httpx.*`; the module's own runtime sites
-  # import httpx locally, which internal global lookups cannot route here.
-  if name == "httpx":
-    import httpx
-
-    return httpx
-  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 
 # The serve URL is plain localhost HTTP, so no TLS ever rides these clients;
 # the context exists only because httpx builds a fresh default SSL context per
@@ -212,8 +193,6 @@ class OpenCodeBackend(base.AgentBackend):
         self._server_url = await self._read_server_url()
         self._stdout_task = asyncio.create_task(self._stream_stdout())
 
-        import httpx
-
         async with httpx.AsyncClient(base_url=self._server_url, timeout=opencode_limits.OPENCODE_HTTP_API_TIMEOUT,
                                      verify=_SERVE_SSL_CONTEXT) as client:
           await self._check_health(client)
@@ -303,8 +282,6 @@ class OpenCodeBackend(base.AgentBackend):
 
     A genuine unexpected disconnect (terminate() not called) stays a visible backend error.
     """
-    import httpx
-
     return self.terminated and isinstance(error, httpx.RemoteProtocolError)
 
   def _should_retry_lock_failure(self, attempt: int) -> bool:

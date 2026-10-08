@@ -80,7 +80,7 @@ def plan_manager() -> PlanRegistryManager:
   return _plan_manager
 
 
-async def get_plan_manager() -> PlanRegistryManager:
+def get_plan_manager() -> PlanRegistryManager:
   return plan_manager()
 
 

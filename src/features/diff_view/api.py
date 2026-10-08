@@ -45,19 +45,6 @@ _ManifestKey = tuple[str, str, str, str, tuple[int, int] | None]
 # idiom of the sibling memos.
 _diff_files_memo: memo.BoundedMemo[_ManifestKey, tuple[list[dict], int, int]] = memo.BoundedMemo(_DIFF_FILES_MEMO_LIMIT)
 
-# Bound on _diff_file_memo in per-file bodies: a review pass expands files one
-# at a time across the branch pairs open in tabs, and an evicted entry simply
-# re-runs the diff.
-_DIFF_FILE_MEMO_LIMIT = 64
-
-# Memo key for one diff/file body: the manifest key (see _ManifestKey) plus the
-# pathspec the handler passes git. Same immutability argument as the manifest:
-# repeat expands — expand/collapse re-fetches, tab refreshes — of one resolved
-# ref pair re-run zero git diff subprocesses.
-_FileDiffKey = tuple[str, str, str, str, tuple[int, int] | None, tuple[str, ...]]
-
-_diff_file_memo: memo.BoundedMemo[_FileDiffKey, str] = memo.BoundedMemo(_DIFF_FILE_MEMO_LIMIT)
-
 # Signature of every file that feeds `git rev-parse` ref resolution: the git
 # dir's top-level files (HEAD, ORIG_HEAD, FETCH_HEAD, ...), packed-refs, and the
 # loose refs tree. Host git config is static on this host (the same constraint
@@ -449,13 +436,9 @@ async def diff_file(
   # wholesale add/delete; passing both endpoints keeps it a rename diff.
   pathspec = tuple([old_path, path] if old_path else [path])
   base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
-  key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path), pathspec)
-  diff_text = _diff_file_memo.get(key)
-  if diff_text is None:
-    # The range over resolved SHAs, so a ref that moves before the subprocess
-    # starts cannot key one pair's body under another pair.
-    diff_text = await _run_git_diff(repo_path, [_range_spec(base_sha, head_sha, mode), "--", *pathspec])
-    _diff_file_memo.store(key, diff_text)
+  # The range over resolved SHAs, so a ref that moves before the subprocess
+  # starts cannot pair one resolution with another.
+  diff_text = await _run_git_diff(repo_path, [_range_spec(base_sha, head_sha, mode), "--", *pathspec])
   size_bytes = len(diff_text.encode("utf-8"))
   if not force and size_bytes > _DIFF_MAX_BYTES:
     return {"too_large": True, "size_bytes": size_bytes, "path": path}

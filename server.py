@@ -36,7 +36,7 @@ with gc_off(collect=False):
   from src.infra import responses, timeouts
   from src.infra.buildinfo import init_build_info
   from src.infra.config import CharlieBotConfig, get_config, require_backends
-  from src.infra.constants import PERFETTO_MERGED_PATH, REPO_ROOT
+  from src.infra.constants import REPO_ROOT
   from src.infra.http import close_http_client
   from src.infra.log_once import LazyStructlogLogger
   from src.infra.models import SessionMetadata, utc_now
@@ -143,12 +143,9 @@ class _IsalGZipResponder(GZipResponder):
 
 
 class _CharlieBotGZipMiddleware(GZipMiddleware):
-  """Skips transport compression where it cannot pay: the merged-trace path, and media types by prefix."""
+  """Skips transport compression where it cannot pay: media types by prefix."""
 
   async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-    if scope["type"] == "http" and scope["path"] == PERFETTO_MERGED_PATH:
-      await self.app(scope, receive, send)
-      return
     if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
       responder = _IsalGZipResponder(self.app, self.minimum_size, compresslevel=self.compresslevel)
       await responder(scope, receive, send)

@@ -389,7 +389,7 @@ class TaskTreeManager:
     session_mgr.archive_overlay = self.derived_archived_ids
     # The sidebar's probe derives a task-tree node's activity through this
     # hook — the tree's own derivation, never a second copy of the rules.
-    session_mgr.task_tree_activity = self.activity_pair_of
+    session_mgr.sidebar.task_tree_activity = self.activity_pair_of
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
     self._index_build_task: asyncio.Task[_TreeIndex] | None = None

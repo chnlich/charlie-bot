@@ -91,7 +91,7 @@ from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
 from src.infra.yaml_utils import load_yaml, save_yaml
-from src.runtime import init_seed, session_events, session_store, sessions, task_execution, triggers
+from src.runtime import init_seed, session_events, session_sidebar, session_store, sessions, task_execution, triggers
 from src.runtime.home_writer_fence import (
     FENCE_IDENTITY_NAME,
     FENCE_LOCK_NAME,
@@ -779,6 +779,7 @@ def assert_no_bound_singletons() -> None:
       name for name, singleton in (
           ("_store", session_store._store),
           ("_events", session_events._events),
+          ("_sidebar", session_sidebar._sidebar),
           ("_session_manager", sessions._session_manager),
           ("_trigger_manager", triggers._trigger_manager),
           ("_task_manager", task_execution._task_manager),

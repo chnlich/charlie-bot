@@ -27,11 +27,12 @@ def _stub_task_manager():
 
 
 class _LastSessionManager:
-  """The no-op session seam the stub task-tree owner requires; its store and events block are itself."""
+  """The no-op session seam the stub task-tree owner requires; its store and block attributes are itself."""
 
   def __init__(self) -> None:
     self.store = self
     self.events = self
+    self.sidebar = self
 
   async def get_session(self, session_id: str):
     return None

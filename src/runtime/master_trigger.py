@@ -3,8 +3,9 @@
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, SessionStatus
+from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
+from src.runtime.session_successor import SessionSuccessor
 from src.runtime.task_execution import task_manager
 
 log = LazyStructlogLogger()
@@ -44,7 +45,9 @@ async def _wake_task_node(
 async def trigger_master(
     session_id: str,
     summary: str,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    successor: SessionSuccessor,
+    lifecycle: SessionLifecycle,
     *,
     input_id: str | None = None,
     event_type: str = ET.AGENT_MESSAGE,
@@ -55,7 +58,7 @@ async def trigger_master(
 ) -> None:
   """Dispatch a wake to the task node at the end of the session's succession chain."""
   target_session_id = session_id
-  resolved = await session_mgr.resolve_successor_chain(session_id)
+  resolved = await successor.resolve_successor_chain(session_id)
   if resolved is None:
     log.error("trigger_master_session_not_found", session=session_id)
     return
@@ -68,16 +71,16 @@ async def trigger_master(
     if not pull_back:
       log.info("wake_skipped_archived", session=session_id, resolved_session=resolved.id)
       return
-    await session_mgr.unarchive_session(resolved.id)
+    await lifecycle.unarchive_session(resolved.id)
     log.info("wake_pulled_back_archived_session", session=session_id, resolved_session=resolved.id)
 
-  session_meta = await session_mgr.store.get_session(resolved.id)
+  session_meta = await store.get_session(resolved.id)
   if session_meta is None:
     log.error("trigger_master_session_not_found", session=resolved.id)
     return
 
   await _wake_task_node(
-      session_mgr.store,
+      store,
       session_meta,
       requested_id=session_id,
       summary=summary,

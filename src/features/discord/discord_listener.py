@@ -96,6 +96,7 @@ from src.runtime.session_events import SessionEvents
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
+from src.runtime.session_successor import SessionSuccessor
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
@@ -337,7 +338,10 @@ def _thread_name(content: str) -> str:
 async def handle_message_create(
     message: dict,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
+    successor: SessionSuccessor,
     client: DiscordClient,
     trigger_mgr: TriggerManager,
     *,
@@ -387,9 +391,9 @@ async def handle_message_create(
   if not mentioned:
     return await thread_entry.follow_message(
         DiscordThreadAdapter(client),
-        session_mgr.store,
-        session_mgr.lifecycle,
-        session_mgr.events,
+        store,
+        lifecycle,
+        session_events,
         trigger_mgr,
         summon_session_id(guild_id, channel_id),
         message_id,
@@ -414,7 +418,10 @@ async def handle_message_create(
   return await thread_entry.accept_summon(
       DiscordThreadAdapter(client),
       cfg,
-      session_mgr,
+      store,
+      lifecycle,
+      session_events,
+      successor,
       trigger_mgr,
       session_id=summon_session_id(guild_id, thread_id),
       label=f"Discord #{parent['name']}",
@@ -467,24 +474,30 @@ async def post_reply(
   return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, store, session_events)
 
 
-async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:
+async def deliver_done(
+    session_id: str, done: dict, cfg: CharlieBotConfig, store: SessionStore, lifecycle: SessionLifecycle,
+    session_events: SessionEvents, successor: SessionSuccessor) -> bool:
   """Round-end audit for one finished round; True when it nudged or posted the notice.
 
   One-line pass-through to the shared audit (``thread_entry.deliver_done``) on
   a lazily-built Discord adapter; the audit gate, the nudge, and the notice
   live there.
   """
-  return await thread_entry.deliver_done(DiscordThreadAdapter(), session_id, done, cfg, session_mgr)
+  return await thread_entry.deliver_done(
+      DiscordThreadAdapter(), session_id, done, cfg, store, lifecycle, session_events, successor)
 
 
-async def backfill_lost_summons(cfg: CharlieBotConfig, session_mgr: SessionManager) -> int:
+async def backfill_lost_summons(
+    cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore, lifecycle: SessionLifecycle,
+    session_events: SessionEvents, successor: SessionSuccessor) -> int:
   """Boot pass over every Discord session; returns how many notices and nudges it produced.
 
   One-line pass-through to the shared boot audit
   (``thread_entry.backfill_lost_summons``) on a lazily-built Discord adapter;
   the lost-summon report and the per-round audit live there.
   """
-  return await thread_entry.backfill_lost_summons(DiscordThreadAdapter(), cfg, session_mgr)
+  return await thread_entry.backfill_lost_summons(
+      DiscordThreadAdapter(), cfg, listing, store, lifecycle, session_events, successor)
 
 
 async def _backfill_followed_threads(
@@ -562,7 +575,11 @@ async def _run_connection(
     ws: ClientConnection,
     token: str,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    listing: SessionListing,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    session_events: SessionEvents,
+    successor: SessionSuccessor,
     client: DiscordClient,
     trigger_mgr: TriggerManager,
 ) -> None:
@@ -631,12 +648,12 @@ async def _run_connection(
         saw_ready = True
         bot_user_id = payload["d"]["user"]["id"]
         logger.info("discord_listener_connected")
-        await _backfill_followed_threads(
-            cfg, session_mgr.listing, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+        await _backfill_followed_threads(cfg, listing, lifecycle, session_events, client, trigger_mgr)
       elif op == 0 and payload.get("t") == "MESSAGE_CREATE":
         message = payload["d"]
         try:
-          sid = await handle_message_create(message, cfg, session_mgr, client, trigger_mgr, bot_user_id=bot_user_id)
+          sid = await handle_message_create(
+              message, cfg, store, lifecycle, session_events, successor, client, trigger_mgr, bot_user_id=bot_user_id)
           logger.info("discord_listener_message_handled", channel=message.get("channel_id"), session=sid)
         except Exception as e:
           logger.exception("discord_listener_message_handle_failed", channel=message.get("channel_id"), error=str(e))
@@ -683,7 +700,9 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
       backoff = min(backoff * 2, 30.0)
       continue
     try:
-      await _run_connection(ws, token, cfg, session_mgr, client, trigger_mgr)
+      await _run_connection(
+          ws, token, cfg, session_mgr.listing, session_mgr.store, session_mgr.lifecycle, session_mgr.events,
+          session_mgr.successor, client, trigger_mgr)
     except _StopCloseError as stop:
       logger.error("discord_listener_stopped", code=stop.code, reason=_STOP_CLOSE_CODES[stop.code])
       return

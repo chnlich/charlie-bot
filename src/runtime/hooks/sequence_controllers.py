@@ -113,8 +113,8 @@ class SequenceCompletion(Protocol):
     ...
 
 
-class SequenceSessions(Protocol):
-  """The session service members the sequence controllers call."""
+class SequenceSuccessor(Protocol):
+  """The session successor block members the sequence controllers call."""
 
   async def deliver_to_successor(self, session_id: str, event: dict) -> str | None:
     ...
@@ -138,11 +138,8 @@ class SequenceTree(Protocol):
   dispatch: SequenceDispatch
   completion: SequenceCompletion
   session_events: SequenceSessionEvents
+  session_successor: SequenceSuccessor
   _cfg: CharlieBotConfig  # read by the cron backend resolution
-
-  @property
-  def sessions(self) -> SequenceSessions:
-    ...
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
     ...

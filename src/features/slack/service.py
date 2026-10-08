@@ -23,7 +23,8 @@ async def start_service(ctx: wiring.ServiceContext) -> None:
         slack_listener.run_listener(ctx.cfg, ctx.session_mgr), name="slack-listener")
     _backfill_task = tasks.create_logged_task(
         backfill.run_backfill(
-            ctx.cfg, ctx.session_mgr, ctx.recovery_task, slack_listener.backfill_lost_summons, "slack"),
+            ctx.cfg, ctx.session_mgr.listing, ctx.session_mgr.store, ctx.session_mgr.lifecycle, ctx.session_mgr.events,
+            ctx.session_mgr.successor, ctx.recovery_task, slack_listener.backfill_lost_summons, "slack"),
         name="slack-backfill")
     log.info("slack_entrypoint_started")
   else:

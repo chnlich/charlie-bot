@@ -266,6 +266,7 @@ from src.runtime.api.deps import (  # noqa: E402
     get_session_listing,
     get_session_search,
     get_session_sidebar,
+    get_session_successor,
 )
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
@@ -281,6 +282,7 @@ from src.runtime.session_listing import SessionListing  # noqa: E402
 from src.runtime.session_search import SessionSearch  # noqa: E402
 from src.runtime.session_sidebar import SessionSidebar  # noqa: E402
 from src.runtime.session_store import SessionStore  # noqa: E402
+from src.runtime.session_successor import SessionSuccessor  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
@@ -980,13 +982,19 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 
 def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle, fork and anchors blocks, all built on *cfg*."""
+  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle, fork, anchors and successor blocks, all built on *cfg*."""
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   return SessionManager(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events))
+      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events),
+      SessionSuccessor(cfg, store, events))
+
+
+def thread_blocks(session_mgr: Any) -> tuple[SessionStore, SessionLifecycle, SessionEvents, SessionSuccessor]:
+  """The blocks the chat-thread entry points take, in their argument order: store, lifecycle, events, successor."""
+  return session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -1013,6 +1021,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
       session_search,
       session_sidebar,
       session_store,
+      session_successor,
       sessions,
       task_execution,
   )
@@ -1026,6 +1035,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   monkeypatch.setattr(session_lifecycle, "_lifecycle", session_mgr.lifecycle)
   monkeypatch.setattr(session_fork, "_fork", session_mgr.fork)
   monkeypatch.setattr(session_anchors, "_anchors", session_mgr.anchors)
+  monkeypatch.setattr(session_successor, "_successor", session_mgr.successor)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1207,6 +1217,7 @@ def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
   app.dependency_overrides[get_session_lifecycle] = lambda: session_mgr.lifecycle
   app.dependency_overrides[get_session_fork] = lambda: session_mgr.fork
   app.dependency_overrides[get_session_anchors] = lambda: session_mgr.anchors
+  app.dependency_overrides[get_session_successor] = lambda: session_mgr.successor
 
 
 def make_router_client(

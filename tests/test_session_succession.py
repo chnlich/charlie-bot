@@ -38,6 +38,6 @@ async def test_resolve_successor_chain_walks_across_three_generations(tmp_path: 
   gen2 = await mgr.fork.elone_session(gen1.id, event_index=0)
   gen3 = await mgr.fork.elone_session(gen2.id, event_index=0)
 
-  resolved = await mgr.resolve_successor_chain(gen0)
+  resolved = await mgr.successor.resolve_successor_chain(gen0)
   assert resolved is not None
   assert resolved.id == gen3.id

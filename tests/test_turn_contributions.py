@@ -371,8 +371,8 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
     await mgr.events.persist_and_broadcast(meta.id, {"type": ET.SCHEDULED_TRIGGER, "content": "wake"})
     await asyncio.gather(*tasks, return_exceptions=True)
 
-  slack.assert_awaited_once_with(meta.id, done, cfg, mgr)
-  discord.assert_awaited_once_with(meta.id, done, cfg, mgr)
+  slack.assert_awaited_once_with(meta.id, done, cfg, mgr.store, mgr.lifecycle, mgr.events, mgr.successor)
+  discord.assert_awaited_once_with(meta.id, done, cfg, mgr.store, mgr.lifecycle, mgr.events, mgr.successor)
   assert len(tasks) == len(real) + 1
   assert [e["type"] for e in mgr.events.load_chat_events_sync(meta.id)
          ] == [ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]

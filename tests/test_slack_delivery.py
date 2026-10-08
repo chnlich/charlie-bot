@@ -19,6 +19,7 @@ from conftest import (
     build_slack_cfg,
     make_task_spawner,
     stub_credentials,
+    thread_blocks,
 )
 from structlog.testing import capture_logs
 
@@ -332,7 +333,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   trigger = AsyncMock()
 
   with _listener_seam(client, tasks=tasks, trigger=trigger), capture_logs() as logs:
-    assert await deliver_done(sid, done, cfg, session_mgr) is True
+    assert await deliver_done(sid, done, cfg, *thread_blocks(session_mgr)) is True
     await asyncio.gather(*tasks)
 
   nudges = _nudges(session_mgr.events.load_chat_events_sync(sid))
@@ -364,7 +365,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
       patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       capture_logs() as logs,
   ):
-    assert await deliver_done(sid, done, cfg, session_mgr) is False
+    assert await deliver_done(sid, done, cfg, *thread_blocks(session_mgr)) is False
 
   assert not client.posts
   assert not _notices(session_mgr.events.load_chat_events_sync(sid))
@@ -373,7 +374,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
 
   client.fail_posts = False  # Slack is back at the next boot
   with _listener_seam(client, tasks=tasks, queued=set()):
-    assert await backfill_lost_summons(cfg, session_mgr) == 1
+    assert await backfill_lost_summons(cfg, session_mgr.listing, *thread_blocks(session_mgr)) == 1
     await asyncio.gather(*tasks)
 
   assert [p["text"] for p in client.posts] == [_NO_REPLY_NOTICE]
@@ -390,7 +391,7 @@ async def test_round_end_without_a_slack_thread_answers_false_without_slack_cred
   stub_credentials({})  # no slack section: building the bot client raises
   meta = await conftest.create_root_session(session_mgr, CreateSessionRequest(name="plain session"))
 
-  assert await deliver_done(meta.id, _done(None), cfg, session_mgr) is False
+  assert await deliver_done(meta.id, _done(None), cfg, *thread_blocks(session_mgr)) is False
 
 
 # ---------------------------------------------------------------------------
@@ -405,8 +406,8 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
   await _append(session_mgr, sid, _summon())
 
   with _listener_seam(client):
-    assert await backfill_lost_summons(cfg, session_mgr) == 1
-    assert await backfill_lost_summons(cfg, session_mgr) == 0
+    assert await backfill_lost_summons(cfg, session_mgr.listing, *thread_blocks(session_mgr)) == 1
+    assert await backfill_lost_summons(cfg, session_mgr.listing, *thread_blocks(session_mgr)) == 0
 
   assert len(client.posts) == 1
   events = session_mgr.events.load_chat_events_sync(sid)

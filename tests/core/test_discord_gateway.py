@@ -436,7 +436,9 @@ async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) ->
     await session_mgr.events.persist_and_broadcast(meta.id, done)
     await asyncio.gather(*tasks)
 
-  slack_deliver.assert_awaited_once_with(meta.id, done, cfg, session_mgr)
-  discord_deliver.assert_awaited_once_with(meta.id, done, cfg, session_mgr)
+  slack_deliver.assert_awaited_once_with(
+      meta.id, done, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor)
+  discord_deliver.assert_awaited_once_with(
+      meta.id, done, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor)
   names = {t.get_name() for t in tasks}
   assert {f"after-turn-DiscordTurnContribution-{meta.id}", f"after-turn-SlackTurnContribution-{meta.id}"} <= names

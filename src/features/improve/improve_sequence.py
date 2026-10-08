@@ -248,7 +248,7 @@ async def run_improve_sequence(
       await improve_command.save_loop_state(session_id, state, cfg)
       await improve_command.clear_active_loop_lock(session_id, cfg)
       log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
-      await tree.sessions.deliver_to_successor(
+      await tree.session_successor.deliver_to_successor(
           session_id, {
               "type": IMPROVE_FAILED,
               "goal": goal,
@@ -372,7 +372,7 @@ async def run_improve_sequence(
     payload['base_branch'] = base_branch
     if merge_result is not None:
       payload['merge_result'] = merge_result
-    await tree.sessions.deliver_to_successor(session_id, payload)
+    await tree.session_successor.deliver_to_successor(session_id, payload)
 
     await _deliver_sequence_report(tree, child_id, session_id, loop_id, outcome_label, summary, previous_summaries)
   except asyncio.CancelledError:
@@ -386,7 +386,7 @@ async def run_improve_sequence(
       await improve_command.save_loop_state(session_id, state, cfg)
     await improve_command.clear_active_loop_lock(session_id, cfg)
     try:
-      await tree.sessions.deliver_to_successor(
+      await tree.session_successor.deliver_to_successor(
           session_id, {
               "type": IMPROVE_FAILED,
               "goal": goal,
@@ -437,7 +437,7 @@ async def _settle_withheld_iteration(
   payload["reason"] = reason
   payload["withheld_run_id"] = run_id
   payload["iterations_requested"] = iterations
-  await tree.sessions.deliver_to_successor(session_id, payload)
+  await tree.session_successor.deliver_to_successor(session_id, payload)
 
 
 @dataclass(frozen=True)
@@ -531,7 +531,7 @@ async def _broadcast_iteration_progress(
   result reaches the manager as input through the same owner.
   """
   report_path = loop_dir / f'iter_{iteration:04d}.md'
-  await tree.sessions.deliver_to_successor(
+  await tree.session_successor.deliver_to_successor(
       session_id, {
           "type": IMPROVE_ITERATION_COMPLETED,
           "iteration": iteration,
@@ -684,7 +684,7 @@ async def reconcile_interrupted_sequences(
       log.warning("improve_sequence_interrupted", session=session_id, loop_id=loop_id, recorded_pid=state.server_pid)
       meta = await tree.load_meta(session_id)
       if meta is not None:
-        await tree.sessions.deliver_to_successor(
+        await tree.session_successor.deliver_to_successor(
             session_id, {
                 "type":
                     IMPROVE_FAILED,

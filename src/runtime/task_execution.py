@@ -307,6 +307,7 @@ class TaskExecutionAdapter:
   def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> None:
     self._cfg = cfg
     self._sessions = session_mgr
+    self._successor = session_mgr.successor
     self._tree = tree
     # In-process launch guard: one execute task per run per process. The
     # durable (pid, pid_start) identity write is the cross-restart
@@ -1235,7 +1236,7 @@ class TaskExecutionAdapter:
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain.
-      worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
+      worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
       exit_code = await worker.run()
     except backend_lifecycle.LaunchRefused as exc:
       if worker is not None:
@@ -1763,7 +1764,7 @@ class TaskExecutionAdapter:
         backend_option=option,
     )
     # Session-level notices reach the session chat exactly as a fresh run's do.
-    worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
+    worker.on_session_event = functools.partial(self._successor.deliver_to_successor, session_id)
     exit_code = await worker.resume(is_alive=is_alive, on_silence=None)
     durable_outcome = await self._finalize_worker_run(
         meta, run, option, exit_code=exit_code, error="", ended_at=ended_at)

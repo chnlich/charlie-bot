@@ -1,6 +1,5 @@
 """Streaming merge support for Chrome-format JSON traces."""
 
-import collections
 import concurrent.futures
 import contextlib
 import fcntl
@@ -50,23 +49,17 @@ _FLOW_PHASES = frozenset({"s", "t", "f"})
 # across traces and never checks a bound.
 _MERGE_MEMBER_ID_STRIDE = 1 << 24
 
-# One member build's peak RSS, priced in file bytes: the parse holds the raw bytes beside the
-# object tree it finishes (a 1.42 GB / 3.5M-event member peaked at 10.1 GB RSS, 7.1x its bytes),
-# and the walk mutates in place. The member wave budgets every concurrent build at this factor
-# against the cgroup's free bytes, so the pool cannot OOM its own worker on a big member.
-_MERGE_MEMBER_RSS_FACTOR = 8
-
 # The merge walk's stdin pipe capacity. The default 64 KB pipe blocks every batch
 # flush until the compressor drains it — measured +0.3-0.6 s per worst-corpus build
 # — while 1 MB (this kernel's pipe-max-size) holds several batches, so a flush
 # completes without waiting and the compress overlaps the GIL-bound walk.
 _MERGE_PIPE_BYTES = 1 << 20
 
-# A member build's chunk helpers parse in waves of this size: the member wave budgets several
-# members' builds against the cgroup's free bytes, and each member's held chunk trees sit beside
-# its parse peak, so the wave caps what one member adds to it. The single-trace build holds every
-# chunk's tree at its id-map barrier regardless of wave shape (each helper keeps its tree from
-# parse to build), so a wave there only lengthens the parse wall; it spawns every chunk at once.
+# A member build's chunk helpers parse in waves of this size: every member of a directory merge
+# builds at once, and each member's held chunk trees sit beside its parse peak, so the wave caps
+# what one member adds to it. The single-trace build holds every chunk's tree at its id-map
+# barrier regardless of wave shape (each helper keeps its tree from parse to build), so a wave
+# there only lengthens the parse wall; it spawns every chunk at once.
 _MERGE_CHUNK_WAVE = 4
 
 
@@ -657,63 +650,6 @@ def _member_outcome(path: Path, fragment: Path, file_index: int, slim: bool) -> 
     return None
 
 
-def _merge_memory_budget() -> int | None:
-  """The bytes this process's cgroup still grants above its current usage.
-
-  cgroup v2 only: ``/proc/self/cgroup``'s single ``0::`` line names the group
-  and ``memory.max``/``memory.current`` sit under the cgroup root. Any miss —
-  older hosts, a sandbox without the current files, macOS — prices nothing and the
-  caller submits every member at once (the unbounded shape).
-  """
-  try:
-    group_path = ""
-    with open("/proc/self/cgroup", encoding="ascii") as cgroup_file:
-      for line in cgroup_file:
-        if line.startswith("0::"):
-          group_path = line.strip()[3:]
-          break
-    if not group_path:
-      return None
-    with open(f"/sys/fs/cgroup{group_path}/memory.max", encoding="ascii") as limit_file:
-      limit_text = limit_file.read().strip()
-    if limit_text == "max":
-      return None
-    with open(f"/sys/fs/cgroup{group_path}/memory.current", encoding="ascii") as current_file:
-      return int(limit_text) - int(current_file.read())
-  except (OSError, ValueError):
-    return None
-
-
-def _member_counts(paths: list[Path], fragments: list[Path], slim: bool,
-                   executor: concurrent.futures.Executor) -> Iterator[int | None]:
-  """Run the members' builds on ``executor``; yield their counts in merge order.
-
-  The wave size caps concurrently building members so their priced footprints
-  (``_MERGE_MEMBER_RSS_FACTOR`` x the largest member's bytes) fit the cgroup's
-  free bytes — members too big to coexist build one at a time instead of the
-  pool's OOM kill taking the whole merge down. Builds still ride the shared
-  pool's own worker cap; a wave larger than it buys nothing.
-  """
-  if not paths:
-    return
-  budget = _merge_memory_budget()
-  if budget is None:
-    wave = len(paths)
-  else:
-    largest_bytes = max(path.stat().st_size for path in paths)
-    wave = min(len(paths), max(1, budget // (_MERGE_MEMBER_RSS_FACTOR * max(largest_bytes, 1))))
-  pending: collections.deque[concurrent.futures.Future] = collections.deque()
-  submitted = 0
-  while submitted < wave:
-    pending.append(executor.submit(_member_outcome, paths[submitted], fragments[submitted], submitted, slim))
-    submitted += 1
-  while pending:
-    yield pending.popleft().result()
-    if submitted < len(paths):
-      pending.append(executor.submit(_member_outcome, paths[submitted], fragments[submitted], submitted, slim))
-      submitted += 1
-
-
 def build_multi_trace_merge(
     paths: list[Path], out_path: Path, slim: bool, executor: concurrent.futures.Executor | None) -> None:
   """Build the multi-trace merged artifact: one pool task per trace, streamed as each completes.
@@ -721,14 +657,12 @@ def build_multi_trace_merge(
   Each walk runs on ``executor`` (``None`` builds inline, the tests' shape) and
   the single gzip run streams each member's fragment the moment its task
   returns, in merge order — the compress overlaps the members still building.
-  The concurrently building members stay inside the memory wave bound
-  (:func:`_member_counts`), so a dir of oversized members builds instead of
-  OOM-killing a pool worker. A comma precedes a fragment only when an earlier
-  one emitted, so empty members stay invisible to the JSON. A member that
-  parses but is not a Chrome-JSON trace skips with a logged warning; a merge
-  that skips every member raises instead of shipping an empty artifact. Any
-  other member failure raises out of the walk order and kills the gzip run;
-  the caller owns artifact atomicity.
+  A comma precedes a fragment only when an earlier one emitted, so empty
+  members stay invisible to the JSON. A member that parses but is not a
+  Chrome-JSON trace skips with a logged warning; a merge that skips every
+  member raises instead of shipping an empty artifact. Any other member
+  failure raises out of the walk order and kills the gzip run; the caller owns
+  artifact atomicity.
   """
   member_dir = Path(tempfile.mkdtemp(prefix="merge-members-"))
   try:
@@ -738,7 +672,11 @@ def build_multi_trace_merge(
           _member_outcome(path, fragment, index, slim)
           for index, (path, fragment) in enumerate(zip(paths, fragments, strict=True)))
     else:
-      counts = _member_counts(paths, fragments, slim, executor)
+      futures = [
+          executor.submit(_member_outcome, path, fragment, index, slim)
+          for index, (path, fragment) in enumerate(zip(paths, fragments, strict=True))
+      ]
+      counts = (future.result() for future in futures)
     with _gzip_output_stream(out_path) as output:
       output.write(b'{"traceEvents":[')
       emitted = False

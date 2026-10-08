@@ -94,6 +94,7 @@ from src.infra.yaml_utils import load_yaml, save_yaml
 from src.runtime import (
     init_seed,
     session_events,
+    session_fork,
     session_lifecycle,
     session_listing,
     session_search,
@@ -794,6 +795,7 @@ def assert_no_bound_singletons() -> None:
           ("_listing", session_listing._listing),
           ("_search", session_search._search),
           ("_lifecycle", session_lifecycle._lifecycle),
+          ("_fork", session_fork._fork),
           ("_session_manager", sessions._session_manager),
           ("_trigger_manager", triggers._trigger_manager),
           ("_task_manager", task_execution._task_manager),

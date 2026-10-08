@@ -53,7 +53,7 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
   # A third event past the fork point proves the copied prefix truncates there.
   conftest.append_events(mgr.events.get_chat_events_path(parent), [conftest.user_event("e2")])
 
-  child = await mgr.fork_session(parent, event_index=2)
+  child = await mgr.fork.fork_session(parent, event_index=2)
 
   child_events = _assert_child_log_is_parent_prefix_marker_and_creation(mgr, parent, child.id, end=3)
   assert [event["content"] for event in child_events[1:3]] == ["e0", "e1"]
@@ -72,7 +72,7 @@ async def test_fork_session_rejects_corrupt_parent_line(tmp_path: pathlib.Path) 
 
   chat_logs_before = set(cfg.sessions_dir.glob("*/data/chat_events.jsonl"))
   with pytest.raises(ValueError, match="not a serialized event object"):
-    await mgr.fork_session(parent.id)
+    await mgr.fork.fork_session(parent.id)
 
   assert not _parent_side_files(cfg)
   assert set(cfg.sessions_dir.glob("*/data/chat_events.jsonl")) == chat_logs_before
@@ -92,7 +92,7 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
   with open(events_path, "a", encoding="utf-8") as f:
     f.write(non_ascii + "\n")
 
-  child = await mgr.fork_session(parent.id)
+  child = await mgr.fork.fork_session(parent.id)
   expected_prefix = events_path.read_bytes()
   child_raw = mgr.events.get_chat_events_path(child.id).read_bytes()
   assert child_raw.startswith(expected_prefix)
@@ -109,7 +109,7 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
   chat_logs_before = set(cfg.sessions_dir.glob("*/data/chat_events.jsonl"))
 
   with pytest.raises(UnicodeDecodeError):
-    await mgr.fork_session(other.id)
+    await mgr.fork.fork_session(other.id)
 
   assert not _parent_side_files(cfg)
   assert set(cfg.sessions_dir.glob("*/data/chat_events.jsonl")) == chat_logs_before

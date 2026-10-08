@@ -61,7 +61,7 @@ async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: pathlib
               ]
       })
 
-  child = await mgr.fork_session(parent.id)
+  child = await mgr.fork.fork_session(parent.id)
 
   child_plans_path = cfg.sessions_dir / child.id / "plans.json"
   assert child_plans_path.exists(), "child inherits plans.json"
@@ -127,7 +127,7 @@ async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: p
       })
 
   with testing.capture_logs() as logs:
-    child = await mgr.fork_session(parent.id)
+    child = await mgr.fork.fork_session(parent.id)
 
   # Fork succeeds; the existing artifact is copied; the missing one is skipped.
   assert (cfg.sessions_dir / child.id / "plans.json").exists()
@@ -165,7 +165,7 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
       })
 
   with testing.capture_logs() as logs:
-    child = await mgr.fork_session(parent.id)
+    child = await mgr.fork.fork_session(parent.id)
 
   child_dir = cfg.sessions_dir / child.id
   child_plans = json.loads((child_dir / "plans.json").read_text(encoding="utf-8"))

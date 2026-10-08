@@ -1,4 +1,4 @@
-"""Tests for SessionManager.recycle_history_before and global event_index."""
+"""Tests for SessionLifecycle.recycle_history_before and global event_index."""
 
 from __future__ import annotations
 

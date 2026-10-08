@@ -377,12 +377,13 @@ class TaskTreeManager:
     # guard seam the input dispatcher answers.
     self.pending_input_blockers: Callable[[str], list[str]] | None = self.dispatch.pending_input_blockers
     # Block-level writes that move a tree-projection input (the unread
-    # flag in _set_unread_flag) drop this tree's rebuildable index through the
-    # hook registered here — the same policy _save_meta applies to its own
-    # metadata writes — so a tree page read after the flip never serves the
-    # stale flag a missed broadcast would have left standing.
-    session_mgr.tree_index_invalidator = self.invalidate_tree_index
+    # flag in _set_unread_flag, a forked session's creation) drop this tree's
+    # rebuildable index through the hook registered here — the same policy
+    # _save_meta applies to its own metadata writes — so a tree page read after
+    # the write never serves the stale state a missed broadcast would have left
+    # standing.
     self._lifecycle.tree_index_invalidator = self.invalidate_tree_index
+    session_mgr.fork.tree_index_invalidator = self.invalidate_tree_index
     # The session lists read stored status; the archive of a task node is a
     # derived fact (archived_of, subtree inheritance included). The overlay
     # lets the sidebar's active list drop a delivered worker — and, with it,

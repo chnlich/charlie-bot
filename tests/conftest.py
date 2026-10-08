@@ -260,6 +260,7 @@ from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import (  # noqa: E402
     get_config_on_loop,
     get_session_events,
+    get_session_fork,
     get_session_lifecycle,
     get_session_listing,
     get_session_search,
@@ -272,6 +273,7 @@ from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
 from src.runtime.session_events import SessionEvents  # noqa: E402
+from src.runtime.session_fork import SessionFork  # noqa: E402
 from src.runtime.session_lifecycle import SessionLifecycle  # noqa: E402
 from src.runtime.session_listing import SessionListing  # noqa: E402
 from src.runtime.session_search import SessionSearch  # noqa: E402
@@ -976,13 +978,13 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
 
 
 def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events, sidebar, listing, search and lifecycle blocks, all built on *cfg*."""
+  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle and fork blocks, all built on *cfg*."""
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   return SessionManager(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events))
+      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events))
 
 
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
@@ -1002,6 +1004,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   """
   from src.runtime import (
       session_events,
+      session_fork,
       session_lifecycle,
       session_listing,
       session_search,
@@ -1018,6 +1021,7 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   monkeypatch.setattr(session_listing, "_listing", session_mgr.listing)
   monkeypatch.setattr(session_search, "_search", session_mgr.search)
   monkeypatch.setattr(session_lifecycle, "_lifecycle", session_mgr.lifecycle)
+  monkeypatch.setattr(session_fork, "_fork", session_mgr.fork)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1197,6 +1201,7 @@ def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
   app.dependency_overrides[get_session_listing] = lambda: session_mgr.listing
   app.dependency_overrides[get_session_search] = lambda: session_mgr.search
   app.dependency_overrides[get_session_lifecycle] = lambda: session_mgr.lifecycle
+  app.dependency_overrides[get_session_fork] = lambda: session_mgr.fork
 
 
 def make_router_client(

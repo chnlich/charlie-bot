@@ -52,7 +52,8 @@ from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.runtime.runs import RAW_LOG_NAME
-from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE
+from src.runtime.session_fork import HISTORY_LOCATION_NOTE
+from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION
 from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests

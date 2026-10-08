@@ -62,6 +62,7 @@ from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
     get_session_events,
+    get_session_fork,
     get_session_lifecycle,
     get_session_listing,
     get_session_manager,
@@ -90,12 +91,18 @@ from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_fork import (
+    ELONE_BOOTSTRAP_OPENER,
+    FORK_BOOTSTRAP_OPENER,
+    HISTORY_LOCATION_NOTE,
+    SessionFork,
+)
 from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_search import SessionSearch
 from src.runtime.session_sidebar import SessionSidebar
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
+from src.runtime.sessions import SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_errors import (
@@ -1227,7 +1234,7 @@ async def fork_session(
     session_id: str,
     body: ForkSessionRequest | None = None,
     parent: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    fork: SessionFork = Depends(get_session_fork),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
@@ -1239,7 +1246,7 @@ async def fork_session(
       fallback_backend=parent.backend,
   )
   try:
-    meta = await session_mgr.fork_session(
+    meta = await fork.fork_session(
         session_id,
         event_index=body.event_index if body else None,
         backend=backend,
@@ -1264,7 +1271,7 @@ async def elone_session(
     session_id: str,
     body: EloneSessionRequest,
     parent: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    fork: SessionFork = Depends(get_session_fork),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
@@ -1272,7 +1279,7 @@ async def elone_session(
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
   try:
-    meta = await session_mgr.elone_session(session_id, body.event_index, backend=backend)
+    meta = await fork.elone_session(session_id, body.event_index, backend=backend)
   except FileNotFoundError as e:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL) from e
   except ValueError as e:

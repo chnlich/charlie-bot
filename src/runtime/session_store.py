@@ -129,15 +129,9 @@ class SessionStore:
       if raw is None:
         return None
       meta = validate_session_metadata(raw, str(self.metadata_path(session_id)))
-    # The migrate branch's save_metadata re-populates the cache, so the manual
-    # populate below covers disk loads only; re-stamping a hit's timestamp
-    # would wrongly extend its TTL.
-    if self._migrate_round_rating_keys(meta):
-      # Never acquires (get_session runs under callers' locks too); the anchor
-      # reconciliation still runs -- the upgrade path never legitimately
-      # changes an anchor, so a stale one is corrected to disk.
-      await self.save_metadata(meta, lock_held=True)
-    elif not cache_hit:
+    # The manual populate covers disk loads only; re-stamping a hit's
+    # timestamp would wrongly extend its TTL.
+    if not cache_hit:
       self.metadata_cache[session_id] = (meta, time.monotonic(), sig)
     return stamp_thinking_since(meta.model_copy())
 
@@ -147,9 +141,9 @@ class SessionStore:
     The single-field mutators (``save_field_fresh``, ``_persist_anchor_fresh``)
     and their post-save read-backs must act on the latest on-disk state, not a
     TTL-cached view: a stale view would clobber a concurrent writer's save.
-    Unlike ``read_metadata_fresh`` this stays a ``get_session`` call — the
-    rating-key migration still runs and the cache is re-populated from the
-    read. Hold ``self.lock_for(session_id)`` around the whole mutate-save;
+    Unlike ``read_metadata_fresh`` this stays a ``get_session`` call, so the
+    cache is re-populated from the read. Hold ``self.lock_for(session_id)``
+    around the whole mutate-save;
     without the lock the fresh view races other writers.
     """
     self.invalidate_cache(session_id)
@@ -303,23 +297,6 @@ class SessionStore:
         resolved[session_id] = meta
     return resolved
 
-  @staticmethod
-  def _migrate_round_rating_keys(meta: SessionMetadata) -> bool:
-    """Rewrite pre-UUID rating keys from event_index strings to legacy ids."""
-    if not meta.round_ratings:
-      return False
-    migrated = {}
-    changed = False
-    for key, value in meta.round_ratings.items():
-      if key.isdigit():
-        migrated[f"legacy:{key}"] = value
-        changed = True
-      else:
-        migrated[key] = value
-    if changed:
-      meta.round_ratings = migrated
-    return changed
-
   async def load_session_metas(self, status: SessionStatus | None = None) -> list[SessionMetadata]:
     """Load session metadata, batching disk reads and parses for cache misses.
 
@@ -439,16 +416,7 @@ class SessionStore:
           continue
         meta = parsed_by_id[session_id]
 
-      try:
-        migrated = self._migrate_round_rating_keys(meta)
-        if migrated:
-          # Same no-acquire, still-checked migrate save as get_session's.
-          await self.save_metadata(meta, lock_held=True)
-      except Exception as exc:
-        log.warning("session_load_failed", session_id=session_id, error=str(exc))
-        continue
-
-      if not loaded_from_cache and not migrated:
+      if not loaded_from_cache:
         self.metadata_cache.setdefault(session_id, (meta, time.monotonic(), parsed_sigs.get(session_id)))
       if status is None or meta.status == status:
         result.append(meta)
@@ -540,8 +508,8 @@ class SessionStore:
     The write is atomic — a unique-per-call tmp file swapped in by ``os.replace``
     — and excludes ``TRANSIENT_METADATA_FIELDS``. The cache entry stores the meta
     re-validated from that serialized form, so a cached read sees exactly what a
-    disk read parses; that is what lets save-callers skip a manual cache populate
-    (see ``get_session``'s migrate branch). ``updated_at`` is written as given:
+    disk read parses; that is what lets save-callers skip a manual cache
+    populate. ``updated_at`` is written as given:
     bumping or preserving it is the caller's decision (``update_field`` bumps,
     ``_set_unread_flag`` does not).
 
@@ -549,10 +517,9 @@ class SessionStore:
     them (``_reconcile_anchor_fields``), always under the per-session lock:
 
     * ``lock_held`` — the caller already holds the per-session lock (the in-class
-      read-modify-write sites, and the migrate branches whose get_session runs
-      both under callers' locks and lock-free, so their save can never acquire).
-      The lock is never reentrant; the reconciliation then runs inside the
-      caller's own critical section. Lock-free callers get the acquisition here.
+      read-modify-write sites). The lock is never reentrant; the reconciliation
+      then runs inside the caller's own critical section. Lock-free callers get
+      the acquisition here.
     * ``anchor_write`` — this save is an authorized anchor channel
       (``persist_cc_session_id``, ``persist_account_label``,
       ``persist_native_backend``, ``persist_native_anchor_provenance``,

@@ -1,7 +1,7 @@
 """Deployment step for the qwen3_hf GPU voice engine.
 
-``scripts/setup.sh`` runs ``python -m src.features.voice.voice_setup enable`` on hosts with
-nvidia-smi, after ``uv sync --group gpu-voice``. The enable flow downloads the official
+``scripts/setup.sh`` calls ``register_all()`` and ``voice_setup.enable()`` in one Python process on
+hosts with nvidia-smi, after ``uv sync --group gpu-voice``. The enable flow downloads the official
 Qwen3-ASR weights when missing, preflight-asserts the four GPU conditions (imports,
 cuda model load, measured decode timing, free VRAM report), and only then flips
 ``voice.engine: qwen3_hf`` in the deployment config — idempotently, so rerunning setup

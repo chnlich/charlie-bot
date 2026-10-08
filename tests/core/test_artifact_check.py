@@ -191,7 +191,7 @@ def test_cli_unknown_genre_is_usage_error() -> None:
 async def test_plan_present_and_artifact_check_reject_the_same_assertions_on_one_fixture(tmp_path: Path) -> None:
   broken = plan_page_html().replace('<span class="n">4</span>', '<span class="n">9</span>').replace(
       '<div class="foot"><p>How to respond.</p></div>', "")
-  cfg, _session_mgr, plan_mgr, meta = await make_plan_setup(tmp_path)
+  cfg, _session_blocks, plan_mgr, meta = await make_plan_setup(tmp_path)
   file_rel = write_plan_artifact(cfg, meta.id, "plan_01.html", content=broken)
 
   cli_failures = {o.name for o in run_assertions("plan", cfg.sessions_dir / meta.id / file_rel, cfg) if not o.passed}

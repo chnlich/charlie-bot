@@ -57,9 +57,6 @@ class SessionEvents:
   def __init__(self, cfg: CharlieBotConfig, store: session_store.SessionStore) -> None:
     self._cfg = cfg
     self._store = store
-    # The manager that each turn contribution receives as ``sessions`` (``TurnContribution.after_turn``).
-    # ``SessionManager.__init__`` registers itself here, so this module imports the manager nowhere.
-    self.turn_sessions: Any = None
     self.chat_events = ChatEventStore(store.session_dir, store.metadata_path, store.metadata_cache)
     # Per-session MessageAggregator instance carrying live streaming state
     # (assistant_buf, tools_buf). Lazy-initialized from disk on first
@@ -154,7 +151,7 @@ class SessionEvents:
     if event.get("type") == ET.MASTER_DONE and meta is not None:
       for contribution in turn_contributions.turn_contributions():
         create_logged_task(
-            contribution.after_turn(meta, event, cfg=self._cfg, sessions=self.turn_sessions),
+            contribution.after_turn(meta, event, cfg=self._cfg),
             name=f"after-turn-{type(contribution).__name__}-{session_id}")
 
   async def prime_aggregator(self, session_id: str) -> int:

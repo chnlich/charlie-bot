@@ -24,7 +24,7 @@ from tests import test_task_execution
 @pytest.mark.asyncio
 async def test_two_same_spec_siblings_readback_binds_to_request_identity(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   description = "Fix the flaky test the same way twice"
@@ -75,7 +75,7 @@ async def test_two_same_spec_siblings_readback_binds_to_request_identity(
 async def test_readback_returns_none_without_the_bound_child(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """No bound child (or a mismatched one) is outcome-unknown, never a fallback."""
-  _cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  _cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   description = "A delegation that never landed"
@@ -92,7 +92,7 @@ async def test_readback_returns_none_without_the_bound_child(
   assert common.find_local_task_child(
       manager.id, description=description, task_type="quick-edit", request_id="delegate-missing") is None
   # A manager root with no matching child also reads back None.
-  root = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="Root"))
+  root = await conftest.create_root_session(session_blocks, models.CreateSessionRequest(name="Root"))
   assert common.find_local_task_child(
       root.id, description="whatever", task_type="quick-edit", request_id="delegate-x") is None
 
@@ -102,7 +102,7 @@ async def test_readback_run_id_is_the_operation_work_run(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The returned Run is the delegation's own work Run — not whichever run
     directory sorts first (a review Run of the same child is a different op)."""
-  _cfg, _session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="pm"), name="PM")
   description = "The spec"

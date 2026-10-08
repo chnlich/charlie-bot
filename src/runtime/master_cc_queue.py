@@ -7,11 +7,39 @@ from typing import Any
 
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
-from src.runtime import master_cc_run, master_cc_state, session_store, sidebar_state, streaming, thinking_state
+from src.runtime import (
+    master_cc_run,
+    master_cc_state,
+    session_anchors,
+    session_events,
+    session_lifecycle,
+    session_sidebar,
+    session_store,
+    sidebar_state,
+    streaming,
+    thinking_state,
+)
 from src.runtime.agent_process import base
 from src.runtime.hooks import backend_types, turn_contributions
 
 log = log_once.LazyStructlogLogger()
+
+
+def session_callbacks(
+    events: session_events.SessionEvents,
+    lifecycle: session_lifecycle.SessionLifecycle,
+    anchors: session_anchors.SessionAnchors,
+    sidebar: session_sidebar.SessionSidebar,
+) -> models.SessionCallbacks:
+  """The run callbacks that ``run_message`` takes, bound to the session blocks that serve them."""
+  return models.SessionCallbacks(
+      persist_and_broadcast=events.persist_and_broadcast,
+      mark_unread=lifecycle.mark_unread,
+      persist_cc_session_id=anchors.persist_cc_session_id,
+      persist_account_label=anchors.persist_account_label,
+      context_state=anchors.context_state,
+      task_tree_activity=sidebar.task_tree_activity,
+  )
 
 
 def _enqueue_work_item(session_id: str, work_item: master_cc_state._WorkItem) -> tuple[datetime.datetime, bool]:

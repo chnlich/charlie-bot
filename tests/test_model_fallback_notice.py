@@ -103,7 +103,8 @@ async def test_resume_notice_persists_exactly_once_with_full_fields(
 
   record = conftest.crashed_run_record(raw_path)
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [FABLE_OPTION]})
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
+  conftest.bind_session_blocks(monkeypatch, mgr)  # the round's MASTER_DONE runs every contribution's after_turn
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="fb-persist"))
   meta = await mgr.store.get_session(session.id)
   assert meta is not None

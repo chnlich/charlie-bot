@@ -297,11 +297,9 @@ async def seed_scenario(home: Path) -> dict:
   from src.runtime.session_fork import SessionFork
   from src.runtime.session_lifecycle import SessionLifecycle
   from src.runtime.session_listing import SessionListing
-  from src.runtime.session_search import SessionSearch
   from src.runtime.session_sidebar import SessionSidebar
   from src.runtime.session_store import SessionStore
   from src.runtime.session_successor import SessionSuccessor
-  from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
   registrations.register_all()
@@ -310,11 +308,9 @@ async def seed_scenario(home: Path) -> dict:
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   lifecycle = SessionLifecycle(cfg, store, events)
-  session_mgr = SessionManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      lifecycle, SessionFork(cfg, store, events), SessionAnchors(cfg, store, events),
-      SessionSuccessor(cfg, store, events))
-  tree = TaskTreeManager(cfg, session_mgr)
+  tree = TaskTreeManager(
+      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), lifecycle, SessionFork(cfg, store, events),
+      SessionAnchors(cfg, store, events), SessionSuccessor(cfg, store, events))
   OP = CallerIdentity(kind="operator")
 
   async def seed() -> dict:

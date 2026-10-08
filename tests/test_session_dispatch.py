@@ -6,13 +6,21 @@ from datetime import timedelta
 from pathlib import Path
 
 import pytest
-from conftest import OPERATOR, OPUS_BACKEND_ID, build_env, create_scheduled_node, create_task, stub_credentials
+from conftest import (
+    OPERATOR,
+    OPUS_BACKEND_ID,
+    SessionBlocks,
+    build_env,
+    build_task_tree,
+    create_scheduled_node,
+    create_task,
+    stub_credentials,
+)
 
 from src.infra import event_types as ET
 from src.infra.models import LastRunStatus, RunRecord, SessionStatus, ensure_utc, utc_now_iso
 from src.runtime.api.message_utils import events_to_view
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token
-from src.runtime.sessions import SessionManager
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -55,8 +63,8 @@ class ScriptedExecutor:
     return run.id
 
 
-def child_report_messages(session_mgr: SessionManager, session_id: str) -> list[dict]:
-  events = session_mgr.events.load_chat_events_sync(session_id)
+def child_report_messages(session_blocks: SessionBlocks, session_id: str) -> list[dict]:
+  events = session_blocks.events.load_chat_events_sync(session_id)
   view, _draft = events_to_view(events)
   return [m for m in view if m.get("role") == ET.CHILD_REPORT]
 
@@ -72,7 +80,7 @@ def input_events(tree: TaskTreeManager, session_id: str) -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   parent = await create_task(tree, parent=None, request_id="parent")
   child_a = await create_task(tree, parent=parent.id, request_id="a", profile="worker")
   child_b = await create_task(tree, parent=parent.id, request_id="b", profile="worker")
@@ -104,7 +112,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   assert pending_now == {child_b.id}
 
   # A fresh instance derives the same eligibility from disk facts alone.
-  fresh = TaskTreeManager(cfg, session_mgr)
+  fresh = build_task_tree(cfg, session_blocks)
   pending_fresh = {e["child_session_id"] for e in input_events(fresh, parent.id)}
   assert pending_fresh == {child_b.id}
 
@@ -116,7 +124,7 @@ async def test_two_reports_one_acknowledged_reload_leaves_only_the_other(tmp_pat
   events = fresh.events.load_events(parent.id)
   reports = [e for e in events if e["type"] == ET.CHILD_REPORT]
   assert sorted(str(e["child_session_id"]) for e in reports) == sorted([child_a.id, child_b.id])
-  assert len(child_report_messages(session_mgr, parent.id)) == 2
+  assert len(child_report_messages(session_blocks, parent.id)) == 2
 
 
 @pytest.mark.asyncio
@@ -171,7 +179,7 @@ async def test_recovery_redelivery_of_a_fresh_report_wakes_the_parent(tmp_path: 
 
 @pytest.mark.asyncio
 async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Path) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   parent = await create_task(tree, parent=None, request_id="parent")
   child = await create_task(tree, parent=parent.id, request_id="child", profile="worker")
 
@@ -190,7 +198,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
       "report_to": parent.id,
   }
   await tree.events.append(child.id, close_event)
-  fresh = TaskTreeManager(cfg, session_mgr)
+  fresh = build_task_tree(cfg, session_blocks)
 
   # While the report is undelivered, the moving-subtree reparent guard blocks.
   from src.infra.models import PatchSessionTaskRequest
@@ -207,7 +215,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
 
   delivered = await fresh.dispatch.recover_pending_reports(child.id)
   assert len(delivered) == 1 and delivered[0]["child_session_id"] == child.id
-  assert len(child_report_messages(session_mgr, parent.id)) == 1
+  assert len(child_report_messages(session_blocks, parent.id)) == 1
 
   # A repeat recovery pass and a direct re-delivery both dedup to the same event.
   again = await fresh.dispatch.recover_pending_reports(child.id)
@@ -215,7 +223,7 @@ async def test_delivery_crash_windows_repair_after_a_fresh_instance(tmp_path: Pa
   redelivered, created = await fresh.dispatch.deliver_child_report(
       child.id, source_event=close_event, outcome="completed", summary="delivered", result_refs=[], recipient=parent.id)
   assert not created and redelivered["id"] == delivered[0]["id"]
-  assert len(child_report_messages(session_mgr, parent.id)) == 1
+  assert len(child_report_messages(session_blocks, parent.id)) == 1
 
   # Window (b): the parent append landed but the enqueue was lost — the report
   # is a pending input the fresh instance's recovery calculation rediscovers.
@@ -314,7 +322,7 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 
 @pytest.mark.asyncio
 async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tmp_path: Path) -> None:
-  _cfg, session_mgr, tree = build_env(tmp_path)
+  _cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
 
@@ -337,17 +345,17 @@ async def test_deletion_rejects_each_reference_category_and_deletes_the_empty(tm
   assert any("child report" in b for b in blockers)
   # An origin reference from another task's saved metadata.
   from src.infra.models import EventRef
-  fork_meta = await session_mgr.store.get_session(other_root.id)
+  fork_meta = await session_blocks.store.get_session(other_root.id)
   assert fork_meta is not None
   fork_meta.origin_ref = EventRef(session_id=child.id, event_id=None)
-  await session_mgr.store.save_metadata(fork_meta)
+  await session_blocks.store.save_metadata(fork_meta)
   blockers = await tree.deletion_blockers(child.id)
   assert any("origin_ref" in b for b in blockers)
 
   # A truly empty, unreferenced task is deletable under the same lock.
   empty = await create_task(tree, parent=None, request_id="empty")
   assert await tree.delete_permanently(empty.id, caller=OPERATOR) is True
-  assert await session_mgr.store.get_session(empty.id) is None
+  assert await session_blocks.store.get_session(empty.id) is None
   # Agents cannot delete.
   with pytest.raises(TaskForbiddenError):
     await tree.delete_permanently(
@@ -369,9 +377,9 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   import src.runtime.api.internal as internal_api
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
+  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
   worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
@@ -382,8 +390,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
 
@@ -467,9 +474,9 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
 
   import src.runtime.api.sessions as sessions_api
   from src.infra import config
-  from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
+  from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(tree, parent=root.id, request_id="worker", profile="worker")
 
@@ -478,8 +485,7 @@ async def test_complete_cancel_reopen_routes_and_scope(tmp_path: Path) -> None:
   key = "op-secret"
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
   with TestClient(app) as client:
@@ -566,7 +572,7 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
   lands between the dispatcher's pre-check and the locked finish still fails)."""
   from src.runtime.runs import RunInputMismatchError
 
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   task = await create_task(tree, parent=None, request_id="root")
   await admit(tree, task.id, "work", input_id="in-1")
   await tree.runs.register_run(RunRecord(id="run-b", session_id=task.id, kind="work"))
@@ -591,9 +597,9 @@ async def test_batchless_finish_never_acknowledges_another_runs_claimed_batch(tm
 # ---------------------------------------------------------------------------
 
 
-async def updated_at_of(session_mgr: SessionManager, session_id: str):
+async def updated_at_of(session_blocks: SessionBlocks, session_id: str):
   """One node's current sidebar sort key."""
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await session_blocks.store.get_session(session_id)
   assert meta is not None
   return meta.updated_at
 
@@ -604,51 +610,51 @@ async def test_user_admission_lifts_the_branch_and_stops_at_an_archived_ancestor
   event's time; an archived ancestor and everything above it keep their
   updated_at; a replayed input_id lifts nothing; agent messages, child
   reports, and scheduled triggers never lift."""
-  _, session_mgr, tree = build_env(tmp_path)
+  _, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root", name="Root")
   mid = await create_task(tree, parent=root.id, request_id="mid", name="Mid")
   child = await create_task(tree, parent=mid.id, request_id="child", name="Child")
-  first = (await updated_at_of(session_mgr, child.id) + timedelta(hours=1)).isoformat()
-  second = (await updated_at_of(session_mgr, child.id) + timedelta(hours=2)).isoformat()
+  first = (await updated_at_of(session_blocks, child.id) + timedelta(hours=1)).isoformat()
+  second = (await updated_at_of(session_blocks, child.id) + timedelta(hours=2)).isoformat()
 
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=first)
-  assert await updated_at_of(session_mgr, child.id) == ensure_utc(first)
-  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(first)
-  assert await updated_at_of(session_mgr, root.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, child.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, root.id) == ensure_utc(first)
 
   # A replayed input_id returns the original event and lifts nothing; a new
   # message moves the whole branch forward again.
   await admit(tree, child.id, "my turn", input_id="m1", timestamp=second)
-  assert await updated_at_of(session_mgr, child.id) == ensure_utc(first)
+  assert await updated_at_of(session_blocks, child.id) == ensure_utc(first)
   await admit(tree, child.id, "again", input_id="m2", timestamp=second)
-  assert await updated_at_of(session_mgr, child.id) == ensure_utc(second)
-  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(second)
-  assert await updated_at_of(session_mgr, root.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, child.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, root.id) == ensure_utc(second)
 
   # Agent relays, scheduled triggers, and child reports are server/agent
   # traffic: none of them lifts, however fresh.
-  agent_at = (await updated_at_of(session_mgr, child.id) + timedelta(hours=3)).isoformat()
+  agent_at = (await updated_at_of(session_blocks, child.id) + timedelta(hours=3)).isoformat()
   await admit(tree, child.id, "relayed", event_type=ET.AGENT_MESSAGE, actor="agent", timestamp=agent_at)
   await admit(
       tree, child.id, "cron woke this node", event_type=ET.SCHEDULED_TRIGGER, actor="system", timestamp=agent_at)
   await admit(tree, child.id, "child finished", event_type=ET.CHILD_REPORT, actor="system", timestamp=agent_at)
-  assert await updated_at_of(session_mgr, child.id) == ensure_utc(second)
-  assert await updated_at_of(session_mgr, mid.id) == ensure_utc(second)
-  assert await updated_at_of(session_mgr, root.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, child.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, mid.id) == ensure_utc(second)
+  assert await updated_at_of(session_blocks, root.id) == ensure_utc(second)
 
   # An archived ancestor stops the climb: the archived row and everything
   # above it keep their updated_at even though the message is fresher.
   aroot = await create_task(tree, parent=None, request_id="aroot", name="ARoot")
   amid = await create_task(tree, parent=aroot.id, request_id="amid", name="AMid")
   achild = await create_task(tree, parent=amid.id, request_id="achild", name="AChild")
-  await session_mgr.lifecycle.archive_session(amid.id)
-  archived_at = await updated_at_of(session_mgr, amid.id)
-  root_at = await updated_at_of(session_mgr, aroot.id)
-  later = (await updated_at_of(session_mgr, achild.id) + timedelta(hours=3)).isoformat()
+  await session_blocks.lifecycle.archive_session(amid.id)
+  archived_at = await updated_at_of(session_blocks, amid.id)
+  root_at = await updated_at_of(session_blocks, aroot.id)
+  later = (await updated_at_of(session_blocks, achild.id) + timedelta(hours=3)).isoformat()
   await admit(tree, achild.id, "to the archived branch", timestamp=later)
-  assert await updated_at_of(session_mgr, achild.id) == ensure_utc(later)
-  assert await updated_at_of(session_mgr, amid.id) == archived_at
-  assert await updated_at_of(session_mgr, aroot.id) == root_at
+  assert await updated_at_of(session_blocks, achild.id) == ensure_utc(later)
+  assert await updated_at_of(session_blocks, amid.id) == archived_at
+  assert await updated_at_of(session_blocks, aroot.id) == root_at
 
 
 @pytest.mark.asyncio
@@ -656,24 +662,24 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
   """Listing order follows the user's actions: a fire leaves the scheduled
   node's updated_at alone, so a node the user just messaged lists ahead of it
   even when it started out older."""
-  _, session_mgr, tree = build_env(tmp_path)
+  _, session_blocks, tree = build_env(tmp_path)
   x = await create_task(tree, parent=None, request_id="x", name="X")
   s = await create_scheduled_node(tree, name="nightly", backend=OPUS_BACKEND_ID)
   # Pin both rows into the past, X two hours older than the scheduled node.
-  s_meta = await session_mgr.store.get_session(s.id)
+  s_meta = await session_blocks.store.get_session(s.id)
   assert s_meta is not None
   base = s_meta.updated_at
-  await session_mgr.anchors.update_thinking_state(x.id, base - timedelta(hours=2))
-  await session_mgr.anchors.update_thinking_state(s.id, base - timedelta(hours=1))
+  await session_blocks.anchors.update_thinking_state(x.id, base - timedelta(hours=2))
+  await session_blocks.anchors.update_thinking_state(s.id, base - timedelta(hours=1))
 
   await tree.update_slot_fields(
       s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=LastRunStatus.SKIPPED)
-  listing = await session_mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
+  listing = await session_blocks.listing.list_sessions(status=SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [s.id, x.id]
   assert next(r for r in listing if r.id == s.id).last_run_status == LastRunStatus.SKIPPED
 
   # The user messages the older node; the fired node keeps its place.
   messaged_at = (base - timedelta(minutes=30)).isoformat()
   await admit(tree, x.id, "my turn", timestamp=messaged_at)
-  listing = await session_mgr.listing.list_sessions(status=SessionStatus.ACTIVE)
+  listing = await session_blocks.listing.list_sessions(status=SessionStatus.ACTIVE)
   assert [r.id for r in listing] == [x.id, s.id]

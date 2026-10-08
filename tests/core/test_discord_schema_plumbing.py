@@ -64,10 +64,11 @@ def test_session_metadata_without_discord_fields_parses() -> None:
 
 @pytest.mark.asyncio
 async def test_create_session_persists_discord_origin(tmp_path) -> None:
-  _, session_mgr, _ = conftest.build_env(tmp_path)
+  _, session_blocks, _ = conftest.build_env(tmp_path)
   origin = DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
-  meta = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="d", discord_origin=origin))
-  reloaded = await session_mgr.store.read_metadata_fresh(meta.id)
+  meta = await conftest.create_root_session(
+      session_blocks, models.CreateSessionRequest(name="d", discord_origin=origin))
+  reloaded = await session_blocks.store.read_metadata_fresh(meta.id)
   fields = metadata_slots.fields_of(reloaded, "discord")
   assert fields.discord_origin == origin
   assert fields.discord_watermark_id is None

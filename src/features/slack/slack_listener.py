@@ -15,7 +15,7 @@ follow, the reconnect backfill, and the round side (``post_reply``,
 ``SLACK`` platform and keeps the public Slack-named wrappers (``post_reply``,
 ``assert_thread_fresh``, ``ack_messages``, ``deliver_done``,
 ``backfill_lost_summons``, the summon and thread-message handlers) that the
-server endpoint, the session manager, and the tests import. The master posts
+server endpoint, the turn contribution, and the tests import. The master posts
 to its session's thread itself, through ``charliebot slack reply`` ->
 ``POST /api/internal/slack/reply`` -> the ``post_reply`` wrapper, and reads the
 outcome back in the same call; the text posts as written, and a reply that
@@ -68,7 +68,7 @@ from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_store import SessionStore
 from src.runtime.session_successor import SessionSuccessor
-from src.runtime.sessions import SessionManager
+from src.runtime.task_execution import task_manager
 from src.runtime.triggers import TriggerManager
 
 if TYPE_CHECKING:
@@ -252,7 +252,10 @@ def _build_summon_prompt(permalink: str, cfg: CharlieBotConfig) -> str:
 async def handle_app_mention(
     event: dict,
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    events: SessionEvents,
+    successor: SessionSuccessor,
     client: SlackClient,
     trigger_mgr: TriggerManager | None = None,
 ) -> str | None:
@@ -278,7 +281,7 @@ async def handle_app_mention(
   the group assignment, the summon persistence, and the round and ack tasks
   are the shared core's (``thread_entry.accept_summon``).
   """
-  trigger_mgr = trigger_mgr or TriggerManager(cfg, session_mgr)
+  trigger_mgr = trigger_mgr or TriggerManager(cfg, task_manager())
   channel_id = event.get("channel")
   thread_ts = event.get("thread_ts") or event.get("ts")
   slack_user = event.get("user")
@@ -302,10 +305,10 @@ async def handle_app_mention(
   return await thread_entry.accept_summon(
       SlackThreadAdapter(client),
       cfg,
-      session_mgr.store,
-      session_mgr.lifecycle,
-      session_mgr.events,
-      session_mgr.successor,
+      store,
+      lifecycle,
+      events,
+      successor,
       trigger_mgr,
       session_id=sid,
       label=label,
@@ -562,7 +565,14 @@ async def _expect_hello(ws: ClientConnection) -> None:
     logger.warning("slack_listener_expected_hello", received=envelope.get("type"))
 
 
-async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+async def run_listener(
+    cfg: CharlieBotConfig,
+    listing: SessionListing,
+    store: SessionStore,
+    lifecycle: SessionLifecycle,
+    events: SessionEvents,
+    successor: SessionSuccessor,
+) -> None:
   """Socket Mode connect/receive/reconnect loop; never returns."""
   # websockets (~13 ms with its asyncio client) rides first use: the import
   # path never opens the Socket Mode connection, and the M99 server import
@@ -573,7 +583,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
   creds = get_credentials()
   client = SlackClient(
       http, bot_token=str(creds.require("slack", "bot_token")), app_token=str(creds.require("slack", "app_token")))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, task_manager())
   backoff = 1.0
 
   while True:
@@ -589,7 +599,7 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
     try:
       async with websockets.connect(url, max_size=None, close_timeout=timeouts.WS_CLIENT_CLOSE_TIMEOUT) as ws:
         try:
-          await _serve_socket_mode(ws, cfg, session_mgr, client, trigger_mgr)
+          await _serve_socket_mode(ws, cfg, listing, store, lifecycle, events, successor, client, trigger_mgr)
         finally:
           # Slack's Socket Mode endpoint never answers a client close frame, so
           # the context manager's graceful close would wait out close_timeout
@@ -606,7 +616,8 @@ async def run_listener(cfg: CharlieBotConfig, session_mgr: SessionManager) -> No
 
 
 async def _serve_socket_mode(
-    ws: ClientConnection, cfg: CharlieBotConfig, session_mgr: SessionManager, client: SlackClient,
+    ws: ClientConnection, cfg: CharlieBotConfig, listing: SessionListing, store: SessionStore,
+    lifecycle: SessionLifecycle, events: SessionEvents, successor: SessionSuccessor, client: SlackClient,
     trigger_mgr: TriggerManager) -> None:
   """One Socket Mode connection's serve: hello, thread backfill, envelope loop.
 
@@ -615,8 +626,7 @@ async def _serve_socket_mode(
   """
   await _expect_hello(ws)
   logger.info("slack_listener_connected")
-  await _backfill_followed_threads(
-      cfg, session_mgr.listing, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+  await _backfill_followed_threads(cfg, listing, lifecycle, events, client, trigger_mgr)
   async for raw in ws:
     envelope = json.loads(raw)
     envelope_id = envelope.get("envelope_id")
@@ -635,7 +645,7 @@ async def _serve_socket_mode(
       thread_ts = inner.get("thread_ts") or inner.get("ts")
       slack_user = inner.get("user")
       try:
-        sid = await handle_app_mention(inner, cfg, session_mgr, client, trigger_mgr)
+        sid = await handle_app_mention(inner, cfg, store, lifecycle, events, successor, client, trigger_mgr)
         logger.info(
             "slack_listener_app_mention_handled",
             channel=channel,
@@ -651,8 +661,7 @@ async def _serve_socket_mode(
             error=str(e))
     elif inner and inner.get("type") == "message":
       try:
-        await handle_thread_message(
-            inner, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, client, trigger_mgr)
+        await handle_thread_message(inner, cfg, store, lifecycle, events, client, trigger_mgr)
       except Exception as e:
         logger.exception(
             "slack_listener_message_handle_failed",

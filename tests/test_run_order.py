@@ -34,8 +34,8 @@ BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.UTC)
 @pytest_asyncio.fixture
 async def store_env(tmp_path: pathlib.Path):
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
   task = await tree.create_task(
       request_id="t",
       task_parent_id=None,
@@ -98,7 +98,6 @@ async def api_env(store_env):
   tree, session_id = store_env
   app = fastapi.FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
-  app.dependency_overrides[deps.get_session_manager] = lambda: conftest.build_session_manager(tree._cfg)
   app.dependency_overrides[deps.get_session_store] = lambda: SessionStore(tree._cfg)
   app.dependency_overrides[deps.get_task_manager] = lambda: tree
   app.dependency_overrides[deps.get_run_store] = lambda: tree.runs

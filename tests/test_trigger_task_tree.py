@@ -19,7 +19,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
     backend_option,
-    bind_deps_managers,
+    bind_deps_blocks,
 )
 
 from src.infra import event_types as ET
@@ -35,10 +35,10 @@ from tests.test_task_execution import (
 
 
 def build_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-  cfg, session_mgr, tree = build_spawning_env(
+  cfg, session_blocks, tree = build_spawning_env(
       tmp_path, monkeypatch, options=[backend_option(id="fake", label="Fake", type="codex", model="fake-model")])
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  return cfg, session_mgr, tree
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
+  return cfg, session_blocks, tree
 
 
 def _trigger(session_id: str, trigger_id: str = "trigger-v2-1") -> PendingTrigger:
@@ -53,8 +53,8 @@ def _trigger(session_id: str, trigger_id: str = "trigger-v2-1") -> PendingTrigge
 @pytest.mark.asyncio
 async def test_trigger_admits_one_durable_input_to_task_tree_node(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, tree = build_env(tmp_path, monkeypatch)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="pm",
@@ -64,7 +64,7 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
       name="PM",
       backend=None,
       caller="operator")
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, tree)
   trigger = _trigger(manager.id)
   await trigger_mgr._save_trigger(trigger)
 

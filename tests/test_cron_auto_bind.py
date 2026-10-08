@@ -26,8 +26,11 @@ from conftest import (
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
     SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
-    bind_deps_managers,
-    build_session_manager,
+    SessionBlocks,
+    bind_deps_blocks,
+    build_scheduler,
+    build_session_blocks,
+    build_task_tree,
     init_repo_with_origin,
     make_cron_session,
     make_cron_sessions_client,
@@ -41,7 +44,6 @@ from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionStatus, utc_now_iso
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_cron_backend import _patch_cron_d
 from tests.test_task_execution import (
@@ -72,18 +74,18 @@ def _write_task_body(home: Path, name: str, body: dict) -> None:
 def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic home the scheduler tick reads: cron.d under HOME's profile,
   sessions under the cfg's own home, tree wired as the deps singleton. Yields
-  (cfg, session_mgr, tree, scheduler, home)."""
+  (cfg, session_blocks, tree, scheduler, home)."""
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       backends={"options": [OPUS_BACKEND_OPTION, CODEX_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  session_mgr = build_session_manager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
-  scheduler = Scheduler(cfg, session_mgr)
-  return cfg, session_mgr, tree, scheduler, temp_home
+  session_blocks = build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
+  scheduler = build_scheduler(cfg, session_blocks)
+  return cfg, session_blocks, tree, scheduler, temp_home
 
 
 # ---------------------------------------------------------------------------
@@ -97,15 +99,15 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   session: the yaml gains only ``session_id``, the node is a manager named
   after the task in the task's project group carrying the copied last run, the
   cron session is archived, and nothing fires at the migration moment."""
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home, project="charlie", backend=OPUS_BACKEND_ID)
-  cron_session = await make_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_blocks, "nightly")
   # A copied anchor whose next occurrence is always ahead of this tick, so the
   # migration itself fires nothing.
   copied_run = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
   cron_session.last_scheduled_run = copied_run
   cron_session.last_scheduled_cron = "0 3 * * *"
-  await session_mgr.store.save_metadata(cron_session)
+  await session_blocks.store.save_metadata(cron_session)
   execute_task = AsyncMock()
   scheduler._execute_task = execute_task  # type: ignore[method-assign]
 
@@ -129,13 +131,13 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   assert node.last_scheduled_cron == "0 3 * * *"
   execute_task.assert_not_awaited()
   # The legacy cron session is archived.
-  stored = await session_mgr.store.get_session(cron_session.id)
+  stored = await session_blocks.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
 
 
 @pytest.mark.asyncio
 async def test_task_without_project_lands_ungrouped(tick_env) -> None:
-  _cfg, _session_mgr, tree, scheduler, home = tick_env
+  _cfg, _session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home)
 
   await scheduler._tick()
@@ -150,7 +152,7 @@ async def test_task_without_project_lands_ungrouped(tick_env) -> None:
 async def test_disabled_task_and_task_without_prior_cron_session_are_bound_too(tick_env) -> None:
   """A disabled unbound task still shows as a node, and a task with no prior
   cron session binds the same way."""
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, session_blocks, tree, scheduler, home = tick_env
   prompt_path = write_nightly_prompt(home, _NIGHTLY_PROMPT_MD)
   _write_task_body(
       home, "nightly", {
@@ -174,14 +176,14 @@ async def test_disabled_task_and_task_without_prior_cron_session_are_bound_too(t
     node = await tree.load_meta(body["session_id"])
     assert node is not None and node.profile == "manager" and node.name == name
   # Neither task had a cron session; none was created.
-  assert not await session_mgr.listing.list_sessions(scheduled=True)
+  assert not await session_blocks.listing.list_sessions(scheduled=True)
 
 
 @pytest.mark.asyncio
 async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -> None:
   """A bound handler task's fire records its handler result on the node and
   creates no child."""
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, session_blocks, tree, scheduler, home = tick_env
   _write_task_body(
       home, "nightly", {
           "cron": "0 3 * * *",
@@ -202,7 +204,7 @@ async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -
 
   fresh = await tree.load_meta(node_id)
   assert fresh is not None and fresh.last_scheduled_run is not None
-  events = [e for e in session_mgr.events.load_chat_events_sync(node_id) if e.get("type") == "handler_result"]
+  events = [e for e in session_blocks.events.load_chat_events_sync(node_id) if e.get("type") == "handler_result"]
   assert [e.get("message") for e in events] == ["swept 42 bytes"]
   # Handler work is inline: the node has no child.
   index = await tree._get_index()
@@ -220,16 +222,16 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   task's backend), and the leaf's work run actually launches to a spawned
   process \u2014 the 2026-09-26 ``KeyError: None`` regression came from a
   type-less repo-bound leaf that no test ever launched."""
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   repo, _origin = init_repo_with_origin(tmp_path / "sweep-work")
   write_nightly_task(home, backend=OPUS_BACKEND_ID, repo=str(repo))
-  cron_session = await make_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_blocks, "nightly")
   # Last ran at yesterday's 03:00 occurrence: today's 03:00 is due.
   cron_session.last_scheduled_run = "2026-06-07T03:00:00-07:00"
   cron_session.last_scheduled_cron = "0 3 * * *"
-  await session_mgr.store.save_metadata(cron_session)
+  await session_blocks.store.save_metadata(cron_session)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("sweep done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -257,7 +259,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   assert run.pid == 424001 and run.pid_start == "1-424000"
   assert run.backend == OPUS_BACKEND_ID and run.model == "claude-opus-4-6"
   # The cron session is archived and holds no firing: the work went to the node.
-  stored = await session_mgr.store.get_session(cron_session.id)
+  stored = await session_blocks.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
   index = await tree._get_index()
   assert not [m for m in index.metas.values() if m.task_parent_id == cron_session.id]
@@ -281,14 +283,14 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   """Stopping auto-bind after each of the first three steps and running the
   tick again ends with exactly one node, one binding, and no active cron
   session for the task."""
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home)
-  cron_session = await make_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_blocks, "nightly")
   # A just-ran anchor: the next occurrence is always ahead, so no replayed tick
   # fires and the copied bookkeeping is observable verbatim.
   copied_run = utc_now_iso()
   cron_session.last_scheduled_run = copied_run
-  await session_mgr.store.save_metadata(cron_session)
+  await session_blocks.store.save_metadata(cron_session)
 
   with pytest.MonkeyPatch().context() as crash:
     if fail_after == "create":
@@ -311,7 +313,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   else:
     # The binding landed; only the archive is missing.
     assert "session_id" in _read_task_yaml(home)
-    stored = await session_mgr.store.get_session(cron_session.id)
+    stored = await session_blocks.store.get_session(cron_session.id)
     assert stored is not None and stored.status == SessionStatus.ACTIVE
 
   # The replayed tick lands the end state.
@@ -326,7 +328,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   assert {m.id for m in roots} == {node.id, cron_session.id}
   # The migrated bookkeeping survived every replay path.
   assert node.last_scheduled_run == copied_run
-  stored = await session_mgr.store.get_session(cron_session.id)
+  stored = await session_blocks.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
 
 
@@ -341,11 +343,11 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
   thread is marked running \u2014 is archived by the next tick. No busy gate: a
   month-long scan window must not hold the archive off."""
   from conftest import write_thread_meta
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home)
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
-  cron_session = await make_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_blocks, "nightly")
   write_thread_meta(
       cfg, cron_session.id, {
           "id": "legacy-thread",
@@ -357,7 +359,7 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
 
   await scheduler._tick()
 
-  stored = await session_mgr.store.get_session(cron_session.id)
+  stored = await session_blocks.store.get_session(cron_session.id)
   assert stored is not None and stored.status == SessionStatus.ARCHIVED
   # The bound node is untouched by the sweep.
   node = await tree.load_meta(node_id)
@@ -371,7 +373,7 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
 
 @pytest.mark.asyncio
 async def test_recreated_task_reattaches_to_its_original_node(tick_env) -> None:
-  _cfg, _session_mgr, tree, scheduler, home = tick_env
+  _cfg, _session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home)
   await scheduler._tick()
   original_id = _read_task_yaml(home)["session_id"]
@@ -406,7 +408,7 @@ async def test_cron_editor_backend_change_switches_bound_node_in_place(
     tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
   """A cron-editor backend change on a bound task creates no session and
   switches the node's backend in place."""
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   _patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
@@ -414,11 +416,11 @@ async def test_cron_editor_backend_change_switches_bound_node_in_place(
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == OPUS_BACKEND_ID
 
-  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_blocks, tree) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 200
-  sessions = await session_mgr.listing.list_sessions()
+  sessions = await session_blocks.listing.list_sessions()
   assert len(sessions) == 1 and sessions[0].id == node_id  # no session was created
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == "codex-o3"
@@ -431,14 +433,14 @@ async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
   """The editor keeps its contract: 409 before any yaml write when the switch
   cannot happen now (the node's own work is in flight)."""
   from src.runtime.thinking_state import mark_busy
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   _patch_cron_d(monkeypatch, home / ".charliebot" / "config.d" / "cron.d")
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
   mark_busy(node_id)
 
-  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_blocks, tree) as client:
     response = client.put("/api/cron/tasks/nightly", json={"backend": "codex-o3"})
 
   assert response.status_code == 409
@@ -450,7 +452,7 @@ async def test_cron_editor_backend_change_on_busy_node_409s_before_writing(
 
 @pytest.mark.asyncio
 async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -> None:
-  _cfg, session_mgr, tree, scheduler, home = tick_env
+  _cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
@@ -463,7 +465,7 @@ async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -
 
   node = await tree.load_meta(node_id)
   assert node is not None and node.backend == "codex-o3"
-  sessions = await session_mgr.listing.list_sessions()
+  sessions = await session_blocks.listing.list_sessions()
   assert [s.id for s in sessions] == [node_id]  # switched in place, no new session
 
 
@@ -476,12 +478,12 @@ async def test_hand_edited_yaml_backend_is_followed_on_the_next_tick(tick_env) -
 async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
   """The user's archive action on a bound node stops its task: the single-key
   write flips only ``enabled`` in the task's yaml; the binding itself stays."""
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home, project="charlie")
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
-  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_blocks, tree) as client:
     response = client.delete(f"/api/sessions/{node_id}")
 
   assert response.status_code == 200
@@ -494,12 +496,12 @@ async def test_archiving_bound_node_writes_enabled_false(tick_env) -> None:
 @pytest.mark.asyncio
 async def test_task_delete_leaves_its_node_active(tick_env) -> None:
   """Deleting the task unlinks the yaml only: the node stays active."""
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
-  with make_cron_sessions_client(cfg, session_mgr, tree) as client:
+  with make_cron_sessions_client(cfg, session_blocks, tree) as client:
     response = client.delete("/api/cron/tasks/nightly")
 
   assert response.status_code == 200
@@ -507,7 +509,7 @@ async def test_task_delete_leaves_its_node_active(tick_env) -> None:
   assert not (home / ".charliebot" / "config.d" / "cron.d" / "nightly.yaml").exists()
   node = await tree.load_meta(node_id)
   assert node is not None
-  fresh = await session_mgr.store.get_session(node_id)
+  fresh = await session_blocks.store.get_session(node_id)
   assert fresh is not None and fresh.status == SessionStatus.ACTIVE
 
 
@@ -517,18 +519,18 @@ async def test_task_delete_leaves_its_node_active(tick_env) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _backdate_cc_anchor(session_mgr: SessionManager, session_id: str, *, started_at: datetime) -> None:
+def _backdate_cc_anchor(session_blocks: SessionBlocks, session_id: str, *, started_at: datetime) -> None:
   """Backdate the native anchor's started_at on disk.
 
   The anchor channels stamp only now, and a whole-object save is corrected
   back to the disk anchor by the save guard, so the file itself is the only
   honest way to age an anchor in a test.
   """
-  path = session_mgr.store.metadata_path(session_id)
+  path = session_blocks.store.metadata_path(session_id)
   body = json.loads(path.read_text(encoding="utf-8"))
   body["cc_session_started_at"] = started_at.isoformat()
   path.write_text(json.dumps(body), encoding="utf-8")
-  session_mgr.store.metadata_cache.pop(session_id)  # the next read re-parses the file
+  session_blocks.store.metadata_cache.pop(session_id)  # the next read re-parses the file
 
 
 def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> pathlib.Path:
@@ -547,19 +549,19 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   recycle clears the stale anchor and archives chat history while leaving
   old worker-thread directories on disk."""
   from src.features.cron.sequence_controller import scheduled_report_prefix
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
 
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("reviewed: merged")])
   install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
 
   # An anchor and worker-thread directory predate the last Saturday 01:00 PT.
-  await session_mgr.anchors.persist_cc_session_id(node_id, "cc-old")
-  _backdate_cc_anchor(session_mgr, node_id, started_at=datetime.now(UTC) - timedelta(days=8))
+  await session_blocks.anchors.persist_cc_session_id(node_id, "cc-old")
+  _backdate_cc_anchor(session_blocks, node_id, started_at=datetime.now(UTC) - timedelta(days=8))
   old_thread = _write_old_thread(cfg, node_id, "legacy-round")
 
   await tree.dispatch.deliver_child_report(
@@ -573,7 +575,7 @@ async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_fir
   assert backend.prompt is not None
   assert backend.prompt.startswith(scheduled_report_prefix("nightly"))
   # The recycle ran: it cleared the stale anchor and retained the old thread.
-  disk = await session_mgr.store.read_metadata_fresh(node_id)
+  disk = await session_blocks.store.read_metadata_fresh(node_id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
   assert (old_thread / "sentinel.txt").read_text(encoding="utf-8") == "retained"
 
@@ -585,13 +587,13 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   a live anchor (recorded by the previous turn) the next firing report's wake
   continues that conversation \u2014 no prefix, no reset notice, no recycle."""
   from src.features.cron.sequence_controller import scheduled_report_prefix
-  cfg, session_mgr, tree, scheduler, home = tick_env
+  cfg, session_blocks, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
   await scheduler._tick()
   node_id = _read_task_yaml(home)["session_id"]
 
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
-  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   builds = install_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event("first")]),
@@ -608,8 +610,8 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
   assert builds[0]["backend"].prompt.startswith(scheduled_report_prefix("nightly"))
 
   # A now-valid anchor on the same native identity: the conversation continues.
-  await session_mgr.anchors.persist_cc_session_id(node_id, "cc-live")
-  disk = await session_mgr.store.read_metadata_fresh(node_id)
+  await session_blocks.anchors.persist_cc_session_id(node_id, "cc-live")
+  disk = await session_blocks.store.read_metadata_fresh(node_id)
   assert disk.native_prompt_hash is not None and disk.native_backend == OPUS_BACKEND_ID
 
   await tree.dispatch.deliver_child_report(

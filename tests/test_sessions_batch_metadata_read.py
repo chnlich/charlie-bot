@@ -10,10 +10,10 @@ import pytest
 
 from src.infra import config as core_config
 from src.infra import models
-from src.runtime import sessions, spawner_backends
+from src.runtime import spawner_backends
 
 
-def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:
+def _write_metadata(mgr: conftest.SessionBlocks, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:
   path = mgr.store.metadata_path(meta.id)
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text(meta.model_dump_json() if raw is None else raw, encoding="utf-8")
@@ -22,7 +22,7 @@ def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, 
 
 @pytest.mark.asyncio
 async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp_path: pathlib.Path,) -> None:
-  mgr = conftest.make_session_mgr(tmp_path)
+  mgr = conftest.make_session_blocks(tmp_path)
   active = models.SessionMetadata(profile="manager", name="active")
   archived = models.SessionMetadata(profile="manager", name="archived", status=models.SessionStatus.ARCHIVED)
   rated = models.SessionMetadata(profile="manager", name="rated", round_ratings={"9": "thumbs_up"})
@@ -33,9 +33,9 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
   _write_metadata(mgr, corrupt, "{corrupt")
 
   batch_result = await mgr.store.load_session_metas()
-  sequential_mgr = conftest.build_session_manager(mgr._cfg)
+  sequential_mgr = conftest.build_session_blocks(mgr.cfg)
   sequential_result: list[models.SessionMetadata] = []
-  for session_dir in mgr._cfg.sessions_dir.iterdir():
+  for session_dir in mgr.cfg.sessions_dir.iterdir():
     if not session_dir.is_dir():
       continue
     try:
@@ -52,7 +52,7 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
 
 @pytest.mark.asyncio
 async def test_metadata_without_profile_names_the_file_and_conversion_tool(tmp_path: pathlib.Path) -> None:
-  mgr = conftest.make_session_mgr(tmp_path)
+  mgr = conftest.make_session_blocks(tmp_path)
   session_id = "missing-profile"
   path = _write_metadata(
       mgr,
@@ -77,7 +77,7 @@ async def test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_li
   """Stored sessions carry removed subscription backend ids; they stay readable and a new run is refused."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "home", backends={"options": [conftest.OPUS_BACKEND_OPTION]})
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   stored = models.SessionMetadata(profile="manager", name="stored", backend="claude-fable-sub")
   _write_metadata(mgr, stored)
   events_path = mgr.events.get_chat_events_path(stored.id)

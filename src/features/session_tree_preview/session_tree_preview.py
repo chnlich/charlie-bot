@@ -102,7 +102,6 @@ from src.runtime import (
     session_sidebar,
     session_store,
     session_successor,
-    sessions,
     task_execution,
     triggers,
 )
@@ -800,7 +799,6 @@ def assert_no_bound_singletons() -> None:
           ("_fork", session_fork._fork),
           ("_anchors", session_anchors._anchors),
           ("_successor", session_successor._successor),
-          ("_session_manager", sessions._session_manager),
           ("_trigger_manager", triggers._trigger_manager),
           ("_task_manager", task_execution._task_manager),
       ) if singleton is not None

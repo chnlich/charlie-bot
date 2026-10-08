@@ -54,10 +54,10 @@ async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session
 
 async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager, executor installed, NO user input anywhere."""
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": KEY}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
-  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The spawn-style routes resolve backends through the config owner directly.
   from src.runtime.api import internal as internal_api
   monkeypatch.setattr(internal_api, "get_config", lambda: cfg)
@@ -69,7 +69,7 @@ async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
       name="Project",
       backend=None,
       caller=conftest.OPERATOR)
-  return cfg, session_mgr, tree, root
+  return cfg, session_blocks, tree, root
 
 
 async def create_child_via_api(client, parent_id: str, token: dict, request_id: str, profile: str = "manager"):
@@ -95,11 +95,11 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
   public create API makes a logical manager child under the caller's own open
   task; the replayed request returns the original product; the node is durable
   on disk with the agent as the creation fact's actor."""
-  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     body = {"request_id": "child-mgr", "task_parent_id": root.id, "profile": "manager", "name": "Child"}
     first = client.post("/api/sessions/", json=body, headers=conftest.agent_headers(root.id, "root-run"))
     assert first.status_code == 200, first.text
@@ -116,7 +116,7 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
     assert len(created) == 1 and created[0]["actor"] == "agent"
 
   # Durable: a fresh owner over the same home sees the node without a replay.
-  fresh = task_sessions.TaskTreeManager(cfg, conftest.build_session_manager(cfg))
+  fresh = conftest.build_task_tree(cfg, conftest.build_session_blocks(cfg))
   meta = await fresh.load_meta(child["id"])
   assert meta is not None and meta.profile == "manager"
 
@@ -133,7 +133,7 @@ async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open
   user authorization anywhere: 202 pending_run_finish, then the close lands
   when that Run finishes successfully. The parent stays open — a child's
   completion never finishes a long-lived ancestor."""
-  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   child = await tree.create_task(
       request_id="child",
       task_parent_id=root.id,
@@ -144,7 +144,7 @@ async def test_own_run_completion_closes_without_takeoff_and_ancestor_stays_open
       caller=conftest.OPERATOR)
   await register_live_manager_run(tree, child.id, "child-owner-run")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     pending = client.post(
         f"/api/sessions/{child.id}/complete",
         json={
@@ -176,7 +176,7 @@ async def three_manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
   """Root -> child -> grandchild managers, each created through the public API
   with that node's own Run token, and each holding a registered live Run token
   identity. No user input anywhere."""
-  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   ids = {"root": root.id}
   parent_id, parent_run = root.id, "root-run"
   await tree.runs.register_run(models.RunRecord(id=parent_run, session_id=parent_id, kind="manager_turn"))
@@ -185,14 +185,14 @@ async def three_manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
       "child": ("child-mgr", "child-run"),
       "grandchild": ("grandchild-mgr", "grandchild-run"),
   }.items():
-    with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+    with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
       resp = await create_child_via_api(client, parent_id, conftest.agent_headers(parent_id, parent_run), request_id)
       assert resp.status_code == 200, resp.text
       ids[level] = resp.json()["id"]
     await tree.runs.register_run(models.RunRecord(id=run_id, session_id=ids[level], kind="manager_turn"))
     await tree.runs.record_launch(ids[level], run_id, pid=424242, pid_start=f"ps-{level}")
     parent_id, parent_run = ids[level], run_id
-  return cfg, session_mgr, tree, ids
+  return cfg, session_blocks, tree, ids
 
 
 @pytest.mark.integration
@@ -204,13 +204,13 @@ async def test_implementation_blocked_until_real_user_authorizes_then_delegates_
   reports never authorize. Once a real user authorizes the scope at the root,
   the grandchild delegates through the existing boundary with no per-manager
   takeoff, and the launched leaf run completes on the scripted backend."""
-  cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   builds = test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("leaf done")])],
       conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     blocked = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(grand_id, repo),
@@ -276,7 +276,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, repo: pathlib.Path) -> None:
   """Expired pre-takeoff windows and a shadowing local instruction keep current
   semantics at manager depth: the nearest real user instruction decides."""
-  cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   test_task_execution.install_backends(monkeypatch, [], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   child_id = ids["child"]
@@ -287,7 +287,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
   await tree.dispatch.admit_input(
       ids["root"], event_type=ET.USER, content="pre take off", actor="user", timestamp=issued)
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="carry on with the plan", actor="user")
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     expired = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(grand_id, repo),
@@ -299,7 +299,7 @@ async def test_expired_and_shadowing_authorization_still_block_delegation_at_dep
   # without a takeoff shadows the ancestor: the gate fails at the child.
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   await tree.dispatch.admit_input(child_id, event_type=ET.USER, content="please look into this first", actor="user")
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     shadowed = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(grand_id, repo),
@@ -317,7 +317,7 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
   queue, and a later conversation cannot withhold the launch (the takeoff gate
   is a request-entry check). A read-only verify run under the same tree still
   launches (the established exemption)."""
-  cfg, session_mgr, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, ids = await three_manager_tree(tmp_path, monkeypatch)
   grand_id, grand_run = ids["grandchild"], "grandchild-run"
   await tree.dispatch.admit_input(ids["root"], event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
   builds = test_task_execution.install_backends(
@@ -326,7 +326,7 @@ async def test_queued_retry_launches_without_reauthorizing_and_verify_exemption(
           test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("verdict: yes")])
       ], conftest.WORKER_BUILD_BACKEND_PATCH_TARGET)
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     ok = client.post(
         "/api/internal/delegate",
         json=conftest.delegate_payload(grand_id, repo),
@@ -377,7 +377,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
   """The cancel route enforces the agent scope at the boundary: the parent's
   run token cancels its own direct child (200), a non-parent's token is
   refused (403)."""
-  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   # Each caller's credential rides one launched Run (the caller-identity
   # predicate pins the process identity).
   await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
@@ -401,7 +401,7 @@ async def test_agent_cancels_only_its_own_direct_child_over_http(
   await tree.runs.register_run(models.RunRecord(id="other-run", session_id=other.id, kind="manager_turn"))
   await tree.runs.record_launch(other.id, "other-run", pid=424243, pid_start="ps-other")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     ok = client.post(
         f"/api/sessions/{child.id}/cancel",
         json={
@@ -430,12 +430,12 @@ async def test_profile_changing_replay_never_bypasses_authorization(
   replayed as a manager request stays blocked once the takeoff window is gone,
   and a manager create replayed as a worker request returns the original
   manager product without minting a worker."""
-  cfg, session_mgr, tree, root = await manager_tree(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, root = await manager_tree(tmp_path, monkeypatch)
   await tree.runs.register_run(models.RunRecord(id="root-run", session_id=root.id, kind="manager_turn"))
   await tree.runs.record_launch(root.id, "root-run", pid=424242, pid_start="ps-root")
   await tree.dispatch.admit_input(root.id, event_type=ET.USER, content="Take off. Ship the feature.", actor="user")
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     token = conftest.agent_headers(root.id, "root-run")
     worker_resp = client.post(
         "/api/sessions/", json={

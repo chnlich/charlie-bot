@@ -3,8 +3,8 @@
 This module is the single owner of task metadata, of the task-tree
 relation (``task_parent_id`` edges over flat ``sessions/<id>`` directories),
 and of the derived task projection (``task_state`` / ``work_state`` / archive
-visibility / subtree counts). The legacy conversation, attachment, rating and
-page-aggregation services stay in :mod:`src.runtime.sessions`.
+visibility / subtree counts). The session metadata, chat events, listings and
+lifecycle writes live in the ``src.runtime.session_*`` blocks.
 
 Guarantees the delivery stage pins down:
 
@@ -59,7 +59,17 @@ from src.infra.models import (
 )
 from src.infra.ndjson import append_ndjson
 from src.infra.tasks import create_logged_task
-from src.runtime import control_sink
+from src.runtime import (
+    control_sink,
+    session_anchors,
+    session_events,
+    session_fork,
+    session_lifecycle,
+    session_listing,
+    session_sidebar,
+    session_store,
+    session_successor,
+)
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import (
     ACTOR_AGENT,
@@ -75,7 +85,6 @@ from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
 from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_alive, stop_requested_in_events
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
-from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import is_verify_exempt
 from src.runtime.task_completion import TaskCompletionManager
 from src.runtime.task_errors import (
@@ -350,17 +359,26 @@ def derive_task_tree_activity(
 
 
 class TaskTreeManager:
-  """The task-tree record owner wired over one SessionManager."""
+  """The task-tree record owner wired over the session blocks it reads and installs hooks on."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  def __init__(
+      self,
+      cfg: CharlieBotConfig,
+      store: session_store.SessionStore,
+      events: session_events.SessionEvents,
+      sidebar: session_sidebar.SessionSidebar,
+      listing: session_listing.SessionListing,
+      lifecycle: session_lifecycle.SessionLifecycle,
+      fork: session_fork.SessionFork,
+      anchors: session_anchors.SessionAnchors,
+      successor: session_successor.SessionSuccessor,
+  ) -> None:
     self._cfg = cfg
-    self._sessions = session_mgr
-    self._store = session_mgr.store
-    self._lifecycle = session_mgr.lifecycle
-    self._anchors = session_mgr.anchors
-    self.session_events = session_mgr.events
-    self.session_successor = session_mgr.successor
-    session_mgr.task_tree_manager = self
+    self.session_store = store
+    self._lifecycle = lifecycle
+    self.session_anchors = anchors
+    self.session_events = events
+    self.session_successor = successor
     self.control_lock = asyncio.Lock()
     self.events = control_sink.ControlEventSink(self.session_events)
     self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events)
@@ -385,16 +403,16 @@ class TaskTreeManager:
     # the write never serves the stale state a missed broadcast would have left
     # standing.
     self._lifecycle.tree_index_invalidator = self.invalidate_tree_index
-    session_mgr.fork.tree_index_invalidator = self.invalidate_tree_index
+    fork.tree_index_invalidator = self.invalidate_tree_index
     # The session lists read stored status; the archive of a task node is a
     # derived fact (archived_of, subtree inheritance included). The overlay
     # lets the sidebar's active list drop a delivered worker — and, with it,
     # every descendant of an archived ancestor — while its Archived list shows
     # them, with no status write.
-    session_mgr.listing.archive_overlay = self.derived_archived_ids
+    listing.archive_overlay = self.derived_archived_ids
     # The sidebar's probe derives a task-tree node's activity through this
     # hook — the tree's own derivation, never a second copy of the rules.
-    session_mgr.sidebar.task_tree_activity = self.activity_pair_of
+    sidebar.task_tree_activity = self.activity_pair_of
     self._index: tuple[_TreeIndex, float] | None = None
     self._index_generation = 0
     self._index_build_task: asyncio.Task[_TreeIndex] | None = None
@@ -419,11 +437,6 @@ class TaskTreeManager:
     return self._prompt_bodies_dir
 
   @property
-  def sessions(self) -> SessionManager:
-    """The conversation/attachment service this tree is wired over."""
-    return self._sessions
-
-  @property
   def cfg(self) -> CharlieBotConfig:
     """The config this tree was built over (display-label resolution reads it)."""
     return self._cfg
@@ -433,7 +446,7 @@ class TaskTreeManager:
   # ------------------------------------------------------------------
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
-    return await self._store.get_session(session_id)
+    return await self.session_store.get_session(session_id)
 
   def _require_task(self, meta: SessionMetadata | None, session_id: str) -> SessionMetadata:
     if meta is None:
@@ -449,7 +462,7 @@ class TaskTreeManager:
 
   async def _save_meta(self, meta: SessionMetadata) -> None:
     meta.updated_at = utc_now()
-    await self._store.save_metadata(meta)
+    await self.session_store.save_metadata(meta)
     self._invalidate_index()  # any metadata write may move the projection inputs
 
   # ------------------------------------------------------------------
@@ -475,7 +488,7 @@ class TaskTreeManager:
     # The metadata snapshot resolves on the loop through the shared per-entry
     # check (_fresh_cached_meta), so the thread build reads a file only for a
     # session no authoritative entry covers (cold cache, out-of-band create).
-    cached_metas = self._store.fresh_cached_metas()
+    cached_metas = self.session_store.fresh_cached_metas()
     task = create_logged_task(asyncio.to_thread(self._build_index_sync, cached_metas), name="task-tree-index-build")
     self._index_build_task = task
     self._index_build_generation = generation
@@ -501,10 +514,10 @@ class TaskTreeManager:
     self._index_generation += 1
 
   def invalidate_tree_index(self) -> None:
-    """A SessionManager-level write (legacy rename) changed tree inputs.
+    """A session block's write (legacy rename) changed tree inputs.
 
     Tree-node facts normally mutate through this owner (which invalidates in
-    _save_meta); the legacy rename path writes through the SessionManager and
+    _save_meta); the legacy rename path writes through the lifecycle block and
     must drop the projection cache here or tree_page serves a stale name."""
     self._invalidate_index()
 
@@ -835,7 +848,7 @@ class TaskTreeManager:
   async def derived_archived_ids(self) -> set[str]:
     """Task nodes the effective archive lists while their stored status stays active.
 
-    The read-time overlay the SessionManager listings apply: a task node whose
+    The read-time overlay the listing block applies: a task node whose
     state is not open (the close fact is the archive), and any node inherited
     under one, list as archived with no status write. Reads the cached index;
     a node already archived by status needs no overlay and is left out.
@@ -952,17 +965,17 @@ class TaskTreeManager:
     reaches this write, so the usable old anchor survives it.
     """
     async with self.control_lock:
-      await self._anchors.persist_native_anchor_provenance(
+      await self.session_anchors.persist_native_anchor_provenance(
           session_id, prompt_hash=prompt_hash, native_backend=backend, model=model)
       self._invalidate_index()  # any metadata write may move the projection inputs
       if reset_anchor:
-        fresh = await self._store.read_metadata_fresh(session_id)
+        fresh = await self.session_store.read_metadata_fresh(session_id)
         if fresh is not None and fresh.cc_session_id is not None:
           # The fresh native context voids the old conversation anchor. The clear
           # goes through the authorized channel: a whole-object save's anchor
           # reconciliation would correct it back to the disk value and the reset
           # would silently do nothing.
-          await self._anchors.clear_cc_session_anchor(session_id)
+          await self.session_anchors.clear_cc_session_anchor(session_id)
 
   def prompt_rule_summaries(self, meta: SessionMetadata, index: _TreeIndex) -> dict:
     """The scope/source/current-rule facts the Task/Context UI reads from the detail.
@@ -1107,7 +1120,7 @@ class TaskTreeManager:
       )
     self._invalidate_index()
     # The publish rename took the node out from under any cached entry.
-    self._store.invalidate_cache(task_id)
+    self.session_store.invalidate_cache(task_id)
     fresh = await self.load_meta(task_id)
     assert fresh is not None
     # The creation fact is durably published; connected clients learn about it
@@ -1312,7 +1325,7 @@ class TaskTreeManager:
       if meta is None:
         raise TaskNotFoundError(f"session {session_id} not found")
       metadata_slots.set_fields(meta, owner, **values)
-      await self._store.save_metadata(meta)
+      await self.session_store.save_metadata(meta)
       self._invalidate_index()
       return meta
 

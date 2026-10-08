@@ -14,6 +14,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -236,7 +237,22 @@ from src.app import registrations  # noqa: E402
 registrations.register_all()
 
 import src.infra.config as core_config  # noqa: E402,I001
-from src.runtime import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
+from src.runtime import (  # noqa: E402
+    master_cc_queue,
+    master_cc_run,
+    master_cc_state,
+    session_anchors,
+    session_events,
+    session_fork,
+    session_lifecycle,
+    session_listing,
+    session_search,
+    session_sidebar,
+    session_store,
+    session_successor,
+    task_execution,
+)
+from src.runtime import worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
 from src.backends.antigravity.antigravity_cli import AntigravityCliBackend  # noqa: E402
 from src.backends.charlie_code.charlie_code import CharlieCodeBackend  # noqa: E402
@@ -246,7 +262,7 @@ from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
 from src.runtime.worker import Worker  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
 from src.features.cron.api import router as cron_router  # noqa: E402
-from src.runtime.api.deps import get_session_manager, get_session_store, get_task_manager  # noqa: E402
+from src.runtime.api.deps import get_session_store, get_task_manager  # noqa: E402
 from src.runtime.api.internal import router as internal_router  # noqa: E402
 from src.app.pages import router as pages_router  # noqa: E402
 from src.runtime.api.sessions import router as sessions_router  # noqa: E402
@@ -283,8 +299,8 @@ from src.runtime.session_search import SessionSearch  # noqa: E402
 from src.runtime.session_sidebar import SessionSidebar  # noqa: E402
 from src.runtime.session_store import SessionStore  # noqa: E402
 from src.runtime.session_successor import SessionSuccessor  # noqa: E402
-from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
+from src.runtime.task_execution import TaskExecutionAdapter  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
 from src.runtime.triggers import TriggerManager  # noqa: E402
 
@@ -294,6 +310,19 @@ from src.app import registrations  # noqa: E402
 # Tests that build an app or run the CLI see the registered routers, commands and services
 # the way the server does; the registry fills before collection.
 registrations.register_all()
+
+# Each session block module with the name of its process singleton.
+_BLOCK_SINGLETONS = (
+    (session_store, "_store"),
+    (session_events, "_events"),
+    (session_sidebar, "_sidebar"),
+    (session_listing, "_listing"),
+    (session_search, "_search"),
+    (session_lifecycle, "_lifecycle"),
+    (session_fork, "_fork"),
+    (session_anchors, "_anchors"),
+    (session_successor, "_successor"),
+)
 
 # The pytester fixture: the budget mechanism's own test drives inner pytest
 # sessions (tests/test_pytest_budget.py).
@@ -352,8 +381,8 @@ def mock_session_callbacks() -> models.SessionCallbacks:
   )
 
 
-def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
-  """SessionCallbacks whose anchor funnels are the real manager's, so anchor persistence is
+def manager_backed_callbacks(mgr: SessionBlocks) -> models.SessionCallbacks:
+  """SessionCallbacks whose anchor funnels are the real blocks', so anchor persistence is
   observable on disk rather than on a mock's call list; broadcast stays mocked."""
   return models.SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
@@ -545,7 +574,7 @@ def patch_resume_seams(
   """Install the three seams every re-attach round needs, and return the broadcast stub.
 
   The re-attach path (enqueue_master_resume) reads fresh metadata, broadcasts
-  deltas, and builds a fresh event translator. The session manager double
+  deltas, and builds a fresh event translator. The session store double
   returns no metadata; the broadcast stub silences the streaming manager.
   resume_cc=None keeps the real _resume_cc over the test's raw log and installs
   the identity _build_fresh_translate instead; a callable replaces _resume_cc.
@@ -883,7 +912,7 @@ def archive_cutoff_events() -> tuple[datetime, list[dict]]:
   return cutoff, events
 
 
-def backdate_task_created_event(mgr: SessionManager, session_id: str, timestamp: datetime) -> None:
+def backdate_task_created_event(mgr: SessionBlocks, session_id: str, timestamp: datetime) -> None:
   """Place a task fixture's creation fact before the archived event corpus."""
   from src.infra import event_types as ET
 
@@ -895,7 +924,7 @@ def backdate_task_created_event(mgr: SessionManager, session_id: str, timestamp:
   mgr.events.chat_events.clear_cache(session_id)
 
 
-async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) -> tuple[datetime, Path]:
+async def recycle_archive_cutoff_events(mgr: SessionBlocks, session_id: str) -> tuple[datetime, Path]:
   """Seed the task-created fixture and archive_cutoff_events()'s corpus in timestamp order.
 
   Returns (cutoff, live path). The task creation fact and five e-events end up
@@ -909,7 +938,7 @@ async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) ->
   return cutoff, live_path
 
 
-async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
+async def make_parent(mgr: SessionBlocks, *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
   parent = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
   append_events(
@@ -981,61 +1010,94 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
-def build_session_manager(cfg: Any) -> SessionManager:
-  """A SessionManager over its own store, events, sidebar, listing, search, lifecycle, fork, anchors and successor blocks, all built on *cfg*."""
+@dataclass
+class SessionBlocks:
+  """The nine session blocks of one test, all built on one cfg, and the task tree last built over them.
+
+  A test helper: src holds no such bundle, and each holder there takes the blocks it uses.
+  ``tree`` is None until ``build_task_tree`` builds one; ``create_root_session`` builds one on demand.
+  """
+  cfg: Any
+  store: SessionStore
+  events: SessionEvents
+  sidebar: SessionSidebar
+  listing: SessionListing
+  search: SessionSearch
+  lifecycle: SessionLifecycle
+  fork: SessionFork
+  anchors: SessionAnchors
+  successor: SessionSuccessor
+  tree: TaskTreeManager | None = None
+
+  def callbacks(self) -> models.SessionCallbacks:
+    """The run callbacks over these blocks, as ``master_cc_queue.session_callbacks`` builds them."""
+    return master_cc_queue.session_callbacks(self.events, self.lifecycle, self.anchors, self.sidebar)
+
+
+def build_session_blocks(cfg: Any) -> SessionBlocks:
+  """The store, events, sidebar, listing, search, lifecycle, fork, anchors and successor blocks, all built on *cfg*."""
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
-  return SessionManager(
+  return SessionBlocks(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
       SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events),
       SessionSuccessor(cfg, store, events))
 
 
-def thread_blocks(session_mgr: Any) -> tuple[SessionStore, SessionLifecycle, SessionEvents, SessionSuccessor]:
+def build_task_tree(cfg: Any, blocks: SessionBlocks) -> TaskTreeManager:
+  """A task tree over *blocks*; the blocks remember it as their tree."""
+  blocks.tree = TaskTreeManager(
+      cfg, blocks.store, blocks.events, blocks.sidebar, blocks.listing, blocks.lifecycle, blocks.fork, blocks.anchors,
+      blocks.successor)
+  return blocks.tree
+
+
+def build_execution_adapter(cfg: Any, blocks: SessionBlocks, tree: TaskTreeManager) -> TaskExecutionAdapter:
+  """A task execution adapter over *blocks* and *tree*."""
+  return TaskExecutionAdapter(
+      cfg, blocks.successor, blocks.events, blocks.lifecycle, blocks.anchors, blocks.sidebar, tree)
+
+
+def thread_blocks(blocks: Any) -> tuple[SessionStore, SessionLifecycle, SessionEvents, SessionSuccessor]:
   """The blocks the chat-thread entry points take, in their argument order: store, lifecycle, events, successor."""
-  return session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor
+  return blocks.store, blocks.lifecycle, blocks.events, blocks.successor
 
 
-def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
-  """(cfg, SessionManager, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
-  session manager's cfg, so tree-created sessions land in the same home."""
+def build_env(tmp_path: Path) -> tuple[object, SessionBlocks, TaskTreeManager]:
+  """(cfg, SessionBlocks, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
+  blocks' cfg, so tree-created sessions land in the same home."""
   cfg = make_home_config(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
+  blocks = build_session_blocks(cfg)
+  return cfg, blocks, build_task_tree(cfg, blocks)
 
 
-def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, session_mgr: SessionManager) -> None:
-  """Install *tree*, *session_mgr* and the blocks it holds as the process singletons.
+def bind_session_blocks(monkeypatch: pytest.MonkeyPatch, blocks: SessionBlocks) -> None:
+  """Install *blocks* as the process singletons the block accessors answer with.
 
-  The group rides one patch: a task tree bound without its session manager
-  leaves sessions.session_manager() free to build a second SessionManager over the
-  same home, whose private chat-event cache never sees the tree's rounds.
+  The group rides one patch: a test binding some of the blocks leaves each remaining accessor
+  free to build a second block over the same home, whose private chat-event cache never sees
+  the first block's rounds.
   """
-  from src.runtime import (
-      session_anchors,
-      session_events,
-      session_fork,
-      session_lifecycle,
-      session_listing,
-      session_search,
-      session_sidebar,
-      session_store,
-      session_successor,
-      sessions,
-      task_execution,
-  )
+  monkeypatch.setattr(session_store, "_store", blocks.store)
+  monkeypatch.setattr(session_events, "_events", blocks.events)
+  monkeypatch.setattr(session_sidebar, "_sidebar", blocks.sidebar)
+  monkeypatch.setattr(session_listing, "_listing", blocks.listing)
+  monkeypatch.setattr(session_search, "_search", blocks.search)
+  monkeypatch.setattr(session_lifecycle, "_lifecycle", blocks.lifecycle)
+  monkeypatch.setattr(session_fork, "_fork", blocks.fork)
+  monkeypatch.setattr(session_anchors, "_anchors", blocks.anchors)
+  monkeypatch.setattr(session_successor, "_successor", blocks.successor)
+
+
+def bind_deps_blocks(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, blocks: SessionBlocks) -> None:
+  """Install *tree* and *blocks* as the process singletons.
+
+  A task tree bound without its blocks leaves each block accessor free to build a second block
+  over the same home, so the tree and the blocks go in together.
+  """
   monkeypatch.setattr(task_execution, "_task_manager", tree)
-  monkeypatch.setattr(sessions, "_session_manager", session_mgr)
-  monkeypatch.setattr(session_store, "_store", session_mgr.store)
-  monkeypatch.setattr(session_events, "_events", session_mgr.events)
-  monkeypatch.setattr(session_sidebar, "_sidebar", session_mgr.sidebar)
-  monkeypatch.setattr(session_listing, "_listing", session_mgr.listing)
-  monkeypatch.setattr(session_search, "_search", session_mgr.search)
-  monkeypatch.setattr(session_lifecycle, "_lifecycle", session_mgr.lifecycle)
-  monkeypatch.setattr(session_fork, "_fork", session_mgr.fork)
-  monkeypatch.setattr(session_anchors, "_anchors", session_mgr.anchors)
-  monkeypatch.setattr(session_successor, "_successor", session_mgr.successor)
+  bind_session_blocks(monkeypatch, blocks)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1074,12 +1136,12 @@ async def create_task(
 
 
 async def create_root_session(
-    mgr: SessionManager, req: models.CreateSessionRequest, backend: str | None = None) -> models.SessionMetadata:
+    mgr: SessionBlocks, req: models.CreateSessionRequest, backend: str | None = None) -> models.SessionMetadata:
   """One operator-created manager root, created through the task tree wired over *mgr*.
 
-  The tree is the one that registered itself on *mgr*, or a new one over *mgr* when none has.
+  The tree is the one last built over *mgr*, or a new one when none has been.
   """
-  tree = mgr.task_tree_manager or TaskTreeManager(mgr._cfg, mgr)
+  tree = mgr.tree or build_task_tree(mgr.cfg, mgr)
   return await tree.create_task(
       request_id=f"session-create:{req.session_id or uuid.uuid4()}",
       task_parent_id=None,
@@ -1171,25 +1233,25 @@ def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
   )
 
 
-def make_session_mgr(tmp_path: Path) -> SessionManager:
-  """SessionManager over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
+def make_session_blocks(tmp_path: Path) -> SessionBlocks:
+  """Session blocks over a SimpleNamespace cfg whose sessions_dir is tmp_path/"sessions"; a test
   needing a richer cfg builds its own."""
   cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
   cfg.sessions_dir.mkdir()
-  return build_session_manager(cfg)
+  return build_session_blocks(cfg)
 
 
 async def make_home_session(
     tmp_path: Path,
     *,
     name: str,
-    backend: str | None = None) -> tuple[CharlieBotConfig, SessionManager, models.SessionMetadata]:
-  """(cfg, SessionManager, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
+    backend: str | None = None) -> tuple[CharlieBotConfig, SessionBlocks, models.SessionMetadata]:
+  """(cfg, SessionBlocks, one created session) over a CharlieBotConfig rooted at tmp_path/"home";
   backend=None takes the default (the first registered backend). A test needing more
   sessions calls create_root_session directly; a test needing no session builds the cfg/mgr pair
   inline."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
-  mgr = build_session_manager(cfg)
+  mgr = build_session_blocks(cfg)
   session = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=backend)
   return cfg, mgr, session
 
@@ -1206,32 +1268,31 @@ def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
 
 
-def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
-  """Bind the session dependency keys on *app*: the manager, and the blocks the manager holds."""
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
-  app.dependency_overrides[get_session_events] = lambda: session_mgr.events
-  app.dependency_overrides[get_session_sidebar] = lambda: session_mgr.sidebar
-  app.dependency_overrides[get_session_listing] = lambda: session_mgr.listing
-  app.dependency_overrides[get_session_search] = lambda: session_mgr.search
-  app.dependency_overrides[get_session_lifecycle] = lambda: session_mgr.lifecycle
-  app.dependency_overrides[get_session_fork] = lambda: session_mgr.fork
-  app.dependency_overrides[get_session_anchors] = lambda: session_mgr.anchors
-  app.dependency_overrides[get_session_successor] = lambda: session_mgr.successor
+def override_session_blocks(app: FastAPI, session_blocks: Any) -> None:
+  """Bind the session dependency keys on *app* to the blocks of *session_blocks*."""
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
+  app.dependency_overrides[get_session_events] = lambda: session_blocks.events
+  app.dependency_overrides[get_session_sidebar] = lambda: session_blocks.sidebar
+  app.dependency_overrides[get_session_listing] = lambda: session_blocks.listing
+  app.dependency_overrides[get_session_search] = lambda: session_blocks.search
+  app.dependency_overrides[get_session_lifecycle] = lambda: session_blocks.lifecycle
+  app.dependency_overrides[get_session_fork] = lambda: session_blocks.fork
+  app.dependency_overrides[get_session_anchors] = lambda: session_blocks.anchors
+  app.dependency_overrides[get_session_successor] = lambda: session_blocks.successor
 
 
 def make_router_client(
     cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+    session_blocks: SessionBlocks,
     router: APIRouter,
     prefix: str,
 ) -> TestClient:
-  """TestClient mounting one router with cfg/session_mgr as dependency overrides; a test needing
+  """TestClient mounting one router with cfg/session_blocks as dependency overrides; a test needing
   extra routers or overrides builds its own FastAPI app."""
   app = FastAPI()
   app.include_router(router, prefix=prefix)
   apply_config_overrides(app, cfg)
-  override_session_manager(app, session_mgr)
+  override_session_blocks(app, session_blocks)
   return TestClient(app)
 
 
@@ -1246,60 +1307,61 @@ def include_registered_routers(app: FastAPI, prefix: str, *, before_runtime: boo
       app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
 
 
-def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+def make_sessions_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
-  return make_router_client(cfg, session_mgr, sessions_router, "/api/sessions")
+  return make_router_client(cfg, session_blocks, sessions_router, "/api/sessions")
 
 
-def make_internal_router_client(cfg: Any, session_mgr: Any, task_mgr: Any | None = None) -> TestClient:
+def make_internal_router_client(cfg: Any, session_blocks: Any, task_mgr: Any | None = None) -> TestClient:
   """make_router_client over the internal router, mounted at /api/internal, plus the feature routers
   registered under that prefix; the internal routes take cfg through the on-loop dependency
   (same instance the sync key serves), so the override keys in make_router_client cover them.
   cfg may be a MagicMock when the tested route never reads it."""
-  client = make_router_client(cfg, session_mgr, internal_router, "/api/internal")
+  client = make_router_client(cfg, session_blocks, internal_router, "/api/internal")
   if task_mgr is not None:
     client.app.dependency_overrides[get_task_manager] = lambda: task_mgr
   include_registered_routers(client.app, "/api/internal")
   return client
 
 
-def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
+def make_cron_client(cfg: CharlieBotConfig, session_blocks: SessionBlocks) -> TestClient:
   """make_router_client over the cron router, mounted at /api/cron."""
-  return make_router_client(cfg, session_mgr, cron_router, "/api/cron")
+  return make_router_client(cfg, session_blocks, cron_router, "/api/cron")
 
 
-def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
+def make_cron_sessions_client(
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
   """TestClient mounting the cron router plus the sessions router (the scheduled listing and
-  unarchive endpoints) with cfg/session_mgr/tree as dependency overrides."""
+  unarchive endpoints) with cfg/session_blocks/tree as dependency overrides."""
   app = FastAPI()
   app.include_router(cron_router, prefix="/api/cron")
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
-  override_session_manager(app, session_mgr)
+  override_session_blocks(app, session_blocks)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
 
 def make_sessions_listing_client(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
   """TestClient mounting the sessions router with its config and manager overrides."""
   app = FastAPI()
   include_registered_routers(app, "/api/sessions", before_runtime=True)
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
-  override_session_manager(app, session_mgr)
+  override_session_blocks(app, session_blocks)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
 
 def make_sessions_listing_page_client(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
+    cfg: CharlieBotConfig, session_blocks: SessionBlocks, tree: TaskTreeManager) -> TestClient:
   """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
   same overrides make_sessions_listing_client carries."""
   app = FastAPI()
   app.include_router(pages_router)
   apply_config_overrides(app, cfg)
-  override_session_manager(app, session_mgr)
+  override_session_blocks(app, session_blocks)
   app.dependency_overrides[get_task_manager] = lambda: tree
   return TestClient(app)
 
@@ -2208,32 +2270,37 @@ def plan_doc(
   }
 
 
-def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, Scheduler]:
-  """Real cfg/session_mgr/scheduler trio for scheduler and cron-task tests; the scheduler holds the
-  process-wide SessionManager because a private instance keeps its own chat-event cache and its
+def build_scheduler(cfg: Any, blocks: SessionBlocks) -> Scheduler:
+  """A scheduler over the store, events, listing and lifecycle blocks of *blocks*."""
+  return Scheduler(cfg, blocks.store, blocks.events, blocks.listing, blocks.lifecycle)
+
+
+def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, Scheduler]:
+  """Real cfg/blocks/scheduler trio for scheduler and cron-task tests; the scheduler holds the
+  process-wide blocks because a private events block keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
   cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  return cfg, session_mgr, Scheduler(cfg, session_mgr)
+  session_blocks = build_session_blocks(cfg)
+  return cfg, session_blocks, build_scheduler(cfg, session_blocks)
 
 
 async def make_plan_setup(
-    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
-  """Session and plan managers plus one created task for plan endpoint tests."""
+    tmp_path: Path,) -> tuple[CharlieBotConfig, SessionBlocks, PlanRegistryManager, models.SessionMetadata]:
+  """Session blocks and the plan manager plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  plan_mgr = PlanRegistryManager(cfg, session_mgr)
-  meta = await create_root_session(session_mgr, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
-  return cfg, session_mgr, plan_mgr, meta
+  session_blocks = build_session_blocks(cfg)
+  plan_mgr = PlanRegistryManager(cfg, session_blocks.events)
+  meta = await create_root_session(session_blocks, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
+  return cfg, session_blocks, plan_mgr, meta
 
 
-async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
-  """Real cfg/session_mgr/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
+async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionBlocks, TriggerManager, str]:
+  """Real cfg/blocks/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, models.CreateSessionRequest(name="Trigger watch"))
-  trigger_mgr = TriggerManager(cfg, session_mgr)
-  return cfg, session_mgr, trigger_mgr, session.id
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, models.CreateSessionRequest(name="Trigger watch"))
+  trigger_mgr = TriggerManager(cfg, session_blocks.tree)
+  return cfg, session_blocks, trigger_mgr, session.id
 
 
 async def no_sleep(_seconds: float) -> None:
@@ -2435,6 +2502,43 @@ def _isolate_profile(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pyte
   reset_config_caches()
 
 
+def _guarded_get_config(real: Callable[[], CharlieBotConfig], accessor: str, tmp_path: Path,
+                        violations: list[str]) -> Callable[[], CharlieBotConfig]:
+  """*real* wrapped to record and raise when the config it returns has its home outside *tmp_path*."""
+
+  def guarded() -> CharlieBotConfig:
+    cfg = real()
+    if not cfg.charliebot_home.resolve().is_relative_to(tmp_path.resolve()):
+      message = (
+          f"{accessor} built its block from the home {cfg.charliebot_home}, outside this test's tmp dir {tmp_path}; "
+          "build the blocks on the test's own cfg and bind them with bind_session_blocks or bind_deps_blocks")
+      violations.append(message)
+      raise AssertionError(message)
+    return cfg
+
+  return guarded
+
+
+@pytest.fixture(autouse=True)
+def block_home_violations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[list[str]]:
+  """A session block accessor builds its block from get_config(); its home must sit under this test's tmp_path.
+
+  Each test starts with no block singleton, so every accessor call builds one and passes the check;
+  the singleton the build leaves behind goes away with the test, and it never answers a later test
+  whose home is another directory. A build outside tmp_path raises in the caller and is recorded
+  here, so the test fails at teardown even when the caller swallowed the error. The list is the
+  test's to inspect: a test that provokes the guard clears it.
+  """
+  violations: list[str] = []
+  for module, singleton in _BLOCK_SINGLETONS:
+    monkeypatch.setattr(module, singleton, None)
+    monkeypatch.setattr(
+        module, "get_config", _guarded_get_config(module.get_config, module.__name__, tmp_path, violations))
+  yield violations
+  if violations:
+    pytest.fail("\n".join(violations), pytrace=False)
+
+
 @pytest.fixture
 def temp_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   """Point HOME at a temp dir and reset the config/cron module-level caches.
@@ -2478,13 +2582,13 @@ def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
 
 
 async def make_cron_session(
-    session_mgr: SessionManager,
+    session_blocks: SessionBlocks,
     task_name: str,
     backend: str = OPUS_BACKEND_ID,
 ) -> models.SessionMetadata:
   """Create a scheduled manager task with a cron-owned metadata stamp."""
   return await create_root_session(
-      session_mgr,
+      session_blocks,
       models.CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name),
       backend=backend)
 
@@ -2620,30 +2724,6 @@ class FakeWebSocket:
   async def send_text(self, text: str) -> None:
     self.sent_text.append(text)
     self.sent.append(json.loads(text))
-
-
-class FakeSessionStore:
-  """SessionStore double: get_session answers a bare SessionMetadata for any id."""
-
-  async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(profile="manager", id=session_id, name="Test")
-
-
-class FakeSessionManager:
-  """SessionManager double replaying a canned chat-event list.
-
-  Callers rely on load_chat_events_sync returning the constructor's events
-  (takeoff-gate probes) and on persist_and_broadcast being an AsyncMock
-  (delegate/agent-message route tests); its store is a FakeSessionStore.
-  """
-
-  def __init__(self, events: list[dict[str, Any]]) -> None:
-    self.events = events
-    self.persist_and_broadcast = AsyncMock()
-    self.store = FakeSessionStore()
-
-  def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
-    return self.events
 
 
 class FakeAsyncProcess:

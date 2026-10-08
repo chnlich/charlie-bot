@@ -591,7 +591,7 @@ async def walk_depths(cdp: CDP, session_id: str, sc: Scenario, place: dict, expe
 # --- seeding ----------------------------------------------------------------
 
 
-async def seed_sessions() -> tuple[str, str, list[dict], object]:
+async def seed_sessions() -> tuple[str, str, list[dict], object, object]:
   """Create the two regression sessions and their synthetic chat events.
 
   The main session carries 30 closed turns: the bootstrap's 40-message tail
@@ -599,7 +599,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   first stubbed page's trailing user message merge across the page boundary.
   The events persist through the same owner the APIs serve; nothing reaches a
   model. Returns (main session id, second session id, bootstrap messages,
-  session manager).
+  session store block, session events block).
   """
   from src.infra.config import get_config
   from src.runtime.api.message_utils import build_session_bootstrap_data
@@ -609,22 +609,18 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   from src.runtime.session_fork import SessionFork
   from src.runtime.session_lifecycle import SessionLifecycle
   from src.runtime.session_listing import SessionListing
-  from src.runtime.session_search import SessionSearch
   from src.runtime.session_sidebar import SessionSidebar
   from src.runtime.session_store import SessionStore
   from src.runtime.session_successor import SessionSuccessor
-  from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
   cfg = get_config()
   store = SessionStore(cfg)
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
-  session_mgr = SessionManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      SessionLifecycle(cfg, store, events), SessionFork(cfg, store, events), SessionAnchors(cfg, store, events),
-      SessionSuccessor(cfg, store, events))
-  tree = TaskTreeManager(cfg, session_mgr)
+  tree = TaskTreeManager(
+      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionLifecycle(cfg, store, events),
+      SessionFork(cfg, store, events), SessionAnchors(cfg, store, events), SessionSuccessor(cfg, store, events))
   operator = CallerIdentity(kind="operator")
   main = await tree.create_task(
       request_id="seed-main",
@@ -639,8 +635,8 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   # the aggregator projects master_done into the separator message that closes
   # a turn, exactly as a completed chat session's history looks.
   for i in range(40):
-    await session_mgr.events.save_chat_event(sid, {"type": "user", "content": f"history question {i:02d}"})
-    await session_mgr.events.save_chat_event(
+    await events.save_chat_event(sid, {"type": "user", "content": f"history question {i:02d}"})
+    await events.save_chat_event(
         sid, {
             "type": "assistant",
             "message": {
@@ -650,7 +646,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
                 }]
             }
         })
-    await session_mgr.events.save_chat_event(sid, {"type": "master_done"})
+    await events.save_chat_event(sid, {"type": "master_done"})
   other = await tree.create_task(
       request_id="seed-second",
       task_parent_id=None,
@@ -661,8 +657,8 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
       caller=operator)
   sid_b = other.id
   for i in range(3):
-    await session_mgr.events.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})
-    await session_mgr.events.save_chat_event(
+    await events.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})
+    await events.save_chat_event(
         sid_b, {
             "type": "assistant",
             "message": {
@@ -672,19 +668,19 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
                 }]
             }
         })
-    await session_mgr.events.save_chat_event(sid_b, {"type": "master_done"})
-  bootstrap = await build_session_bootstrap_data(sid, session_mgr.store, session_mgr.events)
-  return sid, sid_b, bootstrap.messages, session_mgr
+    await events.save_chat_event(sid_b, {"type": "master_done"})
+  bootstrap = await build_session_bootstrap_data(sid, store, events)
+  return sid, sid_b, bootstrap.messages, store, events
 
 
-async def broadcast_user(session_mgr, sid: str, text: str) -> None:
+async def broadcast_user(events, sid: str, text: str) -> None:
   """One real live message: persisted, then broadcast through the aggregator."""
-  await session_mgr.events.persist_and_broadcast(sid, {"type": "user", "content": text})
+  await events.persist_and_broadcast(sid, {"type": "user", "content": text})
 
 
-async def broadcast_assistant_draft(session_mgr, sid: str, text: str) -> None:
+async def broadcast_assistant_draft(events, sid: str, text: str) -> None:
   """One real stream delta: the assistant event buffers into the live draft."""
-  await session_mgr.events.persist_and_broadcast(
+  await events.persist_and_broadcast(
       sid, {
           "type": "assistant",
           "message": {
@@ -696,14 +692,14 @@ async def broadcast_assistant_draft(session_mgr, sid: str, text: str) -> None:
       })
 
 
-async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
+async def bootstrap_messages_now(sid: str, store, events) -> list[dict]:
   """The session's current committed messages, read in-process.
 
   The transcript-reset payload must carry what the view now holds (the seeded
   history plus the live messages the scenarios broadcast).
   """
   from src.runtime.api.message_utils import build_session_bootstrap_data
-  bootstrap = await build_session_bootstrap_data(sid, session_mgr.store, session_mgr.events)
+  bootstrap = await build_session_bootstrap_data(sid, store, events)
   return bootstrap.messages
 
 
@@ -711,7 +707,7 @@ async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
 
 
 async def run_scenarios(
-    cdp: CDP, page: str, sid: str, sid_b: str, session_mgr, evidence_dir: Path, results: list[dict]) -> None:
+    cdp: CDP, page: str, sid: str, sid_b: str, store, events, evidence_dir: Path, results: list[dict]) -> None:
   """The ordered scenario flow; each scenario starts from a state it sets.
 
   ``page`` is the CDP page session the browser calls ride; ``sid``/``sid_b``
@@ -762,7 +758,7 @@ async def run_scenarios(
   sc = Scenario("live_message_while_reading_holds_position")
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
-  await broadcast_user(session_mgr, sid, "live message arriving during a read")
+  await broadcast_user(events, sid, "live message arriving during a read")
   await settle()
   after = await snap(cdp, cs)
   ay_after = await anchor_y(cdp, cs, anchor["id"])
@@ -776,7 +772,7 @@ async def run_scenarios(
   sc = Scenario("stream_draft_while_reading_holds_position")
   ay_before = await anchor_y(cdp, cs, anchor["id"])
   snap_before = await snap(cdp, cs)
-  await broadcast_assistant_draft(session_mgr, sid, "a streaming draft grows below while the reader reads")
+  await broadcast_assistant_draft(events, sid, "a streaming draft grows below while the reader reads")
   await settle()
   after = await snap(cdp, cs)
   ay_after = await anchor_y(cdp, cs, anchor["id"])
@@ -793,7 +789,7 @@ async def run_scenarios(
   sc.check(at_bottom["bottom"] <= ANCHOR_TOLERANCE_PX, "jump button returned to the bottom")
   sc.check(at_bottom["pinned"] is True, "pin intent re-armed")
   sc.check(at_bottom["jumpBtn"] is False, "jump button hidden again")
-  await broadcast_user(session_mgr, sid, "first message after returning to the bottom")
+  await broadcast_user(events, sid, "first message after returning to the bottom")
   await settle()
   followed = await snap(cdp, cs)
   sc.check(followed["bottom"] <= ANCHOR_TOLERANCE_PX, "new message followed at the bottom")
@@ -958,7 +954,7 @@ async def run_scenarios(
   await asyncio.sleep(0.5)
   anchor = await ev(cdp, cs, TOP_VISIBLE_JS)
   ay_before = await anchor_y(cdp, cs, anchor["id"])
-  reset_messages = await bootstrap_messages_now(sid, session_mgr)
+  reset_messages = await bootstrap_messages_now(sid, store, events)
   payload = {"reset": True, "messages": reset_messages, "revision": "regression-reset", "total": len(reset_messages)}
   await ev(cdp, cs, "window.__transcriptPayload = " + json.dumps(payload))
   await ev(cdp, cs, "setWorkerTranscriptMode({sessionId: SESSION_ID})")
@@ -1289,7 +1285,7 @@ async def run_harness(args: argparse.Namespace) -> None:
   chrome = resolve_chrome(args.chrome or get_config().headless_chrome_bin or None, fail)
   log(f"chat scroll regression · commit {commit} · chrome {chrome}")
 
-  sid, sid_b, _bootstrap_messages, session_mgr = await seed_sessions()
+  sid, sid_b, _bootstrap_messages, store, events = await seed_sessions()
 
   # Isolated server: the real app, lifespan disabled, this checkout's files.
   import uvicorn
@@ -1358,7 +1354,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         {"source": "try { localStorage.setItem('charliebot_access_key', " + json.dumps(key) + "); } catch (e) {}"},
         session_id=page_session)
     await cdp.send("Page.navigate", {"url": f"{base}/?session={sid}"}, session_id=page_session)
-    await run_scenarios(cdp, page_session, sid, sid_b, session_mgr, evidence_dir, results_payload["scenarios"])
+    await run_scenarios(cdp, page_session, sid, sid_b, store, events, evidence_dir, results_payload["scenarios"])
     results_payload["console_errors"] = list(cdp.console_errors)
   except Exception as exc:
     results_payload["aborted_by"] = repr(exc)

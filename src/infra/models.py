@@ -551,7 +551,7 @@ class SessionRow(BaseModel):
   # delegated-work cue (a manager with only active descendants must not hide
   # ongoing work). Derived in the same projection pass as the other counts.
   running_descendant_count: int
-  # The SessionManager-owned unread-reply flag (mark_unread on a delivered
+  # The lifecycle block's unread-reply flag (mark_unread on a delivered
   # reply, mark_read on opening). Independent of work_state: an idle task can
   # carry an unread reply, and a running one hides the dot without discarding
   # the flag.
@@ -727,13 +727,13 @@ class SessionMessageRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Session Callbacks (internal DTO bundling SessionManager hooks for run_message)
+# Session Callbacks (internal DTO bundling session block hooks for run_message)
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class SessionCallbacks:
-  """Bundle of SessionManager hooks passed to run_message as a single unit."""
+  """Bundle of session block hooks passed to run_message as a single unit."""
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
   # Returns the cc_session_id read back from disk after persisting. The live

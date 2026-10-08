@@ -16,8 +16,9 @@ from conftest import (
     ConsumerRound,
     TerminateFlagBackend,
     _run_seeded_consumer,
+    bind_session_blocks,
     build_master_cc_cfg,
-    build_session_manager,
+    build_session_blocks,
     create_root_session,
     drain_session_consumer,
     fresh_master_state,
@@ -48,7 +49,7 @@ async def run_consumer_over_real_disk(
     work_items: list[master_cc_state._WorkItem],
     fake_run_cc: ConsumerRound,
 ) -> None:
-  """run_session_consumer with the SessionManager class kept real: the dequeue refresh reads disk
+  """run_session_consumer with the session blocks kept real: the dequeue refresh reads disk
   through it, the teardown probe is silenced at the method, and no class-level patch can shadow
   the refresh's own local import."""
   await _run_seeded_consumer(
@@ -117,6 +118,7 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
   """
   session_id = f"t1-{inject_at}"
   cfg = build_master_cc_cfg(tmp_path)
+  bind_session_blocks(monkeypatch, build_session_blocks(cfg))
   monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
 
   entries: list[datetime | None] = []
@@ -196,12 +198,13 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 @pytest.mark.asyncio
 async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Anchor lands on disk: after one round through the consumer, a second,
-  cold-cache SessionManager reads the cc_session_id the backend returned —
+  cold-cache session blocks read the cc_session_id the backend returned —
   an assertion an in-memory-object check cannot make.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  session = await create_root_session(session_mgr, CreateSessionRequest(name="anchor-on-disk"))
+  session_blocks = build_session_blocks(cfg)
+  session = await create_root_session(session_blocks, CreateSessionRequest(name="anchor-on-disk"))
+  bind_session_blocks(monkeypatch, session_blocks)
   backend_returned_id = "cc-backend-session-42"
 
   monkeypatch.setattr(master_cc_run, "_run_cc", make_sound_round(backend_returned_id))
@@ -209,12 +212,12 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session.id):
-    result = await run_task_manager_message(cfg, session, "hi", session_mgr.callbacks())
+    result = await run_task_manager_message(cfg, session, "hi", session_blocks.callbacks())
     assert result == backend_returned_id
     await drain_session_consumer(session.id, timeout=5)
 
-  # Cold-cache reader: a fresh SessionManager parses metadata.json from disk.
-  cold_reader = build_session_manager(cfg)
+  # Cold-cache reader: fresh session blocks parse metadata.json from disk.
+  cold_reader = build_session_blocks(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == backend_returned_id
@@ -259,6 +262,7 @@ async def _run_stream_consumer(
 ) -> SessionCallbacks:
   """Run a simulated event stream through the production consumer path."""
   cfg = build_master_cc_cfg(tmp_path)
+  bind_session_blocks(monkeypatch, build_session_blocks(cfg))
   meta = _make_meta(session_id)
   cb = mock_session_callbacks()
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
@@ -317,7 +321,8 @@ async def test_zero_output_guard_covers_resume_path(tmp_path: Path, monkeypatch:
 
 
 @pytest.mark.asyncio
-async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_id(tmp_path: Path) -> None:
+async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A turn that ends without a backend session id (a refusal or a spawn /
   transport failure) must not wipe the durable resume anchor: only a truthy id
   ever persists. Clearing for a v2 fresh-native launch is the adapter's
@@ -325,8 +330,9 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   from conftest import build_sessions_cfg
 
   cfg = build_sessions_cfg(tmp_path)
-  mgr = build_session_manager(cfg)
+  mgr = build_session_blocks(cfg)
   session = await create_root_session(mgr, CreateSessionRequest(name="anchor-preserved"))
+  bind_session_blocks(monkeypatch, mgr)
   await mgr.anchors.persist_cc_session_id(session.id, "kept-anchor")
 
   snapshot = SessionMetadata(
@@ -339,7 +345,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
 
   await run_consumer_over_real_disk(session.id, [item], refused_round)
 
-  cold_reader = build_session_manager(cfg)
+  cold_reader = build_session_blocks(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"

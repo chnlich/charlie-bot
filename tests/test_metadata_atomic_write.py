@@ -27,7 +27,7 @@ from conftest import (
     make_os_replace_spy,
     make_read_at_os_replace,
 )
-from conftest import make_session_mgr as _make_session_mgr
+from conftest import make_session_blocks as _make_session_blocks
 
 from src.infra.memo import stat_signature
 from src.infra.models import SessionMetadata
@@ -44,7 +44,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   fails here because the hook never fires against the target -- killing the
   vacuous pass where the hook is never reached.
   """
-  mgr = _make_session_mgr(tmp_path)
+  mgr = _make_session_blocks(tmp_path)
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   target = mgr.store.metadata_path(meta.id)
@@ -67,7 +67,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   empty and not a parse failure -- proving the previous inode stays intact right
   up to the rename. An in-place truncating write side would read empty here.
   """
-  mgr = _make_session_mgr(tmp_path)
+  mgr = _make_session_blocks(tmp_path)
   meta = SessionMetadata(profile="manager", name="before", backend=OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   target = mgr.store.metadata_path(meta.id)
@@ -123,7 +123,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   its own writers, so the defect window the unique temp name covers is between
   independent writers sharing the sessions directory.
   """
-  mgr = _make_session_mgr(tmp_path)
+  mgr = _make_session_blocks(tmp_path)
   other_store = SessionStore(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
@@ -163,7 +163,7 @@ async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Pat
   30 s TTL. The discriminating assertion is the survived entry: an entry keyed
   with a foreign or absent signature fails here.
   """
-  mgr = _make_session_mgr(tmp_path)
+  mgr = _make_session_blocks(tmp_path)
   meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.store.save_metadata(meta)
   stored_sig = mgr.store.metadata_cache[meta.id][2]

@@ -46,9 +46,11 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
 
 
 @pytest.mark.asyncio
-async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_path: pathlib.Path) -> None:
-  """A new SessionManager (simulating restart) must not re-broadcast historical deltas."""
+async def test_lazy_init_aggregator_after_restart_does_not_replay_history(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """New session blocks (simulating restart) must not re-broadcast historical deltas."""
   cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
+  conftest.bind_session_blocks(monkeypatch, mgr)  # the master_done below runs every contribution's after_turn
 
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()):
     await mgr.events.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
@@ -70,8 +72,8 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
             "timestamp": "t3",
         })
 
-  # Simulate process restart: brand-new SessionManager with same on-disk state.
-  mgr2 = conftest.build_session_manager(cfg)
+  # Simulate process restart: brand-new session blocks with same on-disk state.
+  mgr2 = conftest.build_session_blocks(cfg)
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
     await mgr2.events.persist_and_broadcast(session.id, {
         "type": "user",

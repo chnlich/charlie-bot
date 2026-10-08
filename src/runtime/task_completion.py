@@ -71,7 +71,7 @@ if TYPE_CHECKING:
   from datetime import datetime
 
   from src.runtime.control_sink import ControlEventSink
-  from src.runtime.sessions import SessionManager
+  from src.runtime.session_events import SessionEvents
 
 log = LazyStructlogLogger()
 
@@ -96,10 +96,7 @@ class CompletionTree(Protocol):
   runs: RunStore
   dispatch: session_dispatch.TaskInputDispatcher
   _index: tuple[Any, float] | None
-
-  @property
-  def sessions(self) -> SessionManager:
-    ...
+  session_events: SessionEvents
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
     ...

@@ -13,13 +13,13 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import chat_events, runs, sessions, task_sessions
+from src.runtime import chat_events, runs, task_sessions
 
 
 def build_env(
-    tmp_path: pathlib.Path) -> tuple[object, sessions.SessionManager, task_sessions.TaskTreeManager, runs.RunStore]:
-  cfg, session_mgr, mgr = conftest.build_env(tmp_path)
-  return cfg, session_mgr, mgr, mgr.runs
+    tmp_path: pathlib.Path) -> tuple[object, conftest.SessionBlocks, task_sessions.TaskTreeManager, runs.RunStore]:
+  cfg, session_blocks, mgr = conftest.build_env(tmp_path)
+  return cfg, session_blocks, mgr, mgr.runs
 
 
 async def make_task(store_run_env: tuple, request_id: str) -> str:
@@ -54,7 +54,7 @@ async def register_live_run(store: runs.RunStore, session_id: str, proc: subproc
 @pytest.mark.asyncio
 async def test_register_is_idempotent(tmp_path: pathlib.Path) -> None:
   env = build_env(tmp_path)
-  _, session_mgr, _, store = env
+  _, session_blocks, _, store = env
   session_id = await make_task(env, "t1")
 
   run = await store.register_run(models.RunRecord(id="r1", session_id=session_id, kind="work"))
@@ -63,7 +63,7 @@ async def test_register_is_idempotent(tmp_path: pathlib.Path) -> None:
 
   assert (await store.get_run(session_id, "r1")) is not None
   # Registering a run writes no ThreadMetadata.
-  assert not (session_mgr._cfg.sessions_dir / session_id / "threads" / "r1").exists()
+  assert not (session_blocks.cfg.sessions_dir / session_id / "threads" / "r1").exists()
 
   # A queued run is distinguishable from a live process and keeps its inputs for dispatch.
   assert store.run_blocker(
@@ -81,7 +81,7 @@ async def test_register_is_idempotent(tmp_path: pathlib.Path) -> None:
 @pytest.mark.asyncio
 async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: pathlib.Path) -> None:
   env = build_env(tmp_path)
-  cfg, session_mgr, mgr, store = env
+  cfg, session_blocks, mgr, store = env
   session_id = await make_task(env, "t1")
   original = await store.register_run(models.RunRecord(id="r-orig", session_id=session_id, kind="work", backend="opus"))
 
@@ -94,7 +94,7 @@ async def test_retry_binding_is_stable_across_requests_and_reload(tmp_path: path
         session_id, "retry-req", "r-orig", task_spec_text='{"goal":"x"}', backend=original.backend)
   assert first.id == second.id and first.retry_of_run_id == "r-orig"
 
-  fresh_mgr = task_sessions.TaskTreeManager(cfg, session_mgr)
+  fresh_mgr = conftest.build_task_tree(cfg, session_blocks)
   fresh_store = fresh_mgr.runs
   async with fresh_mgr.control_lock:
     replay = await fresh_store.create_retry_run_locked(

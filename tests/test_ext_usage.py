@@ -429,7 +429,7 @@ async def test_the_poller_and_the_warmup_start_and_stop_through_the_wiring_regis
     monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(usage_sources, "quota_accounts", list)
   monkeypatch.setattr(usage_api, "preload_usage_tally_stack", lambda: None)
-  ctx = wiring.ServiceContext(None, None, None, None)
+  ctx = wiring.ServiceContext(None, None, None)
 
   early = dict(wiring.service_starts("early"))
   ready = dict(wiring.service_starts("ready"))

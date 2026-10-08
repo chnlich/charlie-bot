@@ -51,7 +51,7 @@ def persisted_close_and_report(tree: TaskTreeManager, parent_id: str, child_id: 
 
 @pytest.mark.asyncio
 async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   project = await create_task(tree, parent=None, request_id="project")
   feature = await create_task(tree, parent=project.id, request_id="feature")
   worker_1 = await create_task(tree, parent=feature.id, request_id="w1", profile="worker")
@@ -111,7 +111,7 @@ async def test_three_level_delivery_closes_workers_and_keeps_project_open(tmp_pa
 
 @pytest.mark.asyncio
 async def test_implement_completion_requires_review_and_landing_evidence(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   worker = await create_task(
       tree,
@@ -235,7 +235,7 @@ async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp
   """A run id that is not a Run of the task or its children (the 9/27 shape: a
   backend's own run id) is refused at request time instead of a 202 the
   re-evaluation could only block."""
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
@@ -252,7 +252,7 @@ async def test_own_run_request_naming_a_foreign_run_is_refused_and_not_saved(tmp
 
 @pytest.mark.asyncio
 async def test_own_run_request_with_an_open_child_is_refused_and_not_saved(tmp_path: Path) -> None:
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
@@ -274,7 +274,7 @@ async def test_saved_request_blocked_after_its_run_wakes_the_requester_once(tmp_
   the same request adds no second notice."""
   from src.runtime.task_recovery import reconcile_task_tree
 
-  cfg, _session_mgr, tree = build_env(tmp_path)
+  cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   agent = await live_manager_caller(tree, manager.id, "run-mgr")
@@ -311,7 +311,7 @@ async def test_agent_cancels_only_its_own_direct_child(tmp_path: Path) -> None:
   """An agent cancels a direct child of its own task (the close fact records
   the agent as the actor); every other target — grandchild, sibling, parent,
   self, unrelated root — is refused, and an active run still blocks."""
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   manager = await create_task(tree, parent=root.id, request_id="mgr")
   sibling = await create_task(tree, parent=root.id, request_id="sib")
@@ -355,7 +355,7 @@ async def test_agent_cancels_only_its_own_direct_child(tmp_path: Path) -> None:
 async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_path: Path) -> None:
   """A queued (pid-less) run blocks the cancel like any unresolved execution;
   a durable stop request settles it and the cancel succeeds."""
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   child = await create_task(tree, parent=root.id, request_id="child", profile="worker")
   await tree.runs.register_run(RunRecord(id="run-queued", session_id=child.id, kind="work"))
@@ -384,7 +384,7 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
 @pytest.mark.asyncio
 async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_path: Path) -> None:
   """Cancelling a worker preserves its close fact and reports the result to its manager node."""
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   manager = await create_task(tree, parent=None, request_id="manager")
   child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
   payload = await tree.completion.cancel_task(

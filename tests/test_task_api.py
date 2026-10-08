@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import build_session_manager, stub_credentials
+from conftest import build_session_blocks, build_task_tree, stub_credentials
 
 from src.infra.models import RunRecord, utc_now_iso
 from src.runtime.run_token import RunTokenClaims, sign_run_token
@@ -22,9 +22,9 @@ from tests.test_task_execution import make_api_client
 async def task_env(tmp_path: Path):
   from conftest import make_home_config
   cfg = make_home_config(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  task_mgr = TaskTreeManager(cfg, session_mgr)
-  return cfg, session_mgr, task_mgr
+  session_blocks = build_session_blocks(cfg)
+  task_mgr = build_task_tree(cfg, session_blocks)
+  return cfg, session_blocks, task_mgr
 
 
 async def seed_tree(task_mgr: TaskTreeManager) -> dict[str, str]:
@@ -48,9 +48,9 @@ async def seed_tree(task_mgr: TaskTreeManager) -> dict[str, str]:
 
 @pytest.mark.asyncio
 async def test_v2_create_tree_detail_and_runs(task_env) -> None:
-  cfg, session_mgr, task_mgr = task_env
+  cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
-  with make_api_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_blocks, task_mgr) as client:
     # v2 create requires request_id.
     assert client.post("/api/sessions/", json={"task_parent_id": ids["root"], "profile": "worker"}).status_code == 400
 
@@ -108,7 +108,7 @@ async def test_activity_tracks_a_finish_that_lands_after_a_warm_derivation(task_
   cursor, so a run_finished append after a warmed derivation must move the
   verdict — a stale memo would pin a finished run's queued verdict on every
   tree page and sidebar probe until restart."""
-  _cfg, _session_mgr, task_mgr = task_env
+  _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
   await task_mgr.runs.register_run(RunRecord(id="r-memo", session_id=worker))
@@ -123,7 +123,7 @@ async def test_activity_tracks_a_launch_that_lands_after_a_warm_derivation(task_
   so a launch identity persisted after a warmed derivation must move the
   queued verdict — a memo the funnel bypass leaves stale would pin the
   waiting verdict on every tree page and sidebar probe."""
-  _cfg, _session_mgr, task_mgr = task_env
+  _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
   await task_mgr.runs.register_run(RunRecord(id="r-launch", session_id=worker))
@@ -146,7 +146,7 @@ async def test_activity_tracks_a_stop_request_that_lands_after_a_warm_derivation
   the covered length in the memo key. A key without it would pin the waiting
   verdict on every tree page and sidebar probe until an unrelated record
   write bumped the generation."""
-  _cfg, _session_mgr, task_mgr = task_env
+  _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
   await task_mgr.runs.register_run(RunRecord(id="r-stop", session_id=worker))
@@ -164,7 +164,7 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   post-recycle append: a writer that bumped the offset without that drop would
   leave the warm memo folding the suffix at a stale archived base — silently
   wrong facts on every tree page and sidebar probe."""
-  _cfg, session_mgr, task_mgr = task_env
+  _cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
   await task_mgr.runs.register_run(RunRecord(id="r1", session_id=worker))
@@ -172,9 +172,9 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
   assert task_mgr.activity_of(worker).work_state == "idle"
 
   cutoff = datetime.now(UTC) + timedelta(hours=1)
-  result = await session_mgr.lifecycle.recycle_history_before(worker, cutoff)
+  result = await session_blocks.lifecycle.recycle_history_before(worker, cutoff)
   assert result["events_archived"] > 0
-  meta = await session_mgr.store.get_session(worker)
+  meta = await session_blocks.store.get_session(worker)
   assert meta is not None and meta.archive_offset == result["events_archived"]
 
   # The rotation replaced the events cache's list, so the warm fold re-keyed
@@ -199,7 +199,7 @@ async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> No
   death no record write announces: the derivation must re-read on every call
   for such a node — a stored /proc verdict would pin a crashed run's running
   verdict on every tree page until restart."""
-  _cfg, _session_mgr, task_mgr = task_env
+  _cfg, _session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   worker = ids["worker"]
   await task_mgr.runs.register_run(RunRecord(id="r-proc", session_id=worker))
@@ -217,9 +217,9 @@ async def test_activity_derivation_rereads_after_a_proc_judgment(task_env) -> No
 
 @pytest.mark.asyncio
 async def test_patch_metadata_and_permanent_delete_blockers(task_env) -> None:
-  cfg, session_mgr, task_mgr = task_env
+  cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
-  with make_api_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_blocks, task_mgr) as client:
     # Name-only PATCH keeps the legacy rename contract.
     renamed = client.patch(f"/api/sessions/{ids['worker']}", json={"name": "Renamed"})
     assert renamed.status_code == 200 and renamed.json()["name"] == "Renamed"
@@ -264,7 +264,7 @@ async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(ta
   """A metadata.json still carrying the retired pause key loads through the
   normal session load path (unknown keys are ignored on read) and the key is
   gone after the next metadata save."""
-  cfg, session_mgr, task_mgr = task_env
+  cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   metadata_path = cfg.sessions_dir / ids["worker"] / "metadata.json"
   data = json.loads(metadata_path.read_text())
@@ -275,11 +275,11 @@ async def test_metadata_with_the_retired_pause_key_loads_and_drops_it_on_save(ta
   # The normal load paths answer the node, not a parse error.
   meta = await task_mgr.load_task_meta(ids["worker"])
   assert meta is not None and meta.id == ids["worker"]
-  loaded = await session_mgr.store.get_session(ids["worker"])
+  loaded = await session_blocks.store.get_session(ids["worker"])
   assert loaded is not None and loaded.id == ids["worker"]
 
   # The next save rewrites the file from the parsed model: the key is gone.
-  await session_mgr.lifecycle.rename_session(ids["worker"], "Renamed")
+  await session_blocks.lifecycle.rename_session(ids["worker"], "Renamed")
   saved = json.loads(metadata_path.read_text())
   assert RETIRED_PAUSE_KEY not in saved
   assert saved["name"] == "Renamed"
@@ -318,7 +318,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
   """A valid active-Run token organizes its own manager task: a logical manager
   child needs no user authorization, a worker child rides the takeoff gate
   (present here), and any foreign parent is refused."""
-  cfg, session_mgr, task_mgr = task_env
+  cfg, session_blocks, task_mgr = task_env
   ids = await seed_tree(task_mgr)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   claims = RunTokenClaims(session_id=ids["root"], run_id="agent-run-1", agent="worker-alpha")
@@ -334,7 +334,7 @@ async def test_agent_run_token_creates_own_children_under_its_own_task(task_env)
           "content": "take off",
       })
 
-  with make_api_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_blocks, task_mgr) as client:
     # A valid active-Run token may create a worker directly under its own manager task.
     ok = client.post(
         "/api/sessions/",
@@ -406,7 +406,7 @@ async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env)
   from src.infra.event_types import AGENT_MESSAGE
   from src.runtime.control_events import build_control_event
 
-  cfg, session_mgr, task_mgr = task_env
+  cfg, session_blocks, task_mgr = task_env
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   root = await task_mgr.create_task(
       request_id="root",
@@ -422,7 +422,7 @@ async def test_agent_messages_and_cron_inputs_never_mint_authorization(task_env)
       root.id,
       build_control_event(AGENT_MESSAGE, actor="agent", source_session_id=root.id, content="take off now please"))
 
-  with make_api_client(cfg, session_mgr, task_mgr) as client:
+  with make_api_client(cfg, session_blocks, task_mgr) as client:
     blocked = client.post(
         "/api/sessions/",
         json={

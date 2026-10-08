@@ -15,7 +15,6 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import task_execution
 
 _MASTER_TRIGGER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
 
@@ -42,7 +41,7 @@ def _failed_work_run(session_id: str, run_id: str) -> models.RunRecord:
 @pytest.mark.asyncio
 async def test_node_parent_dispatches_its_pending_inputs(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  _cfg, _session_mgr, tree = conftest.build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   node = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
   dispatch = mock.AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
@@ -63,7 +62,7 @@ async def test_task_tree_parent_with_the_caller_equal_to_itself_still_dispatches
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The dispatch consults the node's durable inputs, never the caller —
   even when the closer is the node itself."""
-  _cfg, _session_mgr, tree = conftest.build_env(tmp_path)
+  _cfg, _session_blocks, tree = conftest.build_env(tmp_path)
   node = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
   dispatch = mock.AsyncMock(return_value={"session_id": node.id, "pending": 0, "launch": False})
@@ -87,8 +86,8 @@ async def test_failure_report_dispatches_a_task_tree_parents_pending_inputs(
   """The first failed/blocked delivery is a task-tree parent's new durable
   input: its next serialized turn dispatches now, and no master wake fires for
   a node parent."""
-  cfg, session_mgr, tree = conftest.build_env(tmp_path)
-  adapter = task_execution.TaskExecutionAdapter(cfg, session_mgr, tree)
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  adapter = conftest.build_execution_adapter(cfg, session_blocks, tree)
   manager = await conftest.create_task(
       tree, parent=None, request_id="root", profile="manager", task=models.TaskSpec(goal="project"), name="Project")
   worker = await conftest.create_task(

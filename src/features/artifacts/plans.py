@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
   from src.features.artifacts import artifact_check
   from src.infra import config
-  from src.runtime import sessions
+  from src.runtime import session_events
 
 
 def run_assertions(*args: object, **kwargs: object) -> list[artifact_check.AssertionOutcome]:
@@ -224,9 +224,9 @@ def read_plans_tolerant(plans_path: pathlib.Path, session_id: str) -> dict:
 class PlanRegistryManager:
   """Per-session plan registry: lineage state and version mutations."""
 
-  def __init__(self, cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager) -> None:
+  def __init__(self, cfg: config.CharlieBotConfig, events: session_events.SessionEvents) -> None:
     self._cfg = cfg
-    self._session_events = session_mgr.events
+    self._session_events = events
     self._locks: dict[str, asyncio.Lock] = {}
 
   # -- locking ------------------------------------------------------------

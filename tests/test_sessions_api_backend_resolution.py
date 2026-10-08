@@ -8,12 +8,13 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import session_fork, sessions, task_sessions
+from src.runtime import session_fork
 
 
-async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
-  parent = await conftest.create_root_session(session_mgr, models.CreateSessionRequest(name="Parent"), backend=backend)
-  events_path = session_mgr.events.get_chat_events_path(parent.id)
+async def _seed_parent(session_blocks: conftest.SessionBlocks, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
+  parent = await conftest.create_root_session(
+      session_blocks, models.CreateSessionRequest(name="Parent"), backend=backend)
+  events_path = session_blocks.events.get_chat_events_path(parent.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(
       "\n".join([
@@ -25,17 +26,17 @@ async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = c
   return parent.id
 
 
-_RouteEnv = tuple[config.CharlieBotConfig, sessions.SessionManager, list[tuple[str, list[str]]]]
+_RouteEnv = tuple[config.CharlieBotConfig, conftest.SessionBlocks, list[tuple[str, list[str]]]]
 
 
 @pytest.fixture
 def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> _RouteEnv:
-  """(cfg, session_mgr, launches): cfg registers the two backends, the deps singletons are a task tree
-  over that session manager, and launches records (session id, input contents) per dispatched run."""
+  """(cfg, session_blocks, launches): cfg registers the two backends, the deps singletons are a task tree
+  over those session blocks, and launches records (session id, input contents) per dispatched run."""
   cfg = conftest.build_two_backend_cfg(tmp_path)
-  session_mgr = conftest.build_session_manager(cfg)
-  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
-  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  session_blocks = conftest.build_session_blocks(cfg)
+  tree = conftest.build_task_tree(cfg, session_blocks)
+  conftest.bind_deps_blocks(monkeypatch, tree, session_blocks)
   launches: list[tuple[str, list[str]]] = []
 
   async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
@@ -43,7 +44,7 @@ def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
     return "run-1"
 
   tree.dispatch.executor = executor
-  return cfg, session_mgr, launches
+  return cfg, session_blocks, launches
 
 
 @pytest.mark.asyncio
@@ -56,10 +57,10 @@ def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
     ])
 async def test_fork_and_elone_routes_inherit_parent_backend_and_dispatch_their_bootstrap(
     two_backend_env: _RouteEnv, route: str, payload: dict[str, Any], opener: str) -> None:
-  cfg, session_mgr, launches = two_backend_env
-  parent_id = await _seed_parent(session_mgr, backend=conftest.OPUS_BACKEND_ID)
+  cfg, session_blocks, launches = two_backend_env
+  parent_id = await _seed_parent(session_blocks, backend=conftest.OPUS_BACKEND_ID)
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post(f"/api/sessions/{parent_id}/{route}", json=payload)
 
   assert response.status_code == 200
@@ -95,22 +96,22 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
     two_backend_env: _RouteEnv, route: str, parent_backend: str | None, payload: dict[str, Any]) -> None:
   """Backend validation precedes every side effect: the route returns 400, persists no child
   session, and leaves the parent's status and rating unchanged."""
-  cfg, session_mgr, _ = two_backend_env
+  cfg, session_blocks, _ = two_backend_env
   parent_id = None
   parent_before = None
   if parent_backend is not None:
-    parent_id = await _seed_parent(session_mgr, backend=parent_backend)
-    parent_before = await session_mgr.store.get_session(parent_id)
+    parent_id = await _seed_parent(session_blocks, backend=parent_backend)
+    parent_before = await session_blocks.store.get_session(parent_id)
   before = conftest.session_dir_names(cfg)
   url = "/api/sessions/" if route == "create" else f"/api/sessions/{parent_id}/{route}"
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post(url, json=payload)
 
   assert response.status_code == 400
   assert conftest.session_dir_names(cfg) == before
   if parent_id is not None:
-    parent_after = await session_mgr.store.get_session(parent_id)
+    parent_after = await session_blocks.store.get_session(parent_id)
     assert parent_after.status == parent_before.status
 
 
@@ -121,9 +122,9 @@ async def test_route_rejects_unresolvable_backend_and_persists_nothing(
 
 @pytest.mark.asyncio
 async def test_create_route_defaults_to_first_backend_option_when_omitted(two_backend_env: _RouteEnv,) -> None:
-  cfg, session_mgr, _ = two_backend_env
+  cfg, session_blocks, _ = two_backend_env
 
-  with conftest.make_sessions_client(cfg, session_mgr) as client:
+  with conftest.make_sessions_client(cfg, session_blocks) as client:
     response = client.post("/api/sessions/", json={})
 
   assert response.status_code == 200

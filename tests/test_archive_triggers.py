@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from conftest import bind_deps_managers, build_env, create_root_session, create_task
+from conftest import bind_deps_blocks, build_env, create_root_session, create_task
 
 from src.infra.models import PendingTrigger
 from src.runtime.triggers import ArchivedSessionError, TriggerManager
@@ -24,13 +24,13 @@ def _trigger(session_id: str, trigger_id: str = "trig-archived-1") -> PendingTri
 @pytest.mark.asyncio
 async def test_create_trigger_on_an_archived_task_node_is_refused(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, tree = build_env(tmp_path)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await create_task(tree, parent=None, request_id="node")
   from conftest import OPERATOR
   await tree.archive_subtree(node.id, caller=OPERATOR)
 
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, tree)
   with pytest.raises(ArchivedSessionError, match="target task is archived"):
     await trigger_mgr.create_trigger(node.id, 60, "check the run")
 
@@ -42,11 +42,11 @@ async def test_create_trigger_on_an_archived_task_node_is_refused(
 @pytest.mark.asyncio
 async def test_fire_time_backstop_cancels_with_the_archived_reason(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, tree = build_env(tmp_path)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await create_task(tree, parent=None, request_id="node")
   from conftest import OPERATOR
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, tree)
   trigger = _trigger(node.id)
   await trigger_mgr._save_trigger(trigger)
   # The archive lands mid-wait: the fire-time re-check must cancel, not fire.
@@ -64,19 +64,19 @@ async def test_fire_time_backstop_cancels_with_the_archived_reason(
 
 @pytest.mark.asyncio
 async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = build_env(tmp_path)
-  bind_deps_managers(monkeypatch, tree, session_mgr)
+  cfg, session_blocks, tree = build_env(tmp_path)
+  bind_deps_blocks(monkeypatch, tree, session_blocks)
   node = await create_task(tree, parent=None, request_id="node")
   from conftest import OPERATOR
   await tree.archive_subtree(node.id, caller=OPERATOR)
 
-  trigger_mgr = TriggerManager(cfg, session_mgr)
+  trigger_mgr = TriggerManager(cfg, tree)
   # The dormancy judgment is the one predicate both racers read.
   assert await trigger_mgr._dormancy_reason(node.id) == "target task is archived"
   assert await trigger_mgr._is_dormant_target(node.id) is True
   # An open manager root remains eligible for trigger registration.
   from src.infra.models import CreateSessionRequest
-  open_root = await create_root_session(session_mgr, CreateSessionRequest(name="Open root"), backend=None)
+  open_root = await create_root_session(session_blocks, CreateSessionRequest(name="Open root"), backend=None)
   assert open_root.profile == "manager"
   assert await trigger_mgr._dormancy_reason(open_root.id) is None
 

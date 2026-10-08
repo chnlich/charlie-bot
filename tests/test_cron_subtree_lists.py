@@ -19,7 +19,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import sessions, task_sessions
+from src.runtime import task_sessions
 
 
 @dataclasses.dataclass
@@ -27,7 +27,7 @@ class Fixture:
   """One corpus exercising every cron-subtree classification the sidebar lists make."""
 
   cfg: config.CharlieBotConfig
-  session_mgr: sessions.SessionManager
+  session_blocks: conftest.SessionBlocks
   tree: task_sessions.TaskTreeManager
   cron: models.SessionMetadata  # active cron session (scheduled_task set)
   manager: models.SessionMetadata  # active manager child of the cron session
@@ -42,8 +42,8 @@ class Fixture:
 
 
 async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
-  cfg, session_mgr, tree = conftest.build_env(tmp_path)
-  cron = await conftest.make_cron_session(session_mgr, "nightly")
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
+  cron = await conftest.make_cron_session(session_blocks, "nightly")
   manager = await conftest.create_task(
       tree, parent=cron.id, request_id="mgr-1", profile="manager", name="nightly · manager")
   worker = await conftest.create_task(
@@ -57,24 +57,24 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   await tree.dispatch.finish_run(delivered.id, "run-44", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # the derived archive hides it while active
 
-  cron_archived = await conftest.make_cron_session(session_mgr, "nightly-archived")
-  await session_mgr.lifecycle.archive_session(cron_archived.id)
+  cron_archived = await conftest.make_cron_session(session_blocks, "nightly-archived")
+  await session_blocks.lifecycle.archive_session(cron_archived.id)
   plain_archived = await conftest.create_root_session(
-      session_mgr, models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
-  await session_mgr.lifecycle.archive_session(plain_archived.id)
+      session_blocks, models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
+  await session_blocks.lifecycle.archive_session(plain_archived.id)
   plain_active = await conftest.create_root_session(
-      session_mgr, models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
+      session_blocks, models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
   ordinary = await conftest.create_root_session(
-      session_mgr, models.CreateSessionRequest(name="Ordinary"), backend=conftest.OPUS_BACKEND_ID)
+      session_blocks, models.CreateSessionRequest(name="Ordinary"), backend=conftest.OPUS_BACKEND_ID)
   fillers = []
   for i in range(3):
     filler = await conftest.create_root_session(
-        session_mgr, models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
-    await session_mgr.lifecycle.archive_session(filler.id)
+        session_blocks, models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
+    await session_blocks.lifecycle.archive_session(filler.id)
     fillers.append(filler)
   return Fixture(
       cfg=cfg,
-      session_mgr=session_mgr,
+      session_blocks=session_blocks,
       tree=tree,
       cron=cron,
       manager=manager,
@@ -99,7 +99,7 @@ def _subtree_ids(fx: Fixture) -> set[str]:
 @pytest.mark.asyncio
 async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_blocks, fx.tree)
   resp = client.get("/api/sessions/")
   assert resp.status_code == 200
   all_ids = {row["id"] for row in resp.json()}
@@ -110,7 +110,7 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: pathlib.
 
   # The homepage's first-paint list carries the same membership, and the
   # auto-redirect never lands on a cron-subtree row.
-  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree)
+  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_blocks, fx.tree)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _subtree_ids(fx)
@@ -122,7 +122,7 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: pathlib.
 @pytest.mark.asyncio
 async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_blocks, fx.tree)
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
   page = resp.json()
@@ -151,7 +151,7 @@ async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: 
 @pytest.mark.asyncio
 async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_blocks, fx.tree)
   resp = client.get("/api/sessions/search", params={"q": "firing-42"})
   assert resp.status_code == 200
   assert fx.worker.id in {row["id"] for row in resp.json()}
@@ -160,7 +160,7 @@ async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> Non
   assert resp.status_code == 200
   assert {fx.cron.id, fx.worker.id} <= {row["id"] for row in resp.json()}
   # Starred keeps today's behavior: a starred cron session still lists.
-  await fx.session_mgr.lifecycle.star_session(fx.cron.id)
+  await fx.session_blocks.lifecycle.star_session(fx.cron.id)
   resp = client.get("/api/sessions/starred")
   assert resp.status_code == 200
   assert fx.cron.id in {row["id"] for row in resp.json()}
@@ -169,7 +169,7 @@ async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> Non
 @pytest.mark.asyncio
 async def test_scheduled_filter_returns_only_cron_sessions(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  rows = await fx.session_mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=True)
+  rows = await fx.session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=True)
   assert [row.id for row in rows] == [fx.cron.id]
   assert all(row.scheduled_task is not None for row in rows)
 
@@ -179,19 +179,19 @@ async def test_subtree_map_rederives_after_a_metadata_write(tmp_path: pathlib.Pa
   """The derived map rides the listings memo's staleness bounds, so a write
   between two reads must be visible to the second read and not to a stale map."""
   fx = await _build_fixture(tmp_path)
-  warmed = await fx.session_mgr.listing.sequence_subtree_roots()
+  warmed = await fx.session_blocks.listing.sequence_subtree_roots()
   assert fx.worker.id in warmed and fx.ordinary.id not in warmed
   # Attach the plain session under the cron session: the write funnel bumps the
   # listings revision, the next listing rebuilds its list, and the map keyed on
   # that list's identity re-derives with the new member.
-  meta = await fx.session_mgr.store.get_session(fx.ordinary.id)
+  meta = await fx.session_blocks.store.get_session(fx.ordinary.id)
   meta.task_parent_id = fx.cron.id
-  await fx.session_mgr.store.save_metadata(meta)
-  attached = await fx.session_mgr.listing.sequence_subtree_roots()
+  await fx.session_blocks.store.save_metadata(meta)
+  attached = await fx.session_blocks.listing.sequence_subtree_roots()
   assert attached[fx.ordinary.id] == fx.cron.id
   # Detach again: the map drops the member on the next read.
-  meta = await fx.session_mgr.store.get_session(fx.ordinary.id)
+  meta = await fx.session_blocks.store.get_session(fx.ordinary.id)
   meta.task_parent_id = None
-  await fx.session_mgr.store.save_metadata(meta)
-  detached = await fx.session_mgr.listing.sequence_subtree_roots()
+  await fx.session_blocks.store.save_metadata(meta)
+  detached = await fx.session_blocks.listing.sequence_subtree_roots()
   assert fx.ordinary.id not in detached

@@ -55,7 +55,7 @@ _snapshot: dict[str, dict] = {}
 # one — and whose 30-day scan-window rollover has not passed — re-derives from
 # unchanged bytes, so the deep probe is skipped (the every-10th-poll self-heal
 # sweep drops to a stat-only pass). Built and stored by the poll in
-# src.runtime.sessions; the /status?force=1 escape hatch bypasses it.
+# the session_sidebar block; the /status?force=1 escape hatch bypasses it.
 _probe_signatures: dict[str, tuple] = {}
 # populate_sidebar_state invocation counter (process lifetime).
 _poll_count = 0

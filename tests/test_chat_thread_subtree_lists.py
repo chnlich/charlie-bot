@@ -21,7 +21,7 @@ from src.features.chat_threads import api as chat_threads_api
 from src.features.discord.metadata import DiscordOrigin
 from src.features.slack.metadata import SlackOrigin
 from src.infra import config, models
-from src.runtime import sessions, task_sessions
+from src.runtime import task_sessions
 from src.runtime.api import sessions as sessions_api
 
 
@@ -30,7 +30,7 @@ class Fixture:
   """One corpus exercising every chat-thread classification the sidebar lists make."""
 
   cfg: config.CharlieBotConfig
-  session_mgr: sessions.SessionManager
+  session_blocks: conftest.SessionBlocks
   tree: task_sessions.TaskTreeManager
   thread: models.SessionMetadata  # active discord-origin session (the subtree's root)
   slack_thread: models.SessionMetadata  # active slack-origin session (the other origin field)
@@ -43,16 +43,16 @@ class Fixture:
 
 
 async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
-  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  cfg, session_blocks, tree = conftest.build_env(tmp_path)
   thread = await conftest.create_root_session(
-      session_mgr,
+      session_blocks,
       models.CreateSessionRequest(
           name="Discord #general 2026",
           discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t1"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
   slack_thread = await conftest.create_root_session(
-      session_mgr,
+      session_blocks,
       models.CreateSessionRequest(
           name="Slack #general 2026",
           slack_origin=SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")),
@@ -62,21 +62,21 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   grandchild = await conftest.create_task(
       tree, parent=child.id, request_id="th-child-2", profile="worker", name="thread grandchild")
   archived_thread = await conftest.create_root_session(
-      session_mgr,
+      session_blocks,
       models.CreateSessionRequest(
           name="Discord #general archived",
           discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t2"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
-  await session_mgr.lifecycle.archive_session(archived_thread.id)
-  cron = await conftest.make_cron_session(session_mgr, "nightly")
+  await session_blocks.lifecycle.archive_session(archived_thread.id)
+  cron = await conftest.make_cron_session(session_blocks, "nightly")
   cron_child = await conftest.create_task(
       tree, parent=cron.id, request_id="cron-leaf-1", profile="worker", name="cron leaf")
   plain = await conftest.create_root_session(
-      session_mgr, models.CreateSessionRequest(name="Plain"), backend=conftest.OPUS_BACKEND_ID)
+      session_blocks, models.CreateSessionRequest(name="Plain"), backend=conftest.OPUS_BACKEND_ID)
   return Fixture(
       cfg=cfg,
-      session_mgr=session_mgr,
+      session_blocks=session_blocks,
       tree=tree,
       thread=thread,
       slack_thread=slack_thread,
@@ -100,7 +100,7 @@ def _thread_ids(fx: Fixture) -> set[str]:
 @pytest.mark.asyncio
 async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  chat = (await fx.session_mgr.listing.view_subtree_roots())["threads"]
+  chat = (await fx.session_blocks.listing.view_subtree_roots())["threads"]
   # Both origin fields root a subtree, and the root itself is a member.
   assert chat[fx.thread.id] == fx.thread.id
   assert chat[fx.slack_thread.id] == fx.slack_thread.id
@@ -111,7 +111,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 
   # The cron rule beside which the walk lives keeps its results unchanged: the
   # cron child maps to its cron session, and no chat-thread row joins it.
-  cron = await fx.session_mgr.listing.sequence_subtree_roots()
+  cron = await fx.session_blocks.listing.sequence_subtree_roots()
   assert cron[fx.cron_child.id] == fx.cron.id
   assert fx.cron.id not in cron
   assert not (set(cron) & _thread_ids(fx))
@@ -120,7 +120,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 @pytest.mark.asyncio
 async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shape(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_blocks, fx.tree)
   workspace_ids = {row["id"] for row in client.get("/api/sessions/").json()}
   threads_rows = client.get("/api/sessions/chat-threads").json()
   threads_ids = {row["id"] for row in threads_rows}
@@ -136,9 +136,9 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
 
   # The two routes partition the active non-cron task nodes, and the union is
   # the listing the cron exclusion alone produced before the split.
-  sequence_subtree = await fx.session_mgr.listing.sequence_subtree_roots()
+  sequence_subtree = await fx.session_blocks.listing.sequence_subtree_roots()
   unprojected = [
-      row for row in await fx.session_mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
+      row for row in await fx.session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
       if row.id not in sequence_subtree
   ]
   active = {row.id for row in unprojected}
@@ -155,7 +155,7 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
 @pytest.mark.asyncio
 async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_blocks, fx.tree)
   workspace = client.get("/api/sessions/")
   threads_resp = client.get("/api/sessions/chat-threads")
   # A repeat of each route (the other route's memo now warm) still serves its
@@ -175,7 +175,7 @@ async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: path
 @pytest.mark.asyncio
 async def test_homepage_initial_list_and_redirect_skip_the_chat_thread_subtree(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree)
+  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_blocks, fx.tree)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _thread_ids(fx)

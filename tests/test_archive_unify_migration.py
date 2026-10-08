@@ -24,12 +24,12 @@ ORIGINAL_REQUEST = migration._request
 
 @pytest.fixture()
 def script_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-  """A real (cfg, session_mgr, tree) home with the script's IO seams pointed at it."""
-  cfg, session_mgr, tree = build_env(tmp_path)
+  """A real (cfg, session_blocks, tree) home with the script's IO seams pointed at it."""
+  cfg, session_blocks, tree = build_env(tmp_path)
   stub_credentials({"charliebot": {"access_key": KEY}})
   monkeypatch.setattr(migration, "_sessions_dir", lambda: cfg.sessions_dir)
   monkeypatch.setattr(migration, "_access_key", lambda: KEY)
-  return cfg, session_mgr, tree
+  return cfg, session_blocks, tree
 
 
 class RouterDouble:
@@ -37,13 +37,13 @@ class RouterDouble:
   shape, backed by the real sessions router over the real managers. A plain
   /api/internal/version answers the preflight's reachability check."""
 
-  def __init__(self, cfg, session_mgr, tree) -> None:
+  def __init__(self, cfg, session_blocks, tree) -> None:
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     from src.infra import config
     from src.runtime.api import sessions as sessions_api
-    from src.runtime.api.deps import get_run_store, get_session_manager, get_session_store, get_task_manager
+    from src.runtime.api.deps import get_run_store, get_session_store, get_task_manager
 
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -54,8 +54,7 @@ class RouterDouble:
 
     app.dependency_overrides[config.get_config] = lambda: cfg
     app.dependency_overrides[config.configured_access_key] = lambda: KEY
-    app.dependency_overrides[get_session_manager] = lambda: session_mgr
-    app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+    app.dependency_overrides[get_session_store] = lambda: session_blocks.store
     app.dependency_overrides[get_task_manager] = lambda: tree
     app.dependency_overrides[get_run_store] = lambda: tree.runs
     self.client = TestClient(app)
@@ -82,7 +81,7 @@ def hide_like_the_old_server(cfg, session_id: str) -> None:
 @pytest.mark.asyncio
 async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
     script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-  cfg, session_mgr, tree = script_env
+  cfg, session_blocks, tree = script_env
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   closed = await create_task(tree, parent=root.id, request_id="closed")
@@ -90,7 +89,7 @@ async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
   hide_like_the_old_server(cfg, mid.id)
 
   out = tmp_path / "snapshot.json"
-  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
+  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_blocks, tree))
   migration.cmd_snapshot(out)
 
   doc = json.loads(out.read_text())
@@ -105,12 +104,12 @@ async def test_snapshot_folds_segments_before_the_live_file(
   """A close fact the rotation moved into a weekly segment and a reopen fact
   in the live file fold chronologically: the reopen (the last lifecycle fact)
   wins, so the hidden node reads open and the snapshot lists it."""
-  cfg, session_mgr, tree = script_env
+  cfg, session_blocks, tree = script_env
   node = await create_task(tree, parent=None, request_id="seg")
   await tree.archive_subtree(node.id, caller=OPERATOR)  # the close fact, live file
   # The real segment writer: the rotation moves the closed-period events into
   # data/archives/chat_events.<iso-year>-W<week>.jsonl.
-  await session_mgr.lifecycle.recycle_history_before(node.id, datetime.now(UTC) + timedelta(seconds=1))
+  await session_blocks.lifecycle.recycle_history_before(node.id, datetime.now(UTC) + timedelta(seconds=1))
   segments = sorted((cfg.sessions_dir / node.id / "data" / "archives").glob("chat_events.*.jsonl"))
   assert segments, "the rotation wrote no segment"
   segment_types = [
@@ -122,7 +121,7 @@ async def test_snapshot_folds_segments_before_the_live_file(
   hide_like_the_old_server(cfg, node.id)
 
   out = tmp_path / "snapshot.json"
-  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
+  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_blocks, tree))
   migration.cmd_snapshot(out)
 
   doc = json.loads(out.read_text())
@@ -132,7 +131,7 @@ async def test_snapshot_folds_segments_before_the_live_file(
 @pytest.mark.asyncio
 async def test_apply_archives_verifies_and_reports_mismatches(
     script_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg, session_mgr, tree = script_env
+  cfg, session_blocks, tree = script_env
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   source = tmp_path / "snapshot.json"
@@ -147,7 +146,7 @@ async def test_apply_archives_verifies_and_reports_mismatches(
               },
           }))
 
-  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
+  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_blocks, tree))
   migration.cmd_apply(source)
   # Everything archived; a second apply of the same snapshot still verifies
   # (each node reads back archived, the parents are unchanged).
@@ -174,7 +173,7 @@ async def test_apply_archives_verifies_and_reports_mismatches(
 
 @pytest.mark.asyncio
 async def test_rollback_unarchives_every_archived_task_node(script_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  cfg, session_mgr, tree = script_env
+  cfg, session_blocks, tree = script_env
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   keep = await create_task(tree, parent=None, request_id="keep")
@@ -190,7 +189,7 @@ async def test_rollback_unarchives_every_archived_task_node(script_env, monkeypa
   assert tree.task_state(mid.id) == "archived"
   assert tree.task_state(done.id) == "completed"
 
-  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_mgr, tree))
+  monkeypatch.setattr(migration, "_request", RouterDouble(cfg, session_blocks, tree))
   migration.cmd_rollback()
 
   assert tree.task_state(root.id) == "open"

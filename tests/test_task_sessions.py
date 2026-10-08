@@ -30,11 +30,11 @@ async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, st
 
 @pytest.mark.asyncio
 async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp_path: pathlib.Path) -> None:
-  _, session_mgr, mgr = conftest.build_env(tmp_path)
+  _, session_blocks, mgr = conftest.build_env(tmp_path)
   ids = await build_three_levels(mgr)
 
   for label in ("root", "mid", "low"):
-    meta = await session_mgr.store.get_session(ids[label])
+    meta = await session_blocks.store.get_session(ids[label])
     assert meta is not None and meta.profile == "manager"  # one profile at every manager depth
     assert meta.schema_version == 2
 
@@ -45,12 +45,12 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
 
 @pytest.mark.asyncio
 async def test_history_references_do_not_become_task_parent_edges(tmp_path: pathlib.Path) -> None:
-  cfg, session_mgr, mgr = conftest.build_env(tmp_path)
+  cfg, session_blocks, mgr = conftest.build_env(tmp_path)
   parent = await conftest.create_root_session(
-      session_mgr, models.CreateSessionRequest(name="Parent history copy"), backend=conftest.OPUS_BACKEND_ID)
+      session_blocks, models.CreateSessionRequest(name="Parent history copy"), backend=conftest.OPUS_BACKEND_ID)
   parent.parent_session_id = "some-old-session"
   parent.origin_ref = models.EventRef(session_id="some-old-session", event_id=None)
-  await session_mgr.store.save_metadata(parent)
+  await session_blocks.store.save_metadata(parent)
 
   index = await mgr._get_index()
   assert parent.id in index.children.get(None, [])
@@ -60,7 +60,7 @@ async def test_history_references_do_not_become_task_parent_edges(tmp_path: path
   before = meta_path.read_bytes()
   child = await conftest.create_task(mgr, parent=parent.id, request_id="child-of-parent")
   assert meta_path.read_bytes() == before
-  fresh = await session_mgr.store.get_session(parent.id)
+  fresh = await session_blocks.store.get_session(parent.id)
   assert fresh is not None and fresh.task_parent_id is None
   assert fresh.profile == "manager" and fresh.schema_version == 2
   assert child.task_parent_id == parent.id
@@ -98,7 +98,7 @@ async def test_permanent_delete_blockers(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.asyncio
 async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path: pathlib.Path) -> None:
-  _, session_mgr, mgr = conftest.build_env(tmp_path)
+  _, session_blocks, mgr = conftest.build_env(tmp_path)
   root = await conftest.create_task(mgr, parent=None, request_id="root", name="Root")
   agent = run_token.CallerIdentity(
       kind="agent", claims=run_token.RunTokenClaims(session_id=root.id, run_id="run-1", agent="manager"))
@@ -107,7 +107,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   # The agent's own-child create stays legal; naming its id is the scope refusal.
   with pytest.raises(task_errors.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):
     await mgr.create_task(request_id="by-agent", session_id="agent-picked-id", caller=agent, **create)
-  assert await session_mgr.store.get_session("agent-picked-id") is None
+  assert await session_blocks.store.get_session("agent-picked-id") is None
   assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"
 
   origin = SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
@@ -124,7 +124,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   assert (by_server.id, by_operator.id) == ("server-picked-id", "operator-picked-id")
   # The origin rides the same publish as the metadata: no read sees the node without it.
   assert metadata_slots.fields_of(
-      await session_mgr.store.get_session("server-picked-id"), "slack").slack_origin == origin
+      await session_blocks.store.get_session("server-picked-id"), "slack").slack_origin == origin
   # A replay under the explicit id returns the original node instead of a second one.
   replay = await mgr.create_task(
       request_id="by-server", session_id="server-picked-id", caller="system", **{
@@ -137,13 +137,13 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
 async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited_inputs(tmp_path: pathlib.Path) -> None:
   """The fork copies the parent's control facts into the child's log; the clone_start marker keeps
   them the parent's, so the child's own task_created starts its lifecycle."""
-  _, session_mgr, mgr = conftest.build_env(tmp_path)
+  _, session_blocks, mgr = conftest.build_env(tmp_path)
   parent = await conftest.create_task(mgr, parent=None, request_id="parent", name="Parent")
   await mgr.dispatch.admit_input(parent.id, event_type="user", content="old input", actor="user")
   await mgr.archive_subtree(parent.id, caller=conftest.OPERATOR)
   assert mgr.task_state(parent.id) == "archived"
 
-  child = await session_mgr.fork.fork_session(parent.id)
+  child = await session_blocks.fork.fork_session(parent.id)
 
   facts = mgr.facts_of(child.id)
   assert (mgr.task_state(child.id), facts.input_candidates, facts.close_events) == ("open", [], [])
@@ -160,10 +160,10 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   """Every registered-slot write shape the scheduler uses writes its
   scheduling fields and leaves updated_at as it was: a frequent cron's node
   keeps its sidebar place, while a listing read shows the new Last status."""
-  _, session_mgr, tree = conftest.build_env(tmp_path)
+  _, session_blocks, tree = conftest.build_env(tmp_path)
   node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   fired_at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
-  await session_mgr.anchors.update_thinking_state(node.id, fired_at)
+  await session_blocks.anchors.update_thinking_state(node.id, fired_at)
 
   # The five call shapes src/features/cron/scheduler.py fires with, and the metadata
   # fields each must land (the scheduler's cron argument writes
@@ -185,9 +185,9 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   for call, landed in shapes:
     meta = await tree.update_slot_fields(node.id, "cron", **call)
     assert meta.updated_at == fired_at
-    fresh = await session_mgr.store.get_session(node.id)
+    fresh = await session_blocks.store.get_session(node.id)
     assert fresh is not None and fresh.updated_at == fired_at
     row = next(
-        r for r in await session_mgr.listing.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
+        r for r in await session_blocks.listing.list_sessions(status=models.SessionStatus.ACTIVE) if r.id == node.id)
     for name, value in landed.items():
       assert getattr(row, name) == value

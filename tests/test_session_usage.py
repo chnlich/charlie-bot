@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import OPUS_BACKEND_ID, backend_option, build_session_manager, fresh_state_fixture
+from conftest import OPUS_BACKEND_ID, SessionBlocks, backend_option, build_session_blocks, fresh_state_fixture
 
 from src.backends.claude_code.claude_code import _DECLARED_WINDOW_WARNINGS_SEEN, headless_claude_declared_window
 from src.backends.claude_code.claude_launch import (
@@ -19,7 +19,6 @@ from src.backends.codex import codex_usage
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata
 from src.runtime.agent_process.base import make_context_reading_event
-from src.runtime.sessions import SessionManager
 
 
 def _build_cfg(tmp_path: Path, **codex_kwargs: Any) -> CharlieBotConfig:
@@ -36,26 +35,26 @@ def _build_cfg(tmp_path: Path, **codex_kwargs: Any) -> CharlieBotConfig:
   )
 
 
-def _write_session(session_mgr: SessionManager, meta: SessionMetadata, events: list[dict]) -> None:
-  session_dir = session_mgr.events.get_chat_events_path(meta.id).parent
+def _write_session(session_blocks: SessionBlocks, meta: SessionMetadata, events: list[dict]) -> None:
+  session_dir = session_blocks.events.get_chat_events_path(meta.id).parent
   session_dir.mkdir(parents=True, exist_ok=True)
   (session_dir.parent / "threads").mkdir(parents=True, exist_ok=True)
-  session_mgr.store.metadata_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
+  session_blocks.store.metadata_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
   lines = "\n".join(json.dumps(event) for event in events)
-  session_mgr.events.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
+  session_blocks.events.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
 
 
-def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionManager, SessionMetadata]:
-  """SessionManager over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
+def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionBlocks, SessionMetadata]:
+  """Session blocks over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
   cfg = _build_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
+  session_blocks = build_session_blocks(cfg)
   meta = SessionMetadata(profile="manager", id=session_id, name=name, backend=backend)
-  return session_mgr, meta
+  return session_blocks, meta
 
 
-async def _resolved_usage(session_mgr: SessionManager, meta: SessionMetadata) -> dict:
+async def _resolved_usage(session_blocks: SessionBlocks, meta: SessionMetadata) -> dict:
   """The common resolve rig: default-kwargs resolve asserting a mapping came back."""
-  usage = await session_mgr.anchors.resolve_session_usage(meta.id, meta)
+  usage = await session_blocks.anchors.resolve_session_usage(meta.id, meta)
   assert usage is not None
   return usage
 
@@ -138,10 +137,10 @@ def _cumulative_result_with_assistant_reading() -> list[dict]:
 
 @pytest.mark.asyncio
 async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp_path: Path) -> None:
-  session_mgr, meta = _session_rig(tmp_path, "session-assistant", "Assistant", OPUS_BACKEND_ID)
-  _write_session(session_mgr, meta, _cumulative_result_with_assistant_reading())
+  session_blocks, meta = _session_rig(tmp_path, "session-assistant", "Assistant", OPUS_BACKEND_ID)
+  _write_session(session_blocks, meta, _cumulative_result_with_assistant_reading())
 
-  usage = await _resolved_usage(session_mgr, meta)
+  usage = await _resolved_usage(session_blocks, meta)
   assert usage["context_tokens"] == 150_000  # assistant event sum, not 1.5M
   assert usage["context_full"] == 200_000
   assert usage["model"] == "claude-opus-4-6"
@@ -155,9 +154,9 @@ async def test_claude_tier_uses_assistant_event_tokens_not_result_cumulative(tmp
 
 @pytest.mark.asyncio
 async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_path: Path) -> None:
-  session_mgr, meta = _session_rig(tmp_path, "session-ignore", "Ignore", OPUS_BACKEND_ID)
+  session_blocks, meta = _session_rig(tmp_path, "session-ignore", "Ignore", OPUS_BACKEND_ID)
   _write_session(
-      session_mgr,
+      session_blocks,
       meta,
       [
           # sub-agent event with large usage — must be ignored (parent_tool_use_id set)
@@ -168,7 +167,7 @@ async def test_claude_tier_ignores_subagent_and_synthetic_assistant_events(tmp_p
           _assistant_event("claude-opus-4-6", input_tokens=90_000, cache_read=10_000),
       ])
 
-  usage = await _resolved_usage(session_mgr, meta)
+  usage = await _resolved_usage(session_blocks, meta)
   assert usage["context_tokens"] == 100_000  # the real event, not 400_000
 
 
@@ -190,9 +189,9 @@ _COST_ROWS = [
 @pytest.mark.parametrize("result_costs, expected_cost", _COST_ROWS)
 async def test_total_cost_across_results(
     tmp_path: Path, result_costs: tuple[float, float], expected_cost: object) -> None:
-  session_mgr, meta = _session_rig(tmp_path, "session-cost", "Cost", OPUS_BACKEND_ID)
+  session_blocks, meta = _session_rig(tmp_path, "session-cost", "Cost", OPUS_BACKEND_ID)
   _write_session(
-      session_mgr, meta, [
+      session_blocks, meta, [
           _result_event(result_costs[0], {"claude-opus-4-6": {
               "contextWindow": 200_000
           }}, input_tokens=1000),
@@ -202,7 +201,7 @@ async def test_total_cost_across_results(
           _assistant_event("claude-opus-4-6", input_tokens=50_000),
       ])
 
-  usage = await _resolved_usage(session_mgr, meta)
+  usage = await _resolved_usage(session_blocks, meta)
   assert usage["total_cost_usd"] == expected_cost
 
 
@@ -252,19 +251,19 @@ def _assert_k3_reading(usage: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path) -> None:
-  session_mgr, meta = _session_rig(tmp_path, "session-reading", "Reading", OPUS_BACKEND_ID)
+  session_blocks, meta = _session_rig(tmp_path, "session-reading", "Reading", OPUS_BACKEND_ID)
   # Several result events with turn-cumulative usage and no context_snapshot
   # (charlie-code today), plus context_reading events: the newest reading
   # decides all four fields, the cumulative usage never reaches the readout.
   _write_session(
-      session_mgr, meta, [
+      session_blocks, meta, [
           _result_event(0.10, input_tokens=1_000_000),
           _result_event(0.20, input_tokens=2_000_000),
           make_context_reading_event("old/model", 10_000, 100_000, 90_000),
           _k3_reading(),
       ])
 
-  usage = await _resolved_usage(session_mgr, meta)
+  usage = await _resolved_usage(session_blocks, meta)
   _assert_k3_reading(usage)
   # Cost still comes from the shared fold over result events.
   assert usage["total_cost_usd"] == pytest.approx(0.30)
@@ -272,11 +271,11 @@ async def test_context_reading_tier_beats_cumulative_result_usage(tmp_path: Path
 
 @pytest.mark.asyncio
 async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
-  session_mgr, meta = _session_rig(tmp_path, "session-emptyslot", "Empty Slot", OPUS_BACKEND_ID)
+  session_blocks, meta = _session_rig(tmp_path, "session-emptyslot", "Empty Slot", OPUS_BACKEND_ID)
   # Only text assistant events (no usage -> no claude slot) and cumulative
   # result events: the slot stays empty and the context fields stay unknown.
   _write_session(
-      session_mgr, meta, [
+      session_blocks, meta, [
           {
               "type": "assistant",
               "message": {
@@ -292,11 +291,11 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
           }}, input_tokens=999_999),
       ])
 
-  usage = await session_mgr.anchors.resolve_session_usage(meta.id, meta)
+  usage = await session_blocks.anchors.resolve_session_usage(meta.id, meta)
 
   _assert_no_context_tier(usage)
 
   empty_meta = SessionMetadata(
       profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
-  _write_session(session_mgr, empty_meta, [])
-  assert await session_mgr.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None
+  _write_session(session_blocks, empty_meta, [])
+  assert await session_blocks.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None

@@ -362,12 +362,12 @@ async def test_task_refusal_writes_an_error_event_carrying_quota_exhausted(
   from tests import test_task_execution as tte
 
   labels, backends, failed_login_labels = scenario(monkeypatch)
-  cfg, session_mgr, tree = tte.build_pooled_env(tmp_path, monkeypatch, labels=labels)
+  cfg, session_blocks, tree = tte.build_pooled_env(tmp_path, monkeypatch, labels=labels)
   for label in failed_login_labels:
     write_pool_credentials(tmp_path / f"claude-{label}", access_token="")
   worker = await tte.create_task(
       tree, parent=None, request_id="w", profile="worker", task=tte.TaskSpec(goal="ship it", task_type="quick-edit"))
-  tree.dispatch.executor = tte._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
+  tree.dispatch.executor = tte._adapter_with_silent_broadcast(cfg, session_blocks, tree, monkeypatch)
   # The fresh launch binds a new Claude session id; pin it so the transcript the relay moves exists.
   monkeypatch.setattr(tte.task_execution_module.uuid, "uuid4", lambda: uuid.UUID(CC_ID))
   make_transcript(tmp_path / "claude-main", CC_ID)

@@ -10,7 +10,8 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     OPERATOR,
     backend_option,
-    build_session_manager,
+    build_session_blocks,
+    build_task_tree,
     make_work_item,
     mock_session_callbacks,
 )
@@ -61,30 +62,29 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
   from conftest import make_home_config
 
   from src.runtime.task_execution import set_task_manager
-  from src.runtime.task_sessions import TaskTreeManager
 
   cfg = make_home_config(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  tree = TaskTreeManager(cfg, session_mgr)
+  session_blocks = build_session_blocks(cfg)
+  tree = build_task_tree(cfg, session_blocks)
   node = await tree.create_task(
       request_id="node", task_parent_id=None, profile=profile, task=None, name="Node", backend=None, caller=OPERATOR)
   set_task_manager(tree)
-  return cfg, session_mgr, tree, node
+  return cfg, session_blocks, tree, node
 
 
 @pytest.mark.asyncio
 async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -> None:
   from src.runtime.task_execution import set_task_manager
 
-  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
+  _cfg, session_blocks, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
   # A launched run whose process is already gone: request_stop converges it to
   # the interrupted terminal fact the way a live process's exit would.
   await tree.runs.record_launch(node.id, run.id, pid=2**23, pid_start="1")
 
-  meta = await session_mgr.store.get_session(node.id)
+  meta = await session_blocks.store.get_session(node.id)
   assert meta is not None and meta.profile == "manager"
-  result = await cancel_master_agent(node.id, _meta=meta, session_events=session_mgr.events, task_mgr=tree)
+  result = await cancel_master_agent(node.id, _meta=meta, session_events=session_blocks.events, task_mgr=tree)
 
   assert result == {"ok": True}
   events = tree.events.load_events(node.id)
@@ -105,7 +105,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
   from src.runtime.runs import read_pid_stat
   from src.runtime.task_execution import set_task_manager
 
-  _cfg, session_mgr, tree, node = await _task_node(tmp_path)
+  _cfg, session_blocks, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))
   live = subprocess.Popen(["/bin/sleep", "30"])
   try:
@@ -113,9 +113,9 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
     assert pair is not None
     # A recorded pid_start that /proc no longer reports: pid reuse evidence.
     await tree.runs.record_launch(node.id, run.id, pid=live.pid, pid_start="not-this-boot")
-    meta = await session_mgr.store.get_session(node.id)
+    meta = await session_blocks.store.get_session(node.id)
     with pytest.raises(HTTPException) as exc_info:
-      await cancel_master_agent(node.id, _meta=meta, session_events=session_mgr.events, task_mgr=tree)
+      await cancel_master_agent(node.id, _meta=meta, session_events=session_blocks.events, task_mgr=tree)
     assert exc_info.value.status_code == 409
   finally:
     if live.poll() is None:

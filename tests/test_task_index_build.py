@@ -18,7 +18,7 @@ from conftest import OPERATOR, build_env
 
 @pytest_asyncio.fixture
 async def tree(tmp_path: Path):
-  _cfg, _session_mgr, tree = build_env(tmp_path)
+  _cfg, _session_blocks, tree = build_env(tmp_path)
   await tree.create_task(
       request_id="root", task_parent_id=None, profile="manager", task=None, name="Root", backend=None, caller=OPERATOR)
   return tree
@@ -90,5 +90,5 @@ async def test_index_build_consults_facts_once_per_node_per_pass(tree, monkeypat
     return orig(tree, session_id)
 
   monkeypatch.setattr(tree, "_facts_of", counting)
-  tree._build_index_sync(tree._sessions.store.fresh_cached_metas())
+  tree._build_index_sync(tree.session_store.fresh_cached_metas())
   assert calls["n"] == 2, f"2-node build made {calls['n']} facts consults"

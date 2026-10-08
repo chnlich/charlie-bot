@@ -24,7 +24,9 @@ from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, Task
 from src.infra.tasks import cancel_and_wait, create_logged_task
 from src.runtime.hooks import scheduled_handlers
 from src.runtime.session_events import SessionEvents
-from src.runtime.sessions import SessionManager
+from src.runtime.session_lifecycle import SessionLifecycle
+from src.runtime.session_listing import SessionListing
+from src.runtime.session_store import SessionStore
 
 log = LazyStructlogLogger()
 
@@ -64,14 +66,21 @@ def effective_scheduled_task_backend(task_cfg: ScheduledTaskConfig, cfg: Charlie
 class Scheduler:
   """Runs enabled ScheduledTaskConfigs on their cron schedules."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
-    """Take the process-wide SessionManager; a private instance would keep its own
+  def __init__(
+      self,
+      cfg: CharlieBotConfig,
+      store: SessionStore,
+      events: SessionEvents,
+      listing: SessionListing,
+      lifecycle: SessionLifecycle,
+  ) -> None:
+    """Take the process-wide session blocks; a private events block would keep its own
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg
-    self._store = session_mgr.store
-    self._session_events = session_mgr.events
-    self._session_listing = session_mgr.listing
-    self._session_lifecycle = session_mgr.lifecycle
+    self._store = store
+    self._session_events = events
+    self._session_listing = listing
+    self._session_lifecycle = lifecycle
     self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so

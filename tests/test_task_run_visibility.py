@@ -27,7 +27,7 @@ from tests import test_task_execution
 
 async def manager_with_worker(tmp_path, monkeypatch):
   """One root manager with one worker child, no user input anywhere."""
-  cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
+  cfg, session_blocks, tree = test_task_execution.build_env(tmp_path, monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": "vis-key"}})
   root = await tree.create_task(
       request_id="root",
@@ -45,7 +45,7 @@ async def manager_with_worker(tmp_path, monkeypatch):
       name="W",
       backend=None,
       caller=conftest.OPERATOR)
-  return cfg, session_mgr, tree, root, worker
+  return cfg, session_blocks, tree, root, worker
 
 
 @pytest.mark.asyncio
@@ -55,7 +55,7 @@ async def test_worker_run_opens_the_busy_interval_and_every_finish_closes_it(
   started_at (the header timer) and records its display backend; each
   terminal outcome closes exactly that interval. The manager parent's own
   master-queue interval is never borrowed."""
-  _cfg, _session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
   started = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=3)
   await tree.runs.register_run(
       models.RunRecord(
@@ -80,7 +80,7 @@ async def test_a_run_closes_only_the_interval_it_opened(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Manager turns leave their queue interval open; child runs close only their
   own interval, and queued runs close nothing on finish."""
-  _cfg, _session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
   queue_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=9)
   thinking_state.mark_busy(root.id, since=queue_since)
   await tree.runs.register_run(
@@ -139,7 +139,7 @@ async def test_failed_run_header_reads_failed_with_its_error(
   chosen error event's own chat row leaves the projection."""
   from src.runtime import worker_transcript
 
-  _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: worktree preparation failed: task/x differs from origin/main"
   # Registered without a task spec (the improve-iteration shape): no task_spec_ref.
   await tree.runs.register_run(
@@ -181,7 +181,7 @@ async def test_started_run_that_fails_reads_failed_and_links_its_launch_prompt(
   assembled file. Its error text also lands in the header exactly once."""
   from src.runtime import task_prompts, worker_transcript
 
-  _cfg, _session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  _cfg, _session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
   await tree.runs.register_run(
       models.RunRecord(id="run-s", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -222,7 +222,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
   re-renders) and the error text lives only in the header's error field."""
   import src.runtime.runs as runs_mod
 
-  cfg, session_mgr, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  cfg, session_blocks, tree, _root, worker = await manager_with_worker(tmp_path, monkeypatch)
   error_text = "RuntimeError: backend transport died mid-run"
   await tree.runs.register_run(
       models.RunRecord(id="run-live", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -238,7 +238,7 @@ async def test_transcript_poll_moves_a_failed_run_s_error_into_its_header(
           },
       ])
 
-  with test_task_execution.make_api_client(cfg, session_mgr, tree) as client:
+  with test_task_execution.make_api_client(cfg, session_blocks, tree) as client:
     running = client.get(f"/api/sessions/{worker.id}/transcript?after=0&revision=")
     assert running.status_code == 200, running.text
     running_body = running.json()

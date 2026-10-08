@@ -23,13 +23,17 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
-    build_session_manager,
+    SessionBlocks,
+    bind_deps_blocks,
+    build_session_blocks,
     build_slack_cfg,
+    build_task_tree,
     cancel_and_drain,
     create_root_session,
     fake_backends,
     make_task_spawner,
     stub_credentials,
+    thread_blocks,
 )
 from structlog.testing import capture_logs
 from websockets.exceptions import ConnectionClosedError
@@ -40,7 +44,6 @@ from src.features.discord.discord_listener import _INTENTS, _STOP_CLOSE_CODES, r
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
-from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
 _CONNECT_PATCH_TARGET = "src.features.discord.discord_listener._connect"
@@ -163,8 +166,9 @@ def _listener(
     yield {"rest": rest, "connects": connects, "handler": handler, "backfill": backfill}
 
 
-def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager]:
-  """The config and session manager under tmp_path, with the stubbed test token."""
+def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotConfig, SessionBlocks]:
+  """The config and session blocks under tmp_path, bound as the process blocks run_listener's task tree reads,
+  with the stubbed test token."""
   stub_credentials({"discord": {"bot_token": "test-bot-token"}})
   cfg = CharlieBotConfig(
       charliebot_home=tmp_path / "home",
@@ -173,7 +177,9 @@ def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager]:
       }},
       backends=fake_backends(),
   )
-  return cfg, build_session_manager(cfg)
+  session_blocks = build_session_blocks(cfg)
+  bind_deps_blocks(monkeypatch, build_task_tree(cfg, session_blocks), session_blocks)
+  return cfg, session_blocks
 
 
 async def _until(predicate: Callable[[], bool], timeout: float = 0.9) -> None:
@@ -203,11 +209,11 @@ def _message(seq: int) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_identify_carries_token_and_intents(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_identify_carries_token_and_intents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([_hello(), _ready()])
   with _listener([ws]):
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: any(m.get("op") == 2 for m in ws.sent))
       identify = next(m for m in ws.sent if m.get("op") == 2)
@@ -230,11 +236,11 @@ async def test_identify_carries_token_and_intents(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_heartbeat_carries_the_last_seq(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_heartbeat_carries_the_last_seq(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([_hello(30_000), _ready(seq=7)])
   with _listener([ws]):
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: any(m == {"op": 1, "d": 7} for m in ws.sent))
     finally:
@@ -242,12 +248,13 @@ async def test_heartbeat_carries_the_last_seq(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_acked_heartbeats_keep_beating_one_interval_apart(tmp_path: Path) -> None:
+async def test_acked_heartbeats_keep_beating_one_interval_apart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A beat whose previous beat got its op 11 is answered with the next beat an interval later, not a close."""
-  cfg, session_mgr = _rig(tmp_path)
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([_hello(30_000), _ready()], ack_heartbeats=True)
   with _listener([ws]):
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       # the third beat only exists when the earlier beats each saw their ACK
       # and the loop waited out the interval instead of closing at once
@@ -258,13 +265,13 @@ async def test_acked_heartbeats_keep_beating_one_interval_apart(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
-async def test_server_op1_is_answered_at_once(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_server_op1_is_answered_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   # A one-hour heartbeat interval: the scheduler never beats inside the test,
   # so the only op 1 on the wire is the answer to the server's demand.
   ws = FakeGatewaySocket([_hello(3_600_000), {"op": 1}])
   with _listener([ws]):
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: any(m == {"op": 1, "d": None} for m in ws.sent))
       # exactly two frames went out: the identify, then the op 1 answer (d=None —
@@ -281,12 +288,12 @@ async def test_server_op1_is_answered_at_once(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_missing_ack_closes_and_reconnects(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_missing_ack_closes_and_reconnects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws1 = FakeGatewaySocket([_hello(30_000)])  # no ACK ever comes
   ws2 = FakeGatewaySocket([_hello(3_600_000)])
   with _listener([ws1, ws2]) as rig, capture_logs() as logs:
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: len(rig["connects"]) == 2)
       assert ws1.closes[0] == 4000
@@ -296,13 +303,13 @@ async def test_missing_ack_closes_and_reconnects(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_op7_and_op9_end_the_connection_and_reconnect(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_op7_and_op9_end_the_connection_and_reconnect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws1 = FakeGatewaySocket([_hello(), _ready(seq=2), {"op": 7}])
   ws2 = FakeGatewaySocket([_hello(), _ready(seq=3), {"op": 9}])
   ws3 = FakeGatewaySocket([_hello(3_600_000)])
   with _listener([ws1, ws2, ws3]) as rig, capture_logs() as logs:
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: len(rig["connects"]) == 3)
       dropped = [e for e in logs if e["event"] == "discord_listener_connection_dropped"]
@@ -316,11 +323,12 @@ async def test_op7_and_op9_end_the_connection_and_reconnect(tmp_path: Path) -> N
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("code", [4004, 4014])
-async def test_stop_close_codes_stop_without_reconnecting(tmp_path: Path, code: int) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_stop_close_codes_stop_without_reconnecting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([_hello(), _ready()], close_code=code)
   with _listener([ws]) as rig, capture_logs() as logs:
-    await asyncio.wait_for(run_listener(cfg, session_mgr), 1)
+    await asyncio.wait_for(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)), 1)
   assert rig["connects"] == [_GATEWAY_URL]
   stopped = [e for e in logs if e["event"] == "discord_listener_stopped"]
   assert len(stopped) == 1
@@ -337,18 +345,18 @@ async def test_stop_close_codes_stop_without_reconnecting(tmp_path: Path, code: 
 
 
 @pytest.mark.asyncio
-async def test_ready_runs_the_backfill_per_connection(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_ready_runs_the_backfill_per_connection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([_hello(), _ready()])
   with _listener([ws]) as rig, capture_logs() as logs:
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       await _until(lambda: rig["backfill"].await_count == 1)
       rig["backfill"].assert_awaited_once()
       cfg_arg, listing_arg, lifecycle_arg, events_arg, client_arg, trigger_arg = rig["backfill"].await_args.args
       assert cfg_arg is cfg
       assert (listing_arg, lifecycle_arg,
-              events_arg) == (session_mgr.listing, session_mgr.lifecycle, session_mgr.events)
+              events_arg) == (session_blocks.listing, session_blocks.lifecycle, session_blocks.events)
       assert client_arg is rig["rest"]
       assert isinstance(trigger_arg, TriggerManager)
       assert any(e["event"] == "discord_listener_connected" for e in logs)
@@ -357,12 +365,13 @@ async def test_ready_runs_the_backfill_per_connection(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_message_create_reaches_the_handler_and_survives_its_errors(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_message_create_reaches_the_handler_and_survives_its_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   handler = AsyncMock(side_effect=[RuntimeError("boom"), "sid-2"])
   ws = FakeGatewaySocket([_hello(), _ready(), _message(seq=3), _message(seq=4)])
   with _listener([ws], handler=handler) as rig, capture_logs() as logs:
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       # the second dispatch proves the loop continued past the first failure
       await _until(lambda: rig["handler"].await_count == 2)
@@ -384,11 +393,11 @@ async def test_message_create_reaches_the_handler_and_survives_its_errors(tmp_pa
 
 
 @pytest.mark.asyncio
-async def test_preflight_intent_off_returns_before_connecting(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_preflight_intent_off_returns_before_connecting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   ws = FakeGatewaySocket([])  # would serve a connection; must never be reached
   with _listener([ws], flags=0) as rig, capture_logs() as logs:
-    await asyncio.wait_for(run_listener(cfg, session_mgr), 1)
+    await asyncio.wait_for(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)), 1)
   assert rig["connects"] == []
   off = [e for e in logs if e["event"] == "discord_listener_message_content_intent_off"]
   assert len(off) == 1
@@ -396,13 +405,14 @@ async def test_preflight_intent_off_returns_before_connecting(tmp_path: Path) ->
 
 
 @pytest.mark.asyncio
-async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_path: Path) -> None:
-  cfg, session_mgr = _rig(tmp_path)
+async def test_preflight_logs_missing_permission_names_and_keeps_running(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_blocks = _rig(tmp_path, monkeypatch)
   permissions = sum(bit for name, bit in REQUIRED_PERMISSIONS.items() if name != "ADD_REACTIONS")
   guilds = [{"id": _GUILD, "name": "town", "permissions": str(permissions)}]
   ws = FakeGatewaySocket([_hello(), _ready()])
   with _listener([ws], guilds=guilds) as rig, capture_logs() as logs:
-    task = asyncio.create_task(run_listener(cfg, session_mgr))
+    task = asyncio.create_task(run_listener(cfg, session_blocks.listing, *thread_blocks(session_blocks)))
     try:
       # the loop kept running: the connection happened and READY ran the backfill
       await _until(lambda: rig["backfill"].await_count == 1)
@@ -415,16 +425,17 @@ async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_pat
 
 
 # ---------------------------------------------------------------------------
-# The session-manager round-end hook
+# The session-events round-end hook
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) -> None:
+async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A persisted master_done fires the Slack and the Discord deliver task at the same point."""
   cfg = build_slack_cfg(tmp_path)
-  session_mgr = build_session_manager(cfg)
-  meta = await create_root_session(session_mgr, CreateSessionRequest(name="both"))
+  session_blocks = build_session_blocks(cfg)
+  meta = await create_root_session(session_blocks, CreateSessionRequest(name="both"))
+  bind_deps_blocks(monkeypatch, session_blocks.tree, session_blocks)
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   tasks: list[asyncio.Task] = []
   with (
@@ -433,12 +444,14 @@ async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) ->
       patch("src.runtime.session_events.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await session_mgr.events.persist_and_broadcast(meta.id, done)
+    await session_blocks.events.persist_and_broadcast(meta.id, done)
     await asyncio.gather(*tasks)
 
   slack_deliver.assert_awaited_once_with(
-      meta.id, done, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor)
+      meta.id, done, cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events,
+      session_blocks.successor)
   discord_deliver.assert_awaited_once_with(
-      meta.id, done, cfg, session_mgr.store, session_mgr.lifecycle, session_mgr.events, session_mgr.successor)
+      meta.id, done, cfg, session_blocks.store, session_blocks.lifecycle, session_blocks.events,
+      session_blocks.successor)
   names = {t.get_name() for t in tasks}
   assert {f"after-turn-DiscordTurnContribution-{meta.id}", f"after-turn-SlackTurnContribution-{meta.id}"} <= names

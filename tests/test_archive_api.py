@@ -1,7 +1,7 @@
 """The archive API surface: DELETE archives the subtree, the message routes
 enforce the input table (the user's message restores; an agent's is 409 with
 the one archived sentence), and unarchive restores the chain — all through the
-real TaskTreeManager and SessionManager behind the real routers."""
+real TaskTreeManager and session blocks behind the real routers."""
 
 from __future__ import annotations
 
@@ -20,13 +20,13 @@ from src.runtime.run_token import RunTokenClaims, sign_run_token
 async def test_archive_route_returns_the_archived_ids_and_409_detail_reaches_the_client(tmp_path: Path) -> None:
   from tests.test_task_execution import make_api_client
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   key = "op-secret"
   from conftest import stub_credentials
   stub_credentials({"charliebot": {"access_key": key}})
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     archived = client.delete(f"/api/sessions/{root.id}")
     assert archived.status_code == 200
     assert archived.json() == {"archived": [root.id, mid.id]}
@@ -62,12 +62,11 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   from src.runtime.api.deps import (
       get_config_on_loop,
       get_run_store,
-      get_session_manager,
       get_session_store,
       get_task_manager,
   )
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   leaf = await create_task(tree, parent=mid.id, request_id="leaf", profile="worker")
@@ -83,8 +82,7 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
   stub_credentials({"charliebot": {"access_key": key}})
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_store] = lambda: session_blocks.store
   app.dependency_overrides[get_task_manager] = lambda: tree
   app.dependency_overrides[get_run_store] = lambda: tree.runs
   agent_headers = {
@@ -130,7 +128,7 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
 async def test_unarchive_route_restores_the_chain_and_reports_the_ids(tmp_path: Path) -> None:
   from tests.test_task_execution import make_api_client
 
-  cfg, session_mgr, tree = build_env(tmp_path)
+  cfg, session_blocks, tree = build_env(tmp_path)
   root = await create_task(tree, parent=None, request_id="root")
   mid = await create_task(tree, parent=root.id, request_id="mid")
   leaf = await create_task(tree, parent=root.id, request_id="leaf")
@@ -138,7 +136,7 @@ async def test_unarchive_route_restores_the_chain_and_reports_the_ids(tmp_path: 
   key = "op-secret"
   from conftest import stub_credentials
   stub_credentials({"charliebot": {"access_key": key}})
-  with make_api_client(cfg, session_mgr, tree) as client:
+  with make_api_client(cfg, session_blocks, tree) as client:
     restored = client.post(f"/api/sessions/{mid.id}/unarchive")
     assert restored.status_code == 200
     assert restored.json() == {"restored": [root.id, mid.id]}

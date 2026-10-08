@@ -23,7 +23,7 @@ from src.infra import models
 
 @pytest_asyncio.fixture
 async def env(tmp_path: pathlib.Path):
-  _, session_mgr, tree = conftest.build_env(tmp_path)
+  _, session_blocks, tree = conftest.build_env(tmp_path)
   root = await tree.create_task(
       request_id="root",
       task_parent_id=None,
@@ -40,12 +40,12 @@ async def env(tmp_path: pathlib.Path):
       name="Worker",
       backend=None,
       caller=conftest.OPERATOR)
-  return tree, session_mgr, root.id, worker.id
+  return tree, session_blocks, root.id, worker.id
 
 
 @pytest.mark.asyncio
 async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) -> None:
-  tree, _session_mgr, root_id, worker_id = env
+  tree, _session_blocks, root_id, worker_id = env
   run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
   # Queued first: the row is waiting work and no ancestor shows delegated running.
   index = await tree._get_index()
@@ -73,7 +73,7 @@ async def test_record_launch_notifies_with_running_rows_readable_at_signal(env) 
 
 @pytest.mark.asyncio
 async def test_terminal_outcomes_notify_and_clear_running_ancestor_counts(env) -> None:
-  tree, _session_mgr, root_id, worker_id = env
+  tree, _session_blocks, root_id, worker_id = env
   run = await tree.runs.register_run(models.RunRecord(id="run-1", session_id=worker_id, kind="work"))
   proc = conftest.live_subprocess()
   try:

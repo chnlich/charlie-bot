@@ -31,10 +31,10 @@ from src.infra.ssh import ssh_cmd
 from src.infra.tasks import create_logged_task
 from src.infra.timeouts import SSH_OVERALL_TIMEOUT
 from src.runtime import trigger_files
-from src.runtime.sessions import SessionManager, session_manager
 from src.runtime.sidebar_state import mark_sidebar_dirty
 from src.runtime.task_errors import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_execution import task_manager
+from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -413,9 +413,9 @@ def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
 class TriggerManager:
   """Manages delayed one-shot triggers that admit scheduled task inputs."""
 
-  def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
+  def __init__(self, cfg: CharlieBotConfig, task_tree: TaskTreeManager) -> None:
     self._cfg = cfg
-    self._session_mgr = session_mgr
+    self._task_tree = task_tree
     self._tasks: dict[str, asyncio.Task] = {}
     # list_triggers memo: session id -> {file name: (mtime_ns, size, parsed record)}.
     self._list_memo: BoundedMemo[str, dict[str, tuple[int, int,
@@ -459,7 +459,7 @@ class TriggerManager:
     actually seen without probing twice. ``created_at``, when given, stamps the
     record with the caller's timestamp instead of now; the Slack thread-follow
     path uses it to inherit a chain's original start across cancel-then-create
-    re-arms, keeping the follow chain's flush cap anchored (src/features/slack/slack_listener.py).
+    re-arms, keeping the follow chain's flush cap anchored (a chat-platform listener).
     """
     targets = list(watch_targets or [])
     kinds = {t.kind for t in targets}
@@ -685,7 +685,7 @@ class TriggerManager:
     and reads None (the fire-time path reports it as metadata_unavailable
     instead).
     """
-    task_mgr = self._task_tree_provider()
+    task_mgr = self._task_tree
     meta = await task_mgr.load_meta(session_id)
     if meta is None:
       return None
@@ -826,7 +826,7 @@ class TriggerManager:
 
     # Re-read task metadata before delivery: a node removed or blanked during
     # the wait is cancelled instead of writing into a missing task.
-    task_mgr = self._task_tree_provider()
+    task_mgr = self._task_tree
     if await task_mgr.load_meta(fresh.session_id) is None:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
@@ -859,7 +859,7 @@ class TriggerManager:
 
   async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str) -> None:
     """Admit and dispatch one durable scheduled input to its stable node."""
-    task_mgr = self._task_tree_provider()
+    task_mgr = self._task_tree
     session_id = trigger.session_id
     await task_mgr.load_task_meta(session_id)
     try:
@@ -882,12 +882,6 @@ class TriggerManager:
       log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
       raise
     log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
-
-  def _task_tree_provider(self):
-    """Return this manager's tree, or the process owner before a tree is wired."""
-    if self._session_mgr.task_tree_manager is not None:
-      return self._session_mgr.task_tree_manager
-    return task_manager()
 
   async def _wait_with_pidfd(
       self,
@@ -1147,7 +1141,7 @@ _trigger_manager: TriggerManager | None = None
 def trigger_manager() -> TriggerManager:
   global _trigger_manager
   if _trigger_manager is None:
-    _trigger_manager = TriggerManager(get_config(), session_manager())
+    _trigger_manager = TriggerManager(get_config(), task_manager())
   return _trigger_manager
 
 

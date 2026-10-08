@@ -124,13 +124,13 @@ from pathlib import Path
 from src.features.slack.metadata import SlackOrigin
 from src.infra import backend_models, models
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_listing, get_session_manager, get_session_store
+from src.runtime.api.deps import get_config_on_loop, get_session_listing, get_session_store
 
 
 async def main():
   option = backend_models.parse_option({{"id": "b", "label": "B", "type": "cc-claude", "model": "m"}})
   cfg = CharlieBotConfig(charliebot_home=Path({home!r}), backends={{"options": [option]}})
-  mgr = conftest.build_session_manager(cfg)
+  mgr = conftest.build_session_blocks(cfg)
   thread = await conftest.create_root_session(
       mgr,
       models.CreateSessionRequest(
@@ -139,7 +139,6 @@ async def main():
   mgr.events.drop_session_runtime_state(thread.id)
   views = await mgr.listing.view_subtree_roots()
   server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  server.app.dependency_overrides[get_session_manager] = lambda: mgr
   server.app.dependency_overrides[get_session_listing] = lambda: mgr.listing
   server.app.dependency_overrides[get_session_store] = lambda: mgr.store
   workspace = TestClient(server.app).get("/api/sessions/").json()

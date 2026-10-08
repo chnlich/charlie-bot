@@ -431,7 +431,7 @@ async def test_a_changed_tex_file_is_proposed_after_master_done_and_reverted(
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "edited by the agent"))
 
   types = [event["type"] for event in mgr.load_chat_events_sync(session_id)]
-  assert types == [ET.TASK_CREATED, ET.MASTER_DONE, ET.TEX_EDIT_PROPOSED]
+  assert types == [ET.TASK_CREATED, ET.MASTER_DONE, TEX_EDIT_PROPOSED]
   assert tex_file.read_text(encoding="utf-8") == "original"
   assert latex.get_pending_proposal() == {"old": "original", "new": "edited by the agent"}
 

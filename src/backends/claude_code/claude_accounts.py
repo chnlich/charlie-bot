@@ -546,7 +546,7 @@ class TranscriptMoveError(RuntimeError):
 
 
 # The move guard's refusal marker, carried by every refusal message; the relay
-# consumers (place_turn, move_to_next_account) match it to tell the
+# consumers (place_turn, relay_move) match it to tell the
 # newer-transcript refusal -- the one an adoption may answer -- from every other
 # copy failure.
 GUARD_REFUSAL_MARKER = "refusing to overwrite newer transcript"

@@ -19,7 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.runtime.hooks.backend_lifecycle import import_attr
+from src.infra.deferred import import_attr
 
 if TYPE_CHECKING:
   from src.infra.models import SessionMetadata

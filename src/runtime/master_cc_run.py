@@ -22,7 +22,7 @@ from src.infra.ndjson import type_line_filter
 from src.infra.process import kill_group_escalating
 from src.runtime import launch_loop, master_cc_state, runs
 from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
-from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributions
+from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
 from src.runtime.sessions import backend_switch_reset_reason, context_reset_note
 from src.runtime.streaming import handle_compaction_events
 
@@ -375,9 +375,9 @@ def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple
   if not cc_session_id:
     return [], None
   resume = backend_types.traits_for(backend_type).resume
-  if resume == backend_types.RESUME_CLI_FLAG:
+  if resume == backend_type_registration.RESUME_CLI_FLAG:
     return ["--resume", cc_session_id], None
-  if resume == backend_types.RESUME_NATIVE_ID:
+  if resume == backend_type_registration.RESUME_NATIVE_ID:
     return [], cc_session_id
   raise ValueError(f"unknown resume style {resume!r} for backend type {backend_type}")
 

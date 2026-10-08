@@ -412,8 +412,8 @@ Known-alive symbols:
   `src/backends/*/options.py`, and `snapshot_reading_limits` (`src/backends/opencode/opencode_limits.py`) —
   reached by string: the `register()` of each package passes a "module:attr" string to
   `config_registry.register_config_check`, `register_config_section` or `register_option_model`
-  (the option strings ride `backend_types.register_backend_type(options=...)`) or to
-  `backend_lifecycle.register_reading_limits`, and the registry imports the attribute by that
+  (the option strings ride `backend_type_registration.register_backend_type(options=...)`) or to
+  `backend_lifecycle_registration.register_reading_limits`, and the registry imports the attribute by that
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.

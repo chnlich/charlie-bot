@@ -9,7 +9,7 @@ task run (src/runtime/worker.py) supply only the code that builds and runs one p
 from collections.abc import Awaitable, Callable, Mapping
 
 from src.infra import constants
-from src.runtime.hooks import backend_lifecycle
+from src.runtime.hooks import backend_lifecycle, backend_lifecycle_registration
 
 # (launch, watch, relays before this process) -> (exit code, stderr text)
 RunProcess = Callable[[backend_lifecycle.Launch, backend_lifecycle.LaunchWatch | None, int], Awaitable[tuple[int, str]]]
@@ -56,7 +56,7 @@ def child_env(inherited: Mapping[str, str]) -> dict[str, str]:
   """Copy an inherited environment, strip its session identity, and apply package edits."""
   env = dict(inherited)
   env.pop(constants.SESSION_ID_ENV_VAR, None)
-  backend_lifecycle.apply_child_env(env)
+  backend_lifecycle_registration.apply_child_env(env)
   return env
 
 

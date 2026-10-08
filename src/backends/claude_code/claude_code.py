@@ -62,7 +62,7 @@ def claude_child_env(env: dict[str, str]) -> None:
   launch when it detects a parent session — and ``CLAUDE_CODE_DISABLE_AUTO_MEMORY``
   stays pinned, so a child's auto-memory writes stay off and CharlieBot's own
   memory store remains the only one. The runtime applies this function to every
-  agent child env through ``backend_lifecycle.register_child_env``.
+  agent child env through ``backend_lifecycle_registration.register_child_env``.
   """
   env.pop("CLAUDECODE", None)
   env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"

@@ -1,18 +1,18 @@
 """The opencode backend package."""
 
+from src.runtime.hooks import backend_lifecycle_registration, backend_type_registration, usage_source_registration
+
 # The ledger's source value and the usage page's card title for opencode's own database.
 USAGE_SOURCE = "opencode"
 
 
 def register() -> None:
   """Register the opencode backend type, its usage source and its reading limits."""
-  from src.runtime.hooks import backend_lifecycle, backend_types, usage_sources
-
-  backend_types.register_backend_type(
+  backend_type_registration.register_backend_type(
       "opencode",
       options="src.backends.opencode.options:OpencodeBackend",
       factory="src.backends.opencode.factory:build",
-      traits=backend_types.BackendTraits(
+      traits=backend_type_registration.BackendTraits(
           resume="native_id",
           restart_reattach=False,
           preassigned_session_id=False,
@@ -20,9 +20,10 @@ def register() -> None:
           family_prefix=None,
       ),
   )
-  usage_sources.register_source(
-      usage_sources.UsageSource(
+  usage_source_registration.register_source(
+      usage_source_registration.UsageSource(
           name=USAGE_SOURCE, id_prefixes=("opencode-",), run_logs_only=False,
           module="src.backends.opencode.usage_logs"))
-  usage_sources.attribute_backend_type("opencode", USAGE_SOURCE)
-  backend_lifecycle.register_reading_limits("snapshot", "src.backends.opencode.opencode_limits:snapshot_reading_limits")
+  usage_source_registration.attribute_backend_type("opencode", USAGE_SOURCE)
+  backend_lifecycle_registration.register_reading_limits(
+      "snapshot", "src.backends.opencode.opencode_limits:snapshot_reading_limits")

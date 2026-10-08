@@ -22,7 +22,7 @@ from conftest import make_page_request
 
 from src.features.usage import api
 from src.features.usage.usage_ledger import LedgerAccount, LedgerRow, UsageLedger
-from src.runtime.hooks import usage_sources
+from src.runtime.hooks import usage_source_registration, usage_sources
 
 CC, CODEX, OC, CLC = "Claude Code", "Codex", "opencode", "CLC"
 CB = "charlie-bot"  # the ledger's stored spelling for its own-log records
@@ -333,9 +333,9 @@ async def test_cards_follow_registration_order_with_run_log_sources_last(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
   """The cards are the registered sources in registration order — no page-side list of names —
   and a source whose usage lives only in CharlieBot's run logs closes the list wherever it registered."""
-  by_name = {s.name: s for s in usage_sources.sources()}
+  by_name = {s.name: s for s in usage_source_registration.sources()}
   reordered = {name: by_name[name] for name in (CLC, OC, CC, CODEX)}
-  monkeypatch.setattr(usage_sources, "_sources", reordered)
+  monkeypatch.setattr(usage_source_registration, "_sources", reordered)
   body = await _get_page(monkeypatch, tmp_path)
   leg = re.search(r"const LEG = (\[[^\]]*\])", body).group(1)
   assert json.loads(leg) == [OC, CC, CODEX, CLC]

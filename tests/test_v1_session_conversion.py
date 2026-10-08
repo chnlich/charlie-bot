@@ -287,8 +287,7 @@ def test_apply_refuses_a_home_with_an_unparseable_session_and_writes_nothing(hom
 
 
 @pytest.mark.parametrize("corrupt_manager_log", [False, True])
-def test_dry_run_writes_nothing(
-    home: Path, capsys: pytest.CaptureFixture[str], corrupt_manager_log: bool) -> None:
+def test_dry_run_writes_nothing(home: Path, capsys: pytest.CaptureFixture[str], corrupt_manager_log: bool) -> None:
   if corrupt_manager_log:
     manager_log = home / "sessions" / ROOT_ID / "data" / "chat_events.jsonl"
     with manager_log.open("a", encoding="utf-8") as stream:

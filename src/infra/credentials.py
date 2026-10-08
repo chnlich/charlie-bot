@@ -21,8 +21,8 @@ T = TypeVar("T")
 
 log = LazyStructlogLogger()
 
-# The profile's secrets file, named once so the backup's exclusion
-# (src/features/backup/backup.py) cannot drift from the loader's path.
+# The profile's secrets file, named once so the archive exclusion of this file
+# cannot drift from the loader's path.
 CREDENTIALS_FILENAME = "credentials.yaml"
 
 

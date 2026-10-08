@@ -18,8 +18,9 @@ import json
 import os.path
 from collections.abc import Sequence
 
+from src.features.artifacts import constants
 from src.features.artifacts import plans as core_plans
-from src.infra import constants, help_formatter
+from src.infra import help_formatter
 from src.runtime.cli import common as cli_common
 
 _PLAN_REMINDER = (

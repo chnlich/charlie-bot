@@ -90,7 +90,7 @@ from src.infra.identity_env import inherited_identity_env_vars
 from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
-from src.infra.timeouts import PREVIEW_LAUNCHER_PROBE_TIMEOUT, SUBPROCESS_GIT_IDENTITY_TIMEOUT
+from src.infra.timeouts import SUBPROCESS_GIT_IDENTITY_TIMEOUT
 from src.infra.yaml_utils import load_yaml, save_yaml
 from src.runtime import init_seed
 from src.runtime.home_writer_fence import (
@@ -112,6 +112,10 @@ PREVIEW_LOG_DIRNAME = "logs"
 PREVIEW_NATIVE_DIRNAME = "clc-sessions"
 PREVIEW_WORKSPACES_DIRNAME = "workspaces"
 PREVIEW_WORKTREES_DIRNAME = "worktrees"
+
+# The `charlie-code --help` probe that validates the launcher's --session-dir
+# support; the preview refuses to run when the launcher cannot be executed.
+PREVIEW_LAUNCHER_PROBE_TIMEOUT = 30  # seconds
 
 # The trial config contract: exactly these top-level sections. Anything else is
 # an unrelated configuration and refuses instead of being carried into a trial.

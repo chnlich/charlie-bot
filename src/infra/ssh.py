@@ -1,4 +1,4 @@
-"""The batch-mode ssh invocation shared by the remote-probe and remote-launch paths."""
+"""The batch-mode ssh invocation shared by the remote probes and the CLI's remote command launcher."""
 
 import os
 

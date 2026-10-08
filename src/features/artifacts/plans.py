@@ -17,8 +17,8 @@ import pathlib
 import posixpath
 from typing import TYPE_CHECKING
 
-from src.features.artifacts import plan_paths
-from src.infra import constants, memo
+from src.features.artifacts import constants, plan_paths
+from src.infra import memo
 from src.runtime import sidebar_state
 
 if TYPE_CHECKING:

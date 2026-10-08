@@ -8,7 +8,7 @@ import time
 
 import fastapi
 
-from src.infra import config, log_once, timeouts
+from src.infra import config, log_once
 from src.runtime.api import deps
 
 router = fastapi.APIRouter()
@@ -16,6 +16,13 @@ log = log_once.LazyStructlogLogger()
 
 _CODE_SERVER_HOST = "127.0.0.1"
 _POLL_INTERVAL_SEC = 0.2
+
+# Socket connect probe deciding whether an existing code-server already answers.
+CODE_SERVER_CONNECT_TIMEOUT = 0.2  # seconds
+
+# Wait for the spawned code-server to accept connections before giving up.
+CODE_SERVER_START_TIMEOUT = 5.0  # seconds
+
 # One client-visible spelling for both 503 raisers below (spawn failure and
 # the failed wait-for-listen), so tests and greps pin a single home.
 _START_FAILURE_DETAIL = "failed to start code-server"
@@ -50,7 +57,7 @@ def _resolve_folder_under_allowed_root(folder: str, cfg: config.CharlieBotConfig
 
 def _is_listening(port: int) -> bool:
   with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-    sock.settimeout(timeouts.CODE_SERVER_CONNECT_TIMEOUT)
+    sock.settimeout(CODE_SERVER_CONNECT_TIMEOUT)
     return sock.connect_ex((_CODE_SERVER_HOST, port)) == 0
 
 
@@ -89,7 +96,7 @@ def open_code_server(
       log.exception("code_server_start_failed")
       raise fastapi.HTTPException(status_code=503, detail=_START_FAILURE_DETAIL) from exc
 
-    deadline = time.monotonic() + timeouts.CODE_SERVER_START_TIMEOUT
+    deadline = time.monotonic() + CODE_SERVER_START_TIMEOUT
     while time.monotonic() < deadline:
       if _is_listening(port):
         break

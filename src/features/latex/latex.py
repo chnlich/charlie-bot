@@ -8,6 +8,9 @@ from src.infra import git, log_once, process, timeouts
 
 log = log_once.LazyStructlogLogger()
 
+# Full LaTeX build via `make pdf`; may run pdflatex + bibtex multiple times.
+LATEX_COMPILE_TIMEOUT = 60  # seconds
+
 # Single source of truth — change here when adding more projects.
 LATEX_PROJECT = {
     'project_dir': pathlib.Path('~/workspace/latex-project').expanduser(),
@@ -133,7 +136,7 @@ async def compile_latex() -> dict:
         stderr=asyncio.subprocess.STDOUT,
         start_new_session=True,
     )
-    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeouts.LATEX_COMPILE_TIMEOUT)
+    stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=LATEX_COMPILE_TIMEOUT)
     output = stdout.decode('utf-8', errors='replace')
     ok = proc.returncode == 0
     if not ok:
@@ -144,7 +147,7 @@ async def compile_latex() -> dict:
   except TimeoutError:
     process.kill_process_group(proc.pid, signal.SIGKILL)
     log.warning('latex_compile_timeout')
-    return {'ok': False, 'log': f'Compilation timed out after {timeouts.LATEX_COMPILE_TIMEOUT}s'}
+    return {'ok': False, 'log': f'Compilation timed out after {LATEX_COMPILE_TIMEOUT}s'}
   except Exception as e:
     log.warning('latex_compile_error', error=str(e))
     return {'ok': False, 'log': str(e)}

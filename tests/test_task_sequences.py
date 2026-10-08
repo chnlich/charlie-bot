@@ -27,6 +27,7 @@ from conftest import (
 )
 
 from src.backends.claude_code import claude_accounts, claude_relay
+from src.features.improve import improve_sequence
 from src.features.improve.improve_command import load_loop_state
 from src.infra import event_types as ET
 from src.infra.models import SessionMetadata, TaskSpec
@@ -386,7 +387,7 @@ async def test_pool_exhausted_iteration_ends_the_loop_failed_with_a_quota_reason
 
   state = await load_loop_state(manager.id, body["loop_id"], cfg)
   assert state is not None and state.status == "failed"
-  failed_payloads = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.IMPROVE_FAILED]
+  failed_payloads = [e for e in tree.events.load_events(manager.id) if e.get("type") == improve_sequence.IMPROVE_FAILED]
   assert len(failed_payloads) == 1
   assert failed_payloads[0]["blocked_iteration"] == 1
   # The error event's quota_exhausted flag makes the blocker; its reason carries the message.

@@ -25,12 +25,18 @@ from typing import Any
 
 import structlog
 
-from src.infra import config, deferred, json_utils, models, tasks, timeouts
+from src.infra import config, deferred, json_utils, models, tasks
 from src.runtime import sessions, streaming
 from src.runtime.agent_process import deferred_build
 from src.runtime.api import message_utils
 
 log = structlog.get_logger()
+
+# One one_shot_text call for the explain (btw-style) divider explanation. The
+# agent-run shape may spend model round-trips reading the session history from
+# its read-only copy, so the budget sits an order of magnitude above the light
+# one-shot's; a hit marks the divider's entry failed and the UI can retry.
+EXPLAIN_ONESHOT_TIMEOUT = 600.0  # seconds
 
 
 def __getattr__(name: str) -> Any:
@@ -103,7 +109,7 @@ def _write_entry(session_mgr: sessions.SessionManager, session_id: str, upto: in
 def _is_stale(entry: dict) -> bool:
   """True when a pending entry's own request has outlived the one-shot budget."""
   requested = datetime.datetime.fromisoformat(entry["requested_at"])
-  return models.utc_now() - requested > datetime.timedelta(seconds=timeouts.EXPLAIN_ONESHOT_TIMEOUT)
+  return models.utc_now() - requested > datetime.timedelta(seconds=EXPLAIN_ONESHOT_TIMEOUT)
 
 
 def _reap_stale_pending(session_mgr: sessions.SessionManager, session_id: str, upto: int, entry: dict) -> dict:
@@ -221,7 +227,7 @@ async def _generate(
       # history copy the prompt hands over, and the plan holds every configured
       # backend to the identical agent-run channel.
       answer = await _load_base_one_shot_text(globals())(
-          backend, prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=timeouts.EXPLAIN_ONESHOT_TIMEOUT)
+          backend, prompt, _EXPLAIN_SYSTEM_PROMPT, timeout=EXPLAIN_ONESHOT_TIMEOUT)
     finally:
       await asyncio.to_thread(shutil.rmtree, copy_path.parent, ignore_errors=True)
     if not answer:

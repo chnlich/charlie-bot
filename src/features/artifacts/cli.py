@@ -20,8 +20,8 @@ import pathlib
 import sys
 from collections.abc import Sequence
 
-from src.features.artifacts import artifact_wrap
-from src.infra import constants, help_formatter, home
+from src.features.artifacts import artifact_wrap, constants
+from src.infra import help_formatter, home
 from src.runtime.cli import common as cli_common
 
 

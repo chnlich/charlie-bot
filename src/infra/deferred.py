@@ -25,7 +25,7 @@ def deferred_module_getattr(
 
   Each consumer module defines ``def __getattr__(name): return
   deferred_module_getattr(name, __name__, globals(), "target", loader)``. The
-  module-attribute route (e.g. ``src.features.artifacts.artifact_wrap.requests``) stays the
+  module-attribute route (e.g. ``<consumer module>.requests``) stays the
   tests' patch target; the loader binds the same object as a module global on
   first use, so the consumer's own bare-name reads resolve directly. Any other
   name raises AttributeError, as PEP 562 requires.

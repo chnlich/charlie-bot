@@ -61,27 +61,17 @@ _diff_file_memo: memo.BoundedMemo[_FileDiffKey, str] = memo.BoundedMemo(_DIFF_FI
 # Signature of every file that feeds `git rev-parse` ref resolution: the git
 # dir's top-level files (HEAD, ORIG_HEAD, FETCH_HEAD, ...), packed-refs, and the
 # loose refs tree. Host git config is static on this host (the same constraint
-# the manifest key states). An unchanged signature proves the resolution
+# the manifest key states). An unchanged signature proves the ref state
 # current; a ref that moves rewrites its file and moves the signature.
 _RefSignature = tuple[tuple[str, int, int], ...]
-
-# Bound on _ref_resolution_memo: one entry per (repo, ref pair) the /diff page
-# has open, and an evicted entry re-runs one rev-parse. Keyed by repo, the refs
-# as the request names them, and the ref-state signature.
-_RefResolveKey = tuple[str, tuple[str, ...], _RefSignature]
-
-_REF_RESOLVE_MEMO_LIMIT = 64
-
-_ref_resolution_memo: memo.BoundedMemo[_RefResolveKey, tuple[str, ...]] = memo.BoundedMemo(_REF_RESOLVE_MEMO_LIMIT)
 
 # Bound on _branch_list_memo: one entry per repo the /diff branch picker has
 # served, and an evicted entry re-runs one `git branch -a`.
 _BRANCH_LIST_MEMO_LIMIT = 8
 
-# Memo key for one branch listing: repo plus the ref-state signature (the same
-# _refs_signature the ref-resolution memo keys). `git branch -a --sort` reads
-# the ref set, every ref's commit, and HEAD — all inside that signature — so an
-# unchanged signature proves the listing current.
+# Memo key for one branch listing: repo plus the ref-state signature.
+# `git branch -a --sort` reads the ref set, every ref's commit, and HEAD — all
+# inside that signature — so an unchanged signature proves the listing current.
 _BranchListKey = tuple[str, _RefSignature]
 
 _branch_list_memo: memo.BoundedMemo[_BranchListKey, tuple[str, ...]] = memo.BoundedMemo(_BRANCH_LIST_MEMO_LIMIT)
@@ -258,22 +248,9 @@ def _refs_signature(repo_path: pathlib.Path) -> _RefSignature:
   return tuple(sorted(sig))
 
 
-def _resolve_commits_memoized_sync(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
-  """Return the refs' SHAs, re-running the rev-parse subprocess only when the
-  repo's ref state has moved since the last resolution of the same pair."""
-  signature = _refs_signature(repo_path)
-  key = (str(repo_path), tuple(refs), signature)
-  memoized = _ref_resolution_memo.get(key)
-  if memoized is None:
-    memoized = tuple(_resolve_commits_sync(repo_path, refs))
-    _ref_resolution_memo.store(key, memoized)
-  return list(memoized)
-
-
-async def _resolve_commits_memoized(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
-  """Async front for the memoized blocking resolution; the signature walk and
-  any rev-parse subprocess stay off the event loop in one thread hop."""
-  return await asyncio.to_thread(_resolve_commits_memoized_sync, repo_path, refs)
+async def _resolve_commits(repo_path: pathlib.Path, refs: list[str]) -> list[str]:
+  """Async front for the blocking rev-parse; keeps the lookup off the event loop."""
+  return await asyncio.to_thread(_resolve_commits_sync, repo_path, refs)
 
 
 def _parse_numstat_z(output: str) -> list[tuple[int, int, str, str | None]]:
@@ -365,7 +342,7 @@ async def list_branches(repo: str = fastapi.Query(..., description=_REPO_QUERY_D
   if repo_path.name == ".git":
     repo_path = repo_path.parent
   # The signature walk and any `git branch` subprocess stay off the event loop
-  # in one thread hop, the _resolve_commits_memoized shape.
+  # in one thread hop.
   lines = await asyncio.to_thread(_list_branches_memoized_sync, repo_path)
   seen: set[str] = {"HEAD"}
   branches: list[str] = ["HEAD"]
@@ -402,7 +379,7 @@ async def diff_files(
   """
   repo_path = _resolve_repo_under_workspace(repo, cfg)
   range_spec = _range_spec(base, head, mode)
-  base_sha, head_sha = await _resolve_commits_memoized(repo_path, [base, head])
+  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path))
   memoized = _diff_files_memo.get(key)
   if memoized is None:
@@ -471,7 +448,7 @@ async def diff_file(
   # Restricting to a single side of a rename makes git drop the pairing and emit a
   # wholesale add/delete; passing both endpoints keeps it a rename diff.
   pathspec = tuple([old_path, path] if old_path else [path])
-  base_sha, head_sha = await _resolve_commits_memoized(repo_path, [base, head])
+  base_sha, head_sha = await _resolve_commits(repo_path, [base, head])
   key = (str(repo_path), base_sha, head_sha, mode, _attributes_signature(repo_path), pathspec)
   diff_text = _diff_file_memo.get(key)
   if diff_text is None:

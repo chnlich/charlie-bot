@@ -217,7 +217,7 @@ def worker_signature_sync(tree, session_id: str) -> tuple:
       if not entry.is_dir():
         continue
       parts.append((entry.name, stat_signature(entry / RUN_METADATA_NAME), stat_signature(entry / RUN_EVENTS_NAME)))
-  parts.append(("chat", stat_signature(tree.sessions.get_chat_events_path(session_id))))
+  parts.append(("chat", stat_signature(tree.session_events.get_chat_events_path(session_id))))
   return tuple(parts)
 
 

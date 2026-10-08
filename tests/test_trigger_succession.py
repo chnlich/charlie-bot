@@ -32,7 +32,7 @@ async def test_trigger_master_dispatches_the_input_a_task_node_already_holds(
   launches = _record_launches(tree)
   root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
   persisted = build_agent_message_event("summon prompt", from_session=root.id, from_session_name="Slack")
-  await mgr.persist_and_broadcast(root.id, persisted)
+  await mgr.events.persist_and_broadcast(root.id, persisted)
 
   await master_trigger.trigger_master(
       root.id, "summon prompt", mgr, event_type=ET.AGENT_MESSAGE, input_id=persisted["id"])

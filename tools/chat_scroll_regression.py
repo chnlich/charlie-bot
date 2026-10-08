@@ -23,7 +23,7 @@ retry, and the stale response after a session switch. Isolation contract:
   credential, private session, or personal path enters the repo: everything
   lives in the run's temp dir and the evidence dir.
 - Synthetic data. Seeded chat events (user/assistant turns) through
-  ``SessionManager.save_chat_event`` / ``persist_and_broadcast`` — the same
+  ``SessionEvents.save_chat_event`` / ``persist_and_broadcast`` — the same
   owner the APIs serve, in this process only. No chat message is ever sent to
   a model: a scripted backend that never launches is the only configured
   backend, and the live-message scenarios ride the server's own broadcast.
@@ -604,12 +604,14 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   from src.infra.config import get_config
   from src.runtime.api.message_utils import build_session_bootstrap_data
   from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_events import SessionEvents
   from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
   cfg = get_config()
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  store = SessionStore(cfg)
+  session_mgr = SessionManager(cfg, store, SessionEvents(cfg, store))
   tree = TaskTreeManager(cfg, session_mgr)
   operator = CallerIdentity(kind="operator")
   main = await tree.create_task(
@@ -625,8 +627,8 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   # the aggregator projects master_done into the separator message that closes
   # a turn, exactly as a completed chat session's history looks.
   for i in range(40):
-    await session_mgr.save_chat_event(sid, {"type": "user", "content": f"history question {i:02d}"})
-    await session_mgr.save_chat_event(
+    await session_mgr.events.save_chat_event(sid, {"type": "user", "content": f"history question {i:02d}"})
+    await session_mgr.events.save_chat_event(
         sid, {
             "type": "assistant",
             "message": {
@@ -636,7 +638,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
                 }]
             }
         })
-    await session_mgr.save_chat_event(sid, {"type": "master_done"})
+    await session_mgr.events.save_chat_event(sid, {"type": "master_done"})
   other = await tree.create_task(
       request_id="seed-second",
       task_parent_id=None,
@@ -647,8 +649,8 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
       caller=operator)
   sid_b = other.id
   for i in range(3):
-    await session_mgr.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})
-    await session_mgr.save_chat_event(
+    await session_mgr.events.save_chat_event(sid_b, {"type": "user", "content": f"Session B opening question {i}"})
+    await session_mgr.events.save_chat_event(
         sid_b, {
             "type": "assistant",
             "message": {
@@ -658,19 +660,19 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
                 }]
             }
         })
-    await session_mgr.save_chat_event(sid_b, {"type": "master_done"})
-  bootstrap = await build_session_bootstrap_data(sid, session_mgr)
+    await session_mgr.events.save_chat_event(sid_b, {"type": "master_done"})
+  bootstrap = await build_session_bootstrap_data(sid, session_mgr.store, session_mgr.events)
   return sid, sid_b, bootstrap.messages, session_mgr
 
 
 async def broadcast_user(session_mgr, sid: str, text: str) -> None:
   """One real live message: persisted, then broadcast through the aggregator."""
-  await session_mgr.persist_and_broadcast(sid, {"type": "user", "content": text})
+  await session_mgr.events.persist_and_broadcast(sid, {"type": "user", "content": text})
 
 
 async def broadcast_assistant_draft(session_mgr, sid: str, text: str) -> None:
   """One real stream delta: the assistant event buffers into the live draft."""
-  await session_mgr.persist_and_broadcast(
+  await session_mgr.events.persist_and_broadcast(
       sid, {
           "type": "assistant",
           "message": {
@@ -689,7 +691,7 @@ async def bootstrap_messages_now(sid: str, session_mgr) -> list[dict]:
   history plus the live messages the scenarios broadcast).
   """
   from src.runtime.api.message_utils import build_session_bootstrap_data
-  bootstrap = await build_session_bootstrap_data(sid, session_mgr)
+  bootstrap = await build_session_bootstrap_data(sid, session_mgr.store, session_mgr.events)
   return bootstrap.messages
 
 

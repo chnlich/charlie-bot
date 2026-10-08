@@ -20,13 +20,13 @@ import pytest
 
 from src.infra import config, models
 from src.infra import event_types as ET
+from src.runtime import session_events as session_events_module
 from src.runtime import sessions as sessions_module
-from src.runtime.session_store import SessionStore
 
 
 async def _seed_session(mgr: sessions_module.SessionManager) -> str:
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="catchup"))
-  await mgr.save_chat_event(
+  await mgr.events.save_chat_event(
       session.id, {
           "type": ET.USER,
           "message": {
@@ -37,7 +37,7 @@ async def _seed_session(mgr: sessions_module.SessionManager) -> str:
           },
           "timestamp": "2026-09-07T00:00:00Z",
       })
-  await mgr.save_chat_event(
+  await mgr.events.save_chat_event(
       session.id, {
           **conftest.assistant_text_event("seed answer"), "timestamp": "2026-09-07T00:00:01Z"
       })
@@ -47,15 +47,15 @@ async def _seed_session(mgr: sessions_module.SessionManager) -> str:
 @pytest.mark.asyncio
 async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   sid = await _seed_session(mgr)
 
-  aggregator = await mgr._get_or_init_aggregator(sid)
+  aggregator = await mgr.events._get_or_init_aggregator(sid)
   assert aggregator.emit_stream_deltas is True
-  assert mgr._aggregators[sid] is aggregator
+  assert mgr.events._aggregators[sid] is aggregator
 
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast:
-    await mgr.persist_and_broadcast(
+    await mgr.events.persist_and_broadcast(
         sid, {
             **conftest.assistant_text_event("live tail"), "timestamp": "2026-09-07T00:00:02Z"
         })
@@ -67,24 +67,24 @@ async def test_catchup_restores_stream_deltas_and_live_feed_broadcasts(tmp_path:
 @pytest.mark.asyncio
 async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   sid = await _seed_session(mgr)
 
   inits = 0
-  original = sessions_module.SessionManager._init_live_aggregator
+  original = session_events_module.SessionEvents._init_live_aggregator
 
-  async def counting_init(self, session_id: str, epoch: int) -> sessions_module.MessageAggregator | None:
+  async def counting_init(self, session_id: str, epoch: int) -> session_events_module.MessageAggregator | None:
     nonlocal inits
     inits += 1
     return await original(self, session_id, epoch)
 
   with (
       mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
-      mock.patch.object(sessions_module.SessionManager, "_init_live_aggregator", counting_init),
+      mock.patch.object(session_events_module.SessionEvents, "_init_live_aggregator", counting_init),
   ):
     first, second = await asyncio.gather(
-        mgr._get_or_init_aggregator(sid),
-        mgr._get_or_init_aggregator(sid),
+        mgr.events._get_or_init_aggregator(sid),
+        mgr.events._get_or_init_aggregator(sid),
     )
 
   assert inits == 1
@@ -94,10 +94,10 @@ async def test_concurrent_first_persists_catch_up_once(tmp_path: pathlib.Path) -
 @pytest.mark.asyncio
 async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
-  mgr = sessions_module.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   sid = await _seed_session(mgr)
 
-  real_aggregator = sessions_module.MessageAggregator
+  real_aggregator = session_events_module.MessageAggregator
   feeds = 0
 
   class DropMidFeed(real_aggregator):
@@ -108,12 +108,12 @@ async def test_drop_mid_feed_discards_and_reruns(tmp_path: pathlib.Path, monkeyp
       if feeds == 2:
         # Lands inside the init's first slice; the slice-boundary epoch
         # re-check must discard the unfinished init.
-        mgr._drop_session_runtime_state(sid)
+        mgr.events.drop_session_runtime_state(sid)
       return super().feed(event)
 
-  monkeypatch.setattr(sessions_module, "MessageAggregator", DropMidFeed)
-  aggregator = await mgr._get_or_init_aggregator(sid)
+  monkeypatch.setattr(session_events_module, "MessageAggregator", DropMidFeed)
+  aggregator = await mgr.events._get_or_init_aggregator(sid)
 
   assert feeds >= 3  # the dropped run's feeds plus the rerun's
-  assert mgr._aggregators[sid] is aggregator
+  assert mgr.events._aggregators[sid] is aggregator
   assert aggregator.emit_stream_deltas is True

@@ -356,9 +356,10 @@ class TaskTreeManager:
     self._cfg = cfg
     self._sessions = session_mgr
     self._store = session_mgr.store
+    self.session_events = session_mgr.events
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
-    self.events = control_sink.ControlEventSink(session_mgr)
+    self.events = control_sink.ControlEventSink(self.session_events)
     self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events)
     # The run owner's terminal/stop/identity reads see the full fact history
     # (archived segments included), so a rotated acknowledgement never un-dones
@@ -639,18 +640,18 @@ class TaskTreeManager:
     segments remain part of the fact history every fold and every recovery
     scan reads.
     """
-    live = self._sessions.load_chat_events_sync(session_id)
+    live = self.session_events.load_chat_events_sync(session_id)
     archived_count = self._archived_event_count(session_id, live)
     if not archived_count:
       return live
     return [*self._load_archived_events(session_id, archived_count), *live]
 
   def _archived_event_count(self, session_id: str, live: list[dict]) -> int:
-    total = self._sessions.get_chat_event_count_sync(session_id)
+    total = self.session_events.get_chat_event_count_sync(session_id)
     return max(0, total - len(live))
 
   def _load_archived_events(self, session_id: str, count: int) -> list[dict]:
-    events, _has_more = self._sessions.load_chat_events_range(session_id, 0, count)
+    events, _has_more = self.session_events.load_chat_events_range(session_id, 0, count)
     return events
 
   def _facts_of(self, session_id: str) -> _TaskFacts:
@@ -667,7 +668,7 @@ class TaskTreeManager:
     task_imported fact in the suffix moves the input boundary, so the suffix
     fold that sees one restarts from the whole history.
     """
-    live = self._sessions.load_chat_events_sync(session_id)
+    live = self.session_events.load_chat_events_sync(session_id)
     cached = self._facts_memo.get(session_id)
     if cached is not None and cached[0] is live:
       facts = cached[2]
@@ -772,7 +773,7 @@ class TaskTreeManager:
     if cached is not None and cached[0] == generation:
       if cached[1] is None:
         return cached[3]
-      live = self._sessions.load_chat_events_sync(session_id)
+      live = self.session_events.load_chat_events_sync(session_id)
       if cached[1] is live and cached[2] == len(live):
         return cached[3]
     runs = self.runs.list_run_records_sync(session_id)
@@ -783,7 +784,7 @@ class TaskTreeManager:
       activity = derive_task_tree_activity([], [], self._host_boot_time, task_open=False)
       self._activity_memo[session_id] = (generation, None, -1, activity)
       return activity
-    live = self._sessions.load_chat_events_sync(session_id)
+    live = self.session_events.load_chat_events_sync(session_id)
     archived_count = self._archived_event_count(session_id, live)
     probed = False
 

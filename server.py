@@ -40,13 +40,13 @@ with gc_off(collect=False):
   from src.infra.log_once import LazyStructlogLogger
   from src.infra.models import SessionMetadata, utc_now
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.runtime import init_seed
+  from src.runtime import init_seed, session_events, session_store
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
   from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
-  from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager, session_manager
+  from src.runtime.sessions import session_manager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
   from src.runtime.task_execution import task_manager
   from src.runtime.triggers import TriggerManager, set_trigger_manager
@@ -388,10 +388,10 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
   await streaming_manager.subscribe(channel, websocket)
   await streaming_manager.subscribe(SIDEBAR_CHANNEL, websocket)
   try:
-    session_mgr = session_manager()
-    meta = await session_mgr.store.get_session(session_id)
+    meta = await session_store.store().get_session(session_id)
     try:
-      sent, total_event_count = await _send_session_catchup(websocket, session_mgr, session_id, cursor, meta)
+      sent, total_event_count = await _send_session_catchup(
+          websocket, session_events.events(), session_id, cursor, meta)
       await websocket.send_json({"type": "catchup_complete"})
       log.debug(
           "session_ws_catchup_sent",
@@ -412,7 +412,7 @@ async def session_websocket(websocket: WebSocket, session_id: str) -> None:
 
 async def _send_session_catchup(
     websocket: WebSocket,
-    session_mgr: SessionManager,
+    events_block: session_events.SessionEvents,
     session_id: str,
     cursor: int,
     meta: SessionMetadata | None,
@@ -429,7 +429,7 @@ async def _send_session_catchup(
     events = entry.events
     return await _replay_aggregated_catchup(websocket, events, cursor, session_id), len(events)
   try:
-    total_event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
+    total_event_count = await asyncio.to_thread(events_block.get_chat_event_count_sync, session_id, meta)
   except Exception as e:
     log.warning("session_ws_event_count_failed", session_id=session_id, error=str(e))
     total_event_count = None
@@ -437,7 +437,7 @@ async def _send_session_catchup(
   if total_event_count is not None and cursor >= total_event_count:
     return 0, total_event_count
 
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  events = await asyncio.to_thread(events_block.load_chat_events_sync, session_id)
   sent = await _replay_aggregated_catchup(
       websocket,
       events,
@@ -454,7 +454,7 @@ class _CatchupWalk:
   Feed the full event list so the aggregator state aligns with the client's
   SSR/SPA aggregator; deltas from events before the cursor are dropped because
   the client has already rendered them, and raw events in
-  `_RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed because their content is
+  `session_events.RAW_EVENTS_REPLACED_BY_DELTAS` are suppressed because their content is
   represented by `message`/`stream` deltas on the wire.
 
   The walk is pure-Python CPU at ~1.2 µs per event; fed in slices from the event
@@ -490,7 +490,7 @@ class _CatchupWalk:
         # streaming preview when it appends a committed bubble.
         self._latest_stream = None
         self._frames.append(delta)
-      if ev.get("type") in _RAW_EVENTS_REPLACED_BY_DELTAS:
+      if ev.get("type") in session_events.RAW_EVENTS_REPLACED_BY_DELTAS:
         continue
       payload = dict(ev)
       payload.setdefault("event_index", global_idx)

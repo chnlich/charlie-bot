@@ -18,15 +18,15 @@ from src.infra.models import (
 from src.runtime import spawner_backends
 from src.runtime.api.deps import (
     bad_request,
-    get_session_manager,
+    get_session_events,
     get_session_store,
     get_task_manager,
     get_trigger_manager,
     require_found,
 )
 from src.runtime.api.deps import require_caller as require_caller_dep
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_sessions import TaskTreeManager
@@ -121,7 +121,7 @@ def delegate_request_id(req: DelegateRequest) -> str:
 async def _delegate_task_tree(
     req: DelegateRequest,
     task_mgr: TaskTreeManager,
-    session_mgr: SessionManager,
+    session_events: SessionEvents,
     caller: object,
     resolved_backend: str,
     resolved_model: str | None,
@@ -208,7 +208,7 @@ async def _delegate_task_tree(
       ET.DELEGATE_INVOCATION: _delegate_invocation_event_payload(req),
   }
   # The delegation card rides the delegating session's chat (persist + broadcast).
-  await session_mgr.persist_and_broadcast(req.session_id, task_event)
+  await session_events.persist_and_broadcast(req.session_id, task_event)
 
   log.info("task_delegated_task_tree", session=req.session_id, child=child.id, run_id=run_id)
   return {
@@ -223,7 +223,7 @@ async def _delegate_task_tree(
 @router.post("/delegate")
 async def delegate_task(
     req: DelegateRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    session_events: SessionEvents = Depends(get_session_events),
     store: SessionStore = Depends(get_session_store),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: object = Depends(require_caller_dep),
@@ -252,7 +252,7 @@ async def delegate_task(
           "give both for a repo task, neither for a repo-less one")
   require_found(await store.get_session(req.session_id))
   resolved_backend, resolved_model = await _authorize_spawn_request(req, store, task_mgr)
-  return await _delegate_task_tree(req, task_mgr, session_mgr, caller, resolved_backend, resolved_model)
+  return await _delegate_task_tree(req, task_mgr, session_events, caller, resolved_backend, resolved_model)
 
 
 @router.post("/schedule-trigger")

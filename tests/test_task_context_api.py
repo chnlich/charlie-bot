@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import OPERATOR, make_home_config
+from conftest import OPERATOR, build_session_manager, make_home_config
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,8 +28,6 @@ from src.runtime.api.deps import (
     get_session_store,
     get_task_manager,
 )
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
 pytestmark = pytest.mark.asyncio
@@ -39,7 +37,7 @@ class _TaskEnv:
 
   def __init__(self, tmp_path: Path) -> None:
     self.cfg = make_home_config(tmp_path)
-    self.session_mgr = SessionManager(self.cfg, SessionStore(self.cfg))
+    self.session_mgr = build_session_manager(self.cfg)
     self.tree = TaskTreeManager(self.cfg, self.session_mgr)
     app = FastAPI()
     app.include_router(sessions_api.router, prefix="/api/sessions")

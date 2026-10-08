@@ -44,7 +44,7 @@ async def test_delete_keeps_the_node_dir_and_history(tmp_path: pathlib.Path, tem
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.write_nightly_task(temp_home)
   node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
-  events_path = session_mgr.get_chat_events_path(node.id)
+  events_path = session_mgr.events.get_chat_events_path(node.id)
   conftest.append_events(events_path, [conftest.user_event("e0")])
 
   with conftest.make_cron_sessions_client(cfg, session_mgr, tree) as client:

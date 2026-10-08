@@ -32,7 +32,7 @@ async def test_archive_non_empty_session_keeps_files_and_marks_archived(tmp_path
   meta = await conftest.create_task(tree, parent=None, request_id="non-empty", name="Non-empty")
   await tree.dispatch.admit_input(meta.id, event_type=ET.USER, content="hello", actor="user")
   session_dir = cfg.sessions_dir / meta.id
-  events_path = session_mgr.get_chat_events_path(meta.id)
+  events_path = session_mgr.events.get_chat_events_path(meta.id)
 
   with make_api_client(cfg, session_mgr, tree) as client:
     response = client.delete(f"/api/sessions/{meta.id}")

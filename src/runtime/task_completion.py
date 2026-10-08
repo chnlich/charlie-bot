@@ -667,8 +667,8 @@ class TaskCompletionManager:
       raise TaskConflictError(sorted(set(evidence_blockers)))
     # Live-announce epochs are taken before any append, so the announce
     # feed can never double-render an event the aggregator caught up on.
-    child_epoch = await tree.sessions.prime_aggregator(session_id)
-    parent_epoch = (await tree.sessions.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
+    child_epoch = await tree.session_events.prime_aggregator(session_id)
+    parent_epoch = (await tree.session_events.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
     async with tree.control_lock:
       index = await tree._get_index()
       tree._index_meta(index, session_id)
@@ -694,9 +694,9 @@ class TaskCompletionManager:
           result_refs=evidence.result_refs,
           run_ids=evidence.run_ids,
           actor=actor)
-    await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
+    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
     if report_created and parent_epoch is not None:
-      await tree.sessions.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
+      await tree.session_events.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
     if report_created and fresh_meta.task_parent_id:
       # The delivered report is the parent's new durable input: its next
       # serialized turn wakes now. The close fact and
@@ -979,7 +979,7 @@ class TaskCompletionManager:
     replay = self._replay_input_ack(session_id, request_id)
     if replay is not None:
       return replay
-    epoch = await tree.sessions.prime_aggregator(session_id)
+    epoch = await tree.session_events.prime_aggregator(session_id)
     async with tree.control_lock:
       index = await tree._get_index()
       # 404 on an unknown task before any acknowledgement text.
@@ -1013,7 +1013,7 @@ class TaskCompletionManager:
       )
       await tree.events.append(session_id, event)
       tree._invalidate_index()
-    await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+    await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
     return {
         "session_id": session_id,
         "acknowledged_event_id": str(event["id"]),
@@ -1090,8 +1090,9 @@ class TaskCompletionManager:
     if replay is not None:
       return replay[1]
     pre_meta = await tree.load_task_meta(session_id)
-    child_epoch = await tree.sessions.prime_aggregator(session_id)
-    parent_epoch = (await tree.sessions.prime_aggregator(pre_meta.task_parent_id) if pre_meta.task_parent_id else None)
+    child_epoch = await tree.session_events.prime_aggregator(session_id)
+    parent_epoch = (
+        await tree.session_events.prime_aggregator(pre_meta.task_parent_id) if pre_meta.task_parent_id else None)
     async with tree.control_lock:
       index = await tree._get_index()
       meta = tree._index_meta(index, session_id)
@@ -1114,9 +1115,9 @@ class TaskCompletionManager:
           result_refs=[],
           run_ids=[],
           actor=actor)
-    await tree.sessions.announce_appended_event(session_id, close_event, epoch=child_epoch)
+    await tree.session_events.announce_appended_event(session_id, close_event, epoch=child_epoch)
     if report_created and parent_epoch is not None:
-      await tree.sessions.announce_appended_event(str(meta.task_parent_id), report, epoch=parent_epoch)
+      await tree.session_events.announce_appended_event(str(meta.task_parent_id), report, epoch=parent_epoch)
     if report_created and meta.task_parent_id:
       # Same delivered-report wake the completed close performs. The
       # cancelled close and its report are already durable here, so a
@@ -1163,7 +1164,7 @@ class TaskCompletionManager:
     async with self._tree.control_lock:
       restored, announcements = await self.restore_chain_locked(session_id, request_id=request_id, reason=reason)
     for node_id, event, epoch in announcements:
-      await self._tree.sessions.announce_appended_event(node_id, event, epoch=epoch)
+      await self._tree.session_events.announce_appended_event(node_id, event, epoch=epoch)
     return restored
 
   async def restore_chain_locked(self, session_id: str, *, request_id: str,
@@ -1222,7 +1223,7 @@ class TaskCompletionManager:
           closed_event_id=str(last_close.get("id")) if last_close is not None else None,
           reason=reason,
       )
-      epoch = await tree.sessions.prime_aggregator(node_id)
+      epoch = await tree.session_events.prime_aggregator(node_id)
       await tree.events.append(node_id, reopen_event)
       restored.append(node_id)
       announcements.append((node_id, reopen_event, epoch))

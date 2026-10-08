@@ -23,6 +23,7 @@ from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
 from src.infra.tasks import cancel_and_wait, create_logged_task
 from src.runtime.hooks import scheduled_handlers
+from src.runtime.session_events import SessionEvents
 from src.runtime.sessions import SessionManager
 
 log = LazyStructlogLogger()
@@ -69,6 +70,7 @@ class Scheduler:
     self._cfg = cfg
     self._session_mgr = session_mgr
     self._store = session_mgr.store
+    self._session_events = session_mgr.events
     self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
@@ -154,7 +156,7 @@ class Scheduler:
       if not task_cfg.enabled or not task_cfg.session_id:
         continue  # disabled tasks fire nothing; an unbound one already errored above
       try:
-        await self._maybe_run(task_cfg, session_mgr, session_cache, cfg)
+        await self._maybe_run(task_cfg, self._session_events, session_cache, cfg)
       except Exception as e:
         log.error("scheduler_task_error", task=task_cfg.name, error=str(e), traceback=traceback.format_exc())
 
@@ -293,7 +295,7 @@ class Scheduler:
   async def _maybe_run(
       self,
       task_cfg: ScheduledTaskConfig,
-      session_mgr: SessionManager,
+      session_events: SessionEvents,
       session_cache: dict[str, list[SessionMetadata]],
       cfg: CharlieBotConfig | None,
   ) -> None:
@@ -344,7 +346,7 @@ class Scheduler:
             'skipped_at': now.isoformat(),
             'reason': f"previous round still running ({handle.get_name()})",
         }
-        await session_mgr.persist_and_broadcast(session.id, event)
+        await session_events.persist_and_broadcast(session.id, event)
         log.info(
             "scheduler_run_skipped",
             task=task_cfg.name,
@@ -586,7 +588,7 @@ class Scheduler:
       }
       status = LastRunStatus.FAILED
     await task_manager().update_slot_fields(session.id, "cron", last_run_status=status)
-    await self._session_mgr.persist_and_broadcast(session.id, event)
+    await self._session_events.persist_and_broadcast(session.id, event)
     return {'session_id': session.id, 'thread_id': None}
 
   # ---------------------------------------------------------------------------

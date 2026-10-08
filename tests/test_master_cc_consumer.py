@@ -17,6 +17,7 @@ from conftest import (
     TerminateFlagBackend,
     _run_seeded_consumer,
     build_master_cc_cfg,
+    build_session_manager,
     create_root_session,
     drain_session_consumer,
     fresh_master_state,
@@ -36,8 +37,6 @@ from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
 from src.runtime import master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
 from src.runtime.agent_process.base import make_result_event
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 
 
 def _make_meta(session_id: str) -> SessionMetadata:
@@ -201,7 +200,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   an assertion an in-memory-object check cannot make.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   session = await create_root_session(session_mgr, CreateSessionRequest(name="anchor-on-disk"))
   backend_returned_id = "cc-backend-session-42"
 
@@ -215,7 +214,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
     await drain_session_consumer(session.id, timeout=5)
 
   # Cold-cache reader: a fresh SessionManager parses metadata.json from disk.
-  cold_reader = SessionManager(cfg, SessionStore(cfg))
+  cold_reader = build_session_manager(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == backend_returned_id
@@ -326,7 +325,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   from conftest import build_sessions_cfg
 
   cfg = build_sessions_cfg(tmp_path)
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = build_session_manager(cfg)
   session = await create_root_session(mgr, CreateSessionRequest(name="anchor-preserved"))
   await mgr.persist_cc_session_id(session.id, "kept-anchor")
 
@@ -340,7 +339,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
 
   await run_consumer_over_real_disk(session.id, [item], refused_round)
 
-  cold_reader = SessionManager(cfg, SessionStore(cfg))
+  cold_reader = build_session_manager(cfg)
   cold_meta = await cold_reader.store.get_session(session.id)
   assert cold_meta is not None
   assert cold_meta.cc_session_id == "kept-anchor"

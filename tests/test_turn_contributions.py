@@ -42,7 +42,6 @@ from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_queue, master_cc_run, master_cc_state, message_aggregator, streaming
 from src.runtime.agent_process.base import make_result_event
 from src.runtime.hooks import turn_contributions
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_prompts import build_segments
 
@@ -273,9 +272,8 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
       from src.features.memory.store_root import memory_dir
       from src.infra import event_types as ET
       from src.infra.models import CreateSessionRequest
-      from src.runtime import sessions
+      from src.runtime import session_events
       from src.runtime.hooks import turn_contributions
-      from src.runtime.session_store import SessionStore
       from src.runtime.task_prompts import SCOPE_MEMORY, build_segments
 
       async def main():
@@ -283,7 +281,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
         conftest.write_memory_topics(memory_dir(cfg), ["profile resident"])
         conftest.write_memory_entry(
             memory_dir(cfg), "profile", "resident-note", audience="master", body="resident memory")
-        manager = sessions.SessionManager(cfg, SessionStore(cfg))
+        manager = conftest.build_session_manager(cfg)
         tasks = []
 
         def schedule(coro, *, name):
@@ -291,9 +289,9 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
           tasks.append(task)
           return task
 
-        sessions.create_logged_task = schedule
+        session_events.create_logged_task = schedule
         meta = await conftest.create_root_session(manager, CreateSessionRequest(name="scratch"))
-        await manager.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE}})
+        await manager.events.persist_and_broadcast(meta.id, {{"type": ET.MASTER_DONE}})
         await asyncio.gather(*tasks)
         assert {contribution_type!r} not in [type(item).__name__ for item in turn_contributions.turn_contributions()]
         segments, _ = build_segments(cfg, meta, "manager_turn", overlay=None, chain=(), node_ref=None)
@@ -355,7 +353,7 @@ class _Raises(turn_contributions.TurnContribution):
 async def test_one_master_done_calls_each_platforms_deliver_done_once(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   meta = await conftest.create_root_session(mgr, CreateSessionRequest(name="both"))
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   # A failing contribution in front of the real ones must not stop them or the append.
@@ -366,17 +364,17 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
   with (
       patch("src.features.slack.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack,
       patch("src.features.discord.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord,
-      patch("src.runtime.sessions.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch("src.runtime.session_events.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await mgr.persist_and_broadcast(meta.id, done)
-    await mgr.persist_and_broadcast(meta.id, {"type": ET.SCHEDULED_TRIGGER, "content": "wake"})
+    await mgr.events.persist_and_broadcast(meta.id, done)
+    await mgr.events.persist_and_broadcast(meta.id, {"type": ET.SCHEDULED_TRIGGER, "content": "wake"})
     await asyncio.gather(*tasks, return_exceptions=True)
 
   slack.assert_awaited_once_with(meta.id, done, cfg, mgr)
   discord.assert_awaited_once_with(meta.id, done, cfg, mgr)
   assert len(tasks) == len(real) + 1
-  assert [e["type"] for e in mgr.load_chat_events_sync(meta.id)
+  assert [e["type"] for e in mgr.events.load_chat_events_sync(meta.id)
          ] == [ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
 
 
@@ -405,12 +403,12 @@ async def run_turn(
   Returns the manager, the session id and the after_turn tasks the funnel spawned.
   """
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="tex"))
   tasks: list[asyncio.Task] = []
   monkeypatch.setattr(master_cc_run, "_run_cc", turn)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.runtime.sessions.create_logged_task", make_task_spawner(tasks))
+  monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
   async with fresh_master_state(session.id):
     await run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks())
     await conftest.drain_session_consumer(session.id, timeout=5)
@@ -432,7 +430,7 @@ async def test_a_changed_tex_file_is_proposed_after_master_done_and_reverted(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "edited by the agent"))
 
-  types = [event["type"] for event in mgr.load_chat_events_sync(session_id)]
+  types = [event["type"] for event in mgr.events.load_chat_events_sync(session_id)]
   assert types == [ET.TASK_CREATED, ET.MASTER_DONE, TEX_EDIT_PROPOSED]
   assert tex_file.read_text(encoding="utf-8") == "original"
   assert latex.get_pending_proposal() == {"old": "original", "new": "edited by the agent"}
@@ -443,7 +441,7 @@ async def test_an_unchanged_tex_file_appends_nothing_and_clears_the_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "original"))
 
-  assert [event["type"] for event in mgr.load_chat_events_sync(session_id)] == [ET.TASK_CREATED, ET.MASTER_DONE]
+  assert [event["type"] for event in mgr.events.load_chat_events_sync(session_id)] == [ET.TASK_CREATED, ET.MASTER_DONE]
   assert latex._tex_snapshot is None
   assert latex.get_pending_proposal() is None
 
@@ -482,12 +480,12 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   """A turn left running in another process ends in CancelledError: the consumer appends no MASTER_DONE,
   so no after_turn runs, and the agent's edit stays on disk for the next boot's re-attach to settle."""
   cfg = build_master_cc_cfg(tmp_path)
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   session = await conftest.create_root_session(mgr, CreateSessionRequest(name="let-go"))
   tasks: list[asyncio.Task] = []
   install_scripted_backends(monkeypatch, [_LetGoBackend(tex_file)], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-  monkeypatch.setattr("src.runtime.sessions.create_logged_task", make_task_spawner(tasks))
+  monkeypatch.setattr("src.runtime.session_events.create_logged_task", make_task_spawner(tasks))
 
   async with fresh_master_state(session.id):
     queued = asyncio.create_task(run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
@@ -502,6 +500,6 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
 
   assert consumer.cancelled()
   assert not tasks
-  assert ET.MASTER_DONE not in [event["type"] for event in mgr.load_chat_events_sync(session.id)]
+  assert ET.MASTER_DONE not in [event["type"] for event in mgr.events.load_chat_events_sync(session.id)]
   assert tex_file.read_text(encoding="utf-8") == "edited by the agent"
   assert latex.get_pending_proposal() is None

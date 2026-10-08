@@ -44,7 +44,7 @@ def _write_artifact(cfg: config.CharlieBotConfig, session_id: str, file: str, co
 @pytest.mark.asyncio
 async def test_fork_copies_plans_json_and_referenced_artifacts(tmp_path: pathlib.Path) -> None:
   cfg, mgr, parent = await conftest.make_home_session(tmp_path, name="Parent", backend=conftest.OPUS_BACKEND_ID)
-  conftest.append_events(mgr.get_chat_events_path(parent.id), [conftest.user_event("e0")])
+  conftest.append_events(mgr.events.get_chat_events_path(parent.id), [conftest.user_event("e0")])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>v1</html>")
   _write_artifact(cfg, parent.id, _PLAN_V2_REL, "<html>v2</html>")
@@ -110,7 +110,7 @@ async def test_sidebar_plan_flag_refreshes_after_registry_write_and_skips_an_unc
 @pytest.mark.asyncio
 async def test_fork_missing_artifact_logs_warning_and_does_not_abort(tmp_path: pathlib.Path) -> None:
   cfg, mgr, parent = await conftest.make_home_session(tmp_path, name="Parent", backend=conftest.OPUS_BACKEND_ID)
-  conftest.append_events(mgr.get_chat_events_path(parent.id), [conftest.user_event("e0")])
+  conftest.append_events(mgr.events.get_chat_events_path(parent.id), [conftest.user_event("e0")])
 
   _write_artifact(cfg, parent.id, _PLAN_V1_REL, "<html>present</html>")
   # plan_02.html is referenced but intentionally NOT created on disk.
@@ -147,7 +147,7 @@ async def test_fork_outside_parent_artifact_does_not_alias_copied_artifact(tmp_p
   cfg, mgr, parent = await conftest.make_home_session(tmp_path, name="Parent", backend=conftest.OPUS_BACKEND_ID)
   other = await conftest.create_root_session(
       mgr, models.CreateSessionRequest(name="Other"), backend=conftest.OPUS_BACKEND_ID)
-  conftest.append_events(mgr.get_chat_events_path(parent.id), [conftest.user_event("e0")])
+  conftest.append_events(mgr.events.get_chat_events_path(parent.id), [conftest.user_event("e0")])
 
   artifact_rel = "artifacts/collision.html"
   _write_artifact(cfg, parent.id, artifact_rel, "<html>parent</html>")

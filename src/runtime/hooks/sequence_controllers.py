@@ -116,13 +116,17 @@ class SequenceCompletion(Protocol):
 class SequenceSessions(Protocol):
   """The session service members the sequence controllers call."""
 
+  async def deliver_to_successor(self, session_id: str, event: dict) -> str | None:
+    ...
+
+
+class SequenceSessionEvents(Protocol):
+  """The session events block members the sequence controllers call."""
+
   async def prime_aggregator(self, session_id: str) -> int:
     ...
 
   async def announce_appended_event(self, session_id: str, event: dict, *, epoch: int) -> None:
-    ...
-
-  async def deliver_to_successor(self, session_id: str, event: dict) -> str | None:
     ...
 
 
@@ -133,6 +137,7 @@ class SequenceTree(Protocol):
   runs: SequenceRuns
   dispatch: SequenceDispatch
   completion: SequenceCompletion
+  session_events: SequenceSessionEvents
   _cfg: CharlieBotConfig  # read by the cron backend resolution
 
   @property

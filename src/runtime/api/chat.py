@@ -11,7 +11,7 @@ from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SendMessageRequest, SessionMetadata
 from src.runtime.api.deps import (
     get_config_on_loop,
-    get_session_manager,
+    get_session_events,
     get_task_manager,
     require_caller,
     require_session,
@@ -20,7 +20,7 @@ from src.runtime.message_events import serialize_uploaded_files
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
-from src.runtime.sessions import SessionManager
+from src.runtime.session_events import SessionEvents
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -125,7 +125,7 @@ async def _cancel_task_node_runs(session_id: str, task_mgr: TaskTreeManager) -> 
 @router.post("/{session_id}/cancel")
 async def cancel_master_agent(
     session_id: str,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    session_events: SessionEvents = Depends(get_session_events),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     _meta: SessionMetadata = Depends(require_session),
 ) -> dict:
@@ -136,7 +136,7 @@ async def cancel_master_agent(
     from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
   if requested == 0:
-    await session_mgr.persist_and_broadcast(
+    await session_events.persist_and_broadcast(
         session_id, {
             "type": ET.ASSISTANT_ERROR,
             "content": "No active master agent to cancel.",

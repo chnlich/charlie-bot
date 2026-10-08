@@ -31,10 +31,12 @@ from conftest import (
     _settle_parent,
     assistant_text_event,
     backend_option,
+    build_session_manager,
     create_task,
     init_repo_with_origin,
     install_scripted_backends,
     make_transcript,
+    override_session_manager,
     pool_cfg,
     rate_limit_event,
     run_git,
@@ -50,8 +52,7 @@ from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.runtime.runs import RAW_LOG_NAME
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE, SessionManager
+from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION, HISTORY_LOCATION_NOTE
 from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
@@ -85,7 +86,7 @@ def build_spawning_env(
     backends["preference"] = preference
   cfg = CharlieBotConfig(charliebot_home=home, backends=backends, paths={"worktree_dir": str(home / "worktrees")})
   seed_signing_home(home, monkeypatch)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
@@ -214,13 +215,7 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
   from src.runtime.api import internal as internal_api
   from src.runtime.api import sessions as sessions_api
   from src.runtime.api import threads as threads_api
-  from src.runtime.api.deps import (
-      get_config_on_loop,
-      get_run_store,
-      get_session_manager,
-      get_session_store,
-      get_task_manager,
-  )
+  from src.runtime.api.deps import get_config_on_loop, get_run_store, get_task_manager
 
   app = FastAPI()
   app.include_router(sessions_api.router, prefix="/api/sessions")
@@ -229,8 +224,7 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
   app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
-  app.dependency_overrides[get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  override_session_manager(app, session_mgr)
   app.dependency_overrides[get_task_manager] = lambda: task_mgr
   app.dependency_overrides[get_run_store] = lambda: task_mgr.runs
   return TestClient(app)
@@ -1922,7 +1916,7 @@ def build_pooled_env(
   cfg = pool_cfg(
       tmp_path, [option], home=home, worktree_dir=home / "worktrees", labels=labels, claude_pools=claude_pools)
   seed_signing_home(home, monkeypatch)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 

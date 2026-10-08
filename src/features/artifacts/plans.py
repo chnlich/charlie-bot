@@ -226,7 +226,7 @@ class PlanRegistryManager:
 
   def __init__(self, cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager) -> None:
     self._cfg = cfg
-    self._session_mgr = session_mgr
+    self._session_events = session_mgr.events
     self._locks: dict[str, asyncio.Lock] = {}
 
   # -- locking ------------------------------------------------------------
@@ -271,7 +271,7 @@ class PlanRegistryManager:
     sidebar_state.mark_sidebar_dirty(session_id)
 
   async def _broadcast(self, session_id: str, plan_id: int) -> None:
-    await self._session_mgr.broadcast_only(
+    await self._session_events.broadcast_only(
         session_id, {
             "type": "plan_updated",
             "session_id": session_id,

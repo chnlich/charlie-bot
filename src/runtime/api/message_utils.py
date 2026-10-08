@@ -12,7 +12,8 @@ from src.runtime.message_events import _ATTACHED_FILES_MARKER, _stable_history_p
 if TYPE_CHECKING:
   from src.infra.models import SessionMetadata
   from src.runtime.message_projection import MessageProjection
-  from src.runtime.sessions import SessionManager
+  from src.runtime.session_events import SessionEvents
+  from src.runtime.session_store import SessionStore
   from src.runtime.task_sessions import TaskTreeManager
 
 __all__ = [
@@ -96,7 +97,7 @@ class SessionBootstrapData:
 
 
 async def get_message_projection_fast(
-    session_mgr: SessionManager,
+    session_events: SessionEvents,
     session_id: str,
 ) -> MessageProjection | None:
   """Return the session's message projection via the warm-hit fast path.
@@ -106,14 +107,14 @@ async def get_message_projection_fast(
   for its disk reads. Returns None when no projection is available (an
   archived session), and the caller takes its fallback path.
   """
-  projection = session_mgr.projection_memo_hit(session_id)
+  projection = session_events.projection_memo_hit(session_id)
   if projection is None:
-    projection = await asyncio.to_thread(session_mgr.get_message_projection, session_id)
+    projection = await asyncio.to_thread(session_events.get_message_projection, session_id)
   return projection
 
 
 async def _projection_page(
-    session_mgr: SessionManager,
+    session_events: SessionEvents,
     session_id: str,
     message_limit: int,
 ) -> tuple[list[dict], dict | None, int, int, bool] | None:
@@ -123,7 +124,7 @@ async def _projection_page(
   None when no projection is available and the caller must take the legacy
   tail-events path.
   """
-  projection = await get_message_projection_fast(session_mgr, session_id)
+  projection = await get_message_projection_fast(session_events, session_id)
   if projection is None:
     return None
   messages, oldest_ordinal, has_more = projection.tail(message_limit)
@@ -131,7 +132,7 @@ async def _projection_page(
 
 
 async def _tail_events_page(
-    session_mgr: SessionManager,
+    session_events: SessionEvents,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -144,7 +145,7 @@ async def _tail_events_page(
   or archived events precede it.
   """
   tail_events, total_count, has_more = await asyncio.to_thread(
-      session_mgr.load_chat_events_tail, session_id, message_limit)
+      session_events.load_chat_events_tail, session_id, message_limit)
   offset = archive_offset + total_count - len(tail_events)
   messages, pending_draft = events_to_view(tail_events, event_index_offset=offset)
   return (messages, pending_draft, archive_offset + total_count, offset, has_more or archive_offset > 0)
@@ -182,7 +183,7 @@ async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:
 
 
 async def _messages_page(
-    session_mgr: SessionManager,
+    session_events: SessionEvents,
     session_id: str,
     archive_offset: int,
     message_limit: int,
@@ -197,15 +198,16 @@ async def _messages_page(
   metadata) falls back the same way.
   """
   if archive_offset == 0:
-    page = await _projection_page(session_mgr, session_id, message_limit)
+    page = await _projection_page(session_events, session_id, message_limit)
     if page is not None:
       return page
-  return await _tail_events_page(session_mgr, session_id, archive_offset, message_limit)
+  return await _tail_events_page(session_events, session_id, archive_offset, message_limit)
 
 
 async def build_session_bootstrap_data(
     session_id: str,
-    session_mgr: SessionManager,
+    store: SessionStore,
+    session_events: SessionEvents,
     *,
     message_limit: int = 40,
     tree: TaskTreeManager | None = None,
@@ -219,7 +221,7 @@ async def build_session_bootstrap_data(
   (src/runtime/worker_transcript.py) served through the same page shape, so the
   caller must pass the owning *tree* for it.
   """
-  session_meta = await session_mgr.store.get_session(session_id)
+  session_meta = await store.get_session(session_id)
   if session_meta is None:
     raise ValueError(f"session '{session_id}' metadata missing during bootstrap build")
 
@@ -230,7 +232,7 @@ async def build_session_bootstrap_data(
         tree, session_id, message_limit)
   else:
     messages, pending_draft, total_event_count, oldest_ordinal, has_more = await _messages_page(
-        session_mgr, session_id, session_meta.archive_offset, message_limit)
+        session_events, session_id, session_meta.archive_offset, message_limit)
 
   return SessionBootstrapData(
       session=session_meta,

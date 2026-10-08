@@ -17,8 +17,6 @@ import pytest
 import scripts.v1_session_conversion as conversion
 from src.infra import event_types as ET
 from src.runtime import home_writer_fence, task_sessions
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 
 ACTIVE_ID = "00000000-0000-4000-8000-00000000000a"
 ARCHIVED_ID = "00000000-0000-4000-8000-00000000000b"
@@ -155,7 +153,7 @@ def test_apply_converts_each_v1_session_and_keeps_the_rest(home: Path, tmp_path:
 
   # The runtime reads the converted sessions as task-tree nodes: the old unanswered input is history.
   cfg = conftest.make_home_config(tmp_path)
-  tree = task_sessions.TaskTreeManager(cfg, SessionManager(cfg, SessionStore(cfg)))
+  tree = task_sessions.TaskTreeManager(cfg, conftest.build_session_manager(cfg))
   assert tree.dispatch.pending_inputs(ACTIVE_ID) == []
   assert [tree.task_state(sid) for sid in V1_IDS] == ["open", "archived", "open"]
 

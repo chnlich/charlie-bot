@@ -289,7 +289,7 @@ async def test_user_message_announces_every_restored_node(tmp_path: Path) -> Non
   await tree.archive_subtree(root.id, caller=OPERATOR)
 
   announce = mock.AsyncMock()
-  with mock.patch.object(session_mgr, "announce_appended_event", new=announce):
+  with mock.patch.object(session_mgr.events, "announce_appended_event", new=announce):
     await tree.dispatch.admit_input(leaf.id, event_type=ET.USER, content="resume", actor="user")
 
   announced = [(call.args[0], call.args[1]["type"]) for call in announce.await_args_list]

@@ -9,13 +9,11 @@ from pathlib import Path
 
 import pytest
 import pytest_asyncio
-from conftest import stub_credentials
+from conftest import build_session_manager, stub_credentials
 
 from src.infra.models import RunRecord, utc_now_iso
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import read_pid_stat
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import make_api_client
 
@@ -24,7 +22,7 @@ from tests.test_task_execution import make_api_client
 async def task_env(tmp_path: Path):
   from conftest import make_home_config
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   task_mgr = TaskTreeManager(cfg, session_mgr)
   return cfg, session_mgr, task_mgr
 
@@ -185,12 +183,12 @@ async def test_fold_agrees_with_a_cold_refold_across_a_recycle(task_env) -> None
 
   await task_mgr.runs.register_run(RunRecord(id="r2", session_id=worker))
   await task_mgr.runs.record_finish(worker, "r2", "completed")
-  warm = task_mgr._run_outcomes_of(worker, task_mgr._sessions.load_chat_events_sync(worker), meta.archive_offset)
+  warm = task_mgr._run_outcomes_of(worker, task_mgr.session_events.load_chat_events_sync(worker), meta.archive_offset)
   assert warm == {"r1": "completed", "r2": "completed"}
 
   task_mgr._facts_memo.clear()
   task_mgr._outcomes_memo.clear()
-  cold_live = task_mgr._sessions.load_chat_events_sync(worker)
+  cold_live = task_mgr.session_events.load_chat_events_sync(worker)
   cold_count = task_mgr._archived_event_count(worker, cold_live)
   assert task_mgr._run_outcomes_of(worker, cold_live, cold_count) == warm
 

@@ -19,7 +19,6 @@ from src.features.discord import discord_client, discord_commands, discord_liste
 from src.features.discord.metadata import DiscordOrigin
 from src.infra import config, metadata_slots, models
 from src.runtime import sessions
-from src.runtime.session_store import SessionStore
 
 _GUILD = "800000000000000001"
 _PARENT = "800000000000000002"
@@ -121,7 +120,7 @@ def _rig(tmp_path: pathlib.Path,
          **client_kwargs: object) -> tuple[config.CharlieBotConfig, sessions.SessionManager, FakeDiscordClient]:
   """Rig: cfg and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
-  return cfg, sessions.SessionManager(cfg, SessionStore(cfg)), FakeDiscordClient(**client_kwargs)
+  return cfg, conftest.build_session_manager(cfg), FakeDiscordClient(**client_kwargs)
 
 
 def _message(
@@ -167,7 +166,7 @@ async def _make_session(session_mgr: sessions.SessionManager, *, watermark: str 
 
 
 def _ack_events(session_mgr: sessions.SessionManager, session_id: str) -> list[dict]:
-  return [ev for ev in session_mgr.load_chat_events_sync(session_id) if ev["type"] == "discord_ack"]
+  return [ev for ev in session_mgr.events.load_chat_events_sync(session_id) if ev["type"] == "discord_ack"]
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +199,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   # is the four messages from the oldest unread (m4) on, bot message included,
   # read. The bot message is not unread and rides outside the ack.
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (4, 5, 6, 7)]
   assert [m["unread"] for m in result["messages"]] == [True, True, False, True]
@@ -216,7 +215,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
 
   # A second read picks up the run the first window cut: the rest of the unread.
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    again = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr)
+    again = await discord_commands.read_thread(session_id, None, 4, cfg, session_mgr.store, session_mgr.events)
   assert [m["id"] for m in again["messages"]] == [_mid(i) for i in (8, 9, 10)]
   assert [m["unread"] for m in again["messages"]] == [True, True, True]
   assert again["watermark_id"] == _mid(10)
@@ -230,7 +229,7 @@ async def test_read_without_unread_returns_the_newest_limit(tmp_path: pathlib.Pa
   session_id = await _make_session(session_mgr, watermark=_mid(8))
 
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, None, 3, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, None, 3, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (6, 7, 8)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -263,7 +262,7 @@ async def test_read_succeeds_when_a_message_lands_after_the_full_read(tmp_path: 
 
   client.get_messages = get_messages
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, None, 50, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, None, 50, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -285,7 +284,7 @@ async def test_read_prepends_the_parent_starter_outside_the_limit(tmp_path: path
   session_id = await _make_session(session_mgr)
 
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_THREAD, _mid(1), _mid(2)]
   # The starter rides first, unread false; limit=2 still delivered both unread.
@@ -321,7 +320,7 @@ async def test_read_skips_a_404_starter(tmp_path: pathlib.Path) -> None:
   session_id = await _make_session(session_mgr)
 
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, None, 2, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_mid(1), _mid(2)]
   assert [m["unread"] for m in result["messages"]] == [True, True]
@@ -339,9 +338,10 @@ async def test_read_names_the_author_person_for_listed_and_unlisted_authors(tmp_
   session_id = await _make_session(session_mgr)
 
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    own = await discord_commands.read_thread(session_id, None, 5, cfg, session_mgr)
+    own = await discord_commands.read_thread(session_id, None, 5, cfg, session_mgr.store, session_mgr.events)
     linked = await discord_commands.read_thread(
-        session_id, f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}", 5, cfg, session_mgr)
+        session_id, f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}", 5, cfg, session_mgr.store,
+        session_mgr.events)
 
   persons = {m["id"]: m["person"] for m in own["messages"]}
   assert persons[_mid(1)] == _PERSON
@@ -363,7 +363,7 @@ async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path
   url = f"https://discord.com/channels/{_GUILD}/{_OTHER_CHANNEL}"
 
   with mock.patch(conftest.DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    result = await discord_commands.read_thread(session_id, url, 3, cfg, session_mgr)
+    result = await discord_commands.read_thread(session_id, url, 3, cfg, session_mgr.store, session_mgr.events)
 
   assert [m["id"] for m in result["messages"]] == [_mid(i) for i in (3, 4, 5)]
   assert all(m["unread"] is False for m in result["messages"])
@@ -531,7 +531,7 @@ async def test_check_without_a_token_answers_409(tmp_path: pathlib.Path) -> None
   conftest.stub_credentials({})
   cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home", backends=conftest.fake_backends())
 
-  with conftest.make_internal_router_client(cfg, sessions.SessionManager(cfg, SessionStore(cfg))) as http:
+  with conftest.make_internal_router_client(cfg, conftest.build_session_manager(cfg)) as http:
     resp = http.post("/api/internal/discord/check", json={})
 
   assert resp.status_code == 409

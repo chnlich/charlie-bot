@@ -14,6 +14,7 @@ from conftest import (
     PUBLISH_BASE_URL,
     ROOT,
     bind_deps_managers,
+    build_session_manager,
     create_root_session,
     fake_backends,
     mention_seam,
@@ -39,7 +40,6 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus, TriggerStatus
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import TriggerManager
@@ -132,7 +132,7 @@ def _rig(
 ) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, FakeDiscordClient]:
   """Discord rig: cfg, managers, and session home rooted at tmp_path, plus the recording fake client."""
   cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   return cfg, session_mgr, TriggerManager(cfg, session_mgr), FakeDiscordClient(channels=channels, thread=thread)
 
 
@@ -220,7 +220,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
   # The summon is persisted under the platform key with the block, and its
   # content carries the mention-message link plus the reply command the
   # round-end audit gates on.
-  events = session_mgr.load_chat_events_sync(sid)
+  events = session_mgr.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert len(agent_messages) == 1
   assert agent_messages[0]["discord"] == {
@@ -254,7 +254,7 @@ async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_cit
     sid = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
-  events = session_mgr.load_chat_events_sync(sid)
+  events = session_mgr.events.load_chat_events_sync(sid)
   content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
   scope = (ROOT / "prompts" / "discord_reply_scope.md").read_text(encoding="utf-8").strip()
   red_line = (ROOT / "prompts" / "thread_reply_redline.md").read_text(encoding="utf-8").strip()
@@ -310,7 +310,7 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
   # No thread was started: the mention's own channel is the thread, and the
   # block names it as both the holding channel and the thread.
   assert client.started_threads == []
-  events = session_mgr.load_chat_events_sync(sid)
+  events = session_mgr.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert agent_messages[0]["discord"] == {
       "guild_id": _GUILD,
@@ -525,7 +525,7 @@ async def test_post_reply_posts_a_published_url_byte_identical(tmp_path: Path) -
   # whether the post went out as JSON or as a multipart upload.
   client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await post_reply(sid, text, cfg, session_mgr)
+    readback = await post_reply(sid, text, cfg, session_mgr.store, session_mgr.events)
 
   assert len(requests) == 1
   request = requests[0]
@@ -551,7 +551,7 @@ async def test_post_reply_names_an_application_route_link_for_the_operator(tmp_p
 
   client = DiscordClient(httpx.AsyncClient(transport=httpx.MockTransport(handler)), bot_token="test-bot-token")
   with patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client):
-    readback = await post_reply(sid, text, cfg, session_mgr)
+    readback = await post_reply(sid, text, cfg, session_mgr.store, session_mgr.events)
 
   assert json.loads(requests[0].content)["content"] == text
   assert readback["operator_only_note"] is not None and route_url in readback["operator_only_note"]
@@ -581,13 +581,13 @@ async def test_post_reply_refuses_422_and_posts_nothing_on_a_file_server_link(
       patch(DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET, return_value=client),
       pytest.raises(ThreadReplyError) as excinfo,
   ):
-    await post_reply(sid, f"see {link} for details", cfg, session_mgr)
+    await post_reply(sid, f"see {link} for details", cfg, session_mgr.store, session_mgr.events)
 
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
   assert f"charliebot publish {named_path}" in excinfo.value.detail
   assert client.posts == []
-  assert not [ev for ev in session_mgr.load_chat_events_sync(sid) if ev.get("type") == DISCORD_REPLY]
+  assert not [ev for ev in session_mgr.events.load_chat_events_sync(sid) if ev.get("type") == DISCORD_REPLY]
 
 
 @pytest.mark.asyncio
@@ -596,9 +596,9 @@ async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: Pat
   # here proves the audit never reached for one.
   stub_credentials({})
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   meta = await create_root_session(session_mgr, CreateSessionRequest(name="plain"))
-  events_before = session_mgr.load_chat_events_sync(meta.id)
+  events_before = session_mgr.events.load_chat_events_sync(meta.id)
 
   assert await deliver_done(meta.id, {"type": ET.MASTER_DONE, "input_event_id": "e1"}, cfg, session_mgr) is False
-  assert session_mgr.load_chat_events_sync(meta.id) == events_before
+  assert session_mgr.events.load_chat_events_sync(meta.id) == events_before

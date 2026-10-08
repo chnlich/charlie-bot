@@ -24,7 +24,6 @@ from src.features.cron import config
 from src.features.cron import scheduler as scheduler_module
 from src.infra import models
 from src.runtime import sessions, task_sessions
-from src.runtime.session_store import SessionStore
 
 
 class _Clock:
@@ -125,13 +124,13 @@ async def _tick(
     second: int = 0,
 ) -> None:
   clock.set(datetime.datetime(2026, 6, 1, 0, minute, second, tzinfo=datetime.UTC))
-  await scheduler._maybe_run(task_cfg, session_mgr, {}, None)
+  await scheduler._maybe_run(task_cfg, session_mgr.events, {}, None)
 
 
 def _skip_events_since(session_mgr: sessions.SessionManager, since: int) -> int:
   """Count scheduled_run_skipped events emitted since ``since`` (len-based cursor)."""
   count = 0
-  for call in session_mgr.persist_and_broadcast.await_args_list[since:]:
+  for call in session_mgr.events.persist_and_broadcast.await_args_list[since:]:
     e = call.args[1]
     if e.get("type") == "scheduled_run_skipped":
       count += 1
@@ -145,7 +144,7 @@ async def _bound_rig_tree(
   """One synthetic home with the tree wired as the scheduler's deps singleton,
   plus the task's manager node carrying the clock's instant as its anchor."""
   cfg = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   session = await conftest.create_scheduled_node(tree, name="code-health", backend=None)
@@ -167,7 +166,7 @@ async def _pending_rig(
   pending = _PendingRound(session)
   install_pending_executor(scheduler, clock, pending, tree)
   # The skip event's count reads the broadcast spy, not the real broadcaster.
-  monkeypatch.setattr(session_mgr, "persist_and_broadcast", mock.AsyncMock())
+  monkeypatch.setattr(session_mgr.events, "persist_and_broadcast", mock.AsyncMock())
   task_cfg = _task(session_id=session.id)
   return clock, scheduler, session, session_mgr, tree, pending, task_cfg
 
@@ -211,7 +210,7 @@ async def test_one_skip_consuming_delayed_occurrences(
 
   # One fire births the round; then a single delayed tick arrives at 00:04.
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=1)
-  cursor = len(session_mgr.persist_and_broadcast.await_args_list)
+  cursor = len(session_mgr.events.persist_and_broadcast.await_args_list)
   await _tick(scheduler, task_cfg, session_mgr, clock, minute=4)
 
   # Exactly one record consumed occurrences 00:02, 00:03 and 00:04.

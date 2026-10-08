@@ -16,8 +16,7 @@ import pytest
 from src.features.slack.slack_listener import handle_app_mention, summon_session_id
 from src.infra import config, metadata_slots
 from src.infra import event_types as ET
-from src.runtime import sessions, task_sessions
-from src.runtime.session_store import SessionStore
+from src.runtime import task_sessions
 
 
 def _read_events(path: pathlib.Path) -> list[dict]:
@@ -44,7 +43,7 @@ def _assert_manager_root(cfg: config.CharlieBotConfig, session_id: str) -> list[
 async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   launches: list[tuple[str, int]] = []
@@ -86,7 +85,7 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
 async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path: pathlib.Path, spawn: str) -> None:
   cfg, mgr, _ = conftest.build_env(tmp_path)
   parent = await conftest.make_parent(mgr)  # two seed events: e0, e1
-  parent_events = _read_events(mgr.get_chat_events_path(parent))
+  parent_events = _read_events(mgr.events.get_chat_events_path(parent))
 
   with patch("os.fdatasync") as fdatasync:
     if spawn == "fork":
@@ -95,7 +94,7 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
       child = await mgr.elone_session(parent, event_index=1)
     born_syncs = fdatasync.call_count
     # The patch must see the durable append funnel, or the zero above proves nothing.
-    await mgr.save_chat_event(child.id, conftest.user_event("first turn"))
+    await mgr.events.save_chat_event(child.id, conftest.user_event("first turn"))
     assert fdatasync.call_count == born_syncs + 1
 
   assert born_syncs == 0

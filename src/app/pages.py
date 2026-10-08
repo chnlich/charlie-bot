@@ -20,6 +20,7 @@ from src.runtime import templating
 from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     get_config_on_loop,
+    get_session_events,
     get_session_manager,
     get_session_store,
     get_task_manager,
@@ -32,6 +33,7 @@ from src.runtime.api.sessions import (
 )
 from src.runtime.hooks import page_render
 from src.runtime.hooks.sequence_controllers import sequence_listing_fields
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
@@ -141,6 +143,7 @@ async def index(
     session: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
     store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
@@ -184,7 +187,7 @@ async def index(
 
     if active_session:
       try:
-        bootstrap = await build_session_bootstrap_data(session, session_mgr, tree=task_mgr)
+        bootstrap = await build_session_bootstrap_data(session, store, session_events, tree=task_mgr)
         active_session = bootstrap.session
         pending_draft = bootstrap.pending_draft
         event_count = bootstrap.total_event_count

@@ -27,10 +27,11 @@ def _stub_task_manager():
 
 
 class _LastSessionManager:
-  """The no-op session seam the stub task-tree owner requires; its store is itself."""
+  """The no-op session seam the stub task-tree owner requires; its store and events block are itself."""
 
   def __init__(self) -> None:
     self.store = self
+    self.events = self
 
   async def get_session(self, session_id: str):
     return None
@@ -90,11 +91,11 @@ async def test_delegate_task_returns_403_when_takeoff_gate_blocks(monkeypatch: p
   monkeypatch.setattr(task_mgr, "check_task_authorization", AsyncMock(side_effect=DelegationBlockedError("blocked")))
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, store=session_mgr.store, task_mgr=task_mgr)
+    await internal.delegate_task(req, session_events=session_mgr.events, store=session_mgr.store, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 403
   assert exc_info.value.detail == "blocked"
-  session_mgr.persist_and_broadcast.assert_not_awaited()
+  session_mgr.events.persist_and_broadcast.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -119,7 +120,7 @@ async def test_delegate_task_verify_rejects_repo_path() -> None:
   session_mgr = AsyncMock()
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, store=session_mgr.store)
+    await internal.delegate_task(req, session_events=session_mgr.events, store=session_mgr.store)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "verify delegations are repo-less; omit repo_path"
@@ -137,7 +138,7 @@ async def test_delegate_task_repo_scoped_types_take_repo_and_base_together(task_
   session_mgr = AsyncMock()
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, store=session_mgr.store)
+    await internal.delegate_task(req, session_events=session_mgr.events, store=session_mgr.store)
 
   assert exc_info.value.status_code == 400
   assert "together" in exc_info.value.detail
@@ -171,7 +172,7 @@ async def test_delegate_task_repo_less_request_passes_the_schema_gate(
   monkeypatch.setattr(internal, "_delegate_task_tree", fake_delegate_task_tree)
 
   result = await internal.delegate_task(
-      req, session_mgr=session_mgr, store=session_mgr.store, task_mgr=task_mgr, caller=None)
+      req, session_events=session_mgr.events, store=session_mgr.store, task_mgr=task_mgr, caller=None)
 
   assert result["session_id"] == "child"
   assert captured["repo_path"] is None
@@ -194,7 +195,7 @@ async def test_delegate_task_returns_400_for_invalid_backend(monkeypatch: pytest
   monkeypatch.setattr(internal, "get_config", lambda: object())
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.delegate_task(req, session_mgr=session_mgr, store=session_mgr.store, task_mgr=task_mgr)
+    await internal.delegate_task(req, session_events=session_mgr.events, store=session_mgr.store, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'codex-o3' is not in backends.options"

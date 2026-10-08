@@ -125,20 +125,18 @@ from src.features.slack.metadata import SlackOrigin
 from src.infra import backend_models, models
 from src.infra.config import CharlieBotConfig
 from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 
 
 async def main():
   option = backend_models.parse_option({{"id": "b", "label": "B", "type": "cc-claude", "model": "m"}})
   cfg = CharlieBotConfig(charliebot_home=Path({home!r}), backends={{"options": [option]}})
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   thread = await conftest.create_root_session(
       mgr,
       models.CreateSessionRequest(
           name="thread", slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1.0")),
       backend="b")
-  mgr._drop_session_runtime_state(thread.id)
+  mgr.events.drop_session_runtime_state(thread.id)
   views = await mgr.view_subtree_roots()
   server.app.dependency_overrides[get_config_on_loop] = lambda: cfg
   server.app.dependency_overrides[get_session_manager] = lambda: mgr

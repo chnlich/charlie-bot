@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
+from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 
 router = APIRouter()
 
@@ -36,8 +36,8 @@ class DiscordCheckRequest(BaseModel):
 @router.post("/discord/reply")
 async def discord_reply(
     req: DiscordReplyRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
     store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Discord thread and return the readback.
@@ -57,7 +57,7 @@ async def discord_reply(
   from src.features.discord import discord_listener
   try:
     await discord_listener.assert_thread_fresh(req.session_id, cfg, store)
-    return await discord_listener.post_reply(req.session_id, req.text, cfg, session_mgr)
+    return await discord_listener.post_reply(req.session_id, req.text, cfg, store, session_events)
   except ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
@@ -65,7 +65,8 @@ async def discord_reply(
 @router.post("/discord/read")
 async def discord_read(
     req: DiscordReadRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Read the calling session's Discord thread (or the channel *url* names) and return its messages.
@@ -84,7 +85,7 @@ async def discord_read(
   from src.features.chat_threads.thread_entry import ThreadReplyError
   from src.features.discord.discord_commands import read_thread
   try:
-    return await read_thread(req.session_id, req.url, req.limit, cfg, session_mgr)
+    return await read_thread(req.session_id, req.url, req.limit, cfg, store, session_events)
   except ThreadReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 

@@ -18,6 +18,7 @@ import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
 from src.features.memory.memory import select_master_memory, select_worker_memory
+from src.features.memory.store_root import memory_dir
 from src.infra.models import PatchSessionTaskRequest, TaskSpec, TaskType
 from src.runtime.task_prompts import PromptSnapshot, assemble_snapshot, build_segments, prompt_task_type
 from src.runtime.task_sessions import TaskTreeManager
@@ -236,12 +237,13 @@ async def test_three_levels_with_both_scopes_prove_inheritance_and_ordering(tmp_
 async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) -> None:
   """A store holding only a staged candidate selects nothing: staging never launches."""
   cfg, _sm, _mgr = build_env(tmp_path)
-  staged_dir = cfg.memory_dir / "staging"
+  store = memory_dir(cfg)
+  staged_dir = store / "staging"
   staged_dir.mkdir(parents=True)
   (staged_dir / "candidate.md").write_text(
       "---\nscope: user\ntopic: staged\ntitle: Candidate\n---\nstaged body\n", encoding="utf-8")
-  (cfg.memory_dir / "topics").write_text("", encoding="utf-8")
-  assert select_master_memory(cfg.memory_dir) is None
-  worker_selection = select_worker_memory(cfg.memory_dir, "")
+  (store / "topics").write_text("", encoding="utf-8")
+  assert select_master_memory(store) is None
+  worker_selection = select_worker_memory(store, "")
   assert worker_selection is not None
   assert all(not sources for _d, _t, sources in worker_selection.segments)

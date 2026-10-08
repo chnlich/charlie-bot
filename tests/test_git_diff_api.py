@@ -1,7 +1,9 @@
 """Tests for the file-level lazy-load diff API (src/features/diff_view/api.py)."""
 
+import json
 import pathlib
 import subprocess
+import sys
 
 import conftest
 import fastapi
@@ -10,6 +12,7 @@ import pytest
 from fastapi import testclient
 
 from src.features.diff_view import api as git_api
+from src.features.memory.store_root import memory_dir
 from src.infra import config
 
 
@@ -162,15 +165,15 @@ def test_diff_head_move_busts_memo(tmp_path: pathlib.Path, endpoint: str, extra_
 
 
 def test_memory_store_repo_accepted_outside_workspace_dirs(tmp_path: pathlib.Path) -> None:
-  """The memory store (cfg.memory_dir) is a diff-able repo even though it sits
-  outside paths.workspace_dirs: the PR flow serves its proposal diff here."""
+  """The memory store (its registered diff root) is a diff-able repo even though it
+  sits outside paths.workspace_dirs: the PR flow serves its proposal diff here."""
   workspace = tmp_path / "workspace"
   workspace.mkdir()
   cfg = config.CharlieBotConfig(
       charliebot_home=tmp_path / "charliebot-home",
       paths={"workspace_dirs": [str(workspace)]},
   )
-  repo = _build_repo(cfg.memory_dir)
+  repo = _build_repo(memory_dir(cfg))
   app = fastapi.FastAPI()
   app.include_router(git_api.router, prefix="/api/git")
   conftest.apply_config_overrides(app, cfg)
@@ -195,6 +198,62 @@ def test_other_repo_outside_workspace_and_memory_rejected(tmp_path: pathlib.Path
 
   resp = _get_diff(client, "files", repo, "main", "feature")
   assert resp.status_code == 400
+
+
+# The probe process deletes the memory line, registers, then asks the diff API for a memory-store
+# repo and for a workspace repo.
+MEMORY_DELETED_PROBE = """
+import json
+import pathlib
+import fastapi
+from fastapi.testclient import TestClient
+from src.app import registrations
+registrations.PACKAGES = tuple(p for p in registrations.PACKAGES if p != "src.features.memory")
+registrations.register_all()
+from src.features.diff_view import api as git_api
+from src.infra import config
+from src.runtime.api.deps import get_config_on_loop
+cfg = config.CharlieBotConfig(charliebot_home=pathlib.Path({home!r}), paths={{"workspace_dirs": [{workspace!r}]}})
+app = fastapi.FastAPI()
+app.include_router(git_api.router, prefix="/api/git")
+app.dependency_overrides[config.get_config] = lambda: cfg
+app.dependency_overrides[get_config_on_loop] = lambda: cfg
+client = TestClient(app)
+result = {{}}
+for name, repo in (("memory", {memory_repo!r}), ("workspace", {workspace_repo!r})):
+  response = client.get("/api/git/diff/files", params={{"repo": repo, "base": "main", "head": "feature"}})
+  result[name] = [response.status_code, response.json().get("detail")]
+print(json.dumps(result))
+"""
+
+
+def test_the_memory_store_repo_is_refused_without_the_memory_package(tmp_path: pathlib.Path) -> None:
+  """Only the memory package's registered diff root admits its store: without its line, the store is a stray repo."""
+  home = tmp_path / "charliebot-home"
+  workspace = tmp_path / "workspace"
+  memory_repo = _build_repo(home / "memory")
+  workspace_repo = _build_repo(workspace)
+
+  probe = subprocess.run(
+      [
+          sys.executable, "-c",
+          MEMORY_DELETED_PROBE.format(
+              home=str(home),
+              workspace=str(workspace),
+              memory_repo=str(memory_repo),
+              workspace_repo=str(workspace_repo))
+      ],
+      cwd=conftest.ROOT,
+      capture_output=True,
+      text=True,
+      timeout=60,
+      check=False)
+
+  assert probe.returncode == 0, probe.stderr
+  assert json.loads(probe.stdout.splitlines()[-1]) == {
+      "memory": [400, "repo must be under configured paths.workspace_dirs or a registered package repository"],
+      "workspace": [200, None],
+  }
 
 
 def test_refs_signature_tracks_ref_state(tmp_path: pathlib.Path) -> None:

@@ -36,6 +36,7 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from src.features.memory.store_root import store_root
 from src.infra.help_formatter import CliHelpFormatter
 from src.infra.home import charliebot_home_dir
 
@@ -44,8 +45,8 @@ from src.infra.home import charliebot_home_dir
 
 
 def _memory_dir() -> Path:
-  """The store root: ``<home>/memory`` (the CharlieBotConfig.memory_dir derivation)."""
-  return charliebot_home_dir() / "memory"
+  """The store root of the env-resolved home (``store_root``)."""
+  return store_root(charliebot_home_dir())
 
 
 def _sessions_root() -> Path:

@@ -93,6 +93,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
 
   from src.features.backup import backup as core_backup
   from src.features.cron import api as api_cron
+  from src.features.memory import store_root
   from src.features.trace import api as trace_api
   from src.runtime import init as core_init
 
@@ -109,7 +110,7 @@ def test_profile_leaves_the_default_home_untouched(monkeypatch: pytest.MonkeyPat
       cfg.sessions_dir,
       cfg.config_file,
       cfg.config_d_dir,
-      cfg.memory_dir,
+      store_root.memory_dir(cfg),
       cfg.claude_md_file,
       api_cron.cron_dir(),
       trace_api._perfetto_merge_cache_dir(),

@@ -1,6 +1,6 @@
 """Labeled-entry memory store: parse, load, lint, and assemble.
 
-The store is a local git repo at ``cfg.memory_dir`` (``~/.charliebot/memory/``):
+The store is a local git repo at the store root (``store_root.memory_dir``, ``~/.charliebot/memory/``):
 
   entries/<topic>/<slug>.md   # canonical entries, one fact/rule set per file
   topics                      # controlled vocabulary, one topic per line

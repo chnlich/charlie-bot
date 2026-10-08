@@ -1976,9 +1976,9 @@ class FakeSlackClient:
 def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
   """Fake instruction inputs for the master-instruction builder: a repo whose prompts/master.md
   reads "BASE PROMPT", with the two second rule files the builder reads after it. claude_md_file
-  names a path that does not exist, so the built instructions carry no host override. memory_dir
-  names a path that does not exist yet: the build creates the empty scaffold there, so the
-  instructions carry no memory block."""
+  names a path that does not exist, so the built instructions carry no host override. The memory
+  store root under charliebot_home does not exist yet: the build creates the empty scaffold there,
+  so the instructions carry no memory block."""
   home = tmp_path / "home"
   repo = tmp_path / "repo"
   (repo / "prompts").mkdir(parents=True)
@@ -1988,7 +1988,6 @@ def make_instruction_cfg(tmp_path: Path) -> SimpleNamespace:
   return SimpleNamespace(
       charlie_bot_repo=repo,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=home / "memory",
       charliebot_home=home,
   )
 
@@ -2000,7 +1999,7 @@ def cfg_with_repo(repo_root: Path) -> CharlieBotConfig:
 
   class _Cfg:
     charlie_bot_repo = repo_root
-    memory_dir = repo_root / "memory"
+    charliebot_home = repo_root
 
   return _Cfg()  # type: ignore[return-value]
 

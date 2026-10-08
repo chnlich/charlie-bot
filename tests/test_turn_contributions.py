@@ -63,7 +63,6 @@ def real_repo_cfg(home: Path) -> SimpleNamespace:
   return SimpleNamespace(
       charlie_bot_repo=conftest.ROOT,
       claude_md_file=home / "MASTER_AGENT_PROMPT.md",
-      memory_dir=home / "memory",
       charliebot_home=home,
   )
 
@@ -270,6 +269,7 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
       import conftest
       import server
 
+      from src.features.memory.store_root import memory_dir
       from src.infra import event_types as ET
       from src.infra.models import CreateSessionRequest
       from src.runtime import sessions
@@ -278,9 +278,9 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
 
       async def main():
         cfg = conftest.build_master_cc_cfg(Path({str(profile)!r}))
-        conftest.write_memory_topics(cfg.memory_dir, ["profile resident"])
+        conftest.write_memory_topics(memory_dir(cfg), ["profile resident"])
         conftest.write_memory_entry(
-            cfg.memory_dir, "profile", "resident-note", audience="master", body="resident memory")
+            memory_dir(cfg), "profile", "resident-note", audience="master", body="resident memory")
         manager = sessions.SessionManager(cfg)
         tasks = []
 

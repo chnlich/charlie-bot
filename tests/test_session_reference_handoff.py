@@ -53,10 +53,10 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
   # A third event past the fork point proves the copied prefix truncates there.
   conftest.append_events(mgr.get_chat_events_path(parent), [conftest.user_event("e2")])
 
-  child = await mgr.fork_session(parent, event_index=1)
+  child = await mgr.fork_session(parent, event_index=2)
 
-  child_events = _assert_child_log_is_parent_prefix_marker_and_creation(mgr, parent, child.id, end=2)
-  assert [event["content"] for event in child_events[:2]] == ["e0", "e1"]
+  child_events = _assert_child_log_is_parent_prefix_marker_and_creation(mgr, parent, child.id, end=3)
+  assert [event["content"] for event in child_events[1:3]] == ["e0", "e1"]
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
     f.write(non_ascii + "\n")
 
   child = await mgr.fork_session(parent.id)
-  expected_prefix = (json.dumps(conftest.user_event("ok")) + "\n" + non_ascii + "\n").encode("utf-8")
+  expected_prefix = events_path.read_bytes()
   child_raw = mgr.get_chat_events_path(child.id).read_bytes()
   assert child_raw.startswith(expected_prefix)
   marker_lines = child_raw[len(expected_prefix):].decode("utf-8").splitlines()

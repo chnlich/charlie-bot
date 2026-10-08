@@ -42,10 +42,8 @@ from src.infra.models import (
     SetGroupRequest,
     SwitchBackendRequest,
     TaskState,
-    ThreadMetadata,
     TriggerStatus,
     UtcDatetime,
-    WorkerThreadRef,
     WorkState,
 )
 from src.infra.responses import (
@@ -65,7 +63,6 @@ from src.runtime.api.deps import (
     get_run_store,
     get_session_manager,
     get_task_manager,
-    get_thread_manager,
     get_trigger_manager,
     require_caller,
     require_found,
@@ -77,7 +74,6 @@ from src.runtime.api.message_utils import (
     events_to_messages,
     get_message_projection_fast,
 )
-from src.runtime.api.threads import view_thread_rows
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import backend_types
@@ -99,10 +95,8 @@ from src.runtime.task_sessions import (
     TaskInvalidError,
     TaskNotFoundError,
     TaskTreeManager,
-    not_task_node_detail,
 )
 from src.runtime.thinking_state import run_backend
-from src.runtime.threads import ThreadManager
 from src.runtime.triggers import TriggerManager
 
 log = LazyStructlogLogger()
@@ -270,78 +264,11 @@ def _resolve_requested_backend(
   return resolved_fallback
 
 
-# ---------------------------------------------------------------------------
-# Projected legacy worker-thread rows (sidebar list responses)
-# ---------------------------------------------------------------------------
-# A legacy session (profile None) stays a root row of every sidebar list; the
-# worker threads its delegations left under threads/*/metadata.json project as
-# read-only worker-leaf rows under it. The projected rows are response-only
-# SessionMetadata objects — worker_thread marks them and the transient
-# exclusion keeps every metadata write free of it — derived from the memoized
-# full thread-row scan (view_thread_rows: every threads/*/metadata.json, no
-# time window; never init_worker_recovery's 30-day windowed badge scan).
-# Each row memoizes on (parent id, thread id) against the parent row object
-# and the thread row object, both shared cache references whose identity
-# changes exactly when their file changed, so the search route's whole-body
-# memo keeps serving while nothing moved.
-_PROJECTED_ROW_MEMO_LIMIT = 8192
-_projected_row_memo: BoundedMemo[tuple[str, str], tuple[SessionMetadata, dict,
-                                                        SessionMetadata]] = BoundedMemo(_PROJECTED_ROW_MEMO_LIMIT)
-
 # TaskSpec.goal is the task's prompt prose — tens of KB per task node — and its
 # one reader is the task-context modal through GET /{session_id}, so every
 # poll, switch, and listing payload ships the spec without the body; the detail
 # render keeps it.
 _RESPONSE_ROW_EXCLUDE = {"task": {"goal"}}
-
-
-def _datetime_from_epoch_ms(ms: int) -> datetime:
-  return datetime.fromtimestamp(ms / 1000, tz=UTC)
-
-
-def _projected_thread_row(parent: SessionMetadata, thread_row: dict) -> SessionMetadata:
-  """One legacy worker thread projected as a sidebar worker-leaf row."""
-  key = (parent.id, str(thread_row["id"]))
-  hit = _projected_row_memo.get(key)
-  if hit is not None and hit[0] is parent and hit[1] is thread_row:
-    return hit[2]
-  projected = SessionMetadata(
-      id=str(thread_row["id"]),
-      name=str(thread_row["description"] or "")[:80],
-      status=parent.status,
-      profile="worker",
-      task_parent_id=parent.id,
-      created_at=_datetime_from_epoch_ms(thread_row["created_at"]),
-      updated_at=_datetime_from_epoch_ms(
-          thread_row["completed_at"] or thread_row["started_at"] or thread_row["created_at"]),
-      has_running_tasks=thread_row["status"] == "running",
-      backend=thread_row["backend"] or parent.backend,
-      worker_thread=WorkerThreadRef(session_id=parent.id, thread_id=str(thread_row["id"])),
-  )
-  _projected_row_memo.store(key, (parent, thread_row, projected))
-  return projected
-
-
-async def project_worker_threads(
-    rows: list[SessionMetadata],
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
-) -> list[SessionMetadata]:
-  """Every sidebar list row plus one projected worker leaf per legacy worker thread.
-
-  The parent rows return as given; after each legacy row (profile None) its
-  session's thread rows ride ``view_thread_rows`` — the session view's
-  memoized full scan — and each becomes one leaf row named for the thread
-  description's first 80 characters, with the parent's status and the
-  thread's times. Nothing is written to disk.
-  """
-  out: list[SessionMetadata] = []
-  for row in rows:
-    out.append(row)
-    if row.profile is not None:
-      continue
-    out.extend(_projected_thread_row(row, thread_row) for thread_row in await view_thread_rows(row.id, cfg, thread_mgr))
-  return out
 
 
 # The model's transient schedule fields ride every row dump as nulls; the
@@ -420,33 +347,25 @@ async def _sessions_list_response(
     request: Request,
     rows: list[SessionMetadata],
     derived: dict[str, dict],
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
     memos: _SessionsListMemos,
 ) -> Response:
   """Render one sidebar list body and serve it from the route's own memos.
 
   The one render/memo body both sidebar routes share: each route selects its
   rows (the membership rule is the route's own) and hands them over with the
-  listing's derived sidebar state; the helper projects the legacy worker-thread
-  leaves, joins the schedule fields, renders the changed round, and stores
-  every memo on *memos*. The readonly rows and the memoized leaves are
-  identity-stable across requests, so the rendered body keys on the row
+  listing's derived sidebar state; the helper joins the schedule fields,
+  renders the changed round, and stores every memo on *memos*. The readonly
+  rows are identity-stable across requests, so the rendered body keys on the row
   identities plus the overlay states: a repeat of an unchanged corpus re-runs
   zero dumps (the search route's whole-body memo mechanism) and a reloaded
   meta or moved overlay state re-renders. The controller fields ride the same
   key, so a controller config change or a passing next-run re-renders the bound
-  rows. A worker_thread row's fields are construction-fixed, so only the
-  parent rows carry overlay state.
+  rows. Each task row carries its own overlay state.
   """
-  projected = await project_worker_threads(rows, cfg, thread_mgr)
-  listing_fields = sequence_listing_fields((row.id for row in projected), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in rows), datetime.now(UTC))
   rendered: list[tuple[SessionMetadata, tuple, tuple]] = []
-  for row in projected:
+  for row in rows:
     listing_state = tuple(listing_fields[row.id].items())
-    if row.worker_thread is not None:
-      rendered.append((row, (), listing_state))
-      continue
     entry = derived[row.id]
     thinking = thinking_state.busy_since(row.id)
     next_trigger = entry[sidebar_state.NEXT_TRIGGER_AT]
@@ -484,10 +403,8 @@ async def _sessions_list_response(
           dump["thinking_since"], dump["has_running_tasks"], dump["has_pending_trigger"], dump["pending_trigger_count"],
           dump["next_trigger_at"], dump["has_pending_plan_approval"], dump["backend"], work_state) = state
       if work_state is not None:
-        # A task-tree row carries its fact-derived work verdict — the same
-        # derivation the /status payload serves — so the first paint shows the
-        # running/waiting icons without a poll. A legacy row's key
-        # set stays byte-identical (the dump already carries the field's null).
+        # The fact-derived work verdict is the same derivation the /status
+        # payload serves, so the first paint shows the running/waiting icons.
         dump[sidebar_state.WORK_STATE] = work_state
     payload.append(apply_listing_fields(dump, dict(listing_state)))
     memos.row_render[id(row)] = (state, listing_state, row, payload[-1])
@@ -501,7 +418,7 @@ async def _sessions_list_response(
   body = fast_json_bytes(payload)
   memos.whole_body = (list_rows, list_states, body)
   # The Response return skips response_model's jsonable_encoder pass over every
-  # projected row; the body-keyed memo serves the middleware's deflate.
+  # row; the body-keyed memo serves the middleware's deflate.
   return await gzip_body_response(request, body, {}, memos.gzip_memo)
 
 
@@ -509,10 +426,8 @@ async def _sessions_list_response(
 async def list_sessions(
     request: Request,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> Response:
-  """List active sessions newest first, each legacy row followed by its worker-leaf rows.
+  """List active task nodes newest first.
 
   Sequence-subtree rows and every sidebar view's subtree ride no listing: a
   firing leaf whose parent chain reaches a sequence-owned root stays out, and
@@ -524,7 +439,7 @@ async def list_sessions(
   sequence_subtree = await session_mgr.sequence_subtree_roots()
   views = await session_mgr.view_subtree_roots()
   rows = [row for row in rows if row.id not in sequence_subtree and not any(row.id in view for view in views.values())]
-  return await _sessions_list_response(request, rows, derived, cfg, thread_mgr, _workspace_list_memos)
+  return await _sessions_list_response(request, rows, derived, _workspace_list_memos)
 
 
 @router.post("/", response_model=SessionMetadata)
@@ -597,8 +512,6 @@ async def list_archived_sessions(
     before: str | None = None,
     before_id: str | None = None,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> dict:
   """One keyset page of archived sessions, newest first, with group aggregates for the filter strip.
 
@@ -613,11 +526,7 @@ async def list_archived_sessions(
     page = await session_mgr.list_archived_page(group=group, limit=limit, before=before, before_id=before_id)
   except ValueError as e:
     raise HTTPException(status_code=422, detail=str(e)) from e
-  rows = await project_worker_threads(page["sessions"], cfg, thread_mgr)
-  # The projection above appends each legacy row's worker-thread leaves; under
-  # an archived sequence owner those leaves are subtree rows and stay out.
-  # Every leaf's parent rides the page, so the membership walk classifies the
-  # projected rows from the page's own rows.
+  rows = page["sessions"]
   sequence_subtree = sequence_subtree_roots(rows)
   rows = [row for row in rows if row.id not in sequence_subtree]
   context = await session_mgr.archived_context_rows(rows)
@@ -640,10 +549,8 @@ async def list_archived_sessions(
 @router.get("/starred")
 async def list_starred_sessions(
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> list[dict]:
-  """List starred sessions, newest first, with their legacy worker-thread leaves.
+  """List starred task nodes, newest first.
 
   Row shape matches the other sidebar lists: the model dump with the schedule
   join's fields, so a starred row the client has also archived later renders
@@ -654,11 +561,10 @@ async def list_starred_sessions(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  projected = await project_worker_threads(sessions, cfg, thread_mgr)
-  listing_fields = sequence_listing_fields((row.id for row in projected), datetime.now(UTC))
+  listing_fields = sequence_listing_fields((row.id for row in sessions), datetime.now(UTC))
   return [
       apply_listing_fields(row.model_dump(mode="json", exclude=_RESPONSE_ROW_EXCLUDE), listing_fields[row.id])
-      for row in projected
+      for row in sessions
   ]
 
 
@@ -764,8 +670,7 @@ async def all_sessions_status(
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: entry[sidebar_state.HAS_PENDING_PLAN_APPROVAL],
     }
     if sidebar_state.WORK_STATE in entry:
-      # A task-tree row carries its fact-derived work verdict. A legacy row's
-      # key set stays byte-identical to today.
+      # Rows without a task activity snapshot keep the prior payload shape.
       payload[sidebar_state.WORK_STATE] = entry[sidebar_state.WORK_STATE]
     result[meta.id] = payload
   body = fast_json_bytes(result)
@@ -972,8 +877,6 @@ async def search_sessions(
     request: Request,
     q: str = '',
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> list[SessionMetadata] | Response:
   """Full-text search across session names and chat content."""
   if not q.strip():
@@ -986,7 +889,7 @@ async def search_sessions(
         include_running_status=True,
         include_pending_trigger_status=True,
     )
-    return await _serve_search_rows(request, rows, derived, cfg, thread_mgr)
+    return await _serve_search_rows(request, rows, derived)
   # The capped name-match shape (a short query) is this route's slowest
   # request: the read-only search serves cache references and the response
   # renders through FastJsonResponse with the derived fields overlaid, the
@@ -997,15 +900,13 @@ async def search_sessions(
       include_running_status=True,
       include_pending_trigger_status=True,
   )
-  return await _serve_search_rows(request, rows, derived, cfg, thread_mgr)
+  return await _serve_search_rows(request, rows, derived)
 
 
 async def _serve_search_rows(
     request: Request,
     rows: list[SessionMetadata],
     derived: dict[str, dict],
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
 ) -> Response:
   """Render the search route's rows through the whole-body memo and serve.
 
@@ -1025,10 +926,6 @@ async def _serve_search_rows(
   # _SEARCH_DERIVED_PREFIXES, and a None datetime field rides its whole prebuilt
   # null piece (both fields are None on the common idle row), so the pydantic
   # dump_python call under it never runs.
-  # A legacy row's projected worker-thread leaves ride directly after it with
-  # their own state tuples: a leaf's only live fact is its thread's running
-  # state (no thinking, no pending trigger), and the leaf memo keeps the row
-  # objects identity-stable so the whole-body memo below still serves.
   rendered: list[tuple[SessionMetadata, tuple]] = []
   for meta in rows:
     entry = derived[meta.id]
@@ -1038,11 +935,6 @@ async def _serve_search_rows(
                 thinking_state.busy_since(meta.id), entry[sidebar_state.HAS_RUNNING_TASKS],
                 entry[sidebar_state.HAS_PENDING_TRIGGER], entry[sidebar_state.PENDING_TRIGGER_COUNT],
                 entry[sidebar_state.NEXT_TRIGGER_AT], entry.get(sidebar_state.WORK_STATE))))
-    if meta.profile is not None:
-      continue
-    for thread_row in await view_thread_rows(meta.id, cfg, thread_mgr):
-      leaf = _projected_thread_row(meta, thread_row)
-      rendered.append((leaf, (None, leaf.has_running_tasks, False, 0, None, None)))
   search_rows = tuple(m for m, _s in rendered)
   search_states = tuple(s for _m, s in rendered)
   cached = _search_whole_body
@@ -1257,13 +1149,10 @@ async def get_session_transcript(
     session_id: str,
     after: int = Query(default=0, ge=0, description="Rendered message count (the client's cursor)"),
     revision: str = Query(default='', description="The revision the client last rendered"),
-    thread: str | None = Query(default=None, description="Legacy thread id (thread view)"),
     meta: SessionMetadata = Depends(require_session),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
 ) -> FastJsonResponse:
-  """The live-transcript poll for a worker node or a legacy thread view.
+  """The live-transcript poll for a worker task.
 
   The open chat asks every ~2 s while the view shows one of them. An unchanged
   transcript costs one stat pass; appended messages ride the append-only
@@ -1272,23 +1161,11 @@ async def get_session_transcript(
   appeared), and the response then carries the full history with ``reset``
   set, so the client re-renders instead of appending.
   """
+  if meta.profile != "worker":
+    raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
   from src.runtime import worker_transcript
-  if thread is not None:
-    thread_meta = await thread_mgr.get_thread(session_id, thread)
-    if thread_meta is None:
-      raise HTTPException(status_code=404, detail=f"thread {thread} not found in session {session_id}")
-    entry = await asyncio.to_thread(
-        worker_transcript.load_thread_transcript, cfg, cfg.sessions_dir / session_id, thread_meta, await
-        thread_mgr.get_events_log_path(session_id, thread))
-    thinking_since = worker_transcript.thread_thinking_since(thread_meta)
-  else:
-    if meta.profile != "worker":
-      raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
-    entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
-    thinking_since = thinking_state.busy_since(session_id)
-  # Both transcript arms answer one frontend poll (web/static/js/sidebar/session-view.js),
-  # so the response body lives here once: a field added to one arm only would
-  # silently drop from the other view.
+  entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
+  thinking_since = thinking_state.busy_since(session_id)
   reset = _transcript_reset(entry.revision, revision)
   return FastJsonResponse(
       {
@@ -1474,8 +1351,6 @@ async def get_session(
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> SessionDetailResponse:
   """Session detail; task-tree nodes carry the derived task fields from one projection owner."""
-  if meta.profile is None:
-    return SessionDetailResponse(**meta.model_dump())
   try:
     detail = await task_mgr.session_detail(meta.id)
   except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
@@ -1486,64 +1361,38 @@ async def get_session(
 @router.delete("/{session_id}")
 async def archive_session(
     session_id: str,
-    meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
-  """The user's archive: on a task node the single end state, on a legacy
-  session the stored-status archive.
+  """Archive a task subtree as one end state.
 
   A task node's archive ends its whole subtree: every open node gets one
   ``task_closed`` fact with outcome ``archived`` (operator scope required; an
   unfinished run anywhere in the subtree refuses with 409 before anything is
-  written). The response names the ids this call archived — an already
-  archived node returns an empty list. A session without a profile keeps the
-  legacy path: the empty-session delete, else the stored
-  ``status: archived`` write.
+  written). The response names the ids this call archived; an already
+  archived node returns an empty list.
   """
-  if meta.profile is not None:
-    if not caller.is_operator:
-      raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
-    try:
-      archived = await task_mgr.archive_subtree(session_id, caller=caller)
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
-      raise _task_http_error(e) from e
-    return JSONResponse({"archived": archived})
-  event_count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id, meta)
-  if event_count == 0:
-    await session_mgr.delete_session_permanently(session_id)
-    return meta
-
-  return require_found(await session_mgr.archive_session(session_id))
+  if not caller.is_operator:
+    raise HTTPException(status_code=403, detail="archiving a task requires operator credentials")
+  try:
+    archived = await task_mgr.archive_subtree(session_id, caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return JSONResponse({"archived": archived})
 
 
 @router.delete("/{session_id}/permanent", status_code=204)
 async def delete_session_permanently(
     session_id: str,
-    session_mgr: SessionManager = Depends(get_session_manager),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
-  """Permanent delete: the empty/unreferenced rule is checked and deleted under
-  the one control lock (v2 nodes); legacy sessions keep the v1 check set."""
-  meta = await session_mgr.get_session(session_id)
-  if meta is not None and meta.profile is not None:
-    try:
-      deleted = await task_mgr.delete_permanently(session_id, caller=caller)
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
-      raise _task_http_error(e) from e
-    if not deleted:
-      raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
-    return Response(status_code=204)
+  """Permanently delete an empty, unreferenced task under the control lock."""
   try:
-    blockers = await task_mgr.deletion_blockers(session_id)
-  except (TaskInvalidError, TaskNotFoundError, TaskConflictError) as e:
+    deleted = await task_mgr.delete_permanently(session_id, caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
     raise _task_http_error(e) from e
-  if blockers:
-    raise HTTPException(status_code=409, detail={"message": "permanent delete blocked", "blockers": blockers})
-  result = await session_mgr.delete_session_permanently(session_id)
-  if not result:
+  if not deleted:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
   return Response(status_code=204)
 
@@ -1551,31 +1400,25 @@ async def delete_session_permanently(
 @router.post("/{session_id}/unarchive")
 async def unarchive_session(
     session_id: str,
-    meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    _meta: SessionMetadata = Depends(require_session),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> Response:
-  """Restore an archived node.
+  """Restore an archived task node.
 
   On a task node this is the end state's only exit: the target and every
   archived ancestor restore (one ``task_reopened`` fact each, topmost first;
   siblings and descendants untouched; no round starts), operator scope
-  required, and the response names the restored ids. A session without a
-  profile keeps the legacy stored-status restore.
+  required, and the response names the restored ids.
   """
-  if meta.profile is not None:
-    if not caller.is_operator:
-      raise HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
-    try:
-      restored = await task_mgr.completion.restore_task(
-          session_id, request_id=str(uuid.uuid4()), reason="sidebar unarchive", caller=caller)
-    except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
-      raise _task_http_error(e) from e
-    return JSONResponse({"restored": restored["restored"]})
-  if meta.status != SessionStatus.ARCHIVED:
-    raise HTTPException(status_code=409, detail="Session is not archived")
-  return require_found(await session_mgr.unarchive_session(session_id))
+  if not caller.is_operator:
+    raise HTTPException(status_code=403, detail="unarchiving a task requires operator credentials")
+  try:
+    restored = await task_mgr.completion.restore_task(
+        session_id, request_id=str(uuid.uuid4()), reason="sidebar unarchive", caller=caller)
+  except (TaskInvalidError, TaskNotFoundError, TaskForbiddenError, TaskConflictError) as e:
+    raise _task_http_error(e) from e
+  return JSONResponse({"restored": restored["restored"]})
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)
@@ -1624,12 +1467,8 @@ async def patch_session(
     if not req.name:
       raise HTTPException(status_code=400, detail="rename requires a non-empty name")
     meta = require_found(await session_mgr.rename_session(session_id, req.name))
-    if meta.profile:
-      # Task-tree nodes keep the tree projection and the sidebar in the same
-      # loop as every other task mutation; legacy (non-tree) sessions have no
-      # tree to refresh.
-      task_mgr.invalidate_tree_index()
-      await task_mgr.events.notify_tree_changed(session_id, "task_updated")
+    task_mgr.invalidate_tree_index()
+    await task_mgr.events.notify_tree_changed(session_id, "task_updated")
     return SessionDetailResponse(**meta.model_dump())
   try:
     meta = await task_mgr.patch_task(session_id, req, caller=caller)
@@ -1671,14 +1510,8 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
   return Response(content=body, media_type="application/x-ndjson", headers=GZIP_RESPONSE_HEADERS)
 
 
-@router.get("/{session_id}/threads", response_model=list[ThreadMetadata])
-async def list_threads(
-    session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)) -> list[ThreadMetadata]:
-  return await thread_mgr.list_threads(session_id)
-
-
 # ---------------------------------------------------------------------------
-# Task-tree run routes (schema_version=2)
+# Task-tree run routes
 # ---------------------------------------------------------------------------
 
 
@@ -1782,12 +1615,10 @@ async def get_effective_prompt(
 
 
 async def _require_task_meta(task_mgr: TaskTreeManager, session_id: str) -> SessionMetadata:
-  """The task metadata a context read needs, with the task-tree 404/400 mapping."""
+  """The task metadata a context read needs, with the task-tree 404 mapping."""
   meta = await task_mgr.load_meta(session_id)
   if meta is None:
     raise HTTPException(status_code=404, detail=SESSION_NOT_FOUND_DETAIL)
-  if meta.profile is None:
-    raise HTTPException(status_code=400, detail=not_task_node_detail(session_id))
   return meta
 
 

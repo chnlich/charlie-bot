@@ -100,9 +100,6 @@ COMPACT_BOUNDARY = "compact_boundary"
 # is terminated at the cap; ``content`` carries the rendered chat note. The
 # aggregator renders the note as a system message (src/runtime/message_aggregator.py).
 COMMAND_PROGRESS = "command_progress"
-# Legacy render-only ``system`` subtype: no producer remains, but persisted
-# history events still render as system messages. New code never emits it.
-TUI_MENU_DISMISSED = "tui_menu_dismissed"
 COMPACT_METADATA = "compact_metadata"
 # Token counts a compaction event carries. Both are persisted wire values and both live as inner
 # keys of a ``compact_metadata`` payload — on a ``compact_boundary`` system event and on the

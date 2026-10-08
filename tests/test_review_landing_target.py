@@ -51,7 +51,6 @@ async def _reviewed_delivery(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyP
     return backend
 
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, manager_turn)
-  conftest.patch_instructions_content(monkeypatch)
   # The work-run launch judges the nearest-user authorization on the manager.
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and add the marker.", actor="user")
 
@@ -137,7 +136,6 @@ async def test_blocked_child_report_reaches_the_manager_turn_with_its_summary(
   builds = test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("noted")])],
       conftest.BUILD_BACKEND_PATCH_TARGET)
-  conftest.patch_instructions_content(monkeypatch)
   summary = "work run run-w passed review but its branch did not land on main: ancestry check failed"
   await tree.dispatch.deliver_child_report(
       child.id, source_event={"id": "finish-1"}, outcome="blocked", summary=summary, recipient=manager.id)

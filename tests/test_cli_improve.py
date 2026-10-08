@@ -12,7 +12,6 @@ from src.features.improve import stop_cli as improve_stop
 from src.runtime.cli import common
 
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.runtime.api.internal.get_config"
-_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.runtime.api.internal.check_takeoff_gate"
 _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.runtime.spawner_backends.resolve_requested_subagent_backend_model"
 _IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET = "src.features.improve.api.reserve_loop_state"
 
@@ -121,18 +120,19 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
       session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
   session_mgr = mock.AsyncMock()
-  session_mgr.get_session.return_value = mock.MagicMock(profile=None)
+  session_mgr.get_session.return_value = mock.MagicMock(profile="manager")
+  task_mgr = mock.MagicMock()
+  task_mgr.check_task_authorization = mock.AsyncMock()
 
   async def fake_resolve_requested_subagent_backend_model(*args: object, **kwargs: object) -> tuple[str, str]:
     raise ValueError("requested backend 'missing' is not in backends.options")
 
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
-       mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        mock.patch(
            _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
        pytest.raises(fastapi.HTTPException) as exc_info:
-    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backends.options"
@@ -155,16 +155,17 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   )
 
   session_mgr = mock.AsyncMock()
-  session_mgr.get_session.return_value = mock.MagicMock(profile=None)
+  session_mgr.get_session.return_value = mock.MagicMock(profile="manager")
+  task_mgr = mock.MagicMock()
+  task_mgr.check_task_authorization = mock.AsyncMock()
 
   with mock.patch(_INTERNAL_GET_CONFIG_PATCH_TARGET, return_value=mock.MagicMock()), \
-       mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        mock.patch(
            _IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \
        pytest.raises(fastapi.HTTPException) as exc_info:
-    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=task_mgr)
 
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "Loop 7 is already running for this session. Use charliebot improve-stop first."

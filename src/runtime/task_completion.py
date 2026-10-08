@@ -634,8 +634,7 @@ class TaskCompletionManager:
       await tree.sessions.announce_appended_event(str(fresh_meta.task_parent_id), report, epoch=parent_epoch)
     if report_created and fresh_meta.task_parent_id:
       # The delivered report is the parent's new durable input: its next
-      # serialized turn wakes now (dispatcher for a task-tree parent,
-      # the legacy master wake for a legacy parent). The close fact and
+      # serialized turn wakes now. The close fact and
       # the report are already durable at this point, so a failed wake
       # must not fail the close: the automatic-completion callers would
       # classify the landed boundary as blocked and deliver a

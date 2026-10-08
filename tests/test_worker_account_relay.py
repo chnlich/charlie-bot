@@ -62,7 +62,7 @@ def _worker(tmp_path: Path, cfg: CharlieBotConfig) -> Worker:
       "do the thing",
       cfg,
       backend_option=option,
-      session_meta=SessionMetadata(id="s1", name="S", backend=POOLED_FABLE_ID),
+      session_meta=SessionMetadata(profile="manager", id="s1", name="S", backend=POOLED_FABLE_ID),
   )
 
 

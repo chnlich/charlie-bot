@@ -1,7 +1,6 @@
-"""Task-tree owner: v2 task metadata mutations, tree validation, derived queries.
+"""Task-tree owner: task metadata mutations, tree validation, and derived queries.
 
-This module is the single owner of schema_version=2 task metadata (everything
-``SessionMetadata`` carries beyond the v1 session fields), of the task-tree
+This module is the single owner of task metadata, of the task-tree
 relation (``task_parent_id`` edges over flat ``sessions/<id>`` directories),
 and of the derived task projection (``task_state`` / ``work_state`` / archive
 visibility / subtree counts). The legacy conversation, attachment, rating and
@@ -44,7 +43,7 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.event_types import is_real_user_message
-from src.infra.json_utils import atomic_write_text, load_model_meta
+from src.infra.json_utils import atomic_write_text
 from src.infra.models import (
     AncestorRef,
     EventRef,
@@ -56,6 +55,7 @@ from src.infra.models import (
     WorkState,
     ensure_utc,
     utc_now,
+    validate_session_metadata,
 )
 from src.infra.ndjson import append_ndjson
 from src.infra.tasks import create_logged_task
@@ -72,13 +72,12 @@ from src.runtime.control_events import (
     stable_task_id,
 )
 from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
-from src.runtime.runs import DATA_DIR_NAME, RunStore, is_run_alive, stop_requested_in_events
+from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_alive, stop_requested_in_events
 from src.runtime.session_aliases import SessionAliasStore
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.runtime.sessions import _TRANSIENT_METADATA_FIELDS, SessionManager
 from src.runtime.takeoff_gate import is_verify_exempt
 from src.runtime.thinking_state import clear_run_busy, mark_run_busy, note_run_backend
-from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME
 
 if TYPE_CHECKING:
   from src.infra.models import RunRecord
@@ -148,15 +147,6 @@ def require_operator(caller: object, message: str) -> None:
 def closed_ancestors_blocker(closed_ids: list[str]) -> str:
   """The 409 blocker sentence naming a node's closed ancestor tasks."""
   return f"closed ancestor task(s): {', '.join(closed_ids)}"
-
-
-def not_task_node_detail(session_id: str) -> str:
-  """The 400 detail sentence for a session that carries no task-tree profile.
-
-  Named and used by the context-read route's ``_require_task_meta`` so the
-  route's 400 detail and the domain error's message stay one sentence.
-  """
-  return f"session {session_id} is not a task-tree node (no profile)"
 
 
 @dataclass
@@ -403,6 +393,7 @@ class TaskTreeManager:
   def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     self._cfg = cfg
     self._sessions = session_mgr
+    session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
     self.events = ControlEventSink(session_mgr)
     self.aliases = SessionAliasStore(cfg.sessions_dir)
@@ -482,16 +473,12 @@ class TaskTreeManager:
   def _require_task(self, meta: SessionMetadata | None, session_id: str) -> SessionMetadata:
     if meta is None:
       raise TaskNotFoundError(f"task {session_id} not found")
-    if meta.profile is None:
-      raise TaskInvalidError(not_task_node_detail(session_id))
     return meta
 
   async def load_task_meta(self, session_id: str) -> SessionMetadata:
     """The session's metadata, required to be a task-tree node.
 
-    Raises TaskNotFoundError for an absent session and TaskInvalidError for a
-    session with no profile; callers rely on the returned metadata passing
-    that validation.
+    Raises TaskNotFoundError for an absent session.
     """
     return self._require_task(await self.load_meta(session_id), session_id)
 
@@ -585,14 +572,12 @@ class TaskTreeManager:
       except OSError:
         continue  # session dir without (yet readable) metadata: not a tree node
       try:
-        metas[name] = SessionMetadata.model_validate_json(raw)
+        metas[name] = validate_session_metadata(raw, str(path))
       except ValueError as e:
         raise RuntimeError(f"session metadata unparseable at {path}: {e}") from e
     children: dict[str | None, list[str]] = {}
     task_nodes: list[tuple[str, SessionMetadata]] = []
     for sid, meta in metas.items():
-      if meta.profile is None:
-        continue  # legacy v1 session: not a task-tree node
       task_nodes.append((sid, meta))
       children.setdefault(meta.task_parent_id, []).append(sid)
     for kids in children.values():
@@ -874,15 +859,12 @@ class TaskTreeManager:
   def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
     """One node's OWN archive value from a pre-folded fact set (no inheritance).
 
-    The subtree-inheritance fold around it lives in archived_of. One rule per
-    shape: a task node is archived exactly when its task state is not open —
-    the close fact is the archive, and a completed child counts at once (no
-    wait for the parent receipt). A session without a profile keeps the legacy
-    stored-status check. The cache argument stays in the signature because the
+    The subtree-inheritance fold around it lives in archived_of. A node is
+    archived exactly when its task state is not open — the close fact is the
+    archive, and a completed child counts at once (no wait for the parent receipt).
+    The cache argument stays in the signature because the
     subtree pass hands one shared cache to every node's read.
     """
-    if meta.profile is None:
-      return meta.status == SessionStatus.ARCHIVED
     return facts.task_state != "open"
 
   async def derived_archived_ids(self) -> set[str]:
@@ -907,12 +889,9 @@ class TaskTreeManager:
     """Archive visibility with subtree inheritance (the effective archive's single owner).
 
     effective(n) is the node's own facts-based value or its parent's inherited
-    one: a task node is archived exactly when its task state is not open (the
-    close fact is the archive — completed and cancelled included), and a
-    session without a profile is archived exactly when its stored status is
-    ARCHIVED. Every descendant reads its parent's effective value, so an
-    archived ancestor — a legacy profile=None parent's stored status among
-    them — archives the subtree at read time with no descendant metadata
+    one: a node is archived exactly when its task state is not open (the close
+    fact is the archive — completed and cancelled included). Every descendant
+    reads its parent's effective value, so an archived ancestor archives the subtree at read time with no descendant metadata
     write. A restored node is open again, so it unarchives. A shared *memo*
     makes a pass over many nodes
     linear in node count (each chain resolves through already-computed
@@ -1050,7 +1029,7 @@ class TaskTreeManager:
     # Re-read through the index so the detail and the tree agree on one projection.
     indexed = index.metas.get(session_id)
     if indexed is None:
-      raise TaskInvalidError(not_task_node_detail(session_id))
+      raise TaskNotFoundError(f"task {session_id} not found")
     ancestors = self._ancestors(index, session_id)
     payload = indexed.model_dump(mode="json")
     payload.update(
@@ -1090,7 +1069,7 @@ class TaskTreeManager:
       *,
       request_id: str,
       task_parent_id: str | None,
-      profile: str | None,
+    profile: str,
       task: TaskSpec | None,
       name: str | None,
       backend: str | None,
@@ -1129,7 +1108,6 @@ class TaskTreeManager:
         # implementation.
         if isinstance(caller, CallerIdentity) and not caller.is_operator:
           parent_meta = await self.load_meta(task_parent_id) if task_parent_id is not None else None
-          assert existing.profile is not None  # a (parent, request_id)-bound id only exists via this create
           await self._authorize_agent_creation(caller, existing.profile, existing.task, task_parent_id, parent_meta)
         return existing
       parent_meta: SessionMetadata | None = None
@@ -1142,9 +1120,6 @@ class TaskTreeManager:
         parent_meta = await self.load_meta(task_parent_id)
         if parent_meta is None:
           raise TaskNotFoundError(f"task {task_parent_id} not found")
-        # A legacy session (profile None) parents task work in place: it is a
-        # valid parent exactly like a manager and is never rewritten by the
-        # create. Only a worker parent is no parent at all.
         if parent_meta.profile == "worker":
           raise TaskInvalidError(f"parent task {task_parent_id} is not a manager")
         index = await self._get_index()
@@ -1183,7 +1158,7 @@ class TaskTreeManager:
 
   async def _default_node_name(self, task: TaskSpec | None, profile: str) -> str:
     """A node created without a name takes the goal's first line when there is
-    one; otherwise the legacy session counter name ("Session N"), so the
+    one; otherwise the session counter name ("Session N"), so the
     sidebar's one-click create names a task node the way it names a session.
     """
     if task is not None and task.goal.strip():
@@ -1207,15 +1182,14 @@ class TaskTreeManager:
     one shared judgment (takeoff_gate.is_verify_exempt) excuses here exactly
     as it does on the route and at the launch. On a replayed create *task* is
     the ORIGINAL node's spec, so re-labeling a replay cannot borrow the
-    exemption for a node created as implementation. A legacy session (profile
-    None) counts as the caller's manager task without being rewritten. Any
-    other shape — an unrelated root, a foreign parent, a worker parent — is
+    exemption for a node created as implementation. Any other shape — an
+    unrelated root, a foreign parent, a worker parent — is
     outside an agent's scope.
     """
     assert isinstance(caller, CallerIdentity)
     claims = caller.claims
     assert claims is not None
-    if (task_parent_id != claims.session_id or parent_meta is None or parent_meta.profile not in ("manager", None)):
+    if (task_parent_id != claims.session_id or parent_meta is None or parent_meta.profile != "manager"):
       raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
     if profile == "worker" and not is_verify_exempt(task):
       # Implementation authorization stays with the caller's own manager task:
@@ -1264,7 +1238,6 @@ class TaskTreeManager:
     metadata_slots.set_registered(meta, slot_values)
     try:
       (temp_dir / DATA_DIR_NAME).mkdir(parents=True)
-      (temp_dir / THREADS_DIR_NAME).mkdir()
       # The creation fact is written into the temp node itself, so metadata and
       # the event log publish together with the one rename; post-publication
       # facts go through the sink.
@@ -1295,13 +1268,15 @@ class TaskTreeManager:
 
   @staticmethod
   def _read_metadata_file(path) -> SessionMetadata | None:
-    return load_model_meta(path, SessionMetadata)
+    if not path.exists():
+      return None
+    return validate_session_metadata(path.read_text(encoding="utf-8"), str(path))
 
   async def check_task_authorization(self, session_id: str, now: datetime | None = None) -> str:
     """The nearest-real-user-ancestor gate for a v2 task caller (takeoff_gate).
 
     Every ancestor must be open and the calling node a manager; the first node
-    holding a real user instruction is where the legacy time-window rules
+    holding a real user instruction is where the time-window rules
     apply, and a failure there blocks without borrowing from higher ancestors.
     """
     from src.runtime.takeoff_gate import check_takeoff_gate_for_task
@@ -1311,10 +1286,7 @@ class TaskTreeManager:
       meta = index.metas.get(sid)
       if meta is None:
         return None, None
-      # A legacy session parents task work without being rewritten: the gate
-      # treats it as a manager node whose chat log is the authorization
-      # source. It has no close facts, so its state is "open".
-      return meta.task_parent_id, meta.profile if meta.profile is not None else "manager"
+      return meta.task_parent_id, meta.profile
 
     def state_of(sid: str) -> str:
       meta = index.metas.get(sid)
@@ -1600,14 +1572,10 @@ class TaskTreeManager:
     index = await self._get_index(force=True)  # a just-saved reference must be seen
     self._index_meta(index, session_id)
     meta = index.metas[session_id]
-    if meta.profile is None:
-      blockers = self._legacy_deletion_blockers(index, session_id)
-    else:
-      blockers = self._deletion_blockers_locked(index, session_id)
-    return blockers
+    return self._deletion_blockers_locked(index, session_id)
 
-  def _legacy_deletion_blockers(self, index: _TreeIndex, session_id: str) -> list[str]:
-    """The v1 check set (children via the flat index, runs, triggers, aliases)."""
+  def _deletion_reference_blockers(self, index: _TreeIndex, session_id: str) -> list[str]:
+    """Saved child, run, trigger, and alias references that prevent deletion."""
     blockers: list[str] = []
     children = self._children_of(index, session_id)
     if children:
@@ -1630,14 +1598,14 @@ class TaskTreeManager:
     records, child reports another log holds), and no preserved conversation
     or evidence beyond the creation fact itself.
     """
-    blockers = self._legacy_deletion_blockers(index, session_id)
+    blockers = self._deletion_reference_blockers(index, session_id)
     facts = self._facts_of(session_id)
     substance = [e for e in facts.events_by_id.values() if e.get("type") != ET.TASK_CREATED]
     if substance:
       kinds = sorted({str(e.get("type")) for e in substance})
       blockers.append(f"has preserved conversation/evidence: {', '.join(kinds)}")
     for other_id, other in index.metas.items():
-      if other_id == session_id or other.profile is None:
+      if other_id == session_id:
         continue
       refs: list[str] = []
       if other.parent_session_id == session_id:
@@ -1666,11 +1634,9 @@ class TaskTreeManager:
     async with self.control_lock:
       index = await self._get_index(force=True)
       self._index_meta(index, session_id)
-      meta = index.metas[session_id]
-      if meta.profile is not None:
-        blockers = self._deletion_blockers_locked(index, session_id)
-        if blockers:
-          raise TaskConflictError(sorted(set(blockers)))
+      blockers = self._deletion_blockers_locked(index, session_id)
+      if blockers:
+        raise TaskConflictError(sorted(set(blockers)))
       result = await self._sessions.delete_session_permanently(session_id)
     if result:
       self._invalidate_index()

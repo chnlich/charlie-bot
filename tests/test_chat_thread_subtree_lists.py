@@ -3,8 +3,7 @@ thread session, the thread session itself included) splits the sidebar's Workspa
 listing from the new Threads listing.
 
 Workspace (route + homepage render + auto-redirect) returns no chat-thread rows —
-the thread session, its task descendants, and its projected legacy worker-thread
-leaf all stay out — while ``GET /api/sessions/chat-threads`` returns exactly that
+the thread session and its task descendants stay out — while ``GET /api/sessions/chat-threads`` returns exactly that
 subtree's active rows with the Workspace row shape. The two routes partition the
 active non-cron rows, and the cron-subtree rule beside which the walk lives keeps
 its results unchanged.
@@ -22,7 +21,7 @@ from src.features.discord.metadata import DiscordOrigin
 from src.features.slack.metadata import SlackOrigin
 from src.features.chat_threads import api as chat_threads_api
 from src.infra import config, models
-from src.runtime import sessions, task_sessions, threads
+from src.runtime import sessions, task_sessions
 from src.runtime.api import sessions as sessions_api
 
 
@@ -33,12 +32,10 @@ class Fixture:
   cfg: config.CharlieBotConfig
   session_mgr: sessions.SessionManager
   tree: task_sessions.TaskTreeManager
-  thread_mgr: threads.ThreadManager
   thread: models.SessionMetadata  # active discord-origin session (the subtree's root)
   slack_thread: models.SessionMetadata  # active slack-origin session (the other origin field)
   child: models.SessionMetadata  # active task node whose parent is the thread session
   grandchild: models.SessionMetadata  # active worker under the child
-  thread_legacy: models.SessionMetadata  # the thread session's projected worker-leaf row
   archived_thread: models.SessionMetadata  # archived discord-origin session (neither list)
   cron: models.SessionMetadata  # active cron session (scheduled_task set)
   cron_child: models.SessionMetadata  # active worker child of the cron session
@@ -47,7 +44,6 @@ class Fixture:
 
 async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   cfg, session_mgr, tree = conftest.build_env(tmp_path)
-  thread_mgr = threads.ThreadManager(cfg)
   thread = await session_mgr.create_session(
       models.CreateSessionRequest(
           name="Discord #general 2026",
@@ -63,7 +59,6 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
       tree, parent=thread.id, request_id="th-child-1", profile="manager", name="thread child")
   grandchild = await conftest.create_task(
       tree, parent=child.id, request_id="th-child-2", profile="worker", name="thread grandchild")
-  thread_legacy = await conftest.seed_thread(thread_mgr, thread, "thread worker leaf")
   archived_thread = await session_mgr.create_session(
       models.CreateSessionRequest(
           name="Discord #general archived",
@@ -71,7 +66,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
   await session_mgr.archive_session(archived_thread.id)
-  cron = await conftest.make_legacy_cron_session(session_mgr, "nightly")
+  cron = await conftest.make_cron_session(session_mgr, "nightly")
   cron_child = await conftest.create_task(
       tree, parent=cron.id, request_id="cron-leaf-1", profile="worker", name="cron leaf")
   plain = await session_mgr.create_session(models.CreateSessionRequest(name="Plain"), backend=conftest.OPUS_BACKEND_ID)
@@ -79,12 +74,10 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
       cfg=cfg,
       session_mgr=session_mgr,
       tree=tree,
-      thread_mgr=thread_mgr,
       thread=thread,
       slack_thread=slack_thread,
       child=child,
       grandchild=grandchild,
-      thread_legacy=thread_legacy,
       archived_thread=archived_thread,
       cron=cron,
       cron_child=cron_child,
@@ -93,7 +86,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
 
 # Every row the chat-thread rule claims, by fixture name (statuses never matter
 # to the walk; the active-only listings drop the archived one on their own).
-_CHAT_THREAD_ROWS = ("thread", "slack_thread", "child", "grandchild", "thread_legacy", "archived_thread")
+_CHAT_THREAD_ROWS = ("thread", "slack_thread", "child", "grandchild", "archived_thread")
 
 
 def _thread_ids(fx: Fixture) -> set[str]:
@@ -123,7 +116,7 @@ async def test_subtree_walk_maps_the_chat_thread_subtree_and_spares_the_cron_one
 @pytest.mark.asyncio
 async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shape(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
   workspace_ids = {row["id"] for row in client.get("/api/sessions/").json()}
   threads_rows = client.get("/api/sessions/chat-threads").json()
   threads_ids = {row["id"] for row in threads_rows}
@@ -133,20 +126,18 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
   assert not (workspace_ids & _thread_ids(fx))
   assert fx.cron.id not in workspace_ids and fx.cron_child.id not in workspace_ids
 
-  # Threads: exactly the subtree's active rows, the projected legacy worker
-  # leaf among them; the archived thread session stays out.
+  # Threads: exactly the subtree's active task nodes; the archived thread session stays out.
   assert threads_ids == _thread_ids(fx) - {fx.archived_thread.id}
   assert fx.plain.id not in threads_ids
 
-  # The two routes partition the active non-cron rows, and the union is the
-  # Workspace listing the cron exclusion alone produced before the split — the
-  # projected legacy worker-thread leaves included.
+  # The two routes partition the active non-cron task nodes, and the union is
+  # the listing the cron exclusion alone produced before the split.
   sequence_subtree = await fx.session_mgr.sequence_subtree_roots()
   unprojected = [
       row for row in await fx.session_mgr.list_sessions(status=models.SessionStatus.ACTIVE, scheduled=False)
       if row.id not in sequence_subtree
   ]
-  active = {row.id for row in await sessions_api.project_worker_threads(unprojected, fx.cfg, fx.thread_mgr)}
+  active = {row.id for row in unprojected}
   assert not (workspace_ids & threads_ids)
   assert workspace_ids | threads_ids == active
 
@@ -160,7 +151,7 @@ async def test_workspace_and_threads_partition_the_active_rows_with_one_row_shap
 @pytest.mark.asyncio
 async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
   workspace = client.get("/api/sessions/")
   threads_resp = client.get("/api/sessions/chat-threads")
   # A repeat of each route (the other route's memo now warm) still serves its
@@ -180,7 +171,7 @@ async def test_threads_route_memos_never_serve_the_workspace_body(tmp_path: path
 @pytest.mark.asyncio
 async def test_homepage_initial_list_and_redirect_skip_the_chat_thread_subtree(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _thread_ids(fx)

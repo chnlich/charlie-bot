@@ -426,7 +426,7 @@ async def _land_work_branch_after_loop(
 def blocked_loop_summary(iteration: int, reason: str) -> str:
   """The reader-facing blocked-loop sentence: what blocked, and the decision left to the reader.
 
-  Both launch paths compose through this one definition -- the v1 loop's failed
+  Both launch paths compose through this one definition -- the retired loop's failed
   payload and the v2 sequence's failed summary -- so the instruction to the
   reader cannot fork between them.
   """

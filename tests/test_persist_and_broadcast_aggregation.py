@@ -86,4 +86,4 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
   assert payloads[0]["type"] == "message"
   assert payloads[0]["message"]["role"] == "user"
   assert payloads[0]["message"]["content"] == "next"
-  assert payloads[0]["message"]["event_index"] == 3
+  assert payloads[0]["message"]["event_index"] == 4

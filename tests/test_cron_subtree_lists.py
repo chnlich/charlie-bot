@@ -1,9 +1,8 @@
 """The cron subtree (every session whose parent chain reaches a scheduled_task session)
 rides no sidebar listing.
 
-All (route + homepage render) and Archived return no cron-subtree rows — the
-projected legacy worker-thread rows under cron sessions included, and the
-active cron session itself with them (the ``scheduled`` listing filter keeps
+All (route + homepage render) and Archived return no cron-subtree rows, and
+the active cron session itself (the ``scheduled`` listing filter keeps
 its root out of All) — while the archived cron sessions keep their rows in
 Archived and the keyset pagination and group aggregates describe the rows
 actually returned. Search and Starred keep their behavior, and
@@ -20,7 +19,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import sessions, task_sessions, threads
+from src.runtime import sessions, task_sessions
 
 
 @dataclasses.dataclass
@@ -30,52 +29,41 @@ class Fixture:
   cfg: config.CharlieBotConfig
   session_mgr: sessions.SessionManager
   tree: task_sessions.TaskTreeManager
-  thread_mgr: threads.ThreadManager
   cron: models.SessionMetadata  # active cron session (scheduled_task set)
   manager: models.SessionMetadata  # active manager child of the cron session
   worker: models.SessionMetadata  # active direct worker child of the cron session
   grandchild: models.SessionMetadata  # active worker under the manager child
   delivered: models.SessionMetadata  # worker under the manager child, archived by derivation
-  cron_archived: models.SessionMetadata  # archived cron session with a legacy worker thread
-  cron_archived_thread: models.ThreadMetadata  # its projected leaf row (excluded from Archived)
-  plain_archived: models.SessionMetadata  # archived non-cron session with a legacy worker thread
-  plain_archived_thread: models.ThreadMetadata  # its projected leaf row (stays in Archived)
-  plain_active: models.SessionMetadata  # active non-cron session with a legacy worker thread
-  plain_active_thread: models.ThreadMetadata  # its projected leaf row (stays in All)
+  cron_archived: models.SessionMetadata  # archived cron session
+  plain_archived: models.SessionMetadata  # archived non-cron session
+  plain_active: models.SessionMetadata  # active non-cron session
   ordinary: models.SessionMetadata  # active plain session
   fillers: list[models.SessionMetadata]  # archived plain sessions padding the keyset walk
 
 
 async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   cfg, session_mgr, tree = conftest.build_env(tmp_path)
-  thread_mgr = threads.ThreadManager(cfg)
-  cron = await conftest.make_legacy_cron_session(session_mgr, "nightly")
+  cron = await conftest.make_cron_session(session_mgr, "nightly")
   manager = await conftest.create_task(
       tree, parent=cron.id, request_id="mgr-1", profile="manager", name="nightly · manager")
   worker = await conftest.create_task(
       tree, parent=cron.id, request_id="leaf-42", profile="worker", name="nightly · firing-42")
   grandchild = await conftest.create_task(
       tree, parent=manager.id, request_id="leaf-43", profile="worker", name="nightly · firing-43")
-  # The delivered leaf parents under the manager child: a legacy parent's wake
-  # launches its master turn (a real backend spawn), a task-tree parent's wake
-  # rides the dispatcher. The leaf stays a cron-subtree row — its chain still
-  # reaches the cron session through the manager.
+  # The delivered leaf stays a cron-subtree row through its manager parent.
   delivered = await conftest.create_task(
       tree, parent=manager.id, request_id="leaf-44", profile="worker", name="nightly · firing-44")
   await tree.runs.register_run(models.RunRecord(id="run-44", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-44", outcome="success")
   assert tree.task_state(delivered.id) == "completed"  # the derived archive hides it while active
 
-  cron_archived = await conftest.make_legacy_cron_session(session_mgr, "legacy-task")
-  cron_archived_thread = await conftest.seed_thread(thread_mgr, cron_archived, "legacy cron thread")
+  cron_archived = await conftest.make_cron_session(session_mgr, "nightly-archived")
   await session_mgr.archive_session(cron_archived.id)
   plain_archived = await session_mgr.create_session(
       models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
-  plain_archived_thread = await conftest.seed_thread(thread_mgr, plain_archived, "plain archived thread")
   await session_mgr.archive_session(plain_archived.id)
   plain_active = await session_mgr.create_session(
       models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
-  plain_active_thread = await conftest.seed_thread(thread_mgr, plain_active, "plain active thread")
   ordinary = await session_mgr.create_session(
       models.CreateSessionRequest(name="Ordinary"), backend=conftest.OPUS_BACKEND_ID)
   fillers = []
@@ -88,24 +76,20 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
       cfg=cfg,
       session_mgr=session_mgr,
       tree=tree,
-      thread_mgr=thread_mgr,
       cron=cron,
       manager=manager,
       worker=worker,
       grandchild=grandchild,
       delivered=delivered,
       cron_archived=cron_archived,
-      cron_archived_thread=cron_archived_thread,
       plain_archived=plain_archived,
-      plain_archived_thread=plain_archived_thread,
       plain_active=plain_active,
-      plain_active_thread=plain_active_thread,
       ordinary=ordinary,
       fillers=fillers)
 
 
 # Every row the cron-subtree rule excludes from All and Archived, by fixture name.
-_CRON_SUBTREE_ROWS = ("cron", "manager", "worker", "grandchild", "delivered", "cron_archived", "cron_archived_thread")
+_CRON_SUBTREE_ROWS = ("cron", "manager", "worker", "grandchild", "delivered", "cron_archived")
 
 
 def _subtree_ids(fx: Fixture) -> set[str]:
@@ -115,19 +99,18 @@ def _subtree_ids(fx: Fixture) -> set[str]:
 @pytest.mark.asyncio
 async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
   resp = client.get("/api/sessions/")
   assert resp.status_code == 200
   all_ids = {row["id"] for row in resp.json()}
   # The active rows that never belong to a cron subtree stay.
   assert {fx.ordinary.id, fx.plain_active.id} <= all_ids
-  assert fx.plain_active_thread.id in all_ids  # a non-cron legacy thread leaf keeps its row
   # No cron-subtree row: neither the cron sessions nor any of their descendants.
   assert not (all_ids & _subtree_ids(fx))
 
   # The homepage's first-paint list carries the same membership, and the
   # auto-redirect never lands on a cron-subtree row.
-  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  page_client = conftest.make_sessions_listing_page_client(fx.cfg, fx.session_mgr, fx.tree)
   redirect = page_client.get("/", follow_redirects=False)
   assert redirect.status_code in (301, 302, 307)
   assert redirect.headers["location"].split("session=")[1] not in _subtree_ids(fx)
@@ -139,32 +122,27 @@ async def test_all_list_and_homepage_exclude_the_cron_subtree(tmp_path: pathlib.
 @pytest.mark.asyncio
 async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
   page = resp.json()
   ids = {row["id"] for row in page["sessions"]}
-  # The archived cron session itself and the non-cron legacy thread row stay.
+  # The archived cron session itself and the ordinary archived session stay.
   assert fx.cron_archived.id in ids
   assert fx.plain_archived.id in ids
-  assert fx.plain_archived_thread.id in ids
-  # No cron-subtree row: neither the delivered child (archived by derivation)
-  # nor the archived cron session's own legacy thread row.
-  assert not (ids & {fx.delivered.id, fx.cron_archived_thread.id})
+  # No cron-subtree row, including the delivered child archived by derivation.
+  assert fx.delivered.id not in ids
   # The aggregates describe the rows actually returned: the five archived
   # sessions that survive the exclusion (the delivered child stays out).
   assert page["groups"] == [{"group": None, "total": 5}]
 
   # A small-limit walk returns every non-excluded archived row exactly once,
   # with every page but the last full.
-  expected = {
-      fx.cron_archived.id, fx.plain_archived.id, fx.plain_archived_thread.id, *(filler.id for filler in fx.fillers)
-  }
+  expected = {fx.cron_archived.id, fx.plain_archived.id, *(filler.id for filler in fx.fillers)}
   walk: list[str] = []
   for page in conftest.walk_archived_pages(client):
-    real_rows = [row for row in page["sessions"] if row["worker_thread"] is None]
     if page["has_more"]:
-      assert len(real_rows) == 2  # a page stays full when more rows exist
+      assert len(page["sessions"]) == 2  # a page stays full when more rows exist
     walk.extend(row["id"] for row in page["sessions"])
   assert len(walk) == len(set(walk))  # the cursor never repeats a row
   assert set(walk) == expected
@@ -173,7 +151,7 @@ async def test_archived_list_excludes_cron_subtree_rows_and_paginates(tmp_path: 
 @pytest.mark.asyncio
 async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> None:
   fx = await _build_fixture(tmp_path)
-  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree, fx.thread_mgr)
+  client = conftest.make_sessions_listing_client(fx.cfg, fx.session_mgr, fx.tree)
   resp = client.get("/api/sessions/search", params={"q": "firing-42"})
   assert resp.status_code == 200
   assert fx.worker.id in {row["id"] for row in resp.json()}

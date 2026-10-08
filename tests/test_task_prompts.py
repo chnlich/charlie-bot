@@ -5,7 +5,7 @@ Covers plan 4.1's context/role terms at the assembly layer: the one manager
 template at any depth with no PM load, the worker/review/verify/iteration/
 scheduled-step contracts, inherited subtree rules root→node with no ancestor
 node-rule or sibling leakage, byte-exact dedup with full source preservation,
-memory selection provenance identical to the legacy strings, and the
+memory selection provenance, and the
 snapshot/prompt_hash/char_count semantics.
 """
 
@@ -17,7 +17,7 @@ import conftest
 import pytest
 from conftest import OPERATOR, OPUS_BACKEND_ID, build_env
 
-from src.features.memory.memory import assemble_master, select_master_memory, select_worker_memory
+from src.features.memory.memory import select_master_memory, select_worker_memory
 from src.infra.models import PatchSessionTaskRequest, TaskSpec, TaskType
 from src.runtime.task_prompts import PromptSnapshot, assemble_snapshot, build_segments, prompt_task_type
 from src.runtime.task_sessions import TaskTreeManager
@@ -242,7 +242,6 @@ async def test_staged_candidates_never_enter_startup_or_query(tmp_path: Path) ->
       "---\nscope: user\ntopic: staged\ntitle: Candidate\n---\nstaged body\n", encoding="utf-8")
   (cfg.memory_dir / "topics").write_text("", encoding="utf-8")
   assert select_master_memory(cfg.memory_dir) is None
-  assert assemble_master(cfg.memory_dir) is None
   worker_selection = select_worker_memory(cfg.memory_dir, "")
   assert worker_selection is not None
   assert all(not sources for _d, _t, sources in worker_selection.segments)

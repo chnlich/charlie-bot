@@ -27,9 +27,8 @@ def subtree_roots(
   - the view rule (``view_subtree_roots``): the root is a session a sidebar
     contribution names as the root of a view, and the root itself IS a member.
 
-  Projected legacy worker-thread rows carry ``task_parent_id`` = their parent
-  session, so the same walk classifies them. The sidebar lists share this one
-  walk, so each membership rule is implemented once.
+  The sidebar lists share this one walk, so each membership rule is
+  implemented once.
 
   A chain member missing from *metas* (deleted or unreadable) ends that walk:
   the row classifies as unparented rather than guessing past the gap. When

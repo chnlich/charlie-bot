@@ -7,7 +7,6 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.features.memory.memory import assemble_master
 from src.infra import event_types as ET
 from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
 from src.infra.constants import SESSION_ID_ENV_VAR
@@ -23,7 +22,6 @@ from src.infra.process import kill_group_escalating
 from src.runtime import launch_loop, master_cc_state, runs
 from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
-from src.runtime.sessions import backend_switch_reset_reason, context_reset_note
 from src.runtime.streaming import handle_compaction_events
 
 log = LazyStructlogLogger()
@@ -240,95 +238,6 @@ async def _salvage_silent_turn(
 _ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
 
 
-class _Instructions(str):
-  """Instructions string carrying the build's non-fatal read failure, when one occurred.
-
-  The builder's return must stay a plain ``str`` for every consumer, so a
-  declared overlay's read failure rides upward as this attribute instead of a
-  changed return shape. The wake path reads it to log and emit the unified
-  ``backend_overlay_inactive`` alert; it is ``None`` on every other path.
-  """
-
-  overlay_error: OSError | UnicodeDecodeError | None = None
-
-
-def _build_instructions_content(
-    session_meta: SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str | None:
-  """Build master agent instructions: base prompt + second rule file + per-host override + memory store + declared overlay.
-
-  The second rule file is the workflow rules file the turn contributions name
-  for the session (:func:`src.runtime.hooks.turn_contributions.resolve_workflow_rules_file`):
-  a thread session gets ``prompts/thread_session.md`` (the short brief naming
-  what it may read on demand); every other session gets
-  ``prompts/manager_workflows.md`` (the full manager-workflow rules master.md
-  no longer carries). The file is read unconditionally, so a missing file raises.
-
-  The memory block is assembled from the labeled-entry store via
-  :func:`src.features.memory.memory.assemble_master` (resident topics full text + index
-  lines for the rest).
-
-  *prompt_overlay* names a file under ``prompts/model_overlays/`` (without the
-  ``.md`` suffix) whose full text is appended as the final part. The backend
-  declares it explicitly. A declared-but-unreadable file (``OSError`` /
-  ``UnicodeDecodeError``) does not raise: the overlay segment is skipped and
-  the failure rides upward on the returned string's ``overlay_error``
-  attribute — this function stays a pure builder and emits no events; the
-  caller (the wake path) owns logging and the ``backend_overlay_inactive``
-  alert. Any other exception type still propagates. ``None`` appends nothing.
-  The ``model`` string never enters this function — the overlay binding is
-  wholly driven by the declaration.
-  """
-  parts: list[str] = []
-
-  # 1. Git-shared base prompt (prompts/master.md in the repo)
-  base_prompt_file = cfg.charlie_bot_repo / "prompts" / "master.md"
-  if base_prompt_file.exists():
-    base_text = base_prompt_file.read_text(encoding="utf-8")
-    base_text = base_text.replace("{{session_id}}", session_meta.id)
-    parts.append(base_text)
-
-  # 1b. Second rule file, named by the turn contributions. A thread session gets the
-  # short thread brief naming the manager workflows file it may read on demand;
-  # every other session gets those manager workflows in full. Read
-  # unconditionally: a missing file is a broken repo and raises.
-  rule_file = cfg.charlie_bot_repo / "prompts" / turn_contributions.resolve_workflow_rules_file(session_meta)
-  parts.append(rule_file.read_text(encoding="utf-8").replace("{{session_id}}", session_meta.id))
-
-  # 2. Per-host override (~/.charliebot/MASTER_AGENT_PROMPT.md)
-  host_prompt_file = cfg.claude_md_file
-  if host_prompt_file.exists():
-    host_text = host_prompt_file.read_text(encoding="utf-8")
-    host_text = host_text.replace("YOUR_SESSION_UUID", session_meta.id)
-    parts.append(host_text)
-
-  if not parts:
-    log.warning("master_prompt_files_missing", base=str(base_prompt_file), host=str(host_prompt_file))
-    return None
-
-  # 3. Memory store (resident topics full text + index lines for the rest)
-  memory_block = assemble_master(cfg.memory_dir)
-  if memory_block:
-    parts.append(memory_block)
-
-  # 4. Declared overlay (prompts/model_overlays/<prompt_overlay>.md). The read
-  # degrades, never raises for missing/unreadable files: OSError and
-  # UnicodeDecodeError skip the overlay segment and ride upward on the
-  # result's overlay_error attribute — the wake continues without a fence and
-  # _run_cc logs and emits the unified backend_overlay_inactive alert with
-  # reason="unreadable". Any other exception type still propagates.
-  overlay_error: OSError | UnicodeDecodeError | None = None
-  if prompt_overlay is not None:
-    overlay_file = cfg.charlie_bot_repo / "prompts" / "model_overlays" / f"{prompt_overlay}.md"
-    try:
-      parts.append(overlay_file.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError) as exc:
-      overlay_error = exc
-
-  content = _Instructions("\n\n".join(parts))
-  content.overlay_error = overlay_error
-  return content
-
-
 _VOICE_DISCLAIMER = (
     "[Voice input: this message was dictated via speech transcription and may "
     "contain recognition errors. Interpret unclear words from context; ask only "
@@ -339,35 +248,6 @@ def _build_prompt(user_content: str, is_voice: bool) -> str:
   if is_voice:
     return _VOICE_DISCLAIMER + "\n" + user_content
   return user_content
-
-
-async def _v1_reset_reason(
-    item: master_cc_state._WorkItem,
-    option: BackendOption,
-    *,
-    fresh_by_switch: bool,
-    dropped_reason: str | None,
-) -> str | None:
-  """The v1 start note's reset reason, or None when this turn carries no note.
-
-  A v1 turn notes its context reset only when the session has a completed round
-  of its own (``has_completed_round`` scopes to the session's own log segment,
-  so a fresh clone child gets no note) and the caller did not declare the turn
-  fresh (the weekly recycle). The reason names either the cross-family
-  continuation rule — the session switched backends, and the new family starts
-  its own conversation — or the dropped-resume path (transcript or anchor
-  missing). v2 turns carry their note from the launch seam (task_execution)
-  instead, so this helper fires for ``task_run is None`` items only.
-  """
-  if item.task_run is not None or item.expect_fresh_session:
-    return None
-  if not fresh_by_switch and dropped_reason is None:
-    return None
-  if not await item.callbacks.has_completed_round(item.session_meta.id):
-    return None
-  if fresh_by_switch:
-    return backend_switch_reset_reason(item.session_meta.native_backend, option.id)
-  return "the previous conversation could not be resumed"
 
 
 def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
@@ -590,80 +470,16 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     if context_window is not None:
       option = option.model_copy(update={"context_window": context_window})
 
-  if item.task_instructions is not None:
-    # A v2 task turn delivers the context owner's committed snapshot bytes and
-    # never runs the v1 builder: no second memory injection. The
-    # overlay judgment (with its unified alert) already happened at the launch
-    # seam, so nothing is re-judged or re-alerted here.
-    instructions_content: str | None = item.task_instructions
-  else:
-    # Three-state overlay judgment on the wake path, never at config-load time
-    # (a hot reload would swallow a load-time exception as a warning and keep the
-    # old config). None (absent key or explicit YAML null) = undeclared: run
-    # without a fence and emit the unified overlay-inactive alert with
-    # reason="undeclared"; the literal string "none" = explicitly no overlay:
-    # pass None, silent, no alert; any other string names the overlay file
-    # (without ".md") under prompts/model_overlays/, read by the builder — a
-    # read failure degrades the same way as undeclared: fenceless run plus the
-    # same unified alert with reason="unreadable", never a raise.
-    prompt_overlay = option.prompt_overlay
-    if prompt_overlay is None:
-      log.warning("master_cc_overlay_undeclared", session=session_meta.id, backend=option.id)
-      await item.callbacks.persist_and_broadcast(
-          session_meta.id, {
-              "type": ET.BACKEND_OVERLAY_INACTIVE,
-              "backend": option.id,
-              "reason": ET.OVERLAY_REASON_UNDECLARED,
-          })
-    elif prompt_overlay == "none":
-      prompt_overlay = None
-    # Any other string is the overlay filename (sans ".md"); pass it through.
+  assert item.task_run is not None
+  assert item.task_instructions is not None
+  instructions_content = item.task_instructions
 
-    instructions_content = await asyncio.to_thread(_build_instructions_content, session_meta, cfg, prompt_overlay)
-    overlay_error = getattr(instructions_content, "overlay_error", None)
-    if overlay_error is not None:
-      log.warning(
-          "master_cc_overlay_unreadable",
-          session=session_meta.id,
-          backend=option.id,
-          overlay=prompt_overlay,
-          error=type(overlay_error).__name__,
-          detail=str(overlay_error),
-      )
-      await item.callbacks.persist_and_broadcast(
-          session_meta.id, {
-              "type": ET.BACKEND_OVERLAY_INACTIVE,
-              "backend": option.id,
-              "reason": ET.OVERLAY_REASON_UNREADABLE,
-              "overlay": prompt_overlay,
-              "error": type(overlay_error).__name__,
-          })
-
-  # A v2 fresh-native launch never resumes: the instruction hash or backend
-  # identity changed, so the previous conversation is not this launch's
-  # context. The adapter clears the stale anchor at spawn (after the process
-  # exists — a failed spawn leaves the usable old anchor intact).
-  fresh_native = item.task_run is not None and item.task_run.fresh_native_context
+  # A fresh-native launch starts without the previous conversation. The
+  # adapter clears the durable anchor when the Run spawns.
+  fresh_native = item.task_run.fresh_native_context
   if fresh_native:
-    # The in-memory whole-object writes this turn may make (usage, account,
-    # thinking state) must carry the cleared anchor, not the stale one the
-    # item was enqueued with; the durable clearing itself happens at spawn.
     session_meta.cc_session_id = None
-  # v1 continuation rule: a held native id belongs to the backend recorded in
-  # native_backend, and a backend outside its continuation domain starts its
-  # own conversation. The turn withholds the resume id (no --resume flag, no
-  # native resume id) and skips the resume pre-flight, but leaves the id on
-  # disk: the consumer persists only a truthy new id, so a round that lands one
-  # replaces the old id and native_backend together and a round that lands none
-  # leaves both for the next turn to judge again. A pre-rule session (empty
-  # native_backend) resumes as before.
-  switch_from_backend = session_meta.native_backend
-  fresh_by_switch = (
-      item.task_run is None and not fresh_native and bool(session_meta.cc_session_id) and bool(switch_from_backend) and
-      not backend_types.same_continuation_domain(switch_from_backend, option.id, cfg))
-  # A fresh turn (v2's fresh_native, or the v1 rule's cross-family switch) holds no id, so
-  # the lifecycle places it with no resume id and nothing is withheld twice.
-  held_native_id = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
+  held_native_id = None if fresh_native else session_meta.cc_session_id
   lifecycle = backend_types.lifecycle_for(option)
   ctx = _turn_launch_context(item, option, cwd, held_native_id)
   env = _build_master_env(cfg, session_meta.id)
@@ -674,21 +490,18 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   prompt = _build_prompt(item.user_content, item.is_voice)
 
-  # The round's own conversation state. A fresh turn (v2's cleared snapshot, or
-  # a v1 cross-family switch) starts a new conversation, so its state starts
-  # empty: a new id from the backend is adoptable, and a round that lands none
-  # returns None, so the consumer's persist leaves the disk's old id and
-  # producer untouched for the next turn to judge again. The metadata snapshot
-  # itself stays intact for the v1 switch (only v2's spawn clears it): the
-  # dequeue refresh corrects a set snapshot from disk, and a None snapshot is
-  # never resurrected.
-  cc_session_id: str | None = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
+  # A fresh task turn starts a new conversation, so its state starts empty: a
+  # new id from the backend is adoptable, and a round that lands none returns
+  # None, so the consumer's persist leaves the disk's old id and producer
+  # untouched for the next turn to judge again. The fresh-native adapter
+  # clears the snapshot before launch.
+  cc_session_id: str | None = None if fresh_native else session_meta.cc_session_id
   exit_code = 1
   error_msg: str | None = None
   # The launch refusal's flag when the turn ended on one; None for every other failure.
   quota_exhausted: bool | None = None
-  # Set inside _on_spawn the moment the master_run record hits disk; the cancel
-  # path lets the turn go only once a boot can find it, so this flag — not
+  # Set inside _on_spawn after the task Run's process identity lands on disk;
+  # the cancel path lets the turn go only once recovery can find it, so this flag — not
   # backend.pid — is the let-go precondition.
   record_persisted = False
   # True only on the cancel path when the turn is handed to the next boot: the
@@ -700,16 +513,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # Relays this turn performed (a backend with a login pool only).
   relays = 0
 
-  # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
-  # and read cursor here so a restarted server can re-attach to this exact
-  # turn from the persisted master_run record. A v2 task-tree turn pins the
-  # same files inside its Run's own directory (the Run is the execution
-  # record). A relay's fresh process gets a dir and record of its own (see
-  # _run_process).
-  started_at = datetime.now(UTC)
-  log_dir = (
-      Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
-          cfg.sessions_dir / session_meta.id, started_at))
+  # The Run directory holds the backend transport files.
+  log_dir = Path(item.task_run.transport_dir)
   raw_log = str(log_dir / runs.RAW_LOG_NAME)
 
   # The invocation's own translated error-event messages, in stream order — the
@@ -725,20 +530,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # callback fired — same contract as the worker path — so the pair cannot
     # be faked by a later pid reuse.
     assert backend is not None
-    if item.task_run is not None:
-      assert item.on_task_spawn is not None
-      # The v2 Run owns the identity: pid/pid_start land on the Run record
-      # before any call from its run credential is accepted.
-      await item.on_task_spawn(pid, backend.pid_start)
-    else:
-      record = MasterRunRecord(
-          pid=pid,
-          pid_start=backend.pid_start,
-          started_at=started_at,
-          raw_log=raw_log,
-          user_event_ids=list(item.user_event_ids),
-      )
-      await item.callbacks.persist_master_run(session_meta.id, record)
+    assert item.on_task_spawn is not None
+    await item.on_task_spawn(pid, backend.pid_start)
     record_persisted = True
 
   def _on_relay(relay_count: int) -> None:
@@ -751,30 +544,19 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       relays_before: int,
   ) -> tuple[int, str]:
     """One process of this turn: build the backend, stream its events, record its exit."""
-    nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log, relays
+    nonlocal backend, exit_code, cc_session_id, record_persisted, log_dir, raw_log, relays
     relays = relays_before
     error_event_messages.clear()
     if backend is not None:
       record_persisted = False
-      started_at = datetime.now(UTC)
-      # A v2 task-tree turn keeps every relay process inside its Run's own
-      # transport dir; the v1 turn gets the per-round master_run dir.
-      log_dir = (
-          Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
-              cfg.sessions_dir / session_meta.id, started_at))
-      raw_log = str(log_dir / runs.RAW_LOG_NAME)
+    raw_log = str(log_dir / runs.RAW_LOG_NAME)
     process_prompt = prompt
     if relays_before == 0:
       resume_id = process_launch.resume_id
-      # Pre-flight: a launch without a resolved resume id could start a
-      # zero-context conversation when this session already has an anchor.
-      # Declared fresh starts and cross-domain switches intentionally skip it.
-      dropped_reason: str | None = None
-      if (not resume_id and not item.expect_fresh_session and not fresh_native and not fresh_by_switch):
-        anchor_on_disk = session_meta.cc_session_id
-        if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
-          reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
-          dropped_reason = reason
+      # Pre-flight catches a missing transcript when a durable anchor exists.
+      if not resume_id and not fresh_native:
+        if session_meta.cc_session_id:
+          reason = ET.RESUME_REASON_TRANSCRIPT_MISSING
           log.error(
               "master_cc_resume_anchor_missing",
               session=session_meta.id,
@@ -786,11 +568,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
                   "type": ET.RESUME_CONTEXT_DROPPED,
                   "reason": reason,
               })
-      reset_reason = await _v1_reset_reason(
-          item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
-      if reset_reason is not None:
-        # Only the prompt the backend receives carries the note; the persisted user event stays unchanged.
-        process_prompt = f"{context_reset_note(reset_reason)}\n\n{process_prompt}"
       log.info(
           "master_cc_starting",
           session=session_meta.id,
@@ -896,13 +673,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         await _emit_round_notices(item, option, turn_events)
 
   except asyncio.CancelledError:
-    # Only live trigger: event-loop shutdown (graceful restart). Same let-go
-    # rule as the worker path (spawner.py): a covered transport whose
-    # master_run record is already persisted keeps running on its own raw-log
-    # fds, and the next boot's reconcile re-attaches for the real result.
-    # Uncovered transports die with their transport process, and a process
-    # whose record never hit disk can never be found by a boot, so both are
-    # still terminated.
+    # A covered transport with a persisted Run identity can be followed after
+    # restart; an uncovered process is terminated during shutdown.
     let_go = (backend is not None and backend_types.traits_for(option.type).restart_reattach and record_persisted)
     log.warning(
         "master_cc_cancelled",
@@ -1059,8 +831,8 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     # Same turn-end model attribution on the re-attach path: the whole-round
     # projection above is reused (zero new I/O) and the identical notice is
     # emitted. One turn's lifecycle takes exactly one of the two completion
-    # paths (a completed live turn clears its master_run record, so a
-    # re-attach implies the live path never completed), so no double emit.
+    # paths (a completed live turn writes a terminal Run fact, so a re-attach
+    # implies the live path never completed), so no double emit.
     if option is not None:
       await _emit_round_notices(item, option, events)
 

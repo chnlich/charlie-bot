@@ -728,17 +728,16 @@ def find_local_task_child(
   report each other's result. The candidate must still be that child: the
   parent, worker profile, spec body and task type all match, or the readback
   returns None (outcome unknown), never a fallback to an unrelated sibling or
-  legacy thread.
+  unrelated task.
   """
   from src.infra.config import get_config
   from src.infra.models import SessionMetadata
   from src.runtime.control_events import derived_delegate_request_id, stable_task_id
   from src.runtime.runs import DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME
-  from src.runtime.threads import METADATA_NAME
 
   resolved_request_id = request_id or derived_delegate_request_id(session_id, task_type, description)
   child_id = stable_task_id(session_id, resolved_request_id)
-  meta_path = get_config().sessions_dir / child_id / METADATA_NAME
+  meta_path = get_config().sessions_dir / child_id / RUN_METADATA_NAME
   if not meta_path.is_file():
     return None
   try:
@@ -808,49 +807,6 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
     if event.get("type") == "task_close_requested" and event.get("request_id") == request_id:
       deferred = {"session_id": task_id, "request_id": request_id, "status": "pending_run_finish"}
   return deferred
-
-
-def find_local_thread(
-    session_id: str,
-    *,
-    description: str,
-    task_type: str | None,
-    description_match: str = "exact",
-) -> dict[str, Any] | None:
-  """Readback scan: the newest thread metadata matching description + task_type.
-
-  Pure local-disk judgment used when an internal-API POST's response was lost:
-  matching this call's own product proves the effect landed, so the call can
-  report success without re-sending. Threads in any status count.
-  ``description_match`` is ``exact`` or ``contains``.
-  """
-  # Lazy: the readback path is the rare sent-but-lost class, and the threads
-  # module's own import chain (config, models, sidebar_state) is ~17 ms of
-  # every CLI invocation that imports this module — the numpy weight rides the
-  # backends.base import this module never makes.
-  from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME
-
-  threads_dir = get_config().sessions_dir / session_id / THREADS_DIR_NAME
-  if not threads_dir.is_dir():
-    return None
-  best: dict[str, Any] | None = None
-  for thread_dir in threads_dir.iterdir():
-    meta_path = thread_dir / METADATA_NAME
-    try:
-      meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-      continue
-    stored_description = meta.get("description", "")
-    if description_match == "exact":
-      if stored_description != description:
-        continue
-    elif description not in stored_description:
-      continue
-    if (meta.get("task_type") or "implement") != (task_type or "implement"):
-      continue
-    if best is None or str(meta.get("created_at", "")) > str(best.get("created_at", "")):
-      best = meta
-  return best
 
 
 def add_session_arg(parser: argparse.ArgumentParser) -> None:

@@ -140,8 +140,7 @@ async def resolve_binding(
   """Load the bound task-tree node; every invalid binding fails loudly.
 
   A bound task never discovers or creates a session: the binding IS the node.
-  A missing session, a legacy (non-task-tree) session, or — for the paths that
-  execute against it — a closed node stops the fire here.
+  A missing session or a closed node stops the fire here.
   """
 
   if not task_cfg.session_id:
@@ -150,10 +149,6 @@ async def resolve_binding(
   if meta is None:
     raise ScheduledBindingError(
         f"scheduled task '{task_cfg.name}' binds session {task_cfg.session_id}, which does not exist")
-  if meta.profile is None:
-    raise ScheduledBindingError(
-        f"scheduled task '{task_cfg.name}' binds session {task_cfg.session_id}, "
-        "which is not a task-tree node (legacy sessions keep the legacy path)")
   return meta
 
 
@@ -235,16 +230,14 @@ async def ensure_firing_leaf(
   evidence policy is otherwise the run's own result truth reported to the
   manager.
 
-  The parent is the bound manager, or an unbound task's cron session: a legacy
-  session (profile None) parents its firings' leaves in place, exactly as the
-  delegation path parents a worker under it.
+  The parent is the bound manager task, which owns the firing's worker leaf.
   """
   from src.runtime import task_sessions
 
-  if meta.profile not in ("manager", None):
+  if meta.profile != "manager":
     raise task_sessions.TaskInvalidError(
         f"scheduled task '{task_cfg.name}' cannot create a worker leaf under "
-        f"{meta.id}: the parent is neither a manager nor the task's legacy cron session")
+        f"{meta.id}: the parent is not a manager task")
   return await tree.create_task(
       request_id=leaf_request_id(task_cfg, firing),
       task_parent_id=meta.id,
@@ -402,12 +395,10 @@ async def deliver_boundary_report(
 ) -> None:
   """The ONE firing failure report through the common report owner, then the wake.
 
-  The delivered report is the recipient's new durable input: a task-tree
-  manager drains it on its next serialized turn (dispatch_pending), a legacy
-  cron session is woken through trigger_master — one wake per fire, the same
-  shape the legacy path's master wake had. The stable report id dedups the
-  delivery, and only a freshly created report wakes, so a recovery re-delivery
-  never wakes twice for one firing.
+  The delivered report is the manager's new durable input; the task tree
+  dispatches its next serialized turn. The stable report id deduplicates the
+  delivery, and only a freshly created report wakes, so recovery never wakes
+  twice for one firing.
   """
   source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
   epoch = await tree.sessions.prime_aggregator(recipient)

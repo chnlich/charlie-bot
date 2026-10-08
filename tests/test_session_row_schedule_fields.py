@@ -8,8 +8,8 @@ carries ``schedule_task: null`` and none of the four. The Scheduled listing and
 its endpoint are gone (404). Each archived page also carries its rows'
 unarchived ancestors as ``context_only`` rows — never counted into page size,
 cursor, or group aggregates, each archived row returned exactly once across a
-full walk — and the cron-subtree exclusion still keeps the legacy cron session
-and everything under it out.
+full walk — and the cron-subtree exclusion still keeps the synthetic scheduled
+manager node and everything under it out.
 """
 
 from __future__ import annotations
@@ -19,11 +19,12 @@ from pathlib import Path
 import pytest
 from conftest import (
     OPUS_BACKEND_ID,
+    OPERATOR,
     build_env,
     create_task,
     cron_d_dir,
     dump_yaml,
-    make_legacy_cron_session,
+    make_cron_session,
     make_sessions_listing_client,
     make_sessions_listing_page_client,
     page_initial_sessions,
@@ -31,7 +32,6 @@ from conftest import (
 )
 
 from src.infra.models import CreateSessionRequest, RunRecord, SessionStatus
-from src.runtime.threads import ThreadManager
 
 
 def _write_bound_task(home: Path, name: str, session_id: str, *, enabled: bool = True) -> None:
@@ -76,7 +76,6 @@ def _assert_unbound_row(row: dict) -> None:
 @pytest.mark.asyncio
 async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
-  thread_mgr = ThreadManager(cfg)
 
   async def manager(name: str, request_id: str, group: str | None = None):
     node = await create_task(tree, parent=None, request_id=request_id, profile="manager", name=name)
@@ -90,7 +89,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   unbound = await manager("Plain root", "plain-1", "Synthetic")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   _write_bound_task(temp_home, "synthetic-paused", disabled_node.id, enabled=False)
-  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree)
 
   for url in ("/api/sessions/", "/api/sessions/starred"):
     if url.endswith("starred"):
@@ -107,7 +106,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   # The homepage's server-rendered sidebar carries the same answer.
   rows = {
       row["id"]: row for row in page_initial_sessions(
-          make_sessions_listing_page_client(cfg, session_mgr, tree, thread_mgr), unbound.id)
+          make_sessions_listing_page_client(cfg, session_mgr, tree), unbound.id)
   }
   _assert_bound_row(rows[bound.id], "synthetic-daily", enabled=True)
   _assert_bound_row(rows[disabled_node.id], "synthetic-paused", enabled=False)
@@ -172,11 +171,10 @@ async def test_join_answer_repeats_until_the_snapshot_or_a_served_fire_moves(
 async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_gone(
     tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
-  thread_mgr = ThreadManager(cfg)
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="synthetic-daily")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
   await session_mgr.archive_session(bound.id)
-  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree)
 
   resp = client.get("/api/sessions/archived")
   assert resp.status_code == 200
@@ -192,7 +190,6 @@ async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_g
 @pytest.mark.asyncio
 async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_path: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
-  thread_mgr = ThreadManager(cfg)
   root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   root.group = "Alpha"
   await session_mgr.save_metadata(root)
@@ -208,12 +205,10 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   from conftest import OPERATOR
   await tree.archive_subtree(hidden.id, caller=OPERATOR)  # delivered is not open; it stays completed
 
-  # A stored-archived legacy child directly under the active root.
-  legacy_child = await session_mgr.create_session(
-      CreateSessionRequest(name="Synthetic legacy child"), backend=OPUS_BACKEND_ID)
-  legacy_child.task_parent_id = root.id
-  await session_mgr.save_metadata(legacy_child)
-  await session_mgr.archive_session(legacy_child.id)
+  # An archived child directly under the active root.
+  archived_child = await create_task(
+      tree, parent=root.id, request_id="archived-child", profile="manager", name="Synthetic archived child")
+  await tree.archive_subtree(archived_child.id, caller=OPERATOR)
 
   # Fillers push the archived rows past one small page.
   fillers = []
@@ -222,7 +217,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
     await session_mgr.archive_session(filler.id)
     fillers.append(filler)
 
-  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree)
   archived: list[str] = []
   context: list[str] = []
   pages = walk_archived_pages(client)
@@ -244,7 +239,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
 
   # Every archived row exactly once — the walk's cursor never repeats a row.
   assert len(archived) == len(set(archived))
-  assert set(archived) == {delivered.id, hidden.id, legacy_child.id, *(f.id for f in fillers)}
+  assert set(archived) == {delivered.id, hidden.id, archived_child.id, *(f.id for f in fillers)}
   # The active ancestors ride as context_only rows: the root for every branch,
   # climbed past the derived-archived intermediate.
   assert set(context) == {root.id}
@@ -255,8 +250,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
 @pytest.mark.asyncio
 async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, temp_home: Path) -> None:
   cfg, session_mgr, tree = build_env(tmp_path)
-  thread_mgr = ThreadManager(cfg)
-  cron = await make_legacy_cron_session(session_mgr, "synthetic-cron")
+  cron = await make_cron_session(session_mgr, "synthetic-cron")
   active_root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   firing = await create_task(
       tree, parent=cron.id, request_id="firing-1", profile="worker", name="synthetic-cron · firing-1")
@@ -268,7 +262,7 @@ async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, 
   await tree.runs.register_run(RunRecord(id="run-2", session_id=delivered.id, kind="work"))
   await tree.dispatch.finish_run(delivered.id, "run-2", outcome="success")
 
-  client = make_sessions_listing_client(cfg, session_mgr, tree, thread_mgr)
+  client = make_sessions_listing_client(cfg, session_mgr, tree)
   seen: dict[str, dict] = {}
   for page in walk_archived_pages(client):
     for row in page["sessions"]:

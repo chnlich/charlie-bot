@@ -31,12 +31,10 @@ HAS_PENDING_PLAN_APPROVAL = "has_pending_plan_approval"
 HAS_RUNNING_TASKS = "has_running_tasks"
 HAS_PENDING_TRIGGER = "has_pending_trigger"
 # A task-tree node's derived activity, carried by the probed snapshot and the
-# derived entry alike (the sidebar's task-tree rows read it; legacy rows never
-# carry the key). The value is the shared derivation's pair: (has_running_tasks,
-# work_state) — see TaskTreeActivity in src.runtime.task_sessions.
+# derived entry alike. The value is the shared derivation's pair:
+# (has_running_tasks, work_state) — see TaskTreeActivity in src.runtime.task_sessions.
 TASK_TREE_ACTIVITY = "task_tree_activity"
-# The derived entry's work_state key for task-tree rows (the status payload and
-# the list rows carry the verdict; legacy rows keep today's key set).
+# The derived entry's work_state key for rows with a task activity snapshot.
 WORK_STATE = "work_state"
 
 # Every Nth populate_sidebar_state call re-probes all active sessions: the
@@ -248,7 +246,7 @@ def store_derived_map(key: tuple, derived: dict) -> None:
 
 
 def snapshot_task_activity(session_id: str) -> tuple[bool, str] | None:
-  """The stored task-tree activity for *session_id*, or None for a legacy row.
+  """The stored task-tree activity for *session_id*, or None before its probe.
 
   ``(has_running_tasks, work_state)`` — the pair the deep probe derived. A
   node whose stored verdict is ``running`` holds a launched Run without a

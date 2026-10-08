@@ -20,13 +20,12 @@ header carries ``scope``, ``topic``, ``audience`` (comma list of ``master`` /
 ``worker``), and ``title``; ``revises`` is staging-only. Only the first header
 block is parsed, so the body may contain ``---`` lines.
 
-Parsing is dual-read so the legacy (v1) store keeps working until it is
-migrated: a missing frontmatter ``title`` falls back to a body first line of
+Parsing reads both store formats: a missing frontmatter ``title`` falls back to a body first line of
 ``# <title>``, legacy ``audience: both`` reads as ``master, worker``, and
 ``created``/``source`` remain parseable (lint rejects them in entries/ only).
 
-All logic lives here; the CLI (``src/features/memory/cli.py``) is a thin wrapper, and the
-spawn paths (``master_cc``, ``spawner``) call the assemble functions directly.
+All logic lives here; the CLI (``src/features/memory/cli.py``) is a thin wrapper, and task
+prompt snapshots use the selection functions directly.
 
 The store creates its own scaffold: :func:`ensure_store` runs first in every entry
 point that reads or writes the live store (:func:`load_store`, ``memory add``, the
@@ -597,9 +596,8 @@ class MemoryEntrySource:
 class MemorySelection:
   """The provenance-bearing memory assembly result one audience selection produced.
 
-  ``text`` is the exact block the legacy string interface
-  (:func:`assemble_master` / :func:`assemble_worker`) derives — every caller
-  that needs the string reads it here, never re-filtering. ``segments`` is the
+  ``text`` is the exact block selected for the audience — every caller that
+  needs the string reads it here, never re-filtering. ``segments`` is the
   ordered (full-then-index) split the block is joined from, so a snapshot can
   label what the model actually received per delivery mode. ``usage_line``
   rides only on worker selections.
@@ -737,7 +735,7 @@ def select_worker_memory(memory_dir: pathlib.Path, repo_basename: str) -> Memory
 def entry_order_key(entry: Entry) -> tuple[str | None, str]:
   """The store's canonical entry order: ``(topic, slug)``.
 
-  Every listing of entries — both spawn assemblers and the CLI query — sorts
+  Every listing of entries — both prompt selections and the CLI query — sorts
   with this key, so one change moves them all.
   """
   return (entry.topic, entry.slug)
@@ -746,39 +744,9 @@ def entry_order_key(entry: Entry) -> tuple[str | None, str]:
 def resident_topic_names(store: Store) -> set[str]:
   """Names of the store's resident topics.
 
-  ``assemble_master`` injects resident-topic entries in full and serves the
+  Master prompt selection injects resident-topic entries in full and serves the
   rest as index lines; the CLI query's ``--resident`` filter matches the same
-  set. ``assemble_worker`` does not consult residency — it splits on
+  set. Worker prompt selection does not consult residency — it splits on
   ``topic == repo_basename``.
   """
   return {t.name for t in store.topics.values() if t.resident}
-
-
-def assemble_master(memory_dir: pathlib.Path) -> str | None:
-  """Assemble the master spawn memory block (derived from :func:`select_master_memory`).
-
-  Full bodies of entries in resident topics whose audience contains
-  ``master``, then the INDEX_HEADER line and index lines
-  (``<topic>/<slug> · <title>``) for all other master-audience entries, each
-  group stably sorted by ``(topic, slug)``.
-
-  Returns None when the store has no master-audience entries to inject. A
-  malformed store propagates :class:`MemoryFormatError` (fail-loud).
-  """
-  selection = select_master_memory(memory_dir)
-  return selection.text if selection is not None else None
-
-
-def assemble_worker(memory_dir: pathlib.Path, repo_basename: str) -> str | None:
-  """Assemble the worker spawn memory block for *repo_basename* (from :func:`select_worker_memory`).
-
-  Full bodies of entries whose topic equals *repo_basename* and whose audience
-  contains ``worker``, then the INDEX_HEADER line and index lines for all
-  other worker-audience entries, then one usage line explaining
-  ``charliebot memory query`` and ``charliebot memory add`` (workers may stage
-  captures).
-
-  The usage line is always present, so the result is non-None. A malformed
-  store propagates :class:`MemoryFormatError` (fail-loud).
-  """
-  return select_worker_memory(memory_dir, repo_basename).text

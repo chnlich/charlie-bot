@@ -7,10 +7,7 @@ spawner gate code itself stays untouched (the exclusion is by type, like
 ``scheduled_trigger``).
 """
 
-import asyncio
 import pathlib
-from collections.abc import Coroutine
-from typing import Any
 from unittest import mock
 
 import conftest
@@ -18,7 +15,6 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import sessions
 from src.runtime.api import internal
 from src.runtime.cli import session
 
@@ -32,13 +28,9 @@ class RouteSessionManager:
 
   def __init__(self, by_id: dict[str, models.SessionMetadata]) -> None:
     self.sessions = by_id
-    self.persisted: list[tuple[str, dict[str, Any]]] = []
 
   async def get_session(self, session_id: str) -> models.SessionMetadata | None:
     return self.sessions.get(session_id)
-
-  async def persist_and_broadcast(self, session_id: str, event: dict[str, Any]) -> None:
-    self.persisted.append((session_id, event))
 
 
 def _payload() -> dict[str, str]:
@@ -46,76 +38,53 @@ def _payload() -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_session_message_to_archived_target_relays_and_pulls_back(tmp_path: pathlib.Path) -> None:
-  """No 409: the relay returns success, persists the event, and the wake that
-  follows (default pull_back) leaves the archived target ACTIVE."""
-  cfg = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
-  caller = await session_mgr.create_session(models.CreateSessionRequest(name="Caller"))
-  target = await session_mgr.create_session(models.CreateSessionRequest(name="Target"))
-  await session_mgr.archive_session(target.id)
+async def test_session_message_refuses_an_archived_task_node(tmp_path: pathlib.Path) -> None:
+  """Agent relays do not restore archived task nodes."""
+  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  caller = await conftest.create_task(tree, parent=None, request_id="caller", name="Caller")
+  target = await conftest.create_task(tree, parent=None, request_id="target", name="Target")
+  await tree.archive_subtree(target.id, caller=conftest.OPERATOR)
 
-  spawned: list[asyncio.Task] = []
-
-  with (
-      mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()),
-      mock.patch(conftest.MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET, new=mock.AsyncMock()) as
-      mock_run,
-      mock.patch.object(internal, "create_logged_task", conftest.make_task_spawner(spawned)),
-  ):
-    resp = await internal.session_message(
-        models.SessionMessageRequest(session_id=caller.id, target_session_id=target.id, content="status please"),
-        session_mgr=session_mgr,
-        cfg=cfg,
+  with conftest.make_internal_router_client(cfg, session_mgr, tree) as client:
+    response = client.post(
+        "/api/internal/session-message",
+        json={"session_id": caller.id, "target_session_id": target.id, "content": "status please"},
     )
-    assert resp == {"status": "accepted"}
-    await asyncio.wait_for(spawned[0], timeout=5)
 
-  events = session_mgr.load_chat_events_sync(target.id)
-  assert any(ev.get("type") == ET.AGENT_MESSAGE and ev.get("content") == "status please" for ev in events)
-  mock_run.assert_awaited_once()
-  assert mock_run.await_args.args[1].id == target.id
-  fresh = await session_mgr.get_session(target.id)
-  assert fresh is not None
-  assert fresh.status == models.SessionStatus.ACTIVE
+  assert response.status_code == 409
+  assert response.json()["detail"] == f"task {target.id} is archived"
+  assert tree.task_state(target.id) == "archived"
 
 
-def test_session_message_relay_persists_event_and_wakes_master(monkeypatch: pytest.MonkeyPatch,) -> None:
+def test_session_message_relay_admits_and_dispatches_a_task_input() -> None:
   session_mgr = RouteSessionManager(
       {
-          "caller": models.SessionMetadata(id="caller", name="Caller PM"),
-          "target": models.SessionMetadata(id="target", name="Target Task"),
+          "caller": models.SessionMetadata(profile="manager", id="caller", name="Caller PM"),
+          "target": models.SessionMetadata(profile="manager", id="target", name="Target Task"),
       })
-  triggered: list[tuple[str, str]] = []
+  task_mgr = mock.MagicMock()
+  task_mgr.dispatch.admit_input = mock.AsyncMock()
+  task_mgr.dispatch.dispatch_pending = mock.AsyncMock()
 
-  def fake_trigger_master(session_id: str, summary: str, *args: Any, **kwargs: Any) -> Coroutine[Any, Any, None]:
-    triggered.append((session_id, summary))
-    return conftest._noop()
-
-  created: list[str] = []
-
-  monkeypatch.setattr(internal, "trigger_master", fake_trigger_master)
-  monkeypatch.setattr(internal, "create_logged_task", conftest.record_create_logged_task(created))
-
-  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr) as client:
+  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr, task_mgr) as client:
     resp = client.post("/api/internal/session-message", json=_payload())
 
   assert resp.status_code == 200
   assert resp.json() == {"status": "accepted"}
-  assert len(session_mgr.persisted) == 1
-  target_id, event = session_mgr.persisted[0]
-  assert target_id == "target"
-  assert event["type"] == ET.AGENT_MESSAGE
-  assert event["content"] == "status please"
-  assert event["from_session"] == "caller"
-  assert event["from_session_name"] == "Caller PM"
-  assert created == ["session-message-relay-target"]
-  assert triggered == [("target", "[Message from session Caller PM] status please")]
+  task_mgr.dispatch.admit_input.assert_awaited_once_with(
+      "target",
+      event_type=ET.AGENT_MESSAGE,
+      content="status please",
+      actor="agent",
+      from_session="caller",
+      from_session_name="Caller PM",
+  )
+  task_mgr.dispatch.dispatch_pending.assert_awaited_once_with("target")
 
 
 def test_session_message_request_rejects_extra_fields() -> None:
   session_mgr = RouteSessionManager({})
-  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr) as client:
+  with conftest.make_internal_router_client(mock.MagicMock(), session_mgr, mock.MagicMock()) as client:
     resp = client.post(
         "/api/internal/session-message",
         json={

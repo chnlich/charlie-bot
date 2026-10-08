@@ -31,14 +31,6 @@ def _cfg(tmp_path: pathlib.Path, **overrides: object) -> config.CharlieBotConfig
   return config.CharlieBotConfig(charliebot_home=tmp_path / "home", **overrides)
 
 
-def _write_thread(cfg: config.CharlieBotConfig, session_id: str, thread_id: str, **fields: object) -> None:
-  thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
-  thread_dir.mkdir(parents=True, exist_ok=True)
-  meta = {"id": thread_id, "session_id": session_id, "description": "d", "created_at": "2024-01-01T00:00:00+00:00"}
-  meta.update(fields)
-  (thread_dir / "metadata.json").write_text(json.dumps(meta), encoding="utf-8")
-
-
 class _FakeClock:
   """Replaces ``src.runtime.cli.common.time`` so retry backoff never sleeps for real."""
 
@@ -122,37 +114,6 @@ def test_connect_never_established_retries_with_backoff_then_exhausts(
 # ---------------------------------------------------------------------------
 # Gap 3(a) — readback determinism for improve, schedule-trigger, and plan
 # ---------------------------------------------------------------------------
-
-
-def test_improve_readback_resolves_to_seeded_loop_on_sent_but_lost(
-    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-  cfg = _patch_readback_env(monkeypatch, tmp_path)
-
-  session_id = "sess-improve"
-  goal_text = "Improve the widget end to end"
-  loop_dir = cfg.sessions_dir / session_id / "loops" / "3"
-  loop_dir.mkdir(parents=True)
-  (loop_dir / "goal.md").write_text(goal_text, encoding="utf-8")
-  _write_thread(cfg, session_id, "t1", description=f"Goal: {goal_text}", task_type="implement")
-
-  goal_file = tmp_path / "goal.md"
-  goal_file.write_text(goal_text, encoding="utf-8")
-  repo_dir = tmp_path / "repo"
-  repo_dir.mkdir()
-
-  monkeypatch.setattr(
-      sys, "argv", [
-          "charliebot-improve", "--session", session_id, "--repo",
-          str(repo_dir), "--goal-file",
-          str(goal_file), "--base-branch", "main"
-      ])
-
-  improve_module.main()
-
-  out = json.loads(capsys.readouterr().out)
-  assert out["status"] == "started"
-  assert out["session_id"] == session_id
-  assert out["loop_id"] == 3
 
 
 # ---------------------------------------------------------------------------

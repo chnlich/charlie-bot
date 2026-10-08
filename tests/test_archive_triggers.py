@@ -74,11 +74,11 @@ async def test_watchdog_reason_carries_into_the_cancel(tmp_path: Path, monkeypat
   # The dormancy judgment is the one predicate both racers read.
   assert await trigger_mgr._dormancy_reason(node.id) == "target task is archived"
   assert await trigger_mgr._is_dormant_target(node.id) is True
-  # A session without a profile keeps the legacy chain-end check (its answer
-  # is the legacy reason, not the task-node one).
+  # An open manager root remains eligible for trigger registration.
   from src.infra.models import CreateSessionRequest
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=None)
-  assert await trigger_mgr._dormancy_reason(legacy.id) is None
+  open_root = await session_mgr.create_session(CreateSessionRequest(name="Open root"), backend=None)
+  assert open_root.profile == "manager"
+  assert await trigger_mgr._dormancy_reason(open_root.id) is None
 
 
 def test_schedule_trigger_cli_exits_nonzero_and_prints_the_refusal(

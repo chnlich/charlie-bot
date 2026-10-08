@@ -11,12 +11,17 @@ from pathlib import Path
 import orjson
 import pytest
 from conftest import build_two_backend_cfg
-from conftest import make_sessions_client as _build_client
+from conftest import make_sessions_listing_client
 
 from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus
 from src.runtime import sidebar_state, thinking_state
+from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.api import sessions as sessions_api
-from src.runtime.sessions import SessionManager, _iter_trigger_stats, _listing_row_copy, selective_probe_sidebar_state
+from src.runtime.sessions import SessionManager, _iter_trigger_stats, _listing_row_copy
+
+
+def _build_client(cfg, session_mgr: SessionManager):
+  return make_sessions_listing_client(cfg, session_mgr, TaskTreeManager(cfg, session_mgr))
 
 
 def _forbid_list_sessions(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -49,6 +54,7 @@ async def test_status_returns_exactly_the_requested_ids(
   assert set(body[wanted.id]) == {
       "has_unread",
       "has_running_tasks",
+      "work_state",
       "thinking_since",
       "has_pending_trigger",
       "pending_trigger_count",
@@ -208,7 +214,7 @@ async def test_list_sessions_rows_carry_stamp_and_derived_fields(tmp_path: Path,
   rows = await session_mgr.list_sessions(**flags)
   row = next(r for r in rows if r.id == session.id)
   assert row.thinking_since == thinking_state.busy_since(session.id) is not None
-  assert row.has_running_tasks is True  # the live busy state's derived verdict
+  assert row.has_running_tasks is False  # no Run is live; thinking_since is the separate busy stamp
   assert row.has_pending_trigger is False
   assert row.has_pending_plan_approval is False
   row.has_unread = True  # a caller mutation must never reach the shared cache
@@ -301,64 +307,8 @@ async def test_root_list_changed_round_rerenders_only_moved_rows(
     assert all(row["id"] != leaving.id for row in after.json())
 
 
-def _threads_tree(tmp_path: Path) -> tuple[Path, Path]:
-  """One session's threads dir with two thread dirs, the shape the probe walk reads."""
-  threads_dir = tmp_path / "sessions" / "sid" / "threads"
-  for tid in ("t1", "t2"):
-    thread_dir = threads_dir / tid
-    thread_dir.mkdir(parents=True)
-    (thread_dir / "metadata.json").write_text('{"status": "idle"}', encoding="utf-8")
-  return threads_dir, threads_dir / "t1" / "metadata.json"
-
-
-def _probe_spec(threads_dir: Path, tmp_path: Path) -> tuple[str, Path, Path, Path]:
-  """The four-field spec shape selective_probe_sidebar_state accepts per session."""
-  session_dir = tmp_path / "sessions" / "sid"
-  return ("sid", threads_dir, session_dir / "triggers", session_dir)
-
-
-def _thread_entry(signature: tuple, thread_dir_name: str) -> tuple:
-  """The signature's thread half for one thread dir: (name, mtime_ns, size)."""
-  return next(entry for entry in signature[0] if entry[0] == thread_dir_name)
-
-
-def _has_thread(signature: tuple, thread_dir_name: str) -> bool:
-  return any(entry[0] == thread_dir_name for entry in signature[0])
-
-
 class TestProbeWalkDirStateMemo:
-  """The probe walk's dir-state memos serve name pairs while the directory's stat pair holds.
-
-  The per-file stats stay fresh every call — a metadata rewrite under a still
-  threads dir must move the signature, or a stale one suppresses the deep
-  probe and the sidebar shows a running task idle.
-  """
-
-  def test_metadata_rewrite_under_a_still_threads_dir_moves_the_signature(self, tmp_path: Path) -> None:
-    threads_dir, victim = _threads_tree(tmp_path)
-    _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
-    first = sigs["sid"]
-    replacement = victim.with_name("metadata.json.new")
-    replacement.write_text('{"status": "running"}', encoding="utf-8")
-    # the rename lands in the thread dir, not in threads/ — the listing dir's
-    # stat pair holds and the second walk rides the memo; only the fresh
-    # per-file stat may see the rewrite
-    os.replace(replacement, victim)
-    _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
-    second = sigs["sid"]
-    assert _thread_entry(second, "t1") != _thread_entry(first, "t1")
-    assert _thread_entry(second, "t2") == _thread_entry(first, "t2")
-
-  def test_new_thread_dir_enters_the_walk_once_the_listing_dir_moves(self, tmp_path: Path) -> None:
-    threads_dir, _victim = _threads_tree(tmp_path)
-    _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
-    first = sigs["sid"]
-    assert not _has_thread(first, "t3")
-    (threads_dir / "t3").mkdir()
-    (threads_dir / "t3" / "metadata.json").write_text('{"status": "idle"}', encoding="utf-8")
-    _, sigs = selective_probe_sidebar_state([_probe_spec(threads_dir, tmp_path)], deep=False)
-    second = sigs["sid"]
-    assert _has_thread(second, "t3")
+  """The probe walk memoizes trigger directory membership while its stat holds."""
 
   def test_trigger_pairs_refresh_when_the_directory_moves_and_hold_while_it_stands(self, tmp_path: Path) -> None:
     triggers_dir = tmp_path / "sessions" / "sid" / "triggers"

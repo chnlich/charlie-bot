@@ -242,7 +242,7 @@ def test_move_transcript_copies_conversation_and_sidecar_into_the_same_slug(tmp_
 @pytest.mark.asyncio
 async def test_consumer_persists_the_account_the_run_settled_on(tmp_path: Path) -> None:
   cfg = _no_pool_cfg(tmp_path)
-  session_meta = SessionMetadata(id="consumer-account", name="t", backend=POOLED_FABLE_ID)
+  session_meta = SessionMetadata(profile="manager", id="consumer-account", name="t", backend=POOLED_FABLE_ID)
   callbacks = mock_session_callbacks()
   callbacks.persist_account_label.side_effect = lambda sid, label: "other"
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], callbacks=callbacks)

@@ -34,7 +34,7 @@ async def _add_session(
     minutes: int = 0,
     session_id: str | None = None,
 ) -> SessionMetadata:
-  meta = SessionMetadata(name=name, status=status, group=group, updated_at=_BASE_TIME + timedelta(minutes=minutes))
+  meta = SessionMetadata(profile="manager", name=name, status=status, group=group, updated_at=_BASE_TIME + timedelta(minutes=minutes))
   if session_id is not None:
     meta.id = session_id
   await mgr.save_metadata(meta)

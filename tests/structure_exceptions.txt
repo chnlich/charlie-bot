@@ -2,5 +2,3 @@
 # Rows only leave this table.
 #
 # One row per pair: importer file -> imported file. Paths are repo-relative and the rows are sorted.
-src/runtime/master_cc_run.py -> src/features/memory/memory.py
-src/runtime/spawner_prompt.py -> src/features/memory/memory.py

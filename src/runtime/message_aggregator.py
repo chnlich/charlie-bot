@@ -211,7 +211,7 @@ def _resume_context_dropped_msg(ev: dict) -> dict:
 
 
 def _system_msg(ev: dict) -> dict | None:
-  if ev.get("subtype") not in (ET.TUI_MENU_DISMISSED, ET.COMMAND_PROGRESS):
+  if ev.get("subtype") != ET.COMMAND_PROGRESS:
     return None
   return {
       "role": "system",

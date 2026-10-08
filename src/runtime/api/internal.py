@@ -1,12 +1,11 @@
 """Internal API endpoints — used by master CC to delegate tasks."""
 
-import asyncio
 from typing import Protocol
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
+from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     DelegateInvocationMetadata,
@@ -16,21 +15,17 @@ from src.infra.models import (
     TaskType,
     WatchKind,
 )
-from src.infra.tasks import create_logged_task
 from src.runtime import spawner_backends
 from src.runtime.api.deps import (
     bad_request,
-    get_config_on_loop,
     get_session_manager,
     get_task_manager,
     get_trigger_manager,
     require_found,
 )
 from src.runtime.api.deps import require_caller as require_caller_dep
-from src.runtime.api.message_utils import build_agent_message_event
-from src.runtime.master_trigger import trigger_master
 from src.runtime.sessions import SessionManager
-from src.runtime.takeoff_gate import DelegationBlockedError, check_takeoff_gate, is_verify_exempt
+from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
@@ -79,27 +74,17 @@ async def _authorize_spawn_request(
 ) -> tuple[str | None, str | None]:
   """Validate session, enforce the takeoff gate, and resolve backend/model for spawn-style endpoints.
 
-  A v2 task-tree node takes the one central v2 authorization owner —
+  A task-tree node takes the one central authorization owner —
   ``TaskTreeManager.check_task_authorization``, the nearest-real-user-ancestor
   gate (judged where the delegation request enters; the Run launch re-judges
   nothing).
-  The session-local legacy gate must not pre-gate a node that legitimately
-  inherits an ancestor's authorization: that split would force every sub-task
-  manager to carry its own take-off before the real CLI route works. The
-  read-only verify exemption is preserved for both v1 and v2.
+  A node inherits authorization from its nearest real-user ancestor.
   """
   meta = require_found(await session_mgr.get_session(req.session_id))
 
-  if isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type):
-    pass  # the read-only verify exemption (v1 and v2 alike)
-  elif meta.profile is not None:
+  if not (isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type)):
     try:
       await task_mgr.check_task_authorization(req.session_id)
-    except DelegationBlockedError as e:
-      raise HTTPException(status_code=403, detail=str(e)) from e
-  else:
-    try:
-      await asyncio.to_thread(check_takeoff_gate, req.session_id, session_mgr)
     except DelegationBlockedError as e:
       raise HTTPException(status_code=403, detail=str(e)) from e
 
@@ -253,9 +238,8 @@ async def delegate_task(
 ) -> dict:
   """Create a worker task under the calling manager and launch its first Run.
 
-  A legacy session (profile None) delegates in place: its own session-local
-  gate and backend check run first so a blocked or malformed request converts
-  nothing, and the worker child is created under it without rewriting it.
+  The existing task node supplies the authorization boundary and the new
+  worker child is created directly beneath it.
   """
   # Repo/branch contract first, before any session access or backend
   # resolution: the rejection must not depend on the caller's configured
@@ -345,7 +329,6 @@ async def cancel_trigger(
 async def session_message(
     req: SessionMessageRequest,
     session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> dict:
   """Relay an agent message into another session's event log and wake its master.
@@ -362,53 +345,23 @@ async def session_message(
   if target is None:
     raise HTTPException(status_code=404, detail="Target session not found")
 
-  # A v2 target takes the durable dispatcher path: the relay keeps its
-  # agent_message identity and the caller's provenance (never a real user
-  # event), persists durably first, and the executor seam decides any launch.
-  if target.profile is not None and task_mgr is not None:
-    from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
+  from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
-    try:
-      await task_mgr.dispatch.admit_input(
-          req.target_session_id,
-          event_type=ET.AGENT_MESSAGE,
-          content=req.content,
-          actor="agent",
-          from_session=caller.id,
-          from_session_name=caller.name,
-      )
-      await task_mgr.dispatch.dispatch_pending(req.target_session_id)
-    except (TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
-      from src.runtime.api.sessions import _task_http_error
-      raise _task_http_error(e) from e
-    log.info(
-        "session_message_dispatched",
-        session=req.session_id,
-        target_session=req.target_session_id,
-        content_chars=len(req.content),
+  try:
+    await task_mgr.dispatch.admit_input(
+        req.target_session_id,
+        event_type=ET.AGENT_MESSAGE,
+        content=req.content,
+        actor="agent",
+        from_session=caller.id,
+        from_session_name=caller.name,
     )
-    return {"status": "accepted"}
-
-  await session_mgr.persist_and_broadcast(
-      req.target_session_id,
-      build_agent_message_event(
-          req.content,
-          from_session=caller.id,
-          from_session_name=caller.name,
-      ),
-  )
-  create_logged_task(
-      trigger_master(
-          req.target_session_id,
-          f"[Message from session {caller.name}] {req.content}",
-          cfg,
-          session_mgr,
-          ET.AGENT_MESSAGE,
-      ),
-      name=f"session-message-relay-{req.target_session_id}",
-  )
+    await task_mgr.dispatch.dispatch_pending(req.target_session_id)
+  except (TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
+    from src.runtime.api.sessions import _task_http_error
+    raise _task_http_error(e) from e
   log.info(
-      "session_message_relayed",
+        "session_message_dispatched",
       session=req.session_id,
       target_session=req.target_session_id,
       content_chars=len(req.content),

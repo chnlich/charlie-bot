@@ -3,9 +3,8 @@
 Every v2 Run kind (manager turn, work, review, verify, improve iteration, cron
 scheduled step) draws its managed instructions from
 this module, and so does the preview API — one assembly path, never a
-preview-only selector. The legacy (v1) master/worker assemblies in
-``master_cc_run`` and ``spawner_prompt`` stay compatibility callers during the
-migration; they never inject this module's output a second time.
+preview-only selector. Every task Run uses this module's assembly and never
+injects a second prompt path.
 
 Ordered managed instruction blocks (the contract the snapshot pins):
 
@@ -77,7 +76,7 @@ SCOPE_NODE = "node"
 DELIVERY_FULL = "full"
 
 # Run kinds whose managed instructions are the manager contract (no worker
-# workflow, no PM body, no project/PM rules — those retired with the v1 role).
+# workflow, no PM body, no project/PM rules — those retired with the old role).
 MANAGER_KINDS = frozenset({"manager_turn"})
 # Run kinds mapped to the worker audience for memory selection: workers,
 # reviewers, verify, iteration and scheduled-step execution.
@@ -235,7 +234,7 @@ def _host_supplement(cfg: CharlieBotConfig, meta: SessionMetadata) -> str | None
 def _overlay_segment(cfg: CharlieBotConfig, overlay: str | None) -> tuple[str | None, OSError | None]:
   """The declared model overlay's text; a declared-but-unreadable file degrades like v1.
 
-  The v1 contract (undeclared/unreadable overlay → the unified
+  The task prompt contract (undeclared/unreadable overlay → the unified
   ``backend_overlay_inactive`` alert, run continues without the fence) is
   preserved: the caller emits the alert from the returned error. Any other
   overlay failure still propagates.

@@ -11,18 +11,15 @@ from fastapi import testclient
 from src.features.artifacts import api as artifacts_api
 from src.features.artifacts import plans
 from src.infra import config, models
-from src.runtime import sessions, threads
+from src.runtime import sessions
 from src.runtime.api import deps
 
 
-def _build_app(
-    session_mgr: sessions.SessionManager, thread_mgr: threads.ThreadManager,
-    plan_mgr: plans.PlanRegistryManager) -> fastapi.FastAPI:
+def _build_app(session_mgr: sessions.SessionManager, plan_mgr: plans.PlanRegistryManager) -> fastapi.FastAPI:
   app = fastapi.FastAPI()
   app.include_router(artifacts_api.internal_router, prefix="/api/internal")
   app.include_router(artifacts_api.sessions_router, prefix="/api/sessions")
   app.dependency_overrides[deps.get_session_manager] = lambda: session_mgr
-  app.dependency_overrides[deps.get_thread_manager] = lambda: thread_mgr
   app.dependency_overrides[artifacts_api.get_plan_manager] = lambda: plan_mgr
   return app
 
@@ -35,10 +32,10 @@ async def _presented_rig(
   Returns (app, cfg, plan_mgr, meta); amend tests need cfg to stage a second artifact, and
   the closed-state tests close the plan through plan_mgr.
   """
-  cfg, session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  cfg, session_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   f = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f, title="P1")
-  return _build_app(session_mgr, thread_mgr, plan_mgr), cfg, plan_mgr, meta
+  return _build_app(session_mgr, plan_mgr), cfg, plan_mgr, meta
 
 
 # ---------------------------------------------------------------------------
@@ -48,9 +45,9 @@ async def _presented_rig(
 
 @pytest.mark.asyncio
 async def test_plan_present_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   f = conftest.write_plan_artifact(cfg, meta.id, "plan_01.html")
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, plan_mgr)
   with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -142,8 +139,8 @@ async def test_plan_close_endpoint_happy_path(tmp_path: pathlib.Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plan_present_rejects_unknown_session_404(tmp_path: pathlib.Path) -> None:
-  _cfg, _session_mgr, thread_mgr, plan_mgr, _meta = await conftest.make_plan_setup(tmp_path)
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
+  _cfg, _session_mgr, plan_mgr, _meta = await conftest.make_plan_setup(tmp_path)
+  app = _build_app(_session_mgr, plan_mgr)
   with testclient.TestClient(app) as client:
     resp = client.post(
         "/api/internal/plan/present", json={
@@ -177,11 +174,11 @@ async def test_plan_close_rejects_already_closed_400(tmp_path: pathlib.Path) -> 
 
 @pytest.mark.asyncio
 async def test_get_plans_endpoint_corrupt_file_200_with_error_entry(tmp_path: pathlib.Path) -> None:
-  cfg, _session_mgr, thread_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await conftest.make_plan_setup(tmp_path)
   plans_path = cfg.sessions_dir / meta.id / "plans.json"
   plans_path.parent.mkdir(parents=True, exist_ok=True)
   plans_path.write_text("{not valid json", encoding="utf-8")
-  app = _build_app(_session_mgr, thread_mgr, plan_mgr)
+  app = _build_app(_session_mgr, plan_mgr)
   with testclient.TestClient(app) as client:
     resp = client.get(f"/api/sessions/{meta.id}/plans")
   assert resp.status_code == 200

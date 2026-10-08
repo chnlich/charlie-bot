@@ -90,7 +90,7 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
 
   with patch("os.fdatasync") as fdatasync:
     if spawn == "fork":
-      child = await mgr.fork_session(parent, event_index=1)
+      child = await mgr.fork_session(parent, event_index=len(parent_events) - 1)
     else:
       child = await mgr.elone_session(parent, event_index=1)
     born_syncs = fdatasync.call_count
@@ -100,8 +100,11 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
 
   assert born_syncs == 0
   events = _assert_manager_root(cfg, child.id)
-  assert events[:2] == parent_events
-  assert [e["type"] for e in events[2:5]] == [ET.CLONE_START, ET.TASK_CREATED, ET.USER]
+  copied_count = len(parent_events) if spawn == "fork" else 2
+  assert events[:copied_count] == parent_events[:copied_count]
+  parent_event_count = copied_count
+  assert [e["type"] for e in events[parent_event_count:parent_event_count + 3]] == [
+      ET.CLONE_START, ET.TASK_CREATED, ET.USER]
   assert (child.parent_session_id, child.origin_ref, child.task_parent_id) == (parent, None, None)
   if spawn == "elone":
     fresh_parent = await mgr.get_session(parent)

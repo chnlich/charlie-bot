@@ -20,7 +20,6 @@ from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
     CODEX_BACKEND_OPTION,
     FABLE_MODEL,
-    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
     OPERATOR,
     OPUS_BACKEND_ID,
     OPUS_BACKEND_OPTION,
@@ -31,7 +30,6 @@ from conftest import (
     backend_option,
     bind_deps_managers,
     init_repo_with_origin,
-    patch_instructions_content,
 )
 
 from src.backends.claude_code import claude_accounts
@@ -149,7 +147,6 @@ def _script_manager_turn(monkeypatch: pytest.MonkeyPatch, notes: list[str]) -> N
   these tests. One scripted backend per expected manager-turn build."""
   install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event(note)]) for note in notes], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
 
 def _child_reports(tree: TaskTreeManager, node_id: str) -> list[dict]:
@@ -259,19 +256,6 @@ async def test_missing_binding_fails_visibly_without_creating_a_session(
   # No session was created for the missing binding.
   metas = list(cfg.sessions_dir.glob("*/metadata.json"))
   assert len(metas) == 1  # only the manager itself
-
-
-@pytest.mark.asyncio
-async def test_legacy_session_binding_refuses_the_v2_path(bound_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  from src.features.cron.cron_sequence import ScheduledBindingError
-  cfg, session_mgr, tree = bound_env
-  await make_manager(tree)
-  from src.infra.models import CreateSessionRequest
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy session"), backend=OPUS_BACKEND_ID)
-  task_cfg = _bound_task("legacy-bound", legacy.id, prompt="wake")
-  scheduler = Scheduler(cfg, session_mgr)
-  with pytest.raises(ScheduledBindingError, match="not a task-tree node"):
-    await scheduler._execute_task(task_cfg, record_handle=True, firing="2026-01-01T03:00:00+00:00")
 
 
 @pytest.mark.asyncio
@@ -762,12 +746,6 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
       monkeypatch, [
           SpawningScriptedBackend([result_event("sweep done")]),
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  wakes: list[tuple[str, str]] = []
-
-  async def fake_trigger_master(session_id, text, cfg_, session_mgr_, input_event_type, **kwargs):
-    wakes.append((session_id, text))
-
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, fake_trigger_master)
   _persist_unbound_cron_d(cfg, "nightly-sweep", {"cron": "0 3 * * *", "prompt": "Do the sweep.", "backend": "fake"})
   task_cfg = ScheduledTaskConfig(name="nightly-sweep", cron="0 3 * * *", prompt="Do the sweep.", backend="fake")
   scheduler = Scheduler(cfg, session_mgr)
@@ -789,8 +767,7 @@ async def test_unbound_prompt_task_binds_and_fires_once_against_its_new_node(
   assert leaf is not None and leaf.task_parent_id == node_id
   await _wait_for_child_report(tree, node_id, "the leaf's report never reached the bound node", timeout=15.0)
   assert tree.task_state(leaf_id) == "completed"
-  # The node is a task-tree manager: no legacy wake ever fires for it.
-  assert wakes == []
+  # The node receives the leaf report through task-tree dispatch.
   # A replayed fire at the same firing identity creates nothing new.
   await scheduler._execute_task(task_cfg, record_handle=True, firing=firing)
   assert len(tree.runs.list_run_records_sync(leaf_id)) == 1

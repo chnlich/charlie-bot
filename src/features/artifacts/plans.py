@@ -214,8 +214,7 @@ def read_plans_tolerant(plans_path: pathlib.Path, session_id: str) -> dict:
     st = plans_path.stat()
   except OSError:
     # One stat drives both the missing-file answer and the memo key; every
-    # stat failure maps to the missing-file answer, mirroring the scan idiom
-    # in ThreadManager.
+    # stat failure maps to the missing-file answer, mirroring task-tree metadata scans.
     return {"plans": [], "errors": errors}
   result, cacheable = _read_plans_uncached(plans_path, session_id)
   if cacheable:

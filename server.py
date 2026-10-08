@@ -42,7 +42,7 @@ with gc_off(collect=False):
   from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
   from src.infra.models import SessionMetadata, utc_now
   from src.infra.process import log_session_cgroup_startup, sweep_stale_session_cgroups
-  from src.runtime import init_master_recovery, init_seed
+  from src.runtime import init_seed
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
@@ -247,22 +247,16 @@ async def _ws_keepalive(websocket: WebSocket, log_label: str, **log_context: obj
     log.info(f"{log_label}_closed", reason=str(e), **log_context)
 
 
-async def _run_crash_recovery(cfg: CharlieBotConfig, boot_time: datetime, identity: asyncio.Task) -> None:
-  """Background startup recovery; logs completion and never swallows failures.
-
-  Wraps init_master_recovery.run_crash_recovery so an exception surfaces
-  loudly instead of vanishing into the event loop, and reports the recovered
-  count + elapsed time
-  once the deferred scan finishes. *identity* is the lifespan's one shielded
-  reconcile_master_identity task, forwarded for the replay pass.
-  """
+async def _run_task_recovery(cfg: CharlieBotConfig, tree) -> None:
+  """Reconcile task Runs before startup opens input and trigger routes."""
   started = utc_now()
   try:
-    await init_master_recovery.run_crash_recovery(cfg, boot_time, session_manager(), master_identity=identity)
+    from src.runtime.task_recovery import reconcile_task_tree
+    stats = await reconcile_task_tree(cfg, tree)
     elapsed_ms = round((utc_now() - started).total_seconds() * 1000)
-    log.info("crash_recovery_done", elapsed_ms=elapsed_ms)
+    log.info("task_tree_recovery_done", elapsed_ms=elapsed_ms, **stats)
   except Exception:
-    log.exception("crash_recovery_failed")
+    log.exception("task_tree_recovery_failed")
 
 
 @asynccontextmanager
@@ -309,45 +303,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log_session_cgroup_startup(cfg.server.session_memory_max_mb, cfg.server.session_swap_max_mb)
     sweep_stale_session_cgroups()
 
-    # Crash recovery / worktree quarantine / stale-thinking cleanup scans every
-    # thread's metadata (O(history)). Run it off the critical path so the server
-    # reaches readiness immediately; boot_time guards against killing a worker
-    # spawned during the recovery window.
-    #
-    # The master_run identity judgment is the exception: master_run is a single
-    # slot per session that a new turn overwrites unconditionally, so the
-    # judgment must complete before any door that can start a new turn — the
-    # worker-finalize chain dispatched by this same background task, the ready
-    # services (the scheduler among them), and trigger_mgr.recover_pending()
-    # below. Barrier on it
-    # with a timeout; the shield keeps the one judgment running past the bound
-    # and the recovery task re-awaits that same task for the replay pass.
     session_mgr = session_manager()
-    identity = asyncio.create_task(init_master_recovery.reconcile_master_identity(cfg, session_mgr, boot_time))
-    try:
-      await asyncio.wait_for(asyncio.shield(identity), timeout=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
-    except TimeoutError:
-      log.warning("master_identity_barrier_timeout", timeout_s=timeouts.MASTER_IDENTITY_BARRIER_TIMEOUT)
-    except Exception:
-      pass  # reported where the task is awaited: crash recovery logs it loudly
-    app.state.recovery_task = asyncio.create_task(_run_crash_recovery(cfg, boot_time, identity))
+    app.state.recovery_task = asyncio.create_task(_run_task_recovery(cfg, task_manager()))
     service_ctx = wiring.ServiceContext(app, cfg, session_mgr, app.state.recovery_task)
     for _, start_service in wiring.service_starts("early"):
       await start_service(service_ctx)
 
-    # Task-tree (v2) reconciliation is the startup owner's own pass and belongs
-    # BEFORE any door that can start a competing process: a new chat input, a
-    # scheduled fire, or a recovered trigger must not launch while a recorded live
-    # run is still unattached, a pending batch unclaimed, or a sequence
-    # boundary unreconciled. The scan is bounded to this configured instance's
-    # own sessions directory and its owned records. The legacy (v1) scan stays
-    # on the background task above for unmigrated v1 sessions only.
-    try:
-      from src.runtime.task_recovery import reconcile_task_tree
-      task_tree_stats = await reconcile_task_tree(cfg, task_manager())
-      log.info("task_tree_recovery_done", **task_tree_stats)
-    except Exception:
-      log.exception("task_tree_recovery_failed")
+    # Recovery must finish before a scheduler fire or a recovered trigger can
+    # compete with a recorded Run.
+    await app.state.recovery_task
 
     trigger_mgr = TriggerManager(cfg, session_mgr)
     set_trigger_manager(trigger_mgr)

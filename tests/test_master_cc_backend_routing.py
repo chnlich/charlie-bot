@@ -11,7 +11,6 @@ from conftest import (
     FakeBackend,
     backend_option,
     make_work_item,
-    patch_instructions_content,
 )
 
 from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW
@@ -109,11 +108,10 @@ async def test_run_cc_thread_session_pins_clc_context_window(tmp_path: Path, mon
   option carries THREAD_CONTEXT_WINDOW and the CLC command line passes it as
   --context-window, in place of the option's own value."""
   cfg = build_charlie_code_cfg(tmp_path)
-  patch_instructions_content(monkeypatch)
   captured: dict[str, object] = {}
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
 
-  session_meta = models.SessionMetadata(
+  session_meta = models.SessionMetadata(profile="manager",
       id="session-id",
       name="Thread",
       backend="charlie-code-kimi-k3",
@@ -130,11 +128,10 @@ async def test_run_cc_main_session_keeps_option_context_window(tmp_path: Path, m
   """A main session on the same option keeps the option's own context window, on the resolved
   option and on the CLC command line alike."""
   cfg = build_charlie_code_cfg(tmp_path)
-  patch_instructions_content(monkeypatch)
   captured: dict[str, object] = {}
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, capturing_clc_build_backend(monkeypatch, tmp_path, captured))
 
-  session_meta = models.SessionMetadata(id="session-id", name="Main", backend="charlie-code-kimi-k3")
+  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="Main", backend="charlie-code-kimi-k3")
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 
@@ -187,7 +184,6 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = build_antigravity_cfg(tmp_path)
-  patch_instructions_content(monkeypatch)
 
   # Run 1: a fresh antigravity backend emits a bare session_id event, which the
   # master adopts as the anchor.
@@ -203,7 +199,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
 
-  fresh_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy")
+  fresh_meta = models.SessionMetadata(profile="manager", id="session-id", name="Antigravity", backend="agy")
   item1 = make_work_item(cfg, fresh_meta, cfg.backends.options[0])
   cc_session_id, exit_code, error_msg, _ = await master_cc.master_cc_run._run_cc(item1)
 
@@ -212,7 +208,7 @@ async def test_run_cc_chain_adopts_session_id_and_resumes_with_it(
   assert error_msg is None
 
   # Run 2: the anchored session passes the anchor through as the resume id.
-  anchored_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
+  anchored_meta = models.SessionMetadata(profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="conv-abc")
   item2 = make_work_item(cfg, anchored_meta, cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item2)
 
@@ -225,10 +221,9 @@ async def test_run_cc_guard_round_fails_with_guard_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
   cfg = build_antigravity_cfg(tmp_path)
-  session_meta = models.SessionMetadata(id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
+  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="Antigravity", backend="agy", cc_session_id="anchor-id")
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **kw: _AnchorMismatchBackend())
-  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
 
@@ -248,7 +243,7 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5"),]},
   )
-  session_meta = models.SessionMetadata(id="session-id", name="CC", backend="cc")
+  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="CC", backend="cc")
   option = cfg.backends.options[0]
   captures: dict[str, object] = {}
 
@@ -258,7 +253,6 @@ async def test_run_cc_adds_exclude_dynamic_flag_for_cc_claude(
     return FakeBackend()
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, option)
 

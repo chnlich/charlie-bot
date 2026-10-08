@@ -11,7 +11,7 @@ from src.runtime import review
 
 def _setup_paths(tmp_path: pathlib.Path, session_id: str, thread_id: str) -> tuple[pathlib.Path, pathlib.Path]:
   chat_log = tmp_path / session_id / "data" / "chat_events.jsonl"
-  worker_log = tmp_path / session_id / "threads" / thread_id / "data" / "events.jsonl"
+  worker_log = tmp_path / session_id / "data" / "runs" / thread_id / "events.jsonl"
   return chat_log, worker_log
 
 
@@ -26,7 +26,7 @@ async def test_codex_style_falls_back_to_assistant_text(tmp_path: pathlib.Path) 
           "result": ""
       }])
 
-  user_request, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path)
+  user_request, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path, worker_log)
   assert user_request == "Do X"
   assert worker_summary == "Done. Commit abcdef."
 
@@ -38,7 +38,7 @@ async def test_worker_summary_preserved_when_no_task_delegated(tmp_path: pathlib
   conftest.append_events(chat_log, [])
   conftest.append_events(worker_log, [{"type": ET.RESULT, "result": "All done."}])
 
-  user_request, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path)
+  user_request, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path, worker_log)
   assert user_request is None
   assert worker_summary == "All done."
 
@@ -59,7 +59,7 @@ async def test_worker_summary_prefers_newest_assistant_over_older_result(tmp_pat
           conftest.assistant_text_event("newest words"),
       ])
 
-  _, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path)
+  _, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path, worker_log)
   assert worker_summary == "newest words"
 
 
@@ -74,5 +74,5 @@ async def test_worker_summary_skips_malformed_tail_lines(tmp_path: pathlib.Path)
   with open(worker_log, "a", encoding="utf-8") as stream:
     stream.write("\n{broken json\n")
 
-  _, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path)
+  _, worker_summary = await review.extract_review_context(session_id, thread_id, tmp_path, worker_log)
   assert worker_summary == "Worker did X successfully."

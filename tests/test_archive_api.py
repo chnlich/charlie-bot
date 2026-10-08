@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from conftest import OPERATOR, OPUS_BACKEND_ID, build_env, create_task
+from conftest import OPERATOR, build_env, create_task
 
 from src.infra import event_types as ET
 from src.infra import models
@@ -117,27 +117,6 @@ async def test_user_message_restores_through_the_chat_route_and_agent_is_409(tmp
     assert [str(e["id"]) for e in pending] == [body["input_event_id"]]
     users = [e for e in tree.events.load_events(leaf.id) if e["type"] == ET.USER]
     assert len(users) == 1
-
-
-@pytest.mark.asyncio
-async def test_legacy_unarchive_route_returns_the_restored_session(tmp_path: Path) -> None:
-  """A session without a profile keeps the legacy restore: the route answers
-  200 with the restored session metadata (the SessionManager's model, rendered
-  as JSON — not the task tree's {"restored": [...]} shape)."""
-  from tests.test_task_execution import make_api_client
-
-  cfg, session_mgr, tree = build_env(tmp_path)
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  assert legacy.profile is None
-  await session_mgr.archive_session(legacy.id)
-
-  with make_api_client(cfg, session_mgr, tree) as client:
-    restored = client.post(f"/api/sessions/{legacy.id}/unarchive")
-
-  assert restored.status_code == 200
-  assert restored.json()["status"] == "active"
-  stored = await session_mgr.get_session(legacy.id)
-  assert stored is not None and stored.status == models.SessionStatus.ACTIVE
 
 
 @pytest.mark.asyncio

@@ -86,10 +86,6 @@ async def test_snapshot_lists_open_hidden_nodes_and_records_parents(
   mid = await create_task(tree, parent=root.id, request_id="mid")
   closed = await create_task(tree, parent=root.id, request_id="closed")
   await tree.archive_subtree(closed.id, caller=OPERATOR)  # not open: never listed
-  legacy = await session_mgr.create_session(
-      __import__("src.infra.models", fromlist=["CreateSessionRequest"]).CreateSessionRequest(name="Legacy"),
-      backend="claude-opus-4.6")
-  assert legacy.profile is None  # not a task node: absent from both maps
   hide_like_the_old_server(cfg, mid.id)
 
   out = tmp_path / "snapshot.json"

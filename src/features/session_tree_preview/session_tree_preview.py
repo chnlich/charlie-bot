@@ -101,7 +101,6 @@ from src.runtime.home_writer_fence import (
 from src.runtime.runs import read_pid_stat
 from src.runtime.session_aliases import ALIASES_FILE_NAME
 from src.runtime.task_recovery import reconcile_task_tree
-from src.runtime.threads import METADATA_NAME
 
 log = LazyStructlogLogger()
 
@@ -278,15 +277,8 @@ def _legacy_home_evidence(home: Path) -> list[str]:
     evidence.append("triggers/ exists")
   if (home / ALIASES_FILE_NAME).is_file():
     evidence.append(f"{ALIASES_FILE_NAME} exists")
-  legacy_sessions = 0
-  sessions_dir = home / "sessions"
-  if sessions_dir.is_dir():
-    for meta_path in sorted(sessions_dir.glob(f"*/{METADATA_NAME}"))[:50]:
-      raw = load_json_meta(meta_path, "preview_home_meta_unreadable")
-      if raw is not None and not raw.get("profile"):
-        legacy_sessions += 1
-  if legacy_sessions:
-    evidence.append(f"sessions/ holds {legacy_sessions}+ legacy v1 session records")
+  if (home / "sessions").is_dir():
+    evidence.append("sessions/ exists")
   return evidence
 
 
@@ -929,11 +921,10 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
       init_build_info()
       await init_seed.init_charliebot_home()
       log.info("preview_home_ready", path=str(cfg.charliebot_home))
-      # The v2 recovery owner reconciles only this instance's own task nodes
-      # and their Runs. The v1 scan, scheduler, trigger recovery, external
-      # messaging, global cgroup sweep and the other shared provisioners never
-      # start in a preview instance; the request-boundary gate keeps their
-      # routes unreachable.
+      # Recovery reconciles only this instance's own task nodes and Runs.
+      # Scheduling, trigger recovery, external messaging, the global cgroup
+      # sweep and the other shared provisioners never start in a preview
+      # instance; the request-boundary gate keeps their routes unreachable.
       from src.runtime.api.deps import task_manager
 
       tree = task_manager()

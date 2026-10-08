@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import asyncio
 import subprocess
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from conftest import (
-    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
     OPERATOR,
-    OPUS_BACKEND_ID,
     build_env,
     create_task,
 )
 
 from src.infra import event_types as ET
-from src.infra.models import CreateSessionRequest, RunRecord, TaskSpec
+from src.infra.models import RunRecord, TaskSpec
 from src.runtime.run_token import CallerIdentity, RunTokenClaims
 from src.runtime.task_completion import CompletionEvidence, LandingEvidence
 from src.runtime.task_sessions import TaskConflictError, TaskForbiddenError, TaskTreeManager
@@ -35,39 +32,6 @@ def live_identity() -> tuple[int, str, datetime]:
 async def finish_worker_run(tree: TaskTreeManager, session_id: str, run_id: str) -> None:
   """Land one successful worker work run: the automatic completion path."""
   await tree.dispatch.finish_run(session_id, run_id, outcome="success")
-
-
-async def legacy_parent_and_task(tree: TaskTreeManager, session_mgr, *, request_id: str):
-  """A legacy (profile None) parent session with one fresh child task under it.
-
-  This is the shape the 9/25 echo incident ran on: a master session's own turn
-  closed a delegated task and the scheduled wake replayed its own words.
-  """
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-  child = await create_task(tree, parent=legacy.id, request_id=request_id)
-  return legacy, child
-
-
-def wake_probe():
-  """A trigger_master stand-in that records (parent_id, text) and signals fired.
-
-  The legacy wake is scheduled fire-and-forget, so the probe signals through an
-  event: awaiting it proves the wake ran; a timed-out wait proves it never did.
-  """
-  calls: list[tuple[str, str]] = []
-  fired = asyncio.Event()
-
-  async def trigger(parent_id: str, text: str, *_rest: object) -> None:
-    calls.append((parent_id, text))
-    fired.set()
-
-  return trigger, calls, fired
-
-
-async def assert_wake_stays_quiet(fired: asyncio.Event) -> None:
-  """Give any wrongly scheduled wake a bounded loop wait, then require silence."""
-  with pytest.raises(asyncio.TimeoutError):
-    await asyncio.wait_for(fired.wait(), timeout=0.5)
 
 
 def persisted_close_and_report(tree: TaskTreeManager, parent_id: str, child_id: str,
@@ -417,24 +381,18 @@ async def test_cancel_waits_for_a_queued_run_only_until_its_stop_request(tmp_pat
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_cancel_by_the_parent_session_skips_the_parent_wake(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """The parent's own turn already holds the outcome in its HTTP response; the
-  close facts and the report still land, but no echo turn is scheduled."""
-  _cfg, session_mgr, tree = build_env(tmp_path)
-  legacy, child = await legacy_parent_and_task(tree, session_mgr, request_id="child")
-  trigger, calls, fired = wake_probe()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-
+async def test_cancel_by_the_manager_parent_records_close_and_child_report(tmp_path: Path) -> None:
+  """Cancelling a worker preserves its close fact and reports the result to its manager node."""
+  _cfg, _session_mgr, tree = build_env(tmp_path)
+  manager = await create_task(tree, parent=None, request_id="manager")
+  child = await create_task(tree, parent=manager.id, request_id="child", profile="worker")
   payload = await tree.completion.cancel_task(
       child.id,
       request_id="cancel-1",
       reason="no longer needed",
-      caller=CallerIdentity(kind="operator", session_id=legacy.id))
-  await assert_wake_stays_quiet(fired)
+      caller=CallerIdentity(kind="operator", session_id=manager.id))
 
   assert payload["closed_event_id"]
-  closes, reports = persisted_close_and_report(tree, legacy.id, child.id, "cancelled")
+  closes, reports = persisted_close_and_report(tree, manager.id, child.id, "cancelled")
   assert len(closes) == 1 and closes[0]["summary"] == "no longer needed"
   assert len(reports) == 1 and reports[0]["outcome"] == "cancelled"
-  assert calls == []

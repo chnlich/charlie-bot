@@ -55,7 +55,6 @@ async def register_live_manager_run(tree: task_sessions.TaskTreeManager, session
 async def manager_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager, executor installed, NO user input anywhere."""
   cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.patch_instructions_content(monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": KEY}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)

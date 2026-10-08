@@ -118,7 +118,7 @@ async def _ensure_backend_update_session(
   node = await session_mgr.get_session(cand_model.session_id)
   if node is None or node.backend == backend:
     return None
-  if await _scheduled_node_busy(session_mgr, node):
+  if await _scheduled_node_busy(node):
     raise ScheduledSessionBusyError(
         f"scheduled task '{name}' backend switch from '{node.backend}' to '{backend}' is blocked "
         f"because node '{node.id}' has running work; retry when it is idle")
@@ -139,27 +139,22 @@ async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: Sch
 
   tree = task_manager()
   meta = await tree.load_meta(cand_model.session_id)
-  if meta is None or meta.profile is None:
-    return  # a missing or legacy binding keeps the legacy status mechanics
+  if meta is None:
+    return
   if tree.task_state(meta.id) == "open":
     return
   restored = await tree.completion.restore_chain(meta.id, request_id=str(uuid.uuid4()), reason="cron enable")
   log.info("cron_enable_restored_node", task=name, session=meta.id, restored=restored)
 
 
-async def _scheduled_node_busy(session_mgr: SessionManager, node: SessionMetadata) -> bool:
+async def _scheduled_node_busy(node: SessionMetadata) -> bool:
   """Whether the bound node's own work is in flight.
 
   The rotation busy check's successor: the node's busy interval (the master
-  queue's or a worker Run's, per thinking_state) plus a legacy session's
-  running threads. An in-flight round resolved its backend at launch, so the
+  queue's or a worker Run's, per thinking_state). An in-flight round resolved its backend at launch, so the
   editor's switch waits for it instead of splitting the round's identity.
   """
-  if busy_since(node.id):
-    return True
-  if node.profile is None:
-    return await session_mgr._has_running_tasks(node.id)
-  return False
+  return bool(busy_since(node.id))
 
 
 class TaskUpdate(BaseModel):

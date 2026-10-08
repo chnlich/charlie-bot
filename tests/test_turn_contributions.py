@@ -27,7 +27,7 @@ from conftest import (
     install_scripted_backends,
     make_task_spawner,
     make_work_item,
-    patch_instructions_content,
+    run_task_manager_message,
 )
 
 from src.features.discord.event_types import DISCORD_REPLY
@@ -73,14 +73,14 @@ def prompts_text(filename: str, session_id: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# The workflow rules file: a thread root gets its brief on the task path and in the v1 builder
+# The workflow rules file: a thread root gets its brief on the task path
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("kind", SESSION_KINDS)
 def test_manager_root_task_path_reads_the_rule_file_of_its_kind(kind: str, tmp_path: Path) -> None:
   rule_file, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="root-1", name="root", **origin)
+  meta = SessionMetadata(id="root-1", name="root", profile="manager", **origin)
 
   segments, _ = build_segments(
       real_repo_cfg(tmp_path / "home"), meta, "manager_turn", overlay=None, chain=(), node_ref=None)
@@ -95,16 +95,6 @@ def test_manager_root_task_path_reads_the_rule_file_of_its_kind(kind: str, tmp_p
   assert by_ref[f"prompts/{rule_file}"] == prompts_text(rule_file, meta.id)
 
 
-@pytest.mark.parametrize("kind", SESSION_KINDS)
-def test_v1_builder_output_is_master_prompt_then_the_rule_file_of_its_kind(kind: str, tmp_path: Path) -> None:
-  rule_file, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="root-1", name="root", **origin)
-
-  built = master_cc_run._build_instructions_content(meta, real_repo_cfg(tmp_path / "home"), None)
-
-  assert built == prompts_text("master.md", meta.id) + "\n\n" + prompts_text(rule_file, meta.id)
-
-
 # ---------------------------------------------------------------------------
 # The context window: a thread session runs the thread window, any other session keeps the option's
 # ---------------------------------------------------------------------------
@@ -113,7 +103,7 @@ def test_v1_builder_output_is_master_prompt_then_the_rule_file_of_its_kind(kind:
 @pytest.mark.parametrize("kind, window", [("slack", 96_000), ("discord", 96_000), ("plain", None)])
 def test_context_window_is_set_for_a_thread_session_only(kind: str, window: int | None) -> None:
   _, origin = SESSION_KINDS[kind]
-  meta = SessionMetadata(id="s", name="s", **origin)
+  meta = SessionMetadata(id="s", name="s", profile="manager", **origin)
 
   assert turn_contributions.resolve_context_window(meta) == window
 
@@ -125,10 +115,10 @@ async def test_a_backend_that_reads_no_context_window_keeps_its_option(
   does not, so a thread session's option reaches the backend unchanged. The reading backend's two
   cases (thread window, main session's own) run through the charlie-code tests of the backend routing suite."""
   cfg = build_master_cc_cfg(tmp_path)
-  patch_instructions_content(monkeypatch)
   builds = install_scripted_backends(
       monkeypatch, [ScriptedRelayBackend([make_result_event()], exit_code=0)], BUILD_BACKEND_PATCH_TARGET)
-  thread_meta = SessionMetadata(id="thread", name="thread", backend="fake", slack_origin=SLACK_ORIGIN)
+  thread_meta = SessionMetadata(
+      id="thread", name="thread", backend="fake", profile="manager", slack_origin=SLACK_ORIGIN)
 
   await master_cc_run._run_cc(make_work_item(cfg, thread_meta, cfg.backends.options[0]))
 
@@ -193,7 +183,7 @@ def test_contributions_come_back_in_registration_order(empty_registry: None) -> 
 
 
 def test_one_named_rule_file_wins_and_none_means_the_manager_workflows(empty_registry: None) -> None:
-  meta = SessionMetadata(id="s", name="s")
+  meta = SessionMetadata(profile="manager", id="s", name="s")
   assert turn_contributions.resolve_workflow_rules_file(meta) == "manager_workflows.md"
 
   register(silent="SILENT", first="FIRST")
@@ -203,7 +193,7 @@ def test_one_named_rule_file_wins_and_none_means_the_manager_workflows(empty_reg
 
 
 def test_two_named_rule_files_or_two_context_windows_raise(empty_registry: None) -> None:
-  meta = SessionMetadata(id="s", name="s")
+  meta = SessionMetadata(profile="manager", id="s", name="s")
   register(first="FIRST", second="SECOND")
 
   with pytest.raises(ValueError, match="workflow rules file"):
@@ -218,7 +208,7 @@ def test_two_named_rule_files_fail_the_task_path_build(empty_registry: None, tmp
   with pytest.raises(ValueError, match="workflow rules file"):
     build_segments(
         real_repo_cfg(tmp_path / "home"),
-        SessionMetadata(id="s", name="s"),
+        SessionMetadata(profile="manager", id="s", name="s"),
         "manager_turn",
         overlay=None,
         chain=(),
@@ -384,7 +374,8 @@ async def test_one_master_done_calls_each_platforms_deliver_done_once(
   slack.assert_awaited_once_with(meta.id, done, cfg, mgr)
   discord.assert_awaited_once_with(meta.id, done, cfg, mgr)
   assert len(tasks) == len(real) + 1
-  assert [e["type"] for e in mgr.load_chat_events_sync(meta.id)] == [ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
+  assert [e["type"] for e in mgr.load_chat_events_sync(meta.id)] == [
+      ET.TASK_CREATED, ET.MASTER_DONE, ET.SCHEDULED_TRIGGER]
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +410,7 @@ async def run_turn(
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.runtime.sessions.create_logged_task", make_task_spawner(tasks))
   async with fresh_master_state(session.id):
-    await master_cc_queue.run_message(cfg, session, "edit the paper", mgr.callbacks(), ET.USER, skip_user_event=True)
+    await run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks())
     await conftest.drain_session_consumer(session.id, timeout=5)
     await asyncio.gather(*tasks)
   return mgr, session.id, tasks
@@ -440,7 +431,7 @@ async def test_a_changed_tex_file_is_proposed_after_master_done_and_reverted(
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "edited by the agent"))
 
   types = [event["type"] for event in mgr.load_chat_events_sync(session_id)]
-  assert types == [ET.MASTER_DONE, TEX_EDIT_PROPOSED]
+  assert types == [ET.TASK_CREATED, ET.MASTER_DONE, ET.TEX_EDIT_PROPOSED]
   assert tex_file.read_text(encoding="utf-8") == "original"
   assert latex.get_pending_proposal() == {"old": "original", "new": "edited by the agent"}
 
@@ -450,7 +441,7 @@ async def test_an_unchanged_tex_file_appends_nothing_and_clears_the_snapshot(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tex_file: Path) -> None:
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "original"))
 
-  assert [event["type"] for event in mgr.load_chat_events_sync(session_id)] == [ET.MASTER_DONE]
+  assert [event["type"] for event in mgr.load_chat_events_sync(session_id)] == [ET.TASK_CREATED, ET.MASTER_DONE]
   assert latex._tex_snapshot is None
   assert latex.get_pending_proposal() is None
 
@@ -459,7 +450,7 @@ async def test_an_unchanged_tex_file_appends_nothing_and_clears_the_snapshot(
 async def test_latex_after_turn_skips_the_check_without_a_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
   sessions = SimpleNamespace(persist_and_broadcast=AsyncMock())
   contribution = LatexTurnContribution()
-  meta = SessionMetadata(id="no-snapshot", name="no-snapshot")
+  meta = SessionMetadata(profile="manager", id="no-snapshot", name="no-snapshot")
   monkeypatch.setattr(latex, "has_snapshot", lambda: False)
 
   with patch("src.features.latex.turn_contribution.asyncio.to_thread", new=AsyncMock()) as to_thread:
@@ -492,14 +483,13 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
   mgr = SessionManager(cfg)
   session = await mgr.create_session(CreateSessionRequest(name="let-go"))
   tasks: list[asyncio.Task] = []
-  patch_instructions_content(monkeypatch)
   install_scripted_backends(monkeypatch, [_LetGoBackend(tex_file)], BUILD_BACKEND_PATCH_TARGET)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
   monkeypatch.setattr("src.runtime.sessions.create_logged_task", make_task_spawner(tasks))
 
   async with fresh_master_state(session.id):
     queued = asyncio.create_task(
-        master_cc_queue.run_message(cfg, session, "edit the paper", mgr.callbacks(), ET.USER, skip_user_event=True))
+        run_task_manager_message(cfg, session, "edit the paper", mgr.callbacks()))
     for _ in range(1000):
       if session.id in master_cc_state._session_consumers:
         break
@@ -510,7 +500,6 @@ async def test_a_let_go_turn_appends_no_master_done_and_proposes_nothing(
     await asyncio.gather(queued, return_exceptions=True)
 
   assert consumer.cancelled()
-  assert (await mgr.get_session(session.id)).master_run is not None  # the let-go left the re-attach record
   assert not tasks
   assert ET.MASTER_DONE not in [event["type"] for event in mgr.load_chat_events_sync(session.id)]
   assert tex_file.read_text(encoding="utf-8") == "edited by the agent"

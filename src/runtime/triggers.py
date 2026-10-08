@@ -14,7 +14,7 @@ from typing import Any
 import aiofiles
 
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig, get_config
+from src.infra.config import CharlieBotConfig
 from src.infra.json_utils import write_model_json_atomically
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
@@ -22,7 +22,6 @@ from src.infra.models import (
     LocalPid,
     PendingTrigger,
     RemotePid,
-    SessionStatus,
     SlurmJob,
     TriggerStatus,
     WatchKind,
@@ -31,8 +30,6 @@ from src.infra.models import (
 from src.infra.ssh import ssh_cmd
 from src.infra.tasks import create_logged_task
 from src.infra.timeouts import SSH_OVERALL_TIMEOUT
-from src.runtime.api.message_utils import build_scheduled_trigger_event
-from src.runtime.master_trigger import trigger_master
 from src.runtime.sessions import SessionManager
 from src.runtime.sidebar_state import mark_sidebar_dirty
 
@@ -48,7 +45,7 @@ _REMOTE_PROBE_NOISE_MAX = 10  # uniform random 0..10s added to each interval
 # SLURM watch (sacct polling).
 _SACCT_POLL_INTERVAL = 30  # seconds between sacct probes
 # A remote sacct host that answers nothing for this long is treated as unobservable: the
-# group stops waiting and reports itself so the master wakes up instead of going blind.
+# group stops waiting and reports itself so the task can respond instead of going blind.
 _REMOTE_SACCT_UNREACHABLE_GRACE = 900  # seconds
 # Non-terminal job states: the job is still in flight, keep polling.
 _SLURM_ACTIVE_STATES = frozenset(
@@ -104,7 +101,7 @@ class PendingTriggerLimitError(Exception):
 
 
 class ArchivedSessionError(Exception):
-  """Raised when create_trigger targets a session archived without a successor."""
+  """Raised when create_trigger targets a task that is archived."""
 
 
 def _detect_pidfd() -> tuple[Callable[[int, int], int], Callable[[int, int], object | None]] | tuple[None, None]:
@@ -435,7 +432,7 @@ def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat
 
 
 class TriggerManager:
-  """Manages delayed one-shot triggers that wake the master CC."""
+  """Manages delayed one-shot triggers that admit scheduled task inputs."""
 
   def __init__(self, cfg: CharlieBotConfig, session_mgr: SessionManager) -> None:
     self._cfg = cfg
@@ -468,9 +465,8 @@ class TriggerManager:
     """Create a pending trigger, persist to disk, and start the sleep task.
 
     Raises ``ArchivedSessionError`` when the target must not be woken — a task
-    node whose state is not open, or a legacy session's succession chain that
-    ends archived with no successor (the single rejection funnel for both
-    callers: the internal API and the Slack thread-follow re-arm) — and
+    node whose state is not open (the single rejection funnel for both callers:
+    the internal API and the Slack thread-follow re-arm) — and
     ``PendingTriggerLimitError`` when a ``schedule-trigger`` registration would
     push the session past MAX_PENDING_TRIGGERS pending records.
 
@@ -490,10 +486,9 @@ class TriggerManager:
     kinds = {t.kind for t in targets}
 
     # Single rejection funnel for both callers (the internal API and the Slack
-    # thread-follow re-arm): a dormant target — an archived task node, or a
-    # legacy chain end archived with no successor — is the user's explicit
-    # "no more wakes" signal and must not gain a new wake. The reason names
-    # which dormancy answered.
+    # thread-follow re-arm): an archived task is the user's explicit "no more
+    # wakes" signal and must not gain a new wake. The reason names the
+    # dormancy answer.
     dormancy = await self._dormancy_reason(session_id)
     if dormancy is not None:
       raise ArchivedSessionError(f"session {session_id} is archived ({dormancy}); trigger rejected")
@@ -702,24 +697,18 @@ class TriggerManager:
     """The one dormancy judgment for every reader in this module — create-time
     rejection, the wait watchdog, and the fire-time backstop. A task node is
     dormant exactly when its task state is not open: the close fact is the
-    user's "no more wakes" signal for the whole archived subtree. A session
-    without a profile keeps the legacy check — the succession chain's end is
-    ARCHIVED with no successor. Returns the cancel reason when the target must
-    not be woken, None otherwise; a missing chain end is not a dormancy answer
+    user's "no more wakes" signal for the whole archived subtree. Returns the
+    cancel reason when the target must not be woken, None otherwise; a missing
+    node is not a dormancy answer
     and reads None (the fire-time path reports it as metadata_unavailable
     instead).
     """
     task_mgr = self._task_tree_provider()
     meta = await task_mgr.load_meta(session_id)
-    if meta is not None and meta.profile is not None:
-      if task_mgr.task_state(session_id) != "open":
-        return "target task is archived"
+    if meta is None:
       return None
-    resolved_tail = await self._session_mgr.resolve_successor_chain(session_id)
-    if resolved_tail is None:
-      return None
-    if resolved_tail.status == SessionStatus.ARCHIVED and resolved_tail.successor_session_id is None:
-      return "archived"
+    if task_mgr.task_state(session_id) != "open":
+      return "target task is archived"
     return None
 
   async def _is_dormant_target(self, session_id: str) -> bool:
@@ -768,15 +757,15 @@ class TriggerManager:
     )
 
   async def _wait_and_fire(self, trigger: PendingTrigger) -> None:
-    """Wait until every watch group finishes (or fire_at), then trigger the master agent.
+    """Wait until every watch group finishes (or fire_at), then admit its task input.
 
     Targets are grouped by kind and each group's sub-waiter runs concurrently
     against the shared ``fire_at`` deadline. The reason is 'completed' when all
     groups finish, 'timeout' if the deadline arrives with anything still alive;
     a trigger with no watch targets has nothing to wait on and fires as
     'timeout' at fire_at.
-    The wait races a dormancy watchdog, so a session archived without a
-    successor mid-wait cancels the trigger instead of firing.
+    The wait races a dormancy watchdog, so an archived task cancels the trigger
+    instead of firing.
     """
     groups: dict[WatchKind, list[WatchTarget]] = {}
     for t in trigger.watch_targets:
@@ -832,8 +821,7 @@ class TriggerManager:
           raise exc
 
     if watchdog_task in done:
-      # Watchdog win: the target went dormant mid-wait (an archived task node
-      # or a legacy archived chain end). Same re-read as the fire-time backstop
+      # Watchdog win: the target task went dormant mid-wait. Same re-read as the fire-time backstop
       # below, so a trigger cancelled while we waited is not re-stamped.
       fresh = await self._reload_pending(trigger)
       if fresh is None:
@@ -855,17 +843,14 @@ class TriggerManager:
       trigger_message = f"[Scheduled trigger fired] {fresh.message}"
 
     # Established aliases resolve to the canonical task without changing its
-    # ownership: a trigger recorded against a pre-tree (imported) session id
-    # delivers to the same node. The trigger file stays where it was written;
-    # only the delivery target resolves.
+    # ownership. The trigger file stays where it was written; only the
+    # delivery target resolves.
     deliver_to = self._tree_alias_target(fresh.session_id) or fresh.session_id
 
-    # Fresh chain read, and the fire path's missing-metadata guard: a
-    # metadata.json deleted or blanked mid-wait cancels here instead of
-    # delivering into a vanished session. The archived-no-successor call and
-    # the redirect live below (_is_dormant_target, deliver_to_successor).
-    resolved_tail = await self._session_mgr.resolve_successor_chain(deliver_to)
-    if resolved_tail is None:
+    # Re-read task metadata before delivery: a node removed or blanked during
+    # the wait is cancelled instead of writing into a missing task.
+    task_mgr = self._task_tree_provider()
+    if await task_mgr.load_meta(deliver_to) is None:
       await self._cancel_undeliverable(fresh, reason="metadata_unavailable")
       return
 
@@ -876,56 +861,10 @@ class TriggerManager:
       await self._cancel_undeliverable(fresh, reason=dormancy_reason)
       return
 
-    # A v2 task-tree node takes the durable dispatcher route: the trigger's
-    # own id is the input's stable identity, so a crash after the durable
-    # admission but before the FIRED stamp replays into the SAME input (a
-    # recovered trigger re-fires, admission dedups, FIRED lands) instead of
-    # duplicating the task input or its process. No second append/wake path
-    # exists on this route.
-    if await self._fire_task_tree(fresh, trigger_message, deliver_to):
-      await self._stamp_fired(fresh, reason)
-      return
-
-    # Deliver the scheduled-trigger event through the succession-aware primitive:
-    # it persists into the chain end (stamping origin_session_id when redirected)
-    # and returns None only when the chain end no longer exists. The wake event
-    # is the delivery: its injected id is what the woken turn answers, so a
-    # restart reconcile excludes exactly this event from replay.
-    wake_event = build_scheduled_trigger_event(trigger_message)
-    delivered = await self._session_mgr.deliver_to_successor(deliver_to, wake_event)
-    if delivered is None:
-      await self._cancel_undeliverable(fresh, reason="chain_end_missing")
-      return
-
-    # FIRED on delivery: the record leaves pending the moment its wake lands in
-    # the chat log, before the woken turn is even enqueued -- pending means
-    # "not yet delivered", so the tray and the limit count stop carrying a wake
-    # the session is already about to answer. Crash between this stamp and the
-    # enqueue below costs one replayed wake (the event is unanswered), which
-    # merges into the next turn.
+    # The trigger id is the durable input identity, so a crash after admission
+    # but before the FIRED stamp replays into the same task input.
+    await self._fire_task_tree(fresh, trigger_message, deliver_to)
     await self._stamp_fired(fresh, reason)
-
-    # Wake the master CC, declared as SCHEDULED_TRIGGER input so it batches
-    # with whatever else is queued. The trigger's task no longer waits for the
-    # woken turn to finish: the record is already terminal, and trigger_master
-    # handles its own failures (it persists an ERROR event and logs). Re-read
-    # the config here rather than using the snapshot captured at construction:
-    # backends added to or renamed in config.yaml after server start are
-    # invisible to that snapshot. Timed wake: never pull an archived session
-    # back -- the dormancy checks above cancel that case; this opt-out also
-    # covers the window between the last watchdog poll and this call.
-    create_logged_task(
-        trigger_master(
-            deliver_to,
-            trigger_message,
-            get_config(),
-            self._session_mgr,
-            ET.SCHEDULED_TRIGGER,
-            user_event_id=wake_event.get("id"),
-            pull_back=False,
-        ),
-        name=f"trigger-wake-{trigger.id[:8]}",
-    )
 
   async def _stamp_fired(self, fresh: PendingTrigger, reason: str) -> None:
     """Stamp a delivered trigger FIRED, persist it, and retire its waiter.
@@ -949,26 +888,13 @@ class TriggerManager:
       log.exception("trigger_alias_resolution_failed", session=session_id)
       return None
 
-  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str, session_id: str | None = None) -> bool:
-    """The v2 delivery: durable scheduled input to the stable node + dispatch.
-
-    Returns False when the target is not a task-tree node (the legacy route
-    serves it). *session_id* is the alias-resolved delivery target. A missing
-    canonical node is a visible refusal, not a legacy fallback.
-    """
+  async def _fire_task_tree(self, trigger: PendingTrigger, trigger_message: str, session_id: str | None = None) -> None:
+    """Admit and dispatch one durable scheduled input to its stable node."""
     from src.runtime.task_sessions import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
 
     task_mgr = self._task_tree_provider()
     session_id = session_id or trigger.session_id
-    meta = await task_mgr.load_meta(session_id)
-    if meta is None or meta.profile is None:
-      if session_id != trigger.session_id:
-        # An alias resolved but its node is gone: refuse visibly, never fall
-        # back to writing a legacy wake against a dead mapping.
-        log.error("trigger_task_tree_target_missing", trigger_id=trigger.id, session=session_id)
-        await self._cancel_undeliverable(trigger, reason="task_tree_target_missing")
-        return True
-      return False
+    await task_mgr.load_task_meta(session_id)
     try:
       await task_mgr.dispatch.admit_input(
           session_id,
@@ -984,15 +910,16 @@ class TriggerManager:
       # retire instead of lingering on a pending record.
       log.info("trigger_cancelled_archived_target", trigger_id=trigger.id, session=session_id, error=str(e))
       await self._cancel_undeliverable(trigger, reason="target task is archived")
-      return True
+      return
     except (TaskNotFoundError, TaskForbiddenError, TaskInvalidError) as e:
       log.error("trigger_task_tree_delivery_failed", trigger_id=trigger.id, session=session_id, error=str(e))
       raise
     log.info("trigger_delivered_to_task_tree", trigger_id=trigger.id, session=session_id)
-    return True
 
   def _task_tree_provider(self):
-    """The task-tree owner singleton (lazy import keeps the API layering)."""
+    """Return this manager's tree, or the process owner before a tree is wired."""
+    if self._session_mgr.task_tree_manager is not None:
+      return self._session_mgr.task_tree_manager
     from src.runtime.api.deps import task_manager
     return task_manager()
 

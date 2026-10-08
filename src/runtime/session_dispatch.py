@@ -411,41 +411,16 @@ class TaskInputDispatcher:
 
   async def wake_parent(
       self, parent_id: str, *, report: dict, caller_session_id: str | None = None) -> asyncio.Task | None:
-    """The one parent-wake entry after a report delivery.
-
-        A legacy parent whose own turn closed the task (caller_session_id equal
-        to the parent id) skips the wake: the parent's own turn already holds
-        the outcome in its HTTP response. The report argument is the
-        child_report the caller just delivered — the legacy wake renders it
-        through child_report_text as compose_input_prompt renders it, and the
-        event appended by deliver_child_report_locked stays the durable record;
-        a task-tree parent's next serialized turn dispatches from its durable
-        inputs and never consults the caller.
-
-        The legacy wake is a whole master turn (minutes on a slow backend), so
-        it is scheduled, never awaited: the startup reconcile pass that replays
-        a lost report must not hold the server's doors shut for the turn, and a
-        close request must not wait on it. Returns that scheduled task, or None
-        when the wake was skipped or the parent is missing.
-        """
+    """Dispatch a newly delivered child report to its parent task."""
     tree = self._tree
-    meta = await tree.load_meta(parent_id)
-    if meta is None:
-      log.warning("wake_parent_target_missing", parent_id=parent_id)
-      return None
-    if meta.profile is not None:
-      await self.dispatch_pending(parent_id)
-      return None
+    meta = await tree.load_task_meta(parent_id)
     if caller_session_id == parent_id:
-      log.info("legacy_parent_wake_skipped", parent=parent_id, report=report.get("id"), caller=caller_session_id)
+      log.info("parent_report_self_delivery", parent=parent_id, report=report.get("id"))
       return None
-    text = child_report_text(report)
-    from src.infra.tasks import create_logged_task
-    from src.runtime.master_trigger import trigger_master
-
-    return create_logged_task(
-        trigger_master(parent_id, text, tree._cfg, tree.sessions, ET.CHILD_REPORT),
-        name=f"legacy-parent-wake-{parent_id[:8]}")
+    if tree.task_state(meta.id) != "open":
+      return None
+    await self.dispatch_pending(parent_id)
+    return None
 
   async def finish_run(
       self,
@@ -581,8 +556,7 @@ class TaskInputDispatcher:
           actor=actor)
     if created:
       await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
-      parent_meta = await tree.load_meta(recipient)
-      if parent_meta is not None and parent_meta.profile is not None and tree.task_state(recipient) != "open":
+      if tree.task_state(recipient) != "open":
         # The archived parent keeps the report as history: it counts as
         # delivered and never wakes the node.
         log.info(

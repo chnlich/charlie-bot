@@ -19,7 +19,6 @@ from src.infra.log_once import LazyStructlogLogger
 from src.infra.tasks import create_logged_task
 from src.runtime import spawner_backends
 from src.runtime.api.deps import bad_request, get_config_on_loop, get_session_manager, get_task_manager, require_found
-from src.runtime.api.internal import _authorize_spawn_request
 from src.runtime.sessions import SessionManager
 from src.runtime.takeoff_gate import DelegationBlockedError
 from src.runtime.task_sessions import TaskTreeManager
@@ -81,14 +80,9 @@ async def start_improve_loop(
 
   One worker child task, one iteration Run per round (``sequence_ref``
   kind=improve), and one final sequence result delivered to the manager
-  through the common report owner. A legacy session (profile None) loops in
-  place: its own session-local gate and backend check run first so a blocked
-  or malformed request converts nothing, and the worker child is created
-  under it without rewriting it.
+  through the common report owner.
   """
-  target = require_found(await session_mgr.get_session(req.session_id))
-  if target.profile is None:
-    await _authorize_spawn_request(req, session_mgr, task_mgr)
+  require_found(await session_mgr.get_session(req.session_id))
   return await _start_improve_sequence(req, cfg, task_mgr, session_mgr)
 
 

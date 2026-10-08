@@ -28,7 +28,6 @@ from tests import test_task_execution
 async def manager_with_worker(tmp_path, monkeypatch):
   """One root manager with one worker child, no user input anywhere."""
   cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.patch_instructions_content(monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": "vis-key"}})
   root = await tree.create_task(
       request_id="root",
@@ -79,10 +78,9 @@ async def test_worker_run_opens_the_busy_interval_and_every_finish_closes_it(
 @pytest.mark.asyncio
 async def test_a_run_closes_only_the_interval_it_opened(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A manager_turn Run opens no interval, so its finish leaves the master
-  queue's own interval standing; a legacy parent's interval is untouched by a
-  child Run; a queued Run that never launched closes nothing on finish."""
-  _cfg, session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
+  """Manager turns leave their queue interval open; child runs close only their
+  own interval, and queued runs close nothing on finish."""
+  _cfg, _session_mgr, tree, root, worker = await manager_with_worker(tmp_path, monkeypatch)
   queue_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=9)
   thinking_state.mark_busy(root.id, since=queue_since)
   await tree.runs.register_run(
@@ -92,17 +90,7 @@ async def test_a_run_closes_only_the_interval_it_opened(
   await tree.runs.record_finish(root.id, "turn-1", "success")
   assert thinking_state.busy_since(root.id) == queue_since
 
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Legacy"), backend="fake")
-  legacy_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=5)
-  thinking_state.mark_busy(legacy.id, since=legacy_since)
-  child = await tree.create_task(
-      request_id="lw",
-      task_parent_id=legacy.id,
-      profile="worker",
-      task=models.TaskSpec(goal="leaf"),
-      name="LW",
-      backend=None,
-      caller=conftest.OPERATOR)
+  child = worker
   await tree.runs.register_run(
       models.RunRecord(
           id="run-l",
@@ -115,7 +103,7 @@ async def test_a_run_closes_only_the_interval_it_opened(
   assert thinking_state.busy_since(child.id) is not None
   await tree.runs.record_finish(child.id, "run-l", "success")
   assert thinking_state.busy_since(child.id) is None
-  assert thinking_state.busy_since(legacy.id) == legacy_since
+  assert thinking_state.busy_since(root.id) == queue_since
 
   worker_since = datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=2)
   await tree.runs.register_run(

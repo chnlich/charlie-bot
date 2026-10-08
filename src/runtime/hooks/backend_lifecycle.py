@@ -163,6 +163,3 @@ class BackendLifecycle:
     """Record on ``thread`` the conversation id that the runtime chose for the task."""
     return
 
-  def attach_command(self, thread: ThreadMetadata) -> str | None:
-    """The shell command that attaches a terminal to the task's conversation; None when the backend has none."""
-    return None

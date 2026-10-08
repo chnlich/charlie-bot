@@ -29,8 +29,7 @@ from conftest import (
     bind_deps_managers,
     init_repo_with_origin,
     make_cron_sessions_client,
-    make_legacy_cron_session,
-    patch_instructions_content,
+    make_cron_session,
     registered_cron_handler,
     write_nightly_prompt,
     write_nightly_task,
@@ -39,8 +38,8 @@ from conftest import (
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
-from src.infra.models import SessionStatus, ThreadMetadata, ThreadStatus, utc_now_iso
+from src.infra.config import CharlieBotConfig, ScheduledTaskConfig
+from src.infra.models import SessionStatus, utc_now_iso
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_cron_backend import _patch_cron_d
@@ -99,7 +98,7 @@ async def test_tick_auto_binds_unbound_task_with_active_legacy_cron_session(tick
   cron session is archived, and nothing fires at the migration moment."""
   _cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, project="charlie", backend=OPUS_BACKEND_ID)
-  cron_session = await make_legacy_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_mgr, "nightly")
   # A copied anchor whose next occurrence is always ahead of this tick, so the
   # migration itself fires nothing.
   copied_run = (datetime.now(UTC) + timedelta(hours=2)).isoformat()
@@ -223,7 +222,7 @@ async def test_due_fire_after_migration_creates_its_leaf_under_the_node(
   cfg, session_mgr, tree, scheduler, home = tick_env
   repo, _origin = init_repo_with_origin(tmp_path / "sweep-work")
   write_nightly_task(home, backend=OPUS_BACKEND_ID, repo=str(repo))
-  cron_session = await make_legacy_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_mgr, "nightly")
   # Last ran at yesterday's 03:00 occurrence: today's 03:00 is due.
   cron_session.last_scheduled_run = "2026-06-07T03:00:00-07:00"
   cron_session.last_scheduled_cron = "0 3 * * *"
@@ -283,7 +282,7 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   session for the task."""
   _cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home)
-  cron_session = await make_legacy_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_mgr, "nightly")
   # A just-ran anchor: the next occurrence is always ahead, so no replayed tick
   # fires and the copied bookkeeping is observable verbatim.
   copied_run = utc_now_iso()
@@ -320,10 +319,10 @@ async def test_crash_replay_after_each_step_ends_in_one_node_one_binding_no_acti
   body = _read_task_yaml(home)
   node = await tree.load_meta(body["session_id"])
   assert node is not None and node.profile == "manager" and node.name == "nightly"
-  # One task node only: the replay returned the original product (the legacy
-  # cron session is a root too, but carries no profile).
+  # Replay returns the original scheduled node. The previously created cron
+  # session remains a separate manager root after fixture conversion.
   roots = [m for m in (await tree._get_index()).metas.values() if m.task_parent_id is None and m.profile == "manager"]
-  assert [m.id for m in roots] == [node.id]
+  assert {m.id for m in roots} == {node.id, cron_session.id}
   # The migrated bookkeeping survived every replay path.
   assert node.last_scheduled_run == copied_run
   stored = await session_mgr.get_session(cron_session.id)
@@ -345,7 +344,7 @@ async def test_sweep_archives_active_cron_session_of_bound_task_despite_stuck_ru
   write_nightly_task(home)
   await scheduler._tick()  # binds; the daily task is not due
   node_id = _read_task_yaml(home)["session_id"]
-  cron_session = await make_legacy_cron_session(session_mgr, "nightly")
+  cron_session = await make_cron_session(session_mgr, "nightly")
   write_thread_meta(
       cfg, cron_session.id, {
           "id": "legacy-thread",
@@ -531,28 +530,21 @@ def _backdate_cc_anchor(session_mgr: SessionManager, session_id: str, *, started
   session_mgr._metadata_cache.pop(session_id)  # the next read re-parses the file
 
 
-def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str, completed_at: datetime) -> None:
-  """One terminal thread predating the weekly recycle's cutoff."""
+def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> pathlib.Path:
+  """One retained worker-thread directory from before the weekly recycle cutoff."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)
-  (thread_dir / "metadata.json").write_text(
-      ThreadMetadata(
-          id=thread_id,
-          session_id=session_id,
-          description="legacy round",
-          status=ThreadStatus.COMPLETED,
-          completed_at=completed_at).model_dump_json(),
-      encoding="utf-8")
+  (thread_dir / "sentinel.txt").write_text("retained", encoding="utf-8")
+  return thread_dir
 
 
 @pytest.mark.asyncio
 @pytest.mark.integration  # polls the fired run's terminal fact in real time; the weekly recycle walks the thread dirs
-async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
+async def test_bound_node_wake_preserves_old_worker_threads_and_prefixes_the_firing_report(
     tick_env, monkeypatch: pytest.MonkeyPatch) -> None:
-  """A bound node woken by a firing's child report takes over the cron
-  session's wake duties on the tree dispatch path: the weekly recycle clears
-  the anchor predating the last Saturday 01:00 PT and GCs the old threads,
-  and the fresh native conversation's turn carries the fixed report prefix."""
+  """A bound node handles firing reports through task dispatch: the weekly
+  recycle clears the stale anchor and archives chat history while leaving
+  old worker-thread directories on disk."""
   from src.features.cron.sequence_controller import scheduled_report_prefix
   cfg, session_mgr, tree, scheduler, home = tick_env
   write_nightly_task(home, backend=OPUS_BACKEND_ID)
@@ -563,13 +555,11 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("reviewed: merged")])
   install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
-  # An anchor started before the last Saturday 01:00 PT, and one old terminal
-  # thread the weekly recycle must GC.
+  # An anchor and worker-thread directory predate the last Saturday 01:00 PT.
   await session_mgr.persist_cc_session_id(node_id, "cc-old")
   _backdate_cc_anchor(session_mgr, node_id, started_at=datetime.now(UTC) - timedelta(days=8))
-  _write_old_thread(cfg, node_id, "legacy-round", datetime.now(UTC) - timedelta(days=8))
+  old_thread = _write_old_thread(cfg, node_id, "legacy-round")
 
   await tree.dispatch.deliver_child_report(
       "worker-1", source_event={"id": "evt-1"}, outcome="completed", summary="sweep finished", recipient=node_id)
@@ -581,11 +571,10 @@ async def test_bound_node_wake_recycles_and_prefixes_the_firing_report(
   # The prefix wrapped the firing report on the fresh native conversation.
   assert backend.prompt is not None
   assert backend.prompt.startswith(scheduled_report_prefix("nightly"))
-  # The recycle ran: the stale anchor is cleared on disk and the old thread
-  # is gone.
+  # The recycle ran: it cleared the stale anchor and retained the old thread.
   disk = await session_mgr.read_metadata_fresh(node_id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
-  assert not (cfg.sessions_dir / node_id / "threads" / "legacy-round").exists()
+  assert (old_thread / "sentinel.txt").read_text(encoding="utf-8") == "retained"
 
 
 @pytest.mark.asyncio
@@ -606,7 +595,6 @@ async def test_bound_node_wake_on_a_live_anchor_carries_no_prefix(tick_env, monk
       monkeypatch,
       [SpawningScriptedBackend([result_event("first")]),
        SpawningScriptedBackend([result_event("second")])], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   # Turn 1: a firing report wakes the anchor-less node — a fresh native
   # conversation carrying the prefix; the launch records the native anchor.

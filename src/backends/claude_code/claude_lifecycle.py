@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import shlex
 from pathlib import Path
 from typing import Any
 
@@ -294,10 +293,3 @@ class ClaudeCodeLifecycle(ClaudeCliLifecycle):
 
   def assign_thread_native_id(self, thread: models.ThreadMetadata, native_id: str | None) -> None:
     claude_metadata.set_session_id(thread, native_id)
-
-  def attach_command(self, thread: models.ThreadMetadata) -> str | None:
-    """``claude --resume`` in the task's worktree; None until the thread has both."""
-    session_id = claude_metadata.session_id_of(thread)
-    if not thread.worktree_path or not session_id:
-      return None
-    return f"cd {shlex.quote(thread.worktree_path)} && claude --resume {shlex.quote(session_id)}"

@@ -45,7 +45,7 @@ async def test_atomic_write_swaps_target_via_os_replace(tmp_path: Path) -> None:
   vacuous pass where the hook is never reached.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
@@ -68,7 +68,7 @@ async def test_atomic_read_observes_previous_document_at_swap(tmp_path: Path) ->
   up to the rename. An in-place truncating write side would read empty here.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="before", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(profile="manager", name="before", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
@@ -125,7 +125,7 @@ async def test_two_concurrent_writes_both_return_and_target_stays_complete(tmp_p
   """
   mgr = _make_session_mgr(tmp_path)
   other_mgr = SessionManager(SimpleNamespace(sessions_dir=tmp_path / "sessions"))
-  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   target = mgr._metadata_path(meta.id)
 
@@ -164,7 +164,7 @@ async def test_funnel_write_keys_cache_entry_with_proven_signature(tmp_path: Pat
   with a foreign or absent signature fails here.
   """
   mgr = _make_session_mgr(tmp_path)
-  meta = SessionMetadata(name="seed", backend=OPUS_BACKEND_ID)
+  meta = SessionMetadata(profile="manager", name="seed", backend=OPUS_BACKEND_ID)
   await mgr.save_metadata(meta)
   stored_sig = mgr._metadata_cache[meta.id][2]
   assert stored_sig is not None

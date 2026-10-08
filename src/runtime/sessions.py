@@ -2768,7 +2768,8 @@ class SessionManager:
     /proc read.
     """
     return SidebarProbeSpec(
-        meta.id, self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), recheck_liveness)
+        meta.id,
+        self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), recheck_liveness)
 
   async def resolve_sidebar_state(
       self,

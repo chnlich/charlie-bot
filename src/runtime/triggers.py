@@ -30,6 +30,7 @@ from src.infra.models import (
 from src.infra.ssh import ssh_cmd
 from src.infra.tasks import create_logged_task
 from src.infra.timeouts import SSH_OVERALL_TIMEOUT
+from src.runtime import trigger_files
 from src.runtime.sessions import SessionManager
 from src.runtime.sidebar_state import mark_sidebar_dirty
 
@@ -407,30 +408,6 @@ def _migrate_legacy_watch_pids(raw_text: str) -> tuple[PendingTrigger, bool]:
   return PendingTrigger.model_validate(data), migrated
 
 
-def iter_trigger_file_stats(triggers_dir: str | Path) -> list[tuple[str, os.stat_result]]:
-  """(path, stat) pairs for the regular ``*.json`` trigger files under *triggers_dir*.
-
-  The one scandir+stat walk every trigger read shares: this module's list memo,
-  the sidebar probe's verdict scan (src.runtime.sessions), and the threads-list
-  body's freshness signature (src.runtime.api.threads). Raises OSError when
-  *triggers_dir* itself cannot be scanned — that verdict belongs to the caller.
-  A file that vanishes between scandir and stat is skipped, the same "nothing
-  to read" verdict every stat failure earns. Paths are scandir's plain strings,
-  and the stat rides ``DirEntry.stat`` — this scan runs per poll.
-  """
-  pairs: list[tuple[str, os.stat_result]] = []
-  with os.scandir(triggers_dir) as entries:
-    for entry in entries:
-      if not entry.name.endswith(".json") or not entry.is_file():
-        continue
-      try:
-        st = entry.stat()
-      except OSError:
-        continue  # vanished between scandir and stat — nothing to read
-      pairs.append((entry.path, st))
-  return pairs
-
-
 class TriggerManager:
   """Manages delayed one-shot triggers that admit scheduled task inputs."""
 
@@ -581,7 +558,10 @@ class TriggerManager:
   @staticmethod
   def _stat_trigger_files(triggers_dir: Path) -> dict[str, tuple[int, int]]:
     """One scandir snapshot of the session's trigger files: name -> (mtime_ns, size)."""
-    return {os.path.basename(path): (st.st_mtime_ns, st.st_size) for path, st in iter_trigger_file_stats(triggers_dir)}
+    return {
+        os.path.basename(path): (st.st_mtime_ns, st.st_size)
+        for path, st in trigger_files.iter_trigger_file_stats(triggers_dir)
+    }
 
   async def list_triggers(self, session_id: str) -> list[PendingTrigger]:
     """Read all triggers for a session from disk, memoized per file.

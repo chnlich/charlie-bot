@@ -41,7 +41,7 @@ from src.infra.models import (
 )
 from src.infra.process import cleanup_session_cgroup
 from src.infra.tasks import create_logged_task
-from src.runtime import sidebar_state
+from src.runtime import sidebar_state, trigger_files
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
 from src.runtime.hooks import backend_types, turn_contributions
@@ -359,20 +359,16 @@ _trigger_walk_pairs: StatSignatureMemo[tuple[str, int],
 
 
 def _iter_trigger_stats(triggers_dir: str, dir_st: os.stat_result) -> list[tuple[str, os.stat_result]]:
-  """The shared trigger-dir stat walk (src.runtime.triggers.iter_trigger_file_stats).
+  """The shared trigger-dir stat walk (src.runtime.trigger_files.iter_trigger_file_stats).
 
   *dir_st* is the directory stat the caller holds from before its walk — the
-  memo's stat-before-read half. Reached lazily because src.runtime.triggers
-  imports SessionManager from this module, the same lazy seam the recap import
-  below uses.
+  memo's stat-before-read half.
   """
   memo_key = (triggers_dir, dir_st.st_mode)
   pairs = _trigger_walk_pairs.fresh(memo_key, dir_st)
   if pairs is not None:
     return pairs
-  from src.runtime.triggers import iter_trigger_file_stats
-
-  pairs = iter_trigger_file_stats(triggers_dir)
+  pairs = trigger_files.iter_trigger_file_stats(triggers_dir)
   _trigger_walk_pairs.record(memo_key, dir_st, pairs)
   return pairs
 

@@ -451,3 +451,7 @@ Known-alive symbols:
   Never delete on that evidence: the cancel tests' `patch(CHAT_CANCEL_MASTER_PATCH_TARGET, ...)`
   resolves the attribute through the loader and raises AttributeError, and the chat cancel
   endpoint breaks on its first production call.
+- `src/runtime/v1_sessions.py` (the start refusal for a home that holds v1 sessions) and
+  `scripts/v1_session_conversion.py` (the converter that the refusal names) — kept on purpose for
+  other CharlieBot homes that still hold v1 sessions. A home on this host holds no v1 session, so
+  the migration-code kind of Step 1 seems to match them. Never delete either file or its tests.

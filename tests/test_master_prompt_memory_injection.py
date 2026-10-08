@@ -76,12 +76,15 @@ def test_staging_content_absent(tmp_path: pathlib.Path) -> None:
 
 
 def test_missing_memory_dir_still_builds(tmp_path: pathlib.Path) -> None:
-  """A missing memory_dir is the one tolerated degradation: prompt still builds."""
-  cfg = conftest.make_instruction_cfg(tmp_path)  # memory_dir left unpopulated
+  """A missing memory_dir gets the store scaffold on first read: the prompt builds with no memory block."""
+  cfg = conftest.make_instruction_cfg(tmp_path)  # memory_dir not created yet
+  assert not cfg.memory_dir.exists()
   out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   assert "BASE PROMPT" in out
-  assert "User prefers dark UI." not in out
+  assert memory.INDEX_HEADER not in out
+  for name in (".git", "topics", ".gitignore", "entries", "staging"):
+    assert (cfg.memory_dir / name).exists()
 
 
 # ---------------------------------------------------------------------------
@@ -89,15 +92,16 @@ def test_missing_memory_dir_still_builds(tmp_path: pathlib.Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _real_repo_cfg() -> types.SimpleNamespace:
+def _real_repo_cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
   """Instruction inputs whose charlie_bot_repo is this checkout's real prompts tree; the host
-  override and memory paths do not exist, so the built instructions carry exactly the rule files."""
-  missing = conftest.ROOT / "does-not-exist"
+  override path does not exist and memory_dir is an empty temporary store, so the built
+  instructions carry exactly the rule files."""
+  home = tmp_path / "home"
   return types.SimpleNamespace(
       charlie_bot_repo=conftest.ROOT,
-      claude_md_file=missing / "MASTER_AGENT_PROMPT.md",
-      memory_dir=missing / "memory",
-      charliebot_home=missing,
+      claude_md_file=home / "MASTER_AGENT_PROMPT.md",
+      memory_dir=home / "memory",
+      charliebot_home=home,
   )
 
 
@@ -110,11 +114,11 @@ def _repo_section_headings(filename: str) -> list[str]:
   ]
 
 
-def test_main_session_instructions_carry_every_manager_section() -> None:
+def test_main_session_instructions_carry_every_manager_section(tmp_path: pathlib.Path) -> None:
   """A main session (no platform origin) gets master.md plus manager_workflows.md: every
   second-level heading the old single-file master.md carried is present exactly once across
   the two files, and the manager workflows file's full text rides verbatim."""
-  cfg = _real_repo_cfg()
+  cfg = _real_repo_cfg(tmp_path)
   out = master_cc.master_cc_run._build_instructions_content(_main_session(), cfg, None)
   assert out is not None
   master_headings = _repo_section_headings("master.md")
@@ -128,10 +132,10 @@ def test_main_session_instructions_carry_every_manager_section() -> None:
   assert workflows in out
 
 
-def test_thread_session_instructions_carry_the_thread_brief_and_no_moved_sections() -> None:
+def test_thread_session_instructions_carry_the_thread_brief_and_no_moved_sections(tmp_path: pathlib.Path) -> None:
   """A thread session gets master.md plus thread_session.md: the brief's full text rides
   verbatim and none of the six manager-workflow sections enters the instructions."""
-  cfg = _real_repo_cfg()
+  cfg = _real_repo_cfg(tmp_path)
   out = master_cc.master_cc_run._build_instructions_content(_thread_session(), cfg, None)
   assert out is not None
   brief = (conftest.ROOT / "prompts" / "thread_session.md").read_text(encoding="utf-8")

@@ -274,7 +274,8 @@ it to the session cwd (CLAUDE.md for Claude Code, AGENTS.md for the other backen
 - Automatic cross-backend review: on worker success, a Review Agent is spawned using a different LLM backend (configurable via `backends.preference`). Failed reviewers retry with the next untried backend
 - Master trigger on completion: combined worker+reviewer summary is sent to the master agent via `trigger_master()` for user notification and follow-up decisions
 - `SessionManager`, `ThreadManager`, `PlanRegistryManager`, `TriggerManager`, `StreamingManager`
-- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml` and the memory store scaffold (git repo + topics vocabulary)
+- `init_charliebot_home()` — seeds `~/.charliebot/` on first run with default `config.yaml`
+- Memory store: `ensure_store` (`src/features/memory/memory.py`) creates the scaffold (git repo + topics vocabulary) at first use, so a fresh home has no `memory/` directory until then
 - Memory updates: sessions stage candidates via `charliebot memory add` (writes `staging/`, never `entries/`); the daily memory curator builds a user-approved diff that admits, revises, or evicts entries
 
 **WebSocket Endpoints**

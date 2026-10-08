@@ -21,6 +21,9 @@ the ``proposal`` branch, worked in the sibling ``memory-proposal`` worktree,
 holds the drafted curation as commits, and only ``land`` — one approved
 version — fast-forwards the live checkout the sessions read.
 
+``query`` (through ``load_store``), ``add`` and the ``proposal`` verbs create the store
+scaffold on first use (``memory.ensure_store``); ``lint`` reports the tree as it finds it.
+
 A present CHARLIEBOT_RUN_TOKEN fixes the query's audience from the verified,
 active owning Run's role: omitted or contradictory --audience cannot broaden
 it, and an invalid, unknown, inactive, not-launched or wrong-instance token
@@ -203,6 +206,8 @@ def _resolve_run_scoped_audience(token: str) -> str:
 
 
 def _cmd_add(args: argparse.Namespace) -> None:
+  from src.features.memory import memory
+
   body = Path(args.file).read_text(encoding="utf-8") if args.file else sys.stdin.read()
   lines = body.split("\n")
   if not lines or not lines[0].startswith("# "):
@@ -215,13 +220,12 @@ def _cmd_add(args: argparse.Namespace) -> None:
   # A title with no slug-charset character (pure CJK, for example) falls back
   # to the fixed ``capture`` segment; the write still proceeds.
   slug = _slugify(title) or "capture"
-  home = charliebot_home_dir()
-  sess8 = _session_slug8(home / "sessions")
+  memory_dir = _memory_dir()
+  memory.ensure_store(memory_dir)
+  sess8 = _session_slug8(_sessions_root())
   ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
   filename = f"{ts}-{sess8}-{slug}.md"
-  staging_dir = home / "memory" / "staging"
-  staging_dir.mkdir(parents=True, exist_ok=True)
-  target = staging_dir / filename
+  target = memory_dir / "staging" / filename
   target.write_text(body, encoding="utf-8")
   print(str(target))
 
@@ -246,11 +250,12 @@ def _cmd_lint(args: argparse.Namespace) -> None:
 
 def _cmd_proposal(args: argparse.Namespace) -> None:
   # Deferred off the module wall: only the proposal verbs import the store's PR
-  # machinery (tarfile + subprocess ride its import chain); query/add/lint never
+  # machinery (tarfile + tempfile ride its import chain); query/add/lint never
   # touch it.
-  from src.features.memory import memory_proposal
+  from src.features.memory import memory, memory_proposal
 
   live = _memory_dir()
+  memory.ensure_store(live)
   try:
     if args.proposal_command == "open":
       fields = memory_proposal.open_proposal(live)

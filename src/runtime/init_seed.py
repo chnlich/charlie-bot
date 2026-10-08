@@ -1,10 +1,7 @@
 """Seed and first-run initialization of the ~/.charliebot/ directory structure."""
 
-import copy
 import os
-import pathlib
 import shutil
-import subprocess
 
 from src.infra import config, yaml_utils
 
@@ -19,17 +16,6 @@ def _default_config_yaml() -> dict:
   }
 
 
-DEFAULT_MEMORY_TOPICS = (
-    "profile resident\n"
-    "communication resident\n"
-    "workflow resident\n"
-    "rulings resident\n"
-    "host resident\n"
-    "charliebot\n")
-
-DEFAULT_MEMORY_GITIGNORE = "staging/\n"
-
-
 async def init_charliebot_home() -> None:
   """Ensure ~/.charliebot/ directory structure exists and seed default files."""
   cfg = config.get_config()
@@ -42,9 +28,6 @@ async def init_charliebot_home() -> None:
   ]
   for d in dirs:
     d.mkdir(parents=True, exist_ok=True)
-
-  # Seed the memory store scaffold (git repo + topics vocabulary + .gitignore)
-  _seed_memory_scaffold(cfg)
 
   # Seed config.yaml from the committed template if missing
   if not cfg.config_file.exists():
@@ -62,108 +45,3 @@ async def init_charliebot_home() -> None:
     template = cfg.charlie_bot_repo / "configs" / "credentials.example.yaml"
     shutil.copyfile(template, cfg.credentials_file)
     os.chmod(cfg.credentials_file, 0o600)
-
-
-def _seed_if_missing(path: pathlib.Path, content: str) -> None:
-  """Write content to path only if the file does not already exist."""
-  if not path.exists():
-    path.write_text(content, encoding="utf-8")
-
-
-def _seed_memory_scaffold(cfg: config.CharlieBotConfig) -> None:
-  """Seed the labeled-entry memory store at cfg.memory_dir (idempotent).
-
-  Creates the directory, runs ``git init`` when it is not already a repo, seeds
-  the topics vocabulary and .gitignore (never overwriting existing files), and
-  creates the ``entries/`` and ``staging/`` directories. The canon (entries/
-  and topics) is populated only by user-approved curation diffs, never here.
-  """
-  memory_dir = cfg.memory_dir
-  memory_dir.mkdir(parents=True, exist_ok=True)
-  if not (memory_dir / ".git").exists():
-    subprocess.run(["git", "init"], cwd=str(memory_dir), check=True, capture_output=True)
-  _seed_if_missing(memory_dir / "topics", DEFAULT_MEMORY_TOPICS)
-  _seed_if_missing(memory_dir / ".gitignore", DEFAULT_MEMORY_GITIGNORE)
-  (memory_dir / "entries").mkdir(exist_ok=True)
-  (memory_dir / "staging").mkdir(exist_ok=True)
-
-
-def seed_default_cron_tasks(cfg: config.CharlieBotConfig, *, dry_run: bool = False) -> list[dict]:
-  """Seed repo-owned default cron tasks into per-job host files by name.
-
-  Reads ``configs/cron.default.yaml`` from the repo and the host
-  ``~/.charliebot/config.d/cron.d/`` directory. For each default entry: if no
-  host file ``cron.d/<name>.yaml`` exists, create it with the entry body minus
-  ``name``, keeping the entry's ``prompt_file`` pointer intact (the pointed
-  file owns the prompt body and the host file carries only the path to it);
-  if one exists, change nothing about it. Never rewrites or drops host-only
-  files.
-
-  With ``dry_run`` the same validation and legacy tripwire run, nothing is
-  written or created, and a would-be seed reports ``would-create`` — the
-  preview ``./scripts/setup.sh -n`` shows must fail exactly where the real
-  run would.
-
-  Creates ``config.d/cron.d/`` when absent. Writes through
-  :func:`src.infra.yaml_utils.save_yaml` (the same writer ``src/features/cron/api.py``
-  uses). Validates every default entry before writing: each must construct a
-  :class:`config.ScheduledTaskConfig` after ``prompt_file``/``local`` resolution (an
-  entry with ``steps`` resolves each step's ``prompt_file`` exactly like the
-  task-level pointer) and every ``prompt_file`` must resolve to an existing
-  file. Fails loudly without writing if validation fails, and fails loudly
-  (writing nothing) when a legacy ``config.d/cron.yaml`` exists — migration to
-  the per-job layout is a human action, never automatic.
-
-  Returns a per-entry report: ``[{"name": str, "status": "created"|"exists"}]``
-  (``dry_run`` reports ``would-create`` instead of ``created``).
-
-  This is a library function invoked only by ``./scripts/setup.sh``. It is NOT
-  called by :func:`init_charliebot_home`, so the server startup path never
-  writes cron config — that is an invariant the tests assert directly.
-  """
-  repo_root = cfg.charlie_bot_repo
-  defaults_data = yaml_utils.load_yaml(repo_root / "configs" / "cron.default.yaml", default={})
-  default_entries = list(defaults_data.get("scheduled_tasks", []))
-
-  # Validate every default entry on a resolved copy before touching the host
-  # directory, so a bad repo default fails loudly without any partial write.
-  for entry in default_entries:
-    if not isinstance(entry, dict):
-      raise ValueError(f"invalid default cron entry (not a mapping): {entry!r}")
-    resolved = copy.deepcopy(entry)
-    resolved.pop("name", None)
-    config._resolve_prompt_file(resolved, repo_root)  # raises ValueError
-    for step in resolved.get("steps") or []:
-      if isinstance(step, dict):
-        config._resolve_prompt_file(step, repo_root)  # raises ValueError
-    config._resolve_local_timezone(resolved)
-    config.ScheduledTaskConfig(name=entry.get("name"), **resolved)  # raises on validation error
-
-  # A leftover legacy cron.yaml is a loud tripwire, never a silent fallback:
-  # refuse to seed (and write nothing) until a human migrates and removes it.
-  legacy_path = cfg.config_d_dir / "cron.yaml"
-  if legacy_path.exists():
-    raise ValueError(
-        f"legacy {legacy_path} present; not seeding. Split its entries into "
-        f"config.d/cron.d/<name>.yaml and remove cron.yaml (migration is manual)")
-
-  cron_d_dir = cfg.config_d_dir / "cron.d"
-  if not dry_run:
-    cron_d_dir.mkdir(parents=True, exist_ok=True)
-
-  report: list[dict] = []
-  for entry in default_entries:
-    name = entry.get("name")
-    path = cron_d_dir / f"{name}.yaml"
-    if path.exists():
-      report.append({"name": name, "status": "exists"})
-      continue
-    if dry_run:
-      report.append({"name": name, "status": "would-create"})
-      continue
-    body = {k: v for k, v in copy.deepcopy(entry).items() if k != "name"}
-    # Persist the pointer unchanged: the pointed file owns the prompt body,
-    # and this host file carries only its path.
-    yaml_utils.save_yaml(path, body)
-    report.append({"name": name, "status": "created"})
-  return report

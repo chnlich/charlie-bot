@@ -96,6 +96,16 @@ def _live_commit(store: Path, rel_path: Path, text: str, message: str) -> None:
 # --- open ---------------------------------------------------------------------
 
 
+def test_proposal_verb_on_a_fresh_home_creates_the_scaffold(tmp_path: Path, monkeypatch, capsys) -> None:
+  home = tmp_path / "home"
+  home.mkdir()
+  monkeypatch.setattr(CLI_MEMORY_HOME_PATCH_TARGET, lambda: home)
+  code, _out, _err = _run_cli(monkeypatch, capsys, "proposal", "status")
+  assert code == 1  # no proposal branch exists yet; the refusal comes after the scaffold step
+  mem = home / "memory"
+  assert (mem / ".git").exists() and (mem / "topics").is_file()
+
+
 def test_first_open_creates_branch_and_worktree(store: Path, monkeypatch, capsys) -> None:
   code, out, err = _run_cli(monkeypatch, capsys, "proposal", "open")
   assert code == 0, err

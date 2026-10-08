@@ -1,9 +1,10 @@
 """Turn contributions: how a feature package adds to a master turn.
 
 A master turn runs one path for every session: it builds the instruction segments, prepares state before the turn,
-picks the context window, renders chat events, and reacts when the turn ends. A feature package that takes part in
-one of these steps registers a ``TurnContribution`` from its ``register()`` function (the packages listed in
-``src/app/registrations.py``). The runtime asks every registered contribution at each step and names no feature.
+picks the context window, opens each user input in the prompt, renders chat events, and reacts when the turn ends.
+A feature package that takes part in one of these steps registers a ``TurnContribution`` from its ``register()``
+function (the packages listed in ``src/app/registrations.py``). The runtime asks every registered contribution at
+each step and names no feature.
 
 Vocabulary:
 
@@ -69,6 +70,13 @@ class TurnContribution:
     """
     return None
 
+  def input_preamble(self, meta: SessionMetadata, input_event: dict) -> str | None:
+    """The text that opens *input_event* (a user input) in the turn prompt, or None to open it with no text.
+
+    At most one contribution answers non-None for one event.
+    """
+    return None
+
   def event_renderers(self) -> Mapping[str, Callable[[dict], dict]]:
     """Chat renderers by event type: each takes the persisted event and returns the message dict.
 
@@ -127,6 +135,16 @@ def resolve_workflow_rules_file(meta: SessionMetadata) -> str:
       "workflow rules file",
       [(contribution, contribution.workflow_rules_file(meta)) for contribution in turn_contributions()])
   return DEFAULT_WORKFLOW_RULES_FILE if named is None else named
+
+
+def resolve_input_preamble(meta: SessionMetadata, input_event: dict) -> str | None:
+  """The preamble a contribution gives *input_event*, or None when none does.
+
+  Two contributions that give one raise ValueError.
+  """
+  return _the_one_answer(
+      "input preamble",
+      [(contribution, contribution.input_preamble(meta, input_event)) for contribution in turn_contributions()])
 
 
 def resolve_context_window(meta: SessionMetadata) -> int | None:

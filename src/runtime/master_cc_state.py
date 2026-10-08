@@ -36,7 +36,6 @@ class _WorkItem:
   session_meta: models.SessionMetadata
   user_content: str
   callbacks: models.SessionCallbacks
-  is_voice: bool
   auto_trigger: bool
   backend_option: models.BackendOption | None
   extra_claude_flags: list[str] | None

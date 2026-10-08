@@ -189,6 +189,7 @@ class TaskInputDispatcher:
       timestamp: str | None = None,
       from_session: str | None = None,
       from_session_name: str | None = None,
+      input_mode: str | None = None,
   ) -> dict:
     """Persist one input as a durable fact and return it.
 
@@ -198,9 +199,14 @@ class TaskInputDispatcher:
         ``event_type`` is the caller's proof of origin — the user-message
         route may mint USER only for operator callers (the route enforces
         that; this method refuses the mismatch as a backstop).
+        ``input_mode`` names how the user produced the message (the web
+        client sets it); the event stores it as ``input_mode``, and only a
+        user event carries one.
         """
     if event_type not in INPUT_EVENT_TYPES:
       raise TaskInvalidError(f"{event_type} is not a task input type")
+    if input_mode is not None and event_type != ET.USER:
+      raise TaskInvalidError(f"input_mode applies to a user message, not to {event_type}")
     if event_type == ET.USER and actor != ACTOR_USER:
       raise TaskForbiddenError("only verified operator input is a real user message")
     if event_type == ET.SCHEDULED_TRIGGER and actor != ACTOR_SYSTEM:
@@ -241,6 +247,8 @@ class TaskInputDispatcher:
         event["from_session"] = from_session
       if from_session_name is not None:
         event["from_session_name"] = from_session_name
+      if input_mode is not None:
+        event["input_mode"] = input_mode
       if tree.task_state(session_id) != "open":
         # A real user message is the one input that restores an archived
         # chain: the target and every archived ancestor reopen (topmost

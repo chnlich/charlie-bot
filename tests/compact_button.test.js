@@ -183,7 +183,7 @@ test('a typed /compact posts through the shared message-send path like the Compa
   assert.deepEqual(JSON.parse(calls[0].opts.body), {
     content: '/compact',
     uploaded_files: [],
-    is_voice: false,
+    input_mode: null,
   });
 
   // The button path lands on the same URL and body.
@@ -192,6 +192,37 @@ test('a typed /compact posts through the shared message-send path like the Compa
   assert.equal(calls.length, 2);
   assert.equal(calls[1].url, calls[0].url);
   assert.deepEqual(JSON.parse(calls[1].opts.body), { content: '/compact' });
+});
+
+// ---------------------------------------------------------------------------
+// 3c. A dictated message names its input mode on the wire, once.
+// ---------------------------------------------------------------------------
+test('a dictated message posts input_mode voice and the next typed message posts none', async () => {
+  const input = createElement({id: 'msg-input'});
+  input.style = {};
+  const elements = new Map([
+    ['messages', new FakeElement('DIV')],
+    ['msg-input', input],
+  ]);
+  const context = loadChatContext(elements);
+  context.DRAFT_KEY = null;
+  context.startThinking = () => {};
+  context.stopThinking = () => {};
+  const calls = [];
+  context.fetch = (url, opts) => { calls.push({ url, opts }); return Promise.resolve({ ok: true }); };
+
+  context.Chat.setVoiceContributed(true);
+  input.value = 'dictated words';
+  await context.sendMessage();
+  input.value = 'typed words';
+  await context.sendMessage();
+
+  assert.deepEqual(
+    calls.map((call) => JSON.parse(call.opts.body)),
+    [
+      { content: 'dictated words', uploaded_files: [], input_mode: 'voice' },
+      { content: 'typed words', uploaded_files: [], input_mode: null },
+    ]);
 });
 
 // ---------------------------------------------------------------------------

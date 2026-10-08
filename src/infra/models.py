@@ -649,7 +649,7 @@ class UploadedFileRef(BaseModel):
 class SendMessageRequest(BaseModel):
   content: str
   uploaded_files: list[UploadedFileRef] = Field(default_factory=list)
-  is_voice: bool = False
+  input_mode: str | None = None
 
 
 class SwitchBackendRequest(BaseModel):

@@ -54,11 +54,11 @@ async function sendMessage() {
   const payloadFiles = toPayloadFiles(uploadedFilesForPayload);
   clearSentUploadedFiles(uploadedFilesForPayload.map((file) => file.id));
 
-  const isVoice = voiceContributed;
+  const inputMode = voiceContributed ? 'voice' : null;
 
   // Optimistic UI: append user message and bump session to top
   pendingUserEchoes++;
-  appendMessage('user', content, isVoice, new Date().toISOString(), payloadFiles);
+  appendMessage('user', content, inputMode, new Date().toISOString(), payloadFiles);
   bumpCurrentSessionToTop();
   input.value = '';
   input.style.height = 'auto';
@@ -70,7 +70,7 @@ async function sendMessage() {
   startThinking({keepSendEnabled: true});
 
   try {
-    const res = await postChatMessage(content, { uploaded_files: payloadFiles, is_voice: isVoice });
+    const res = await postChatMessage(content, { uploaded_files: payloadFiles, input_mode: inputMode });
     if (!res.ok) throw new Error(String(res.status));
   } catch (err) {
     console.error('Send failed:', err);
@@ -94,7 +94,7 @@ async function compactContext() {
   if (!confirmed) return;
 
   pendingUserEchoes++;
-  appendMessage('user', '/compact', false, new Date().toISOString(), null);
+  appendMessage('user', '/compact', null, new Date().toISOString(), null);
 
   try {
     const res = await postChatMessage('/compact');

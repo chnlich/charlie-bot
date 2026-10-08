@@ -635,7 +635,7 @@ class MessageAggregator:
                   "role": "user",
                   "content": normalized["content"],
                   "uploaded_files": normalized["uploaded_files"],
-                  "is_voice": ev.get("is_voice", False),
+                  "input_mode": ev.get("input_mode"),
                   "event_index": idx,
                   "id": ev_id,
                   "timestamp": ev.get("timestamp"),

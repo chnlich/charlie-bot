@@ -42,6 +42,7 @@ from src.features.voice import transcriber
 from src.features.voice.transcription import registry
 from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend
 from src.features.voice.transcription.local import LocalTranscriptionBackend
+from src.features.voice.turn_contribution import VOICE_INPUT_MODE
 from src.infra.config import CharlieBotConfig, load_config
 from src.infra.models import utc_now_iso
 
@@ -132,7 +133,9 @@ def find_ground_truth(session_dir: Path, recorded_at: datetime) -> str | None:
         event = json.loads(line)
       except json.JSONDecodeError as exc:
         raise ValueError(f"malformed JSON at {events_path}:{line_number}: {exc}") from exc
-      if event.get("type") != "user" or event.get("is_voice") is not True:
+      # A stored event carries ``input_mode``, or ``is_voice`` when it was written under the earlier flag.
+      dictated = event.get("input_mode") == VOICE_INPUT_MODE or event.get("is_voice") is True
+      if event.get("type") != "user" or not dictated:
         continue
       content = event.get("content")
       if not isinstance(content, str):

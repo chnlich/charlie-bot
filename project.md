@@ -192,7 +192,7 @@ A local git repo at `~/.charliebot/memory/` holds one durable fact or rule set p
 3. Audio uploaded to backend
 4. **Local speech transcription** decodes the complete recording offline: the VAD segments it and each segment decodes in one shot (sherpa-onnx Qwen3-ASR on CPU by default, `voice.engine=qwen3_hf` on GPU hosts; supports Chinese, English, mixed, and ~30 languages)
 5. Transcription displayed in UI first
-6. Passed to Master with a disclaimer prefix: the displayed message stays verbatim, and the prompt the agent receives carries the fixed voice note from `_VOICE_DISCLAIMER` (`src/runtime/master_cc_run.py`)
+6. Passed to Master with a note: the displayed message stays verbatim, the web client sends the message with `input_mode: "voice"`, and the voice package's turn contribution (`src/features/voice/turn_contribution.py`) opens the prompt's copy of the message with the fixed voice note (`VOICE_NOTE`)
 
 ---
 

@@ -78,7 +78,7 @@ from src.runtime.control_events import (
     stable_run_id,
     stable_withheld_event_id,
 )
-from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributions
 from src.runtime.hooks.sequence_controllers import binding_for, controller_for
 from src.runtime.master_cc_state import TaskRunBinding
 from src.runtime.run_token import RunTokenClaims, sign_run_token
@@ -186,13 +186,14 @@ def free_disk_gib(path: Path) -> float:
   return shutil.disk_usage(probe).free / (1024**3)
 
 
-def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
+def compose_input_prompt(meta: SessionMetadata, events: list[dict]) -> tuple[str, list[dict]]:
   """The manager-turn prompt body from its exact durable input batch.
 
     Real user input rides verbatim (its event is the durable fact the Run
-    acknowledges — no second synthetic USER copy is persisted); relays,
-    child reports and scheduled triggers keep their own typed framing so the
-    manager sees the provenance the event carries. Attachments ride the turn.
+    acknowledges — no second synthetic USER copy is persisted), opened by the
+    preamble a turn contribution gives it, if any; relays, child reports and
+    scheduled triggers keep their own typed framing so the manager sees the
+    provenance the event carries. Attachments ride the turn.
     """
   parts: list[str] = []
   uploads: list[dict] = []
@@ -200,7 +201,8 @@ def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
     event_type = event.get("type")
     content = str(event.get("content") or "")
     if event_type == ET.USER:
-      parts.append(content)
+      preamble = turn_contributions.resolve_input_preamble(meta, event)
+      parts.append(content if preamble is None else f"{preamble}\n{content}")
     elif event_type == ET.AGENT_MESSAGE:
       parts.append(
           f"[Message from session {event.get('from_session_name') or event.get('from_session') or 'unknown'}] "
@@ -1110,7 +1112,7 @@ class TaskExecutionAdapter:
     transport_dir = self._tree.runs.run_dir(session_id, run_id)
     batch_ids = set(run.input_event_ids)
     batch_events = [e for e in self._tree.fact_history(session_id) if str(e.get("id")) in batch_ids]
-    content, uploaded_files = compose_input_prompt(batch_events)
+    content, uploaded_files = compose_input_prompt(meta, batch_events)
     if not content:
       raise TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
 
@@ -1405,7 +1407,7 @@ class TaskExecutionAdapter:
     spec_text = task.goal if (task is not None and task.goal.strip()) else ""
     batch_ids = set(run.input_event_ids)
     batch = [e for e in self._tree.fact_history(meta.id) if str(e.get("id")) in batch_ids]
-    content, _uploads = compose_input_prompt(batch) if batch else ("", [])
+    content, _uploads = compose_input_prompt(meta, batch) if batch else ("", [])
     description = "\n\n".join(part for part in (spec_text, content) if part)
     if not description.strip():
       raise TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")

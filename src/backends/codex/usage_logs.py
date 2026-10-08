@@ -127,3 +127,10 @@ def quota_accounts() -> list[usage_sources.QuotaAccount]:
   from src.backends.codex import usage_quota
 
   return usage_quota.quota_accounts()
+
+
+def sweep(scope: usage_sources.SweepScope) -> usage_sources.SourceSweep:
+  """Codex's part of the cold-storage sweep; the sweep module loads on the first call."""
+  from src.backends.codex import usage_sweep
+
+  return usage_sweep.sweep(scope)

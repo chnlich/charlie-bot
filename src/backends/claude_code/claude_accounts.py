@@ -42,8 +42,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code.login_dirs import CREDENTIALS_FILE, claude_config_dir
 from src.backends.claude_code.options import CcClaudeBackend
-from src.infra.home import CREDENTIALS_FILE
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption
 from src.runtime.hooks.usage_sources import (
@@ -208,9 +208,6 @@ def continuation_domain(option: BackendOption, cfg: CharlieBotConfig) -> str:
   if option.type == "cc-claude":
     if is_pooled(option, cfg):
       return POOL_DOMAIN
-    # Lazy: the config model stack stays out of this module's import.
-    from src.infra.config import claude_config_dir
-
     return str(claude_config_dir())
   return option.id
 
@@ -791,8 +788,8 @@ def transcript_tail_line(path: Path) -> str | None:
 def retire_transcript_copies(cfg: CharlieBotConfig, cc_session_id: str, keep: int = 2) -> None:
   """Retire every pool copy of *cc_session_id*'s transcript except the newest *keep*.
 
-  The live-session counterpart of storage_cool's cold-session sweep
-  (``src/features/storage/storage_cool.py::_sweep_claude_transcripts``): storage_cool
+  The live-session counterpart of the cold-session sweep
+  (``src/backends/claude_code/usage_sweep.py::_sweep_claude_transcripts``): the sweep
   retires whole transcript trees of sessions no reader can reach again, this
   retires the redundant copies a relay leaves behind for one still-live
   session -- the two deletion sets are disjoint, so neither can delete what the

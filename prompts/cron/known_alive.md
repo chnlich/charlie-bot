@@ -229,7 +229,7 @@ Known-alive symbols:
   the only overrides of that pair — fire there; parsers without the pair either pin
   `convert_charrefs=True` (`_TreeBuilder`), under which the stdlib folds
   references into `handle_data`, or inherit the stdlib no-op defaults (`_BoundaryParser`).
-- `isolation_level` (`src/features/storage/storage_cool.py`) — attribute write on a stdlib
+- `isolation_level` (`src/backends/opencode/usage_sweep.py`) — attribute write on a stdlib
   `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
   (`None` switches the connection to per-statement autocommit transactions, which the
   inline comment pins: one failed DELETE keeps the rest of the batch alive). Nothing in

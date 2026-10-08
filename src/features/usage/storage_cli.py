@@ -3,7 +3,7 @@
 Usage:
   charliebot storage cool [--dry-run] [--min-idle-days N] [--session ID] [--vacuum] [--force]
 
-The sweep itself lives in src.features.storage.storage_cool; the scheduler's ``cool_storage``
+The sweep itself lives in src.features.usage.storage_cool; the scheduler's ``cool_storage``
 handler calls the same function, so the two cannot drift.
 """
 
@@ -17,7 +17,7 @@ def _cmd_cool(args: argparse.Namespace) -> None:
   # The sweep and config stacks ride the one sweep command that needs them: a
   # deferral here keeps --help and parser errors off their import chains (the
   # src.runtime.cli.config deferral shape).
-  from src.features.storage import storage_cool
+  from src.features.usage import storage_cool
   from src.infra import config
 
   try:

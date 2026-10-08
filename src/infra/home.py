@@ -1,5 +1,4 @@
-"""The profile-home and claude-login-directory resolution: the one place that
-reads ``CHARLIEBOT_HOME`` and the Claude login-dir derivations.
+"""The profile-home resolution: the one place that reads ``CHARLIEBOT_HOME``.
 
 Every state path derives from :func:`charliebot_home_dir`. A feature CLI that
 keeps a store imports from here directly: its store root is a pure derivation
@@ -18,24 +17,9 @@ CHARLIEBOT_HOME_ENV = "CHARLIEBOT_HOME"
 # writes it onto a cc-claude child (claude_code._prepare_env), the pool strips
 # any inherited value where it pinned the directory itself (master_cc_run,
 # claude_compaction.compaction_env), and the in-process reader
-# src.infra.config.claude_config_dir reads it back. One spelling everywhere.
+# src.backends.claude_code.login_dirs.claude_config_dir reads it back. One spelling everywhere.
 # It lives beside the profile home so it resolves without the config model stack.
 CLAUDE_CONFIG_DIR_ENV_VAR = "CLAUDE_CONFIG_DIR"
-
-# The OAuth credential filename inside a login directory: the account pool reads
-# it for health, and the usage provider derives its per-account path from it.
-# It lives beside the login-dir names.
-CREDENTIALS_FILE = ".credentials.json"
-
-
-def default_claude_dir() -> pathlib.Path:
-  """The default claude login directory (``~/.claude``), read from HOME on every call.
-
-  The terminal fallback of :func:`src.infra.config.claude_config_dir`'s order and
-  the root the cold-storage reader re-derives per call, so it honors a
-  redirected HOME (tests isolate stores that way).
-  """
-  return pathlib.Path.home() / ".claude"
 
 
 def default_opencode_db() -> pathlib.Path:

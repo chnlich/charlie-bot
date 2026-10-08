@@ -63,14 +63,10 @@ from collections.abc import Iterator
 import orjson
 
 from src.features.usage import CHARLIE_BOT_SOURCE, usage_ledger
-from src.infra import config, home, ndjson
+from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime import runs
 from src.runtime.hooks import usage_sources
-
-# The default opencode database, which the cold-storage sweep also names; its one spelling is
-# home.default_opencode_db.
-DEFAULT_OPENCODE_DB = home.default_opencode_db()
 
 # Account label for a master-run capture whose context model matches no run_logs_only backend
 # in config.yaml (a retired backend's master runs, or an ad-hoc model).

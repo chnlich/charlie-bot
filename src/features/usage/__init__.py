@@ -17,3 +17,6 @@ def register() -> None:
   wiring.register_command("usage-ledger", "src.features.usage.cli")
   scheduled_handlers.register_handler(
       "usage_ledger", "src.features.usage.usage_ledger", attr="run_scheduled_usage_ledger")
+  wiring.register_command("storage", "src.features.usage.storage_cli")
+  scheduled_handlers.register_handler(
+      "cool_storage", "src.features.usage.storage_cool", attr="run_scheduled_cool_storage")

@@ -12,15 +12,22 @@ Directions: infra imports infra only. runtime imports runtime and infra. A backe
 runtime and infra. The backends in ``BACKEND_VARIANTS`` may also import backends.claude_code, and the features in
 ``CHAT_CHANNELS`` may also import features.chat_threads. app imports every group.
 
+Inside runtime, ``RUNTIME_LAYERS`` puts every module in one of 8 layers, and a module imports only modules of its own
+layer or a lower layer. The import graph of src/runtime has no cycle, and neither has the import graph of src/infra.
+A runtime module that no entry of the table covers fails a test, and so does an entry that covers no module. A
+package ``__init__.py`` is in no layer and is exempt as importer and as target of both rules.
+
 An import counts where it stands: module level, function body, ``if TYPE_CHECKING`` block, relative form. A string
 whose whole value is a dotted ``src.`` module path counts as an import of the longest existing module: lazy
 loaders, the CLI command table and patch targets name modules this way. A longer string counts one import per
 ``src.`` module path embedded in it, the pieces of an f-string included. A docstring — the first statement of a
 module, class or function, when that statement is a bare string — counts no reference. A module path built at
-runtime hides its target from this check, so building one fails it.
+runtime hides its target from this check, so building one fails it. The layer rule and the cycle rule count imports
+the same way.
 
 structure_exceptions.txt records the reverse imports that predate the groups: one row per
-``importer file -> imported file`` pair.
+``importer file -> imported file`` pair. It holds group directions only: the layer and cycle checks have no exception
+table, and a break is fixed in the code.
 """
 
 import ast
@@ -41,6 +48,48 @@ EMBEDDED = re.compile(r"(?<![\w.])src(?:\.[A-Za-z_]\w*)+")
 DEPEND_ON_THE_RUNTIME = (
     "Depend on the runtime's public interface: the imported package registers its "
     "implementation with the runtime, and the importer looks it up there.")
+FIX_THE_UPWARD_IMPORT = (
+    "Fix it in one of four ways. Give the lower module a narrow protocol that the higher module satisfies. "
+    "Give the owning module an instance accessor. Move the shared code to the lower module. Delete the forwarder.")
+
+
+class Layer(NamedTuple):
+  """One layer of the runtime: its number, its name, and its entries. An entry is a module name relative to
+  ``src.runtime``, or a package name that covers every module below it."""
+  number: int
+  name: str
+  entries: tuple[str, ...]
+
+
+# The highest layer comes first. A module imports modules of its own layer or a lower layer.
+RUNTIME_LAYERS = (
+    Layer(8, "entry points", ("api", "cli", "init")),
+    Layer(
+        7, "execution", (
+            "autonamer", "master_cc", "master_cc_queue", "master_cc_run", "master_trigger", "spawner", "task_execution",
+            "task_recovery", "triggers")),
+    Layer(
+        6, "task tree", ("session_dispatch", "task_completion", "task_prompts", "task_sessions", "worker_transcript")),
+    Layer(
+        5, "session services", (
+            "control_sink", "scheduled_sessions", "session_anchors", "session_fork", "session_lifecycle",
+            "session_listing", "session_search", "session_sidebar", "session_successor", "spawner_backends",
+            "takeoff_gate")),
+    Layer(
+        4, "agent processes", (
+            "agent_environment", "agent_process.base", "agent_process.deferred_build", "agent_process.spawn",
+            "master_cc_state", "session_events", "streaming", "worker")),
+    Layer(
+        3, "records and events", (
+            "control_events", "home_writer_fence", "launch_loop", "message_aggregator", "message_projection", "review",
+            "runs", "session_store", "session_usage", "spawner_prompt", "trigger_files")),
+    Layer(2, "hooks", ("hooks", "templating")),
+    Layer(
+        1, "foundation", (
+            "agent_process.pty_common", "chat_events", "file_urls", "finalize_effects", "init_seed", "message_events",
+            "model_family", "run_identity", "run_token", "sidebar_state", "task_errors", "thinking_state",
+            "v1_sessions", "verify_trailer", "worktree_trash")),
+)
 
 
 class Reference(NamedTuple):
@@ -205,6 +254,114 @@ def recorded_pairs() -> set[tuple[str, str]]:
   return pairs
 
 
+def runtime_name(rel: str) -> str | None:
+  """The name of a runtime module relative to ``src.runtime``; None for another file and for a package ``__init__``."""
+  if not rel.startswith("src/runtime/") or rel.endswith("/__init__.py"):
+    return None
+  return ".".join(Path(rel).with_suffix("").parts[2:])
+
+
+def runtime_files(root: Path) -> list[str]:
+  """The repo-relative paths of the runtime modules under ``root``."""
+  return [rel for rel in module_index(root).values() if runtime_name(rel) is not None]
+
+
+def covers(entry: str, module: str) -> bool:
+  """Whether a layer entry names ``module`` or the package that holds it."""
+  return module == entry or module.startswith(f"{entry}.")
+
+
+def layer_of(module: str, layers: tuple[Layer, ...]) -> Layer | None:
+  """The one layer whose entries cover the runtime module ``module``; None when no layer covers it."""
+  holding = [layer for layer in layers if any(covers(entry, module) for entry in layer.entries)]
+  if len(holding) > 1:
+    raise ValueError(f"{module} is covered by layers {[layer.number for layer in holding]}; keep it in one.")
+  return holding[0] if holding else None
+
+
+def layer_breaks(structure: Structure, layers: tuple[Layer, ...]) -> list[str]:
+  """One failure line per reference from a runtime module to a module of a higher layer. A module that no layer
+  covers is left to the completeness check."""
+  failures = []
+  for reference in structure.references:
+    importer, imported = runtime_name(reference.importer), runtime_name(reference.target)
+    if importer is None or imported is None:
+      continue
+    low, high = layer_of(importer, layers), layer_of(imported, layers)
+    if low is None or high is None or high.number <= low.number:
+      continue
+    failures.append(
+        f"{reference.importer}:{reference.line}: layer {low.number} ({low.name}) module {reference.importer} "
+        f"imports {reference.target} (layer {high.number}, {high.name}); layer {low.number} may import only "
+        f"layers 1 to {low.number}. {FIX_THE_UPWARD_IMPORT}")
+  return failures
+
+
+def unplaced_modules(files: list[str], layers: tuple[Layer, ...]) -> list[str]:
+  """One failure line per runtime file that no layer covers."""
+  return [
+      f"{rel}: no layer in the runtime layer table; add it to the layer of the modules it serves." for rel in files
+      if layer_of(runtime_name(rel), layers) is None
+  ]
+
+
+def stale_entries(files: list[str], layers: tuple[Layer, ...]) -> list[str]:
+  """One failure line per layer entry that covers no runtime file."""
+  modules = [runtime_name(rel) for rel in files]
+  return [
+      f"{entry}: names no runtime module; remove it from the layer table." for layer in layers
+      for entry in layer.entries if not any(covers(entry, module) for module in modules)
+  ]
+
+
+def strongly_connected(edges: dict[str, dict[str, int]]) -> list[list[str]]:
+  """The groups of two or more modules that all reach each other along ``edges`` (importer -> target -> line)."""
+  order: dict[str, int] = {}
+  low: dict[str, int] = {}
+  stack: list[str] = []
+  groups = []
+
+  def visit(node: str) -> None:
+    order[node] = low[node] = len(order)
+    stack.append(node)
+    for target in edges.get(node, {}):
+      if target not in order:
+        visit(target)
+        low[node] = min(low[node], low[target])
+      elif target in stack:
+        low[node] = min(low[node], order[target])
+    if low[node] == order[node]:
+      group = [stack.pop()]
+      while group[-1] != node:
+        group.append(stack.pop())
+      if len(group) > 1:
+        groups.append(group)
+
+  for node in sorted(edges):
+    if node not in order:
+      visit(node)
+  return groups
+
+
+def import_cycles(structure: Structure, package: str) -> list[str]:
+  """One failure message per group of modules under the path prefix ``package`` that import each other in a ring.
+  It names the members, then gives one ``importer:line -> target`` line for each edge inside the group."""
+  edges: dict[str, dict[str, int]] = {}
+  for reference in structure.references:
+    if all(path.startswith(package) and not path.endswith("/__init__.py")
+           for path in (reference.importer, reference.target)):
+      edges.setdefault(reference.importer, {}).setdefault(reference.target, reference.line)
+  failures = []
+  for group in strongly_connected(edges):
+    members = sorted(group)
+    lines = [
+        f"  {importer}:{line} -> {target}" for importer in members for target, line in edges[importer].items()
+        if target in group
+    ]
+    failures.append("\n".join([f"import cycle among {len(members)} modules: {', '.join(members)}", *lines]))
+  return failures
+
+
 # The synthetic tree of the scan test: runtime/core.py names one module of features/alpha once per line below, in
 # every import form, as a whole string, and embedded in a command string and a prose f-string, then builds two
 # module paths (the "src.features." prefixes still name the features marker). The docstring of `documented` names
@@ -236,10 +393,61 @@ FORMS_SOURCE = textwrap.dedent(
       return 1
     """)
 
+# The synthetic tree of the layer test, under the table SMALL_LAYERS. bottom.py (layer 1) imports top (layer 3)
+# four ways: at module level, in a `TYPE_CHECKING` block, in a function body and as a module-path string. It also
+# imports the marker of the layer-3 package `upper`, which passes. top.py imports ring_a (layer 2), which passes.
+# ring_a.py and ring_b.py (layer 2) import each other, once at module level and once in a function body. The marker
+# of `upper` and upper/view.py import each other, which no check counts. left.py and right.py of src/infra import
+# each other. unlisted.py is in no layer, and the table lists `gone`, which no module matches.
+SMALL_LAYERS = (
+    Layer(3, "top", ("top", "upper")),
+    Layer(2, "middle", ("ring_a", "ring_b")),
+    Layer(1, "bottom", ("bottom", "gone")),
+)
+LAYERED_MODULES = {
+    "server.py": "",
+    "src/__init__.py": "",
+    "src/runtime/__init__.py": "",
+    "src/runtime/unlisted.py": "",
+    "src/runtime/top.py": "from src.runtime import ring_a\n",
+    "src/runtime/ring_a.py": "from src.runtime import ring_b\n",
+    "src/runtime/ring_b.py": "def back():\n  from src.runtime import ring_a\n",
+    "src/runtime/upper/__init__.py": "from src.runtime.upper import view\n",
+    "src/runtime/upper/view.py": "from src.runtime.upper import VIEWS\n",
+    "src/infra/__init__.py": "",
+    "src/infra/left.py": "from src.infra import right\n",
+    "src/infra/right.py": "from src.infra import left\n",
+}
+BOTTOM_SOURCE = textwrap.dedent(
+    """\
+    from typing import TYPE_CHECKING
+
+    from src.runtime import top
+    from src.runtime.upper import VIEWS
+    if TYPE_CHECKING:
+      from src.runtime.top import Thing
+
+
+    def later():
+      from src.runtime import top as inner
+      return "src.runtime.top"
+    """)
+
+
+def write_tree(root: Path, modules: dict[str, str]) -> None:
+  for rel, source in modules.items():
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(source, encoding="utf-8")
+
 
 @pytest.fixture(scope="module")
 def structure() -> Structure:
   return scan(conftest.ROOT)
+
+
+@pytest.fixture(scope="module")
+def runtime_paths() -> list[str]:
+  return runtime_files(conftest.ROOT)
 
 
 def test_every_python_file_is_in_a_group(structure: Structure) -> None:
@@ -277,13 +485,32 @@ def test_no_module_path_is_built_at_runtime(structure: Structure) -> None:
       "Import the module by its full name instead." for built in structure.built_paths)
 
 
+def test_no_runtime_module_imports_a_higher_layer(structure: Structure) -> None:
+  failures = layer_breaks(structure, RUNTIME_LAYERS)
+  assert not failures, "\n".join(failures)
+
+
+def test_every_runtime_module_has_a_layer(runtime_paths: list[str]) -> None:
+  failures = unplaced_modules(runtime_paths, RUNTIME_LAYERS)
+  assert not failures, "\n".join(failures)
+
+
+def test_every_layer_entry_names_a_runtime_module(runtime_paths: list[str]) -> None:
+  failures = stale_entries(runtime_paths, RUNTIME_LAYERS)
+  assert not failures, "\n".join(failures)
+
+
+@pytest.mark.parametrize("package", ["src/runtime/", "src/infra/"], ids=["runtime", "infra"])
+def test_the_import_graph_has_no_cycle(structure: Structure, package: str) -> None:
+  failures = import_cycles(structure, package)
+  assert not failures, "\n\n".join(failures)
+
+
 def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
   """An import form the scan skips would let a reverse import in unseen."""
   modules = dict.fromkeys(EMPTY_MODULES, "")
   modules["src/runtime/core.py"] = FORMS_SOURCE
-  for rel, source in modules.items():
-    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-    (tmp_path / rel).write_text(source, encoding="utf-8")
+  write_tree(tmp_path, modules)
 
   found = scan(tmp_path)
 
@@ -293,3 +520,32 @@ def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
       {("src/runtime/core.py", line, "src/features/__init__.py") for line in (14, 15)})
   assert [built.line for built in found.built_paths] == [14, 15]
   assert {(r.importer, r.target) for r in violations(found)} == {("src/runtime/core.py", "src/features/alpha/impl.py")}
+
+
+def test_the_layer_checks_find_each_break(tmp_path: Path) -> None:
+  """A form of import the checks skip would let an upward import in unseen, and a package marker they count would
+  fail a clean tree."""
+  write_tree(tmp_path, {**LAYERED_MODULES, "src/runtime/bottom.py": BOTTOM_SOURCE})
+
+  found = scan(tmp_path)
+  files = runtime_files(tmp_path)
+
+  def subjects(failures: list[str]) -> list[str]:
+    return [failure.partition(": ")[0] for failure in failures]
+
+  assert found.ungrouped == []
+  assert subjects(layer_breaks(found, SMALL_LAYERS)) == [f"src/runtime/bottom.py:{line}" for line in (3, 6, 10, 11)]
+  assert subjects(unplaced_modules(files, SMALL_LAYERS)) == ["src/runtime/unlisted.py"]
+  assert subjects(stale_entries(files, SMALL_LAYERS)) == ["gone"]
+  [runtime_cycle] = import_cycles(found, "src/runtime/")
+  runtime_header, *runtime_edges = runtime_cycle.splitlines()
+  assert runtime_header.endswith("src/runtime/ring_a.py, src/runtime/ring_b.py")
+  assert runtime_edges == [
+      "  src/runtime/ring_a.py:1 -> src/runtime/ring_b.py", "  src/runtime/ring_b.py:2 -> src/runtime/ring_a.py"
+  ]
+  [infra_cycle] = import_cycles(found, "src/infra/")
+  infra_header, *infra_edges = infra_cycle.splitlines()
+  assert infra_header.endswith("src/infra/left.py, src/infra/right.py")
+  assert infra_edges == ["  src/infra/left.py:1 -> src/infra/right.py", "  src/infra/right.py:1 -> src/infra/left.py"]
+  with pytest.raises(ValueError, match="top"):
+    layer_of("top", (Layer(2, "first", ("top",)), Layer(1, "second", ("top",))))

@@ -28,6 +28,7 @@ from typing import NamedTuple
 
 from src.backends.claude_code import claude_accounts
 from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code.event_types import CLAUDE_ACCOUNT_LOGIN_REQUIRED
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 
@@ -37,11 +38,8 @@ MAX_RELAYS_PER_TURN = 3
 
 # Operator notice from the account pool (claude_accounts.py): one login lost its credentials or
 # failed to authenticate and needs an interactive `claude /login` in ``config_dir``. Fields:
-# account, config_dir, reason ("auth_failed" | "empty_credentials"). The chat renders it
-# account-free (src/runtime/message_aggregator.py spells the same value); the account and
-# directory are for the server log and the usage panel. The emit sites also label their
-# server-log lines with this constant, so the chat event type and the log label stay the same string.
-CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
+# account, config_dir, reason ("auth_failed" | "empty_credentials"). The event type is shared
+# with the account-free chat renderer through event_types.py.
 
 # A warning whose window resets sooner than this is left alone: waiting for the
 # reset costs less than a cold start on another account.

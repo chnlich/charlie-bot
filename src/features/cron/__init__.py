@@ -1,8 +1,9 @@
 from src.infra import metadata_slots
-from src.runtime.hooks import sequence_controllers, wiring
+from src.runtime.hooks import sequence_controllers, turn_contributions, wiring
 
 
 def register() -> None:
+  turn_contributions.register_turn_contribution("cron", "src.features.cron.turn_contribution:CONTRIBUTION")
   sequence_controllers.register_sequence_controller(
       "cron", "src.features.cron.sequence_controller:CronSequenceController")
   metadata_slots.register_metadata_fields("cron", "src.features.cron.metadata:CronMetadata", after="backend")

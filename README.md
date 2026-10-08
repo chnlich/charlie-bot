@@ -93,6 +93,7 @@ CharlieBot is a self-hosted multi-agent orchestration system: a master agent dri
 - `charliebot session-tree` — migrate a home's legacy sessions to the task tree (dry-run/apply/rollback) and run an isolated trial preview
 - `charliebot slack` — reply to or ack the Slack thread a session was summoned from
 - `charliebot storage` — `cool` deletes the bytes no reader can reach again: cold sessions' transport files and cold-or-orphaned backend records
+- `charliebot voice-replay-eval` — replay recorded dictations through the transcription backends and score latency and accuracy
 - `charliebot usage-ledger` — `capture` writes this host's per-call usage into the ledger
 - `charliebot gc-trash` — inspect and purge quarantined worktree trash
 

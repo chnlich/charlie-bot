@@ -25,10 +25,6 @@ from src.runtime import message_events
 from src.runtime.hooks import turn_contributions
 from src.runtime.model_family import model_family
 
-# The Claude account pool's operator notice type, spelled where the chat renders it: the runtime imports no
-# backend module, and src/backends/claude_code/claude_relay.py holds the emitting constant.
-_CLAUDE_ACCOUNT_LOGIN_REQUIRED = "claude_account_login_required"
-
 # The renderer's preview bound for one tool row (renderToolActivity,
 # web/static/js/chat/rendering.js): an output's first 500 characters render
 # plain and an input feeds only a bounded summary (a Bash command renders 80
@@ -203,16 +199,6 @@ def _context_compact_failed_msg(ev: dict) -> dict:
   return {'role': 'system', 'kind': ET.CONTEXT_COMPACT_FAILED, 'content': content}
 
 
-def _claude_account_login_required_msg(ev: dict) -> dict:
-  """Account-free by design: the login directory is on the usage panel, never in chat."""
-  del ev
-  return {
-      'role': 'system',
-      'kind': _CLAUDE_ACCOUNT_LOGIN_REQUIRED,
-      'content': 'One account in the Claude pool needs a new login; see the usage panel.',
-  }
-
-
 def _resume_context_dropped_msg(ev: dict) -> dict:
   reason = ev.get('reason')
   if reason == ET.RESUME_REASON_ANCHOR_MISSING:
@@ -274,16 +260,6 @@ def _model_fallback_notice_msg(ev: dict) -> dict:
   return {
       "role": "system",
       "content": _fallback_notice_text(ev.get("configured_model") or "", served_models),
-  }
-
-
-def _scheduled_run_skipped_msg(ev: dict) -> dict:
-  task = ev.get('task', '')
-  skipped_at = ev.get('skipped_at', '')
-  reason = ev.get('reason', '')
-  return {
-      'role': 'system',
-      'content': f"Scheduled run of '{task}' skipped at {skipped_at}: {reason}",
   }
 
 
@@ -428,8 +404,6 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _context_compact_failed_msg,
     ET.RESUME_CONTEXT_DROPPED:
         _resume_context_dropped_msg,
-    _CLAUDE_ACCOUNT_LOGIN_REQUIRED:
-        _claude_account_login_required_msg,
     ET.SYSTEM:
         _system_msg,
     ET.CLONE_START:
@@ -460,8 +434,6 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
         _backend_overlay_inactive_msg,
     ET.MODEL_FALLBACK_NOTICE:
         _model_fallback_notice_msg,
-    ET.SCHEDULED_RUN_SKIPPED:
-        _scheduled_run_skipped_msg,
     # Task-tree control events the chat surface renders. child_report carries
     # the child node link and evidence refs; close/reopen render as system
     # lines. All three ride the message-delta path only (the raw forms are in

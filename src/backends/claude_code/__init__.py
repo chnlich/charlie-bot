@@ -27,8 +27,10 @@ def register() -> None:
   """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
   its metadata keys and its credential variables with the runtime."""
   from src.infra import config_registry, identity_env, metadata_slots
-  from src.runtime.hooks import backend_lifecycle, backend_types, usage_sources
+  from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributions, usage_sources
 
+  turn_contributions.register_turn_contribution(
+      "claude_code", "src.backends.claude_code.turn_contribution:CONTRIBUTION")
   backend_types.register_backend_type(
       "cc-claude",
       options="src.backends.claude_code.options:CcClaudeBackend",

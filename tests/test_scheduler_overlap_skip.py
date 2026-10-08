@@ -108,8 +108,7 @@ def install_pending_executor(
     pending.handle = handle
     if record_handle:
       scheduler._handles[task_cfg.name] = handle
-    await tree.update_slot_fields(
-        pending.session.id, "cron", last_scheduled_run=clock.now(datetime.UTC).isoformat())
+    await tree.update_slot_fields(pending.session.id, "cron", last_scheduled_run=clock.now(datetime.UTC).isoformat())
     return {"session_id": pending.session.id, "thread_id": None}
 
   scheduler._execute_task = _execute

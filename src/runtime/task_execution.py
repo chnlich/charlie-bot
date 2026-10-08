@@ -46,11 +46,15 @@ from datetime import datetime
 from pathlib import Path
 
 from src.infra import event_types as ET
-from src.infra import git
+from src.infra import git, models
 from src.infra.config import CharlieBotConfig, configured_access_key, get_config
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
+from src.infra.git import git_verify_commit_landed
+from src.infra.json_utils import atomic_write_text
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
+from src.infra.ndjson import append_ndjson
+from src.infra.tasks import create_logged_task
 from src.runtime import (
     master_cc_queue,
     review,
@@ -76,11 +80,20 @@ from src.runtime.control_events import (
 )
 from src.runtime.hooks import backend_lifecycle, backend_types
 from src.runtime.hooks.sequence_controllers import binding_for, controller_for
+from src.runtime.master_cc_state import TaskRunBinding
 from src.runtime.run_token import RunTokenClaims, sign_run_token
-from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
+from src.runtime.runs import (
+    RUN_EVENTS_NAME,
+    RunNotFoundError,
+    read_host_boot_time,
+    run_alive_probe,
+    run_not_found_in_task_text,
+    scan_result_exit,
+)
 from src.runtime.session_anchors import backend_switch_reset_reason, context_reset_note
 from src.runtime.session_dispatch import child_report_text
-from src.runtime.spawner_backends import resolve_backend_option
+from src.runtime.spawner_backends import _resolve_session_default_backend_model, resolve_backend_option
+from src.runtime.spawner_prompt import load_worker_prompt_sections
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,
     REVIEW_REF_PREFIX,
@@ -92,6 +105,7 @@ from src.runtime.task_completion import (
 from src.runtime.task_errors import TaskConflictError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
 from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
+from src.runtime.thinking_state import clear_run_busy
 from src.runtime.worker import QuotaExhaustedError, Worker
 
 log = LazyStructlogLogger()
@@ -449,7 +463,6 @@ class TaskExecutionAdapter:
 
   def _reserve_backend_model(self, meta: SessionMetadata) -> tuple[str, str | None]:
     """The task's backend+model for a fresh reservation, resolved strictly."""
-    from src.runtime.spawner_backends import _resolve_session_default_backend_model
     return _resolve_session_default_backend_model(self._cfg, meta)
 
   # ------------------------------------------------------------------
@@ -503,7 +516,6 @@ class TaskExecutionAdapter:
         """
     if session_id in self._landing_retries:
       return
-    from src.infra.tasks import create_logged_task
 
     self._landing_retries[session_id] = create_logged_task(
         self._run_end_landing_retry(session_id, run_id), name=f"run-end-landing-retry-{session_id[:8]}")
@@ -554,7 +566,6 @@ class TaskExecutionAdapter:
         end-landing retry's node reconcile pass) can judge the same run, and
         an unregistered window there would schedule a second follower.
         """
-    from src.infra.tasks import create_logged_task
 
     self._resume_follows.add((session_id, run_id))
     create_logged_task(self._follow_run_background(session_id, run_id), name=f"task-resume-{run_id[:8]}")
@@ -594,7 +605,6 @@ class TaskExecutionAdapter:
       prompt: str | None = None,
   ) -> None:
     """Fire-and-forget the actual execution; the reservation is already durable."""
-    from src.infra.tasks import create_logged_task
 
     async def _execute_and_release() -> None:
       key = (session_id, run_id)
@@ -625,11 +635,9 @@ class TaskExecutionAdapter:
         space returns.
         """
     run = await self._tree.runs.get_run(session_id, run_id)
-    if run is not None and run.pid is not None:
-      from src.runtime.runs import read_host_boot_time
-      if not runs.is_run_alive(run.pid, run.pid_start, run.started_at, read_host_boot_time()):
-        from src.runtime.thinking_state import clear_run_busy
-        clear_run_busy(session_id, run_id)
+    if (run is not None and run.pid is not None and
+        not runs.is_run_alive(run.pid, run.pid_start, run.started_at, read_host_boot_time())):
+      clear_run_busy(session_id, run_id)
     self.start_run_end_landing_retry(session_id, run_id)
 
   async def execute_run(
@@ -887,7 +895,6 @@ class TaskExecutionAdapter:
         ``quota_exhausted`` is the ``LaunchRefused`` flag of a refused launch and
         None for every other launch failure: only a refusal's event carries the key.
         """
-    from src.infra.ndjson import append_ndjson
 
     events_log = self._tree.runs.run_dir(session_id, run_id) / RUN_EVENTS_NAME
     event: dict = {
@@ -1034,7 +1041,6 @@ class TaskExecutionAdapter:
         """
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(self._cfg, self._tree, meta, run.kind, option)
     path = self._tree.runs.run_dir(meta.id, run.id) / task_prompts.SNAPSHOT_FILENAME
-    from src.infra.json_utils import atomic_write_text
     await asyncio.to_thread(atomic_write_text, path, json.dumps(snapshot.to_json_dict(), indent=2, ensure_ascii=False))
     await self._tree.runs.record_observation(meta.id, run.id, prompt_snapshot_ref=str(path))
     if not declared or overlay_error is not None:
@@ -1099,7 +1105,6 @@ class TaskExecutionAdapter:
         notice (the task summary and where the earlier history lives), while an
         input-only change keeps the conversation.
         """
-    from src.runtime.master_cc_state import TaskRunBinding
 
     session_id, run_id = meta.id, run.id
     transport_dir = self._tree.runs.run_dir(session_id, run_id)
@@ -1409,9 +1414,7 @@ class TaskExecutionAdapter:
   def _binding_intro(self, run: RunRecord) -> str:
     """The workflow bindings' intro line: a retry continuing the worktree says so."""
     if run.retry_of_run_id is not None and run.worktree_path is not None:
-      from src.runtime.spawner_prompt import load_worker_prompt_sections
       return load_worker_prompt_sections(self._cfg)["intro_continuation"].strip()
-    from src.runtime.spawner_prompt import load_worker_prompt_sections
     return load_worker_prompt_sections(self._cfg)["intro_new"].strip()
 
   async def _build_work_context(self, meta: SessionMetadata, run: RunRecord, task_type: TaskType) -> str:
@@ -1579,7 +1582,6 @@ class TaskExecutionAdapter:
         the volatile half — bindings, pinned spec, claimed batch, sequence
         positions — exactly as it was handed to the adapter.
         """
-    from src.infra.json_utils import atomic_write_text
     path = self._tree.runs.run_dir(session_id, run_id) / task_prompts.LAUNCH_TEXT_FILENAME
     atomic_write_text(path, prompt)
 
@@ -1678,7 +1680,6 @@ class TaskExecutionAdapter:
       # that kept stdout are judged by the existing identity rules on
       # every poll), and a stopped/ended process must converge to its
       # durable result instead of following forever.
-      from src.runtime.runs import read_host_boot_time, run_alive_probe
       is_alive = run_alive_probe(run.pid, run.pid_start, run.started_at, read_host_boot_time())
     meta = await tree.load_meta(session_id)
     if meta is None:
@@ -1726,8 +1727,6 @@ class TaskExecutionAdapter:
         out-of-space failure can reach the end-landing retry after this call
         has returned.
         """
-    from src.infra import models
-    from src.runtime.master_cc_state import TaskRunBinding
 
     transport_dir = self._tree.runs.run_dir(meta.id, run.id)
     record = models.MasterRunRecord(
@@ -1860,7 +1859,6 @@ class TaskExecutionAdapter:
 
   async def _redrive_firing(self, session_id: str, run: RunRecord) -> None:
     """Re-drive the sequence referenced by the leaf's durable Run facts."""
-    from src.runtime.hooks.sequence_controllers import controller_for
 
     sequence = run.sequence_ref
     if sequence is None:
@@ -2027,7 +2025,6 @@ class TaskExecutionAdapter:
     if commit is None:
       return None, f"branch {work_run.branch_name} does not resolve in {work_run.repo_path}"
     target = review.review_landing_target(work_run.base_branch)
-    from src.infra.git import git_verify_commit_landed
     landed, reason = await git_verify_commit_landed(Path(work_run.repo_path), target, commit)
     if not landed:
       return None, reason

@@ -39,6 +39,8 @@ from src.runtime.control_events import (
     build_control_event,
     stable_child_report_id,
 )
+from src.runtime.run_token import CallerIdentity
+from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.runtime.task_errors import (
     TaskArchivedError,
     TaskConflictError,
@@ -292,7 +294,6 @@ class TaskInputDispatcher:
         TaskForbiddenError before anything is enqueued; every entry that
         delivers an agent message to a worker node passes through here.
         """
-    from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
     if event_type != ET.AGENT_MESSAGE or meta.profile != "worker":
       return
     if is_verify_exempt(meta.task):
@@ -756,7 +757,6 @@ def input_event_type_for_caller(caller: object) -> str:
   same route stays agent input with its own session's provenance — it can
   never manufacture a real USER event or another caller's provenance.
   """
-  from src.runtime.run_token import CallerIdentity
 
   if isinstance(caller, CallerIdentity):
     if caller.is_operator:
@@ -770,7 +770,6 @@ def input_event_type_for_caller(caller: object) -> str:
 
 def agent_provenance(caller: object) -> tuple[str | None, str | None]:
   """The (from_session, from_session_name) provenance for agent-relayed input."""
-  from src.runtime.run_token import CallerIdentity
 
   if isinstance(caller, CallerIdentity) and not caller.is_operator:
     claims = caller.claims

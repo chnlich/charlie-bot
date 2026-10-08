@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra import event_types as ET
+from src.infra.git import git_verify_commit_landed
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, SessionMetadata, TaskType
 from src.runtime import session_dispatch
@@ -55,6 +56,8 @@ from src.runtime.control_events import (
     stable_input_ack_event_id,
     stable_reopen_event_id,
 )
+from src.runtime.review import review_landing_target
+from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunStore, run_not_found_in_task_text
 from src.runtime.task_errors import (
     RESTORE_CHAIN_HOP_LIMIT,
@@ -411,7 +414,6 @@ class TaskCompletionManager:
       if not branch or not commit:
         blockers.append(f"result ref {ref} must be landed:<branch>@<commit>")
       else:
-        from src.runtime.review import review_landing_target
         base_branches = {runs[r].base_branch for r in runs if r in runs and runs[r].base_branch}
         if meta.task is not None and meta.task.base_branch:
           base_branches.add(meta.task.base_branch)
@@ -457,7 +459,6 @@ class TaskCompletionManager:
         verified.
         """
     blockers: list[str] = []
-    from src.infra.git import git_verify_commit_landed
 
     claims = self._landing_claims(evidence)
     if not claims:
@@ -516,7 +517,6 @@ class TaskCompletionManager:
         durably with the verified owner run id and re-evaluated once that Run
         finishes successfully.
         """
-    from src.runtime.run_token import CallerIdentity
 
     if not request_id:
       raise TaskInvalidError("request_id is required for completion")
@@ -1061,7 +1061,6 @@ class TaskCompletionManager:
         outcome — only to a caller authorized for that cancel, never as an
         authorization bypass.
         """
-    from src.runtime.run_token import CallerIdentity
 
     if not isinstance(caller, CallerIdentity):
       raise TaskForbiddenError("task cancellation requires operator credentials")

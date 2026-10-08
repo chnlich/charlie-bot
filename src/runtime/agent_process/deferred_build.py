@@ -1,11 +1,12 @@
-"""The deferred build_backend loader shared by the carriers that build one backend.
+"""The build_backend loader shared by the carriers that build one backend.
 
-The backend type table (src/runtime/hooks/backend_types.py) imports a backend module only when its
-factory runs, so a carrier that binds ``build_backend`` at its one build site keeps the type table
-off its own import chain; this module imports the table only inside that call.
+A carrier binds ``build_backend`` into its own namespace at its one build site, on first use. The backend
+type table (src/runtime/hooks/backend_types.py) imports a backend module only when its factory runs.
 """
 
 from typing import Any
+
+from src.runtime.hooks import backend_types
 
 
 def load_build_backend(namespace: dict[str, Any]) -> Any:
@@ -19,7 +20,6 @@ def load_build_backend(namespace: dict[str, Any]) -> Any:
   bound = namespace.get("build_backend")
   if bound is not None:
     return bound
-  from src.runtime.hooks import backend_types
 
   namespace["build_backend"] = backend_types.build_backend
   return backend_types.build_backend

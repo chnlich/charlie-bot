@@ -19,7 +19,8 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
 from src.infra import event_types as ET
-from src.infra import log_once, tasks
+from src.infra import log_once, responses, tasks
+from src.runtime.agent_process import base
 
 if TYPE_CHECKING:
   import fastapi
@@ -151,7 +152,6 @@ def _serialize(event: dict[str, Any]) -> str:
   a NaN/Infinity float renders as null instead of the stdlib's invalid-JSON
   literal, and a non-str dict key raises instead of the silent str coercion.
   """
-  from src.infra import responses
 
   return responses.fast_json_bytes(event).decode("utf-8")
 
@@ -168,7 +168,6 @@ async def handle_compaction_events(
   """Detect compact_boundary and compact-failure system events, log, persist, and
   broadcast a synthesized event. At most one synthesized event is emitted per
   input event."""
-  from src.runtime.agent_process import base
 
   if event.get("type") != ET.SYSTEM:
     return

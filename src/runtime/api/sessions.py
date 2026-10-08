@@ -55,7 +55,7 @@ from src.infra.responses import (
     gzip_file_fresh,
     request_wants_gzip,
 )
-from src.runtime import sidebar_state, thinking_state
+from src.runtime import sidebar_state, task_completion, thinking_state, worker_transcript
 from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     bad_request,
@@ -77,6 +77,7 @@ from src.runtime.api.deps import (
 )
 from src.runtime.api.message_utils import (
     SessionBootstrapData,
+    _worker_usage,
     build_session_bootstrap_data,
     events_to_messages,
     get_message_projection_fast,
@@ -87,7 +88,7 @@ from src.runtime.hooks import backend_types
 from src.runtime.hooks.sequence_controllers import binding_for, sequence_listing_fields
 from src.runtime.message_aggregator import tool_preview
 from src.runtime.run_token import CallerIdentity
-from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
+from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, read_host_boot_time, run_not_found_in_task_text
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_anchors import SessionAnchors
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
@@ -112,6 +113,8 @@ from src.runtime.task_errors import (
     TaskInvalidError,
     TaskNotFoundError,
 )
+from src.runtime.task_execution import assemble_coherent_snapshot
+from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
 from src.runtime.task_sessions import AGENT_CREATE_SCOPE_REFUSAL, TASK_CREATE_REQUEST_ID_REQUIRED, TaskTreeManager
 from src.runtime.thinking_state import run_backend
 from src.runtime.triggers import TriggerManager
@@ -1082,7 +1085,6 @@ async def get_session_usage(
 ) -> FastJsonResponse:
   """Return lazy session status and usage data for the active header."""
   if meta.profile == "worker":
-    from src.runtime.api.message_utils import _worker_usage
     usage = await _worker_usage(task_mgr, session_id)
   else:
     usage = await anchors.resolve_session_usage(session_id, meta)
@@ -1091,7 +1093,6 @@ async def get_session_usage(
       "usage": usage,
   }
   if meta.profile == "worker":
-    from src.runtime import worker_transcript
     entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
     payload["active_run_id"] = entry.active_run_id
   payload.update(_active_backend_payload(meta, cfg))
@@ -1126,7 +1127,6 @@ async def get_session_events_page(
     # A worker node's messages are its Runs' transcript; the same turn-aligned
     # page contract, sliced off the transcript projection (message ordinals in
     # the transcript's own cursor space).
-    from src.runtime import worker_transcript
     entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
     messages, next_before, has_more = entry.projection.slice_before(before, limit)
     return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": next_before})
@@ -1180,7 +1180,6 @@ async def get_session_transcript(
   """
   if meta.profile != "worker":
     raise HTTPException(status_code=400, detail=f"session {session_id} has no worker transcript")
-  from src.runtime import worker_transcript
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, task_mgr, session_id)
   thinking_since = thinking_state.busy_since(session_id)
   reset = _transcript_reset(entry.revision, revision)
@@ -1568,7 +1567,6 @@ async def list_session_runs(
   except ValueError as e:
     raise bad_request(e) from e
   events = task_mgr.runs.load_events_sync(session_id)
-  from src.runtime.runs import read_host_boot_time
   host_boot = await asyncio.to_thread(read_host_boot_time)
   rows = [
       RunRow(
@@ -1614,10 +1612,6 @@ async def get_effective_prompt(
     if not cfg.backends.options:
       raise HTTPException(status_code=400, detail=EMPTY_BACKENDS_OPTIONS_REFUSAL)
     option = cfg.backends.options[0]
-  # The M99 import floor carries no launch-snapshot stack; the assembly rides the
-  # endpoints that render it.
-  from src.runtime.task_execution import assemble_coherent_snapshot
-  from src.runtime.task_prompts import TaskPromptError
   try:
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(cfg, task_mgr, meta, resolved_kind, option)
   except TaskPromptError as e:
@@ -1676,7 +1670,6 @@ async def get_run_context(
   run = await task_mgr.runs.get_run(session_id, run_id)
   if run is None:
     raise HTTPException(status_code=404, detail=run_not_found_in_task_text(run_id, session_id))
-  from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME, SNAPSHOT_FILENAME, PromptSnapshot, TaskPromptError
   snapshot_payload: dict | None = None
   legacy_prompt: dict | None = None
   if run.prompt_snapshot_ref:
@@ -1821,7 +1814,6 @@ async def complete_session_task(
   names one); the close re-evaluates only after that Run succeeds. Duplicate
   request ids replay the original outcome, across later epochs included.
   """
-  from src.runtime import task_completion
   evidence = task_completion.CompletionEvidence(summary=req.summary, result_refs=req.result_refs, run_ids=req.run_ids)
   try:
     status, payload = await task_mgr.completion.complete_task(

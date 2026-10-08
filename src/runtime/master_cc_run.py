@@ -22,6 +22,7 @@ from src.infra.process import kill_group_escalating
 from src.runtime import launch_loop, master_cc_state, runs
 from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
 from src.runtime.hooks import backend_lifecycle, backend_type_registration, backend_types, turn_contributions
+from src.runtime.spawner_backends import unknown_backend_pin_refusal
 from src.runtime.streaming import handle_compaction_events
 
 log = LazyStructlogLogger()
@@ -430,9 +431,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   if option is None:
     if session_meta.backend:
       # The session pins a backend id config.yaml no longer defines.
-      # lazy: spawner_backends→review→master_trigger→master_cc would close a cycle
-      # through this module if imported at top level.
-      from src.runtime.spawner_backends import unknown_backend_pin_refusal
       fallback_id = cfg.backends.options[0].id if cfg.backends.options else "(none)"
       msg = (f"backend {unknown_backend_pin_refusal(session_meta.backend, fallback_id)}; "
              "this run did not execute.")

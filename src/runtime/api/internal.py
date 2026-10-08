@@ -5,13 +5,16 @@ from typing import Protocol
 from fastapi import APIRouter, Depends, HTTPException
 
 from src.infra import event_types as ET
+from src.infra.buildinfo import build_info
 from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     DelegateInvocationMetadata,
     DelegateRequest,
+    RunRecord,
     ScheduleTriggerRequest,
     SessionMessageRequest,
+    TaskSpec,
     TaskType,
     WatchKind,
 )
@@ -25,11 +28,14 @@ from src.runtime.api.deps import (
     require_found,
 )
 from src.runtime.api.deps import require_caller as require_caller_dep
+from src.runtime.api.sessions import _task_http_error
+from src.runtime.control_events import derived_delegate_request_id, stable_run_id
 from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
 from src.runtime.takeoff_gate import DelegationBlockedError, is_verify_exempt
 from src.runtime.task_errors import TaskConflictError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
-from src.runtime.task_sessions import TaskTreeManager
+from src.runtime.task_execution import TaskExecutionAdapter
+from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
 from src.runtime.triggers import ArchivedSessionError, PendingTriggerLimitError, RemoteVerifyError, TriggerManager
 
 log = LazyStructlogLogger()
@@ -44,7 +50,6 @@ async def get_version() -> dict:
   Read-only; used by the CLI to detect version skew when an internal-API call fails
   (server older than the checkout → hint to restart).
   """
-  from src.infra.buildinfo import build_info
   return build_info()
 
 
@@ -114,7 +119,6 @@ def delegate_request_id(req: DelegateRequest) -> str:
   """
   if req.request_id:
     return req.request_id
-  from src.runtime.control_events import derived_delegate_request_id
   return derived_delegate_request_id(req.session_id, req.task_type.value, req.description)
 
 
@@ -132,9 +136,6 @@ async def _delegate_task_tree(
   task; the Run is its first execution record. A replayed request returns the
   original child and Run. The returned ``thread_id`` equals ``run_id``.
   """
-  from src.infra.models import RunRecord, TaskSpec
-  from src.runtime.control_events import stable_run_id
-  from src.runtime.task_sessions import canonical_task_spec_text
 
   try:
     # The nearest-user-ancestor gate judges here, where the delegation request
@@ -186,13 +187,11 @@ async def _delegate_task_tree(
       async with task_mgr.control_lock:
         await task_mgr.runs.register_run_locked(record, task_spec_text=canonical_task_spec_text(task_spec))
   except (DelegationBlockedError, TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
-    from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
 
   # The same adapter the creating tree owns launches the run — never a
   # differently-configured singleton.
   adapter = task_mgr.dispatch.executor
-  from src.runtime.task_execution import TaskExecutionAdapter
   if not isinstance(adapter, TaskExecutionAdapter):
     raise HTTPException(status_code=503, detail="task execution adapter is not installed")
   adapter.launch(child.id, run_id)
@@ -348,7 +347,6 @@ async def session_message(
     )
     await task_mgr.dispatch.dispatch_pending(req.target_session_id)
   except (TaskNotFoundError, TaskForbiddenError, TaskConflictError, TaskInvalidError) as e:
-    from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
   log.info(
       "session_message_dispatched",

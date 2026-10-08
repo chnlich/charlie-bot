@@ -28,6 +28,8 @@ import subprocess
 import threading
 from collections.abc import Callable
 
+import src.runtime.agent_process._vfkspawn as vfkspawn
+
 
 def _reap(
     popen: subprocess.Popen | _VforkHandle, loop: asyncio.AbstractEventLoop, exit_future: asyncio.Future[int]) -> None:
@@ -57,13 +59,7 @@ class _VforkHandle:
 
 
 def _vfork_exec(argv: list[str], cwd: str | None, env: dict, stdin_fd: int, stdout_fd: int, stderr_fd: int) -> int:
-  """Run the clone(CLONE_VM|CLONE_VFORK) handshake, returning the child's pid.
-
-  Lazy import: the compiled module exists where the package was installed with
-  a C toolchain, so a missing build surfaces here, at the first pdeathsig
-  spawn, instead of at startup.
-  """
-  import src.runtime.agent_process._vfkspawn as vfkspawn
+  """Run the clone(CLONE_VM|CLONE_VFORK) handshake, returning the child's pid."""
 
   env_items = [f"{key}={value}" for key, value in env.items()]
   return vfkspawn.spawn(argv, env_items, cwd, stdin_fd, stdout_fd, stderr_fd, os.getpid())

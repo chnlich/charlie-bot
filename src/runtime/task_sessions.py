@@ -81,11 +81,19 @@ from src.runtime.control_events import (
     stable_close_event_id,
     stable_task_id,
 )
+from src.runtime.hooks.sequence_controllers import binding_for
 from src.runtime.run_token import CallerIdentity, b64url_decode, b64url_encode
-from src.runtime.runs import DATA_DIR_NAME, METADATA_NAME, RunStore, is_run_alive, stop_requested_in_events
+from src.runtime.runs import (
+    DATA_DIR_NAME,
+    METADATA_NAME,
+    RunStore,
+    is_run_alive,
+    read_host_boot_time,
+    stop_requested_in_events,
+)
 from src.runtime.session_dispatch import INPUT_EVENT_TYPES, TaskInputDispatcher
 from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
-from src.runtime.takeoff_gate import is_verify_exempt
+from src.runtime.takeoff_gate import check_takeoff_gate_for_task, is_verify_exempt
 from src.runtime.task_completion import TaskCompletionManager
 from src.runtime.task_errors import (
     ANCESTOR_HOP_LIMIT,
@@ -831,7 +839,6 @@ class TaskTreeManager:
     return (activity.has_running_tasks, activity.work_state)
 
   def _host_boot_time(self) -> datetime:
-    from src.runtime.runs import read_host_boot_time
     return read_host_boot_time()
 
   def _archived_facts_based(self, meta: SessionMetadata, facts: _TaskFacts, cache: dict[str, _TaskFacts]) -> bool:
@@ -1287,7 +1294,6 @@ class TaskTreeManager:
     holding a real user instruction is where the time-window rules
     apply, and a failure there blocks without borrowing from higher ancestors.
     """
-    from src.runtime.takeoff_gate import check_takeoff_gate_for_task
     index = await self._get_index()
 
     def meta_of(sid: str) -> tuple[str | None, str | None]:
@@ -1668,7 +1674,6 @@ class TaskTreeManager:
     archived node's sequence binding receives its archive callback. Returns
     the ids this call archived, in parent-before-child order; an already-archived target returns [].
     """
-    from src.runtime.hooks.sequence_controllers import binding_for
 
     require_operator(caller, "archiving a task requires operator credentials")
     tree = self

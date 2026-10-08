@@ -320,13 +320,12 @@ def _request_get(
 def get_config() -> CharlieBotConfig:
   """Resolve the process config, importing its module on first call.
 
-  config's import chain (pydantic models + yaml, ~180 ms of the M92 CLI import
-  floor) serves only paths that read config; --help never does, and the
-  request path reads only the server port through the fingerprint-keyed
-  document below. The module attribute stays the tests' patch target (conftest
+  Only paths that read config import it: --help never does, and the request path
+  reads only the server port through the fingerprint-keyed document below. The
+  module attribute stays the tests' patch target (conftest
   CLI_COMMON_GET_CONFIG_PATCH_TARGET setattrs this name).
   """
-  from src.infra.config import get_config
+  from src.infra.config import get_config  # deferred: charliebot improve --help
   return get_config()
 
 
@@ -355,11 +354,8 @@ def _config_module_fingerprint() -> tuple[float, int]:
 
 def _cached_server_port() -> int | None:
   """Return the cached server port, or None when the document is absent, stale, or unreadable."""
-  # The home stack (src.infra.home -> pathlib, ~5 ms) rides the request paths
-  # that resolve it: a deferral here keeps --help and parser errors off its
-  # import chain (the src.runtime.cli.config deferral shape).
-  from src.infra import home
-  from src.infra.home import charliebot_home_dir
+  from src.infra import home  # deferred: charliebot improve --help
+  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
 
   fingerprint = [list(home.file_fingerprint("config.yaml")), list(_config_module_fingerprint())]
   try:
@@ -378,15 +374,13 @@ def _store_base_url_cache(port: int) -> None:
   """Write the fingerprint-keyed port document atomically (a torn write never publishes)."""
   from pathlib import Path
 
-  from src.infra import home
-  from src.infra.home import charliebot_home_dir
-  from src.infra.json_utils import write_json_atomically
+  from src.infra import home  # deferred: charliebot improve --help
+  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
+  from src.infra.json_utils import write_json_atomically  # deferred: charliebot improve --help
 
   doc = {"fingerprint": [home.file_fingerprint("config.yaml"), _config_module_fingerprint()], "port": port}
   cache_path = Path(charliebot_home_dir()) / _BASE_URL_CACHE_RELPATH
   cache_path.parent.mkdir(parents=True, exist_ok=True)
-  # Only the miss path calls this, after get_config() has already paid pydantic's
-  # import; the hit path must stay free of that stack, so the import stays here.
   write_json_atomically(cache_path, doc, private=True)
 
 
@@ -409,14 +403,14 @@ def _sessions_dir() -> Path:
   carries; the M102 wrap-verb precedent). The module attribute stays the tests' patch target
   (conftest CLI_COMMON_SESSIONS_DIR_PATCH_TARGET setattrs this name)."""
 
-  from src.infra.home import charliebot_home_dir
+  from src.infra.home import charliebot_home_dir  # deferred: charliebot improve --help
 
   return (charliebot_home_dir() / "sessions").resolve()
 
 
 def get_credentials() -> Credentials:
   """Resolve the process credentials (the light secrets module; config's model stack stays out)."""
-  from src.infra.credentials import get_credentials
+  from src.infra.credentials import get_credentials  # deferred: charliebot improve --help
   return get_credentials()
 
 
@@ -436,14 +430,12 @@ def internal_api_auth_headers() -> dict[str, str]:
   operator caller identities only (an agent's session comes from its verified
   token, never the header).
   """
-  # run_token's module body pulls the hashlib chain (~6 ms of the M92 CLI
-  # floor); only the token-bearing request reads it.
-  from src.runtime.run_token import load_run_token
+  from src.runtime.run_token import load_run_token  # deferred: charliebot improve --help
 
   run_token = load_run_token()
   if run_token:
     return _with_caller_session({"Authorization": f"Bearer {run_token}"})
-  from src.infra.credentials import configured_access_key
+  from src.infra.credentials import configured_access_key  # deferred: charliebot improve --help
   access_key = configured_access_key()
   if access_key:
     return _with_caller_session({"Authorization": f"Bearer {access_key}"})
@@ -593,9 +585,7 @@ def _best_effort_server_version(base_url: str) -> tuple[str | None, str | None]:
 
 def _maybe_version_skew_hint(base_url: str) -> str | None:
   """Gather server + local SHAs and compose the hint. Pure-failure-safe (never raises)."""
-  # buildinfo pulls subprocess (measured ~4 ms of the M92 floor) and serves
-  # only the version-skew failure path; the parser-build path never reads a SHA.
-  from src.infra.buildinfo import read_repo_head_sha
+  from src.infra.buildinfo import read_repo_head_sha  # deferred: charliebot improve --help
 
   server_sha, started_at = _best_effort_server_version(base_url)
   local_sha = read_repo_head_sha(SUBPROCESS_GIT_SHA_TIMEOUT)
@@ -730,10 +720,11 @@ def find_local_task_child(
   returns None (outcome unknown), never a fallback to an unrelated sibling or
   unrelated task.
   """
-  from src.infra.config import get_config
-  from src.infra.models import SessionMetadata
+  from src.infra.models import SessionMetadata  # deferred: charliebot improve --help
+
+  # deferred: charliebot improve --help
   from src.runtime.control_events import derived_delegate_request_id, stable_task_id
-  from src.runtime.runs import DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME
+  from src.runtime.runs import DATA_DIR_NAME, RUN_METADATA_NAME, RUNS_DIR_NAME  # deferred: charliebot improve --help
 
   resolved_request_id = request_id or derived_delegate_request_id(session_id, task_type, description)
   child_id = stable_task_id(session_id, resolved_request_id)
@@ -751,7 +742,7 @@ def find_local_task_child(
   # (child, "<request id>:work") binding the server launched — not "whatever
   # run directory sorts first" (a review Run of the same child is a different
   # operation).
-  from src.runtime.control_events import stable_run_id
+  from src.runtime.control_events import stable_run_id  # deferred: charliebot improve --help
   run_id = stable_run_id(child_id, f"{resolved_request_id}:work")
   if not (get_config().sessions_dir / child_id / DATA_DIR_NAME / RUNS_DIR_NAME / run_id / RUN_METADATA_NAME).is_file():
     # Registered but not yet on disk, or the child predates the work Run:
@@ -778,9 +769,8 @@ def find_local_task_close(task_id: str, request_id: str) -> dict | None:
   a borrowed answer. The closed fact outranks the deferral: once this
   request's closure is on disk the task is no longer pending a run finish.
   """
-  from src.infra.config import get_config
-  from src.runtime.chat_events import chat_events_path
-  from src.runtime.control_events import stable_close_event_id
+  from src.runtime.chat_events import chat_events_path  # deferred: charliebot improve --help
+  from src.runtime.control_events import stable_close_event_id  # deferred: charliebot improve --help
 
   events_path = chat_events_path(get_config().sessions_dir / task_id)
   if not events_path.is_file():

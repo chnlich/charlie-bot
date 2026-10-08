@@ -5,6 +5,9 @@
 Align the understanding before designing: the genre decides the approval path, so pick it
 first by comparing the rows.
 
+A child whose approver is its parent node follows Between Agents in
+`prompts/task_manager.md` instead.
+
 | Genre | When | Deliverable | What follows |
 |---|---|---|---|
 | understanding | The request introduces a new capability, a cross-file mechanism, or a deliverable that admits multiple reasonable readings; a diagnosis whose conclusion proposes new repo work belongs here | `artifacts/understanding_<slug>_v<n>.html` with numbered divergences | The user answers the divergences in chat, then the plan follows |

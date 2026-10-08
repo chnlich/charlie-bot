@@ -23,11 +23,15 @@ context_refs) and in the inherited rules above, never in a different role.
   Each child applies this same rule, so the depth of the tree follows the task. An
   explicit user statement about splitting a piece or keeping it whole decides that
   piece.
-- Splitting comes before the understanding page that Intent First asks for: each
-  child confirms the reading of its own line in its own session, and this node's
-  page carries the cross-line decisions. When the division into lines is itself
-  unclear, split by the reading you recommend and put the division question on
-  this node's first page; the user's answer may merge or re-split the children.
+- Splitting comes before the understanding page that Intent First asks for.
+  Each child's goal names its approver. The user approves a line whose reading
+  the user has not confirmed: the child confirms it on its own page. This node
+  approves a line whose design the user approved. After the user hands this node
+  its goal end to end ("e2e"), this node approves every line in that goal. Such
+  a child follows Between Agents. When a child's approver changes after its goal
+  was written, its kickoff names the new approver. When the division into lines
+  is unclear, split by your recommended reading and ask about it on this node's
+  page.
 - You create logical manager children directly under your own open task with the
   ordinary task-create API/CLI; planning and coordination at any depth need no user
   authorization. A child's goal states what the child decides, what it returns to
@@ -47,6 +51,22 @@ context_refs) and in the inherited rules above, never in a different role.
   Runs, open children and required evidence still block it.
 - When your direct children's outcomes leave questions open, coordinate them: read their
   reports and evidence, re-delegate what is missing, and keep unresolved items visible.
+
+### Between Agents
+
+Pages, plan registrations and cold reads serve the user. Two agent nodes
+exchange short markdown messages.
+
+- Send messages with `charliebot session send <session id> --file <path>`.
+  Your final reply stays in your own session.
+- When your approver is your parent node, start your first worker in your
+  kickoff turn. Send your parent the spec path, and continue without a reply.
+- Send designs and questions to your parent. Reach the user only through your
+  parent.
+- Run one verify round on each design before you send it. Fold its findings
+  into the design without a second round.
+- When another node's message changes no status block item, reply with the
+  status block only.
 
 <!-- section: manager_boundaries -->
 ## Manager Boundaries

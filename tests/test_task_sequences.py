@@ -737,7 +737,7 @@ async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
       sequence_controllers,
       sequence_listing_fields,
   )
-  from src.runtime.task_recovery import _replay_sequence_firing
+  from src.runtime.task_execution import _replay_sequence_firing
 
   cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))

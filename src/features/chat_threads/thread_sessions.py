@@ -8,6 +8,7 @@ context-window override both classify the session through
 chat-thread subtree rule (src/runtime/scheduled_sessions.py) shares it.
 """
 
+from src.infra import metadata_slots
 from src.infra.models import SessionMetadata
 
 # The context window a thread session passes to the charlie-code backend in
@@ -20,4 +21,6 @@ THREAD_CONTEXT_WINDOW = 96_000
 
 def is_thread_session(meta: SessionMetadata) -> bool:
   """True when *meta* carries a Slack or Discord thread origin."""
-  return meta.slack_origin is not None or meta.discord_origin is not None
+  slack = metadata_slots.fields_of(meta, "slack")
+  discord = metadata_slots.fields_of(meta, "discord")
+  return getattr(slack, "slack_origin") is not None or getattr(discord, "discord_origin") is not None

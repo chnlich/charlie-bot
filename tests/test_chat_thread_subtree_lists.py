@@ -18,6 +18,8 @@ import pathlib
 import conftest
 import pytest
 
+from src.features.discord.metadata import DiscordOrigin
+from src.features.slack.metadata import SlackOrigin
 from src.infra import config, models
 from src.runtime import sessions, task_sessions, threads
 from src.runtime.api import sessions as sessions_api
@@ -48,13 +50,13 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   thread = await session_mgr.create_session(
       models.CreateSessionRequest(
           name="Discord #general 2026",
-          discord_origin=models.DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t1"),
+          discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t1"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
   slack_thread = await session_mgr.create_session(
       models.CreateSessionRequest(
           name="Slack #general 2026",
-          slack_origin=models.SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")),
+          slack_origin=SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100")),
       backend=conftest.OPUS_BACKEND_ID)
   child = await conftest.create_task(
       tree, parent=thread.id, request_id="th-child-1", profile="manager", name="thread child")
@@ -64,7 +66,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   archived_thread = await session_mgr.create_session(
       models.CreateSessionRequest(
           name="Discord #general archived",
-          discord_origin=models.DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t2"),
+          discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t2"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
   await session_mgr.archive_session(archived_thread.id)

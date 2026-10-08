@@ -38,6 +38,7 @@ from urllib.parse import unquote
 from zoneinfo import ZoneInfo
 
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
@@ -86,10 +87,8 @@ class ThreadPlatform:
   scope_doc: str
   follow_trigger_prefix: str
   id_key: Callable[[str], Any]
-  # ``SessionMetadata`` attribute holding the thread origin (``slack_origin``,
-  # ``discord_origin``) and the newest consumed message id
-  # (``slack_watermark_ts``, ``discord_watermark_id``): the round side reads
-  # and writes both by these names.
+  # Fields in this platform's registered session metadata slot: the thread
+  # origin and newest consumed message id.
   origin_field: str
   watermark_field: str
   # The key naming a message id in readbacks and refusals (``ts`` for Slack,
@@ -463,7 +462,7 @@ async def require_thread_session(
   meta = await session_mgr.get_session(session_id)
   if meta is None:
     raise ThreadReplyError(404, SESSION_NOT_FOUND_DETAIL)
-  if getattr(meta, platform.origin_field) is None:
+  if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     raise ThreadReplyError(409, f"Session has no {platform.display_name} thread")
   return meta
 
@@ -497,8 +496,9 @@ async def assert_thread_fresh(
   """
   platform = adapter.platform
   meta = await require_thread_session(platform, session_id, session_mgr)
-  watermark = getattr(meta, platform.watermark_field)
-  unread = await unread_messages(adapter, getattr(meta, platform.origin_field), cfg, watermark)
+  fields = metadata_slots.fields_of(meta, platform.name)
+  watermark = getattr(fields, platform.watermark_field)
+  unread = await unread_messages(adapter, getattr(fields, platform.origin_field), cfg, watermark)
   if not unread:
     return
   raise ThreadReplyError(
@@ -564,7 +564,8 @@ async def post_reply(
       input_event_ids = fresh.master_run.user_event_ids
   bound = newest_thread_input(platform, events, input_event_ids)
   answers = summon_of(bound[1], bound[0]) if bound is not None else None
-  address = adapter.address_of(getattr(meta, platform.origin_field))
+  fields = metadata_slots.fields_of(meta, platform.name)
+  address = adapter.address_of(getattr(fields, platform.origin_field))
   bodies = chunk_text(text, platform.max_post_chars)
   for index, body in enumerate(bodies, start=1):
     ok = await post_with_retry(adapter, address, body, session_id=session_id)
@@ -622,11 +623,12 @@ async def ack_messages(
   ids = sorted(set(message_ids), key=platform.id_key)
   if not ids:
     raise ThreadReplyError(422, "message_ids is empty")
-  eligible = {m.id for m in await adapter.read_eligible(getattr(meta, platform.origin_field), cfg)}
+  fields = metadata_slots.fields_of(meta, platform.name)
+  eligible = {m.id for m in await adapter.read_eligible(getattr(fields, platform.origin_field), cfg)}
   unknown = [i for i in ids if i not in eligible]
   if unknown:
     raise ThreadReplyError(422, f"Unknown or ineligible message id: {unknown[0]}")
-  watermark = getattr(meta, platform.watermark_field)
+  watermark = getattr(fields, platform.watermark_field)
   ceiling = ids[-1]
   floor = None if watermark is None else platform.id_key(watermark)
   ceiling_key = platform.id_key(ceiling)
@@ -638,7 +640,7 @@ async def ack_messages(
     raise ThreadReplyError(422, f"Skipped eligible message id at or below {ceiling}: {skipped[0]}")
   if floor is None or ceiling_key > floor:
     watermark = ceiling
-    setattr(meta, platform.watermark_field, watermark)
+    metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: watermark})
     meta.updated_at = utc_now()
     await session_mgr.save_metadata(meta)
   await session_mgr.persist_and_broadcast(
@@ -754,7 +756,7 @@ async def deliver_done(
   """
   platform = adapter.platform
   meta = await session_mgr.get_session(session_id)
-  if meta is None or getattr(meta, platform.origin_field) is None:
+  if meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
     return False
   input_event_ids = master_done_input_event_ids(done)
   if not input_event_ids:
@@ -792,7 +794,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
   sessions = await session_mgr.list_sessions()  # archived included: a thread can be summoned again
   reported = 0
   for meta in sessions:
-    if getattr(meta, platform.origin_field) is None:
+    if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
       continue
     events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
     lost = lost_summons(
@@ -931,9 +933,10 @@ async def consume_mention(
   # A None here would silently skip the watermark advance, leaving the summon's own
   # mention permanently unread; the invariant break fails loudly instead.
   assert meta is not None, "unreachable: the summon path resolves the session just before this call"
-  watermark = getattr(meta, platform.watermark_field)
+  fields = metadata_slots.fields_of(meta, platform.name)
+  watermark = getattr(fields, platform.watermark_field)
   if watermark is None or platform.id_key(watermark) < platform.id_key(mention_id):
-    setattr(meta, platform.watermark_field, mention_id)
+    metadata_slots.set_fields(meta, platform.name, **{platform.watermark_field: mention_id})
     meta.updated_at = utc_now()
     await session_mgr.save_metadata(meta)
   cancelled = await cancel_armed_follow_triggers(platform, trigger_mgr, session_id)
@@ -952,7 +955,8 @@ async def ensure_group(platform: ThreadPlatform, session_mgr: SessionManager, se
   """
   try:
     meta = await session_mgr.get_session(session_id)
-    if meta is None or getattr(meta, platform.origin_field) is None or meta.group:
+    if (meta is None or getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None or
+        meta.group):
       return
     await session_mgr.set_group(session_id, label)
   except Exception as e:
@@ -1008,8 +1012,9 @@ async def accept_summon(
         backend=None,
         group=None,
         session_id=session_id,
+        slot_values={platform.origin_field: origin},
         caller="system",
-        **{platform.origin_field: origin})
+    )
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == SessionStatus.ARCHIVED:
     await session_mgr.unarchive_session(session_id)
@@ -1065,7 +1070,7 @@ async def revive_and_arm_follow(
     await session_mgr.unarchive_session(session_id)
     logger.info(f"{platform.name}_follow_session_unarchived", session=session_id, **log_fields)
     await session_mgr.broadcast_task_tree_changed(session_id, "session_unarchived")
-  origin = getattr(meta, platform.origin_field)
+  origin = getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field)
   link = await adapter.thread_link(origin)
   return await arm_follow_trigger(
       platform,
@@ -1100,10 +1105,13 @@ async def follow_message(
   """
   platform = adapter.platform
   meta = await session_mgr.get_session(session_id)
-  origin = getattr(meta, platform.origin_field) if meta is not None else None
-  if meta is None or origin is None or not origin_matches(origin):
+  if meta is None:
     return None
-  watermark = getattr(meta, platform.watermark_field)
+  fields = metadata_slots.fields_of(meta, platform.name)
+  origin = getattr(fields, platform.origin_field)
+  if origin is None or not origin_matches(origin):
+    return None
+  watermark = getattr(fields, platform.watermark_field)
   if watermark is not None and not (platform.id_key(message_id) > platform.id_key(watermark)):
     return None
   trigger = await revive_and_arm_follow(
@@ -1141,11 +1149,12 @@ async def backfill_followed_threads(
   active, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ACTIVE)
   archived, _ = await session_mgr.list_sessions_readonly(status=SessionStatus.ARCHIVED)
   for meta in [*active, *archived]:
-    origin = getattr(meta, platform.origin_field)
+    fields = metadata_slots.fields_of(meta, platform.name)
+    origin = getattr(fields, platform.origin_field)
     if origin is None:
       continue
     try:
-      unread = await unread_messages(adapter, origin, cfg, getattr(meta, platform.watermark_field))
+      unread = await unread_messages(adapter, origin, cfg, getattr(fields, platform.watermark_field))
       if not unread:
         continue
       trigger = await revive_and_arm_follow(

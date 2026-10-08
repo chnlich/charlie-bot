@@ -10,6 +10,8 @@ import conftest
 import pytest
 
 from src.infra import models
+from src.features.slack.metadata import SlackOrigin
+from src.infra import metadata_slots
 from src.runtime import run_token, task_sessions
 
 
@@ -132,11 +134,11 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
   assert await session_mgr.get_session("agent-picked-id") is None
   assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"
 
-  origin = models.SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
+  origin = SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
   by_server = await mgr.create_task(
       request_id="by-server",
       session_id="server-picked-id",
-      slack_origin=origin,
+      slot_values={"slack_origin": origin},
       caller="system",
       **{
           **create, "task_parent_id": None
@@ -145,7 +147,7 @@ async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path:
       request_id="by-operator", session_id="operator-picked-id", caller=conftest.OPERATOR, **create)
   assert (by_server.id, by_operator.id) == ("server-picked-id", "operator-picked-id")
   # The origin rides the same publish as the metadata: no read sees the node without it.
-  assert (await session_mgr.get_session("server-picked-id")).slack_origin == origin
+  assert metadata_slots.fields_of(await session_mgr.get_session("server-picked-id"), "slack").slack_origin == origin
   # A replay under the explicit id returns the original node instead of a second one.
   replay = await mgr.create_task(
       request_id="by-server", session_id="server-picked-id", caller="system", **{

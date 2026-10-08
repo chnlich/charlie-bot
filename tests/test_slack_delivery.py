@@ -23,9 +23,10 @@ from structlog.testing import capture_logs
 
 from src.features.chat_threads.thread_entry import _NO_REPLY_NOTICE, lost_summons
 from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_lost_summons, deliver_done, post_reply
+from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionMetadata, SlackOrigin, utc_now
+from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionMetadata, utc_now
 from src.runtime import master_cc_state
 from src.runtime.agent_process.base import make_text_event
 from src.runtime.message_aggregator import MessageAggregator

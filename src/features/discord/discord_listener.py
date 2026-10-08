@@ -91,7 +91,7 @@ from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import DiscordOrigin
+from src.features.discord.metadata import DiscordOrigin
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 

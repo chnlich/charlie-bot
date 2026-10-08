@@ -7,7 +7,8 @@ import pydantic
 import pytest
 
 from src.infra import config, models
-from src.infra import event_types as ET
+from src.features.discord.metadata import DiscordOrigin
+from src.infra import event_types as ET, metadata_slots
 from src.runtime import message_aggregator
 
 _GUILD = "100000000000000001"
@@ -44,27 +45,30 @@ def test_discord_bot_token_comes_from_credentials() -> None:
 def test_session_metadata_discord_fields_round_trip_through_json() -> None:
   meta = models.SessionMetadata(
       name="t",
-      discord_origin=models.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD),
+      discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD),
       discord_watermark_id=_WATERMARK)
   loaded = models.SessionMetadata.model_validate_json(meta.model_dump_json())
-  assert loaded.discord_origin == meta.discord_origin
-  assert loaded.discord_watermark_id == _WATERMARK
+  fields = metadata_slots.fields_of(loaded, "discord")
+  assert fields.discord_origin == metadata_slots.fields_of(meta, "discord").discord_origin
+  assert fields.discord_watermark_id == _WATERMARK
 
 
 def test_session_metadata_without_discord_fields_parses() -> None:
   meta = models.SessionMetadata.model_validate_json(models.SessionMetadata(name="t").model_dump_json())
-  assert meta.discord_origin is None
-  assert meta.discord_watermark_id is None
+  fields = metadata_slots.fields_of(meta, "discord")
+  assert fields.discord_origin is None
+  assert fields.discord_watermark_id is None
 
 
 @pytest.mark.asyncio
 async def test_create_session_persists_discord_origin(tmp_path) -> None:
   _, session_mgr, _ = conftest.build_env(tmp_path)
-  origin = models.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
+  origin = DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   meta = await session_mgr.create_session(models.CreateSessionRequest(name="d", discord_origin=origin))
   reloaded = await session_mgr.read_metadata_fresh(meta.id)
-  assert reloaded.discord_origin == origin
-  assert reloaded.discord_watermark_id is None
+  fields = metadata_slots.fields_of(reloaded, "discord")
+  assert fields.discord_origin == origin
+  assert fields.discord_watermark_id is None
 
 
 def test_discord_reply_renders_as_system_row() -> None:

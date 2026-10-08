@@ -824,7 +824,7 @@ async def seed_scenario(home: Path) -> dict:
     # One discord-origin session in the group named for its channel, with
     # one delegated child: Workspace lists neither, the Threads pill lists
     # the pair nested, and no group-header plus button renders there.
-    from src.infra.models import DiscordOrigin
+    from src.features.discord.metadata import DiscordOrigin
     discord_thread = await session_mgr.create_session(
         CreateSessionRequest(
             name="Discord #general 2026",

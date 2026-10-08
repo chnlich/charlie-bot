@@ -13,7 +13,8 @@ import types
 import conftest
 
 from src.features.memory import memory
-from src.infra.models import SlackOrigin
+from src.features.slack.metadata import SlackOrigin
+from src.infra.models import SessionMetadata
 from src.runtime import master_cc
 
 
@@ -37,18 +38,17 @@ def _cfg(tmp_path: pathlib.Path) -> types.SimpleNamespace:
   return cfg
 
 
-def _main_session(session_id: str = "session-1") -> types.SimpleNamespace:
+def _main_session(session_id: str = "session-1") -> SessionMetadata:
   """A session meta with no platform origin — the main-session instruction build."""
-  return types.SimpleNamespace(id=session_id, group=None, slack_origin=None, discord_origin=None)
+  return SessionMetadata(id=session_id, name="Session")
 
 
-def _thread_session(session_id: str = "session-1") -> types.SimpleNamespace:
+def _thread_session(session_id: str = "session-1") -> SessionMetadata:
   """A session meta summoned from a Slack thread — the thread-session instruction build."""
-  return types.SimpleNamespace(
+  return SessionMetadata(
       id=session_id,
-      group=None,
-      slack_origin=SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100"),
-      discord_origin=None)
+      name="Session",
+      slack_origin=SlackOrigin(team_id="T1", channel_id="C1", thread_ts="1700000000.000100"))
 
 
 def test_resident_body_present_non_resident_index_only(tmp_path: pathlib.Path) -> None:

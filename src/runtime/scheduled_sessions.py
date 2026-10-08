@@ -37,7 +37,7 @@ def subtree_roots(
   - the cron rule (``cron_subtree_roots``): the root is a session whose
     ``scheduled_task`` is set, and the root itself is not part of its subtree;
   - the chat-thread rule (``chat_thread_subtree_roots``): the root is a
-    session carrying a platform origin (``slack_origin`` or ``discord_origin``),
+    session carrying a chat-thread origin,
     and the root itself IS a member.
 
   Projected legacy worker-thread rows carry ``task_parent_id`` = their parent

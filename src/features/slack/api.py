@@ -19,7 +19,7 @@ async def slack_reply(
   """Post the calling session's reply to its own Slack thread and return the readback.
 
   The in-process boundary behind ``charliebot slack reply``: the session's
-  ``slack_origin`` names the thread, the running round's input names the summon
+  platform origin names the thread, the running round's input names the summon
   the reply answers, and the readback (chars, chunks, over_budget, answers) is
   what the CLI prints. Refusals map SlackReplyError's status (404 unknown
   session, 409 no Slack thread, 422 blank text or a file-server link, 502 Slack
@@ -47,7 +47,7 @@ async def slack_ack(
   values, every one must be eligible, and every eligible id at or below the
   newest must be included — a skipped id (or an unknown/ineligible one) refuses
   with 422 naming it and persists nothing. Success advances the session's
-  ``slack_watermark_ts``, persists a small ack event for the audit trail, and
+  read watermark, persists a small ack event for the audit trail, and
   returns ``acked`` plus the new watermark; re-acking ids at or below the
   watermark is an idempotent no-op counted as acked. Refusals map
   SlackReplyError's status: 404 unknown session, 409 no Slack thread.

@@ -19,7 +19,7 @@ async def discord_reply(
   """Post the calling session's reply to its own Discord thread and return the readback.
 
   The in-process boundary behind ``charliebot discord reply``: the session's
-  ``discord_origin`` names the thread, and the readback (posted, text, chars,
+  platform origin names the thread, and the readback (posted, text, chars,
   chunks, over_budget, answers) is what the CLI prints. Refusals map
   ThreadReplyError's status (404 unknown session, 409 no Discord thread, 422
   blank text or a file-server link, 502 Discord rejected the post after

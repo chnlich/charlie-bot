@@ -45,6 +45,7 @@ from src.features.chat_threads.thread_entry import (
     unread_after,
 )
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionStatus
 
@@ -64,6 +65,30 @@ FAKECHAT = ThreadPlatform(
     block_keys=("channel_id", "thread_ts", "mention_id"),
     thread_fallback="(channel {channel_id}, thread {thread_ts})",
 )
+
+
+@pytest.fixture(autouse=True)
+def fakechat_metadata_access(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Adapt the fake platform's lightweight session double to the slot API."""
+  real_fields_of = metadata_slots.fields_of
+  real_set_fields = metadata_slots.set_fields
+
+  def fields_of(meta, owner: str):
+    if owner == "fakechat":
+      return SimpleNamespace(
+          fakechat_origin=meta.fakechat_origin,
+          fakechat_watermark_id=meta.fakechat_watermark_id)
+    return real_fields_of(meta, owner)
+
+  def set_fields(meta, owner: str, **values: object) -> None:
+    if owner == "fakechat":
+      for name, value in values.items():
+        setattr(meta, name, value)
+      return
+    real_set_fields(meta, owner, **values)
+
+  monkeypatch.setattr(metadata_slots, "fields_of", fields_of)
+  monkeypatch.setattr(metadata_slots, "set_fields", set_fields)
 
 
 def _summon(event_id: str) -> dict:
@@ -354,20 +379,21 @@ class FakeTriggers:
 
 class FakeTree:
   """The task-tree surface the summon create touches: create_task records its keyword arguments
-  (the origin under the platform's field name among them) and resolves the doubled session."""
+  (the origin in slot_values among them) and resolves the doubled session."""
 
   def __init__(self, sessions: FakeSessions) -> None:
     self._sessions = sessions
 
   async def create_task(self, **kwargs) -> None:
     self._sessions.created.append(SimpleNamespace(**kwargs))
+    slot_values = kwargs["slot_values"]
     self._sessions.meta = SimpleNamespace(
         id=kwargs["session_id"],
         name=kwargs["name"],
         group=kwargs["group"],
         status=SessionStatus.ACTIVE,
         updated_at="2026-01-01T00:00:00Z",
-        fakechat_origin=kwargs.get("fakechat_origin"),
+        fakechat_origin=slot_values["fakechat_origin"],
         fakechat_watermark_id=None,
     )
 
@@ -566,7 +592,7 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
       patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       # The stand-in tree records the keyword arguments the shared core passes
-      # and the assert reads the platform's origin field off them by name.
+      # and the assert reads the registered origin from slot_values.
       patch("src.features.chat_threads.thread_entry.deps.task_manager", return_value=FakeTree(sessions)),
   ):
     sid = await accept_summon(
@@ -672,10 +698,10 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
   request = sessions.created[0]
   assert request.name.startswith("Fakechat #c1 ")
   # The summon opens a manager root bound to the deterministic session id, written by the
-  # server itself, and the origin rides the create under the platform's origin field name.
+  # server itself, and the origin rides the create in the platform's slot values.
   assert (request.session_id, request.profile, request.task_parent_id, request.task) == ("s1", "manager", None, None)
   assert request.caller == "system"
-  assert request.fakechat_origin == {"channel_id": "c1", "thread_ts": "t1"}
+  assert request.slot_values["fakechat_origin"] == {"channel_id": "c1", "thread_ts": "t1"}
   assert sessions.groups == [("s1", "Fakechat #c1")]
   summon_event = sessions.persisted[0]
   assert summon_event["type"] == ET.AGENT_MESSAGE

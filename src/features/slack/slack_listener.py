@@ -62,7 +62,7 @@ from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SlackOrigin
+from src.features.slack.metadata import SlackOrigin
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 

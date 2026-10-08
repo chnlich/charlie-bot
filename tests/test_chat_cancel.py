@@ -59,8 +59,8 @@ async def _run_cc_with_backend(
 async def _task_node(tmp_path: Path, profile: str = "manager"):
   from conftest import make_home_config
 
-  from src.runtime.api.deps import set_task_manager
   from src.runtime.sessions import SessionManager
+  from src.runtime.task_execution import set_task_manager
   from src.runtime.task_sessions import TaskTreeManager
 
   cfg = make_home_config(tmp_path)
@@ -74,7 +74,7 @@ async def _task_node(tmp_path: Path, profile: str = "manager"):
 
 @pytest.mark.asyncio
 async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -> None:
-  from src.runtime.api.deps import set_task_manager
+  from src.runtime.task_execution import set_task_manager
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-live", session_id=node.id, kind="manager_turn"))
@@ -102,8 +102,8 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
   the v2 run-cancel route's 409 shape, never as a silent miss."""
   import subprocess
 
-  from src.runtime.api.deps import set_task_manager
   from src.runtime.runs import read_pid_stat
+  from src.runtime.task_execution import set_task_manager
 
   _cfg, session_mgr, tree, node = await _task_node(tmp_path)
   run = await tree.runs.register_run(RunRecord(id="run-reused", session_id=node.id, kind="manager_turn"))

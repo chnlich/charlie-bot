@@ -3,12 +3,11 @@
 import fastapi
 
 from src.infra import config, constants, models
-from src.runtime import run_token, runs, sessions, task_sessions, triggers
+from src.runtime import run_token, runs, sessions, task_execution, task_sessions, triggers
 
 # Module-level singletons (created once per process)
 _session_manager: sessions.SessionManager | None = None
 _trigger_manager: triggers.TriggerManager | None = None
-_task_manager: task_sessions.TaskTreeManager | None = None
 
 
 def session_manager() -> sessions.SessionManager:
@@ -22,39 +21,12 @@ def get_session_manager() -> sessions.SessionManager:
   return session_manager()
 
 
-def task_manager() -> task_sessions.TaskTreeManager:
-  """The task-tree owner singleton; it owns the control lock the runs.RunStore shares.
-
-  Construction installs the execution adapter as the input dispatcher's
-  executor — the application initialization owner wiring durable dispatch to
-  actual manager/worker/review execution. A test-built TaskTreeManager keeps
-  its executor None until it installs one.
-  """
-  global _task_manager
-  if _task_manager is None:
-    _task_manager = task_sessions.TaskTreeManager(config.get_config(), session_manager())
-    from src.runtime import task_execution
-    _task_manager.dispatch.executor = task_execution.TaskExecutionAdapter(
-        config.get_config(), session_manager(), _task_manager)
-  return _task_manager
-
-
 async def get_task_manager() -> task_sessions.TaskTreeManager:
-  return task_manager()
-
-
-def run_store() -> runs.RunStore:
-  return task_manager().runs
+  return task_execution.task_manager()
 
 
 async def get_run_store() -> runs.RunStore:
-  return task_manager().runs
-
-
-def set_task_manager(mgr: task_sessions.TaskTreeManager | None) -> None:
-  """Replace the task-tree owner singleton (tests); None restores lazy construction."""
-  global _task_manager
-  _task_manager = mgr
+  return task_execution.task_manager().runs
 
 
 def trigger_manager() -> triggers.TriggerManager:

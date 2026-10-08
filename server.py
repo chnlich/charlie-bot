@@ -45,11 +45,12 @@ with gc_off(collect=False):
   from src.runtime.agent_environment import apply_agent_environment
   from src.runtime.api import chat, internal, sessions, threads
   from src.runtime.api.auth import AuthMiddleware, check_ws_auth
-  from src.runtime.api.deps import session_manager, set_trigger_manager, task_manager
+  from src.runtime.api.deps import session_manager, set_trigger_manager
   from src.runtime.hooks import wiring
   from src.runtime.message_aggregator import MessageAggregator
   from src.runtime.sessions import _RAW_EVENTS_REPLACED_BY_DELTAS, SessionManager
   from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
+  from src.runtime.task_execution import task_manager
   from src.runtime.triggers import TriggerManager
   from src.runtime.v1_sessions import require_no_v1_sessions
 

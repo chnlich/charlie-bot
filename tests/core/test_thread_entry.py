@@ -591,7 +591,7 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
       # The stand-in tree records the keyword arguments the shared core passes
       # and the assert reads the registered origin from slot_values.
-      patch("src.features.chat_threads.thread_entry.deps.task_manager", return_value=FakeTree(sessions)),
+      patch("src.features.chat_threads.thread_entry.task_execution.task_manager", return_value=FakeTree(sessions)),
   ):
     sid = await accept_summon(
         adapter,

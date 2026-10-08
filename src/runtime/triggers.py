@@ -34,6 +34,7 @@ from src.runtime import trigger_files
 from src.runtime.sessions import SessionManager
 from src.runtime.sidebar_state import mark_sidebar_dirty
 from src.runtime.task_errors import TaskArchivedError, TaskForbiddenError, TaskInvalidError, TaskNotFoundError
+from src.runtime.task_execution import task_manager
 
 log = LazyStructlogLogger()
 
@@ -886,7 +887,6 @@ class TriggerManager:
     """Return this manager's tree, or the process owner before a tree is wired."""
     if self._session_mgr.task_tree_manager is not None:
       return self._session_mgr.task_tree_manager
-    from src.runtime.api.deps import task_manager
     return task_manager()
 
   async def _wait_with_pidfd(

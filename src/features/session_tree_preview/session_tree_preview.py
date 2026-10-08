@@ -91,7 +91,7 @@ from src.infra.json_utils import atomic_write_text, load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now, utc_now_iso
 from src.infra.yaml_utils import load_yaml, save_yaml
-from src.runtime import init_seed
+from src.runtime import init_seed, task_execution
 from src.runtime.home_writer_fence import (
     FENCE_IDENTITY_NAME,
     FENCE_LOCK_NAME,
@@ -778,8 +778,11 @@ def assert_no_bound_singletons() -> None:
   from src.runtime.api import deps
 
   bound = [
-      name for name in ("_session_manager", "_thread_manager", "_trigger_manager", "_task_manager")
-      if getattr(deps, name, None) is not None
+      name for name, singleton in (
+          ("_session_manager", deps._session_manager),
+          ("_trigger_manager", deps._trigger_manager),
+          ("_task_manager", task_execution._task_manager),
+      ) if singleton is not None
   ]
   if bound:
     raise PreviewRefusedError(
@@ -924,7 +927,7 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
       # Scheduling, trigger recovery, external messaging, the global cgroup
       # sweep and the other shared provisioners never start in a preview
       # instance; the request-boundary gate keeps their routes unreachable.
-      from src.runtime.api.deps import task_manager
+      from src.runtime.task_execution import task_manager
 
       tree = task_manager()
       tree.dispatch.executor.launch_workspace_guard = make_workspace_guard(cfg)

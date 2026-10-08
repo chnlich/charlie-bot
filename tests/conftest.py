@@ -977,8 +977,9 @@ def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, s
   leaves deps.session_manager() free to build a second SessionManager over the
   same home, whose private chat-event cache never sees the tree's rounds.
   """
+  from src.runtime import task_execution
   from src.runtime.api import deps
-  monkeypatch.setattr(deps, "_task_manager", tree)
+  monkeypatch.setattr(task_execution, "_task_manager", tree)
   monkeypatch.setattr(deps, "_session_manager", session_mgr)
 
 

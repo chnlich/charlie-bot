@@ -630,8 +630,8 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 
     # The list route exposes the same Run as a thread row: its real id,
     # backend and finished status — no ThreadMetadata exists.
-    from src.runtime.api import deps
-    monkeypatch.setattr(deps, "_task_manager", tree)
+    from src.runtime import task_execution
+    monkeypatch.setattr(task_execution, "_task_manager", tree)
     listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
     assert listed.status_code == 200, listed.text
     rows = listed.json()

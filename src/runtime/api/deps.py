@@ -12,7 +12,6 @@ Depends forms.
 
 import fastapi
 
-from src.features.artifacts import plans
 from src.infra import config, constants, models
 from src.runtime import run_token, runs, sessions, task_sessions, threads, triggers
 
@@ -20,7 +19,6 @@ from src.runtime import run_token, runs, sessions, task_sessions, threads, trigg
 _session_manager: sessions.SessionManager | None = None
 _thread_manager: threads.ThreadManager | None = None
 _trigger_manager: triggers.TriggerManager | None = None
-_plan_manager: plans.PlanRegistryManager | None = None
 _task_manager: task_sessions.TaskTreeManager | None = None
 
 
@@ -96,17 +94,6 @@ def set_trigger_manager(mgr: triggers.TriggerManager) -> None:
   """Set the trigger manager singleton (called from server lifespan)."""
   global _trigger_manager
   _trigger_manager = mgr
-
-
-def plan_manager() -> plans.PlanRegistryManager:
-  global _plan_manager
-  if _plan_manager is None:
-    _plan_manager = plans.PlanRegistryManager(config.get_config(), session_manager())
-  return _plan_manager
-
-
-async def get_plan_manager() -> plans.PlanRegistryManager:
-  return plan_manager()
 
 
 async def get_config_on_loop() -> config.CharlieBotConfig:

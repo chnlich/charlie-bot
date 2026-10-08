@@ -13,7 +13,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, TypeAdapter, field_validator
 from starlette.responses import Response
 
-from src.features.artifacts.plans import PlanRegistryManager
 from src.features.cron.api import next_run_iso
 from src.infra import event_types as ET
 from src.infra.compression import gzip_level1
@@ -30,7 +29,6 @@ from src.infra.models import (
     CreateSessionRequest,
     DeleteGroupRequest,
     EloneSessionRequest,
-    ExplainRequest,
     ForkSessionRequest,
     PatchSessionTaskRequest,
     RateRoundRequest,
@@ -66,7 +64,6 @@ from src.runtime.api.deps import (
     SESSION_NOT_FOUND_DETAIL,
     bad_request,
     get_config_on_loop,
-    get_plan_manager,
     get_run_store,
     get_session_manager,
     get_task_manager,
@@ -1401,101 +1398,6 @@ def _transcript_reset(latest_revision: str, client_revision: str) -> bool:
   return not client_revision or client_revision != latest_revision
 
 
-@router.get('/{session_id}/recap')
-async def get_session_recap(
-    session_id: str,
-    upto: int | None = None,
-    _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-) -> FastJsonResponse:
-  """Pure-extraction recap (no LLM) plus any cached Haiku summary for a divider.
-
-  ``upto`` is a global event_index (default: latest). Returns ordered asks, the
-  last exchange, the cached summary (or null), and whether that summary is stale.
-  """
-  from src.features.recap import recap
-  if upto is None:
-    count = await asyncio.to_thread(session_mgr.get_chat_event_count_sync, session_id)
-    upto = max(0, count - 1)
-  # The chat UI re-requests an open recap panel on every re-materialization, so a
-  # repeat read answers from the extract + summary-cache memos on the event loop;
-  # the executor round-trips are paid only on a memo miss.
-  extract = recap.extract_recap_memo_hit(session_id, upto)
-  if extract is None:
-    extract = await asyncio.to_thread(recap.extract_recap, session_mgr, session_id, upto)
-  summary = recap.summary_lookup_memo_hit(session_mgr, session_id, upto)
-  if summary is None:
-    summary = await asyncio.to_thread(recap.lookup_cached_summary, session_mgr, session_id, upto)
-  summary_text, stale = summary
-  return FastJsonResponse({**extract, "summary": summary_text, "summary_stale": stale})
-
-
-@router.post('/{session_id}/recap/summarize')
-async def summarize_session_recap(
-    session_id: str,
-    upto: int,
-    _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> dict:
-  """Generate (via a light backend), cache, and return the recap summary for a divider."""
-  from src.features.recap import recap
-  summary = await recap.generate_and_cache_summary(session_mgr, session_id, upto, cfg)
-  return {"summary": summary}
-
-
-@router.post('/{session_id}/explain')
-async def request_session_explain(
-    session_id: str,
-    body: ExplainRequest,
-    _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-) -> FastJsonResponse:
-  """Register (or return) the explain task for a divider; generation runs detached.
-
-  A divider with no entry, or a terminal one (re-run overwrites), returns 202 with
-  the fresh pending entry; a pending one returns 200 with the stored entry so one
-  divider never runs a second concurrent generation.
-  """
-  from src.features.explain import explain
-  option = cfg.get_backend_option(body.backend)
-  if option is None:
-    raise bad_request(ValueError(f"unknown backend: {body.backend}"))
-  entry, created = await explain.request_explain(session_mgr, session_id, body.event_index, option, cfg)
-  return FastJsonResponse(entry, status_code=202 if created else 200)
-
-
-@router.get('/{session_id}/explain')
-async def get_session_explain(
-    session_id: str,
-    upto: int,
-    _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-) -> FastJsonResponse:
-  """The single explain entry for a divider; answer and error bodies included."""
-  from src.features.explain import explain
-  entry = await explain.get_explain_entry(session_mgr, session_id, upto)
-  if entry is None:
-    raise HTTPException(status_code=404, detail=f"no explain entry for event_index {upto}")
-  return FastJsonResponse(entry)
-
-
-@router.get('/{session_id}/explain/status')
-async def get_session_explain_status(
-    session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
-) -> FastJsonResponse:
-  """Every explain entry's ``{upto: {state, backend, generated_at}}`` summary; bodies excluded.
-
-  The chat page pulls this once per session load/switch to render each divider's
-  explain button from persisted truth.
-  """
-  from src.features.explain import explain
-  return FastJsonResponse(await explain.explain_status(session_mgr, session_id))
-
-
 async def _start_successor_run(
     task_mgr: TaskTreeManager,
     caller: CallerIdentity,
@@ -1869,21 +1771,6 @@ async def get_events_jsonl(session_id: str, request: Request) -> Response:
 async def list_threads(
     session_id: str, thread_mgr: ThreadManager = Depends(get_thread_manager)) -> list[ThreadMetadata]:
   return await thread_mgr.list_threads(session_id)
-
-
-@router.get("/{session_id}/plans")
-async def list_plans(
-    session_id: str,
-    _meta: SessionMetadata = Depends(require_session),
-    plan_mgr: PlanRegistryManager = Depends(get_plan_manager),
-) -> FastJsonResponse:
-  """Return the plan registry for a session with derived states and read errors.
-
-  Unknown session → 404. Known session → always 200 with ``{"plans": [...], "errors": [...]}``;
-  a corrupt registry produces 200 with empty plans and one error entry, never 5xx.
-  """
-  # The plan panel polls this route.
-  return FastJsonResponse(await plan_mgr.list_plans(session_id))
 
 
 # ---------------------------------------------------------------------------

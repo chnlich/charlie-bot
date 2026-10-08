@@ -8,22 +8,22 @@ import fastapi
 import pytest
 from fastapi import testclient
 
+from src.features.artifacts import api as artifacts_api
 from src.features.artifacts import plans
 from src.infra import config, models
 from src.runtime import sessions, threads
-from src.runtime.api import deps, internal
-from src.runtime.api import sessions as sessions_api
+from src.runtime.api import deps
 
 
 def _build_app(
     session_mgr: sessions.SessionManager, thread_mgr: threads.ThreadManager,
     plan_mgr: plans.PlanRegistryManager) -> fastapi.FastAPI:
   app = fastapi.FastAPI()
-  app.include_router(internal.router, prefix="/api/internal")
-  app.include_router(sessions_api.router, prefix="/api/sessions")
+  app.include_router(artifacts_api.internal_router, prefix="/api/internal")
+  app.include_router(artifacts_api.sessions_router, prefix="/api/sessions")
   app.dependency_overrides[deps.get_session_manager] = lambda: session_mgr
   app.dependency_overrides[deps.get_thread_manager] = lambda: thread_mgr
-  app.dependency_overrides[deps.get_plan_manager] = lambda: plan_mgr
+  app.dependency_overrides[artifacts_api.get_plan_manager] = lambda: plan_mgr
   return app
 
 

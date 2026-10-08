@@ -16,6 +16,7 @@ from conftest import (
 from conftest import THREE_BACKEND_OPTIONS as VERIFY_BACKEND_OPTIONS
 from fastapi import HTTPException
 
+from src.features.improve import api as improve_api
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import DelegateRequest, SessionMetadata, TaskType
@@ -235,7 +236,7 @@ async def test_improve_stays_blocked_without_takeoff() -> None:
   session_mgr = FakeSessionManager([{"type": ET.USER, "content": "please proceed"}])
 
   with pytest.raises(HTTPException) as exc_info:
-    await internal.start_improve_loop(req, session_mgr=session_mgr)
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr)
 
   assert exc_info.value.status_code == 403
   assert "no active authorization" in exc_info.value.detail

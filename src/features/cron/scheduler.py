@@ -17,11 +17,11 @@ from zoneinfo import ZoneInfo
 from src.features.cron.cron_files import write_cron_key
 from src.infra import event_types as ET
 from src.infra.config import (
-  CharlieBotConfig,
-  ScheduledTaskConfig,
-  get_config,
-  get_scheduled_tasks,
-  require_backend_option,
+    CharlieBotConfig,
+    ScheduledTaskConfig,
+    get_config,
+    get_scheduled_tasks,
+    require_backend_option,
 )
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import LastRunStatus, SessionMetadata, SessionStatus, TaskType, parse_utc_datetime, utc_now_iso
@@ -218,10 +218,7 @@ class Scheduler:
     old = await self._newest_active_cron_session(task_cfg.name, session_cache)
     if old is not None:
       await tree.adopt_metadata_slot(
-          node.id,
-          old,
-          "cron",
-          fields=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
+          node.id, old, "cron", fields=("last_scheduled_run", "last_scheduled_cron", "last_run_status"))
     # Step 3 — write the binding back through the single-key write: only the
     # session_id key changes.
     await asyncio.to_thread(write_cron_key, task_cfg.name, "session_id", node.id)

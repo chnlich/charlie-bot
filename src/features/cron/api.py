@@ -43,6 +43,7 @@ router = APIRouter()
 # each one.
 _TASK_NOT_FOUND_DETAIL = 'Task "{}" not found'
 
+
 def _read_cron_yaml(name: str) -> dict:
   return load_yaml(cron_path(name), default={})
 

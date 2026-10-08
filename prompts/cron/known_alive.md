@@ -217,18 +217,15 @@ Known-alive symbols:
   that names unrelated methods. Same class as the `do_POST`/`log_message`
   stdlib-dispatch entry.
 - `handle_starttag`, `handle_startendtag`, `handle_endtag`, `handle_data`, `handle_entityref`,
-  `handle_charref` (`_Parser` — all six — and `handle_starttag`/`handle_startendtag`/
-  `handle_endtag` on `_BoundaryParser`, both in `src/features/artifacts/plan_diff.py`) — template-method
-  overrides of stdlib `html.parser.HTMLParser`,
-  same class as the `_TreeBuilder` entry above; `feed()` drives the base scanner, which
-  invokes these under their contract-fixed names while each parser builds its DOM. The
-  `_TreeBuilder` entry covers only artifact_check's class; each name matches only the parser
-  classes' own definitions, so vulture flags each as an unused method. `_OffsetParser`, the
-  shared base of both plan_diff parsers, pins `convert_charrefs=False` because its offset
-  math must address raw source spans, so `_Parser`'s `handle_entityref`/`handle_charref` —
-  the only overrides of that pair — fire there; parsers without the pair either pin
-  `convert_charrefs=True` (`_TreeBuilder`), under which the stdlib folds
-  references into `handle_data`, or inherit the stdlib no-op defaults (`_BoundaryParser`).
+  `handle_charref` (`_Parser`, all six, in `src/features/artifacts/plan_diff.py`) — template-method
+  overrides of stdlib `html.parser.HTMLParser`, same class as the `_TreeBuilder` entry above.
+  `feed()` drives the base scanner, which calls these methods under their contract-fixed names
+  while the parser builds its DOM. The `_TreeBuilder` entry covers only artifact_check's class.
+  Each name matches only the `_Parser` definition, so vulture flags each as an unused method.
+  `_OffsetParser`, the base of `_Parser`, pins `convert_charrefs=False` because its offset math
+  must address raw source spans. Therefore `_Parser`'s `handle_entityref` and `handle_charref`,
+  the only overrides of that pair, fire there. `_TreeBuilder` pins `convert_charrefs=True`, and
+  under that setting the stdlib folds references into `handle_data`.
 - `isolation_level` (`src/backends/opencode/usage_sweep.py`) — attribute write on a stdlib
   `sqlite3.Connection`; the sqlite3 C module reads it back when executing statements
   (`None` switches the connection to per-statement autocommit transactions, which the

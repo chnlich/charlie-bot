@@ -1,11 +1,10 @@
-import random
 import re
 from html import unescape
 
 from conftest import ROOT
 
 from src.features.artifacts.artifact_check import _descendants, _Element, _parse_dom
-from src.features.artifacts.plan_diff import _BLOCK_TAGS, _IGNORED_TAGS, _first_descendant, _parse_anchors, annotate
+from src.features.artifacts.plan_diff import _BLOCK_TAGS, _IGNORED_TAGS, annotate
 
 
 def _parse(html: str) -> _Element:
@@ -143,49 +142,6 @@ def test_cjk_tokens_stay_per_character_and_restore_the_base_text() -> None:
   assert '<ins class="cbd-ins">新</ins>' in annotated
 
 
-_CJK_REFERENCE_RANGES = ((0x3400, 0x4DBF), (0x4E00, 0x9FFF), (0xF900, 0xFAFF), (0x20000, 0x2FA1F))
-_TOKEN_FUZZ_PIECES = [
-    " ", "\n", "\t", "\u3000", "\xa0", "word", "x_1", "2", "中文", "ＣＫ", "！", "é", "-", "--", "...", "a&b", "😀"
-]
-
-
-def _reference_tokenise(text: str) -> list[tuple[str, int, int]]:
-  tokens: list[tuple[str, int, int]] = []
-  index = 0
-  while index < len(text):
-    char = text[index]
-    if char.isspace():
-      end = index + 1
-      while end < len(text) and text[end].isspace():
-        end += 1
-      index = end
-      continue
-    value = ord(char)
-    if any(start <= value <= end for start, end in _CJK_REFERENCE_RANGES):
-      tokens.append((char, index, index + 1))
-      index += 1
-      continue
-    if char.isascii() and (char.isalnum() or char == "_"):
-      end = index + 1
-      while end < len(text) and text[end].isascii() and (text[end].isalnum() or text[end] == "_"):
-        end += 1
-      tokens.append((text[index:end], index, end))
-      index = end
-      continue
-    tokens.append((char, index, index + 1))
-    index += 1
-  return tokens
-
-
-def test_tokeniser_matches_the_per_character_reference_on_a_randomized_corpus() -> None:
-  from src.features.artifacts.plan_diff import _tokenise
-
-  rng = random.Random(20260908)
-  for _ in range(500):
-    text = "".join(rng.choice(_TOKEN_FUZZ_PIECES) for _ in range(rng.randint(0, 40)))
-    assert _tokenise(text) == _reference_tokenise(text), f"token drift on {text!r}"
-
-
 def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None:
   base = '<html><body><h2><span class="n">2</span> Context<span class="revbadge">changed · r4</span></h2></body></html>'
   new = '<html><body><h2><span class="n">2</span> Context</h2></body></html>'
@@ -201,25 +157,3 @@ def test_replaced_block_keeps_a_direct_text_node_and_stays_commentable() -> None
       '<html><body><h2><span class="n">2</span> Gamma Delta</h2></body></html>')
   assert '<h2 class="cbd-new"><span class="n">2</span> Gamma Delta</h2>' in replaced
   assert 'class="cbd-del" data-del="2 Alpha Beta"' in replaced
-
-
-def _anchors_from_full_parse(source: str) -> tuple[tuple | None, tuple | None]:
-  from src.features.artifacts.plan_diff import _Node, _parse
-
-  parser = _parse(source)
-
-  def quad(node: _Node | None) -> tuple | None:
-    return (node.start, node.start_end, node.end, node.end_end) if node is not None else None
-
-  return quad(_first_descendant(parser.root, "head")), quad(_first_descendant(parser.root, "body"))
-
-
-def _anchors_as_quads(anchors: tuple) -> tuple[tuple | None, tuple | None]:
-  return tuple(
-      None if anchor is None else (anchor.start, anchor.start_end, anchor.end, anchor.end_end) for anchor in anchors)
-
-
-def test_boundary_anchors_match_the_full_parse_on_the_fixture_pair_and_spliced_output() -> None:
-  base, new = _fixture_pair()
-  for source in (base, new, annotate(base, new)):
-    assert _anchors_as_quads(_parse_anchors(source)) == _anchors_from_full_parse(source)

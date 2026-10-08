@@ -7,27 +7,24 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.backends.claude_code import claude_accounts, claude_relay, master_cc_relay
-from src.backends.claude_code.claude_code import claude_supervisor_env, out_of_family_served_models
 from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW, is_thread_session
 from src.features.latex.latex import check_tex_changed, clear_snapshot
 from src.features.memory.memory import assemble_master
 from src.infra import event_types as ET
-from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, claude_config_dir
-from src.infra.constants import SESSION_ID_ENV_VAR, BackendType
+from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig
+from src.infra.constants import SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
     BackendOption,
-    ClaudeAccount,
     MasterRunRecord,
-    SessionCallbacks,
     SessionMetadata,
     backend_type_allows_missing_model,
 )
 from src.infra.ndjson import type_line_filter
 from src.infra.process import kill_group_escalating
-from src.runtime import master_cc_state, runs
+from src.runtime import launch_loop, master_cc_state, runs
 from src.runtime.agent_process.base import AgentBackend, _read_stderr_tail, make_text_event, tail_follow_events
+from src.runtime.hooks import backend_lifecycle, backend_types
 from src.runtime.sessions import backend_switch_reset_reason, context_reset_note
 from src.runtime.streaming import handle_compaction_events
 
@@ -237,19 +234,12 @@ async def _salvage_silent_turn(
   log.info("master_cc_silent_turn_salvaged", session=session_id)
 
 
-_CLAUDE_RESUME_FLAG_BACKEND_TYPES = {BackendType.CC_CLAUDE, BackendType.CC_KIMI, BackendType.CC_OPENAI_COMPATIBLE}
-
 # The turn-end attribution's parse bound: assistant lines only. ET.ASSISTANT
-# is the raw stream's own type name here — every _CLAUDE_RESUME_FLAG_BACKEND_TYPES
-# backend runs the claude CLI and inherits the identity translate — so a raw
-# line head-proving another type cannot reach the served-model detector.
+# is the raw stream's own type name here — a lifecycle with round notices
+# belongs to a backend that runs the claude CLI and inherits the identity
+# translate — so a raw line head-proving another type cannot reach the
+# notice detector.
 _ASSISTANT_LINE_FILTER = type_line_filter(frozenset({ET.ASSISTANT}))
-_NATIVE_RESUME_SESSION_BACKEND_TYPES = {
-    BackendType.CODEX, BackendType.GEMINI, BackendType.OPENCODE, BackendType.CHARLIE_CODE, BackendType.ANTIGRAVITY
-}
-# Every backend that can resume a prior session (via --resume or a native id).
-# The pre-flight anchor-missing alarm fires only for these.
-_RESUME_CAPABLE_BACKEND_TYPES = _CLAUDE_RESUME_FLAG_BACKEND_TYPES | _NATIVE_RESUME_SESSION_BACKEND_TYPES
 
 
 class _Instructions(str):
@@ -384,99 +374,31 @@ async def _v1_reset_reason(
   return "the previous conversation could not be resumed"
 
 
-def _cc_transcript_exists(config_dir: Path, cc_session_id: str) -> bool:
-  """True when *config_dir* holds a resumable transcript for *cc_session_id*."""
-  return bool(claude_accounts.transcript_matches(config_dir, cc_session_id))
-
-
-def _resolve_resume_id(
-    option: BackendOption,
-    session_meta: SessionMetadata,
-    cfg: CharlieBotConfig | None,
-) -> str | None:
-  """Return the cc_session_id to resume, or None when it is not reachable.
-
-  Each pool account has its own login directory and cannot see another's
-  conversations, so resuming an id recorded under a different account always fails.
-  A pooled option (src/backends/claude_code/claude_accounts.py) looks in the session's own account
-  first and then in every pool login, writing a hit elsewhere back onto
-  ``session_meta.claude_account``; that is how sessions created before the pool
-  migrate without a metadata rewrite. Backends with native resume ids carry no
-  local transcript and pass through.
-  """
-  cc_session_id = session_meta.cc_session_id
-  if not cc_session_id:
-    return None
-  if option.type not in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-    return cc_session_id
-  if cfg is not None and claude_accounts.is_pooled(option, cfg):
-    return _resolve_pooled_resume_id(cfg, session_meta, cc_session_id)
-  config_dir = claude_config_dir()
-  if _cc_transcript_exists(config_dir, cc_session_id):
-    return cc_session_id
-  log.warning(
-      "master_cc_resume_transcript_missing",
-      session=session_meta.id,
-      cc_session_id=cc_session_id,
-      config_dir=str(config_dir),
-  )
-  return None
-
-
-def _resolve_pooled_resume_id(cfg: CharlieBotConfig, session_meta: SessionMetadata, cc_session_id: str) -> str | None:
-  """Pool half of _resolve_resume_id: own account first, then every pool login."""
-  current = claude_accounts.account_by_label(cfg, session_meta.claude_account)
-  if current is not None and _cc_transcript_exists(Path(current.config_dir), cc_session_id):
-    return cc_session_id
-  found = claude_accounts.find_transcript_account(cfg, cc_session_id)
-  if found is not None:
-    log.info(
-        "master_cc_resume_transcript_found_in_pool",
-        session=session_meta.id,
-        cc_session_id=cc_session_id,
-        account=found.label,
-        previous_account=session_meta.claude_account,
-    )
-    session_meta.claude_account = found.label
-    return cc_session_id
-  log.warning(
-      "master_cc_resume_transcript_missing",
-      session=session_meta.id,
-      cc_session_id=cc_session_id,
-      config_dir=current.config_dir if current is not None else None,
-      pool=[account.label for account in claude_accounts.pool(cfg)],
-  )
-  return None
-
-
 def _route_resume_session(backend_type: str, cc_session_id: str | None) -> tuple[list[str], str | None]:
   """Return CLI resume flags and native resume ID for a backend type."""
   if not cc_session_id:
     return [], None
-  if backend_type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+  resume = backend_types.traits_for(backend_type).resume
+  if resume == backend_types.RESUME_CLI_FLAG:
     return ["--resume", cc_session_id], None
-  if backend_type in _NATIVE_RESUME_SESSION_BACKEND_TYPES:
+  if resume == backend_types.RESUME_NATIVE_ID:
     return [], cc_session_id
-  return [], None
+  raise ValueError(f"unknown resume style {resume!r} for backend type {backend_type}")
 
 
 def _build_extra_flags(
     option: BackendOption,
-    resume_id: str | None,
+    launch: backend_lifecycle.Launch,
     item: master_cc_state._WorkItem,
 ) -> tuple[list[str], str | None]:
   """CLI flags and native resume id for one spawn of this turn.
 
-  Shared by the first spawn and every account relay, so a relayed process
-  resumes with exactly the flags the turn started with plus the transcript id.
+  Shared by the first spawn and every relay: the flags are the type's resume flag, the flags
+  the lifecycle's launch carries in ``backend_kwargs["extra_flags"]``, and the turn's own extra
+  flags, in that order.
   """
-  extra_flags, resume_session_id = _route_resume_session(option.type, resume_id)
-  # Move per-machine sections (cwd, env info, memory paths, git status) out of the
-  # system prompt into the first user message. Keeps the system prompt stable across
-  # sessions so cross-run prompt-cache reuse improves. Only the Claude Code CLI
-  # family supports this flag.
-  if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-    extra_flags = [*extra_flags, "--exclude-dynamic-system-prompt-sections"]
+  extra_flags, resume_session_id = _route_resume_session(option.type, launch.resume_id)
+  extra_flags = [*extra_flags, *launch.backend_kwargs.get("extra_flags", [])]
   if item.extra_claude_flags:
     extra_flags.extend(item.extra_claude_flags)
   return extra_flags, resume_session_id
@@ -487,13 +409,13 @@ def _build_master_env(cfg: CharlieBotConfig, session_id: str) -> dict[str, str]:
 
   ``CHARLIEBOT_SESSION_ID`` carries this master's own session identity, so the
   session-scoped CLIs the master runs resolve to it wherever the shell cd's to
-  (``src.runtime.cli.common.resolve_session_id``). ``claude_supervisor_env`` strips any
+  (``src.runtime.cli.common.resolve_session_id``). ``launch_loop.child_env`` strips any
   inherited value first, so a server started from inside another session's
   environment hands down no stale id. PATH is the inherited one: it already
   carries the ``charliebot`` shim (``src.runtime.agent_environment``), and a venv
   bin directory on it would give uv an install target.
   """
-  env = claude_supervisor_env(os.environ)
+  env = launch_loop.child_env(os.environ)
   env[SESSION_ID_ENV_VAR] = session_id
   env["GIT_CEILING_DIRECTORIES"] = str(cfg.charliebot_home)
   return env
@@ -526,10 +448,23 @@ async def _handle_event(
   return cc_session_id
 
 
+def _agent_error_event(msg: str, quota_exhausted: bool | None) -> dict:
+  """The ASSISTANT_ERROR chat event of a failed turn.
+
+  *quota_exhausted* is the refusal's flag when the turn ended on a ``LaunchRefused`` and None for
+  every other failure: only a launch-refusal event carries the ``QUOTA_EXHAUSTED`` key.
+  """
+  event: dict = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {msg}"}
+  if quota_exhausted is not None:
+    event[ET.QUOTA_EXHAUSTED] = quota_exhausted
+  return event
+
+
 async def _report_turn_error_and_salvage(
     tracker: _RunTimingTracker,
     item: master_cc_state._WorkItem,
     error_msg: str | None,
+    quota_exhausted: bool | None,
 ) -> None:
   """Terminal event pair shared by the _run_cc and _resume_cc finally blocks.
 
@@ -539,23 +474,66 @@ async def _report_turn_error_and_salvage(
   """
   session_id = item.session_meta.id
   if error_msg:
-    err_event = {"type": ET.ASSISTANT_ERROR, "content": f"Agent error: {error_msg}"}
-    await item.callbacks.persist_and_broadcast(session_id, err_event)
+    await item.callbacks.persist_and_broadcast(session_id, _agent_error_event(error_msg, quota_exhausted))
   await _salvage_silent_turn(tracker, error_msg, session_id, item.callbacks.persist_and_broadcast)
 
 
-async def _refuse_turn(item: master_cc_state._WorkItem, msg: str) -> tuple[None, int, str, dict]:
+async def _refuse_turn(item: master_cc_state._WorkItem, msg: str,
+                       quota_exhausted: bool | None) -> tuple[None, int, str, dict]:
   """Fail a turn before any backend spawn: one error event in chat, the triggering message left unread.
 
   Returns the run's refusal shape: no cc_session_id, exit code 1, the message, no finish extras.
   """
-  await item.callbacks.persist_and_broadcast(
-      item.session_meta.id, {
-          "type": ET.ASSISTANT_ERROR,
-          "content": f"Agent error: {msg}"
-      })
+  await item.callbacks.persist_and_broadcast(item.session_meta.id, _agent_error_event(msg, quota_exhausted))
   await item.callbacks.mark_unread(item.session_meta.id)
   return None, 1, msg, {}
+
+
+def _resolve_turn_option(item: master_cc_state._WorkItem) -> BackendOption | None:
+  """The backend option a live turn runs on: the item's own, else the session's pin, else None.
+
+  A caller that passed no option must not silently inherit backends.options[0]: the session's
+  own pin is the explicit choice and takes precedence.
+  """
+  if item.backend_option is not None:
+    return item.backend_option
+  if item.session_meta.backend:
+    return item.cfg.get_backend_option(item.session_meta.backend)
+  return None
+
+
+def _turn_launch_context(
+    item: master_cc_state._WorkItem,
+    option: BackendOption,
+    cwd: str,
+    held_native_id: str | None,
+) -> backend_lifecycle.LaunchContext:
+  """The ``LaunchContext`` of one master turn: events go to the session, the account label to its funnel."""
+  session_meta = item.session_meta
+  callbacks = item.callbacks
+
+  async def emit(event: dict) -> None:
+    await callbacks.persist_and_broadcast(session_meta.id, event)
+
+  async def record_account(label: str) -> None:
+    if callbacks.persist_claude_account is not None:
+      await callbacks.persist_claude_account(session_meta.id, label)
+
+  async def context_state() -> tuple[int | None, datetime | None]:
+    if callbacks.claude_context_state is None:
+      return None, None
+    return await callbacks.claude_context_state(session_meta.id, session_meta)
+
+  return backend_lifecycle.LaunchContext(
+      cfg=item.cfg,
+      option=option,
+      session_meta=session_meta,
+      kind="turn",
+      cwd=cwd,
+      held_native_id=held_native_id,
+      emit=emit,
+      record_account=record_account,
+      context_state=context_state)
 
 
 async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
@@ -572,12 +550,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   session_dir.mkdir(parents=True, exist_ok=True)
   cwd = str(session_dir)
 
-  from src.runtime.agent_process.registry import build_backend
-  option = item.backend_option
-  # A caller that passed no option must not silently inherit backends.options[0]:
-  # the session's own pin is the explicit choice and takes precedence.
-  if option is None and session_meta.backend:
-    option = cfg.get_backend_option(session_meta.backend)
+  option = _resolve_turn_option(item)
   if option is None:
     if session_meta.backend:
       # The session pins a backend id config.yaml no longer defines.
@@ -606,7 +579,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           session=session_meta.id,
           requested="(none)",
       )
-    return await _refuse_turn(item, msg)
+    return await _refuse_turn(item, msg, None)
   if backend_type_allows_missing_model(option.type) and option.model is not None:
     option = option.model_copy(update={"model": None})
   # A thread session on the CLC backend runs the fixed thread context window in
@@ -614,7 +587,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   # and workers, so its window must keep serving them, and a thread session is
   # born without a backend of its own to pin a narrower entry on. Only
   # charlie-code reads a --context-window; other backend types are untouched.
-  if option.type == BackendType.CHARLIE_CODE and is_thread_session(session_meta):
+  if backend_types.traits_for(option.type).reads_context_window and is_thread_session(session_meta):
     option = option.model_copy(update={"context_window": THREAD_CONTEXT_WINDOW})
 
   if item.task_instructions is not None:
@@ -666,12 +639,6 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
               "error": type(overlay_error).__name__,
           })
 
-  pooled = claude_accounts.is_pooled(option, cfg)
-  account: ClaudeAccount | None = None
-  context_tokens: int | None = None
-  last_request_at: datetime | None = None
-  if pooled and item.callbacks.claude_context_state is not None:
-    context_tokens, last_request_at = await item.callbacks.claude_context_state(session_meta.id, session_meta)
   # A v2 fresh-native launch never resumes: the instruction hash or backend
   # identity changed, so the previous conversation is not this launch's
   # context. The adapter clears the stale anchor at spawn (after the process
@@ -693,83 +660,19 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   switch_from_backend = session_meta.native_backend
   fresh_by_switch = (
       item.task_run is None and not fresh_native and bool(session_meta.cc_session_id) and bool(switch_from_backend) and
-      not claude_accounts.same_continuation_domain(switch_from_backend, option.id, cfg))
-  resume_id = None if (fresh_native or fresh_by_switch) else _resolve_resume_id(option, session_meta, cfg=cfg)
-  if pooled:
-    # The pool picks the login for this turn, moves the transcript to it when the
-    # account changes, and compacts a large Fable context when the cache is cold.
-    account, place_error = await master_cc_relay.place_turn(
-        cfg, item, option, resume_id, cwd, context_tokens, last_request_at)
-    if account is None:
-      log.error("master_cc_account_unavailable", session=session_meta.id, error=place_error)
-      return await _refuse_turn(item, place_error)
-    # A moved transcript is re-resolved under the chosen account. A fresh turn
-    # (v2's fresh_native, or the v1 rule's cross-family switch) placed with no
-    # resume id, so no transcript moved and the withheld id stays withheld —
-    # re-resolving would hand the old id to a backend outside its domain.
-    if not (fresh_native or fresh_by_switch):
-      resume_id = _resolve_resume_id(option, session_meta, cfg=cfg)
-  # Pre-flight: a resume-capable backend about to run with no resolved resume
-  # id, when the session already has an anchor on disk or a completed round, is
-  # about to start a zero-context conversation. Fail loudly unless the caller
-  # declared a fresh start (the scheduled-session weekly-recycle path) or the
-  # continuation rule already declared this turn fresh (a cross-domain switch).
-  dropped_reason: str | None = None
-  if (option.type in _RESUME_CAPABLE_BACKEND_TYPES and not resume_id and not item.expect_fresh_session and
-      not fresh_native and not fresh_by_switch):
-    anchor_on_disk = session_meta.cc_session_id
-    if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
-      reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
-      dropped_reason = reason
-      log.error(
-          "master_cc_resume_anchor_missing",
-          session=session_meta.id,
-          backend=option.type,
-          reason=reason,
-      )
-      await item.callbacks.persist_and_broadcast(
-          session_meta.id, {
-              "type": ET.RESUME_CONTEXT_DROPPED,
-              "reason": reason,
-          })
-  extra_flags, resume_session_id = _build_extra_flags(option, resume_id, item)
-  resume_session = bool(resume_id)
-  # Gate on backend capability, not on a resume-id variable: a backend outside
-  # _RESUME_CAPABLE_BACKEND_TYPES cannot resume any prior session, so a session
-  # that carries an anchor (cc_session_id) is misconfigured regardless of
-  # whether this round resolved a reachable resume id. Keying off resume_id or
-  # resume_session_id would silence the warning whenever the id is absent (fresh
-  # start, unreachable transcript) and let the misconfiguration pass undetected.
-  if session_meta.cc_session_id and option.type not in _RESUME_CAPABLE_BACKEND_TYPES:
-    log.warning("master_cc_resume_unsupported_backend", session=session_meta.id, backend=option.type)
-
+      not backend_types.same_continuation_domain(switch_from_backend, option.id, cfg))
+  # A fresh turn (v2's fresh_native, or the v1 rule's cross-family switch) holds no id, so
+  # the lifecycle places it with no resume id and nothing is withheld twice.
+  held_native_id = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
+  lifecycle = backend_types.lifecycle_for(option)
+  ctx = _turn_launch_context(item, option, cwd, held_native_id)
   env = _build_master_env(cfg, session_meta.id)
   if item.extra_env:
     # The v2 adapter's child identity (its own session id, signed run token,
     # selected home) rides on top of the supervisor env.
     env.update(item.extra_env)
-  if pooled:
-    # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must
-    # never shadow it.
-    env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
 
   prompt = _build_prompt(item.user_content, item.is_voice)
-  reset_reason = await _v1_reset_reason(item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
-  if reset_reason is not None:
-    # Only the prompt the backend receives carries the note; the persisted user
-    # event was written before the run and stays unchanged.
-    prompt = f"{context_reset_note(reset_reason)}\n\n{prompt}"
-
-  log.info(
-      "master_cc_starting",
-      session=session_meta.id,
-      backend=option.type,
-      model=option.model,
-      prompt_chars=len(prompt),
-      resume_session=resume_session,
-      cwd=cwd,
-      account=account.label if account is not None else None,
-  )
 
   # The round's own conversation state. A fresh turn (v2's cleared snapshot, or
   # a v1 cross-family switch) starts a new conversation, so its state starts
@@ -782,6 +685,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   cc_session_id: str | None = None if (fresh_native or fresh_by_switch) else session_meta.cc_session_id
   exit_code = 1
   error_msg: str | None = None
+  # The launch refusal's flag when the turn ended on one; None for every other failure.
+  quota_exhausted: bool | None = None
   # Set inside _on_spawn the moment the master_run record hits disk; the cancel
   # path lets the turn go only once a boot can find it, so this flag — not
   # backend.pid — is the let-go precondition.
@@ -792,16 +697,15 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
 
   tracker = _RunTimingTracker(session_meta.id, option.type, option.model)
   backend: AgentBackend | None = None
-  # Account relays this turn performed (pooled options only).
+  # Relays this turn performed (a backend with a login pool only).
   relays = 0
-  watch: claude_relay.RelayWatch | None = None
 
   # Per-turn transport dir: the backend pins its raw NDJSON log, stderr log,
   # and read cursor here so a restarted server can re-attach to this exact
   # turn from the persisted master_run record. A v2 task-tree turn pins the
   # same files inside its Run's own directory (the Run is the execution
   # record). A relay's fresh process gets a dir and record of its own (see
-  # _spawn_and_stream).
+  # _run_process).
   started_at = datetime.now(UTC)
   log_dir = (
       Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
@@ -837,13 +741,18 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
       await item.callbacks.persist_master_run(session_meta.id, record)
     record_persisted = True
 
-  async def _spawn_and_stream(
-      spawn_prompt: str,
-      spawn_flags: list[str],
-      spawn_resume_id: str | None,
-  ) -> None:
+  def _on_relay(relay_count: int) -> None:
+    nonlocal relays
+    relays = relay_count
+
+  async def _run_process(
+      process_launch: backend_lifecycle.Launch,
+      watch: backend_lifecycle.LaunchWatch | None,
+      relays_before: int,
+  ) -> tuple[int, str]:
     """One process of this turn: build the backend, stream its events, record its exit."""
-    nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log
+    nonlocal backend, exit_code, cc_session_id, record_persisted, started_at, log_dir, raw_log, relays
+    relays = relays_before
     error_event_messages.clear()
     if backend is not None:
       record_persisted = False
@@ -854,10 +763,53 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
           Path(item.task_run.transport_dir) if item.task_run is not None else runs.master_run_log_dir(
               cfg.sessions_dir / session_meta.id, started_at))
       raw_log = str(log_dir / runs.RAW_LOG_NAME)
-    backend = build_backend(
+    process_prompt = prompt
+    if relays_before == 0:
+      resume_id = process_launch.resume_id
+      # Pre-flight: a launch without a resolved resume id could start a
+      # zero-context conversation when this session already has an anchor.
+      # Declared fresh starts and cross-domain switches intentionally skip it.
+      dropped_reason: str | None = None
+      if (not resume_id and not item.expect_fresh_session and not fresh_native and not fresh_by_switch):
+        anchor_on_disk = session_meta.cc_session_id
+        if anchor_on_disk or await item.callbacks.has_completed_round(session_meta.id):
+          reason = ET.RESUME_REASON_TRANSCRIPT_MISSING if anchor_on_disk else ET.RESUME_REASON_ANCHOR_MISSING
+          dropped_reason = reason
+          log.error(
+              "master_cc_resume_anchor_missing",
+              session=session_meta.id,
+              backend=option.type,
+              reason=reason,
+          )
+          await item.callbacks.persist_and_broadcast(
+              session_meta.id, {
+                  "type": ET.RESUME_CONTEXT_DROPPED,
+                  "reason": reason,
+              })
+      reset_reason = await _v1_reset_reason(item, option, fresh_by_switch=fresh_by_switch, dropped_reason=dropped_reason)
+      if reset_reason is not None:
+        # Only the prompt the backend receives carries the note; the persisted user event stays unchanged.
+        process_prompt = f"{context_reset_note(reset_reason)}\n\n{process_prompt}"
+      log.info(
+          "master_cc_starting",
+          session=session_meta.id,
+          backend=option.type,
+          model=option.model,
+          prompt_chars=len(process_prompt),
+          resume_session=bool(resume_id),
+          cwd=cwd,
+          account=process_launch.account_label,
+      )
+    process_env = dict(env)
+    if process_launch.account_label is not None:
+      # The pool chose the login directory; an inherited CLAUDE_CONFIG_DIR must never shadow it.
+      process_env.pop(CLAUDE_CONFIG_DIR_ENV_VAR, None)
+    spawn_flags, spawn_resume_id = _build_extra_flags(option, process_launch, item)
+    launch_kwargs = {key: value for key, value in process_launch.backend_kwargs.items() if key != "extra_flags"}
+    backend = backend_types.build_backend(
         option,
         cfg,
-        claude_account=account,
+        **launch_kwargs,
         extra_flags=spawn_flags or None,
         buffer_limit=cfg.subprocess_buffer_limit,
         on_spawn=_on_spawn,
@@ -868,7 +820,8 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     )
     master_cc_state._active_procs[session_meta.id] = backend
 
-    async for event in backend.run(spawn_prompt, cwd, env, uploaded_files=item.uploaded_files):
+    spawn_prompt = process_launch.prompt if process_launch.prompt is not None else process_prompt
+    async for event in backend.run(spawn_prompt, cwd, process_env, uploaded_files=item.uploaded_files):
       tracker.on_event(event)
       if event.get("type") == ET.ERROR:
         error_event_messages.append(event.get("message", ""))
@@ -880,70 +833,46 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     exit_code = backend.exit_code
     if backend.stderr_text:
       log.warning("master_cc_stderr", session=session_meta.id, stderr=backend.stderr_text)
+    return exit_code, backend.stderr_text
 
   try:
-    spawn_prompt, spawn_flags, spawn_resume_id = prompt, extra_flags, resume_session_id
-    while True:
-      watch = claude_relay.RelayWatch(account.label, option.model) if account is not None else None
-      await _spawn_and_stream(spawn_prompt, spawn_flags, spawn_resume_id)
+    try:
+      relays = await launch_loop.run_launches(
+          ctx,
+          lifecycle,
+          run_process=_run_process,
+          native_id=lambda: cc_session_id,
+          on_relay=_on_relay,
+      )
+    except backend_lifecycle.LaunchRefused as refusal:
+      log.error(
+          "master_cc_launch_refused",
+          session=session_meta.id,
+          error=str(refusal),
+          quota_exhausted=refusal.quota_exhausted)
+      error_msg = str(refusal)
+      exit_code = 1
+      quota_exhausted = refusal.quota_exhausted
+    else:
       assert backend is not None
-      decision = watch.decision(exit_code, backend.stderr_text) if watch is not None else None
-      if decision is None:
-        if exit_code != 0 and not backend.terminated:
-          # The invocation's own structured error event outranks the stderr
-          # help banner (runs.select_error_hint); an explicit user stop keeps
-          # today's no-hint behavior, and the cgroup report below still wins
-          # over both channels.
-          error_msg = runs.select_error_hint(error_event_messages, backend.stderr_text)
-        # Session memory-cap / host-OOM attribution: the
-        # routing report supersedes a bare stderr tail ("Killed") whenever the
-        # cgroup's counters moved.
-        error_msg = backend.cgroup_exit_report() or error_msg
-        break
-      assert account is not None
-      if decision == claude_relay.LOGIN_FAILED:
-        await master_cc_relay.report_login_failure(item, account)
-      if relays >= claude_relay.MAX_RELAYS_PER_TURN:
-        error_msg = claude_relay.relay_limit_message()
-        exit_code = 1
-        break
-      next_account, relay_error, refused_holder = await master_cc_relay.prepare_relay(
-          cfg, item, option, cc_session_id, account, cwd, decision)
-      if next_account is None:
-        if refused_holder is None:
-          error_msg = relay_error
-          exit_code = 1
-          break
-        # The mid-turn move hit the newer-transcript guard: the destination
-        # holds the newer copy (the kill between a previous relay's move and
-        # its persist, or an unknown defect). Same predicate and reaction as
-        # the placement layer's self-heal -- adopt the destination, persist it
-        # through the funnel, continue the turn from it; a refusal the copy on
-        # disk already answers never fails the turn.
-        await master_cc_relay.adopt_transcript_holder(
-            item, cc_session_id, refused_holder, account.label, reason=master_cc_relay.GUARD_REFUSED_NEWER_TRANSCRIPT)
-        next_account = refused_holder
-      # Counted toward the relay cap like any other account change, so even a
-      # pathological refusal loop ends loudly at the same bound.
-      relays += 1
-      account = next_account
-      session_meta.claude_account = account.label
-      # The relay's label persist point: disk carries the new account from the
-      # moment the continuation is built, not at round end (the placement and
-      # refusal paths persist through the same funnel; an unchanged account
-      # skips the write inside it).
-      if item.callbacks.persist_claude_account is not None:
-        await item.callbacks.persist_claude_account(session_meta.id, account.label)
-      spawn_prompt = claude_relay.CONTINUATION_PROMPT
-      spawn_flags, spawn_resume_id = _build_extra_flags(option, cc_session_id, item)
+      if exit_code != 0 and not backend.terminated:
+        # The invocation's own structured error event outranks the stderr
+        # help banner (runs.select_error_hint); an explicit user stop keeps
+        # today's no-hint behavior, and the cgroup report below still wins
+        # over both channels.
+        error_msg = runs.select_error_hint(error_event_messages, backend.stderr_text)
+      # Session memory-cap / host-OOM attribution: the
+      # routing report supersedes a bare stderr tail ("Killed") whenever the
+      # cgroup's counters moved.
+      error_msg = backend.cgroup_exit_report() or error_msg
 
-    # Turn-end model attribution: when the CLI silently served this round's
-    # visible reply with a model outside the pinned family, one synthetic
-    # notice lands after the round's own events. Detection re-reads this
-    # invocation's own raw log through the same whole-file projection the
-    # re-attach path uses (fresh translate) — no detection state accumulates
-    # in the stream loop. In-family rounds and non-cc backends emit nothing.
-    if option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
+    # Turn-end attribution: a lifecycle that reads the round's events (the Claude CLI
+    # family reports a visible reply that a model outside the pinned family wrote) gets
+    # this invocation's own raw log re-read through the same whole-file projection the
+    # re-attach path uses (fresh translate) — no detection state accumulates in the
+    # stream loop. The notices land after the round's own events; a backend without
+    # round notices emits nothing.
+    if backend is not None and launch_loop.has_round_notices(lifecycle):
       raw_path = Path(raw_log)
       if not raw_path.is_file():
         # A live cc round always has one (run() creates the raw log before
@@ -963,7 +892,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
         # the whole-file projection.
         turn_events = await asyncio.to_thread(
             runs.project_raw_file, raw_path, _build_fresh_translate(cfg, option), _ASSISTANT_LINE_FILTER)
-        await _emit_model_fallback_notice(item.callbacks, session_meta, option, turn_events)
+        await _emit_round_notices(item, option, turn_events)
 
   except asyncio.CancelledError:
     # Only live trigger: event-loop shutdown (graceful restart). Same let-go
@@ -973,7 +902,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # Uncovered transports die with their transport process, and a process
     # whose record never hit disk can never be found by a boot, so both are
     # still terminated.
-    let_go = (backend is not None and option.type not in runs.UNCOVERED_BACKEND_TYPES and record_persisted)
+    let_go = (backend is not None and backend_types.traits_for(option.type).restart_reattach and record_persisted)
     log.warning(
         "master_cc_cancelled",
         session=session_meta.id,
@@ -994,9 +923,12 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
   finally:
     master_cc_state._active_procs.pop(session_meta.id, None)
     finish_extras = tracker.build_finish_extras()
-    # The backend id this round actually ran on, for the consumer's round-end
-    # anchor persist (the option resolved above, never the request's hint).
-    finish_extras["native_backend"] = option.id
+    if backend is None:
+      cc_session_id = None
+    else:
+      # The backend id this round actually ran on, for the consumer's round-end
+      # anchor persist (the option resolved above, never the request's hint).
+      finish_extras["native_backend"] = option.id
     if relays:
       finish_extras["account_relays"] = relays
 
@@ -1004,7 +936,7 @@ async def _run_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str
     # its error event and silent-turn salvage; only the terminal state writes
     # (unread marker, tex snapshot, finished log) would lie about a turn that
     # keeps running in another process.
-    await _report_turn_error_and_salvage(tracker, item, error_msg)
+    await _report_turn_error_and_salvage(tracker, item, error_msg, quota_exhausted)
 
     # On the let-go path the turn is still running in another process: writing
     # any terminal state (unread marker, tex snapshot, finished log) would lie
@@ -1058,30 +990,16 @@ def _build_fresh_translate(cfg: CharlieBotConfig, option: BackendOption | None) 
   if option is None:
     return lambda event: [event]
   try:
-    from src.runtime.agent_process.registry import build_backend
-    return build_backend(option, cfg).translate_event
+    return backend_types.build_backend(option, cfg).translate_event
   except Exception as e:
     log.warning("master_cc_resume_translate_unresolved", backend=option.id, error=str(e))
     return lambda event: [event]
 
 
-async def _emit_model_fallback_notice(
-    callbacks: SessionCallbacks,
-    session_meta: SessionMetadata,
-    option: BackendOption,
-    events: list[dict],
-) -> None:
-  """Persist and broadcast the turn-end served-model notice when the round's visible reply came
-  from models outside the configured model's family. Emits nothing for in-family rounds."""
-  served_models = out_of_family_served_models(events, option.model)
-  if served_models:
-    await callbacks.persist_and_broadcast(
-        session_meta.id, {
-            "type": ET.MODEL_FALLBACK_NOTICE,
-            "backend": option.id,
-            "configured_model": option.model,
-            "served_models": served_models,
-        })
+async def _emit_round_notices(item: master_cc_state._WorkItem, option: BackendOption, events: list[dict]) -> None:
+  """Persist and broadcast the notices the backend's lifecycle reads from the finished round's events."""
+  for notice in backend_types.lifecycle_for(option).round_notices(option, events):
+    await item.callbacks.persist_and_broadcast(item.session_meta.id, notice)
 
 
 async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, str | None, dict]:
@@ -1151,8 +1069,8 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
     # emitted. One turn's lifecycle takes exactly one of the two completion
     # paths (a completed live turn clears its master_run record, so a
     # re-attach implies the live path never completed), so no double emit.
-    if option is not None and option.type in _CLAUDE_RESUME_FLAG_BACKEND_TYPES:
-      await _emit_model_fallback_notice(item.callbacks, session_meta, option, events)
+    if option is not None:
+      await _emit_round_notices(item, option, events)
 
     # The loop ended on the post-result timeout: same contract as the live
     # path's cleanup — SIGTERM the recorded process group, escalate to
@@ -1177,7 +1095,7 @@ async def _resume_cc(item: master_cc_state._WorkItem) -> tuple[str | None, int, 
 
   finally:
     finish_extras = tracker.build_finish_extras()
-    await _report_turn_error_and_salvage(tracker, item, error_msg)
+    await _report_turn_error_and_salvage(tracker, item, error_msg, None)
     await item.callbacks.mark_unread(session_meta.id)
     log.info(
         "master_cc_resume_finished",

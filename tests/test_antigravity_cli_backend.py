@@ -9,7 +9,7 @@ import pytest
 from src.backends.antigravity import antigravity_cli
 from src.infra import config
 from src.infra import event_types as ET
-from src.runtime.agent_process import registry
+from src.runtime.hooks import backend_types
 
 
 def _build_backend(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> antigravity_cli.AntigravityCliBackend:
@@ -119,13 +119,13 @@ def test_prepare_env_strips_api_keys_for_oauth(monkeypatch: pytest.MonkeyPatch) 
   assert "/usr/bin" in env.get("PATH", "")
 
 
-def test_registry_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_backend_types_builds_antigravity_backend(monkeypatch: pytest.MonkeyPatch) -> None:
   monkeypatch.setattr(
       conftest.ANTIGRAVITY_RESOLVE_BINARY_PATCH_TARGET,
       lambda name, fallback: "/usr/bin/agy",
   )
   option = conftest.AGY_BACKEND_OPTION
-  backend = registry.build_backend(option, config.CharlieBotConfig(), extra_flags=["--sandbox"])
+  backend = backend_types.build_backend(option, config.CharlieBotConfig(), extra_flags=["--sandbox"])
 
   assert isinstance(backend, antigravity_cli.AntigravityCliBackend)
   assert backend._model is None

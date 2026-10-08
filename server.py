@@ -12,7 +12,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
+from src.app import registrations
 from src.infra.gc_control import gc_off
+
+# The backend packages register their types before the import chain below can parse a config.
+registrations.register_all()
 
 # The import chain is the server's largest bulk build: ~560 modules — fastapi's
 # own chain, every router, and the pydantic models every route registers

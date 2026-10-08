@@ -36,7 +36,6 @@ from tests.test_task_execution import (
     BUILD_BACKEND_PATCH_TARGET,
     OP_HEADERS,
     SpawningScriptedBackend,
-    WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
     build_env,
     build_pooled_env,
@@ -317,12 +316,10 @@ async def _pooled_pm_manager(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
 async def test_pooled_iteration_launches_on_the_selected_pool_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo: Path) -> None:
   """The improve controller's iteration Runs are fresh worker launches: with a
-  non-empty pool and a cc-claude backend, each one hands Worker the account
+  non-empty pool and a cc-claude backend, each lifecycle selects the account
   claude_accounts.select returned, and the relay loop is armed (the backend
   build receives the same account)."""
   cfg, session_mgr, tree, manager = await _pooled_pm_manager(tmp_path, monkeypatch)
-  recorder = WorkerAccountRecorder()
-  recorder.install(monkeypatch)
   builds = _worker_backends(monkeypatch, ["iter one words", "iter two words"])
 
   await _admit_takeoff(tree, manager)
@@ -341,7 +338,6 @@ async def test_pooled_iteration_launches_on_the_selected_pool_account(
 
   expected = claude_accounts.select(cfg, FABLE_MODEL)
   assert expected is not None and expected.label == "main"
-  assert recorder.accounts == [expected, expected]
   assert [b["kwargs"]["claude_account"] for b in builds] == [expected, expected]
 
 

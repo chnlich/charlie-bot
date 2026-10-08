@@ -12,7 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src.backends.codex import codex_pricing
-from src.infra import config, constants, log_once, models, ndjson
+from src.infra import config, log_once, models, ndjson
 from src.infra import event_types as ET
 
 log = log_once.LazyStructlogLogger()
@@ -135,13 +135,6 @@ class CodexUsageResolver:
     self._chat_events_path_fn = chat_events_path_fn
     self._codex_rollout_path_cache: dict[str, pathlib.Path] = {}
     self._codex_rollout_usage_cache: dict[str, tuple[int, int, dict | None]] = {}
-
-  def is_codex_backend(self, backend_id: str) -> bool:
-    option = self._cfg.get_backend_option(backend_id)
-    if option is not None:
-      return option.type == constants.BackendType.CODEX
-    # A session pinned to a backend id since removed from config admits by prefix.
-    return backend_id.startswith("codex")
 
   def resolve(
       self,

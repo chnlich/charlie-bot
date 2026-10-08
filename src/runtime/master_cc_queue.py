@@ -6,7 +6,6 @@ import zoneinfo
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
-from src.backends.claude_code import claude_accounts
 from src.features.latex import latex
 from src.infra import config, log_once, models, process, tasks
 from src.infra import event_types as ET
@@ -393,16 +392,6 @@ async def _session_consumer(session_id: str) -> None:
         # Fire-and-forget: the consumer serializes rounds; awaiting it would delay the next round.
         if item.callbacks.after_round is not None:
           tasks.create_logged_task(item.callbacks.after_round(session_id), name=f"after-round-{session_id}")
-
-        # Post-MASTER_DONE copy retirement: with the round's account label
-        # funnel-persisted above, the pool's redundant copies of this transcript
-        # (every relay leaves its source behind) collapse to the newest two.
-        # Runs only on a sound round -- a failed round keeps every copy as its
-        # fallback -- and after the future resolution, so a retirement failure
-        # can never corrupt a finished turn's result (the consumer's handler
-        # logs it instead).
-        if exit_code == 0 and cc_session_id and item.session_meta.claude_account:
-          await asyncio.to_thread(claude_accounts.retire_transcript_copies, item.cfg, cc_session_id)
 
       except Exception as exc:
         log.exception("session_consumer_item_error", session=session_id)

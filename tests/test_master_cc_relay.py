@@ -95,10 +95,11 @@ async def test_place_turn_copies_the_transcript_into_the_option_pool(tmp_path: P
   meta = _session_on("ext-1")
   item = make_work_item(cfg, meta, option)
 
-  account, error = await master_cc_relay.place_turn(
-      cfg, item, option, UUID, str(tmp_path / "work"), None, NOW - timedelta(minutes=10), now=NOW)
+  ctx = master_cc_run._turn_launch_context(item, option, str(tmp_path / "work"), UUID)
 
-  assert (account.label if account else None, error) == ("main", None)
+  account = await master_cc_relay.place_turn(ctx, UUID, None, NOW - timedelta(minutes=10), now=NOW)
+
+  assert account.label == "main"
   assert meta.claude_account == "main"
   assert claude_accounts.transcript_path(tmp_path / "claude-main", UUID) is not None
 

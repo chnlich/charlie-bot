@@ -111,12 +111,12 @@ def install_native_session_dir_isolation(clc_sessions: Path) -> None:
   """Route charlie-code builds' extra_flags through --session-dir in THIS process.
 
     The production config is untouched: the harness wraps the two build entry
-    points the adapter uses (the registry — which the master path imports at
-    call time — and the worker module's bound name) so every charlie-code
+    points the adapter uses (the backend type table, whose ``build_backend`` the master path
+    reads at call time, and the worker module's bound name) so every charlie-code
     backend for these runs appends the isolation flag through the existing
     extra_flags constructor kwarg.
     """
-  master_module = __import__("src.runtime.agent_process.registry", fromlist=["build_backend"])
+  master_module = __import__("src.runtime.hooks.backend_types", fromlist=["build_backend"])
   worker_module = __import__("src.runtime.worker", fromlist=["build_backend"])
   original = master_module.build_backend
 
@@ -577,6 +577,10 @@ def main() -> None:
       help="The configured backend option id the smoke runs on (default: charlie-code-glm-flash)")
   parser.add_argument("--purge", action="store_true", help="Remove the synthetic home after the run")
   args = parser.parse_args()
+  # This harness runs the server stack in-process, outside server.py and the CLI entry, so it
+  # registers the backend packages itself.
+  from src.app import registrations
+  registrations.register_all()
   asyncio.run(smoke(args.backend, args.purge))
 
 

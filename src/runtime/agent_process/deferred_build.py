@@ -1,16 +1,15 @@
 """The deferred build_backend loader shared by the carriers that build one backend.
 
-The registry stack (src.runtime.agent_process.registry and every backend module it
-imports, ~35 ms of the M99 server import floor in docs/perf_baseline.md@5175adf09) must
-stay off the server import chain, so each carrier resolves the builder at its
-one build site; this module imports the registry only inside that call.
+The backend type table (src/runtime/hooks/backend_types.py) imports a backend module only when its
+factory runs, so a carrier that binds ``build_backend`` at its one build site keeps the type table
+off its own import chain; this module imports the table only inside that call.
 """
 
 from typing import Any
 
 
 def load_build_backend(namespace: dict[str, Any]) -> Any:
-  """Bind the registry's ``build_backend`` into *namespace* on first use and return it.
+  """Bind the type table's ``build_backend`` into *namespace* on first use and return it.
 
   Each carrier passes its own ``globals()``: an existing binding — a test's
   stand-in — is returned untouched, so the carrier's module attribute (e.g.
@@ -20,7 +19,7 @@ def load_build_backend(namespace: dict[str, Any]) -> Any:
   bound = namespace.get("build_backend")
   if bound is not None:
     return bound
-  from src.runtime.agent_process import registry
+  from src.runtime.hooks import backend_types
 
-  namespace["build_backend"] = registry.build_backend
-  return registry.build_backend
+  namespace["build_backend"] = backend_types.build_backend
+  return backend_types.build_backend

@@ -42,6 +42,7 @@ from pathlib import Path
 from src.backends.claude_code import claude_accounts
 from src.backends.claude_code.claude_code import BASE_COMMAND, HEADLESS_DISALLOWED_TOOLS, claude_supervisor_env
 from src.backends.claude_code.claude_launch import DISABLE_CONNECTOR_SETTINGS, headless_claude_env
+from src.infra import backend_models
 from src.infra import event_types as ET
 from src.infra.config import CLAUDE_CONFIG_DIR_ENV_VAR, CharlieBotConfig, get_config
 from src.infra.log_once import LazyStructlogLogger
@@ -89,7 +90,7 @@ _COST_STATE_MARKER = '"cost-state"'
 
 
 def is_fable(model: str | None) -> bool:
-  return claude_accounts.model_family(model) == FABLE_FAMILY
+  return backend_models.model_family(model) == FABLE_FAMILY
 
 
 def cache_expired(last_request_at: datetime | None, now: datetime | None) -> bool:
@@ -253,7 +254,7 @@ def _judge(returncode: int, stdout: bytes, baseline: dict, before: int, after: i
     return CompactionOutcome(ok=False, error=f"exit {returncode}: {detail or 'run reported an error'}", models=models)
   if after <= before:
     return CompactionOutcome(ok=False, error="transcript gained no compact_boundary row", models=models)
-  if not models or any(claude_accounts.model_family(name) != COMPACTION_FAMILY for name in models):
+  if not models or any(backend_models.model_family(name) != COMPACTION_FAMILY for name in models):
     return CompactionOutcome(ok=False, error=f"compaction served by {', '.join(models) or 'no model'}", models=models)
   return CompactionOutcome(ok=True, models=models)
 

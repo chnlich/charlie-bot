@@ -68,7 +68,11 @@ if option.type != "charlie-code":
   )
 
 # Mechanism 2: the backend builds, so its binary resolves.
-from src.runtime.agent_process.registry import build_backend
+from src.app import registrations
+
+registrations.register_all()
+
+from src.runtime.hooks.backend_types import build_backend
 
 try:
   backend = build_backend(option, cfg)

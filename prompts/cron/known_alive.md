@@ -16,7 +16,7 @@ Known-alive symbols:
 - `openai_compatible_messages` — FastAPI route handler in `src/backends/openai_compatible/anthropic_proxy.py`
   (`POST /api/anthropic-proxy/openai-compatible/{backend_id}/v1/messages`), reached by string: the
   `cc-openai-compatible` backend registry builds that URL by f-string in
-  `src/runtime/agent_process/registry.py`. The Python name has exactly zero whole-repo matches outside
+  `src/backends/openai_compatible/factory.py`. The Python name has exactly zero whole-repo matches outside
   its own definition, so static dead-code tools (vulture) flag it as an unused function.
 - Every FastAPI route handler in `src/runtime/api/*.py` and the feature `api.py` modules (functions under `@router.get/post/patch/put/
   delete/websocket` decorators, e.g. `get_backlog`, `list_cron_tasks`,

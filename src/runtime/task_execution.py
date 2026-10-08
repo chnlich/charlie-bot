@@ -48,13 +48,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.backends.claude_code import claude_accounts, claude_relay
 from src.infra import event_types as ET
 from src.infra import git
 from src.infra.config import CharlieBotConfig, configured_access_key
-from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR, BackendType
+from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption, ClaudeAccount, RunRecord, SessionMetadata, TaskType, utc_now_iso
+from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, utc_now_iso
 from src.runtime import review, runs, task_prompts
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import (
@@ -64,6 +63,7 @@ from src.runtime.control_events import (
     stable_run_id,
     stable_withheld_event_id,
 )
+from src.runtime.hooks import backend_lifecycle, backend_types
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.runtime.session_dispatch import child_report_text
@@ -801,7 +801,7 @@ class TaskExecutionAdapter:
     if run.pid is not None and is_out_of_space_error(exc):
       try:
         error_text = f"{type(exc).__name__}: {exc}"[:2000]
-        await self._record_launch_error_event(session_id, run_id, error_text)
+        await self._record_launch_error_event(session_id, run_id, error_text, quota_exhausted=None)
       except Exception as land_exc:
         log.error(
             "task_run_launch_failure_landing_failed",
@@ -812,7 +812,7 @@ class TaskExecutionAdapter:
       return
     try:
       error_text = f"{type(exc).__name__}: {exc}"[:2000]
-      await self._record_launch_error_event(session_id, run_id, error_text)
+      await self._record_launch_error_event(session_id, run_id, error_text, quota_exhausted=None)
       await self._tree.dispatch.finish_run(session_id, run_id, outcome="failed", exit_code=-1)
       fresh = await self._tree.runs.get_run(session_id, run_id)
       if fresh is not None:
@@ -839,23 +839,28 @@ class TaskExecutionAdapter:
         # same as after a restart today.
         self.start_run_end_landing_retry(session_id, run_id)
 
-  async def _record_launch_error_event(self, session_id: str, run_id: str, error_text: str) -> None:
+  async def _record_launch_error_event(
+      self, session_id: str, run_id: str, error_text: str, *, quota_exhausted: bool | None) -> None:
     """Write the launch error into the run's events log as durable evidence.
 
         The events log is where the leaf card's event view already reads and
         where ``_worker_failure_summary`` looks for the run's closing words, so
         the error is reachable without any new evidence channel.
+        ``quota_exhausted`` is the ``LaunchRefused`` flag of a refused launch and
+        None for every other launch failure: only a refusal's event carries the key.
         """
     from src.infra.ndjson import append_ndjson
 
     events_log = self._tree.runs.run_dir(session_id, run_id) / RUN_EVENTS_NAME
-    await append_ndjson(
-        events_log, {
-            "type": ET.ERROR,
-            "message": error_text,
-            "content": error_text,
-            "timestamp": utc_now_iso(),
-        })
+    event: dict = {
+        "type": ET.ERROR,
+        "message": error_text,
+        "content": error_text,
+        "timestamp": utc_now_iso(),
+    }
+    if quota_exhausted is not None:
+      event[ET.QUOTA_EXHAUSTED] = quota_exhausted
+    await append_ndjson(events_log, event)
     # The leaf card's Events link reads the record's events_ref: the
     # launch-failed run's evidence is reachable exactly the way a process
     # run's is (record_observation writes only the provided fields).
@@ -1191,7 +1196,7 @@ class TaskExecutionAdapter:
     await self._persist_launch_text(session_id, run_id, prompt)
 
     binding = RunWorkerBinding(id=run_id, session_id=session_id)
-    if option.type == BackendType.CC_CLAUDE:
+    if backend_types.traits_for(option.type).preassigned_session_id:
       binding.claude_session_id = str(uuid.uuid4())
 
     async def on_spawned(spawned: RunWorkerBinding) -> None:
@@ -1204,18 +1209,9 @@ class TaskExecutionAdapter:
     worker: Worker | None = None
     try:
       working_dir = Path(review_worktree) if review_worktree else run_dir
-      # A pooled cc-claude backend launches on the pool account with the most
-      # headroom, so the Worker's relay loop (src/backends/claude_code/claude_relay.py) can
-      # move the run when that login is rejected mid-run. The selection sits
-      # inside this try: with no account available the run fails before any
-      # process starts, through the pool-exhausted branch below.
-      claude_account: ClaudeAccount | None = None
-      if claude_accounts.is_pooled(option, self._cfg):
-        account_pool = claude_accounts.option_pool(option)
-        claude_account = claude_accounts.select(self._cfg, option.model, account_pool=account_pool)
-        if claude_account is None:
-          raise claude_relay.PoolExhaustedError(
-              claude_relay.pool_exhausted_message(self._cfg, account_pool=account_pool))
+      # The Worker places the launch through the backend's lifecycle and relays the run when
+      # the lifecycle asks for it (src/runtime/launch_loop.py). A refused launch — before the
+      # first process or at a relay — ends the run through the LaunchRefused branch below.
       worker = Worker(
           binding,  # type: ignore[arg-type]
           working_dir,
@@ -1223,24 +1219,29 @@ class TaskExecutionAdapter:
           prompt,
           self._cfg,
           backend_option=option,
-          claude_account=claude_account,
           on_spawned=on_spawned,
           extra_env=self._child_env(session_id, run_id, meta.name),
           instructions_content=snapshot.instructions_text,
+          session_meta=meta,
       )
-      # Session-level notices (a pool login that needs re-login) reach
+      # Session-level notices (a pool login that needs re-login, a relay compaction) reach
       # the session chat through the successor chain, exactly as the
       # legacy worker path delivers them.
       worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
       exit_code = await worker.run()
-    except claude_relay.PoolExhaustedError as exc:
+    except backend_lifecycle.LaunchRefused as exc:
       if worker is not None:
         await worker.terminate()
       error = str(exc)
-      log.warning("task_run_pool_exhausted", session_id=session_id, run_id=run_id, error=error)
+      log.warning(
+          "task_run_launch_refused",
+          session_id=session_id,
+          run_id=run_id,
+          error=error,
+          quota_exhausted=exc.quota_exhausted)
       # The run's own events log carries the evidence: the failure-summary
       # reader and the improve quota classification read this event.
-      await self._record_launch_error_event(session_id, run_id, error)
+      await self._record_launch_error_event(session_id, run_id, error, quota_exhausted=exc.quota_exhausted)
     except QuotaExhaustedError as exc:
       if worker is not None:
         await worker.terminate()
@@ -1350,9 +1351,8 @@ class TaskExecutionAdapter:
 
   def _fresh_translate(self, option: BackendOption) -> Callable[[dict], list[dict]]:
     """A fresh translate callable for one whole-file scan (stateful translates need one instance)."""
-    from src.runtime.agent_process.registry import build_backend
     try:
-      return build_backend(option, self._cfg).translate_event
+      return backend_types.build_backend(option, self._cfg).translate_event
     except Exception as e:
       # Translate-only construction may lack the CLI binary; the scan
       # degrades to the raw claude shape the same way restart recovery's
@@ -1748,7 +1748,8 @@ class TaskExecutionAdapter:
         session_id=session_id,
         pid=run.pid,
         pid_start=run.pid_start,
-        claude_session_id=run.native_session_id if option.type == BackendType.CC_CLAUDE else None)
+        claude_session_id=(
+            run.native_session_id if backend_types.traits_for(option.type).preassigned_session_id else None))
     worker = Worker(
         binding,  # type: ignore[arg-type]
         Path(run.worktree_path) if run.worktree_path else run_dir,

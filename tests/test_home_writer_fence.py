@@ -89,6 +89,8 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   the lifespan itself (and therefore its fence acquisition) is the real one.
   """
   import server as server_module
+  from src.features.cron import scheduler as scheduler_module
+  from src.features.voice import service as voice_service
   from src.infra.config import CharlieBotConfig
 
   home = tmp_path / "home"
@@ -101,10 +103,10 @@ def lifespan_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
   monkeypatch.setattr(server_module, "get_config", lambda: cfg)
   monkeypatch.setattr(server_module.init_master_recovery, "reconcile_master_identity", _AsyncStub(return_value=None))
   monkeypatch.setattr(server_module, "_run_crash_recovery", _AsyncStub())
-  monkeypatch.setattr(server_module, "_provision_speech_models", lambda cfg: None)
+  monkeypatch.setattr(voice_service, "_provision_speech_models", lambda cfg: None)
   monkeypatch.setattr(server_module, "log_session_cgroup_startup", lambda *a, **k: None)
   monkeypatch.setattr(server_module, "sweep_stale_session_cgroups", lambda *a, **k: None)
-  monkeypatch.setattr(server_module, "Scheduler", _StubScheduler)
+  monkeypatch.setattr(scheduler_module, "Scheduler", _StubScheduler)
   monkeypatch.setattr(server_module, "TriggerManager", _StubTriggerManager)
   monkeypatch.setattr(server_module, "set_trigger_manager", lambda *a, **k: None)
   monkeypatch.setattr(server_module, "close_http_client", _AsyncStub())
@@ -190,14 +192,14 @@ def test_fence_refuses_symlinked_paths(tmp_path: Path) -> None:
 
 _SHUTDOWN_TIMING_FIELDS = (
     "shutdown_ms",
-    "speech_ms",
     "usage_tally_ms",
-    "slack_listener_ms",
-    "slack_backfill_ms",
     "ext_usage_ms",
+    "slack_ms",
+    "discord_ms",
     "host_auth_ms",
-    "http_client_ms",
     "scheduler_ms",
+    "speech_ms",
+    "http_client_ms",
     "ws_close_ms",
     "merge_pool_ms",
 )
@@ -243,6 +245,8 @@ async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, 
   """A shutdown exception releases the exclusion; the fence never outlives the
   server's ability to hold it cleanly."""
   from fastapi import FastAPI
+
+  from src.features.cron import scheduler as scheduler_module
   server_module = lifespan_env
   home = server_module.get_config().charliebot_home
 
@@ -251,7 +255,7 @@ async def test_server_lifespan_releases_fence_on_shutdown_failure(lifespan_env, 
     async def stop(self):
       raise RuntimeError("shutdown failed")
 
-  monkeypatch.setattr(server_module, "Scheduler", _FailingScheduler)
+  monkeypatch.setattr(scheduler_module, "Scheduler", _FailingScheduler)
   with pytest.raises(RuntimeError, match="shutdown failed"):
     async with server_module.lifespan(FastAPI()):
       assert probe_writer_fence(home)["exclusive_holder_alive"] is True

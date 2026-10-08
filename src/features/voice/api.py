@@ -38,6 +38,7 @@ from fastapi import APIRouter, Form, Request, UploadFile, WebSocket
 from src.infra.config import CharlieBotConfig, get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.responses import FastJsonResponse
+from src.runtime.api import auth
 
 if TYPE_CHECKING:
   from src.features.voice.transcription.base import TranscriptEvent, TranscriptionBackend
@@ -45,6 +46,8 @@ if TYPE_CHECKING:
 log = LazyStructlogLogger()
 
 router = APIRouter()
+# The preview websocket sits outside the /api/voice prefix, so it rides its own router.
+ws_router = APIRouter()
 
 # The recognition probe decodes the recording's opening clip only; the full upload
 # takes a whole dictation and its cap is the transcriber's MAX_RECORDING_SAMPLES.
@@ -393,10 +396,18 @@ def _preview_recording_budget_bytes() -> int:
   return _full_max_samples() * 2
 
 
+@ws_router.websocket("/ws/voice/{session_id}")
+async def voice_preview_websocket(websocket: WebSocket, session_id: str, backend: str = "") -> None:
+  """Stream one recording's live partials from the ?backend= transcription backend."""
+  if not await auth.check_ws_auth(websocket):
+    return
+  await voice_preview_relay(websocket, session_id, backend)
+
+
 async def voice_preview_relay(websocket: WebSocket, session_id: str, backend_id: str) -> None:
   """One recording's live preview: stream the selected backend's partials, archive its audio.
 
-  Auth happens in server.py next to /ws/sessions. The browser sends binary
+  Auth happens in voice_preview_websocket. The browser sends binary
   16 kHz PCM16 chunks from the start of the recording and a text end frame on
   stop — ``{"type":"end"}``, or ``{"type":"end","devices":{...}}`` carrying the
   recording's device facts; the relay answers with partial, final, and error

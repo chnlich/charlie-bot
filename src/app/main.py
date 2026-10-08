@@ -1,9 +1,11 @@
 """Unified CharlieBot CLI entrypoint.
 
-The subcommand vocabulary has one definition: the ``_COMMANDS`` registry
-below, which ``--help`` prints and whose full set the README's "CLI at a
-glance" section must name. The legacy ``python -m <module>``
-entrypoints remain owned by their individual modules.
+The subcommand vocabulary has two definitions: the ``_RUNTIME_COMMANDS`` table
+below, and the commands each package registers through
+``src.runtime.hooks.wiring`` (the package list is ``src.app.registrations``).
+``--help`` prints their union, and the README's "CLI at a glance" section must
+name the full set. The legacy ``python -m <module>`` entrypoints remain owned by
+their individual modules.
 """
 
 import importlib
@@ -11,32 +13,23 @@ import os.path
 import sys
 from collections.abc import Sequence
 
-_COMMANDS = {
-    "artifact": "src.features.artifacts.cli",
+from src.app import registrations
+from src.runtime.hooks import wiring
+
+_RUNTIME_COMMANDS = {
     "config": "src.runtime.cli.config",
     "delegate": "src.runtime.cli.delegate",
-    "discord": "src.features.discord.cli",
-    "improve": "src.features.improve.cli",
-    "improve-stop": "src.features.improve.stop_cli",
     "schedule-trigger": "src.runtime.cli.schedule_trigger",
-    "remote-launch": "src.features.remote_launch.cli",
     "gc-trash": "src.runtime.cli.gc_trash",
-    "plan": "src.features.artifacts.plan_cli",
-    "publish": "src.features.artifacts.publish_cli",
-    "memory": "src.features.memory.cli",
     "session": "src.runtime.cli.session",
-    "session-tree": "src.features.session_tree_preview.cli",
-    "slack": "src.features.slack.cli",
-    "storage": "src.features.storage.cli",
-    "usage-ledger": "src.features.usage.cli",
 }
 
 
-def _print_help(prog: str) -> None:
+def _print_help(prog: str, commands: dict[str, str]) -> None:
   print(f"usage: {prog} <subcommand> [args...]")
   print()
   print("Available subcommands:")
-  for subcommand in sorted(_COMMANDS):
+  for subcommand in sorted(commands):
     print(f"  {subcommand}")
 
 
@@ -44,15 +37,17 @@ def main(argv: Sequence[str] | None = None) -> None:
   """Dispatch to a subcommand's existing main() without duplicating its parser."""
   prog = os.path.basename(sys.argv[0]) if argv is None and sys.argv else "charliebot"
   args = list(sys.argv[1:] if argv is None else argv)
+  registrations.register_all()
+  commands = {**_RUNTIME_COMMANDS, **wiring.commands()}
 
   if not args or args[0] in {"-h", "--help"}:
-    _print_help(prog)
+    _print_help(prog, commands)
     return
 
   subcommand = args[0]
-  module_name = _COMMANDS.get(subcommand)
+  module_name = commands.get(subcommand)
   if module_name is None:
-    available = ", ".join(sorted(_COMMANDS))
+    available = ", ".join(sorted(commands))
     print(f"{prog}: unknown subcommand {subcommand!r}. Available subcommands: {available}", file=sys.stderr)
     sys.exit(2)
 

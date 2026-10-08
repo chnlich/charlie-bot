@@ -9,6 +9,7 @@ from fastapi import responses
 from src.app import pages
 from src.features.host_auth import host_auth
 from src.infra import log_once, models, tasks
+from src.runtime.hooks import wiring
 
 log = log_once.LazyStructlogLogger()
 router = fastapi.APIRouter()
@@ -200,3 +201,13 @@ async def _poll_loop() -> None:
 _poller = tasks.SingleTaskPoller(_poll_loop, log, "host_auth_poller_started", "host_auth_poller_stopped")
 start_poller = _poller.start
 stop_poller = _poller.stop
+
+
+async def start_service(ctx: wiring.ServiceContext) -> None:
+  """Start the standing probe poller."""
+  await start_poller()
+
+
+async def stop_service() -> None:
+  """Stop the poller; stopping a poller that never started does nothing."""
+  await stop_poller()

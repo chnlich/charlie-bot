@@ -1,0 +1,92 @@
+"""Wiring registry: packages register their routers, CLI commands and background services.
+
+Each registration holds module path strings. The server and the CLI import a registered
+module when they use it, so this module imports nothing heavy and a CLI command loads
+only its own module.
+"""
+
+from __future__ import annotations
+
+import importlib
+
+PHASES = ("early", "ready")
+
+# Registration order is the order of the lists: routers include in it, services start in it.
+_ROUTERS: list[tuple[str, str, tuple[str, ...], str]] = []
+_COMMANDS: dict[str, str] = {}
+_SERVICES: dict[str, tuple[str, str]] = {}  # name -> (module, phase)
+
+
+class ServiceContext:
+  """What the server hands each service's start_service."""
+  __slots__ = ("app", "cfg", "recovery_task", "session_mgr")
+
+  def __init__(self, app, cfg, session_mgr, recovery_task) -> None:
+    # app: the FastAPI app; cfg: CharlieBotConfig; session_mgr: SessionManager;
+    # recovery_task: the lifespan's crash-recovery asyncio.Task.
+    self.app = app
+    self.cfg = cfg
+    self.session_mgr = session_mgr
+    self.recovery_task = recovery_task
+
+
+def register_router(module: str, *, prefix: str = "", tags: tuple[str, ...] = (), attr: str = "router") -> None:
+  """The server includes getattr(import_module(module), attr) under prefix, in registration order."""
+  _ROUTERS.append((module, prefix, tags, attr))
+
+
+def register_command(name: str, module: str) -> None:
+  """`charliebot <name>` imports module and calls its main(). A second registration of one name raises ValueError."""
+  if name in _COMMANDS:
+    raise ValueError(f"command {name!r} is already registered by {_COMMANDS[name]}")
+  _COMMANDS[name] = module
+
+
+def register_service(name: str, module: str, *, phase: str = "ready") -> None:
+  """module defines `async def start_service(ctx: ServiceContext) -> None` and `async def stop_service() -> None`.
+
+  phase "early" starts right after the crash-recovery task is created; phase "ready" starts
+  after trigger recovery. A second registration of one name, or a phase outside PHASES,
+  raises ValueError.
+  """
+  if phase not in PHASES:
+    raise ValueError(f"service {name!r} has phase {phase!r}; the phases are {PHASES}")
+  if name in _SERVICES:
+    raise ValueError(f"service {name!r} is already registered by {_SERVICES[name][0]}")
+  _SERVICES[name] = (module, phase)
+
+
+def routers() -> tuple[tuple[str, str, tuple[str, ...], str], ...]:
+  """(module, prefix, tags, attr) in registration order."""
+  return tuple(_ROUTERS)
+
+
+def commands() -> dict[str, str]:
+  """name -> module."""
+  return dict(_COMMANDS)
+
+
+def service_starts(phase: str) -> list[tuple[str, object]]:
+  """(name, start_service) for one phase, in registration order; imports each service module.
+
+  Each start_service is an async function that takes a ServiceContext.
+  """
+  return [
+      (name, importlib.import_module(module).start_service)
+      for name, (module, service_phase) in _SERVICES.items()
+      if service_phase == phase
+  ]
+
+
+def service_stops() -> list[tuple[str, object]]:
+  """(name, stop_service) for every registered service: "ready" ones in reverse registration order, then "early" ones in reverse.
+
+  Each stop_service is an async function that takes no argument.
+  """
+  stops = []
+  for phase in reversed(PHASES):
+    stops.extend(
+        (name, importlib.import_module(module).stop_service)
+        for name, (module, service_phase) in reversed(_SERVICES.items())
+        if service_phase == phase)
+  return stops

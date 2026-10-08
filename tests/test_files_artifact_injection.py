@@ -110,11 +110,6 @@ def test_serve_file_injects_deeper_nested_artifact(sessions_root: pathlib.Path) 
   assert 'window.__cbcServerSessionId="S";' in resp.text
 
 
-# --- clean views: the injected-page memo serves repeat views without re-reading ---
-
-# --- clean views: the gzip form ships pre-compressed so the server's gzip
-# middleware skips its own whole-body deflate ---
-
 # --- diff requests: ?diff=<base artifact path> serves the annotated page ---
 
 

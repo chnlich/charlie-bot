@@ -13,30 +13,8 @@ import stat
 import fastapi
 from fastapi import responses
 
-from src.infra import config, memo
-from src.infra import responses as responses_api
+from src.infra import config
 from src.runtime import templating
-
-# Bound on _clean_view_memo: one open artifact tab serves one page, so the cap
-# covers every clean view open across tabs, and one slot holds the ~1.5 MB
-# worst injected page.
-_CLEAN_VIEW_MEMO_LIMIT = 8
-
-# Memo key for one clean artifact view: the resolved path plus the page's
-# (mtime_ns, size) taken before its read. The injection is a pure function of
-# the page bytes — the session id derives from the path and the static asset
-# version is a per-process constant — and an artifact page is only ever written
-# whole, so an unchanged signature proves the stored body current; an entry
-# keyed from bytes read before a concurrent rewrite is unreachable for the
-# newer bytes. Served bodies are shared across responses, the no-defensive-copy
-# idiom of the sibling memos.
-_CleanViewKey = tuple[str, int, int]
-
-_clean_view_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
-
-# The gzip form of the same body, keyed and bounded alike. It lives in its own
-# memo so a client that sends no Accept-Encoding: gzip never pays the deflate.
-_clean_view_gzip_memo: memo.BoundedMemo[_CleanViewKey, bytes] = memo.BoundedMemo(_CLEAN_VIEW_MEMO_LIMIT)
 
 # Client-visible error details of the artifact view's diff arm. The
 # "not a session artifact page" sentence is a wire contract the tests pin, so
@@ -47,43 +25,8 @@ _DIFF_BASE_NOT_FOUND_DETAIL = "diff base not found: {}"
 
 # Session artifact pages carry injected per-session state (the comment tray and
 # its inline session id), so no stored copy may outlive the request that read
-# it: the plain and the gzip artifact responses alike set Cache-Control:
-# no-store, the gzip one on top of the pre-compressed headers.
+# it: the artifact responses set Cache-Control: no-store.
 _NO_STORE_HEADERS = {"Cache-Control": "no-store"}
-_ARTIFACT_GZIP_HEADERS = {**responses_api.GZIP_RESPONSE_HEADERS, **_NO_STORE_HEADERS}
-
-
-def _file_signature(path: pathlib.Path) -> tuple[int, int]:
-  """(mtime_ns, size) of *path*; artifact writers publish whole files, so a rewrite always moves it."""
-  st = path.stat()
-  return (st.st_mtime_ns, st.st_size)
-
-
-def _injected_artifact_page(fs_path: pathlib.Path, session_id: str) -> bytes:
-  """The artifact view's body: the page wrapped in the artifact UI, memoized on the file signature.
-
-  A repeat view of an unchanged page pays one stat and zero file bytes — the
-  read re-ran on every view before the memo (~4.8 ms on the 1 MB worst
-  artifact, measured, of an ~11.5 ms repeat view). The signature is taken
-  before the read.
-  """
-  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
-  hit = _clean_view_memo.get(key)
-  if hit is not None:
-    return hit
-  page = _inject_artifact_ui(fs_path.read_text(encoding="utf-8"), session_id)
-  body = page.encode("utf-8")
-  _clean_view_memo.store(key, body)
-  return body
-
-
-def _injected_artifact_page_gzip(fs_path: pathlib.Path, session_id: str) -> bytes:
-  """The artifact view's gzip form, memoized beside the plain body.
-
-  Level 1 over the ~1 MB worst page measures ~27 ms per view.
-  """
-  key: _CleanViewKey = (str(fs_path), *_file_signature(fs_path))
-  return responses_api.gzip_form(_clean_view_gzip_memo, key, lambda: _injected_artifact_page(fs_path, session_id))
 
 
 def _artifact_session_id(fs_path: pathlib.Path) -> str | None:
@@ -207,9 +150,6 @@ async def serve_artifact_path(request: fastapi.Request, path: str) -> responses.
     html_text = _inject_artifact_ui(html_text, session_id)
     return responses.HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)
 
-  if responses_api.request_wants_gzip(request):
-    body = await asyncio.to_thread(_injected_artifact_page_gzip, fs_path, session_id)
-    return responses.Response(content=body, media_type="text/html", headers=_ARTIFACT_GZIP_HEADERS)
-  # One executor hop: signature, memo hit, and on a miss the read+inject+store.
-  body = await asyncio.to_thread(_injected_artifact_page, fs_path, session_id)
-  return responses.HTMLResponse(body, media_type="text/html", headers=_NO_STORE_HEADERS)
+  html_text = await asyncio.to_thread(lambda: fs_path.read_text(encoding="utf-8"))
+  html_text = await asyncio.to_thread(_inject_artifact_ui, html_text, session_id)
+  return responses.HTMLResponse(html_text, media_type="text/html", headers=_NO_STORE_HEADERS)

@@ -156,11 +156,6 @@ def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: pa
   assert resp.status_code == 400
 
 
-# --- diff requests: the annotate memo serves repeat views without re-annotating ---
-
-# --- diff requests: the gzip form ships pre-compressed so the server's gzip
-# middleware skips its own whole-body deflate ---
-
 # --- the view costs a plain file and a listing no executor hop ---
 
 

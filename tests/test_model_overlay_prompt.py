@@ -22,7 +22,7 @@ from src.infra import config as core_config
 from src.infra import event_types as ET
 from src.infra import models
 from src.runtime import master_cc, message_aggregator
-from src.runtime.agent_process import registry
+from src.runtime.hooks import backend_types
 
 
 def _wake_cfg(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> core_config.CharlieBotConfig:
@@ -84,7 +84,7 @@ async def test_wake_path_overlay_four_states(
       id="fake", label="Fake", type="codex", model="ignored/model", prompt_overlay=prompt_overlay)
   captured: dict[str, object] = {}
   monkeypatch.setattr(
-      registry, "build_backend",
+      backend_types, "build_backend",
       lambda *a, **kw: captured.update(instructions_content=kw.get("instructions_content")) or conftest.FakeBackend())
 
   item = conftest.make_work_item(cfg, models.SessionMetadata(id="s", name="S", backend="fake"), option)

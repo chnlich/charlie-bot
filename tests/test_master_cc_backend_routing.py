@@ -20,7 +20,7 @@ from src.infra import models
 from src.infra.constants import SESSION_ID_ENV_VAR
 from src.runtime import master_cc
 from src.runtime.agent_process import base as backend_base
-from src.runtime.agent_process.registry import build_backend as real_build_backend
+from src.runtime.hooks.backend_types import build_backend as real_build_backend
 
 
 def build_antigravity_cfg(tmp_path: Path) -> core_config.CharlieBotConfig:

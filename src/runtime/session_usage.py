@@ -43,15 +43,14 @@ bar). ``None`` for any context field means "unknown" — the bar is hidden.
 import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
-from src.backends.claude_code.claude_code import headless_claude_declared_window
-from src.backends.claude_code.claude_launch import CLAUDE_COMPACT_CONTEXT_RESERVE, CLAUDE_COMPACT_OUTPUT_RESERVE
-from src.backends.codex.codex_usage import CodexUsageResolver
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.constants import OPENCODE_COMPACT_OUTPUT_RESERVE
 from src.infra.memo import BoundedMemo
 from src.infra.models import SessionMetadata
+from src.runtime.hooks import backend_lifecycle, backend_types
 
 
 def _prompt_token_sum(usage: dict) -> int:
@@ -250,7 +249,7 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   the assistant event's ``message.model``. context_full is ``min(contextWindow of
   modelUsage[model], declared_window)``; when the assistant model is absent from
   ``modelUsage`` the declared window alone is used. context_compact_at is
-  ``context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE``; it is
+  ``context_full`` minus the compaction reserve of the registered ``claude`` reading limits; it is
   ``None`` when the
   declared window is degraded (a forwarded-but-unmodelled override is present).
   Returns ``None`` when no qualifying assistant event exists.
@@ -258,15 +257,17 @@ def _resolve_claude_tier(facts: _UsageFacts) -> dict | None:
   if facts.chosen_prompt_tokens <= 0:
     return None
   context_tokens = (facts.post_compact_tokens if facts.post_compact_tokens is not None else facts.chosen_prompt_tokens)
-  declared_window, compact_point = headless_claude_declared_window()
+  limits = backend_lifecycle.reading_limits(_READING_CLAUDE)
+  if limits is None:
+    return _usage_dict(context_tokens, None, None, facts.chosen_model, facts.cost)
   if facts.chosen_model and facts.chosen_model in facts.model_windows:
-    context_full = min(facts.model_windows[facts.chosen_model], declared_window)
+    context_full = min(facts.model_windows[facts.chosen_model], limits.declared_window)
   else:
-    context_full = declared_window
-  if compact_point is None:
+    context_full = limits.declared_window
+  if limits.compact_reserve is None:
     context_compact_at: int | None = None
   else:
-    context_compact_at = context_full - CLAUDE_COMPACT_OUTPUT_RESERVE - CLAUDE_COMPACT_CONTEXT_RESERVE
+    context_compact_at = context_full - limits.compact_reserve
   return _usage_dict(context_tokens, context_full, context_compact_at, facts.chosen_model, facts.cost)
 
 
@@ -403,7 +404,10 @@ class SessionUsageResolver:
   ) -> None:
     self._load_chat_events_sync = load_chat_events_sync_fn
     self._events_cache = events_cache
-    self._codex_resolver = CodexUsageResolver(cfg, events_cache, chat_events_path_fn)
+    self._cfg = cfg
+    self._chat_events_path_fn = chat_events_path_fn
+    # backend type -> its registered usage resolver, built on the type's first resolution (None: the type has none).
+    self._usage_resolvers: dict[str, object | None] = {}
     # session_id -> (events list, len at last fold, fold state). Pinning the
     # list keeps id() stable, so an identity match can never be an id-reuse
     # collision with a different list; the chat-events cache mutates the list
@@ -412,6 +416,19 @@ class SessionUsageResolver:
     # (asyncio.to_thread), so the memo mechanics are BoundedMemo's locked
     # ones, not a bare OrderedDict's.
     self._facts_memo: BoundedMemo[str, tuple[list[dict], int, _UsageFold]] = BoundedMemo(_FACTS_MEMO_CAP)
+
+  def _usage_resolver(self, backend_id: str) -> Any:
+    """The usage resolver the backend id's type registered, built once; None when the type has none."""
+    option = self._cfg.get_backend_option(backend_id)
+    # A session pinned to a backend id since removed from config admits by prefix.
+    backend_type = option.type if option is not None else backend_types.type_for_family_prefix(backend_id)
+    if backend_type is None:
+      return None
+    if backend_type not in self._usage_resolvers:
+      cls = backend_lifecycle.usage_resolver_for(backend_type)
+      self._usage_resolvers[backend_type] = (
+          None if cls is None else cls(self._cfg, self._events_cache, self._chat_events_path_fn))
+    return self._usage_resolvers[backend_type]
 
   async def resolve_session_usage(
       self,
@@ -426,8 +443,8 @@ class SessionUsageResolver:
     unchanged-list hit and small appended suffixes answer on the event loop
     via ``_facts_hit``; tier selection:
 
-    - codex: first, when the backend is codex and the native rollout resolves
-      (unchanged logic).
+    - the backend type's registered usage resolver (codex's native rollout): first, when
+      it resolves.
     - the fold's latest-reading slot, the newest reading-bearing main-chain
       event regardless of which backend produced it: ``claude`` -> the
       assistant reading (``_resolve_claude_tier``), ``snapshot`` -> the result
@@ -444,8 +461,9 @@ class SessionUsageResolver:
     else:
       events, facts = hit
 
-    if self._codex_resolver.is_codex_backend(session_meta.backend):
-      merged = await asyncio.to_thread(self._codex_resolver.resolve, session_id, session_meta, events)
+    resolver = self._usage_resolver(session_meta.backend)
+    if resolver is not None:
+      merged = await asyncio.to_thread(resolver.resolve, session_id, session_meta, events)
       if merged is not None:
         return merged
 

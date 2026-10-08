@@ -41,6 +41,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from src.infra import backend_models
 from src.infra.constants import BackendType
 from src.infra.home import CREDENTIALS_FILE
 from src.infra.log_once import LazyStructlogLogger
@@ -286,14 +287,6 @@ def healthy(account: ClaudeAccount, now: datetime | None = None) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def model_family(model: str | None) -> str:
-  """The family word of a Claude model id: ``claude-fable-5-1`` -> ``fable``."""
-  if not model:
-    return ""
-  parts = model.lower().split("-")
-  return parts[1] if len(parts) > 1 and parts[0] == "claude" else parts[0]
-
-
 def observe_rate_limit(label: str, info: dict, now: datetime | None = None) -> RateLimitReading | None:
   """Fold one ``rate_limit_info`` payload into the account's newest event reading.
 
@@ -385,7 +378,7 @@ def _live_windows(label: str, model: str | None, now: datetime) -> list[dict[str
   stored = _panel_readings.get(label)
   if stored is None:
     return []
-  family = model_family(model)
+  family = backend_models.model_family(model)
   live: list[dict[str, Any]] = []
   for window in stored[PANEL_WINDOWS]:
     if panel_window_expired(window, stored["at"], now):

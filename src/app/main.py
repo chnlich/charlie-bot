@@ -37,7 +37,7 @@ def main(argv: Sequence[str] | None = None) -> None:
   """Dispatch to a subcommand's existing main() without duplicating its parser."""
   prog = os.path.basename(sys.argv[0]) if argv is None and sys.argv else "charliebot"
   args = list(sys.argv[1:] if argv is None else argv)
-  registrations.register_all()
+  registrations.register_cli_commands()
   commands = {**_RUNTIME_COMMANDS, **wiring.commands()}
 
   if not args or args[0] in {"-h", "--help"}:
@@ -51,6 +51,9 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(f"{prog}: unknown subcommand {subcommand!r}. Available subcommands: {available}", file=sys.stderr)
     sys.exit(2)
 
+  registrations.register_all()
+  # Every subcommand may build a backend or read a backend option, so the packages register
+  # before the first config parse; --help and a refused subcommand name need none of it.
   module = importlib.import_module(module_name)
   original_argv = sys.argv
   sys.argv = [f"{prog} {subcommand}", *args[1:]]

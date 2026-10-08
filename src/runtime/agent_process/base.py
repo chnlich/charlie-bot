@@ -22,10 +22,6 @@ from functools import partial
 from pathlib import Path
 from typing import BinaryIO
 
-from src.backends.claude_code.claude_launch import (  # noqa: F401  (re-export: the established base import path)
-    DISALLOWED_TOOLS_FLAG,
-    SKIP_PERMISSIONS_FLAG,
-)
 from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now_iso
@@ -43,6 +39,10 @@ from src.runtime import runs
 from src.runtime.agent_process.spawn import SpawnedProcess, spawn_subprocess
 
 log = LazyStructlogLogger()
+
+# Claude-compatible CLI flags shared by backend packages.
+SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
+DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
 
 DEFAULT_BUFFER_LIMIT = 1024 * 1024 * 1024  # 1 GB
 _STDERR_TAIL_BYTES = 64 * 1024

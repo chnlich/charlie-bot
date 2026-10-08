@@ -120,6 +120,14 @@ def backend_type_allows_missing_model(backend_type: str) -> bool:
   return backend_type in MODEL_OPTIONAL_ROUTING_BACKEND_TYPES
 
 
+def model_family(model: str | None) -> str:
+  """The family word of a Claude model id: ``claude-fable-5-1`` -> ``fable``."""
+  if not model:
+    return ""
+  parts = model.lower().split("-")
+  return parts[1] if len(parts) > 1 and parts[0] == "claude" else parts[0]
+
+
 def option_default_model(option: BackendOption, *, subject: str) -> str | None:
   """Return the option's default model, or None when its type routes without one.
 

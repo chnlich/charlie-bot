@@ -13,13 +13,11 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, TypeAdapter, field_validator
 from starlette.responses import Response
 
-from src.backends.claude_code import claude_accounts
 from src.features.artifacts.plans import PlanRegistryManager
 from src.features.cron.api import next_run_iso
 from src.infra import event_types as ET
 from src.infra.compression import gzip_level1
 from src.infra.config import CharlieBotConfig, get_config, scheduled_tasks_snapshot
-from src.infra.constants import BackendType
 from src.infra.event_types import BACKEND_SWITCHED
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.memo import BoundedMemo, StatSignatureMemo
@@ -87,6 +85,7 @@ from src.runtime.api.message_utils import (
 from src.runtime.api.threads import view_thread_rows
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import sha256_hex
+from src.runtime.hooks import backend_types
 from src.runtime.message_aggregator import tool_preview
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
@@ -194,7 +193,7 @@ def _switchable_backend_ids(
   starts its own native conversation and catches up from the session's chat
   log. A task-bound node keeps the in-domain restriction — the scheduler
   re-aligns it to its task config on every tick, so only the ids in its
-  continuation domain (``claude_accounts.continuation_domain``) are offered; a
+  continuation domain (``BackendLifecycle.continuation_domain``) are offered; a
   bound non-Claude node therefore lists only itself. The list is empty when
   the effective backend is missing from config.
   """
@@ -203,8 +202,12 @@ def _switchable_backend_ids(
     return []
   if not dedicated:
     return [opt.id for opt in cfg.backends.options]
-  active_domain = claude_accounts.continuation_domain(active_option, cfg)
-  return [opt.id for opt in cfg.backends.options if claude_accounts.continuation_domain(opt, cfg) == active_domain]
+  active_domain = backend_types.lifecycle_for(active_option).continuation_domain(active_option, cfg)
+  return [
+      opt.id
+      for opt in cfg.backends.options
+      if backend_types.lifecycle_for(opt).continuation_domain(opt, cfg) == active_domain
+  ]
 
 
 # Wire spelling of the 400 an id outside cfg.backends.options earns: all three
@@ -223,7 +226,7 @@ def _resolve_requested_backend(
     *,
     fallback_backend: str | None,
 ) -> str:
-  """Resolve a backend override with codex-family alias support.
+  """Resolve a backend override with family-prefix alias support (a codex id resolves to the codex option).
 
   Raises HTTPException(400) for any non-None backend id -- whether it arrives
   explicitly via ``requested_backend`` or is inherited via ``fallback_backend``
@@ -237,11 +240,12 @@ def _resolve_requested_backend(
     log.info("using_requested_backend", backend=requested_backend)
     return requested_backend
 
-  if requested_backend is not None and requested_backend.startswith("codex"):
-    codex_option = next((opt for opt in cfg.backends.options if opt.type == BackendType.CODEX), None)
-    if codex_option:
-      log.info("using_requested_backend_family_match", requested=requested_backend, backend=codex_option.id)
-      return codex_option.id
+  family_type = backend_types.type_for_family_prefix(requested_backend) if requested_backend is not None else None
+  if family_type is not None:
+    family_option = next((opt for opt in cfg.backends.options if opt.type == family_type), None)
+    if family_option:
+      log.info("using_requested_backend_family_match", requested=requested_backend, backend=family_option.id)
+      return family_option.id
 
   if requested_backend is not None:
     log.warning(
@@ -1603,7 +1607,7 @@ async def switch_session_backend(
   ``meta.backend`` is an effective current backend: the raw field when set,
   else ``backends.options[0]``. Every session accepts any configured backend
   id: the target backend starts its own native conversation when it cannot
-  continue the held one (``claude_accounts.same_continuation_domain`` judges
+  continue the held one (``backend_types.same_continuation_domain`` judges
   that at turn start), and catches up from the session's chat log. A
   cron-dedicated session keeps the in-domain restriction — the scheduler
   re-aligns it to its task config on every trigger, so its backend is decided
@@ -1623,7 +1627,7 @@ async def switch_session_backend(
 
   from src.features.cron.cron_sequence import bound_task_name
   bound_task = bound_task_name(parent.id)
-  if bound_task is not None and not claude_accounts.same_continuation_domain(effective_current, body.backend, cfg):
+  if bound_task is not None and not backend_types.same_continuation_domain(effective_current, body.backend, cfg):
     raise HTTPException(
         status_code=400,
         detail=(

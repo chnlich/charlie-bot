@@ -36,7 +36,6 @@ from typing import TYPE_CHECKING
 import orjson
 
 from src.infra import event_types as ET
-from src.infra.constants import BackendType
 from src.infra.json_utils import atomic_write_text
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import RunRecord, ensure_utc, utc_now
@@ -44,6 +43,7 @@ from src.infra.ndjson import HeadProvableFilter, parse_ndjson_events, parse_ndjs
 from src.infra.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
+from src.runtime.hooks import backend_types
 from src.runtime.run_token import b64url_decode, b64url_encode
 from src.runtime.session_aliases import SessionAliasStore
 from src.runtime.sidebar_state import mark_sidebar_dirty
@@ -82,12 +82,9 @@ EVENTS_LOG_NAME = "events.jsonl"
 # run-scoped CLI path reads session metadata without this module's model stack.
 from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME  # noqa: E402, F401  (re-export)
 
-# Backend types whose event transport does not go through the shared base read
-# loop (opencode serves events over its own HTTP SSE; antigravity
-# manages its own pipes). A restart cannot attach to those, so an interrupted
-# run on one of them still fails — but with this explicit reason, never
-# disguised as a crash.
-UNCOVERED_BACKEND_TYPES: frozenset[BackendType] = frozenset({BackendType.OPENCODE, BackendType.ANTIGRAVITY})
+# Backend types with event transports outside the shared base read loop register
+# restart_reattach=False. A restart cannot attach to those runs, so they fail with
+# an explicit reason instead of being disguised as crashes.
 TRANSPORT_NOT_COVERED_REASON = "backend transport not covered by restart-safe runtime"
 
 LEGACY_RAW_MISSING_REASON = "raw log missing (run predates restart-safe transport)"
@@ -477,7 +474,7 @@ def resolve_run(
     events = project_raw_file(raw_path, translate)
     result = summarize_result(events)
 
-  if backend_type in UNCOVERED_BACKEND_TYPES and result is None:
+  if backend_type is not None and not backend_types.traits_for(backend_type).restart_reattach and result is None:
     # A result event already on disk falls through to the downstream result
     # row and completes normally; this row only judges runs without one.
     if effectively_alive:

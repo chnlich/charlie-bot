@@ -1932,40 +1932,17 @@ def build_pooled_env(
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
-class WorkerAccountRecorder:
-  """The Worker-constructor spy: records every claude_account= the adapter passes.
-
-    A subclass stands in for src.runtime.task_execution.Worker, so the real Worker —
-    its relay loop included — still runs every recorded launch.
-    """
-
-  def __init__(self) -> None:
-    self.accounts: list = []
-
-  def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-    recorder = self
-    real_worker = task_execution_module.Worker
-
-    class RecordingWorker(real_worker):  # type: ignore[misc,valid-type]
-
-      def __init__(self, *args, **kwargs) -> None:
-        recorder.accounts.append(kwargs.get("claude_account"))
-        super().__init__(*args, **kwargs)
-
-    monkeypatch.setattr(task_execution_module, "Worker", RecordingWorker)
-
-
 async def _register_work_run(tree: TaskTreeManager, worker_id: str, run_id: str, backend: str, model: str) -> None:
   await tree.runs.register_run(RunRecord(id=run_id, session_id=worker_id, kind="work", backend=backend, model=model))
 
 
 @pytest.mark.asyncio
-async def test_pooled_fresh_worker_launches_hand_worker_the_selected_account(
+async def test_pooled_fresh_worker_launches_build_on_the_selected_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """With a non-empty pool and a cc-claude backend, the fresh work Run and the
-    review it spawns both hand Worker the account claude_accounts.select returned,
+    review it spawns both launch on the account claude_accounts.select returned,
     and the relay loop is armed from the first process (the backend build receives
-    the same account). The iteration and scheduled-step kinds launch through their
+    that account). The iteration and scheduled-step kinds launch through their
     controllers and are pinned in the sequence suites."""
   claude_accounts.reset_for_tests()
   cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
@@ -1974,8 +1951,6 @@ async def test_pooled_fresh_worker_launches_hand_worker_the_selected_account(
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="implement"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  recorder = WorkerAccountRecorder()
-  recorder.install(monkeypatch)
   builds = install_backends(
       monkeypatch, [
           SpawningScriptedBackend([result_event("work done; modified /tmp/x.sh")]),
@@ -2001,14 +1976,13 @@ async def test_pooled_fresh_worker_launches_hand_worker_the_selected_account(
   else:
     pytest.fail("the spawned review never reached a terminal fact")
 
-  assert recorder.accounts == [expected, expected]
   assert [b["kwargs"]["claude_account"] for b in builds] == [expected, expected]
 
 
 @pytest.mark.asyncio
 async def test_pooled_worker_launch_selects_inside_the_option_pool(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """With pools defined, the launch hands Worker an account of the option's pool: beta's
+  """With pools defined, the launch picks an account of the option's pool: beta's
     untouched accounts, holding more headroom than every alpha member, stay unused."""
   claude_accounts.reset_for_tests()
   cfg, session_mgr, tree = build_pooled_env(
@@ -2019,8 +1993,6 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  recorder = WorkerAccountRecorder()
-  recorder.install(monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # main sits at half a window; across all accounts an untouched beta account wins.
@@ -2034,7 +2006,6 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
   _run, outcome = await wait_for_terminal_run(tree, worker.id, "run-pool")
   assert outcome == "success"
 
-  assert recorder.accounts == [expected]
   assert builds[0]["kwargs"]["claude_account"] == expected
 
 
@@ -2047,14 +2018,12 @@ async def test_pooled_worker_launch_selects_inside_the_option_pool(
     ids=["empty-pool", "non-claude-backend"])
 async def test_unpooled_fresh_worker_launch_carries_no_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env_builder, backend_id: str) -> None:
-  """An empty pool and a non-Claude backend both leave the account unset: the
+  """An empty pool and a non-Claude backend both build with no claude_account key: the
     worker runs on its default login exactly as before this change."""
   cfg, session_mgr, tree = env_builder(tmp_path, monkeypatch)
   worker = await create_task(
       tree, parent=None, request_id="w", profile="worker", task=TaskSpec(goal="ship it", task_type="quick-edit"))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  recorder = WorkerAccountRecorder()
-  recorder.install(monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -2063,8 +2032,7 @@ async def test_unpooled_fresh_worker_launch_carries_no_account(
   _run, outcome = await wait_for_terminal_run(tree, worker.id, "run-work")
   assert outcome == "success"
 
-  assert recorder.accounts == [None]
-  assert builds[0]["kwargs"]["claude_account"] is None
+  assert "claude_account" not in builds[0]["kwargs"]
 
 
 @pytest.mark.asyncio
@@ -2094,6 +2062,13 @@ async def test_pool_exhausted_launch_fails_the_run_with_evidence_and_no_process(
   assert claude_relay.POOL_EXHAUSTED_PHRASE in error_text
   assert "earliest reset" in error_text and "UTC" in error_text
   assert error_text == claude_relay.pool_exhausted_message(cfg)
+  # The refusal's flag rides the launch error event.
+  error_events = [
+      json.loads(line)
+      for line in (tree.runs.run_dir(worker.id, "run-x") / "events.jsonl").read_text(encoding="utf-8").splitlines()
+      if line.strip()
+  ]
+  assert [event[ET.QUOTA_EXHAUSTED] for event in error_events if event["type"] == ET.ERROR] == [True]
 
 
 @pytest.mark.asyncio
@@ -2237,10 +2212,12 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   # second process builds and registers. The wrapper stops the Run first, then
   # hands over to the real relay.
   real_prepare_relay = master_cc_relay.prepare_relay
+  relay_run_id: str | None = None
 
-  async def stop_then_relay(cfg_, item, option, cc_session_id, current, cwd, reason):
-    await tree.runs.request_stop(manager.id, item.task_run.run_id, "stop-in-relay-gap")
-    return await real_prepare_relay(cfg_, item, option, cc_session_id, current, cwd, reason)
+  async def stop_then_relay(ctx, current, cc_session_id, reason, relays):
+    assert relay_run_id is not None
+    await tree.runs.request_stop(manager.id, relay_run_id, "stop-in-relay-gap")
+    return await real_prepare_relay(ctx, current, cc_session_id, reason, relays)
 
   monkeypatch.setattr(master_cc_relay, "prepare_relay", stop_then_relay)
 
@@ -2249,6 +2226,7 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
   assert decision["launch"] is True
   run_id = decision["run_id"]
   assert run_id is not None
+  relay_run_id = run_id
 
   run, outcome = await wait_for_terminal_run(tree, manager.id, run_id)
   from conftest import drain_session_consumer

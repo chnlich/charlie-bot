@@ -783,14 +783,14 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
   """
   questions = _PROBE_QUESTIONS.replace("<trigger message verbatim>", trigger)
   prompt = f"{artifact.read_text(encoding='utf-8')}\n\n{questions}"
-  # The backends registry drags fastapi and the sessions stack (~250 ms of
+  # The autonamer import drags fastapi and the sessions stack (~250 ms of
   # import) and asyncio another ~35 ms; both serve only this probe, and the
   # artifact chain's import floor (docs/perf_baseline.md@5175adf09 M102) depends on them
   # loading here and nowhere earlier.
   import asyncio
 
   from src.runtime import autonamer
-  from src.runtime.agent_process import registry
+  from src.runtime.hooks import backend_types
   options = list(autonamer.iter_light_backends(cfg))
   if not options:
     raise ValueError("no light backends resolvable from config backends.preference")
@@ -800,7 +800,7 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
       # No cgroup_session_id: the artifact probe runs from the CLI with no
       # CharlieBot session home, so it cannot enter any session's cgroup.
       answer = asyncio.run(
-          registry.build_backend(option, cfg).one_shot_text(
+          backend_types.build_backend(option, cfg).one_shot_text(
               prompt, _PROBE_SYSTEM_PROMPT, timeout=timeouts.ARTIFACT_PROBE_TIMEOUT))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
     except Exception as e:

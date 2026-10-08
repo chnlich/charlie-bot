@@ -5,6 +5,7 @@ removes its routes, commands and services from the server and the CLI.
 """
 
 import importlib
+from collections.abc import Iterable
 
 # Registration order is route inclusion order, service start order and the order of the home-page
 # cards that packages add after the app's own. The file server's catch-all routes come last among
@@ -32,10 +33,32 @@ PACKAGES = (
     "src.features.usage",
     "src.features.voice",
     "src.backends.openai_compatible",
+    "src.backends.antigravity",
+    "src.backends.charlie_code",
+    "src.backends.claude_code",
+    "src.backends.codex",
+    "src.backends.gemini",
+    "src.backends.kimi",
+    "src.backends.opencode",
     "src.features.files",
 )
 
 _registered = False
+_registered_packages: set[str] = set()
+
+
+def _register_packages(packages: Iterable[str]) -> None:
+  for package in packages:
+    if package not in _registered_packages:
+      importlib.import_module(package).register()
+      _registered_packages.add(package)
+
+
+def register_cli_commands() -> None:
+  """Register feature commands without importing backend type hooks for CLI help."""
+  if _registered:
+    return
+  _register_packages(package for package in PACKAGES if package.startswith("src.features."))
 
 
 def register_all() -> None:
@@ -43,6 +66,5 @@ def register_all() -> None:
   global _registered
   if _registered:
     return
-  for package in PACKAGES:
-    importlib.import_module(package).register()
+  _register_packages(PACKAGES)
   _registered = True

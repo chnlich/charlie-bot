@@ -42,7 +42,6 @@ from src.runtime.control_events import stable_run_id
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_task_execution import (
     SpawningScriptedBackend,
-    WorkerAccountRecorder,
     _adapter_with_silent_broadcast,
     build_pooled_env,
     build_spawning_env,
@@ -1043,16 +1042,14 @@ async def test_boundary_report_headings_carry_each_step_backend(bound_env, monke
 async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The cron controller's scheduled_step Runs are fresh worker launches: the
-  step hands Worker the pool account claude_accounts.select returned, and the
-  relay loop is armed (the backend build receives the same account)."""
+  lifecycle selects the pool account, and the relay loop is armed (the backend
+  build receives the selected account)."""
   claude_accounts.reset_for_tests()
   cfg, session_mgr, tree = build_pooled_env(tmp_path, monkeypatch)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   manager = await make_manager(tree, "Pooled Manager")
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. Run the schedule.", actor="user")
-  recorder = WorkerAccountRecorder()
-  recorder.install(monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("step done")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
 
@@ -1078,7 +1075,6 @@ async def test_pooled_scheduled_step_launches_on_the_selected_pool_account(
 
   expected = claude_accounts.select(cfg, FABLE_MODEL)
   assert expected is not None and expected.label == "main"
-  assert recorder.accounts == [expected]
   assert builds[0]["kwargs"]["claude_account"] == expected
   runs = tree.runs.list_run_records_sync(leaf.id)
   assert len(runs) == 1 and tree.runs.terminal_outcome(tree.runs.load_events_sync(leaf.id), runs[0].id) == "success"

@@ -11,6 +11,7 @@ from src.backends.claude_code import claude_launch
 from src.infra import constants, home, log_once, process
 from src.infra import event_types as ET
 from src.runtime.agent_process import base
+from src.runtime.hooks import backend_lifecycle
 
 log = log_once.LazyStructlogLogger()
 
@@ -54,24 +55,32 @@ def _warn_declared_window_once(event: str, *, variable: str, **fields: str) -> N
       log.warning, event, (event, variable, tuple(sorted(fields.items()))), variable=variable, **fields)
 
 
+def claude_child_env(env: dict[str, str]) -> None:
+  """Edit *env* in place for a child process that runs Claude Code.
+
+  The inherited ``CLAUDECODE`` marker is stripped — a child ``claude`` refuses to
+  launch when it detects a parent session — and ``CLAUDE_CODE_DISABLE_AUTO_MEMORY``
+  stays pinned, so a child's auto-memory writes stay off and CharlieBot's own
+  memory store remains the only one. The runtime applies this function to every
+  agent child env through ``backend_lifecycle.register_child_env``.
+  """
+  env.pop("CLAUDECODE", None)
+  env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+
+
 def claude_supervisor_env(env: Mapping[str, str]) -> dict[str, str]:
   """Environment for a supervisor process whose children run Claude Code.
 
-  Three pins travel together for every supervisor (master, worker): the
-  inherited ``CLAUDECODE`` marker is stripped — a child ``claude`` refuses to
-  launch when it detects a parent session — ``CLAUDE_CODE_DISABLE_AUTO_MEMORY``
-  stays pinned, so a child's auto-memory writes stay off and CharlieBot's own
-  memory store remains the only one, and an inherited ``CHARLIEBOT_SESSION_ID``
-  is stripped, so only the id a caller writes afterwards travels on: a master
-  gets its own session's id (see ``master_cc_run._build_master_env``) and a
-  worker gets the id its launcher applied after this strip (the v2 task-tree
-  adapter's child identity), never the parent's inherited one.
-  Returns a copy; the argument is not mutated.
+  The two pins of ``claude_child_env`` travel with an inherited
+  ``CHARLIEBOT_SESSION_ID`` strip, so only the id a caller writes afterwards
+  travels on: a master gets its own session's id (see
+  ``master_cc_run._build_master_env``) and a worker gets the id its launcher
+  applied after this strip (the v2 task-tree adapter's child identity), never
+  the parent's inherited one. Returns a copy; the argument is not mutated.
   """
   out = dict(env)
-  out.pop("CLAUDECODE", None)
   out.pop(constants.SESSION_ID_ENV_VAR, None)
-  out["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+  claude_child_env(out)
   return out
 
 
@@ -144,6 +153,18 @@ def headless_claude_declared_window() -> tuple[int, int | None]:
       return window, None
 
   return window, window - claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE - claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE
+
+
+def claude_reading_limits() -> backend_lifecycle.ContextLimits:
+  """The context limits of a ``claude`` reading: the declared window and the two compaction reserves.
+
+  ``compact_reserve`` is None when ``headless_claude_declared_window`` reports no compaction point.
+  """
+  declared_window, compact_point = headless_claude_declared_window()
+  compact_reserve = (
+      None if compact_point is None else claude_launch.CLAUDE_COMPACT_OUTPUT_RESERVE +
+      claude_launch.CLAUDE_COMPACT_CONTEXT_RESERVE)
+  return backend_lifecycle.ContextLimits(declared_window=declared_window, compact_reserve=compact_reserve)
 
 
 # The CLI's synthetic assistant events (errors, injected notices) carry this

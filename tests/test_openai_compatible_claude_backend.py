@@ -8,7 +8,7 @@ from fastapi import testclient
 
 from src.backends.openai_compatible import anthropic_proxy, openai_compatible_claude
 from src.infra import config
-from src.runtime.agent_process import registry
+from src.runtime.hooks import backend_types
 
 _PROXY_PREFIX = "/api/anthropic-proxy"
 _BACKEND_ID = "cc-glm52"
@@ -60,12 +60,12 @@ def test_requires_model_proxy_and_auth_token() -> None:
         proxy_base_url="http://localhost:8000/proxy", auth_token="", model=_PROXY_MODEL)
 
 
-def test_registry_builds_openai_compatible_backend() -> None:
+def test_backend_types_builds_openai_compatible_backend() -> None:
   option = _option()
   cfg = _cfg(option)
   conftest.stub_credentials({"charliebot": {"access_key": _AUTH_TOKEN}})
 
-  backend = registry.build_backend(option, cfg)
+  backend = backend_types.build_backend(option, cfg)
 
   assert isinstance(backend, openai_compatible_claude.OpenAICompatibleClaudeBackend)
   prepared = backend._prepare_env({})

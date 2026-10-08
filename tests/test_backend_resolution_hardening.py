@@ -9,6 +9,7 @@ from unittest import mock
 import conftest
 import pytest
 
+from src.backends.claude_code import claude_lifecycle
 from src.infra import config as core_config
 from src.infra import event_types as ET
 from src.infra import models
@@ -160,9 +161,9 @@ def test_cc_transcript_exists_ignores_subagent_logs(tmp_path: pathlib.Path) -> N
   nested.mkdir(parents=True)
   (nested / "agent-deep.jsonl").write_text("{}\n", encoding="utf-8")
 
-  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "conv-1") is True
-  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "agent-deep") is False
-  assert master_cc.master_cc_run._cc_transcript_exists(cfg_dir, "absent") is False
+  assert claude_lifecycle.cc_transcript_exists(cfg_dir, "conv-1") is True
+  assert claude_lifecycle.cc_transcript_exists(cfg_dir, "agent-deep") is False
+  assert claude_lifecycle.cc_transcript_exists(cfg_dir, "absent") is False
 
 
 # Rows are the transcript-reachability gate's two outcomes for a non-pooled

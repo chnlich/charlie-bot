@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 import orjson
 
-from src.infra import event_types as ET
 from src.infra import log_once, process, sse, timeouts
+from src.infra import event_types as ET
 from src.runtime.agent_process import base
 
 if TYPE_CHECKING:

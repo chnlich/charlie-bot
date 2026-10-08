@@ -6,7 +6,7 @@ import pytest
 
 from src.backends.claude_code import claude_code
 from src.infra import config, models
-from src.runtime.agent_process import registry
+from src.runtime.hooks import backend_types
 
 
 def test_build_command_sends_plain_prompt_via_stdin_hook() -> None:
@@ -76,7 +76,7 @@ def test_pool_account_config_dir_expands_user_and_injects_env(monkeypatch: pytes
   option = conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-opus-4-8")
   account = models.ClaudeAccount(label="invite-1", config_dir="~/accounts/invite-1")
 
-  backend = registry.build_backend(option, config.CharlieBotConfig(), claude_account=account)
+  backend = backend_types.build_backend(option, config.CharlieBotConfig(), claude_account=account)
 
   env = backend._prepare_env({})
 

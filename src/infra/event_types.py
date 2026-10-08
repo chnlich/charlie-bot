@@ -20,6 +20,10 @@ TOOL_RESULT = "tool_result"
 # -- Master lifecycle --------------------------------------------------------
 MASTER_DONE = "master_done"
 ASSISTANT_ERROR = "assistant_error"
+# Payload key of the error event that a refused launch writes (an ASSISTANT_ERROR on a master
+# turn, an ERROR in a task run's event log). True when the backend refused because its quota is
+# spent. The key appears on every launch-refusal event and on no other error event.
+QUOTA_EXHAUSTED = "quota_exhausted"
 # Payload keys of a MASTER_DONE event, all persisted wire values re-read from
 # chat_events.jsonl. Every round end renders a separator; still_thinking marks
 # a round end that left another queued item running, and the live panel reads

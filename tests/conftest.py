@@ -226,6 +226,12 @@ def pytest_collection_finish(session: pytest.Session) -> None:
 
 
 # Imports must follow the sys.path bootstrap above.
+from src.app import registrations  # noqa: E402
+
+# Every process registers the backend packages before its first config parse; the suite registers
+# at import, ahead of every test module's own src imports.
+registrations.register_all()
+
 import src.infra.config as core_config  # noqa: E402,I001
 from src.runtime import master_cc_queue, master_cc_run, master_cc_state, worker as worker_module  # noqa: E402
 from src.runtime.agent_process import base as backend_base  # noqa: E402
@@ -1522,28 +1528,25 @@ CLI_COMMON_TRANSPORT_GET_PATCH_TARGET = "src.runtime.cli.common._request_get"
 CLI_MEMORY_HOME_PATCH_TARGET = "src.features.memory.cli.charliebot_home_dir"
 
 # Import-path patch target shared by every test that swaps the backend factory a master session
-# runs under. src/runtime/master_cc_run.py binds the factory with call-time `from
-# src.runtime.agent_process.registry import build_backend` inside its run/resume helpers, so
-# monkeypatch.setattr on the registry module attribute lands the stand-in where those imports
-# resolve. The lazy carriers (worker.py, autonamer.py, recap.py — each deferring through the
-# shared load_build_backend in src/runtime/agent_process/deferred_build.py, which returns an existing
-# module binding untouched) resolve the same registry function at first
-# build, so a patch applied before that first build reaches them too; a patch applied after
-# binds their module attribute directly.
-BUILD_BACKEND_PATCH_TARGET = "src.runtime.agent_process.registry.build_backend"
+# runs under. src/runtime/master_cc_run.py reads `backend_types.build_backend` as a module
+# attribute at every build, so monkeypatch.setattr on the backend type table's module attribute
+# lands the stand-in where that read resolves. The lazy carriers (worker.py, autonamer.py,
+# recap.py — each deferring through the shared load_build_backend in
+# src/runtime/agent_process/deferred_build.py, which returns an existing module binding
+# untouched) resolve the same function at first build, so a patch applied before that first
+# build reaches them too; a patch applied after binds their module attribute directly.
+BUILD_BACKEND_PATCH_TARGET = "src.runtime.hooks.backend_types.build_backend"
 # The worker builds through the shared lazy loader it binds at import scope
 # (src/runtime/agent_process/deferred_build.py load_build_backend),
 # so the worker path's stand-in binds here — an existing binding is returned untouched,
-# exactly the semantics the master-cc registry route relies on.
+# exactly the semantics the master-cc type-table route relies on.
 WORKER_BUILD_BACKEND_PATCH_TARGET = "src.runtime.worker.build_backend"
 
-# Import-path patch target for the worker's default-backend fallback. src/runtime/worker.py
-# binds the class at import scope (`from src.backends.claude_code.claude_code import
-# ClaudeCodeBackend, claude_supervisor_env`), and _build_backend's fallback return — reached
-# when no backend_option is set or a translate-only build fails — reads it as a module global
-# at call time, so tests that drive that fallback set the stand-in on the src.runtime.worker
-# module attribute.
-WORKER_CLAUDE_CODE_BACKEND_PATCH_TARGET = "src.runtime.worker.ClaudeCodeBackend"
+# Import-path patch target for the worker's binary-free translate fallback. src/runtime/worker.py
+# calls `backend_types.build_translate_fallback` from _build_backend's fallback return — reached
+# when no backend_option is set or a translate-only build fails — as a module attribute at call
+# time, so tests that drive that fallback set the stand-in on the type table's module attribute.
+WORKER_TRANSLATE_FALLBACK_PATCH_TARGET = "src.runtime.hooks.backend_types.build_translate_fallback"
 
 # Import-path patch target for the /proc stat read the backend start contract pins. src/runtime/runs.py
 # defines read_pid_stat; src/runtime/agent_process/base.py binds the module (`from src.runtime import runs`)
@@ -2647,8 +2650,8 @@ def install_scripted_backends(
   each build's on_spawn into the double the way install_backends does.
 
   *patch_target* is the dotted import path of the build_backend binding the
-  tested path reads: the master-cc run path re-imports through
-  src.runtime.agent_process.registry on every call (BUILD_BACKEND_PATCH_TARGET),
+  tested path reads: the master-cc run path reads the type table's attribute
+  on every call (BUILD_BACKEND_PATCH_TARGET),
   while the worker path reads src.runtime.worker's module binding
   (WORKER_BUILD_BACKEND_PATCH_TARGET). Returns the build records (option,
   kwargs, backend) in build order.

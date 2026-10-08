@@ -10,18 +10,15 @@ from typing import Any
 
 import orjson
 
-from src.backends.claude_code import claude_accounts, claude_relay
-from src.backends.claude_code.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.constants import BackendType
 from src.infra.deferred import deferred_module_getattr
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import BackendOption, ClaudeAccount, ThreadMetadata, utc_now_iso
+from src.infra.models import BackendOption, SessionMetadata, ThreadMetadata, utc_now_iso
 from src.infra.ndjson import append_ndjson
 from src.infra.ndjson import write_all as _write_all
 from src.infra.process import kill_group_escalating
-from src.runtime import runs
+from src.runtime import launch_loop, runs
 from src.runtime.agent_process.base import (
     AgentBackend,
     _capture_proc_diagnostics,
@@ -29,6 +26,7 @@ from src.runtime.agent_process.base import (
     tail_follow_events,
 )
 from src.runtime.agent_process.deferred_build import load_build_backend
+from src.runtime.hooks import backend_lifecycle, backend_types
 from src.runtime.session_usage import _prompt_token_sum
 from src.runtime.streaming import handle_compaction_events, streaming_manager
 
@@ -98,13 +96,13 @@ async def _append_event_line(fd: int, line: bytes) -> None:
 
 
 class Worker:
-  """Manages the Claude Code Worker subprocesses of one task.
+  """Manages the backend subprocesses of one task.
 
-  One task is one process, except on a pool account (src/backends/claude_code/claude_accounts.py):
-  when that account runs out of quota the Worker relays, moving the transcript to
-  the account with the most headroom and resuming the same session id there with
-  the shared continuation prompt (src/backends/claude_code/claude_relay.py). Every process of the
-  task appends to the same events log; the terminal events belong to the last one.
+  One task is one process, except for a backend whose lifecycle relays (``backend_lifecycle``):
+  when the watch of a process asks for a next one, the lifecycle plans it and the Worker runs it
+  (``launch_loop``). Every process of the task appends to the same events log; the terminal
+  events belong to the last one. ``session_meta`` is the session the task belongs to; a run
+  needs it, and a follow of an interrupted run does not.
   """
 
   def __init__(
@@ -118,7 +116,7 @@ class Worker:
       extra_env: dict[str, str] | None = None,
       on_spawned: Callable | None = None,
       instructions_content: str | None = None,
-      claude_account: ClaudeAccount | None = None,
+      session_meta: SessionMetadata | None = None,
   ) -> None:
     self._thread = thread_metadata
     self._worktree = working_dir
@@ -129,13 +127,12 @@ class Worker:
     self._extra_env = extra_env or {}
     self._on_spawned = on_spawned
     self._instructions_content = instructions_content
+    self._session_meta = session_meta
     self._backend: AgentBackend | None = None
-    # The pool account this task runs on; None outside the pool.
-    self._claude_account = claude_account
-    self._relay_watch: claude_relay.RelayWatch | None = None
+    # The plan and the watch of the process now running; None outside a launched run.
+    self._launch: backend_lifecycle.Launch | None = None
+    self._watch: backend_lifecycle.LaunchWatch | None = None
     self._relays = 0
-    # Set by a relay: the next process resumes the transcript instead of opening a session.
-    self._resume_session_id: str | None = None
     # Context size from the newest assistant usage block, for the relay compaction rule.
     self._context_tokens: int | None = None
     # Session-level notices (the login-required event) leave through this hook; the
@@ -143,16 +140,17 @@ class Worker:
     self.on_session_event: Callable[[dict], Awaitable[None]] | None = None
 
   @property
-  def claude_account(self) -> ClaudeAccount | None:
-    return self._claude_account
-
-  @property
   def account_relays(self) -> int:
     return self._relays
 
-  def _build_backend(self, on_spawn: Callable[[int], Awaitable[None]] | None) -> AgentBackend:
+  def _build_backend(
+      self,
+      on_spawn: Callable[[int], Awaitable[None]] | None,
+      launch: backend_lifecycle.Launch | None = None,
+  ) -> AgentBackend:
     """Build the backend for this task; *on_spawn* is None for translate-only instances.
 
+    *launch* is the lifecycle's plan for the process; a translate-only build has none.
     Launcher builds (on_spawn set) fail loudly: a missing CLI binary raises in
     the constructor and a real run never silently degrades to another backend.
     Translate-only builds (on_spawn None) only parse events, so a construction
@@ -161,21 +159,28 @@ class Worker:
     translate-only fallback — and never crashes restart recovery's drain.
     """
     if self._backend_option:
-      backend_kwargs = {
+      launch_kwargs = dict(launch.backend_kwargs) if launch is not None else {}
+      extra_flags = launch_kwargs.pop("extra_flags", [])
+      backend_kwargs: dict[str, Any] = {
           "buffer_limit": self._cfg.subprocess_buffer_limit,
           "on_spawn": on_spawn,
           "instructions_content": self._instructions_content,
           "log_dir": self._events_log.parent,
           "cgroup_session_id": self._thread.session_id,
+          **launch_kwargs,
       }
-      if self._backend_option.type == BackendType.CC_CLAUDE:
-        if self._resume_session_id:
-          backend_kwargs["extra_flags"] = ["--resume", self._resume_session_id]
+      if backend_types.traits_for(self._backend_option.type).preassigned_session_id:
+        # The runtime chose this task's session id before the first process: a relay resumes it
+        # with --resume, and the first process opens it.
+        if launch is not None and launch.resume_id:
+          extra_flags = ["--resume", launch.resume_id, *extra_flags]
         else:
           backend_kwargs["claude_session_id"] = self._thread.claude_session_id
+      if extra_flags:
+        backend_kwargs["extra_flags"] = extra_flags
       try:
         backend = load_build_backend(globals())
-        return backend(self._backend_option, self._cfg, claude_account=self._claude_account, **backend_kwargs)
+        return backend(self._backend_option, self._cfg, **backend_kwargs)
       except Exception as e:
         if on_spawn is not None:
           raise
@@ -185,8 +190,9 @@ class Worker:
             backend=self._backend_option.id,
             backend_type=self._backend_option.type,
             error=str(e))
-    # Fallback to default ClaudeCodeBackend
-    return ClaudeCodeBackend(
+    # Fallback to the binary-free translate backend
+    return backend_types.build_translate_fallback(
+        self._cfg,
         buffer_limit=self._cfg.subprocess_buffer_limit,
         on_spawn=on_spawn,
         instructions_content=self._instructions_content,
@@ -194,13 +200,39 @@ class Worker:
         cgroup_session_id=self._thread.session_id,
     )
 
+  def _launch_context(self, fd: int) -> backend_lifecycle.LaunchContext:
+    """The ``LaunchContext`` of this task run: events go to the events log and the session's chat."""
+    assert self._backend_option is not None and self._session_meta is not None
+
+    async def emit(event: dict) -> None:
+      await self._persist_and_broadcast(fd, event)
+      if self.on_session_event is not None:
+        await self.on_session_event(event)
+
+    async def record_account(label: str) -> None:
+      """A task keeps no account label: the label is a master turn's session field."""
+
+    async def context_state() -> tuple[int | None, datetime | None]:
+      return self._context_tokens, None
+
+    return backend_lifecycle.LaunchContext(
+        cfg=self._cfg,
+        option=self._backend_option,
+        session_meta=self._session_meta,
+        kind="task",
+        cwd=str(self._worktree),
+        held_native_id=None,
+        emit=emit,
+        record_account=record_account,
+        context_state=context_state)
+
   async def run(self) -> int:
     """Spawn the Worker and stream its output. Returns exit code."""
     # The supervisor strip runs on the inherited environment; the launch's own
     # extra_env (the child's session id, its signed run token, the selected
     # home) applies AFTER it, so the child's explicit identity survives the
     # inherited-identity strip.
-    env = {**claude_supervisor_env(os.environ), **self._extra_env}
+    env = {**launch_loop.child_env(os.environ), **self._extra_env}
     # The stash-guard git wrapper rides first on the child's PATH (plan 3 v3):
     # every worktree of a repository shares one stash stack, so the guard
     # refuses the git stash write forms an agent runs by habit and passes
@@ -219,34 +251,55 @@ class Worker:
       if self._on_spawned:
         await self._on_spawned(self._thread)
 
-    # Read stdout (NDJSON) line by line via the backend; a pooled task loops once
-    # per account relay, each process appending to the same events log.
+    # Read stdout (NDJSON) line by line via the backend; a task whose lifecycle relays loops once
+    # per relay, each process appending to the same events log.
     self._events_log.parent.mkdir(parents=True, exist_ok=True)
     # The fd is held for the whole run: a worker's events log is append-only and
     # nothing rewrites or replaces it mid-run (only chat files archive), so a
     # per-call open to re-resolve the path is never needed here.
     fd = os.open(self._events_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o666)
+    exit_code = 1
+
+    async def _run_process(
+        launch: backend_lifecycle.Launch,
+        watch: backend_lifecycle.LaunchWatch | None,
+        relays_before: int,
+    ) -> tuple[int, str]:
+      nonlocal exit_code
+      self._relays = relays_before
+      self._launch = launch
+      self._watch = watch
+      self._backend = self._build_backend(_on_spawn, launch)
+      log.info(
+          "worker_starting",
+          thread=self._thread.id,
+          cwd=str(self._worktree),
+          account=launch.account_label,
+          relays=self._relays)
+      task_description = launch.prompt if launch.prompt is not None else self._task_description
+      async for event in self._backend.run(task_description, str(self._worktree), env):
+        await self._process_event(event, fd)
+      exit_code = self._backend.exit_code
+      return exit_code, self._backend.stderr_text
+
+    def _on_relay(relays: int) -> None:
+      self._relays = relays
+
     try:
-      while True:
-        self._backend = self._build_backend(_on_spawn)
-        account = self._claude_account
-        self._relay_watch = (
-            claude_relay.RelayWatch(account.label, self._backend_option.model)
-            if account is not None and self._backend_option is not None else None)
-        log.info(
-            "worker_starting",
-            thread=self._thread.id,
-            cwd=str(self._worktree),
-            account=account.label if account is not None else None,
-            relays=self._relays)
-        async for event in self._backend.run(self._task_description, str(self._worktree), env):
-          await self._process_event(event, fd)
-        exit_code = self._backend.exit_code
-        decision = (
-            self._relay_watch.decision(exit_code, self._backend.stderr_text) if self._relay_watch is not None else None)
-        if decision is None:
-          break
-        await self._relay(decision, exit_code, fd)
+      if self._backend_option is None:
+        # No backend option: one process on the binary-free fallback backend.
+        await _run_process(backend_lifecycle.Launch(backend_kwargs={}, resume_id=None), None, 0)
+      else:
+        ctx = self._launch_context(fd)
+        lifecycle = backend_types.lifecycle_for(self._backend_option)
+        # A refused launch raises LaunchRefused to the run entry, which ends the run with its message.
+        await launch_loop.run_launches(
+            ctx,
+            lifecycle,
+            run_process=_run_process,
+            native_id=lambda: self._thread.claude_session_id,
+            on_relay=_on_relay,
+        )
     finally:
       os.close(fd)
 
@@ -326,72 +379,6 @@ class Worker:
     )
     log.info("worker_resume_finished", thread=self._thread.id, exit_code=exit_code)
     return exit_code
-
-  async def _relay(self, decision: str, exit_code: int, fd: int) -> None:
-    """Move this task to the next pool account, or end it loudly.
-
-    A login failure marks the account unhealthy and tells the operator first. The
-    pool exhausted raises PoolExhaustedError (reported as quota exhaustion with the
-    reset time); the relay cap raises RuntimeError (reported as the task's error).
-    """
-    assert self._backend_option is not None and self._claude_account is not None
-    current = self._claude_account
-    if decision == claude_relay.LOGIN_FAILED:
-      claude_accounts.record_auth_failure(current.label)
-      log.error(
-          ET.CLAUDE_ACCOUNT_LOGIN_REQUIRED,
-          thread=self._thread.id,
-          account=current.label,
-          config_dir=current.config_dir,
-          reason=claude_relay.LOGIN_REASON_AUTH_FAILED)
-      notice = claude_relay.login_required_event(current, claude_relay.LOGIN_REASON_AUTH_FAILED)
-      await self._persist_and_broadcast(fd, notice)
-      if self.on_session_event is not None:
-        await self.on_session_event(notice)
-    if self._relays >= claude_relay.MAX_RELAYS_PER_TURN:
-      raise RuntimeError(claude_relay.relay_limit_message())
-    nxt, error, _refused_holder = claude_relay.move_to_next_account(
-        self._cfg,
-        self._backend_option.model,
-        current,
-        self._thread.claude_session_id,
-        account_pool=claude_accounts.option_pool(self._backend_option))
-    if nxt is None:
-      # A guard-refused move ends the worker loudly like every other relay
-      # failure: adoption is the master turn's consumer decision, not this loop's.
-      raise claude_relay.PoolExhaustedError(error)
-    log.warning(
-        "worker_account_relay",
-        thread=self._thread.id,
-        reason=decision,
-        exit_code=exit_code,
-        from_account=current.label,
-        to_account=nxt.label,
-        relays=self._relays + 1)
-    # lazy: keeps the compaction stack off the M99 server import floor (docs/perf_baseline.md@5175adf09)
-    from src.backends.claude_code import claude_compaction
-    if claude_compaction.relay_compaction_wanted(self._cfg, self._backend_option.model, self._context_tokens):
-
-      async def persist(evt: dict) -> None:
-        await self._persist_and_broadcast(fd, evt)
-
-      await claude_compaction.compact_with_sonnet(
-          cc_session_id=self._thread.claude_session_id,
-          cwd=str(self._worktree),
-          config_dir=nxt.config_dir,
-          pre_tokens=self._context_tokens,
-          persist_and_broadcast=persist,
-          cgroup_session_id=self._thread.session_id,
-          log_context={
-              "thread": self._thread.id,
-              "account": nxt.label,
-              "trigger": "relay"
-          },
-      )
-    self._relays += 1
-    self._claude_account = nxt
-    self._task_description = claude_relay.CONTINUATION_PROMPT
-    self._resume_session_id = self._thread.claude_session_id
 
   async def _persist_and_broadcast(self, fd: int, event: dict) -> None:
     if not event.get("timestamp"):
@@ -496,10 +483,10 @@ class Worker:
     if not event_data.get("timestamp"):
       event_data["timestamp"] = utc_now_iso()
 
-    # A pooled task folds every event into its relay decision; a rejection ends
+    # A task whose lifecycle relays folds every event into its watch; a rejection ends
     # the process on its own and the relay follows in run(), so the event is
     # persisted like any other instead of raising.
-    terminate_now = self._relay_watch is not None and self._relay_watch.observe(event_data)
+    terminate_now = self._watch is not None and self._watch.observe(event_data)
 
     # Detect rate-limit rejections from Claude Code (type=ET.RATE_LIMIT_EVENT)
     if event_type == ET.RATE_LIMIT_EVENT:
@@ -512,8 +499,8 @@ class Worker:
             thread=self._thread.id,
             rate_type=rate_type,
             resets_at=resets_at,
-            account=self._claude_account.label if self._claude_account is not None else None)
-        if self._relay_watch is None:
+            account=self._launch.account_label if self._launch is not None else None)
+        if self._watch is None:
           await _append_event_line(fd, _event_line(event_data))
           raise QuotaExhaustedError(f"Rate limited ({rate_type}), resets at {resets_at}")
 
@@ -545,6 +532,6 @@ class Worker:
 
     if terminate_now:
       # Armed relay at its safe point: the tool result is on disk, stop here.
-      assert self._backend is not None and self._claude_account is not None
-      log.warning("worker_account_relay_safe_point", thread=self._thread.id, account=self._claude_account.label)
+      assert self._backend is not None and self._launch is not None
+      log.warning("worker_account_relay_safe_point", thread=self._thread.id, account=self._launch.account_label)
       await self._backend.terminate()

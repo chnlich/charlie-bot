@@ -1,18 +1,12 @@
 """Claude CLI launch vocabulary: permission flags, argv assembly, headless env.
 
-Consumers read these names from two homes: base (src.runtime.agent_process.base)
-re-exports the two permission flags for its established import path, and every
-other reader -- claude_code (src.backends.claude_code.claude_code), session_usage,
-claude_compaction, the session-usage tests included -- imports from here.
+The shared permission flag spellings live in the runtime backend base so every CLI
+backend can use them without importing a backend package.
 """
 
 import os
 
-# The flag that suppresses the CLI's interactive permission prompt. Its
-# spelling is fixed by the vendor CLI contract, not by this repo, so every
-# Claude-compatible launcher here (claude headless, agy, opencode) must pass
-# the same literal.
-SKIP_PERMISSIONS_FLAG = "--dangerously-skip-permissions"
+from src.runtime.agent_process.base import DISALLOWED_TOOLS_FLAG, SKIP_PERMISSIONS_FLAG
 
 # Settings-side companion of SKIP_PERMISSIONS_FLAG: with the flag passed, an
 # interactive launch still pops a one-time dangerous-mode confirmation unless
@@ -24,10 +18,6 @@ SKIP_PERMISSIONS_SETTINGS = {"skipDangerousModePermissionPrompt": True}
 # dedup cache (mcp-needs-auth-cache.json) lives in the config directory.
 # Every Claude launch path merges this into its single --settings JSON.
 DISABLE_CONNECTOR_SETTINGS = {"disableClaudeAiConnectors": True}
-
-# The tool-deny flag's spelling is vendor-fixed like SKIP_PERMISSIONS_FLAG's.
-DISALLOWED_TOOLS_FLAG = "--disallowed-tools"
-
 
 def build_claude_argv(
     session_id: str,

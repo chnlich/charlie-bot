@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 from conftest import ROOT, backend_option
+from pydantic import ValidationError
 
 from src.app import registrations
 from src.infra import config as config_module
@@ -34,6 +35,15 @@ def _credentials_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
   (home / "config.yaml").write_text("server:\n  port: 2001\n", encoding="utf-8")
   monkeypatch.setenv(CHARLIEBOT_HOME_ENV, str(home))
   return home
+
+
+def test_ui_backlog_repos_is_an_unknown_key_since_the_backlog_section_owns_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  home = _credentials_home(tmp_path, monkeypatch)
+  (home / "config.yaml").write_text("ui:\n  backlog_repos: []\n", encoding="utf-8")
+  with pytest.raises(ValidationError) as excinfo:
+    config_module.load_config()
+  assert [(err["type"], err["loc"]) for err in excinfo.value.errors()] == [("extra_forbidden", ("ui", "backlog_repos"))]
 
 
 def test_credentials_stay_out_of_config_and_get_returns_each_sentinel(

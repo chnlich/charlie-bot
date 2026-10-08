@@ -152,10 +152,6 @@ async def index(
   transcript); ``/?session=<parent>&thread=<id>`` opens one legacy worker
   thread projected into the same main-chat view, read-only.
   """
-  # The M99 import floor carries no speech stack (the M99 row's rule) and no
-  # preview probe; both serve only this page's context build.
-  from src.features.session_tree_preview.session_tree_preview import is_preview_mode
-  from src.features.voice.transcription.registry import build_transcription_backends
   load_errors: list[str] = []
   try:
     sessions = await session_mgr.list_sessions(
@@ -271,16 +267,6 @@ async def index(
           "event_count": event_count,
           "session_bootstrap": session_bootstrap,
           "backend_options": cfg.backends.options,
-          "voice_backends":
-              [
-                  {
-                      "id": backend.id,
-                      "label": backend.label,
-                      "live_partials": backend.live_partials,
-                      "unavailable_reason": backend.unavailable_reason(),
-                  } for backend in build_transcription_backends(cfg)
-              ],
-          "voice_default_backend": cfg.voice.default_backend,
           "active_backend": active_backend,
           "active_backend_label": active_backend_label,
           "active_backend_type": active_backend_type,
@@ -290,5 +276,4 @@ async def index(
           "sessions_root": str(cfg.sessions_dir),
           "version": templating.git_version(),
           "static_asset_version": templating.static_asset_version(),
-          "preview_mode": is_preview_mode(),
       })

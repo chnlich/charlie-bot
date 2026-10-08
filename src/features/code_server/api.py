@@ -8,6 +8,7 @@ import time
 
 import fastapi
 
+from src.features.code_server.config import code_server_config_path, code_server_listen_port
 from src.infra import config, log_once
 from src.runtime.api import deps
 
@@ -83,8 +84,8 @@ def open_code_server(
 
   folder_path = _resolve_folder_under_allowed_root(folder, cfg)
   try:
-    config_path = cfg.code_server_config_path
-    port = cfg.code_server_listen_port
+    config_path = code_server_config_path(cfg)
+    port = code_server_listen_port(cfg)
   except Exception as exc:
     log.exception("code_server_config_invalid")
     raise fastapi.HTTPException(status_code=500, detail=str(exc)) from exc

@@ -21,8 +21,8 @@ def _repo_path(repo: str | None) -> pathlib.Path | None:
     return pathlib.Path(repo).expanduser()
   from src.infra import config
   cfg = config.get_config()
-  if cfg.ui.backlog_repos:
-    return pathlib.Path(cfg.ui.backlog_repos[0].path)
+  if cfg.backlog.repos:
+    return pathlib.Path(cfg.backlog.repos[0].path)
   return None
 
 
@@ -85,7 +85,7 @@ async def get_repos() -> responses.JSONResponse:
   """Return configured backlog repos [{label, path}]."""
   from src.infra import config
   cfg = config.get_config()
-  return responses.JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.ui.backlog_repos])
+  return responses.JSONResponse(content=[{"label": r.label, "path": r.path} for r in cfg.backlog.repos])
 
 
 @router.get('')
@@ -174,7 +174,7 @@ async def patch_backlog(
   if repo_path is None:
     # A write with no configured repo has nowhere to persist; that is an
     # operator error, not the reads' empty state, so it stays loud.
-    raise ValueError('ui.backlog_repos not configured in config.yaml')
+    raise ValueError('backlog.repos not configured in config.yaml')
   yaml_path, items = await asyncio.to_thread(_find_item_file, repo_path, item_id, source)
   if yaml_path is None:
     return responses.JSONResponse(content={'error': f'Item {item_id} not found'}, status_code=404)

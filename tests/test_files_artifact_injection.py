@@ -155,12 +155,11 @@ def test_serve_file_diff_base_outside_session_artifacts_is_400(sessions_root: pa
 
 
 @pytest.mark.parametrize(
-    ("target", "accept_encoding", "hops"),
-    [("notes.txt", "identity", 1), ("notes.txt", "gzip", 2), ("", "identity", 1), ("", "gzip", 1)],
+    ("target", "accept_encoding"), [("notes.txt", "identity"), ("notes.txt", "gzip"), ("", "identity"), ("", "gzip")],
     ids=["file", "file-gzip", "listing", "listing-gzip"])
 def test_a_plain_file_and_a_listing_take_the_executor_hops_they_took_before_the_view(
-    sessions_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch, target: str, accept_encoding: str, hops: int) -> None:
-  """The hop counts are the file server's own: its resolve-and-list hop, plus the bare-file gzip memo's."""
+    sessions_root: pathlib.Path, monkeypatch: pytest.MonkeyPatch, target: str, accept_encoding: str) -> None:
+  """The one executor hop is the file server's own resolve-and-list hop, with or without gzip."""
   served = sessions_root / "plain"
   served.mkdir()
   (served / "notes.txt").write_text("plain text\n" * 20, encoding="utf-8")
@@ -176,4 +175,4 @@ def test_a_plain_file_and_a_listing_take_the_executor_hops_they_took_before_the_
   resp = _build_client(None).get(f"/absolute_filepath{served}/{target}", headers={"Accept-Encoding": accept_encoding})
 
   assert resp.status_code == 200
-  assert len(calls) == hops
+  assert len(calls) == 1

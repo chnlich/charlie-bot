@@ -143,7 +143,7 @@ async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited
   await mgr.archive_subtree(parent.id, caller=conftest.OPERATOR)
   assert mgr.task_state(parent.id) == "archived"
 
-  child = await session_mgr.fork_session(parent.id)
+  child = await session_mgr.fork.fork_session(parent.id)
 
   facts = mgr.facts_of(child.id)
   assert (mgr.task_state(child.id), facts.input_candidates, facts.close_events) == ("open", [], [])

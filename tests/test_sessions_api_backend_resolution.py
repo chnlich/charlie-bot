@@ -8,7 +8,7 @@ import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import sessions, task_sessions
+from src.runtime import session_fork, sessions, task_sessions
 
 
 async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
@@ -49,10 +49,10 @@ def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route", "payload", "opener"), [
-        ("fork", {}, sessions.FORK_BOOTSTRAP_OPENER),
+        ("fork", {}, session_fork.FORK_BOOTSTRAP_OPENER),
         ("elone", {
             "event_index": 1
-        }, sessions.ELONE_BOOTSTRAP_OPENER),
+        }, session_fork.ELONE_BOOTSTRAP_OPENER),
     ])
 async def test_fork_and_elone_routes_inherit_parent_backend_and_dispatch_their_bootstrap(
     two_backend_env: _RouteEnv, route: str, payload: dict[str, Any], opener: str) -> None:

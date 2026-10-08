@@ -89,9 +89,9 @@ async def test_fork_and_elone_birth_one_stream_without_syncing_the_copy(tmp_path
 
   with patch("os.fdatasync") as fdatasync:
     if spawn == "fork":
-      child = await mgr.fork_session(parent, event_index=len(parent_events) - 1)
+      child = await mgr.fork.fork_session(parent, event_index=len(parent_events) - 1)
     else:
-      child = await mgr.elone_session(parent, event_index=1)
+      child = await mgr.fork.elone_session(parent, event_index=1)
     born_syncs = fdatasync.call_count
     # The patch must see the durable append funnel, or the zero above proves nothing.
     await mgr.events.save_chat_event(child.id, conftest.user_event("first turn"))

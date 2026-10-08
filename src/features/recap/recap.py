@@ -15,7 +15,7 @@ from typing import Any
 import structlog
 
 from src.infra import config, deferred, json_utils, memo, models, timeouts
-from src.runtime import autonamer, sessions
+from src.runtime import autonamer, session_fork
 from src.runtime.agent_process import deferred_build
 from src.runtime.api import message_utils
 from src.runtime.session_events import SessionEvents
@@ -60,15 +60,15 @@ def drop_extract_memo(session_id: str) -> None:
 
 # User messages auto-injected by the system are not real "asks". Matched by prefix
 # against the fork/elone bootstrap prompts; the live openers come from
-# src.runtime.sessions so the producers and this filter cannot drift. The two bare
+# src.runtime.session_fork so the producers and this filter cannot drift. The two bare
 # literals have no producer left in the repo — they keep filtering the same
 # bootstraps pinned in old sessions' event logs, so they stay. Scheduled-trigger
 # self-wakes are excluded by event type (ET.SCHEDULED_TRIGGER), not by this list.
 _AUTO_INJECTED_PREFIXES = (
     "This session was cloned from a previous conversation.",
-    sessions.FORK_BOOTSTRAP_OPENER,
+    session_fork.FORK_BOOTSTRAP_OPENER,
     "You're taking over a task from a previous session where user wasn't satisfied.",
-    sessions.ELONE_BOOTSTRAP_OPENER,
+    session_fork.ELONE_BOOTSTRAP_OPENER,
 )
 
 _SUMMARY_SYSTEM_PROMPT = (

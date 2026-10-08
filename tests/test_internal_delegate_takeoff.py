@@ -35,6 +35,7 @@ class _LastSessionManager:
     self.sidebar = self
     self.listing = self
     self.lifecycle = self
+    self.fork = self
 
   async def get_session(self, session_id: str):
     return None

@@ -16,12 +16,11 @@ import pytest
 from src.features.backlog import backlog_loop
 from src.features.backlog import config as backlog_config
 from src.features.backup import backup
-from src.features.storage import storage_cool
-from src.features.usage import usage_ledger
+from src.features.usage import storage_cool, usage_ledger
 from src.runtime.hooks import scheduled_handlers
 
 HANDLER_STACKS = (
-    "tarfile", "src.features.backup.backup", "src.features.storage.storage_cool", "src.features.usage.usage_ledger")
+    "tarfile", "src.features.backup.backup", "src.features.usage.storage_cool", "src.features.usage.usage_ledger")
 
 
 def run_probe(source: str) -> object:

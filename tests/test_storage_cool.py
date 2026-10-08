@@ -1,4 +1,4 @@
-"""Tests for the cold-session storage sweep (src/features/storage/storage_cool.py).
+"""Tests for the cold-session storage sweep (src/features/usage/storage_cool.py and the backends' usage_sweep.py).
 
 The suite pins mechanisms, not literals: the transport rule deletes by path-then-name
 (uploads keep their stdout.log), rotation suffixes die only inside managed dirs, the
@@ -16,8 +16,10 @@ import sqlite3
 import conftest
 import pytest
 
-from src.features.storage import storage_cool
-from src.infra import config
+from src.backends.claude_code import usage_sweep as claude_sweep
+from src.backends.opencode import usage_sweep as opencode_sweep
+from src.features.usage import storage_cool
+from src.infra import config, home
 from src.runtime import runs
 
 NOW = datetime.datetime(2026, 9, 4, 12, 0, 0, tzinfo=datetime.UTC)
@@ -53,7 +55,7 @@ def cool_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> config.
   config dir and opencode db both under tmp."""
   monkeypatch.setenv("HOME", str(tmp_path))
   monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / CLAUDE_HOME))
-  monkeypatch.setattr(storage_cool, "DEFAULT_OPENCODE_DB", tmp_path / "opencode.db")
+  monkeypatch.setattr(home, "default_opencode_db", lambda: tmp_path / "opencode.db")
   return build_cfg(tmp_path)
 
 
@@ -107,7 +109,7 @@ def claude_dir(tmp_path: pathlib.Path, name: str) -> pathlib.Path:
 
 
 def encoded_session_dir(cfg: config.CharlieBotConfig, sid: str) -> str:
-  return storage_cool.claude_project_dir_name(cfg.sessions_dir / sid)
+  return claude_sweep.claude_project_dir_name(cfg.sessions_dir / sid)
 
 
 def age_file(path: pathlib.Path, age: datetime.timedelta) -> None:
@@ -273,7 +275,7 @@ def test_default_sweep_never_vacuums(
     del connection, db_path
     calls.append(force)
 
-  monkeypatch.setattr(storage_cool, "_vacuum_opencode_db", pretend_vacuum)
+  monkeypatch.setattr(opencode_sweep, "_vacuum_opencode_db", pretend_vacuum)
 
   storage_cool.run_cool_sweep(cfg=cfg, now=NOW)
   storage_cool.run_cool_sweep(cfg=cfg, now=NOW, force=True)  # --force without --vacuum has no effect
@@ -293,6 +295,23 @@ def _seed_every_category(tmp_path: pathlib.Path, cfg: config.CharlieBotConfig) -
   claude_dir(tmp_path, encoded_session_dir(cfg, SID_COLD))
   write_rollout(codex_sessions_tree(tmp_path), f"rollout-2026-08-01T00-00-00-{CODEX_COLD}.jsonl")
   make_opencode_db(tmp_path / "opencode.db", {CC_OPENCOLD: {"events": [b"event-bytes"], "messages": 1}})
+
+
+def test_every_backend_sweeps_through_its_source_in_registration_order(
+    tmp_path: pathlib.Path, cool_env: config.CharlieBotConfig) -> None:
+  """A source whose module lost its ``sweep`` is skipped without an error, so this pins one cold
+  record per backend to a nonzero count, in the order the packages register."""
+  cfg = cool_env
+  _seed_every_category(tmp_path, cfg)
+  for rollout in (tmp_path / CODEX_HOME).rglob("rollout-*.jsonl"):
+    age_file(rollout, datetime.timedelta(days=30))  # unreferenced, so only its own idle clock decides
+
+  result = storage_cool.run_cool_sweep(cfg=cfg, now=NOW, dry_run=True)
+
+  assert [(category.name, category.count) for category in result.categories] == [
+      ("raw-transport", 2), ("claude-transcripts", 1), ("codex-rollouts", 1), ("opencode-events", 1)
+  ]
+  assert [freelist.name for freelist in result.freelists] == ["opencode-freelist"]
 
 
 def test_dry_run_leaves_every_byte_untouched_and_matches_real_run(

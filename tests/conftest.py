@@ -258,7 +258,7 @@ from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
 from src.runtime.api.deps import get_config_on_loop  # noqa: E402
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
-from src.infra.home import CREDENTIALS_FILE  # noqa: E402
+from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402

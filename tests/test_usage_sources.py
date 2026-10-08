@@ -8,6 +8,7 @@ implementation module is tests/test_backend_hooks.py's check.
 
 from __future__ import annotations
 
+import datetime
 import sys
 import types
 
@@ -120,6 +121,47 @@ def test_quota_accounts_come_from_the_registered_sources_in_registration_order(m
   assert [(a.provider, a.label) for a in usage_sources.quota_accounts()] == [
       ("fake_zeta", "z1"), ("fake_zeta", "z2"), ("fake_alpha", "a1")
   ]
+
+
+@pytest.mark.usefixtures("empty_registry")
+def test_sweeps_come_from_the_registered_sources_in_registration_order(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Each source's implementation module sweeps with the one scope the caller built; a source whose
+  module defines no ``sweep`` or has no module adds none."""
+  scope = usage_sources.SweepScope(
+      cfg=None,
+      now=datetime.datetime(2026, 9, 4, tzinfo=datetime.UTC),
+      dry_run=True,
+      session_id=None,
+      facts={},
+      references={},
+      orphan_idle_days=2,
+      vacuum=False,
+      force=False)
+  received: list[tuple[str, usage_sources.SweepScope]] = []
+
+  def implementation(name: str, *categories: str) -> str:
+    module = types.ModuleType(name)
+    if categories:
+
+      def sweep(given: usage_sources.SweepScope) -> usage_sources.SourceSweep:
+        received.append((name, given))
+        return usage_sources.SourceSweep(
+            categories=tuple(usage_sources.CategoryResult(category, "files", 0, 0) for category in categories),
+            freelist=None)
+
+      module.sweep = sweep
+    monkeypatch.setitem(sys.modules, name, module)
+    return name
+
+  usage_sources.register_source(_source("zeta", module=implementation("fake_zeta", "z1", "z2")))
+  usage_sources.register_source(_source("logs-only", module=implementation("fake_logs_only")))
+  usage_sources.register_source(_source("clc", run_logs_only=True))
+  usage_sources.register_source(_source("alpha", module=implementation("fake_alpha", "a1")))
+
+  swept = usage_sources.sweep_all(scope)
+
+  assert [[category.name for category in one.categories] for one in swept] == [["z1", "z2"], ["a1"]]
+  assert [(name, given is scope) for name, given in received] == [("fake_zeta", True), ("fake_alpha", True)]
 
 
 def test_the_panel_lists_claude_accounts_before_codex() -> None:

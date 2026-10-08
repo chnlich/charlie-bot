@@ -22,6 +22,12 @@ An implementation module defines only the functions its source supports:
       every call. The function loads the quota code on its first call, so a capture never loads it.
       An account that stays in the config comes back as the same object, so its state (a 429
       backoff, for one) survives between calls.
+  sweep(scope) -> SourceSweep
+      The source's part of the cold-storage sweep (src/features/usage/storage_cool.py): it deletes
+      the source's conversation logs that no reader can reach again, and reports what it freed or,
+      in a dry run, what it would free. ``scope`` carries what the sweep reads (``SweepScope``).
+      The function loads the sweep code on its first call, so a capture never loads it. The sweep
+      runs after the ledger capture, so the usage of a log is recorded before the log goes.
 
 A backend type attributes its usage to a source with ``attribute_backend_type``, and a backend id
 that has left the config attributes through the source's ``id_prefixes``.
@@ -30,12 +36,18 @@ that has left the config attributes through the source's ``id_prefixes``.
 import abc
 import datetime
 import importlib
+import re
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.infra import log_once
+
+if TYPE_CHECKING:
+  from src.infra.config import CharlieBotConfig
 
 log = log_once.LazyStructlogLogger()
 
@@ -168,6 +180,173 @@ class QuotaAccount(abc.ABC):
     return entry
 
 
+# The sweep types. src/features/usage/storage_cool.py builds the scope, calls ``sweep_all`` and reads
+# the results; each backend's ``sweep`` builds a ``SourceSweep`` from its own ``SweepCounter``s.
+
+# Canonical UUID form: a CharlieBot session id as it appears verbatim in a backend's file names, and
+# the thread id a Codex rollout name embeds.
+SESSION_ID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+
+
+@dataclass(frozen=True)
+class CategoryResult:
+  """One output category of the sweep: what it freed, or in a dry run what it would free."""
+
+  name: str
+  unit: str
+  count: int
+  bytes: int
+
+
+@dataclass(frozen=True)
+class FreelistResult:
+  """The free pages a source's database holds, in bytes, which a manual vacuum hands back.
+
+  ``name`` labels the line the sweep report prints for them.
+  """
+
+  name: str
+  bytes: int
+
+
+@dataclass(frozen=True)
+class SourceSweep:
+  """What one source's ``sweep`` reports: its categories in report order, and its database's free
+  pages, or None for a source that keeps none."""
+
+  categories: tuple[CategoryResult, ...]
+  freelist: FreelistResult | None
+
+
+@dataclass(frozen=True)
+class SessionFacts:
+  """The metadata fields of one CharlieBot session that the sweep judges on.
+
+  ``cold`` is the verdict of the cold rule (archived and idle long enough); ``cc_session_id`` is the
+  backend session id that the session's metadata references, or None.
+  """
+
+  id: str
+  cold: bool
+  cc_session_id: str | None
+
+
+class SweepCounter:
+  """Accumulates one category's count and freed bytes; ``result()`` freezes them."""
+
+  def __init__(self, name: str, unit: str) -> None:
+    self.name = name
+    self.unit = unit
+    self.count = 0
+    self.bytes = 0
+
+  def add(self, size: int) -> None:
+    self.count += 1
+    self.bytes += size
+
+  def add_bytes(self, size: int) -> None:
+    """Bytes without a count: the unit belongs to a larger whole (a directory)."""
+    self.bytes += size
+
+  def delete_file(self, path: Path, dry_run: bool, *, count: bool = True) -> None:
+    """Delete one file (or account for it in a dry run), best effort per file.
+
+    ``count=False`` folds the bytes into a category whose unit is larger than a
+    file (a transcript directory).
+    """
+    try:
+      size = path.stat().st_size
+    except OSError as e:
+      log.warning("storage_cool_file_stat_failed", path=str(path), error=str(e))
+      return
+    if not dry_run:
+      try:
+        path.unlink()
+      except OSError as e:
+        log.warning("storage_cool_file_delete_failed", path=str(path), error=str(e))
+        return
+    if count:
+      self.add(size)
+    else:
+      self.add_bytes(size)
+
+  def result(self) -> CategoryResult:
+    return CategoryResult(self.name, self.unit, self.count, self.bytes)
+
+
+@dataclass(frozen=True)
+class SweepScope:
+  """Everything a source's ``sweep`` reads; the usage package builds one per sweep.
+
+  ``facts`` maps a session id to its ``SessionFacts``; a scoped run keeps only the scoped session,
+  and none when it is not cold. ``references`` maps each backend session id that CharlieBot metadata
+  references to the sessions that reference it, threads included. A record goes under one rule: every
+  referencing session is cold, or nothing references it and its own idle clock is past
+  ``orphan_idle_days``. ``session_id`` is the scoped session id, or None for a whole-host run.
+  ``vacuum`` and ``force`` are the options as given: a dry run vacuums nothing, and ``force`` has no
+  effect without ``vacuum``. A dry run deletes nothing and issues no SQL that changes a database.
+  """
+
+  cfg: CharlieBotConfig
+  now: datetime.datetime
+  dry_run: bool
+  session_id: str | None
+  facts: dict[str, SessionFacts]
+  references: dict[str, list[SessionFacts]]
+  orphan_idle_days: int
+  vacuum: bool
+  force: bool
+
+  def referenced_and_cold(self, backend_session: str) -> bool:
+    """The referenced half of the rule: CharlieBot metadata references the record and every
+    referencing session is cold."""
+    referencing = self.references.get(backend_session)
+    return bool(referencing) and all(owner.cold for owner in referencing)
+
+  def idle_past(self, idle_since_epoch: float) -> bool:
+    """The orphan half of the rule: the record's own idle clock has passed ``orphan_idle_days``."""
+    return self.now.timestamp() - idle_since_epoch >= self.orphan_idle_days * 86400
+
+  def scoped_backend_sessions(self) -> set[str]:
+    """Every backend session id the scoped session references; empty when the run is unscoped."""
+    if self.session_id is None:
+      return set()
+    owner = self.facts.get(self.session_id)
+    backend_sessions = {owner.cc_session_id} if owner and owner.cc_session_id is not None else set()
+    backend_sessions.update(
+        backend_session for backend_session, owners in self.references.items() if any(
+            reference.id == self.session_id for reference in owners))
+    return backend_sessions
+
+
+def sorted_scan(root: Path, listing: Iterable[Path]) -> list[Path] | None:
+  """Materialize one sweep directory listing sorted, or None once the failure is logged.
+
+  ``root`` is the directory the warning names: the listing's own root for
+  ``iterdir``, the walked tree for ``rglob``.
+  """
+  try:
+    return sorted(listing)
+  except OSError as e:
+    log.warning("storage_cool_dir_scan_failed", dir=str(root), error=str(e))
+    return None
+
+
+def sweep_root_entries(roots: Iterable[Path], listing: Callable[[Path], Iterable[Path]]) -> Iterator[Path]:
+  """Yield each sweep root's sorted entries, skipping a missing root or an unreadable listing.
+
+  ``sorted_scan`` already logs a listing failure; the sweep's best-effort
+  contract is that one unreadable directory never stops the run.
+  """
+  for root in roots:
+    if not root.is_dir():
+      continue
+    entries = sorted_scan(root, listing(root))
+    if entries is None:
+      continue
+    yield from entries
+
+
 _sources: dict[str, UsageSource] = {}
 _type_sources: dict[str, str] = {}
 
@@ -225,3 +404,14 @@ def quota_accounts() -> list[QuotaAccount]:
       if hasattr(module, "quota_accounts"):
         accounts.extend(module.quota_accounts())
   return accounts
+
+
+def sweep_all(scope: SweepScope) -> list[SourceSweep]:
+  """The sweep of every registered source that defines ``sweep()``, in source registration order."""
+  sweeps: list[SourceSweep] = []
+  for source in sources():
+    if source.module is not None:
+      module = implementation(source)
+      if hasattr(module, "sweep"):
+        sweeps.append(module.sweep(scope))
+  return sweeps

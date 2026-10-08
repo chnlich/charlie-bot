@@ -29,7 +29,6 @@ PACKAGES = (
     "src.features.recap",
     "src.features.remote_launch",
     "src.features.session_tree_preview",
-    "src.features.storage",
     "src.features.terminal",
     "src.features.trace",
     "src.features.usage",

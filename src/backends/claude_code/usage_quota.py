@@ -20,9 +20,9 @@ import subprocess
 import time
 from typing import Any
 
-from src.backends.claude_code import claude_accounts
+from src.backends.claude_code import claude_accounts, login_dirs
 from src.backends.claude_code.claude_config import ClaudeAccount
-from src.infra import config, home, http, json_utils, log_once, models, timeouts
+from src.infra import config, http, json_utils, log_once, models, timeouts
 from src.runtime.hooks import usage_sources
 
 log = log_once.LazyStructlogLogger()
@@ -271,12 +271,12 @@ def quota_accounts() -> list[usage_sources.QuotaAccount]:
   cfg = config.get_config()
   pool = [(account.label, account.config_dir) for account in cfg.accounts.claude]
   pool_dirs = {label: os.path.abspath(os.path.expanduser(raw)) for label, raw in pool}
-  logins = _derive_login_dirs(str(home.default_claude_dir()), pool)
+  logins = _derive_login_dirs(str(login_dirs.default_claude_dir()), pool)
   accounts: list[usage_sources.QuotaAccount] = []
   for label, dir_path in logins:
     account = _accounts.get(dir_path)
     if account is None:
-      account = ClaudeQuotaAccount(label, pathlib.Path(dir_path) / home.CREDENTIALS_FILE)
+      account = ClaudeQuotaAccount(label, pathlib.Path(dir_path) / login_dirs.CREDENTIALS_FILE)
       _accounts[dir_path] = account
     account.label = label
     account.login_dir = pool_dirs.get(label)

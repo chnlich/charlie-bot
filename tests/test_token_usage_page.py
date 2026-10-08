@@ -377,6 +377,8 @@ def test_preload_pins_the_tally_stack_in_a_fresh_process() -> None:
           "assert 'src.features.usage.usage_ledger' in sys.modules",
           "for module in ('claude_code', 'codex', 'opencode'):",
           "  assert f'src.backends.{module}.usage_logs' in sys.modules, module",
+          "  assert f'src.backends.{module}.usage_sweep' not in sys.modules, module",
+          "assert 'src.features.usage.storage_cool' not in sys.modules",
       ])
   proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
   assert proc.returncode == 0, proc.stderr

@@ -24,6 +24,7 @@ from typing import Any
 
 from src.backends.claude_code import claude_accounts, claude_code, claude_metadata, claude_relay, master_cc_relay
 from src.backends.claude_code.claude_config import ClaudeAccount
+from src.backends.claude_code.login_dirs import claude_config_dir
 from src.infra import config, log_once, models
 from src.infra import event_types as ET
 from src.runtime.hooks import backend_lifecycle
@@ -82,7 +83,7 @@ class ClaudeCliLifecycle(backend_lifecycle.BackendLifecycle):
     cc_session_id = ctx.held_native_id
     if not cc_session_id:
       return None
-    config_dir = config.claude_config_dir()
+    config_dir = claude_config_dir()
     if cc_transcript_exists(config_dir, cc_session_id):
       return cc_session_id
     log.warning(

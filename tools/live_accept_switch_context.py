@@ -134,8 +134,8 @@ def preflight() -> None:
     """
   from src.backends.claude_code.claude_accounts import credentials_present
   from src.backends.claude_code.claude_config import ClaudeAccount
-  from src.infra.config import claude_config_dir, load_config, load_credentials
-  from src.infra.home import CREDENTIALS_FILE
+  from src.backends.claude_code.login_dirs import CREDENTIALS_FILE, claude_config_dir
+  from src.infra.config import load_config, load_credentials
 
   cfg = load_config()
   for backend_id in BACKEND_IDS:
@@ -365,7 +365,7 @@ def codex_user_prompts(native_id: str) -> list[str]:
 def claude_transcript_path(native_id: str) -> Path | None:
   """The Claude transcript for *native_id* under the login directory's projects tree."""
   from src.backends.claude_code.claude_accounts import transcript_matches
-  from src.infra.config import claude_config_dir
+  from src.backends.claude_code.login_dirs import claude_config_dir
   matches = transcript_matches(claude_config_dir(), native_id)
   return matches[0] if matches else None
 
@@ -636,7 +636,7 @@ async def run_leg(spec: LegSpec, base: str, key: str, home: Path, natives: list[
 
 def cleanup_native_files(natives: list[NativeRecord], results: dict) -> None:
   """Delete the recorded native files only, verifying every target first."""
-  from src.infra.config import claude_config_dir
+  from src.backends.claude_code.login_dirs import claude_config_dir
 
   codex_root = Path.home() / ".codex" / "sessions"
   projects_root = Path(claude_config_dir()).expanduser() / "projects"

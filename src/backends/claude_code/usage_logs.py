@@ -15,8 +15,8 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.claude_code import USAGE_SOURCE
-from src.infra import config, home, ndjson
+from src.backends.claude_code import USAGE_SOURCE, login_dirs
+from src.infra import config, ndjson
 from src.infra import event_types as ET
 from src.runtime.hooks import usage_sources
 
@@ -34,7 +34,7 @@ def _account_label(path: pathlib.Path) -> str:
 
 def _login_dirs() -> dict[str, pathlib.Path]:
   """The login directories that hold transcripts, by account label."""
-  dirs = {home.default_claude_dir()}
+  dirs = {login_dirs.default_claude_dir()}
   for account in config.get_config().accounts.claude:
     dirs.add(pathlib.Path(account.config_dir).expanduser())
   return {_account_label(path): path for path in sorted(dirs) if (path / "projects").is_dir()}
@@ -88,3 +88,10 @@ def quota_accounts() -> list[usage_sources.QuotaAccount]:
   from src.backends.claude_code import usage_quota
 
   return usage_quota.quota_accounts()
+
+
+def sweep(scope: usage_sources.SweepScope) -> usage_sources.SourceSweep:
+  """Claude Code's part of the cold-storage sweep; the sweep module loads on the first call."""
+  from src.backends.claude_code import usage_sweep
+
+  return usage_sweep.sweep(scope)

@@ -63,7 +63,7 @@ CURSOR_NAME = "agent.raw.cursor"
 # master run's <session>/data/master_runs/<started_at> dir) and the
 # master-capture directory name under a session's data dir. Writers (the
 # master turn in src/runtime, threads.py's creation skeleton) and readers
-# (token_tally's corpus walk, storage_cool's transport sweep) must agree on
+# (token_tally's corpus walk, the cold-storage transport sweep) must agree on
 # these names.
 DATA_DIR_NAME = "data"
 MASTER_RUNS_DIR_NAME = "master_runs"

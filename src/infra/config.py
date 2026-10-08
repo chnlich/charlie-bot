@@ -36,7 +36,6 @@ from src.infra.home import (  # noqa: F401  (re-export: the established src.infr
     CLAUDE_CONFIG_DIR_ENV_VAR,
     charliebot_home_dir,
     default_charliebot_home,
-    default_claude_dir,
 )
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.yaml_utils import load_yaml
@@ -522,22 +521,3 @@ def get_config() -> CharlieBotConfig:
   the object instead would leave every such holder pinned to a stale snapshot.
   """
   return _config_cache.get(load_config)
-
-
-# The CLAUDE_CONFIG_DIR cross-process wire contract (writers, pool strips,
-# readers) is stated once, on CLAUDE_CONFIG_DIR_ENV_VAR in src.infra.home.
-
-
-def claude_config_dir() -> Path:
-  """Resolve the CLAUDE_CONFIG_DIR a cc-claude process will use.
-
-  Single source of truth for the resolution order: ``$CLAUDE_CONFIG_DIR``
-  first, then ``~/.claude``. Both the API backend-switch guard and the
-  runtime resume resolver call this — do not restate the order anywhere
-  else. A pool account's pinned ``config_dir`` rides the ``CLAUDE_CONFIG_DIR``
-  value the backend sets on the process environment, never this call.
-  """
-  env_dir = os.environ.get(CLAUDE_CONFIG_DIR_ENV_VAR)
-  if env_dir:
-    return Path(env_dir).expanduser()
-  return default_claude_dir()

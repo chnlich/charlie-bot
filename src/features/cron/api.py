@@ -133,7 +133,7 @@ async def _restore_enabled_task_node(name: str, req: TaskUpdate, cand_model: Sch
   """
   if req.enabled is not True or not cand_model.session_id:
     return
-  from src.runtime.api.deps import task_manager
+  from src.runtime.task_execution import task_manager
 
   tree = task_manager()
   meta = await tree.load_meta(cand_model.session_id)

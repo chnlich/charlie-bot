@@ -176,7 +176,7 @@ class Scheduler:
     only after the write-back lands, so the same tick's fire evaluates against
     the node instead of routing back to a cron session.
     """
-    from src.runtime.api.deps import task_manager
+    from src.runtime.task_execution import task_manager
 
     tree = task_manager()
     backend = effective_scheduled_task_backend(task_cfg, cfg)
@@ -308,7 +308,7 @@ class Scheduler:
     # validated here (a missing/legacy node fails the tick visibly), never
     # discovered or replaced.
     from src.features.cron.cron_sequence import check_fireable_binding
-    from src.runtime.api.deps import task_manager
+    from src.runtime.task_execution import task_manager
     tree = task_manager()
     session = await check_fireable_binding(task_cfg, tree)
 
@@ -394,7 +394,7 @@ class Scheduler:
     The binding resolves strictly by the task's ``session_id``.
     """
     from src.features.cron.cron_sequence import check_fireable_binding, fire_bound_master, run_firing_steps
-    from src.runtime.api.deps import task_manager
+    from src.runtime.task_execution import task_manager
 
     self._reload_config()
     tree = task_manager()
@@ -471,7 +471,7 @@ class Scheduler:
     """
     tz = ZoneInfo(task_cfg.timezone)
     now = datetime.now(tz)
-    from src.runtime.api.deps import task_manager
+    from src.runtime.task_execution import task_manager
     await task_manager().update_slot_fields(
         meta.id, "cron", last_scheduled_run=now.isoformat(), last_scheduled_cron=task_cfg.cron)
 
@@ -497,7 +497,7 @@ class Scheduler:
       action_type, prompt = await scheduled_handlers.loop_action()(
           name=task_cfg.name, repo=task_cfg.repo, loop=task_cfg.loop)
       if prompt is None:
-        from src.runtime.api.deps import task_manager
+        from src.runtime.task_execution import task_manager
         await task_manager().update_slot_fields(meta.id, "cron", last_run_status=LastRunStatus.SUCCESS)
         log.info("bound_loop_task_noop", task=task_cfg.name, action=action_type, session=meta.id)
         return None, action_type
@@ -565,7 +565,7 @@ class Scheduler:
       raise ValueError(f"Unknown handler: {task_cfg.handler!r}")
     session = meta
     log.info('handler_task_firing', task=task_cfg.name, handler=task_cfg.handler)
-    from src.runtime.api.deps import task_manager
+    from src.runtime.task_execution import task_manager
     try:
       result = await handler()
       event = {

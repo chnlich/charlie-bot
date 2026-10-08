@@ -4,22 +4,9 @@ from src.infra import event_types as ET
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, SessionStatus
 from src.runtime.sessions import SessionManager
+from src.runtime.task_execution import task_manager
 
 log = LazyStructlogLogger()
-
-
-async def apply_sequence_wake_duties(
-    session_mgr: SessionManager,
-    meta: SessionMetadata,
-    input_events: list[dict],
-) -> str | None:
-  """Run the registered sequence binding's wake duties, if the node has one."""
-  from src.runtime.hooks.sequence_controllers import binding_for
-
-  binding = binding_for(meta.id)
-  if binding is None:
-    return None
-  return await binding.on_wake(meta, input_events, sessions=session_mgr)
 
 
 async def _wake_task_node(
@@ -35,7 +22,6 @@ async def _wake_task_node(
     from_session_name: str | None,
 ) -> None:
   """Dispatch a wake into the resolved task node's pending input queue."""
-  from src.runtime.api.deps import task_manager
   dispatch = task_manager().dispatch
   if node.id != requested_id and from_session is None:
     predecessor = await session_mgr.get_session(requested_id)

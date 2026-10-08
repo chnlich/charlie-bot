@@ -49,7 +49,7 @@ from src.infra.models import (
     utc_now,
 )
 from src.infra.tasks import create_logged_task
-from src.runtime.api import deps
+from src.runtime import task_execution
 from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.runtime.file_urls import FILE_SERVER_MOUNTS
@@ -1005,7 +1005,7 @@ async def accept_summon(
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
-    await deps.task_manager().create_task(
+    await task_execution.task_manager().create_task(
         request_id=f"{platform.name}-summon-{session_id}",
         task_parent_id=None,
         profile="manager",

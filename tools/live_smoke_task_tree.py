@@ -168,7 +168,7 @@ def preflight(backend_id: str) -> None:
 
 
 def deps_tree():
-  from src.runtime.api.deps import task_manager
+  from src.runtime.task_execution import task_manager
   return task_manager()
 
 

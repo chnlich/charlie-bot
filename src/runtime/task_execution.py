@@ -44,11 +44,10 @@ import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from src.infra import event_types as ET
 from src.infra import git
-from src.infra.config import CharlieBotConfig, configured_access_key
+from src.infra.config import CharlieBotConfig, configured_access_key, get_config
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption, RunRecord, SessionMetadata, TaskType, ThreadMetadata, utc_now_iso
@@ -62,6 +61,7 @@ from src.runtime.control_events import (
     stable_withheld_event_id,
 )
 from src.runtime.hooks import backend_lifecycle, backend_types
+from src.runtime.hooks.sequence_controllers import binding_for
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
 from src.runtime.session_dispatch import child_report_text
@@ -77,11 +77,8 @@ from src.runtime.task_completion import (
 )
 from src.runtime.task_errors import TaskConflictError, TaskInvalidError, TaskNotFoundError
 from src.runtime.task_prompts import WORKER_KINDS, PromptSnapshot, TaskPromptError
-from src.runtime.task_sessions import canonical_task_spec_text
+from src.runtime.task_sessions import TaskTreeManager, canonical_task_spec_text
 from src.runtime.worker import QuotaExhaustedError, Worker
-
-if TYPE_CHECKING:
-  from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
 
@@ -289,6 +286,18 @@ async def assemble_coherent_snapshot(
         f"prompt sources for task {meta.id} did not settle across "
         f"{task_prompts._COHERENCE_PASSES} coherent-view attempts")
   return snapshot, overlay_error, declared
+
+
+async def apply_sequence_wake_duties(
+    session_mgr: SessionManager,
+    meta: SessionMetadata,
+    input_events: list[dict],
+) -> str | None:
+  """Run the registered sequence binding's wake duties, if the node has one."""
+  binding = binding_for(meta.id)
+  if binding is None:
+    return None
+  return await binding.on_wake(meta, input_events, sessions=session_mgr)
 
 
 class TaskExecutionAdapter:
@@ -1081,7 +1090,6 @@ class TaskExecutionAdapter:
     # The dispatched wake carries the cron session's duties (weekly recycle,
     # firing-report prefix) here. The recycle may clear the node's anchor in
     # place, so the fresh-conversation judgment below reads the post-recycle state.
-    from src.runtime.master_trigger import apply_sequence_wake_duties
     sequence_prefix = await apply_sequence_wake_duties(self._sessions, meta, batch_events)
     if sequence_prefix:
       content = f"{sequence_prefix}{content}"
@@ -2076,3 +2084,36 @@ class TaskExecutionAdapter:
       if error_text:
         return error_text
     return f"run {run.id} failed without a reportable output"
+
+
+# The process owner of the task tree; built on the first ``task_manager()`` call.
+_task_manager: TaskTreeManager | None = None
+
+
+def task_manager() -> TaskTreeManager:
+  """The task-tree owner singleton; it owns the control lock the runs.RunStore shares.
+
+  Construction installs the execution adapter as the input dispatcher's
+  executor — the application initialization owner wiring durable dispatch to
+  actual manager/worker/review execution. A test-built TaskTreeManager keeps
+  its executor None until it installs one.
+  """
+  global _task_manager
+  if _task_manager is None:
+    # The session singleton lives in api.deps, which imports this module at top
+    # level, so the import stays inside the function until the singleton moves.
+    from src.runtime.api.deps import session_manager
+    _task_manager = TaskTreeManager(get_config(), session_manager())
+    _task_manager.dispatch.executor = TaskExecutionAdapter(get_config(), session_manager(), _task_manager)
+  return _task_manager
+
+
+def run_store() -> runs.RunStore:
+  return task_manager().runs
+
+
+def set_task_manager(mgr: TaskTreeManager | None) -> None:
+  """Replace the task-tree owner singleton (tests); None restores lazy construction."""
+  global _task_manager
+  _task_manager = mgr
+

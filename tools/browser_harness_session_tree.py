@@ -2056,7 +2056,7 @@ async def run_harness(args: argparse.Namespace) -> None:
         # warmed the app-side caches long ago, and an append through
         # them would land on disk without advancing the caches the
         # APIs read.
-        from src.runtime.api.deps import task_manager as serving_tree
+        from src.runtime.task_execution import task_manager as serving_tree
         serving = serving_tree()
         await serving.events.append(
             live,

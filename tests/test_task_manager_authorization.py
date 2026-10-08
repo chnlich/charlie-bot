@@ -23,8 +23,7 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import control_events, sessions, task_sessions
-from src.runtime.session_store import SessionStore
+from src.runtime import control_events, task_sessions
 from tests import test_task_execution
 
 KEY = "op-secret"
@@ -117,7 +116,7 @@ async def test_manager_child_creation_needs_no_takeoff_and_replays_stably(
     assert len(created) == 1 and created[0]["actor"] == "agent"
 
   # Durable: a fresh owner over the same home sees the node without a replay.
-  fresh = task_sessions.TaskTreeManager(cfg, sessions.SessionManager(cfg, SessionStore(cfg)))
+  fresh = task_sessions.TaskTreeManager(cfg, conftest.build_session_manager(cfg))
   meta = await fresh.load_meta(child["id"])
   assert meta is not None and meta.profile == "manager"
 

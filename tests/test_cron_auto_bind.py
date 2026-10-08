@@ -27,6 +27,7 @@ from conftest import (
     OPUS_BACKEND_OPTION,
     SCHEDULER_LOAD_CONFIG_PATCH_TARGET,
     bind_deps_managers,
+    build_session_manager,
     init_repo_with_origin,
     make_cron_session,
     make_cron_sessions_client,
@@ -40,7 +41,6 @@ from src.features.cron.scheduler import Scheduler
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionStatus, utc_now_iso
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from tests.test_cron_backend import _patch_cron_d
@@ -79,7 +79,7 @@ def tick_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   monkeypatch.setattr(SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
@@ -202,7 +202,7 @@ async def test_handler_task_binds_and_records_its_result_on_the_node(tick_env) -
 
   fresh = await tree.load_meta(node_id)
   assert fresh is not None and fresh.last_scheduled_run is not None
-  events = [e for e in session_mgr.load_chat_events_sync(node_id) if e.get("type") == "handler_result"]
+  events = [e for e in session_mgr.events.load_chat_events_sync(node_id) if e.get("type") == "handler_result"]
   assert [e.get("message") for e in events] == ["swept 42 bytes"]
   # Handler work is inline: the node has no child.
   index = await tree._get_index()

@@ -23,7 +23,8 @@ from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, discord_listener
 from src.features.discord.metadata import DiscordSessionFields
 from src.infra import config, metadata_slots
-from src.runtime import sessions
+from src.runtime.session_events import SessionEvents
+from src.runtime.session_store import SessionStore
 
 
 def _message_view(message: dict, *, unread: bool, allowed_users: dict[str, str]) -> dict:
@@ -70,7 +71,8 @@ async def _read_thread_messages(client: discord_client.DiscordClient, thread_id:
 
 
 async def _read_own_thread(
-    session_id: str, limit: int, cfg: config.CharlieBotConfig, session_mgr: sessions.SessionManager) -> dict:
+    session_id: str, limit: int, cfg: config.CharlieBotConfig, store: SessionStore,
+    session_events: SessionEvents) -> dict:
   """Read the session's own Discord thread; the unread messages returned are marked read.
 
   The thread's starter rides first, outside the window count, when it lives in
@@ -81,7 +83,7 @@ async def _read_own_thread(
   ``thread_entry.ack_messages``, which advances the watermark; ``more_unread``
   counts the unread left outside the window.
   """
-  meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, session_mgr.store)
+  meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, store)
   fields = cast(DiscordSessionFields, metadata_slots.fields_of(meta, "discord"))
   origin = fields.discord_origin
   assert origin is not None
@@ -113,7 +115,7 @@ async def _read_own_thread(
   window_unread_ids = [m["id"] for m in window if m["id"] in unread_ids]
   watermark_id: str | None = watermark
   if window_unread_ids:
-    ack = await thread_entry.ack_messages(adapter, session_id, window_unread_ids, cfg, session_mgr)
+    ack = await thread_entry.ack_messages(adapter, session_id, window_unread_ids, cfg, store, session_events)
     watermark_id = ack["watermark_id"]
   allowed_users = cfg.discord.allowed_users
   messages = [] if starter is None else [_message_view(starter, unread=False, allowed_users=allowed_users)]
@@ -152,7 +154,8 @@ async def read_thread(
     url: str | None,
     limit: int,
     cfg: config.CharlieBotConfig,
-    session_mgr: sessions.SessionManager,
+    store: SessionStore,
+    session_events: SessionEvents,
 ) -> dict:
   """Read one Discord thread server-side and return its messages, oldest first.
 
@@ -170,7 +173,7 @@ async def read_thread(
   """
   if url is not None:
     return await _read_linked_channel(url, limit, cfg)
-  return await _read_own_thread(session_id, limit, cfg, session_mgr)
+  return await _read_own_thread(session_id, limit, cfg, store, session_events)
 
 
 async def check_setup(cfg: config.CharlieBotConfig) -> dict:

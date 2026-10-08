@@ -81,8 +81,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The manual run takes the scheduled path and leaves the node's pending
   inputs empty: no `user` event, nothing for a following dispatch to launch."""
-  from src.runtime import sessions, task_sessions
-  from src.runtime.session_store import SessionStore
+  from src.runtime import task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -90,7 +89,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -112,7 +111,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
   }
   handler.assert_awaited_once()
 
-  events = session_mgr.load_chat_events_sync(meta.id)
+  events = session_mgr.events.load_chat_events_sync(meta.id)
   assert not [e for e in events if e["type"] == ET.USER], "the run writes no chat request"
   assert [e["type"] for e in events if e["type"] == ET.HANDLER_RESULT] == [ET.HANDLER_RESULT]
 
@@ -126,8 +125,7 @@ async def test_run_endpoint_fires_bound_handler_task_without_user_event(
 @pytest.mark.asyncio
 async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """A task name the loader does not know answers 404."""
-  from src.runtime import sessions, task_sessions
-  from src.runtime.session_store import SessionStore
+  from src.runtime import task_sessions
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -135,7 +133,7 @@ async def test_run_endpoint_unknown_task_is_404(tmp_path: pathlib.Path, monkeypa
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   monkeypatch.setattr(conftest.SCHEDULER_LOAD_CONFIG_PATCH_TARGET, lambda: cfg)
@@ -155,7 +153,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
   from fastapi import FastAPI
   from fastapi.testclient import TestClient
 
-  from src.runtime import sessions, task_sessions
+  from src.runtime import task_sessions
   from src.runtime.api import chat as chat_api
   from src.runtime.api.deps import (
       get_config_on_loop,
@@ -164,7 +162,6 @@ async def test_slash_prefix_message_is_ordinary_task_input(
       get_session_store,
       get_task_manager,
   )
-  from src.runtime.session_store import SessionStore
 
   monkeypatch.setenv("CHARLIEBOT_HOME", str(tmp_path))
   conftest.reset_config_caches()
@@ -172,7 +169,7 @@ async def test_slash_prefix_message_is_ordinary_task_input(
       charliebot_home=tmp_path,
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
 

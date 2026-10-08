@@ -401,7 +401,7 @@ async def deliver_boundary_report(
   twice for one firing.
   """
   source = tree.dispatch.report_source_event(leaf_id, "scheduled firing leaf")
-  epoch = await tree.sessions.prime_aggregator(recipient)
+  epoch = await tree.session_events.prime_aggregator(recipient)
   async with tree.control_lock:
     report, created = await tree.dispatch.deliver_child_report_locked(
         leaf_id,
@@ -412,7 +412,7 @@ async def deliver_boundary_report(
         recipient=recipient,
     )
   if created:
-    await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+    await tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
     await tree.dispatch.wake_parent(recipient, report=report)
   log.info(
       "cron_sequence_report_delivered",

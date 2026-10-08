@@ -157,13 +157,18 @@ async def test_first_paint_surfaces_are_disjoint(tmp_path: Path) -> None:
   _cfg, mgr, session = await make_home_session(tmp_path, name="t")
 
   with patch(BROADCAST_PATCH_TARGET, new=AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
-    await mgr.persist_and_broadcast(session.id, _assistant_event("reply1", "a1"))
-    await mgr.persist_and_broadcast(session.id, {"type": ET.MASTER_DONE, "thinking_seconds": 1, "timestamp": "t2"})
-    await mgr.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q2", "timestamp": "t3"})
-    await mgr.persist_and_broadcast(session.id, _assistant_event("IN PROGRESS", "a2"))
+    await mgr.events.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q1", "timestamp": "t1"})
+    await mgr.events.persist_and_broadcast(session.id, _assistant_event("reply1", "a1"))
+    await mgr.events.persist_and_broadcast(
+        session.id, {
+            "type": ET.MASTER_DONE,
+            "thinking_seconds": 1,
+            "timestamp": "t2"
+        })
+    await mgr.events.persist_and_broadcast(session.id, {"type": ET.USER, "content": "q2", "timestamp": "t3"})
+    await mgr.events.persist_and_broadcast(session.id, _assistant_event("IN PROGRESS", "a2"))
 
-  projection = mgr.get_message_projection(session.id)
+  projection = mgr.events.get_message_projection(session.id)
   assert projection is not None
   assert projection.pending_draft is not None
   assert projection.pending_draft["content"] == "IN PROGRESS"
@@ -217,5 +222,5 @@ async def test_projection_memo_hit_archived_session_is_always_miss(tmp_path: Pat
   await recycle_archive_cutoff_events(mgr, session.id)
   meta = await mgr.store.get_session(session.id)
   assert meta is not None and meta.archive_offset > 0
-  assert mgr.get_message_projection(session.id) is None
-  assert mgr.projection_memo_hit(session.id) is None
+  assert mgr.events.get_message_projection(session.id) is None
+  assert mgr.events.projection_memo_hit(session.id) is None

@@ -3,7 +3,16 @@
 import fastapi
 
 from src.infra import config, constants, models
-from src.runtime import run_token, runs, session_store, sessions, task_execution, task_sessions, triggers
+from src.runtime import (
+    run_token,
+    runs,
+    session_events,
+    session_store,
+    sessions,
+    task_execution,
+    task_sessions,
+    triggers,
+)
 
 
 def get_session_manager() -> sessions.SessionManager:
@@ -12,6 +21,10 @@ def get_session_manager() -> sessions.SessionManager:
 
 async def get_session_store() -> session_store.SessionStore:
   return session_store.store()
+
+
+async def get_session_events() -> session_events.SessionEvents:
+  return session_events.events()
 
 
 async def get_task_manager() -> task_sessions.TaskTreeManager:

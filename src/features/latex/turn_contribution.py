@@ -36,7 +36,7 @@ class LatexTurnContribution(turn_contributions.TurnContribution):
       return
     proposal = await asyncio.to_thread(latex.check_tex_changed)
     if proposal:
-      await sessions.persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
+      await sessions.events.persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
       log.info(TEX_EDIT_PROPOSED, session=meta.id)
     else:
       latex.clear_snapshot()

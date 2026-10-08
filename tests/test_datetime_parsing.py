@@ -10,6 +10,7 @@ import yaml
 from conftest import (
     BACKLOG_LOOP_GIT_ADD_COMMIT_PUSH_PATCH_TARGET,
     bind_deps_managers,
+    build_session_manager,
     create_scheduled_node,
     make_home_config,
 )
@@ -19,8 +20,6 @@ from src.features.backlog.config import ImprovementLoopConfig
 from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra.models import parse_utc_datetime
-from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
 
@@ -79,7 +78,7 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
     tmp_path: Path,
 ) -> None:
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   scheduler = Scheduler(cfg, session_mgr)
@@ -99,6 +98,6 @@ async def test_scheduler_maybe_run_accepts_naive_last_scheduled_run(
 
   monkeypatch.setattr(scheduler, "_execute_task", execute_task)
 
-  await scheduler._maybe_run(task_cfg, session_mgr, {}, cfg)
+  await scheduler._maybe_run(task_cfg, session_mgr.events, {}, cfg)
 
   execute_task.assert_not_awaited()

@@ -56,7 +56,7 @@ class ScriptedExecutor:
 
 
 def child_report_messages(session_mgr: SessionManager, session_id: str) -> list[dict]:
-  events = session_mgr.load_chat_events_sync(session_id)
+  events = session_mgr.events.load_chat_events_sync(session_id)
   view, _draft = events_to_view(events)
   return [m for m in view if m.get("role") == ET.CHILD_REPORT]
 
@@ -395,10 +395,10 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
     async def broadcast(self, channel: str, payload: dict) -> None:
       self.sent.append((channel, payload))
 
-  import src.runtime.sessions as sessions_module
-  original_streaming = sessions_module.streaming_manager
+  import src.runtime.session_events as session_events_module
+  original_streaming = session_events_module.streaming_manager
   fake_streaming = _StreamingManager()
-  sessions_module.streaming_manager = fake_streaming  # type: ignore[assignment]
+  session_events_module.streaming_manager = fake_streaming  # type: ignore[assignment]
   try:
     with TestClient(app) as client:
       # Operator browser input is a real USER event with its attachments.
@@ -457,7 +457,7 @@ async def test_message_routes_use_the_dispatcher_on_v2_nodes(tmp_path: Path) -> 
       roles = [d["message"]["role"] for d in message_deltas]
       assert roles.count("user") == 1 and roles.count("agent_message") == 0
   finally:
-    sessions_module.streaming_manager = original_streaming  # type: ignore[assignment]
+    session_events_module.streaming_manager = original_streaming  # type: ignore[assignment]
 
 
 @pytest.mark.asyncio

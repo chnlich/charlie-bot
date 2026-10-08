@@ -6,9 +6,6 @@ from unittest import mock
 import conftest
 import pytest
 
-from src.runtime import sessions
-from src.runtime.session_store import SessionStore
-
 
 def _broadcast_calls(broadcast_mock: mock.AsyncMock) -> list[dict]:
   return [call.args[1] for call in broadcast_mock.await_args_list]
@@ -19,7 +16,7 @@ async def test_persist_user_event_broadcasts_message_delta_only(tmp_path: pathli
   _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
-    await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "ts"})
+    await mgr.events.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "ts"})
 
   payloads = _broadcast_calls(broadcast_mock)
   assert len(payloads) == 1
@@ -33,7 +30,7 @@ async def test_persist_handler_result_broadcasts_message_delta_and_raw_event(tmp
   _cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
-    await mgr.persist_and_broadcast(
+    await mgr.events.persist_and_broadcast(
         session.id, {
             "type": "handler_result",
             "task": "Lint",
@@ -54,8 +51,8 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
   cfg, mgr, session = await conftest.make_home_session(tmp_path, name="t")
 
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()):
-    await mgr.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
-    await mgr.persist_and_broadcast(
+    await mgr.events.persist_and_broadcast(session.id, {"type": "user", "content": "hi", "timestamp": "t1"})
+    await mgr.events.persist_and_broadcast(
         session.id, {
             "type": "assistant",
             "message": {
@@ -66,16 +63,17 @@ async def test_lazy_init_aggregator_after_restart_does_not_replay_history(tmp_pa
             },
             "timestamp": "t2",
         })
-    await mgr.persist_and_broadcast(session.id, {
-        "type": "master_done",
-        "thinking_seconds": 1,
-        "timestamp": "t3",
-    })
+    await mgr.events.persist_and_broadcast(
+        session.id, {
+            "type": "master_done",
+            "thinking_seconds": 1,
+            "timestamp": "t3",
+        })
 
   # Simulate process restart: brand-new SessionManager with same on-disk state.
-  mgr2 = sessions.SessionManager(cfg, SessionStore(cfg))
+  mgr2 = conftest.build_session_manager(cfg)
   with mock.patch(conftest.BROADCAST_PATCH_TARGET, new=mock.AsyncMock()) as broadcast_mock:
-    await mgr2.persist_and_broadcast(session.id, {
+    await mgr2.events.persist_and_broadcast(session.id, {
         "type": "user",
         "content": "next",
         "timestamp": "t4",

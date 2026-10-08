@@ -11,7 +11,6 @@ from structlog import testing
 
 from src.infra import models
 from src.runtime import sessions, task_sessions
-from src.runtime.session_store import SessionStore
 
 
 def _corrections(logs: list[dict]) -> list[dict]:
@@ -28,7 +27,7 @@ async def test_whole_object_save_with_a_stale_label_is_corrected_back_to_disk(tm
   """The rate_round shape: a route mutates its injected (stale) meta object and
   whole-object saves. The guard corrects the anchor back to disk on the write."""
   cfg = conftest.build_sessions_cfg(tmp_path)
-  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="stale-writer"))
   await _seed_anchors(mgr, session.id, cc="cc-live", label="pool-b")
 
@@ -50,7 +49,7 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   """The two funnels and the clear channel write their fields; the guard's
   reconciliation is skipped for exactly them."""
   cfg = conftest.build_sessions_cfg(tmp_path)
-  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="channels"))
 
   read_back = await mgr.persist_cc_session_id(session.id, "cc-2")

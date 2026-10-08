@@ -257,13 +257,14 @@ from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
 from src.runtime import streaming  # noqa: E402
 from src.features.memory.memory import DEFAULT_MEMORY_TOPICS  # noqa: E402
-from src.runtime.api.deps import get_config_on_loop  # noqa: E402
+from src.runtime.api.deps import get_config_on_loop, get_session_events  # noqa: E402
 from src.infra.config import CharlieBotConfig, get_config  # noqa: E402
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from src.backends.claude_code.login_dirs import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
 from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
+from src.runtime.session_events import SessionEvents  # noqa: E402
 from src.runtime.session_store import SessionStore  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
@@ -869,12 +870,12 @@ def backdate_task_created_event(mgr: SessionManager, session_id: str, timestamp:
   """Place a task fixture's creation fact before the archived event corpus."""
   from src.infra import event_types as ET
 
-  path = mgr.get_chat_events_path(session_id)
+  path = mgr.events.get_chat_events_path(session_id)
   events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
   created = next(event for event in events if event.get("type") == ET.TASK_CREATED)
   created["timestamp"] = timestamp.isoformat()
   path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
-  mgr._chat_events.clear_cache(session_id)
+  mgr.events.chat_events.clear_cache(session_id)
 
 
 async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) -> tuple[datetime, Path]:
@@ -885,7 +886,7 @@ async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) ->
   """
   cutoff, events = archive_cutoff_events()
   backdate_task_created_event(mgr, session_id, cutoff - timedelta(days=1))
-  live_path = mgr.get_chat_events_path(session_id)
+  live_path = mgr.events.get_chat_events_path(session_id)
   append_events(live_path, events)
   await mgr.recycle_history_before(session_id, cutoff)
   return cutoff, live_path
@@ -895,7 +896,7 @@ async def make_parent(mgr: SessionManager, *, name: str = "Parent") -> str:
   """A session ready to elone: the two seed events give succession tests a cut point to reference."""
   parent = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=OPUS_BACKEND_ID)
   append_events(
-      mgr.get_chat_events_path(parent.id),
+      mgr.events.get_chat_events_path(parent.id),
       [
           {
               "type": "user",
@@ -963,25 +964,32 @@ def make_home_config(tmp_path: Path) -> CharlieBotConfig:
   return CharlieBotConfig(charliebot_home=tmp_path / "charliebot-home", backends={"options": [OPUS_BACKEND_OPTION]})
 
 
+def build_session_manager(cfg: Any) -> SessionManager:
+  """A SessionManager over its own store and events block, both built on *cfg*."""
+  store = SessionStore(cfg)
+  return SessionManager(cfg, store, SessionEvents(cfg, store))
+
+
 def build_env(tmp_path: Path) -> tuple[object, SessionManager, TaskTreeManager]:
   """(cfg, SessionManager, TaskTreeManager) over make_home_config(tmp_path); the tree shares the
   session manager's cfg, so tree-created sessions land in the same home."""
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   return cfg, session_mgr, TaskTreeManager(cfg, session_mgr)
 
 
 def bind_deps_managers(monkeypatch: pytest.MonkeyPatch, tree: TaskTreeManager, session_mgr: SessionManager) -> None:
-  """Install *tree*, *session_mgr* and its store as the process singletons.
+  """Install *tree*, *session_mgr* and the store and events block it holds as the process singletons.
 
-  The trio rides one patch: a task tree bound without its session manager
+  The group rides one patch: a task tree bound without its session manager
   leaves sessions.session_manager() free to build a second SessionManager over the
   same home, whose private chat-event cache never sees the tree's rounds.
   """
-  from src.runtime import session_store, sessions, task_execution
+  from src.runtime import session_events, session_store, sessions, task_execution
   monkeypatch.setattr(task_execution, "_task_manager", tree)
   monkeypatch.setattr(sessions, "_session_manager", session_mgr)
   monkeypatch.setattr(session_store, "_store", session_mgr.store)
+  monkeypatch.setattr(session_events, "_events", session_mgr.events)
 
 
 def identity_of(pid: int) -> tuple[int, str]:
@@ -1122,7 +1130,7 @@ def make_session_mgr(tmp_path: Path) -> SessionManager:
   needing a richer cfg builds its own."""
   cfg = SimpleNamespace(sessions_dir=tmp_path / "sessions")
   cfg.sessions_dir.mkdir()
-  return SessionManager(cfg, SessionStore(cfg))
+  return build_session_manager(cfg)
 
 
 async def make_home_session(
@@ -1135,7 +1143,7 @@ async def make_home_session(
   sessions calls create_root_session directly; a test needing no session builds the cfg/mgr pair
   inline."""
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends={"options": [OPUS_BACKEND_OPTION]})
-  mgr = SessionManager(cfg, SessionStore(cfg))
+  mgr = build_session_manager(cfg)
   session = await create_root_session(mgr, models.CreateSessionRequest(name=name), backend=backend)
   return cfg, mgr, session
 
@@ -1153,9 +1161,10 @@ def apply_config_overrides(app: FastAPI, cfg: CharlieBotConfig) -> None:
 
 
 def override_session_manager(app: FastAPI, session_mgr: Any) -> None:
-  """Bind both session dependency keys on *app*: the manager, and the store the manager holds."""
+  """Bind the session dependency keys on *app*: the manager, and the store and events block the manager holds."""
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_session_store] = lambda: session_mgr.store
+  app.dependency_overrides[get_session_events] = lambda: session_mgr.events
 
 
 def make_router_client(
@@ -1466,11 +1475,11 @@ PLAN_TEST_BACKEND_OPTIONS = [OPUS_BACKEND_OPTION]
 FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 
 # Import-path patch target shared by every test that silences or spies on streaming broadcasts.
-# Mock resolves the route through the src.runtime.sessions namespace (src/runtime/sessions.py imports
-# the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
-# sessions-side import updates this one string. src.runtime.autonamer and src.runtime.worker import
+# Mock resolves the route through the src.runtime.session_events namespace (src/runtime/session_events.py
+# imports the streaming_manager singleton) and setattr's broadcast on that shared object; a move of the
+# events-side import updates this one string. src.runtime.autonamer and src.runtime.worker import
 # the same singleton, so their routes reach the same attribute.
-BROADCAST_PATCH_TARGET = "src.runtime.sessions.streaming_manager.broadcast"
+BROADCAST_PATCH_TARGET = "src.runtime.session_events.streaming_manager.broadcast"
 
 # Import-path patch target for consumer tests that stub fresh metadata reads.
 # master_cc_queue reads the process store through session_store.store() at call time.
@@ -2151,7 +2160,7 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManag
   process-wide SessionManager because a private instance keeps its own chat-event cache and its
   rounds would never reach the HTTP/WS read paths."""
   cfg = build_scheduler_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   return cfg, session_mgr, Scheduler(cfg, session_mgr)
 
 
@@ -2159,7 +2168,7 @@ async def make_plan_setup(
     tmp_path: Path,) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
   """Session and plan managers plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
   meta = await create_root_session(session_mgr, models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
   return cfg, session_mgr, plan_mgr, meta
@@ -2168,7 +2177,7 @@ async def make_plan_setup(
 async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
   """Real cfg/session_mgr/trigger_mgr trio plus one created session, for the PID/SLURM watch tests."""
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   session = await create_root_session(session_mgr, models.CreateSessionRequest(name="Trigger watch"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   return cfg, session_mgr, trigger_mgr, session.id

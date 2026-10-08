@@ -745,8 +745,8 @@ class TaskExecutionAdapter:
     tree = self._tree
     session_id, run_id = meta.id, run.id
     event_id = stable_withheld_event_id(run_id, reason)
-    epoch = await tree.sessions.prime_aggregator(session_id)
-    parent_epoch = (await tree.sessions.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
+    epoch = await tree.session_events.prime_aggregator(session_id)
+    parent_epoch = (await tree.session_events.prime_aggregator(meta.task_parent_id) if meta.task_parent_id else None)
     async with tree.control_lock:
       events = tree.fact_history(session_id)
       existing = next((e for e in events if e.get("id") == event_id), None)
@@ -774,9 +774,9 @@ class TaskExecutionAdapter:
             recipient=meta.task_parent_id,
             actor=ACTOR_SYSTEM,
         )
-    await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+    await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
     if report_event is not None and report_created and parent_epoch is not None:
-      await tree.sessions.announce_appended_event(meta.task_parent_id, report_event, epoch=parent_epoch)
+      await tree.session_events.announce_appended_event(meta.task_parent_id, report_event, epoch=parent_epoch)
     if report_event is not None and report_created and meta.task_parent_id:
       await tree.dispatch.wake_parent(meta.task_parent_id, report=report_event)
     return f"withheld: {reason}"

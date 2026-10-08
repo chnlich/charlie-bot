@@ -19,9 +19,8 @@ from starlette.routing import Match
 import server
 from src.features.artifacts import api as artifacts_api
 from src.infra.config import CharlieBotConfig
-from src.runtime import sessions, task_sessions
+from src.runtime import task_sessions
 from src.runtime.api import deps
-from src.runtime.session_store import SessionStore
 
 ACCESS_KEY = "op-secret"
 SESSION = "no-such-session"
@@ -101,7 +100,7 @@ def keyed_client(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> TestClient:
   """The real app under an access key, over a session manager that knows no session."""
   conftest.stub_credentials({"charliebot": {"access_key": ACCESS_KEY}})
   cfg = CharlieBotConfig(charliebot_home=tmp_path)
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   conftest.bind_deps_managers(monkeypatch, task_sessions.TaskTreeManager(cfg, session_mgr), session_mgr)
   monkeypatch.setattr(artifacts_api, "_plan_manager", None)
   return TestClient(server.app)

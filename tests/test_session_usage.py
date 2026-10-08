@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import OPUS_BACKEND_ID, backend_option, fresh_state_fixture
+from conftest import OPUS_BACKEND_ID, backend_option, build_session_manager, fresh_state_fixture
 
 from src.backends.claude_code.claude_code import _DECLARED_WINDOW_WARNINGS_SEEN, headless_claude_declared_window
 from src.backends.claude_code.claude_launch import (
@@ -19,7 +19,6 @@ from src.backends.codex import codex_usage
 from src.infra.config import CharlieBotConfig
 from src.infra.models import SessionMetadata
 from src.runtime.agent_process.base import make_context_reading_event
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 
@@ -38,18 +37,18 @@ def _build_cfg(tmp_path: Path, **codex_kwargs: Any) -> CharlieBotConfig:
 
 
 def _write_session(session_mgr: SessionManager, meta: SessionMetadata, events: list[dict]) -> None:
-  session_dir = session_mgr.get_chat_events_path(meta.id).parent
+  session_dir = session_mgr.events.get_chat_events_path(meta.id).parent
   session_dir.mkdir(parents=True, exist_ok=True)
   (session_dir.parent / "threads").mkdir(parents=True, exist_ok=True)
   session_mgr.store.metadata_path(meta.id).write_text(meta.model_dump_json(indent=2), encoding="utf-8")
   lines = "\n".join(json.dumps(event) for event in events)
-  session_mgr.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
+  session_mgr.events.get_chat_events_path(meta.id).write_text(lines + "\n", encoding="utf-8")
 
 
 def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionManager, SessionMetadata]:
   """SessionManager over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
   cfg = _build_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   meta = SessionMetadata(profile="manager", id=session_id, name=name, backend=backend)
   return session_mgr, meta
 

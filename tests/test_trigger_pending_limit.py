@@ -22,6 +22,7 @@ from conftest import (
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
     TRIGGER_TASK_DELIVERY_PATCH_TARGET,
+    build_session_manager,
     create_root_session,
     fake_cli_cfg,
     make_home_config,
@@ -38,7 +39,6 @@ from src.infra.models import CreateSessionRequest, PendingTrigger, TriggerStatus
 from src.runtime.api.deps import get_session_manager, get_session_store, get_trigger_manager
 from src.runtime.api.internal import router as internal_router
 from src.runtime.cli import schedule_trigger as cli_module
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import MAX_PENDING_TRIGGERS, PendingTriggerLimitError, TriggerManager
 
@@ -57,7 +57,7 @@ async def _seed(
     cancelled: int = 0,
 ) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
   cfg = make_home_config(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   session = await create_root_session(session_mgr, CreateSessionRequest(name="limit"))
   trigger_mgr = TriggerManager(cfg, session_mgr)
   for i in range(fired):

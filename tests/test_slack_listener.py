@@ -14,6 +14,7 @@ from conftest import (
     FakeSlackClient,
     WsServerNeverAnswersClose,
     bind_deps_managers,
+    build_session_manager,
     build_slack_cfg,
     create_root_session,
     mention_seam,
@@ -29,7 +30,6 @@ from src.infra import event_types as ET
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 
@@ -85,7 +85,7 @@ def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotCon
   same session manager.
   """
   cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   bind_deps_managers(monkeypatch, TaskTreeManager(cfg, session_mgr), session_mgr)
   return cfg, session_mgr, FakeSlackClient()
 
@@ -131,7 +131,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
   # mention, and nothing else Slack-derived beyond the citation boundary.
   expected_url = f"https://fake.slack.test/archives/C_TEST/p{_TS}"
 
-  events = session_mgr.load_chat_events_sync(sid)
+  events = session_mgr.events.load_chat_events_sync(sid)
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   assert len(agent_messages) == 1
   assert agent_messages[0]["slack"] == {
@@ -157,7 +157,7 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path, monkeypat
     await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
 
-  events = session_mgr.load_chat_events_sync(_sid(event))
+  events = session_mgr.events.load_chat_events_sync(_sid(event))
   agent_messages = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE]
   content = agent_messages[0]["content"]
   # The platform line sits between the fetch hint and the citation boundary
@@ -184,7 +184,7 @@ async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(
     await handle_app_mention(event, cfg, session_mgr, client)
     await asyncio.gather(*tasks)
 
-  events = session_mgr.load_chat_events_sync(_sid(event))
+  events = session_mgr.events.load_chat_events_sync(_sid(event))
   content = [ev for ev in events if ev.get("type") == ET.AGENT_MESSAGE][0]["content"]
   assert ("引用边界：只引用这条频道／线程本身、公开仓库、公开频道；"
           "现场只读命令取得的运行状态可引用并附取数命令；已成文的私有内容不引用。") in content

@@ -120,7 +120,7 @@ async def test_backend_alignment_preserves_last_run_to_avoid_catchup_fire(
   scheduler._execute_task = execute_task
 
   await scheduler._align_bound_backend(task_cfg, cfg)
-  await scheduler._maybe_run(task_cfg, session_mgr, {}, cfg)
+  await scheduler._maybe_run(task_cfg, session_mgr.events, {}, cfg)
 
   execute_task.assert_not_awaited()
   fresh = await session_mgr.store.get_session(node.id)

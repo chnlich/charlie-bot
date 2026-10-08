@@ -194,7 +194,7 @@ async def name_after_round(cfg: config.CharlieBotConfig, session_id: str, sessio
   if meta is None or not is_default_session_name(meta.name):
     return
 
-  events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
+  events = await asyncio.to_thread(session_mgr.events.load_chat_events_sync, session_id)
   user_message = ""
   for ev in events:
     if ev.get("type") == ET.USER and isinstance(ev.get("content"), str):

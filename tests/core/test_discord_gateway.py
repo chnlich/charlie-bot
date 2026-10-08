@@ -23,6 +23,7 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
+    build_session_manager,
     build_slack_cfg,
     cancel_and_drain,
     create_root_session,
@@ -39,7 +40,6 @@ from src.features.discord.discord_listener import _INTENTS, _STOP_CLOSE_CODES, r
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
 
@@ -173,7 +173,7 @@ def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager]:
       }},
       backends=fake_backends(),
   )
-  return cfg, SessionManager(cfg, SessionStore(cfg))
+  return cfg, build_session_manager(cfg)
 
 
 async def _until(predicate: Callable[[], bool], timeout: float = 0.9) -> None:
@@ -422,17 +422,17 @@ async def test_preflight_logs_missing_permission_names_and_keeps_running(tmp_pat
 async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) -> None:
   """A persisted master_done fires the Slack and the Discord deliver task at the same point."""
   cfg = build_slack_cfg(tmp_path)
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   meta = await create_root_session(session_mgr, CreateSessionRequest(name="both"))
   done = {"type": ET.MASTER_DONE, "exit_code": 0, "still_thinking": False}
   tasks: list[asyncio.Task] = []
   with (
       patch("src.features.slack.slack_listener.deliver_done", new=AsyncMock(return_value=True)) as slack_deliver,
       patch("src.features.discord.discord_listener.deliver_done", new=AsyncMock(return_value=True)) as discord_deliver,
-      patch("src.runtime.sessions.create_logged_task", side_effect=make_task_spawner(tasks)),
+      patch("src.runtime.session_events.create_logged_task", side_effect=make_task_spawner(tasks)),
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
   ):
-    await session_mgr.persist_and_broadcast(meta.id, done)
+    await session_mgr.events.persist_and_broadcast(meta.id, done)
     await asyncio.gather(*tasks)
 
   slack_deliver.assert_awaited_once_with(meta.id, done, cfg, session_mgr)

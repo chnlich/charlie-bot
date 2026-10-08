@@ -32,7 +32,6 @@ from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_state
 from src.runtime.agent_process.base import make_text_event
 from src.runtime.message_aggregator import MessageAggregator
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 _CHANNEL = "C_TEST"
@@ -52,7 +51,7 @@ def _rig(tmp_path: Path,
          fail_remove: bool = False) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
   """Slack rig: cfg and manager rooted at tmp_path, plus a recording fake client."""
   cfg = build_slack_cfg(tmp_path)
-  return cfg, SessionManager(cfg, SessionStore(cfg)), FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
+  return cfg, conftest.build_session_manager(cfg), FakeSlackClient(fail_posts=fail_posts, fail_remove=fail_remove)
 
 
 @contextlib.contextmanager
@@ -93,7 +92,7 @@ async def _slack_session(session_mgr: SessionManager) -> str:
 
 async def _append(session_mgr: SessionManager, sid: str, event: dict) -> dict:
   """Append one event to the session log (no aggregator, no audit hook) and return it."""
-  await session_mgr.save_chat_event(sid, event)
+  await session_mgr.events.save_chat_event(sid, event)
   return event
 
 
@@ -183,7 +182,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
 
   ack_tasks: list[asyncio.Task] = []
   with _running_round(cfg, session_mgr, sid, summon["id"]), _listener_seam(client, tasks=ack_tasks):
-    result = await post_reply(sid, "the answer", cfg, session_mgr)
+    result = await post_reply(sid, "the answer", cfg, session_mgr.store, session_mgr.events)
     await asyncio.gather(*ack_tasks)
 
   assert result == {
@@ -196,7 +195,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
       "answers": summon["id"],
   }
   assert client.posts == [{"channel": _CHANNEL, "text": "the answer", "thread_ts": _THREAD}]
-  replies = _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
+  replies = _of_type(session_mgr.events.load_chat_events_sync(sid), SLACK_REPLY)
   assert len(replies) == 1
   assert replies[0]["content"] == "the answer"
   assert replies[0]["slack_reply"] == {"answers": summon["id"], "chars": 10, "chunks": 1}
@@ -210,10 +209,10 @@ async def test_blank_reply_is_refused_422_before_any_post(tmp_path: Path, text: 
   cfg, session_mgr, client = _rig(tmp_path)
   sid = await _slack_session(session_mgr)
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
-    await post_reply(sid, text, cfg, session_mgr)
+    await post_reply(sid, text, cfg, session_mgr.store, session_mgr.events)
   assert excinfo.value.status == 422
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
+  assert not _of_type(session_mgr.events.load_chat_events_sync(sid), SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -231,12 +230,12 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
       capture_logs() as logs,
       pytest.raises(SlackReplyError) as excinfo,
   ):
-    await post_reply(sid, "never arrives", cfg, session_mgr)
+    await post_reply(sid, "never arrives", cfg, session_mgr.store, session_mgr.events)
 
   assert excinfo.value.status == 502
   assert "nothing was persisted" in excinfo.value.detail
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
+  assert not _of_type(session_mgr.events.load_chat_events_sync(sid), SLACK_REPLY)
   assert client.reactions[_THREAD] == {"eyes"}
   assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
   assert not any(ev["event"] == "slack_reply_posted" for ev in logs)
@@ -250,7 +249,7 @@ async def test_reply_to_an_unknown_session_is_404_without_slack_credentials(tmp_
   stub_credentials({})  # no slack section: building the bot client raises
 
   with pytest.raises(SlackReplyError) as excinfo:
-    await post_reply("no-such-session", "hello", cfg, session_mgr)
+    await post_reply("no-such-session", "hello", cfg, session_mgr.store, session_mgr.events)
 
   assert excinfo.value.status == 404
 
@@ -268,13 +267,13 @@ async def test_reply_refuses_as_a_whole_when_it_still_links_the_file_server(tmp_
   link = "https://charliebot.example/absolute_filepath/home/u/artifacts/page.html"
 
   with _listener_seam(client), pytest.raises(SlackReplyError) as excinfo:
-    await post_reply(sid, f"details: {link}", cfg, session_mgr)
+    await post_reply(sid, f"details: {link}", cfg, session_mgr.store, session_mgr.events)
 
   assert excinfo.value.status == 422
   assert link in excinfo.value.detail
   assert "charliebot publish /home/u/artifacts/page.html" in excinfo.value.detail
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
+  assert not _of_type(session_mgr.events.load_chat_events_sync(sid), SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -284,7 +283,7 @@ async def test_reply_with_a_published_url_posts_the_text_as_written(tmp_path: Pa
   text = f"see {PUBLISH_BASE_URL}/Ab3dEf6hIj8kLm1nOp2q/page.html for details"
 
   with _listener_seam(client):
-    result = await post_reply(sid, text, cfg, session_mgr)
+    result = await post_reply(sid, text, cfg, session_mgr.store, session_mgr.events)
 
   assert result["text"] == text
   assert client.posts == [{"channel": _CHANNEL, "text": text, "thread_ts": _THREAD}]
@@ -336,7 +335,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
     assert await deliver_done(sid, done, cfg, session_mgr) is True
     await asyncio.gather(*tasks)
 
-  nudges = _nudges(session_mgr.load_chat_events_sync(sid))
+  nudges = _nudges(session_mgr.events.load_chat_events_sync(sid))
   assert len(nudges) == 1
   nudge = nudges[0]
   assert nudge["type"] == ET.AGENT_MESSAGE
@@ -368,7 +367,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
     assert await deliver_done(sid, done, cfg, session_mgr) is False
 
   assert not client.posts
-  assert not _notices(session_mgr.load_chat_events_sync(sid))
+  assert not _notices(session_mgr.events.load_chat_events_sync(sid))
   assert client.reactions[_THREAD] == {"eyes"}
   assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
 
@@ -378,7 +377,7 @@ async def test_notice_post_failure_leaves_no_marker_and_the_boot_audit_posts_it_
     await asyncio.gather(*tasks)
 
   assert [p["text"] for p in client.posts] == [_NO_REPLY_NOTICE]
-  assert len(_notices(session_mgr.load_chat_events_sync(sid))) == 1
+  assert len(_notices(session_mgr.events.load_chat_events_sync(sid))) == 1
   assert not client.reactions[_THREAD]
 
 
@@ -410,7 +409,7 @@ async def test_backfill_run_twice_posts_once(tmp_path: Path) -> None:
     assert await backfill_lost_summons(cfg, session_mgr) == 0
 
   assert len(client.posts) == 1
-  events = session_mgr.load_chat_events_sync(sid)
+  events = session_mgr.events.load_chat_events_sync(sid)
   assert len(_of_type(events, ET.ASSISTANT_ERROR)) == 1
   assert not _of_type(events, ET.MASTER_DONE)
 
@@ -447,18 +446,18 @@ async def test_batch_holding_two_summons_binds_the_reply_to_the_newer_one(tmp_pa
   try:
     ack_tasks: list[asyncio.Task] = []
     with _listener_seam(client, tasks=ack_tasks):
-      result = await post_reply(sid, "one answer for both", cfg, session_mgr)
+      result = await post_reply(sid, "one answer for both", cfg, session_mgr.store, session_mgr.events)
       await asyncio.gather(*ack_tasks)
   finally:
     master_cc_state._current_items.pop(sid, None)
 
   assert result["answers"] == newer["id"]
-  reply_event = _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)[0]
+  reply_event = _of_type(session_mgr.events.load_chat_events_sync(sid), SLACK_REPLY)[0]
   assert reply_event["slack_reply"]["answers"] == newer["id"]
 
   # Both summons count as answered: one MASTER_DONE carries the whole list.
   done = _done(None)
   done[ET.INPUT_EVENT_IDS] = [older["id"], newer["id"]]
   await _append(session_mgr, sid, done)
-  lost = lost_summons(SLACK, session_mgr.load_chat_events_sync(sid), owned=set(), running=set())
+  lost = lost_summons(SLACK, session_mgr.events.load_chat_events_sync(sid), owned=set(), running=set())
   assert lost == []

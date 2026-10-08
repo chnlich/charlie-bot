@@ -18,6 +18,8 @@ from src.infra import config, deferred, json_utils, memo, models, timeouts
 from src.runtime import autonamer, sessions
 from src.runtime.agent_process import deferred_build
 from src.runtime.api import message_utils
+from src.runtime.session_events import SessionEvents
+from src.runtime.session_store import SessionStore
 
 log = structlog.get_logger()
 
@@ -41,7 +43,7 @@ _SUMMARY_CACHE_MEMO_CAP = 8
 # shifts the live/archive split but never moves an event's global index), so a
 # stored end's content cannot change for the life of its id. Most ids are
 # uuid4; the deterministic ids (uuid5 per Slack thread, pinned
-# CreateSessionRequest ids) are covered by _drop_session_runtime_state hooking
+# CreateSessionRequest ids) are covered by drop_session_runtime_state hooking
 # drop_extract_memo.
 _extract_memo: memo.BoundedMemo[tuple[str, int], dict] = memo.BoundedMemo(_EXTRACT_MEMO_CAP)
 
@@ -107,7 +109,7 @@ def _is_auto_injected(content: str) -> bool:
   return any(stripped.startswith(prefix) for prefix in _AUTO_INJECTED_PREFIXES)
 
 
-def extract_recap(session_mgr: sessions.SessionManager, session_id: str, upto: int | None = None) -> dict:
+def extract_recap(session_events: SessionEvents, session_id: str, upto: int | None = None) -> dict:
   """Scan events [0, upto] and return ``{asks, last}`` via pure extraction (no LLM).
 
   asks: ordered first-lines of genuine user messages (auto-injected ones dropped),
@@ -127,12 +129,12 @@ def extract_recap(session_mgr: sessions.SessionManager, session_id: str, upto: i
     cached = _extract_memo.get((session_id, upto + 1))
     if cached is not None:
       return cached
-  count = session_mgr.get_chat_event_count_sync(session_id)
+  count = session_events.get_chat_event_count_sync(session_id)
   end = count if upto is None else min(upto + 1, count)
   cached = _extract_memo.get((session_id, end))
   if cached is not None:
     return cached
-  events, _ = session_mgr.load_chat_events_range(session_id, 0, end)
+  events, _ = session_events.load_chat_events_range(session_id, 0, end)
   result = _extract_from_events(events)
   _extract_memo.store((session_id, end), result)
   return result
@@ -181,9 +183,9 @@ def _extract_from_events(events: list[dict]) -> dict:
   return {"asks": asks, "last": last}
 
 
-def _cache_path(session_mgr: sessions.SessionManager, session_id: str) -> pathlib.Path:
+def _cache_path(session_events: SessionEvents, session_id: str) -> pathlib.Path:
   """Per-session recap-summary cache, sitting next to chat_events.jsonl."""
-  return session_mgr.get_chat_events_path(session_id).parent / "recap_summaries.json"
+  return session_events.get_chat_events_path(session_id).parent / "recap_summaries.json"
 
 
 def _load_cache_signed(path: pathlib.Path) -> dict:
@@ -214,7 +216,7 @@ def _summary_verdict(cache: dict, upto: int) -> tuple[str | None, bool]:
   return None, False
 
 
-def summary_lookup_memo_hit(session_mgr: sessions.SessionManager, session_id: str,
+def summary_lookup_memo_hit(session_events: SessionEvents, session_id: str,
                             upto: int) -> tuple[str | None, bool] | None:
   """The stat + memo half of lookup_cached_summary, safe on the event loop.
 
@@ -223,7 +225,7 @@ def summary_lookup_memo_hit(session_mgr: sessions.SessionManager, session_id: st
   which re-parses and stores. A missing cache file answers ``(None, False)``
   here: no document exists whose bytes could move the verdict.
   """
-  path = _cache_path(session_mgr, session_id)
+  path = _cache_path(session_events, session_id)
   try:
     st = path.stat()
   except OSError:
@@ -234,19 +236,19 @@ def summary_lookup_memo_hit(session_mgr: sessions.SessionManager, session_id: st
   return _summary_verdict(cache, upto)
 
 
-def lookup_cached_summary(session_mgr: sessions.SessionManager, session_id: str, upto: int) -> tuple[str | None, bool]:
+def lookup_cached_summary(session_events: SessionEvents, session_id: str, upto: int) -> tuple[str | None, bool]:
   """Return ``(summary, stale)`` for the divider at *upto*.
 
   Exact cache hit -> ``(summary, False)``. No exact hit but a summary computed at
   an earlier point exists -> ``(that_summary, True)`` since newer events are not
   yet reflected. Otherwise ``(None, False)``.
   """
-  cache = _load_cache_signed(_cache_path(session_mgr, session_id))
+  cache = _load_cache_signed(_cache_path(session_events, session_id))
   return _summary_verdict(cache, upto)
 
 
-def _write_cache_entry(session_mgr: sessions.SessionManager, session_id: str, upto: int, summary: str) -> None:
-  path = _cache_path(session_mgr, session_id)
+def _write_cache_entry(session_events: SessionEvents, session_id: str, upto: int, summary: str) -> None:
+  path = _cache_path(session_events, session_id)
   cache = json_utils.load_json_dict(path)
   cache[str(upto)] = {"summary": summary, "generated_at": models.utc_now_iso()}
   # The recap GET reads this file from an executor thread with no coordination
@@ -255,7 +257,8 @@ def _write_cache_entry(session_mgr: sessions.SessionManager, session_id: str, up
 
 
 async def generate_and_cache_summary(
-    session_mgr: sessions.SessionManager, session_id: str, upto: int, cfg: config.CharlieBotConfig) -> str:
+    store: SessionStore, session_events: SessionEvents, session_id: str, upto: int,
+    cfg: config.CharlieBotConfig) -> str:
   """Generate a recap summary for the divider at *upto*, cache it, and return it.
 
   Feeds the LLM ONLY the bounded extraction (asks + last), never raw events. The
@@ -263,7 +266,7 @@ async def generate_and_cache_summary(
   preference entry resolves, this logs a warning and returns "" without writing
   the cache.
   """
-  meta = await session_mgr.store.get_session(session_id)
+  meta = await store.get_session(session_id)
   if meta is None:
     log.warning("recap_skipped", reason="no_session_backend", session_id=session_id)
     return ""
@@ -273,7 +276,7 @@ async def generate_and_cache_summary(
     log.warning("recap_skipped", reason="no_resolvable_preference", session_id=session_id)
     return ""
 
-  extract = await asyncio.to_thread(extract_recap, session_mgr, session_id, upto)
+  extract = await asyncio.to_thread(extract_recap, session_events, session_id, upto)
   asks = extract["asks"]
   last = extract["last"] or {}
   prompt = _SUMMARY_PROMPT.format(
@@ -293,7 +296,7 @@ async def generate_and_cache_summary(
       continue
 
     if summary:
-      await asyncio.to_thread(_write_cache_entry, session_mgr, session_id, upto, summary)
+      await asyncio.to_thread(_write_cache_entry, session_events, session_id, upto, summary)
       log.info("recap_summary_generated", session_id=session_id, upto=upto)
       return summary
 

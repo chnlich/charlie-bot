@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict
 
 from src.infra.config import CharlieBotConfig
-from src.runtime.api.deps import get_config_on_loop, get_session_manager, get_session_store
+from src.runtime.api.deps import get_config_on_loop, get_session_events, get_session_store
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
-from src.runtime.sessions import SessionManager
 
 router = APIRouter()
 
@@ -30,8 +30,8 @@ class SlackAckRequest(BaseModel):
 @router.post("/slack/reply")
 async def slack_reply(
     req: SlackReplyRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
     store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Post the calling session's reply to its own Slack thread and return the readback.
@@ -48,7 +48,7 @@ async def slack_reply(
   from src.features.slack.slack_listener import SlackReplyError, assert_thread_fresh, post_reply
   try:
     await assert_thread_fresh(req.session_id, cfg, store)
-    return await post_reply(req.session_id, req.text, cfg, session_mgr)
+    return await post_reply(req.session_id, req.text, cfg, store, session_events)
   except SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
@@ -56,7 +56,8 @@ async def slack_reply(
 @router.post("/slack/ack")
 async def slack_ack(
     req: SlackAckRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> dict:
   """Mark the calling session's read thread messages as consumed and return the readback.
@@ -72,6 +73,6 @@ async def slack_ack(
   """
   from src.features.slack.slack_listener import SlackReplyError, ack_messages
   try:
-    return await ack_messages(req.session_id, req.message_ids, cfg, session_mgr)
+    return await ack_messages(req.session_id, req.message_ids, cfg, store, session_events)
   except SlackReplyError as exc:
     raise HTTPException(status_code=exc.status, detail=exc.detail) from exc

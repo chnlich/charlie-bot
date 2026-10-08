@@ -292,13 +292,15 @@ async def seed_scenario(home: Path) -> dict:
   from src.infra.config import get_config
   from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
   from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_events import SessionEvents
   from src.runtime.session_store import SessionStore
   from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
 
   registrations.register_all()
   cfg = get_config()
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  store = SessionStore(cfg)
+  session_mgr = SessionManager(cfg, store, SessionEvents(cfg, store))
   tree = TaskTreeManager(cfg, session_mgr)
   OP = CallerIdentity(kind="operator")
 

@@ -54,7 +54,7 @@ def _thread_message(seq: int, text: str, user: str = "U_ALLOWED", bot: bool = Fa
 def _rig(tmp_path: pathlib.Path) -> tuple:
   """Slack rig: cfg and managers rooted at tmp_path, a recording fake client."""
   cfg = conftest.build_slack_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   return cfg, session_mgr, triggers.TriggerManager(cfg, session_mgr), conftest.FakeSlackClient()
 
 
@@ -211,7 +211,7 @@ async def test_reply_gate_refuses_the_stale_thread_and_persists_nothing(tmp_path
   assert [m["ts"] for m in payload["new_messages"]] == [_ts(110), _ts(130)]
   assert payload["new_messages"][0] == {"ts": _ts(110), "user": "U_ALLOWED", "text_preview": "first follow up"}
   assert client.posts == []
-  assert not [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
+  assert not [ev for ev in session_mgr.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_gated_route_412_then_ack_then_reply_posts(tmp_path: pathlib.Path)
     assert resp.json()["posted"] is True
 
   assert [p["text"] for p in client.posts] == ["the answer"]
-  assert len([ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
+  assert len([ev for ev in session_mgr.events.load_chat_events_sync(meta.id) if ev.get("type") == SLACK_REPLY]) == 1
 
 
 # ---------------------------------------------------------------------------

@@ -11,7 +11,6 @@ import pytest
 from src.infra import config as core_config
 from src.infra import models
 from src.runtime import sessions, spawner_backends
-from src.runtime.session_store import SessionStore
 
 
 def _write_metadata(mgr: sessions.SessionManager, meta: models.SessionMetadata, raw: str | None = None) -> pathlib.Path:
@@ -34,7 +33,7 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
   _write_metadata(mgr, corrupt, "{corrupt")
 
   batch_result = await mgr.store.load_session_metas()
-  sequential_mgr = sessions.SessionManager(mgr._cfg, SessionStore(mgr._cfg))
+  sequential_mgr = conftest.build_session_manager(mgr._cfg)
   sequential_result: list[models.SessionMetadata] = []
   for session_dir in mgr._cfg.sessions_dir.iterdir():
     if not session_dir.is_dir():
@@ -78,10 +77,10 @@ async def test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_li
   """Stored sessions carry removed subscription backend ids; they stay readable and a new run is refused."""
   cfg = core_config.CharlieBotConfig(
       charliebot_home=tmp_path / "home", backends={"options": [conftest.OPUS_BACKEND_OPTION]})
-  mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  mgr = conftest.build_session_manager(cfg)
   stored = models.SessionMetadata(profile="manager", name="stored", backend="claude-fable-sub")
   _write_metadata(mgr, stored)
-  events_path = mgr.get_chat_events_path(stored.id)
+  events_path = mgr.events.get_chat_events_path(stored.id)
   events_path.parent.mkdir(parents=True, exist_ok=True)
   events_path.write_text(json.dumps(conftest.user_event("hello")) + "\n", encoding="utf-8")
 
@@ -91,6 +90,6 @@ async def test_session_pinned_to_a_backend_the_config_no_longer_defines_loads_li
   assert loaded is not None
   assert loaded.backend == "claude-fable-sub"
   assert [meta.id for meta in listed] == [stored.id]
-  assert [event["content"] for event in mgr.load_chat_events_sync(stored.id)] == ["hello"]
+  assert [event["content"] for event in mgr.events.load_chat_events_sync(stored.id)] == ["hello"]
   with pytest.raises(ValueError, match="refusing to substitute"):
     spawner_backends._resolve_session_default_backend_model(cfg, loaded)

@@ -436,7 +436,7 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
     # Task-tree control events the chat surface renders. child_report carries
     # the child node link and evidence refs; close/reopen render as system
     # lines. All three ride the message-delta path only (the raw forms are in
-    # sessions._RAW_EVENTS_REPLACED_BY_DELTAS), so live, catch-up, and
+    # session_events.RAW_EVENTS_REPLACED_BY_DELTAS), so live, catch-up, and
     # reloaded history render each fact exactly once.
     ET.CHILD_REPORT:
         _child_report_msg,

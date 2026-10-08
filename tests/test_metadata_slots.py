@@ -15,8 +15,8 @@ from pydantic import BaseModel, ValidationError
 
 from src.app import registrations
 from src.infra import metadata_slot_registration, metadata_slots, models
-from src.runtime import sessions, task_sessions
-from src.runtime.session_store import TRANSIENT_METADATA_FIELDS, SessionStore
+from src.runtime import task_sessions
+from src.runtime.session_store import TRANSIENT_METADATA_FIELDS
 
 DATA = pathlib.Path(__file__).parent / "data"
 
@@ -199,7 +199,7 @@ def test_task_node_metadata_saves_byte_identically() -> None:
 @pytest.fixture
 def create_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, probe_slots: None):
   cfg = conftest.build_two_backend_cfg(tmp_path)
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   return cfg, session_mgr

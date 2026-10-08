@@ -206,7 +206,7 @@ class TaskInputDispatcher:
       # caller (run-token agent included) can mint one.
       raise TaskForbiddenError("only the server's own scheduler mints scheduled triggers")
     tree = self._tree
-    epoch = await tree.sessions.prime_aggregator(session_id)
+    epoch = await tree.session_events.prime_aggregator(session_id)
     restore_announcements: list[tuple[str, dict, int]] = []
     async with tree.control_lock:
       meta = await tree.load_task_meta(session_id)
@@ -275,8 +275,8 @@ class TaskInputDispatcher:
     # restore_chain's: each reopened fact reaches the page from its own node
     # (the rows leave the archived list), then the message itself.
     for node_id, reopen_event, reopen_epoch in restore_announcements:
-      await tree.sessions.announce_appended_event(node_id, reopen_event, epoch=reopen_epoch)
-    await tree.sessions.announce_appended_event(session_id, event, epoch=epoch)
+      await tree.session_events.announce_appended_event(node_id, reopen_event, epoch=reopen_epoch)
+    await tree.session_events.announce_appended_event(session_id, event, epoch=epoch)
     return event
 
   async def _authorize_agent_message(self, meta, event_type: str, from_session: str | None) -> None:
@@ -616,7 +616,7 @@ class TaskInputDispatcher:
     if recipient is None:
       return None, False
     tree = self._tree
-    epoch = await tree.sessions.prime_aggregator(recipient)
+    epoch = await tree.session_events.prime_aggregator(recipient)
     async with tree.control_lock:
       report, created = await self.deliver_child_report_locked(
           child_session_id,
@@ -627,7 +627,7 @@ class TaskInputDispatcher:
           recipient=recipient,
           actor=actor)
     if created:
-      await tree.sessions.announce_appended_event(recipient, report, epoch=epoch)
+      await tree.session_events.announce_appended_event(recipient, report, epoch=epoch)
       if tree.task_state(recipient) != "open":
         # The archived parent keeps the report as history: it counts as
         # delivered and never wakes the node.

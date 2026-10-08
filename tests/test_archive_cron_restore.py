@@ -11,6 +11,7 @@ import yaml
 from conftest import (
     OPERATOR,
     OPUS_BACKEND_ID,
+    build_session_manager,
     create_scheduled_node,
     write_nightly_task,
 )
@@ -33,10 +34,8 @@ def cron_env(tmp_path: Path, temp_home: Path, monkeypatch: pytest.MonkeyPatch):
       backends={"options": [OPUS_BACKEND_OPTION]},
       paths={"worktree_dir": str(tmp_path / "worktrees")})
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
-  from src.runtime.session_store import SessionStore
-  from src.runtime.sessions import SessionManager
   from src.runtime.task_sessions import TaskTreeManager
-  session_mgr = SessionManager(cfg, SessionStore(cfg))
+  session_mgr = build_session_manager(cfg)
   tree = TaskTreeManager(cfg, session_mgr)
   from conftest import bind_deps_managers
   bind_deps_managers(monkeypatch, tree, session_mgr)

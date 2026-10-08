@@ -14,13 +14,13 @@ from pathlib import Path
 
 import pytest
 from conftest import (
+    build_session_manager,
     count_path_read_text,
     make_session_mgr,
     user_event,
 )
 
 from src.infra.models import SessionMetadata, SessionStatus
-from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 
 _BASE_TIME = datetime(2026, 8, 1, 12, 0, 0, tzinfo=UTC)
@@ -125,8 +125,8 @@ async def test_search_cap_keeps_content_hits_above_the_cap_line(tmp_path: Path) 
     await _add_session(mgr, f"needle-{i:03d}", minutes=i)
   above = await _add_session(mgr, "unrelated-a", status=SessionStatus.ACTIVE, minutes=1000)
   below = await _add_session(mgr, "unrelated-b", status=SessionStatus.ACTIVE, minutes=-1)
-  await mgr.save_chat_event(above.id, user_event("needle in the events"))
-  await mgr.save_chat_event(below.id, user_event("needle in the events"))
+  await mgr.events.save_chat_event(above.id, user_event("needle in the events"))
+  await mgr.events.save_chat_event(below.id, user_event("needle in the events"))
 
   rows, derived = await mgr.search_sessions_readonly(
       "needle", include_running_status=True, include_pending_trigger_status=True)
@@ -156,7 +156,7 @@ async def test_search_match_memo_refreshes_when_chat_content_or_names_move(tmp_p
   # A chat file moves without touching any metadata.json: the append must
   # re-key the derivation or the new hit stays invisible until the next
   # metadata write.
-  await mgr.save_chat_event(carrier.id, user_event("needle in the events"))
+  await mgr.events.save_chat_event(carrier.id, user_event("needle in the events"))
   grown, _ = await mgr.search_sessions_readonly(
       "needle", include_running_status=False, include_pending_trigger_status=False)
   assert [r.id for r in grown] == [carrier.id]
@@ -174,7 +174,7 @@ async def test_search_match_memo_stores_nothing_after_an_errored_scan(
 
   mgr = make_session_mgr(tmp_path)
   carrier = await _add_session(mgr, "carrier", status=SessionStatus.ACTIVE, minutes=1)
-  await mgr.save_chat_event(carrier.id, user_event("nothing relevant here"))
+  await mgr.events.save_chat_event(carrier.id, user_event("nothing relevant here"))
 
   real_scan = sessions_module._scan_content_for_hit
   monkeypatch.setattr(sessions_module, "_scan_content_for_hit", lambda *a, **k: None)
@@ -203,7 +203,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   mgr = make_session_mgr(tmp_path)
   carriers = [await _add_session(mgr, f"bulk-{i:03d}", status=SessionStatus.ACTIVE, minutes=i) for i in range(260)]
   for meta in carriers:
-    await mgr.save_chat_event(meta.id, user_event("filler line\n"))
+    await mgr.events.save_chat_event(meta.id, user_event("filler line\n"))
 
   needle = "zzq9neverpresentneedle"
   first, _ = await mgr.search_sessions_readonly(
@@ -212,7 +212,7 @@ async def test_search_absence_roots_cover_the_whole_candidate_set_across_a_churn
   assert len(list(mgr._search_miss_memo.items())) == len(carriers)
 
   appended = carriers[0]
-  await mgr.save_chat_event(appended.id, user_event("churn append\n"))
+  await mgr.events.save_chat_event(appended.id, user_event("churn append\n"))
 
   scans: list[tuple[str, int]] = []
   real_scan = sessions_module._scan_content_for_hit
@@ -271,7 +271,7 @@ async def test_boot_scan_warms_cache_for_every_status(tmp_path: Path) -> None:
   archived = await _add_session(mgr, "cold-archived", minutes=0)
   active = await _add_session(mgr, "cold-active", status=SessionStatus.ACTIVE, minutes=1)
 
-  rebooted = SessionManager(mgr._cfg, SessionStore(mgr._cfg))
+  rebooted = build_session_manager(mgr._cfg)
   listed = rebooted.store.list_active_session_metas()
 
   assert [s.id for s in listed] == [active.id]

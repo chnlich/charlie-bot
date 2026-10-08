@@ -19,8 +19,7 @@ from src.features.cron.config import ScheduledTaskConfig
 from src.features.cron.scheduler import Scheduler
 from src.infra import config
 from src.infra import event_types as ET
-from src.runtime import sessions, task_sessions
-from src.runtime.session_store import SessionStore
+from src.runtime import task_sessions
 
 
 def _count_event_lines(path: pathlib.Path) -> int:
@@ -43,7 +42,7 @@ def scheduler_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
           "access_key": "shared-key"
       }}))
   monkeypatch.setenv("CHARLIEBOT_HOME", str(home))
-  session_mgr = sessions.SessionManager(cfg, SessionStore(cfg))
+  session_mgr = conftest.build_session_manager(cfg)
   tree = task_sessions.TaskTreeManager(cfg, session_mgr)
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   # The scheduler reloads the process config on every fire; pin the reload to
@@ -67,9 +66,9 @@ async def test_scheduled_fire_bookkeeping_writes_the_injected_session_manager(sc
   fresh = await session_mgr.store.get_session(meta.id)
   assert fresh is not None
   assert fresh.last_scheduled_run is not None
-  events = [e for e in session_mgr.load_chat_events_sync(meta.id) if e.get("type") == ET.HANDLER_RESULT]
+  events = [e for e in session_mgr.events.load_chat_events_sync(meta.id) if e.get("type") == ET.HANDLER_RESULT]
   assert [event["type"] for event in events] == [ET.HANDLER_RESULT]
-  projection = session_mgr.get_message_projection(meta.id)
+  projection = session_mgr.events.get_message_projection(meta.id)
   assert projection is not None
   assert len(projection.history) == 1
 
@@ -84,11 +83,11 @@ async def test_scheduled_round_events_reach_shared_read_cache(scheduler_env) -> 
   with conftest.registered_cron_handler("probe", mock.AsyncMock(return_value="done")):
     await scheduler._execute_task(task_cfg)
 
-  disk_lines = _count_event_lines(session_mgr.get_chat_events_path(meta.id))
+  disk_lines = _count_event_lines(session_mgr.events.get_chat_events_path(meta.id))
   assert disk_lines > 0, "the round persisted nothing"
-  assert session_mgr.get_chat_event_count_sync(meta.id) == disk_lines
-  types = [event["type"] for event in session_mgr.load_chat_events_sync(meta.id)]
+  assert session_mgr.events.get_chat_event_count_sync(meta.id) == disk_lines
+  types = [event["type"] for event in session_mgr.events.load_chat_events_sync(meta.id)]
   assert ET.HANDLER_RESULT in types
-  projection = session_mgr.get_message_projection(meta.id)
+  projection = session_mgr.events.get_message_projection(meta.id)
   assert projection is not None
   assert any(msg.get("role") == "system" for msg in projection.history)

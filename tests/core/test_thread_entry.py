@@ -397,16 +397,16 @@ class FakeTree:
 
 
 class FakeSessions:
-  """The session-manager and session-store surface the round side and the summon side touch, over
-  one in-memory metadata (``store`` is the double itself); persisted events land in ``persisted`` for the
-  readback asserts and the summon create/group writes land in ``created`` and
-  ``groups``. A None *meta* is the no-session-yet state the summon create
-  resolves."""
+  """The session-manager, session-store and events-block surface the round side and the summon side touch,
+  over one in-memory metadata (``store`` and ``events`` are the double itself); persisted events land in
+  ``persisted`` for the readback asserts and the summon create/group writes land in ``created`` and
+  ``groups``. A None *meta* is the no-session-yet state the summon create resolves."""
 
   def __init__(self, meta: SimpleNamespace | None, order: list[str] | None = None) -> None:
     self.meta = meta
     self.store = self
-    self.events: list[dict] = []
+    self.events = self
+    self.chat_events: list[dict] = []
     self.persisted: list[dict] = []
     self.created: list = []
     self.groups: list[tuple[str, str]] = []
@@ -448,7 +448,7 @@ class FakeSessions:
     self.persisted.append(event)
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
-    return list(self.events)
+    return list(self.chat_events)
 
   async def read_metadata_fresh(self, session_id: str) -> None:
     return None
@@ -466,7 +466,7 @@ async def test_ack_messages_orders_ids_by_the_platform_id_key() -> None:
   adapter.thread = [ThreadMessage("99", "u", "a"), ThreadMessage("100", "u", "b")]
   sessions = FakeSessions(_fake_meta())
 
-  readback = await ack_messages(adapter, "s1", ["100", "99"], None, sessions)
+  readback = await ack_messages(adapter, "s1", ["100", "99"], None, sessions.store, sessions.events)
 
   assert readback == {"acked": 2, "watermark_id": "100"}
   assert sessions.meta.fakechat_watermark_id == "100"
@@ -481,7 +481,7 @@ async def test_audit_nudge_names_the_platform_and_its_reply_command(tmp_path) ->
   cfg = make_home_config(tmp_path)
   adapter = FakeAdapter()
   sessions = FakeSessions(_fake_meta())
-  sessions.events = [
+  sessions.chat_events = [
       {
           "id": "s1",
           "type": ET.AGENT_MESSAGE,

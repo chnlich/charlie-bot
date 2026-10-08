@@ -61,6 +61,7 @@ from src.runtime.api.deps import (
     bad_request,
     get_config_on_loop,
     get_run_store,
+    get_session_events,
     get_session_manager,
     get_session_store,
     get_task_manager,
@@ -84,6 +85,7 @@ from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
@@ -1026,12 +1028,13 @@ async def get_session_bootstrap(
     session_id: str,
     request: Request,
     _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
   """Return the minimal data needed to make one chat session usable."""
-  bootstrap = await build_session_bootstrap_data(session_id, session_mgr, tree=task_mgr)
+  bootstrap = await build_session_bootstrap_data(session_id, store, session_events, tree=task_mgr)
   # The switch fetch's gzip form rides the body-keyed memo (_switch_payload_response).
   return await _switch_payload_response(request, _bootstrap_payload(bootstrap, cfg))
 
@@ -1086,7 +1089,7 @@ async def get_session_events_page(
     before: int,
     limit: int = 40,
     meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    session_events: SessionEvents = Depends(get_session_events),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
 ) -> Response:
   """Paginate backwards through session messages by message ordinal.
@@ -1116,7 +1119,7 @@ async def get_session_events_page(
   # plain json.dumps, and every field is already a plain parsed-JSON type so
   # the dumped body is unchanged.
   if meta.archive_offset == 0:
-    projection = await get_message_projection_fast(session_mgr, session_id)
+    projection = await get_message_projection_fast(session_events, session_id)
     if projection is not None:
       # The chat UI re-fetches a page whenever it re-enters the viewport or the
       # session is revisited, and the published projection is immutable, so a
@@ -1137,7 +1140,7 @@ async def get_session_events_page(
         return PreencodedJSONResponse(gz, headers=GZIP_RESPONSE_HEADERS)
       return PreencodedJSONResponse(body)
   start = max(0, before - limit)
-  events, has_more = await asyncio.to_thread(session_mgr.load_chat_events_range, session_id, start, before)
+  events, has_more = await asyncio.to_thread(session_events.load_chat_events_range, session_id, start, before)
   messages = events_to_messages(events, event_index_offset=start)
   return FastJsonResponse({"messages": messages, "has_more": has_more, "next_before": start})
 
@@ -1287,6 +1290,7 @@ async def switch_session_backend(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     store: SessionStore = Depends(get_session_store),
+    session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> SessionMetadata:
   """Switch a session's backend in place, across model families.
@@ -1340,7 +1344,7 @@ async def switch_session_backend(
       "previous_native_backend": durable.native_backend if durable is not None and durable.cc_session_id else None,
       "previous_native_session_id": durable.cc_session_id if durable is not None else None,
   }
-  await session_mgr.persist_and_broadcast(session_id, audit_event)
+  await session_events.persist_and_broadcast(session_id, audit_event)
   return meta
 
 

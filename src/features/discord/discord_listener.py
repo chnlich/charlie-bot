@@ -92,6 +92,7 @@ from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
 from src.infra.log_once import LazyStructlogLogger
 from src.features.discord.metadata import DiscordOrigin
+from src.runtime.session_events import SessionEvents
 from src.runtime.session_store import SessionStore
 from src.runtime.sessions import SessionManager
 from src.runtime.triggers import TriggerManager
@@ -440,24 +441,26 @@ async def assert_thread_fresh(session_id: str, cfg: CharlieBotConfig, store: Ses
 
 
 async def ack_messages(
-    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
+    session_id: str, message_ids: list[str], cfg: CharlieBotConfig, store: SessionStore,
+    session_events: SessionEvents) -> dict:
   """Advance the session's read watermark over *message_ids*; return the readback the CLI prints.
 
   One-line pass-through to the shared ack (``thread_entry.ack_messages``) on a
   lazily-built Discord adapter; the refusal shapes, the ack event, and the
   readback keys live there.
   """
-  return await thread_entry.ack_messages(DiscordThreadAdapter(), session_id, message_ids, cfg, session_mgr)
+  return await thread_entry.ack_messages(DiscordThreadAdapter(), session_id, message_ids, cfg, store, session_events)
 
 
-async def post_reply(session_id: str, text: str, cfg: CharlieBotConfig, session_mgr: SessionManager) -> dict:
+async def post_reply(
+    session_id: str, text: str, cfg: CharlieBotConfig, store: SessionStore, session_events: SessionEvents) -> dict:
   """Post *text* to the session's Discord thread and return the readback the CLI prints.
 
   One-line pass-through to the shared reply path (``thread_entry.post_reply``)
   on a lazily-built Discord adapter; the link check, chunking, refusals, reply
   event, and readback live there.
   """
-  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, session_mgr)
+  return await thread_entry.post_reply(DiscordThreadAdapter(), session_id, text, cfg, store, session_events)
 
 
 async def deliver_done(session_id: str, done: dict, cfg: CharlieBotConfig, session_mgr: SessionManager) -> bool:

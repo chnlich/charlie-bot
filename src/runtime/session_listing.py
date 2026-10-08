@@ -13,6 +13,7 @@ from typing import Any
 from src.infra.config import CharlieBotConfig, get_config
 from src.infra.models import SessionMetadata, SessionStatus
 from src.runtime import session_sidebar, session_store
+from src.runtime.hooks.sequence_controllers import sequence_controllers
 from src.runtime.scheduled_sessions import sequence_subtree_roots, view_subtree_roots
 from src.runtime.thinking_state import busy_since, run_backend
 
@@ -116,12 +117,7 @@ class SessionListing:
     among them (the caller reads :func:`busy_since` itself).
     """
     metas = await self._with_derived_archive(await self._store.load_session_metas(status), status)
-    if scheduled is None:
-      controllers = ()
-    else:
-      from src.runtime.hooks.sequence_controllers import sequence_controllers
-
-      controllers = sequence_controllers()
+    controllers = () if scheduled is None else sequence_controllers()
     rows = [
         meta for meta in metas if (starred is None or meta.starred == starred) and
         (scheduled is None or any(controller.owns_session(meta) for controller in controllers) == scheduled)

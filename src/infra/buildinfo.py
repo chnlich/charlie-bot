@@ -17,10 +17,8 @@ def init_build_info() -> None:
 
   Idempotent — re-calling overwrites the previously captured values (used by tests).
   """
-  # Lazy: this module stays stdlib-only (src.runtime.cli.common lazy-imports
-  # read_repo_head_sha to keep buildinfo off its import floor), so the pydantic
-  # stack loads only here, inside the startup caller that already carries it.
-  from src.infra import models
+  # This module stays stdlib-only: the pydantic stack loads here, in the startup caller that already carries it.
+  from src.infra import models  # deferred: charliebot improve --help
 
   global _sha, _started_at
   _sha = read_repo_head_sha(timeouts.SUBPROCESS_GIT_SHA_TIMEOUT) or "unknown"

@@ -224,12 +224,13 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
 def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
   """Count the landing-proof git calls at src.infra.git's module attributes.
 
-    task_execution imports git_verify_commit_landed inside _landing_for_work,
-    so the module-attribute patch reaches it; git_verify_commit_landed itself
+    task_execution and task_completion each bind git_verify_commit_landed at
+    import, so the counter replaces both bindings; git_verify_commit_landed itself
     resolves git_fetch through the same module global, so both counters see
     every call a replayed follow-up makes.
     """
   from src.infra import git as git_mod
+  from src.runtime import task_completion, task_execution
 
   counts = {"git_fetch": 0, "git_verify_commit_landed": 0}
   real_fetch = git_mod.git_fetch
@@ -244,7 +245,8 @@ def _count_landing_git(monkeypatch: pytest.MonkeyPatch) -> dict[str, int]:
     return await real_verify(repo_path, branch, commit)
 
   monkeypatch.setattr(git_mod, "git_fetch", counted_fetch)
-  monkeypatch.setattr(git_mod, "git_verify_commit_landed", counted_verify)
+  monkeypatch.setattr(task_execution, "git_verify_commit_landed", counted_verify)
+  monkeypatch.setattr(task_completion, "git_verify_commit_landed", counted_verify)
   return counts
 
 

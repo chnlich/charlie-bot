@@ -23,7 +23,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol
 
 from src.infra.deferred import import_attr
-from src.runtime.hooks import backend_type_registration
+from src.runtime.hooks import backend_lifecycle, backend_type_registration
 
 if TYPE_CHECKING:
   from src.infra.config import CharlieBotConfig
@@ -68,7 +68,6 @@ def traits_for(backend_type: str) -> backend_type_registration.BackendTraits:
 def _lifecycle_at(path: str | None) -> backend_lifecycle.BackendLifecycle:
   """The lifecycle instance a registered path names; the default lifecycle for None."""
   global _DEFAULT_LIFECYCLE
-  from src.runtime.hooks import backend_lifecycle
 
   if path is None:
     if _DEFAULT_LIFECYCLE is None:

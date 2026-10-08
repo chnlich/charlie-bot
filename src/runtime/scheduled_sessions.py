@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 
 from src.infra.models import SessionMetadata
+from src.runtime.hooks.sequence_controllers import sequence_controllers
 from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 
 
@@ -69,7 +70,6 @@ def subtree_roots(
 
 def sequence_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
   """Map every sequence-subtree row to the owned session above it."""
-  from src.runtime.hooks.sequence_controllers import sequence_controllers
 
   controllers = sequence_controllers()
   return subtree_roots(

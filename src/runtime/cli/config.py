@@ -36,13 +36,9 @@ def main() -> None:
 
 
 def _cmd_get(key: str) -> None:
-  # The config model stack rides the one command that reads it: a deferral
-  # here keeps --help and parser errors off the pydantic model build (the
-  # src.features.memory.cli deferral shape); `get` pays the build either way, so its
-  # wall is not this deferral's subject.
   import pydantic
 
-  from src.infra import config, config_registry
+  from src.infra import config, config_registry  # deferred: charliebot config --help
 
   if key not in config.CharlieBotConfig.model_fields and key not in config_registry.section_models():
     print(f"error: unknown config key: {key} (not a CharlieBotConfig field or registered section)", file=sys.stderr)

@@ -63,6 +63,16 @@ from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata, TaskSpec, TaskType
 from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import turn_contributions
+from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps, review_rules_text
+from src.runtime.spawner_prompt import (
+    WORKFLOW_PROMPT_SECTION,
+    _substitute_tokens,
+    iteration_report_tokens,
+    load_marker_sections,
+    verify_contract_tokens,
+    workflow_rule_section_ids,
+    worktree_binding_tokens,
+)
 
 log = LazyStructlogLogger()
 
@@ -217,7 +227,6 @@ def _read_source_file(path: Path, *, what: str) -> str:
 
 def _sections_text(cfg: CharlieBotConfig, filename: str, section_ids: tuple[str, ...]) -> str:
   """The joined marker-sections of one repo template (the section ids fail loud)."""
-  from src.runtime.spawner_prompt import load_marker_sections
   path = cfg.charlie_bot_repo / "prompts" / filename
   sections = load_marker_sections(path, section_ids, extraction=f"{filename}-sections")
   return "\n".join(sections[sid] for sid in section_ids)
@@ -323,12 +332,10 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
   segments = [RuleSegment(text=base, sources=(PromptSource(SCOPE_BASE, "prompts/task_base.md"),))]
 
   if kind == "review":
-    from src.runtime.review import review_rules_text
     segments.append(
         RuleSegment(
             text=review_rules_text(), sources=(PromptSource(SCOPE_BASE, "src/runtime/review.py:review_rules_text"),)))
   elif task_type == TaskType.VERIFY:
-    from src.runtime.spawner_prompt import _substitute_tokens, verify_contract_tokens
     contract = _sections_text(cfg, "verify.md", ("preamble", "scope"))
     contract = _substitute_tokens(contract, verify_contract_tokens(cfg))
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
@@ -338,7 +345,6 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
     # single home: the repo contract drops the map's bindings element (it
     # renders per-run, never as a persistent rule), and a repo-less task
     # selects the repo-less workflow and source-files rules.
-    from src.runtime.spawner_prompt import workflow_rule_section_ids
     repo_less = not (meta.task is not None and meta.task.repo_path)
     workflow = _sections_text(cfg, "worker.md", workflow_rule_section_ids(task_type, repo_less=repo_less))
     segments.append(
@@ -461,7 +467,6 @@ def build_segments(
 
 
 def render_session_info(cfg: CharlieBotConfig, session_name: str) -> str:
-  from src.runtime.spawner_prompt import load_marker_sections
   sections = load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("session_info",), extraction="worker-prompt")
   return sections["session_info"].replace("{{session_name}}", session_name)
@@ -478,12 +483,6 @@ def render_worktree_bindings(
     repo_path: str,
 ) -> str:
   """The workflow's binding header (intro + branch/worktree/repo), actual values."""
-  from src.runtime.spawner_prompt import (
-      WORKFLOW_PROMPT_SECTION,
-      _substitute_tokens,
-      load_marker_sections,
-      worktree_binding_tokens,
-  )
   # Element 0 of the section map's single home is the bindings section.
   section = WORKFLOW_PROMPT_SECTION[task_type][0]
   sections = load_marker_sections(
@@ -499,20 +498,17 @@ def render_worktree_bindings(
 
 
 def render_task_body(cfg: CharlieBotConfig, description: str) -> str:
-  from src.runtime.spawner_prompt import _substitute_tokens, load_marker_sections
   sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",), extraction="worker-prompt")
   return _substitute_tokens(sections["task"], {"{{description}}": description})
 
 
 def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
-  from src.runtime.spawner_prompt import _substitute_tokens, iteration_report_tokens, load_marker_sections
   sections = load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",), extraction="worker-prompt")
   return _substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
 
 
 def render_worktree_persistence(cfg: CharlieBotConfig) -> str:
-  from src.runtime.spawner_prompt import load_marker_sections
   sections = load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", ("worktree_persistence",), extraction="worker-prompt")
   return sections["worktree_persistence"]
@@ -531,7 +527,6 @@ def review_task_context(
 
   The pieces come from one maintained source (src/runtime/review.py).
   """
-  from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps
   return (
       f"## Context\n"
       f"{context_section}\n\n"
@@ -555,7 +550,6 @@ def repo_less_review_task_context(
   judgment: the current state of those paths against the acceptance tests —
   no diff to read, nothing to merge or push.
   """
-  from src.runtime.review import review_log_pointer
   spec = spec_text if spec_text and spec_text.strip() else "(the task spec text was not recorded)"
   report = (
       work_report

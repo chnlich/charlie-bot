@@ -1,6 +1,7 @@
 """Chat API routes — triggers master CC process, returns 202 Accepted."""
 
 from pathlib import Path
+
 import aiofiles
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ from src.runtime.api.deps import (
     require_caller,
     require_session,
 )
+from src.runtime.api.sessions import _task_http_error
 from src.runtime.message_events import serialize_uploaded_files
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError
@@ -82,7 +84,6 @@ async def send_message(
     )
     decision = await task_mgr.dispatch.dispatch_pending(session_id)
   except (TaskConflictError, TaskForbiddenError, TaskInvalidError) as e:
-    from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
   log.info(
       "send_message",
@@ -133,7 +134,6 @@ async def cancel_master_agent(
   try:
     requested = await _cancel_task_node_runs(session_id, task_mgr)
   except RunIdentityConflictError as e:
-    from src.runtime.api.sessions import _task_http_error
     raise _task_http_error(e) from e
   if requested == 0:
     await session_events.persist_and_broadcast(

@@ -3,6 +3,7 @@
 import pathlib
 
 from src.infra import config, models
+from src.runtime import verify_trailer
 
 _PROMPT_SECTION_MARKER_PREFIX = "<!-- section: "
 _PROMPT_SECTION_MARKER_SUFFIX = " -->"
@@ -150,7 +151,6 @@ def verify_contract_tokens(cfg: config.CharlieBotConfig) -> dict[str, str]:
 
   One home for the verify rules segment: a token verify.md gains gets its value here once.
   """
-  from src.runtime import verify_trailer
   return {
       "{{result_trailer_expected}}": verify_trailer.VERIFY_RESULT_TRAILER_EXPECTED,
       "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),

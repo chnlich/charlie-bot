@@ -116,9 +116,9 @@ def build_control_event(
     **payload: object,
 ) -> dict:
   """One control event with the common header plus its typed payload fields."""
-  # Lazy: the pydantic model stack stays off this module's import path; the
-  # callers that stamp control facts pay it, not the boot chain.
-  from src.infra import models
+  # src/runtime/cli/common.py imports this module inside functions: this import and those
+  # must not both sit at a module top.
+  from src.infra import models  # deferred: charliebot improve --help
 
   event: dict = {
       "id": event_id or str(uuid.uuid4()),

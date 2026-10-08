@@ -6,8 +6,10 @@ from typing import TYPE_CHECKING
 
 from src.infra import event_types as ET
 from src.infra.models import utc_now_iso
+from src.runtime import worker_transcript
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_events import _ATTACHED_FILES_MARKER, _stable_history_projection
+from src.runtime.session_usage import resolve_events_usage
 
 if TYPE_CHECKING:
   from src.infra.models import SessionMetadata
@@ -163,7 +165,6 @@ async def _worker_messages_page(
   the transcript's own space (positions in the synthesized event list), so the
   ``/events`` pagination and the transcript poll speak the same cursor.
   """
-  from src.runtime import worker_transcript
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
   messages, oldest_ordinal, has_more = entry.projection.tail(message_limit)
   return (messages, entry.projection.pending_draft, entry.projection.event_count, oldest_ordinal, has_more)
@@ -176,8 +177,6 @@ async def _worker_usage(tree: TaskTreeManager, session_id: str) -> dict | None:
   the same tier resolution the chat usage applies picks it from the projected
   event list.
   """
-  from src.runtime import worker_transcript
-  from src.runtime.session_usage import resolve_events_usage
   entry = await asyncio.to_thread(worker_transcript.load_worker_transcript, tree, session_id)
   return await asyncio.to_thread(resolve_events_usage, entry.events)
 

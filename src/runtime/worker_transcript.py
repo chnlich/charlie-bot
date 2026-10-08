@@ -29,7 +29,7 @@ from src.infra import event_types as ET
 from src.infra.memo import BoundedMemo, stat_signature
 from src.infra.models import RunRecord, utc_now_iso
 from src.runtime.message_projection import MessageProjection
-from src.runtime.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
+from src.runtime.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME, parse_raw_lines, read_host_boot_time
 from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME
 
 # One entry per open worker page, bounded like the other read-path memos.
@@ -193,7 +193,6 @@ def _revision(signature: tuple, states: dict[str, str], task_state: str) -> str:
 
 def _read_events(path: Path) -> list[dict]:
   """One events.jsonl parsed; a missing or unreadable log is an empty segment."""
-  from src.runtime.runs import parse_raw_lines
   try:
     raw = path.read_bytes()
   except OSError:
@@ -230,7 +229,6 @@ def build_worker_transcript_sync(tree, session_id: str) -> TranscriptEntry:
   """
   runs = tree.runs.list_run_records_sync(session_id)
   facts_events = tree.runs.load_events_sync(session_id)
-  from src.runtime.runs import read_host_boot_time
   host_boot = read_host_boot_time()
   states = {run.id: tree.runs.run_display_state(run, facts_events, host_boot) for run in runs}
   transcript: list[dict] = []

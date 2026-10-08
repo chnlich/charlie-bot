@@ -25,11 +25,8 @@ def main() -> None:
       action="store_true",
       help="Actually hard-delete every entry. Without it, this is a dry-run that deletes nothing.")
   args = parser.parse_args()
-  # The trash-scan and config stacks ride the one purge that needs them: a
-  # deferral here keeps --help and parser errors off their import chains (the
-  # src.runtime.cli.config deferral shape).
-  from src.infra import config
-  from src.runtime import worktree_trash
+  from src.infra import config  # deferred: charliebot gc-trash --help
+  from src.runtime import worktree_trash  # deferred: charliebot gc-trash --help
 
   cfg = config.get_config()
   trash_path = worktree_trash.trash_dir(cfg.paths.worktree_dir)

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from src.infra import event_types as ET
+from src.infra.config import get_config
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import utc_now_iso
 from src.infra.ndjson import parse_ndjson_line, write_all
@@ -37,6 +38,7 @@ from src.infra.process import (
 from src.infra.timeouts import NO_OUTPUT_REPORT_THRESHOLD, SUBPROCESS_DIAG_CAPTURE_TIMEOUT
 from src.runtime import runs
 from src.runtime.agent_process.spawn import SpawnedProcess, spawn_subprocess
+from src.runtime.message_aggregator import extract_text_from_message
 
 log = LazyStructlogLogger()
 
@@ -850,10 +852,6 @@ class AgentBackend(ABC):
     """
     if self._cgroup_session_id is None:
       return None
-    # The config model stack (~107 ms fresh-process) serves only this cgroup
-    # read, so the stack loads on the spawn path that needs it.
-    from src.infra.config import get_config
-
     cfg = get_config()
     return prepare_session_cgroup(
         self._cgroup_session_id,
@@ -1167,7 +1165,6 @@ class AgentBackend(ABC):
     prompt, collecting assistant text until the RESULT event. Subclasses with a
     cheaper CLI-native one-shot (claude/codex/opencode) override this.
     """
-    from src.runtime.message_aggregator import extract_text_from_message
 
     # A one-shot writes no instructions file; the framed system prompt is the only steering.
     self._instructions_content = None

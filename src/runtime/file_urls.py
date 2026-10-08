@@ -1,6 +1,6 @@
 """The URL form of a served file."""
 
-# File-server URL prefix: the files package mounts its router under it (src/features/files/api.py).
+# File-server URL prefix: the file-server package mounts its router under it.
 # The prefix names what has to follow it — the absolute filesystem path with its leading `/` removed —
 # so a path that dropped its leading segments reads as wrong where it is written. The legacy /files
 # (and singular /file) spellings are hard-offline: nothing is mounted there, both answer 404.

@@ -46,7 +46,7 @@ from src.infra.tasks import create_logged_task
 from src.runtime import init_worker_recovery, sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
-from src.runtime.hooks import backend_types
+from src.runtime.hooks import backend_types, turn_contributions
 from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
@@ -2434,22 +2434,16 @@ class SessionManager:
     await self.save_chat_event(session_id, event)
     await self._feed_and_broadcast(session_id, event, aggregator, archive_offset)
 
-    # Slack delivery hangs off the round's terminal event, after the broadcast
-    # and in its own task: the funnel neither waits on Slack nor breaks when a
-    # post fails, and a round re-attached after a restart delivers through this
-    # same point. deliver_done decides for itself whether the round is one a
-    # Slack thread is waiting for.
-    if event.get("type") == ET.MASTER_DONE:
-      # lazy: slack_listener imports SessionManager from this module at top level
-      from src.features.slack.slack_listener import deliver_done
-
-      create_logged_task(deliver_done(session_id, event, self._cfg, self), name=f"slack-deliver-{session_id}")
-
-      # lazy: discord_listener imports SessionManager from this module at top level
-      from src.features.discord import discord_listener
-
-      create_logged_task(
-          discord_listener.deliver_done(session_id, event, self._cfg, self), name=f"discord-deliver-{session_id}")
+    # Each turn contribution reacts to the round's terminal event after the
+    # broadcast and in its own task: the funnel neither waits on a contribution
+    # nor breaks when one fails, and a round re-attached after a restart reaches
+    # them through this same point. A contribution decides for itself whether
+    # the round is one it acts on. A missing session has no round to react to.
+    if event.get("type") == ET.MASTER_DONE and meta is not None:
+      for contribution in turn_contributions.turn_contributions():
+        create_logged_task(
+            contribution.after_turn(meta, event, cfg=self._cfg, sessions=self),
+            name=f"after-turn-{type(contribution).__name__}-{session_id}")
 
   async def prime_aggregator(self, session_id: str) -> int:
     """Ensure the live aggregator exists before a durable append; return its epoch.

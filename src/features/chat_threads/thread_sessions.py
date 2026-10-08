@@ -2,10 +2,10 @@
 
 A thread session answers one Slack or Discord thread: its metadata carries that
 platform's origin field, set at summon creation and never mutated. The
-instruction build (which rule file follows prompts/master.md) and the CLC
-context-window override both classify the session through
-:func:`is_thread_session`, so the test has one definition; the sidebar's
-chat-thread subtree rule (src/runtime/scheduled_sessions.py) shares it.
+chat-threads turn contribution (which rule file follows prompts/master.md, and
+the CLC context-window override) and the sidebar's chat-thread subtree rule
+(src/runtime/scheduled_sessions.py) classify the session through
+:func:`is_thread_session`, so the test has one definition.
 """
 
 from src.infra import metadata_slots

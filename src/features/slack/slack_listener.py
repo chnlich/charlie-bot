@@ -25,7 +25,7 @@ that produces the URL to write instead. The posted text is persisted as a
 ``slack_reply`` event whose ``answers``
 names the summon the running round was answering (None for a round no summon
 started). ``deliver_done`` hangs off the round's terminal ``master_done`` event
-(called from ``SessionManager.persist_and_broadcast``), not off a waiting
+(called from the Slack turn contribution's ``after_turn``), not off a waiting
 coroutine, so it survives a server restart. The eyes ack reaction tracks the
 open question: lit at the summon (the shared accept path's ack task), cleared
 when a reply answering it lands, or when the notice or the lost-summon report

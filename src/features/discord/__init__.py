@@ -1,5 +1,5 @@
 from src.infra import config_registry
-from src.runtime.hooks import wiring
+from src.runtime.hooks import turn_contributions, wiring
 
 OWNER = "discord"
 
@@ -16,3 +16,4 @@ def register() -> None:
       "src.features.discord.metadata:DiscordSessionFields",
       on=metadata_slots.ON_SESSION,
       after="successor_session_id")
+  turn_contributions.register_turn_contribution("discord", "src.features.discord.turn_contribution:CONTRIBUTION")

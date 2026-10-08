@@ -23,6 +23,7 @@ from collections.abc import Callable, Iterator
 from src.infra import event_types as ET
 from src.runtime import message_events
 from src.runtime.model_family import model_family
+from src.runtime.hooks import turn_contributions
 
 # The Claude account pool's operator notice type, spelled where the chat renders it: the runtime imports no
 # backend module, and src/backends/claude_code/claude_relay.py holds the emitting constant.
@@ -449,16 +450,6 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
             "from_session": ev.get("from_session", ""),
             "from_session_name": ev.get("from_session_name", ""),
         },
-    ET.SLACK_REPLY:
-        lambda ev: {
-            "role": "system",
-            "content": f"Posted to Slack: {ev.get('content', '')}",
-        },
-    ET.DISCORD_REPLY:
-        lambda ev: {
-            "role": "system",
-            "content": f"Posted to Discord: {ev.get('content', '')}",
-        },
     ET.BACKEND_SWITCHED:
         _backend_switched_msg,
     ET.BACKEND_OVERLAY_INACTIVE:
@@ -502,6 +493,31 @@ _SIMPLE_HANDLERS: dict[str, Callable[[dict], dict | None]] = {
                     (f" — {ev['note']}" if ev.get("note") else "")).rstrip(),
         },
 }
+
+_render_table: dict[str, Callable[[dict], dict | None]] | None = None
+
+
+def merge_event_renderers(
+    table: dict[str, Callable[[dict], dict | None]],
+    contributions: tuple[turn_contributions.TurnContribution, ...],
+) -> dict[str, Callable[[dict], dict | None]]:
+  """*table* plus every contribution's event renderers; an event type that is rendered twice raises ValueError."""
+  merged = dict(table)
+  for contribution in contributions:
+    for event_type, renderer in contribution.event_renderers().items():
+      if event_type in merged:
+        raise ValueError(
+            f"event type {event_type!r} already has a renderer; {type(contribution).__name__} cannot add another")
+      merged[event_type] = renderer
+  return merged
+
+
+def _render_handlers() -> dict[str, Callable[[dict], dict | None]]:
+  """The render table: the simple handlers plus the registered contributions' renderers, merged on first use."""
+  global _render_table
+  if _render_table is None:
+    _render_table = merge_event_renderers(_SIMPLE_HANDLERS, turn_contributions.turn_contributions())
+  return _render_table
 
 
 class MessageAggregator:
@@ -738,7 +754,7 @@ class MessageAggregator:
       yield from self._stream_delta()
       return
 
-    handler = _SIMPLE_HANDLERS.get(t)
+    handler = _render_handlers().get(t)
     if handler is None:
       return
     if t == ET.SYSTEM:

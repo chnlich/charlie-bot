@@ -43,7 +43,6 @@ def _item(
     event_id: str | None = None,
     auto_trigger: bool = False,
     is_voice: bool = False,
-    should_check_tex: bool = False,
     uploaded_files: list[dict] | None = None,
     backend_option=None,
     callbacks: models.SessionCallbacks | None = None,
@@ -59,7 +58,6 @@ def _item(
       auto_trigger=auto_trigger,
       backend_option=backend_option,
       extra_claude_flags=None,
-      should_check_tex=should_check_tex,
       future=asyncio.get_running_loop().create_future(),
       user_event_ids=[event_id] if event_id else [],
       input_event_type=input_event_type,
@@ -324,8 +322,7 @@ async def test_voice_disclaimer_and_attachments_are_carried_per_part() -> None:
   cfg = build_cfg()
   files_a = [{"filename": "a.png", "path": "/uploads/a.png", "size": 3}]
 
-  voice_part = _item(
-      session_id, "dictated words", ET.USER, cfg, event_id="e-voice", is_voice=True, should_check_tex=True)
+  voice_part = _item(session_id, "dictated words", ET.USER, cfg, event_id="e-voice", is_voice=True)
   file_part = _item(session_id, "see attachment", ET.USER, cfg, event_id="e-file", uploaded_files=files_a)
   wake_part = _item(
       session_id, "[Scheduled trigger fired] ping", ET.SCHEDULED_TRIGGER, cfg, event_id="e-wake", auto_trigger=True)
@@ -347,9 +344,8 @@ async def test_voice_disclaimer_and_attachments_are_carried_per_part() -> None:
   assert disclaimer not in merged.user_content[file_header_at:]
   # The wake's own fired prefix stays as-is under its header.
   assert "[Scheduled trigger fired] ping" in merged.user_content[merged.user_content.index("[Queued input 3 of 3"):]
-  # Attachments concatenate in order; tex is "any"; auto_trigger is "all".
+  # Attachments concatenate in order; auto_trigger is "all".
   assert merged.uploaded_files == files_a
-  assert merged.should_check_tex is True
   assert merged.auto_trigger is False
   assert merged.user_event_ids == ["e-voice", "e-file", "e-wake"]
 

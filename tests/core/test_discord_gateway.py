@@ -435,4 +435,5 @@ async def test_persisted_master_done_fires_both_deliver_tasks(tmp_path: Path) ->
 
   slack_deliver.assert_awaited_once_with(meta.id, done, cfg, session_mgr)
   discord_deliver.assert_awaited_once_with(meta.id, done, cfg, session_mgr)
-  assert sorted(t.get_name() for t in tasks) == [f"discord-deliver-{meta.id}", f"slack-deliver-{meta.id}"]
+  names = {t.get_name() for t in tasks}
+  assert {f"after-turn-DiscordTurnContribution-{meta.id}", f"after-turn-SlackTurnContribution-{meta.id}"} <= names

@@ -89,6 +89,8 @@ charlie-bot/
 
 **Backend Abstraction**: Workers and Master use a pluggable `AgentBackend` interface (`src/runtime/agent_process/base.py`). Each backend package registers its type string, its option model and its factory with `src/runtime/hooks/backend_types.py` (`src/app/registrations.py` lists the packages), which dispatches each `BackendOption.type` to its implementation; config loading parses each `backends.options[]` entry through the option models that `src/infra/config_registry.py` holds. Backend selection is configured via `backends.options` and `backends.preference` in `config.yaml`.
 
+**Turn Contributions**: Feature packages add to a master turn through `src/runtime/hooks/turn_contributions.py`: a package registers a `TurnContribution` from its `register()`, and the turn path (instruction build, queue, run, session funnel, chat aggregator) asks every registered contribution at its own step and names no feature. The memory, LaTeX, chat-threads, Slack and Discord packages register one each.
+
 ### 4.2 Session & Thread Model
 - **Session**: Represents a project/workspace. Each Session has:
   - A `cc_session_id` for resuming the Master Agent's Claude Code conversation

@@ -605,6 +605,7 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   from src.runtime.api.message_utils import build_session_bootstrap_data
   from src.runtime.run_token import CallerIdentity
   from src.runtime.session_events import SessionEvents
+  from src.runtime.session_lifecycle import SessionLifecycle
   from src.runtime.session_listing import SessionListing
   from src.runtime.session_search import SessionSearch
   from src.runtime.session_sidebar import SessionSidebar
@@ -617,7 +618,8 @@ async def seed_sessions() -> tuple[str, str, list[dict], object]:
   sidebar = SessionSidebar(cfg, store)
   events = SessionEvents(cfg, store)
   session_mgr = SessionManager(
-      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar))
+      cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
+      SessionLifecycle(cfg, store, events))
   tree = TaskTreeManager(cfg, session_mgr)
   operator = CallerIdentity(kind="operator")
   main = await tree.create_task(

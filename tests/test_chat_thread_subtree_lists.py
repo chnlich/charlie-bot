@@ -68,7 +68,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
           discord_origin=DiscordOrigin(guild_id="g1", parent_channel_id="c1", thread_id="t2"),
           group="Discord #general"),
       backend=conftest.OPUS_BACKEND_ID)
-  await session_mgr.archive_session(archived_thread.id)
+  await session_mgr.lifecycle.archive_session(archived_thread.id)
   cron = await conftest.make_cron_session(session_mgr, "nightly")
   cron_child = await conftest.create_task(
       tree, parent=cron.id, request_id="cron-leaf-1", profile="worker", name="cron leaf")

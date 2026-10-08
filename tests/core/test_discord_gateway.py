@@ -345,9 +345,10 @@ async def test_ready_runs_the_backfill_per_connection(tmp_path: Path) -> None:
     try:
       await _until(lambda: rig["backfill"].await_count == 1)
       rig["backfill"].assert_awaited_once()
-      cfg_arg, mgr_arg, client_arg, trigger_arg = rig["backfill"].await_args.args
+      cfg_arg, listing_arg, lifecycle_arg, events_arg, client_arg, trigger_arg = rig["backfill"].await_args.args
       assert cfg_arg is cfg
-      assert mgr_arg is session_mgr
+      assert (listing_arg, lifecycle_arg,
+              events_arg) == (session_mgr.listing, session_mgr.lifecycle, session_mgr.events)
       assert client_arg is rig["rest"]
       assert isinstance(trigger_arg, TriggerManager)
       assert any(e["event"] == "discord_listener_connected" for e in logs)

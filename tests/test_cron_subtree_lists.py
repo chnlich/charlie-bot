@@ -58,10 +58,10 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   assert tree.task_state(delivered.id) == "completed"  # the derived archive hides it while active
 
   cron_archived = await conftest.make_cron_session(session_mgr, "nightly-archived")
-  await session_mgr.archive_session(cron_archived.id)
+  await session_mgr.lifecycle.archive_session(cron_archived.id)
   plain_archived = await conftest.create_root_session(
       session_mgr, models.CreateSessionRequest(name="Plain archived"), backend=conftest.OPUS_BACKEND_ID)
-  await session_mgr.archive_session(plain_archived.id)
+  await session_mgr.lifecycle.archive_session(plain_archived.id)
   plain_active = await conftest.create_root_session(
       session_mgr, models.CreateSessionRequest(name="Plain active"), backend=conftest.OPUS_BACKEND_ID)
   ordinary = await conftest.create_root_session(
@@ -70,7 +70,7 @@ async def _build_fixture(tmp_path: pathlib.Path) -> Fixture:
   for i in range(3):
     filler = await conftest.create_root_session(
         session_mgr, models.CreateSessionRequest(name=f"Filler {i}"), backend=conftest.OPUS_BACKEND_ID)
-    await session_mgr.archive_session(filler.id)
+    await session_mgr.lifecycle.archive_session(filler.id)
     fillers.append(filler)
   return Fixture(
       cfg=cfg,
@@ -160,7 +160,7 @@ async def test_search_and_starred_keep_their_rows(tmp_path: pathlib.Path) -> Non
   assert resp.status_code == 200
   assert {fx.cron.id, fx.worker.id} <= {row["id"] for row in resp.json()}
   # Starred keeps today's behavior: a starred cron session still lists.
-  await fx.session_mgr.star_session(fx.cron.id)
+  await fx.session_mgr.lifecycle.star_session(fx.cron.id)
   resp = client.get("/api/sessions/starred")
   assert resp.status_code == 200
   assert fx.cron.id in {row["id"] for row in resp.json()}

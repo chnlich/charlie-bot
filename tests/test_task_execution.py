@@ -1545,8 +1545,8 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
   await session_mgr.persist_cc_session_id(manager.id, anchor)
 
   # The mis-click: switch away and back before the next message goes out.
-  await session_mgr.switch_backend(manager.id, "fake-2")
-  await session_mgr.switch_backend(manager.id, "fake")
+  await session_mgr.lifecycle.switch_backend(manager.id, "fake-2")
+  await session_mgr.lifecycle.switch_backend(manager.id, "fake")
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="turn two", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)

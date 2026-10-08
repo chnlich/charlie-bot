@@ -335,7 +335,7 @@ async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: 
     await _drain(tasks)
     second = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
-    await session_mgr.archive_session(first)
+    await session_mgr.lifecycle.archive_session(first)
     third = await handle_message_create(_message(), cfg, session_mgr, client, trigger_mgr, bot_user_id=_BOT_USER)
     await _drain(tasks)
 
@@ -437,7 +437,7 @@ async def test_archived_session_revives_and_arms_on_an_unmentioned_message(tmp_p
   returns to the Threads view)."""
   cfg, session_mgr, trigger_mgr, client = _rig(tmp_path)
   meta = await _discord_session(session_mgr)
-  await session_mgr.archive_session(meta.id)
+  await session_mgr.lifecycle.archive_session(meta.id)
   message = _message(id="1000000000000000100", channel_id=_THREAD, content="the follow-up", mentions=[])
 
   try:

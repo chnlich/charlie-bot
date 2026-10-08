@@ -356,6 +356,7 @@ class TaskTreeManager:
     self._cfg = cfg
     self._sessions = session_mgr
     self._store = session_mgr.store
+    self._lifecycle = session_mgr.lifecycle
     self.session_events = session_mgr.events
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
@@ -375,12 +376,13 @@ class TaskTreeManager:
     # The pending-input blockers of one session ([] when none): the structural
     # guard seam the input dispatcher answers.
     self.pending_input_blockers: Callable[[str], list[str]] | None = self.dispatch.pending_input_blockers
-    # SessionManager-level writes that move a tree-projection input (the unread
+    # Block-level writes that move a tree-projection input (the unread
     # flag in _set_unread_flag) drop this tree's rebuildable index through the
     # hook registered here — the same policy _save_meta applies to its own
     # metadata writes — so a tree page read after the flip never serves the
     # stale flag a missed broadcast would have left standing.
     session_mgr.tree_index_invalidator = self.invalidate_tree_index
+    self._lifecycle.tree_index_invalidator = self.invalidate_tree_index
     # The session lists read stored status; the archive of a task node is a
     # derived fact (archived_of, subtree inheritance included). The overlay
     # lets the sidebar's active list drop a delivered worker — and, with it,
@@ -1595,7 +1597,7 @@ class TaskTreeManager:
       blockers = self._deletion_blockers_locked(index, session_id)
       if blockers:
         raise TaskConflictError(sorted(set(blockers)))
-      result = await self._sessions.delete_session_permanently(session_id)
+      result = await self._lifecycle.delete_session_permanently(session_id)
     if result:
       self._invalidate_index()
       self._facts_memo.pop(session_id, None)

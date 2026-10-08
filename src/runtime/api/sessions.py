@@ -62,6 +62,7 @@ from src.runtime.api.deps import (
     get_config_on_loop,
     get_run_store,
     get_session_events,
+    get_session_lifecycle,
     get_session_listing,
     get_session_manager,
     get_session_search,
@@ -89,6 +90,7 @@ from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not
 from src.runtime.scheduled_sessions import sequence_subtree_roots
 from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.session_events import SessionEvents
+from src.runtime.session_lifecycle import SessionLifecycle
 from src.runtime.session_listing import SessionListing
 from src.runtime.session_search import SessionSearch
 from src.runtime.session_sidebar import SessionSidebar
@@ -580,16 +582,16 @@ async def list_groups(listing: SessionListing = Depends(get_session_listing)) ->
 
 
 @router.post("/groups/rename")
-async def rename_group(req: RenameGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
+async def rename_group(req: RenameGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Rename a group across all sessions."""
-  count = await session_mgr.rename_group(req.old_name, req.new_name)
+  count = await lifecycle.rename_group(req.old_name, req.new_name)
   return {"updated": count}
 
 
 @router.post("/groups/delete")
-async def delete_group(req: DeleteGroupRequest, session_mgr: SessionManager = Depends(get_session_manager)) -> dict:
+async def delete_group(req: DeleteGroupRequest, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> dict:
   """Remove a group from all sessions (sets group to null)."""
-  count = await session_mgr.delete_group(req.group)
+  count = await lifecycle.delete_group(req.group)
   return {"updated": count}
 
 
@@ -1050,16 +1052,16 @@ async def get_session_bootstrap(
 async def mark_session_read(
     session_id: str,
     _meta: SessionMetadata = Depends(require_session),
-    session_mgr: SessionManager = Depends(get_session_manager),
+    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
 ) -> dict:
   """Clear the session's unread flag; the client posts this after a render lands.
 
   "Read" means "content rendered": the bootstrap GET stays side-effect-free
   and this explicit POST is the only flip-off path, so a bare data fetch can no
   longer wipe the sidebar's unread dot. Flip semantics and the unread_changed
-  broadcast (only on an actual flip) are SessionManager.mark_read's own.
+  broadcast (only on an actual flip) are SessionLifecycle.mark_read's own.
   """
-  await session_mgr.mark_read(session_id)
+  await lifecycle.mark_read(session_id)
   return {"session_id": session_id, "has_unread": False}
 
 
@@ -1296,6 +1298,7 @@ async def switch_session_backend(
     body: SwitchBackendRequest,
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
+    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
     store: SessionStore = Depends(get_session_store),
     session_events: SessionEvents = Depends(get_session_events),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
@@ -1338,7 +1341,7 @@ async def switch_session_backend(
     await session_mgr.persist_native_backend(session_id, effective_current)
 
   previous = effective_current
-  meta = require_found(await session_mgr.switch_backend(session_id, body.backend))
+  meta = require_found(await lifecycle.switch_backend(session_id, body.backend))
 
   # The audit event is the switch history; the durable metadata read here (the
   # backfill included) is what it records. previous_native_backend is None when
@@ -1432,14 +1435,15 @@ async def unarchive_session(
 
 
 @router.post("/{session_id}/star", response_model=SessionMetadata)
-async def star_session(session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> SessionMetadata:
-  return require_found(await session_mgr.star_session(session_id))
+async def star_session(
+    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> SessionMetadata:
+  return require_found(await lifecycle.star_session(session_id))
 
 
 @router.post("/{session_id}/unstar", response_model=SessionMetadata)
 async def unstar_session(
-    session_id: str, session_mgr: SessionManager = Depends(get_session_manager)) -> SessionMetadata:
-  return require_found(await session_mgr.unstar_session(session_id))
+    session_id: str, lifecycle: SessionLifecycle = Depends(get_session_lifecycle)) -> SessionMetadata:
+  return require_found(await lifecycle.unstar_session(session_id))
 
 
 @router.post("/{session_id}/rounds/{round_id}/rate", response_model=SessionMetadata)
@@ -1464,7 +1468,7 @@ async def rate_round(
 async def patch_session(
     session_id: str,
     req: PatchSessionTaskRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> SessionDetailResponse:
@@ -1476,7 +1480,7 @@ async def patch_session(
   if req.model_fields_set <= {"name"}:
     if not req.name:
       raise HTTPException(status_code=400, detail="rename requires a non-empty name")
-    meta = require_found(await session_mgr.rename_session(session_id, req.name))
+    meta = require_found(await lifecycle.rename_session(session_id, req.name))
     task_mgr.invalidate_tree_index()
     await task_mgr.events.notify_tree_changed(session_id, "task_updated")
     return SessionDetailResponse(**meta.model_dump())
@@ -1491,9 +1495,9 @@ async def patch_session(
 async def set_session_group(
     session_id: str,
     req: SetGroupRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
+    lifecycle: SessionLifecycle = Depends(get_session_lifecycle),
 ) -> SessionMetadata:
-  return require_found(await session_mgr.set_group(session_id, req.group))
+  return require_found(await lifecycle.set_group(session_id, req.group))
 
 
 # The raw events download's compressed serve memo: entries key on the file path

@@ -68,10 +68,10 @@ class Scheduler:
     """Take the process-wide SessionManager; a private instance would keep its own
     chat-event cache, so scheduled rounds would never reach the HTTP/WS read paths."""
     self._cfg = cfg
-    self._session_mgr = session_mgr
     self._store = session_mgr.store
     self._session_events = session_mgr.events
     self._session_listing = session_mgr.listing
+    self._session_lifecycle = session_mgr.lifecycle
     self._task: asyncio.Task | None = None
     # Process-local registry of the background task each task's most recent
     # *scheduled* fire spawned (keyed by task name). Empty after a restart, so
@@ -200,7 +200,7 @@ class Scheduler:
         caller="system",
     )
     if node.status == SessionStatus.ARCHIVED:
-      unarchived = await self._session_mgr.unarchive_session(node.id)
+      unarchived = await self._session_lifecycle.unarchive_session(node.id)
       if unarchived is None:
         raise RuntimeError(f"scheduled task '{task_cfg.name}' node {node.id} vanished during unarchive")
       node = unarchived
@@ -269,7 +269,7 @@ class Scheduler:
     for session in sessions:
       if session.status != SessionStatus.ACTIVE:
         continue
-      await self._session_mgr.archive_session(session.id)
+      await self._session_lifecycle.archive_session(session.id)
       session.status = SessionStatus.ARCHIVED  # the tick's cache copy stays honest
       archived.append(session.id)
     if archived:
@@ -288,7 +288,7 @@ class Scheduler:
     node = await self._store.get_session(task_cfg.session_id)
     if node is None or node.backend == backend:
       return
-    await self._session_mgr.switch_backend(task_cfg.session_id, backend)
+    await self._session_lifecycle.switch_backend(task_cfg.session_id, backend)
     log.info("scheduled_node_backend_aligned", task=task_cfg.name, session=node.id, backend=backend)
 
   async def _maybe_run(

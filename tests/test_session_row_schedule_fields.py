@@ -95,7 +95,7 @@ async def test_bound_and_unbound_rows_carry_the_join_answer_in_every_list(tmp_pa
   for url in ("/api/sessions/", "/api/sessions/starred"):
     if url.endswith("starred"):
       for node in (bound, disabled_node, unbound):
-        await session_mgr.star_session(node.id)
+        await session_mgr.lifecycle.star_session(node.id)
     resp = client.get(url)
     assert resp.status_code == 200, (url, resp.text)
     by_id = {row["id"]: row for row in resp.json()}
@@ -174,7 +174,7 @@ async def test_archived_bound_row_keeps_the_join_and_the_scheduled_endpoint_is_g
   cfg, session_mgr, tree = build_env(tmp_path)
   bound = await create_task(tree, parent=None, request_id="bind-1", profile="manager", name="synthetic-daily")
   _write_bound_task(temp_home, "synthetic-daily", bound.id)
-  await session_mgr.archive_session(bound.id)
+  await session_mgr.lifecycle.archive_session(bound.id)
   client = make_sessions_listing_client(cfg, session_mgr, tree)
 
   resp = client.get("/api/sessions/archived")
@@ -215,7 +215,7 @@ async def test_archived_pages_carry_active_ancestors_as_context_only_rows(tmp_pa
   fillers = []
   for i in range(3):
     filler = await create_root_session(session_mgr, CreateSessionRequest(name=f"Filler {i}"), backend=OPUS_BACKEND_ID)
-    await session_mgr.archive_session(filler.id)
+    await session_mgr.lifecycle.archive_session(filler.id)
     fillers.append(filler)
 
   client = make_sessions_listing_client(cfg, session_mgr, tree)
@@ -255,7 +255,7 @@ async def test_archived_context_walk_keeps_the_cron_subtree_out(tmp_path: Path, 
   active_root = await create_task(tree, parent=None, request_id="root-1", profile="manager", name="Synthetic root")
   firing = await create_task(
       tree, parent=cron.id, request_id="firing-1", profile="worker", name="synthetic-cron · firing-1")
-  await session_mgr.archive_session(firing.id)
+  await session_mgr.lifecycle.archive_session(firing.id)
   # An archived row under the ACTIVE root: the walk climbs to the root, while
   # the firing's chain reaches the cron session, so it never becomes a page row.
   delivered = await create_task(

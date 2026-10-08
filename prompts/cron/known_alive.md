@@ -147,7 +147,7 @@ Known-alive symbols:
   packages register ride as extras (`_parse_package_sections` refuses every other unknown key).
   Vulture flags each production assignment as an unused variable.
 - `return_value`, `side_effect` attribute writes across `tests/` (e.g.
-  `session_mgr.get_session.return_value = ...` in `tests/test_cli_improve.py`,
+  `store.get_session.return_value = ...` in `tests/test_cli_improve.py`,
   `callbacks.persist_account_label.side_effect = ...` in `tests/test_claude_accounts.py`) — `unittest.mock`
   configuration attributes the library reads when the configured mock is called
   (`return_value` supplies the call result, `side_effect` overrides it with an iterable,
@@ -376,8 +376,7 @@ Known-alive symbols:
   gzip body memos instead. Its consumer is the definitional pin in `tests/test_message_projection.py`
   (`test_projection_history_equals_events_to_messages`, parametrized): `history` must equal
   `events_to_messages(all_events)` because it feeds the same reference path, and that module's
-  page-walk and draft-identity tests read it as that reference. `tests/test_scheduler_shared_session_manager.py`
-  reads its length once, and `docs/perf_baseline.md@5175adf09`'s projection-parity collector digests it. A
+  page-walk and draft-identity tests read it as that reference. `docs/perf_baseline.md@5175adf09`'s projection-parity collector digests it. A
   src-only vulture scan flags it as an unused property; a whole-repo grep finds only the definition,
   the class docstring's definitional sentence, those tests, and the perf doc. Same
   deliberately-retained-oracle class as the `search_sessions` entry above.

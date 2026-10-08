@@ -24,6 +24,7 @@ from src.features.slack.slack_listener import (
     handle_app_mention,
     summon_session_id,
 )
+from src.infra import metadata_slots
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
@@ -102,10 +103,11 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
 
   meta = await session_mgr.get_session(sid)
   assert meta is not None
-  assert meta.slack_origin is not None
-  assert meta.slack_origin.team_id == "T_TEST"
-  assert meta.slack_origin.channel_id == "C_TEST"
-  assert meta.slack_origin.thread_ts == _TS
+  origin = metadata_slots.fields_of(meta, "slack").slack_origin
+  assert origin is not None
+  assert origin.team_id == "T_TEST"
+  assert origin.channel_id == "C_TEST"
+  assert origin.thread_ts == _TS
 
   # The Slack traffic is exactly one eyes reaction on the mention, one
   # permalink lookup for the mention's own ts, plus one channel-name lookup

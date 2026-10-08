@@ -606,7 +606,7 @@ async def list_chat_threads(
 
   The complement of the Workspace root list over the same active corpus: the
   only rows kept are the Slack/Discord thread sessions — a session carrying a
-  ``slack_origin`` or ``discord_origin`` — and every descendant their
+  chat-thread origin — and every descendant their
   ``task_parent_id`` chains reach, the projected legacy worker-thread leaves
   included. Row shape, projection, schedule join, and render are the shared
   helper's; the render memos are this route's own, so the two lists never
@@ -664,8 +664,6 @@ async def create_session(
       backend=backend,
       group=req.group,
       session_id=req.session_id,
-      slack_origin=req.slack_origin,
-      discord_origin=req.discord_origin,
       slot_values=req.model_extra,
       caller=caller)
 

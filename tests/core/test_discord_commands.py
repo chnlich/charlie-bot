@@ -16,7 +16,8 @@ import conftest
 import pytest
 
 from src.features.discord import discord_client, discord_commands, discord_listener
-from src.infra import config, models
+from src.features.discord.metadata import DiscordOrigin
+from src.infra import config, metadata_slots, models
 from src.runtime import sessions
 
 _GUILD = "800000000000000001"
@@ -155,9 +156,9 @@ async def _make_session(session_mgr: sessions.SessionManager, *, watermark: str 
       models.CreateSessionRequest(
           session_id=discord_listener.summon_session_id(_GUILD, _THREAD),
           name="discord session",
-          discord_origin=models.DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
+          discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)))
   if watermark is not None:
-    meta.discord_watermark_id = watermark
+    metadata_slots.set_fields(meta, "discord", discord_watermark_id=watermark)
     meta.updated_at = models.utc_now()
     await session_mgr.save_metadata(meta)
   return meta.id
@@ -206,7 +207,7 @@ async def test_read_marks_only_returned_unread_and_reports_more_unread(tmp_path:
   assert result["more_unread"] == 3
 
   meta = await session_mgr.get_session(session_id)
-  assert meta is not None and meta.discord_watermark_id == _mid(7)
+  assert meta is not None and metadata_slots.fields_of(meta, "discord").discord_watermark_id == _mid(7)
   acks = _ack_events(session_mgr, session_id)
   assert len(acks) == 1
   assert acks[0]["discord_ack"] == {"message_ids": [_mid(4), _mid(5), _mid(7)], "watermark_id": _mid(7)}
@@ -368,7 +369,7 @@ async def test_read_with_url_reads_the_linked_channel_and_marks_nothing(tmp_path
   assert result["more_unread"] == 0
   # Nothing was marked: the session's watermark is untouched and no ack landed.
   meta = await session_mgr.get_session(session_id)
-  assert meta is not None and meta.discord_watermark_id is None
+  assert meta is not None and metadata_slots.fields_of(meta, "discord").discord_watermark_id is None
   assert _ack_events(session_mgr, session_id) == []
   # Only the linked channel was read, newest-three shape (no ``after``).
   assert client.calls == [("get_messages", {"channel_id": _OTHER_CHANNEL, "after": None, "limit": 3})]

@@ -1137,13 +1137,7 @@ class SessionManager:
     overrides: dict[str, str] = {}
     if req.session_id:
       overrides["id"] = req.session_id
-    meta = SessionMetadata(
-        name=name,
-        backend=backend or self._cfg.backends.options[0].id,
-        slack_origin=req.slack_origin,
-        discord_origin=req.discord_origin,
-        group=req.group,
-        **overrides)
+    meta = SessionMetadata(name=name, backend=backend or self._cfg.backends.options[0].id, group=req.group, **overrides)
     metadata_slots.set_registered(meta, req.model_extra or {})
 
     self._create_session_dirs(self._session_dir(meta.id))

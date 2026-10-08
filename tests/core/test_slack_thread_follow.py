@@ -10,7 +10,9 @@ import conftest
 import pytest
 
 from src.features.slack import slack_listener
+from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra import models
 from src.runtime import sessions, triggers
 
@@ -65,9 +67,9 @@ async def _make_session(
       models.CreateSessionRequest(
           session_id=slack_listener.summon_session_id(_TEAM, _CHANNEL, thread_ts),
           name="slack session",
-          slack_origin=models.SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
+          slack_origin=SlackOrigin(team_id=_TEAM, channel_id=_CHANNEL, thread_ts=thread_ts)))
   if watermark is not None:
-    meta.slack_watermark_ts = watermark
+    metadata_slots.set_fields(meta, "slack", slack_watermark_ts=watermark)
     await session_mgr.save_metadata(meta)
   return meta
 
@@ -88,10 +90,10 @@ async def _armed(trigger_mgr: triggers.TriggerManager, session_id: str) -> list[
 async def test_watermark_persists_through_metadata_json(tmp_path: pathlib.Path) -> None:
   cfg, session_mgr, _trigger_mgr, _client = _rig(tmp_path)
   meta = await _make_session(session_mgr)
-  assert meta.slack_watermark_ts == _MENTION_ERA_WATERMARK
+  assert metadata_slots.fields_of(meta, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
   reloaded = await sessions.SessionManager(cfg).get_session(meta.id)
   assert reloaded is not None
-  assert reloaded.slack_watermark_ts == _MENTION_ERA_WATERMARK
+  assert metadata_slots.fields_of(reloaded, "slack").slack_watermark_ts == _MENTION_ERA_WATERMARK
 
 
 # ---------------------------------------------------------------------------

@@ -47,13 +47,11 @@ from src.infra.event_types import is_real_user_message
 from src.infra.json_utils import atomic_write_text, load_model_meta
 from src.infra.models import (
     AncestorRef,
-    DiscordOrigin,
     EventRef,
     PatchSessionTaskRequest,
     SessionMetadata,
     SessionRow,
     SessionStatus,
-    SlackOrigin,
     TaskSpec,
     WorkState,
     ensure_utc,
@@ -1099,8 +1097,6 @@ class TaskTreeManager:
       backend: str | None,
       group: str | None = None,
       session_id: str | None = None,
-      slack_origin: SlackOrigin | None = None,
-      discord_origin: DiscordOrigin | None = None,
       slot_values: dict[str, Any] | None = None,
       caller: object,
   ) -> SessionMetadata:
@@ -1109,8 +1105,8 @@ class TaskTreeManager:
     The node id is (parent, request_id)-stable unless *session_id* names it:
     the summon and the operator's create bind a node to an id that exists
     before the node does, and only the operator and the server may name one.
-    The origin fields and *slot_values* (keys a package registered on the session
-    file) ride the same atomic publish as the metadata. Metadata
+    *slot_values* (keys a package registered on the session file) ride the same
+    atomic publish as the metadata. Metadata
     plus the task_created fact are written into a temp directory and published
     with one rename, so a crash leaves either no node or a complete one.
     """
@@ -1166,8 +1162,6 @@ class TaskTreeManager:
           name=name,
           backend=backend,
           group=group,
-          slack_origin=slack_origin,
-          discord_origin=discord_origin,
           slot_values=slot_values or {},
           parent_meta=parent_meta,
           actor=_create_actor_for(caller),
@@ -1250,8 +1244,6 @@ class TaskTreeManager:
       name: str | None,
       backend: str | None,
       group: str | None,
-      slack_origin: SlackOrigin | None,
-      discord_origin: DiscordOrigin | None,
       slot_values: dict[str, Any],
       parent_meta: SessionMetadata | None,
       actor: str,
@@ -1269,8 +1261,6 @@ class TaskTreeManager:
         task_parent_id=task_parent_id,
         backend=backend or (parent_meta.backend if parent_meta else "") or self._cfg.backends.options[0].id,
         group=group,
-        slack_origin=slack_origin,
-        discord_origin=discord_origin,
     )
     metadata_slots.set_registered(meta, slot_values)
     try:

@@ -32,9 +32,11 @@ from src.features.discord.discord_listener import (
     post_reply,
     summon_session_id,
 )
+from src.features.discord.metadata import DiscordOrigin
 from src.infra import event_types as ET
+from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest, DiscordOrigin, SessionMetadata, SessionStatus, TriggerStatus
+from src.infra.models import CreateSessionRequest, SessionMetadata, SessionStatus, TriggerStatus
 from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import TriggerManager
@@ -193,7 +195,8 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
 
   meta = await session_mgr.get_session(sid)
   assert meta is not None
-  assert meta.discord_origin == DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
+  assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
+      guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   assert meta.name.startswith("Discord #general ")
   assert meta.group == "Discord #general"
 
@@ -297,7 +300,8 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
   assert sid == summon_session_id(_GUILD, _THREAD)
   meta = await session_mgr.get_session(sid)
   assert meta is not None
-  assert meta.discord_origin == DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
+  assert metadata_slots.fields_of(meta, "discord").discord_origin == DiscordOrigin(
+      guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD)
   assert meta.name.startswith("Discord #general ")
   assert meta.group == "Discord #general"
   # No thread was started: the mention's own channel is the thread, and the
@@ -400,7 +404,7 @@ async def test_unmentioned_message_arms_follow_and_compares_ids_as_integers(tmp_
   # A 3-digit watermark: string order would flip it against the 19-digit
   # message id below, so arming at all proves the comparison went through
   # snowflake_key.
-  meta.discord_watermark_id = "999"
+  metadata_slots.set_fields(meta, "discord", discord_watermark_id="999")
   await session_mgr.save_metadata(meta)
   message_id = "1000000000000000100"
   message = _message(id=message_id, channel_id=_THREAD, content="the follow-up", mentions=[])

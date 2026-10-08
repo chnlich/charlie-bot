@@ -14,6 +14,7 @@ import conftest
 import pytest
 
 from src.features.slack.slack_listener import handle_app_mention, summon_session_id
+from src.infra import metadata_slots
 from src.infra import config
 from src.infra import event_types as ET
 from src.runtime import sessions, task_sessions
@@ -73,8 +74,10 @@ async def test_summon_creates_a_manager_root_under_its_thread_id_and_origin(
   assert launches == [(session_id, 1)]
   _assert_manager_root(cfg, session_id)
   meta = await session_mgr.get_session(session_id)
-  assert meta is not None and meta.slack_origin is not None
-  assert (meta.slack_origin.team_id, meta.slack_origin.channel_id) == ("T_TEST", "C_TEST")
+  assert meta is not None
+  origin = metadata_slots.fields_of(meta, "slack").slack_origin
+  assert origin is not None
+  assert (origin.team_id, origin.channel_id) == ("T_TEST", "C_TEST")
   assert meta.name.startswith("Slack #") and meta.backend == cfg.backends.options[0].id
 
 

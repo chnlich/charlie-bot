@@ -15,6 +15,7 @@ from conftest import (
 )
 
 from src.features.chat_threads.thread_sessions import THREAD_CONTEXT_WINDOW
+from src.features.slack.metadata import SlackOrigin
 from src.infra import config as core_config
 from src.infra import models
 from src.infra.constants import SESSION_ID_ENV_VAR
@@ -116,7 +117,7 @@ async def test_run_cc_thread_session_pins_clc_context_window(tmp_path: Path, mon
       id="session-id",
       name="Thread",
       backend="charlie-code-kimi-k3",
-      slack_origin=models.SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"))
+      slack_origin=SlackOrigin(team_id="T", channel_id="C", thread_ts="1700000000.000100"))
   item = make_work_item(cfg, session_meta, cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 

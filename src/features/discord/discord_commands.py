@@ -17,9 +17,12 @@ endpoint maps onto the response.
 
 from __future__ import annotations
 
+from typing import cast
+
 from src.features.chat_threads import thread_entry
 from src.features.discord import discord_client, discord_listener
-from src.infra import config, models
+from src.features.discord.metadata import DiscordSessionFields
+from src.infra import config, metadata_slots
 from src.runtime import sessions
 
 
@@ -79,10 +82,12 @@ async def _read_own_thread(
   counts the unread left outside the window.
   """
   meta = await thread_entry.require_thread_session(discord_listener.DISCORD, session_id, session_mgr)
-  origin: models.DiscordOrigin = meta.discord_origin
+  fields = cast(DiscordSessionFields, metadata_slots.fields_of(meta, "discord"))
+  origin = fields.discord_origin
+  assert origin is not None
   client = discord_listener._bot_client()
   adapter = discord_listener.DiscordThreadAdapter(client)
-  watermark = meta.discord_watermark_id
+  watermark = fields.discord_watermark_id
   thread_messages = await _read_thread_messages(client, origin.thread_id)
   try:
     starter = await client.get_message(origin.parent_channel_id, origin.thread_id)

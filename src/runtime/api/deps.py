@@ -103,7 +103,7 @@ def bad_request(exc: Exception) -> fastapi.HTTPException:
 
   Route handlers raise this from the except clauses that translate a domain
   failure (the delegate spawn's backend resolution, the plan registry's
-  lineage rules, fork/elone succession, cron-task backend validation, trigger
+  lineage rules, fork/elone succession, scheduled-task backend validation, trigger
   scheduling, the openai-compatible proxy's request translation); raising
   keeps the ``from e`` chain intact.
   """

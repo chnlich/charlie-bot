@@ -720,24 +720,24 @@ async def test_restart_recovery_marks_improve_loop_through_registered_controller
 
 
 @pytest.mark.asyncio
-async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
+async def test_improve_controller_preserves_base_lookups_and_skips_recovery(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-  """Improve loop paths do not bind, own, list, or replay sequence sessions."""
+  """The kind lookup selects the improve controller; it binds, owns, and lists
+    nothing, and recovery leaves an iteration Run alone (no replay, no follow-up)."""
   from datetime import UTC, datetime
-  from types import SimpleNamespace
   from unittest.mock import AsyncMock
 
   from src.features.improve.improve_command import ImproveState, save_loop_state
   from src.features.improve.improve_sequence import loop_owner_ref
   from src.features.improve.sequence_controller import ImproveSequenceController
-  from src.infra.models import SequenceRef
+  from src.infra.models import RunRecord, SequenceRef
   from src.runtime.hooks.sequence_controllers import (
       binding_for,
-      controller_for,
+      controller_for_sequence,
       sequence_controllers,
       sequence_listing_fields,
   )
-  from src.runtime.task_execution import _replay_sequence_firing
+  from src.runtime.task_execution import _replay_followups
 
   cfg, _session_blocks, tree = build_env(tmp_path, monkeypatch)
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
@@ -759,8 +759,9 @@ async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
   improve_controller = next(c for c in controllers if isinstance(c, ImproveSequenceController))
   base_controllers = tuple(c for c in controllers if c is not improve_controller)
   owner_ref = loop_owner_ref(manager.id, state.loop_id, cfg)
-  assert improve_controller.owner_prefix == "improve:"
-  assert controller_for(owner_ref) is None
+  assert improve_controller.sequence_kind == "improve"
+  ref = SequenceRef(kind="improve", owner_ref=owner_ref, position=1)
+  assert controller_for_sequence(ref) is improve_controller
 
   base_binding = next((binding for c in base_controllers if (binding := c.binding(manager.id)) is not None), None)
   assert binding_for(manager.id) is base_binding
@@ -781,6 +782,8 @@ async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
     mock = AsyncMock()
     monkeypatch.setattr(controller, "redrive", mock)
     redrive_mocks.append(mock)
-  run = SimpleNamespace(sequence_ref=SequenceRef(kind="improve", owner_ref=owner_ref, position=1))
-  await _replay_sequence_firing(manager.id, tree, run, cfg)
+  await tree.runs.register_run(RunRecord(id="it-run", session_id=manager.id, kind="iteration", sequence_ref=ref))
+  counters = {"followups": 0}
+  await _replay_followups(manager.id, tree, None, counters, cfg)
+  assert counters["followups"] == 0
   assert all(mock.await_count == 0 for mock in redrive_mocks)

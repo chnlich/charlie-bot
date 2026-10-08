@@ -740,7 +740,7 @@ class RunStore:
     a stale record. The bump lands after the awaited write, on the same loop
     pass a later reader's synchronous derivation runs in.
     """
-    import asyncio  # deferred: the CLI's run-token resolution imports this module read-only
+    import asyncio  # deferred: charliebot improve --help
 
     await asyncio.to_thread(atomic_write_text, self.metadata_path(session_id, run.id), run.model_dump_json(indent=2))
     self.records_generation += 1

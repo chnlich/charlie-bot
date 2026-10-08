@@ -1,7 +1,7 @@
 """Input delivery, deduplication, claims, and parent reports for the task tree.
 
 This module owns the input side of the delivery stage: admission of browser,
-agent-relay, cron, and child-report input as durable facts with stable
+agent-relay, scheduled-task, and child-report input as durable facts with stable
 identity; the pure recoverable pending-input calculation over the fact
 history; the per-node input claims that bind one exact batch to one Run
 before launch; and the parent-report delivery with its fixed recipient.
@@ -440,12 +440,12 @@ class TaskInputDispatcher:
         return decision
       if tree.runs.stop_requested(events, run.id):
         continue  # a stopped queued run is never launched
-      if run.kind in ("iteration", "scheduled_step"):
-        # Sequence Runs are their controller's launches: they need the
+      if run.sequence_ref is not None:
+        # A sequence Run is its controller's launch: it needs the owning
         # controller's composed prompt and sequence context, so the
         # dispatcher never starts one headlessly (and an interrupted
-        # improve iteration is never silently auto-resumed). The
-        # owning controller or the recovery re-drive advances them.
+        # iteration is never silently auto-resumed). The owning controller
+        # or the recovery re-drive advances it.
         continue
       if run.kind == "manager_turn" and not run.input_event_ids and not pending:
         # A void reservation (registered, never claimed): with nothing

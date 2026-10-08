@@ -582,7 +582,7 @@ async def git_worktree_remove_reporting(
   Returns an error message string when the remove fails so the caller can surface
   it in its own flow, or None on success and when the flow has no worktree to
   clean. ``label``, ``log_fields``, and the two structlog event names carry the
-  caller's flow identity (worker finalize, review chain, improve loop);
+  caller's flow identity (worker finalize, review chain, sequence loop);
   ``owner_id`` feeds the remove/prune primitives' thread_id log field. A
   worktree without a branch raises instead of reporting: the residue name and
   the prune both derive from the branch, so a missing one is corrupt state, not

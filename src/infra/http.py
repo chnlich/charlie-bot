@@ -39,7 +39,7 @@ def load_requests(namespace: dict[str, Any]) -> Any:
   Each consumer passes its own ``globals()``: the per-module binding keeps that
   module's bare-name reads working and its module-attribute route (e.g.
   ``<consumer module>.requests``) the tests' monkeypatch target, exactly as
-  ``load_croniter`` does for croniter.
+  ``load_croniter`` does for its parser.
   """
   import requests
 

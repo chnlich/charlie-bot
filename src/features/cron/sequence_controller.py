@@ -20,7 +20,7 @@ if TYPE_CHECKING:
   from collections.abc import Iterable
 
   from src.infra.config import CharlieBotConfig
-  from src.infra.models import SessionMetadata
+  from src.infra.models import RunRecord, SessionMetadata
   from src.runtime.task_sessions import TaskTreeManager
 
 log = LazyStructlogLogger()
@@ -107,12 +107,46 @@ class CronBinding:
 
 
 class CronSequenceController(SequenceController):
-  owner_prefix = "cron:"
+  sequence_kind = "cron_steps"
 
   async def redrive(self, session_id: str, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
     from src.features.cron.cron_sequence import redrive_firing
 
     await redrive_firing(session_id, tree, cfg)
+
+  async def launch_context(
+      self, meta: SessionMetadata, run: RunRecord, launch_text: str, cfg: CharlieBotConfig) -> str | None:
+    """A step's context stays the runtime's rendering over the controller's prompt.
+
+    The step prompt rides the launch verbatim (``launch_text``); the adapter
+    renders it as the task/input context over the step Run's pinned
+    worktree provenance, so this controller composes no context of its own.
+    """
+    return None
+
+  async def after_run(self, session_id: str, run: RunRecord, tree: TaskTreeManager, cfg: CharlieBotConfig) -> None:
+    """Re-drive the firing from this durable finish.
+
+    The next permitted step launches, or the ONE boundary report re-delivers
+    — without waiting for the next tick or restart, and idempotent against a
+    live controller.
+    """
+    await self.redrive(session_id, tree, cfg)
+
+  async def recover_run(
+      self, session_id: str, run: RunRecord, outcome: str | None, tree: TaskTreeManager, cfg: CharlieBotConfig) -> bool:
+    """Replay a terminal or registered-but-unlaunched step; True adds one follow-up.
+
+    A terminal step re-drives the frontier (the next position launches or the
+    ONE boundary report re-delivers); the same redrive replays an admitted
+    step whose controller settled withheld or died before its launch. Both
+    are idempotent by stable Run ids; a live process is followed, never
+    relaunched.
+    """
+    if outcome is None and run.pid is not None:
+      return False
+    await self.redrive(session_id, tree, cfg)
+    return True
 
   def binding(self, session_id: str) -> CronBinding | None:
     from src.features.cron.cron_sequence import bound_task_name

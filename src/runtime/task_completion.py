@@ -1155,7 +1155,7 @@ class TaskCompletionManager:
 
   async def restore_chain(self, session_id: str, *, request_id: str, reason: str) -> list[str]:
     """The restore entry for callers that bring their own authorization (the
-    scheduler's auto-bind and cron-enable restores): takes the control lock,
+    scheduler's auto-bind and enable restores): takes the control lock,
     writes the chain's facts, and announces them after the lock releases."""
     async with self._tree.control_lock:
       restored, announcements = await self.restore_chain_locked(session_id, request_id=request_id, reason=reason)

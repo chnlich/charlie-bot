@@ -204,8 +204,8 @@ def check_takeoff_gate_for_task(
   real user instruction is where the existing gate applies; a failed gate
   there blocks — the walk never borrows from a higher ancestor past a node
   that holds a real user message. Every ancestor on the way must be an open
-  task, and the calling node itself must be a manager. Agent messages, cron
-  inputs, and child reports never mint or revoke a user authorization window;
+  task, and the calling node itself must be a manager. Agent messages,
+  scheduled-task inputs, and child reports never mint or revoke a user authorization window;
   only real user messages count.
 
   Returns the session id whose gate authorized; raises

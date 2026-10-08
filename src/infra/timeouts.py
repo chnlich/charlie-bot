@@ -85,7 +85,7 @@ HOME_SERVICE_PROBE_TIMEOUT = 0.3  # seconds
 # back to the static User-Agent, so the bound only caps the first request's wait.
 EXT_USAGE_VERSION_PROBE_TIMEOUT = 5  # seconds
 
-# CLI -> CharlieBot server internal endpoints (delegate, improve).
+# CLI -> CharlieBot server internal endpoints (the delegate and sequence commands).
 HTTP_INTERNAL_API_TIMEOUT = 30  # seconds — local loopback, generous for cold starts
 
 # Best-effort fetch of /api/internal/version on the CLI error path, bounded so a hung

@@ -130,9 +130,10 @@ def load_worker_prompt_sections(cfg: config.CharlieBotConfig) -> dict[str, str]:
   return merged
 
 
-def _substitute_tokens(template: str, tokens: dict[str, str]) -> str:
+def substitute_tokens(template: str, tokens: dict[str, str]) -> str:
   """Sequentially `str.replace` every `{{name}}` token (not `str.format` -- section text may
   contain literal single braces)."""
+
   result = template
   for token, value in tokens.items():
     result = result.replace(token, value)
@@ -154,18 +155,6 @@ def verify_contract_tokens(cfg: config.CharlieBotConfig) -> dict[str, str]:
   return {
       "{{result_trailer_expected}}": verify_trailer.VERIFY_RESULT_TRAILER_EXPECTED,
       "{{canonical_template_path}}": str((cfg.charlie_bot_repo / "prompts" / "plan_template.html").resolve()),
-  }
-
-
-def iteration_report_tokens(loop_dir: str, iteration_number: int) -> dict[str, str]:
-  """The iteration_reports section's token map: loop dir plus the plain and zero-padded number.
-
-  One home for render_iteration_reports, so the padding contract is one definition.
-  """
-  return {
-      "{{loop_dir}}": loop_dir,
-      "{{iteration_number_padded}}": f"{iteration_number:04d}",
-      "{{iteration_number}}": str(iteration_number),
   }
 
 

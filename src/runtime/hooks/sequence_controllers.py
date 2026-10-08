@@ -3,6 +3,13 @@
 Packages register a controller by module path. The module imports no feature
 package; a controller module is imported only when a runtime path first asks
 for the registered controllers.
+
+A controller owns every Run whose ``sequence_ref.kind`` names its declared
+``sequence_kind``. A Run whose kind no registered controller claims (its
+package was deleted) is never launched by the dispatcher, its finish and its
+recovery log the ``sequence_run_without_controller`` warning and do nothing
+else — except that recovery records ``interrupted`` for a registered-but-
+unlaunched one, so the node holds no Run that nothing can finish.
 """
 
 from __future__ import annotations
@@ -17,11 +24,11 @@ if TYPE_CHECKING:
   from pathlib import Path
 
   from src.infra.config import CharlieBotConfig
-  from src.infra.models import RunRecord, SessionMetadata
+  from src.infra.models import RunRecord, SequenceRef, SessionMetadata
 
 
 class SequenceBinding(Protocol):
-  """One node's binding to a sequence; cron: the loaded task whose session_id names the node."""
+  """One node's binding to a sequence; a scheduled task's binding is the loaded task whose session_id names the node."""
 
   name: str
   dedicated_backend: bool
@@ -132,7 +139,7 @@ class SequenceTree(Protocol):
   completion: SequenceCompletion
   session_events: SequenceSessionEvents
   session_successor: SequenceSuccessor
-  _cfg: CharlieBotConfig  # read by the cron backend resolution
+  _cfg: CharlieBotConfig  # read by the scheduled task's backend resolution
 
   async def load_meta(self, session_id: str) -> SessionMetadata | None:
     ...
@@ -144,10 +151,36 @@ class SequenceTree(Protocol):
 class SequenceController(Protocol):
   """A package's runtime interface for one kind of durable sequence."""
 
-  owner_prefix: str
+  sequence_kind: str  # the SequenceRef.kind whose Runs this controller owns
 
   async def redrive(self, session_id: str, tree: SequenceTree, cfg: CharlieBotConfig) -> None:
     """Redrive the sequence that owns a durable Run reference."""
+    ...
+
+  async def launch_context(
+      self, meta: SessionMetadata, run: RunRecord, launch_text: str, cfg: CharlieBotConfig) -> str | None:
+    """One sequence Run's task/input context, composed by its owning controller.
+
+    *launch_text* is the prompt the controller passed the adapter at launch
+    (an iteration's composed description, a step's prompt). A non-None answer
+    IS the context; None hands composition back to the runtime's step
+    rendering over *launch_text*.
+    """
+    ...
+
+  async def after_run(self, session_id: str, run: RunRecord, tree: SequenceTree, cfg: CharlieBotConfig) -> None:
+    """One sequence Run's durable finish: the owning controller's progression duty."""
+    ...
+
+  async def recover_run(
+      self, session_id: str, run: RunRecord, outcome: str | None, tree: SequenceTree, cfg: CharlieBotConfig) -> bool:
+    """Recovery duty for one sequence Run; True adds one follow-up to the counters.
+
+    *outcome* is the Run's terminal outcome, or None while it has none. A
+    launched, non-terminal Run is followed (or drained) by the recovery's
+    earlier pass, so this replays only terminal or unlaunched Runs and is
+    idempotent by stable ids.
+    """
     ...
 
   async def reconcile_interrupted(self, cfg: CharlieBotConfig, tree: SequenceTree) -> None:
@@ -196,11 +229,11 @@ def sequence_controllers() -> tuple[SequenceController, ...]:
   return tuple(_load_controller(name) for name in _registered)
 
 
-def controller_for(owner_ref: str) -> SequenceController | None:
-  """The controller whose owner prefix matches *owner_ref*, if registered."""
-  matches = [controller for controller in sequence_controllers() if owner_ref.startswith(controller.owner_prefix)]
+def controller_for_sequence(ref: SequenceRef) -> SequenceController | None:
+  """The controller that owns *ref*'s sequence kind, if registered."""
+  matches = [controller for controller in sequence_controllers() if controller.sequence_kind == ref.kind]
   if len(matches) > 1:
-    raise ValueError(f"multiple sequence controllers own {owner_ref!r}")
+    raise ValueError(f"multiple sequence controllers own sequence kind {ref.kind!r}")
   return matches[0] if matches else None
 
 

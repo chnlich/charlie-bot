@@ -2036,8 +2036,7 @@ class TaskExecutionAdapter:
 
         The source event is the Run's durable run_finished fact and the
         recipient is the close-time fixed parent, so the stable report id
-        dedups across recovery and repeated finalize without ever relying on
-        the legacy master_woke_after_summary judgment. Only a freshly created
+        dedups across recovery and repeated finalize. Only a freshly created
         report wakes the parent, so a recovery re-delivery of an already
         delivered report never wakes twice.
         """

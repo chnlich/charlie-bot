@@ -628,25 +628,16 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
     ]
     assert reports and reports[-1]["outcome"] == "completed"
 
-    # The parent-addressed compatibility alias (thread_id from the delegate
-    # contract) resolves to the child's Run — not to a run on the parent.
-    resolved = tree.aliases.resolve_thread(manager.id, run_id)
-    assert resolved == {"session_id": child_id, "run_id": run_id}
+    # The list route exposes the same Run as a thread row: its real id,
+    # backend and finished status — no ThreadMetadata exists.
     from src.runtime.api import deps
     monkeypatch.setattr(deps, "_task_manager", tree)
-    row = client.get(f"/api/threads/{manager.id}/threads/{run_id}", headers=OP_HEADERS)
-    assert row.status_code == 200, row.text
-    assert row.json()["id"] == run_id
-    assert row.json()["session_id"] == child_id
-
-    # The legacy list route exposes the same Run as a compatibility row:
-    # its real id, backend and finished status — no ThreadMetadata exists.
     listed = client.get(f"/api/threads/{child_id}/list", headers=OP_HEADERS)
     assert listed.status_code == 200, listed.text
     rows = listed.json()
     assert isinstance(rows, list)
     compat = [r for r in rows if r.get("id") == run_id]
-    assert compat, f"the worker run did not surface in the legacy list: {listed.text[:400]}"
+    assert compat, f"the worker run did not surface in the thread list: {listed.text[:400]}"
     assert compat[0]["backend"] == "fake" and compat[0]["status"] == "completed"
     legacy_dir = cfg.sessions_dir / child_id / "threads"
     assert not list(legacy_dir.iterdir()) if legacy_dir.is_dir() else True

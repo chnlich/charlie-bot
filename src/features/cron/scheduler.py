@@ -220,7 +220,7 @@ class Scheduler:
     await asyncio.to_thread(write_cron_key, task_cfg.name, "session_id", node.id)
     task_cfg.session_id = node.id
     # Step 4 — archive every active cron session of the task, unconditionally
-    # (no busy gate: a legacy thread stuck at running must not hold the
+    # (no busy gate: a cron session stuck at running must not hold the
     # archive off for the 30-day scan window; a firing leaf still running
     # under it finishes normally).
     await self._archive_active_cron_sessions(task_cfg.name, session_cache)

@@ -34,8 +34,7 @@ from src.runtime.model_family import model_family
 # the dead-field bound below. Every
 # chat wire shape carries the bound — the stream delta, the committed message
 # behind the events pages, and the bootstrap payload — because the trim lands
-# at ingestion (tool_preview on every buffered row); the workers-events
-# projection (src/runtime/api/threads.py) carries it too. The persisted event keeps
+# at ingestion (tool_preview on every buffered row). The persisted event keeps
 # the full content (raw download, fork reference, review scans all read it
 # there).
 TOOL_PREVIEW_CHARS = 500

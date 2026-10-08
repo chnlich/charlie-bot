@@ -45,7 +45,6 @@ from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
 from src.runtime.hooks import backend_types
 from src.runtime.run_token import b64url_decode, b64url_encode
-from src.runtime.session_aliases import SessionAliasStore
 from src.runtime.sidebar_state import mark_sidebar_dirty
 
 log = LazyStructlogLogger()
@@ -341,12 +340,11 @@ def scan_result_exit(
 ) -> tuple[list[dict], dict | None, int]:
   """Whole-file result scan: projected events, last result event, and its exit code.
 
-  A missing raw log is a legal drain input (never-started run, legacy thread
-  without the transport): it scans to no events, no result, exit -1. The
-  whole-file scan needs a FRESH translate — a stateful translate may not be
-  reused after it consumed a stream tail. Exit code: 0 only when a result
-  event exists and ``result_success`` holds, else -1, the code a died-mid-run
-  live turn reports for its missing result event.
+  A missing raw log is a legal drain input (a never-started run): it scans to no
+  events, no result, exit -1. The whole-file scan needs a FRESH translate — a
+  stateful translate may not be reused after it consumed a stream tail. Exit code:
+  0 only when a result event exists and ``result_success`` holds, else -1, the code
+  a died-mid-run live turn reports for its missing result event.
   """
   events = project_raw_file(raw_path, translate) if raw_path.is_file() else []
   result = summarize_result(events)
@@ -547,7 +545,7 @@ from src.runtime.run_identity import (  # noqa: E402, F401  (re-export)
 def terminal_outcome_in_events(events: list[dict], run_id: str) -> str | None:
   """The last recorded run_finished outcome of one Run (None while none).
 
-  The pure fact scan behind ``RunStore.terminal_outcome``: the API's legacy
+  The pure fact scan behind ``RunStore.terminal_outcome``: the Threads list route's
   status fold (src.runtime.api.threads) reads the same durable events through this
   function so both owners answer one identical question.
   """
@@ -667,14 +665,13 @@ def _decode_run_cursor(cursor: str) -> tuple[tuple[datetime, str], bool]:
 
 
 class RunStore:
-  """Owns v2 run records, their aliases, and every terminal fact."""
+  """Owns v2 run records and every terminal fact."""
 
   def __init__(
       self,
       sessions_dir: Path,
       control_lock: asyncio.Lock | None,
       events: ControlEventSink | None,
-      aliases: SessionAliasStore,
   ) -> None:
     """*sessions_dir* is the store's path root; *events* None wires a read-only
     store (the CLI's run-token identity resolution): the reads fall back to the
@@ -684,7 +681,6 @@ class RunStore:
     self._sessions_dir = sessions_dir
     self._lock = control_lock  # the one short control write lock, shared with the tree owner
     self._events = events
-    self._aliases = aliases
     # Installed by the tree owner: the full fact-history reader (archived
     # segments included) the terminal/stop/identity reads use, so a rotated
     # acknowledgement or stop request never un-dones itself.
@@ -929,7 +925,7 @@ class RunStore:
   # -- registration --------------------------------------------------------
 
   async def register_run(self, record: RunRecord, *, task_spec_text: str | None = None) -> RunRecord:
-    """Publish one run record (idempotent by id) and its compatibility thread alias.
+    """Publish one run record (idempotent by id).
 
     The pinned task-spec body lands before the metadata that references it, so
     a crash between the two leaves an unreferenced body, never a record whose
@@ -942,10 +938,6 @@ class RunStore:
     """register_run for a caller already holding the control lock (the lock is not reentrant)."""
     existing = self.read_run_sync(record.session_id, record.id)
     if existing is not None:
-      # Re-register the alias on the replay path: a crash between the original
-      # metadata write and its alias write must not leave the compatibility
-      # entry missing forever (the write is idempotent).
-      self._aliases.register_run_thread(record.session_id, record.id)
       return existing
     run_dir = self.run_dir(record.session_id, record.id)
     if task_spec_text is not None:
@@ -956,7 +948,6 @@ class RunStore:
       record.task_spec_hash = sha256_hex(task_spec_text)
     run_dir.mkdir(parents=True, exist_ok=True)
     await self.write_record(record.session_id, record)
-    self._aliases.register_run_thread(record.session_id, record.id)
     # A registered Run is a new fact transition (queued work exists where none
     # did): the node's sidebar state must re-probe on the next poll. No path
     # rides the mark: the sidebar probe's own signature walk covers the file.

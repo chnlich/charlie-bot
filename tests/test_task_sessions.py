@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import datetime
-import json
 import pathlib
 
 import conftest
@@ -13,22 +12,6 @@ from src.infra import models
 from src.features.slack.metadata import SlackOrigin
 from src.infra import metadata_slots
 from src.runtime import run_token, task_sessions
-
-
-def write_session_alias(
-    path: pathlib.Path, *, old_session_ids: dict[str, str], old_threads: dict[str, dict] | None = None) -> None:
-  """Write one session_aliases.json in the store's own file shape."""
-  path.parent.mkdir(parents=True, exist_ok=True)
-  path.write_text(
-      json.dumps(
-          {
-              "old_session_ids": old_session_ids,
-              "old_threads": old_threads or {},
-          },
-          ensure_ascii=False,
-          indent=2,
-          sort_keys=True),
-      encoding="utf-8")
 
 
 async def build_three_levels(mgr: task_sessions.TaskTreeManager) -> dict[str, str]:
@@ -110,13 +93,7 @@ async def test_permanent_delete_blockers(tmp_path: pathlib.Path) -> None:
   blockers = await mgr.deletion_blockers(ids["worker2"])
   assert any("trigger" in b for b in blockers)
 
-  # A saved alias mapping referencing the session blocks deletion too. The
-  # file format is the store's contract; the test writes it directly.
   leaf = await conftest.create_task(mgr, parent=ids["root"], request_id="leafy", profile="worker", name="Leafy")
-  write_session_alias(mgr.aliases.path, old_session_ids={"old-leaf": leaf.id})
-  blockers = await mgr.deletion_blockers(leaf.id)
-  assert any("alias" in b for b in blockers)
-  mgr.aliases.path.unlink()
   assert await mgr.deletion_blockers(leaf.id) == []
 
 

@@ -1842,9 +1842,7 @@ async def cancel_session_task(
 def _require_own_run_scope(caller: CallerIdentity, session_id: str, run_id: str) -> None:
   """One cancel path's own-run scope: an operator passes; a run token must name this run.
 
-  Raises 403 otherwise. The thread-cancel alias path (src/runtime/api/threads.py) calls
-  this through a function-level import: sessions imports threads at module
-  scope, so the reverse import is deferred to the call site.
+  Raises 403 otherwise.
   """
   if caller.is_operator:
     return

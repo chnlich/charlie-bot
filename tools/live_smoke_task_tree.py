@@ -26,8 +26,8 @@ of the default test run) and must be reviewed for isolation before it runs:
   persist native session ids and models on their Run records, acknowledge the
   exact claimed input, and land successful result refs. The worker must close
   and auto-archive on its delivered report; the manager must remain open. The
-  compatibility aliases must resolve both run ids to the same Run. A network
-  or backend failure is an explicit test failure, never a mocked pass.
+  worker task's runs route must list its Run. A network or backend failure is
+  an explicit test failure, never a mocked pass.
 - Context stage. Both real launches ride the one assembler: the preview
   endpoint's next-start object equals the stored launch snapshot byte for byte
   (same prompt_hash/char_count/blocks), the stored snapshot's blocks carry
@@ -530,11 +530,10 @@ async def smoke(backend_id: str, purge: bool) -> None:
       fail(f"manager native anchor jumped conversations: {meta_after.cc_session_id}")
     log("manager native continuation: instruction hash retained across the report turn")
 
-    # -- the compatibility aliases resolve to the same Run ---------------
-    for owner in (child_id, manager_id):
-      status, row = await arequest(base, access_key, "GET", f"/api/threads/{owner}/threads/{worker_run_id}")
-      if status != 200 or row.get("id") != worker_run_id:
-        fail(f"alias {owner}/{worker_run_id} did not resolve to the run: {status} {row}")
+    # -- the worker task's runs route lists its Run ----------------------
+    status, page = await arequest(base, access_key, "GET", f"/api/sessions/{child_id}/runs")
+    if status != 200 or worker_run_id not in [row["id"] for row in page["items"]]:
+      fail(f"GET /api/sessions/{child_id}/runs did not list run {worker_run_id}: {status} {page}")
 
     # -- native CLC session state stayed under the synthetic home --------
     clc_sessions = home / "clc-sessions"

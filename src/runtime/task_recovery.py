@@ -54,8 +54,6 @@ async def reconcile_task_tree(
     adapter: task_execution.TaskExecutionAdapter | None = None,
 ) -> dict:
   """Reconcile every v2 node this instance owns. Returns pass counters."""
-  from src.features.improve import improve_sequence
-
   adapter = adapter if adapter is not None else tree.dispatch.executor
   counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
   if not cfg.sessions_dir.is_dir():
@@ -63,7 +61,6 @@ async def reconcile_task_tree(
 
   # The sequence controllers' honest verdicts come first: a recovered
   # "interrupted" improve state must not race the Run reconciliation below.
-  await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
   from src.runtime.hooks.sequence_controllers import sequence_controllers
   for controller in sequence_controllers():
     await controller.reconcile_interrupted(cfg, tree)

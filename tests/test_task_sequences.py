@@ -668,3 +668,124 @@ async def test_replaying_an_iteration_report_creates_no_event_and_wakes_nobody(
   assert created is False and replayed["id"] == first["id"]
   assert len(_iteration_reports(tree, manager.id)) == 1
   assert wakes == [manager.id, manager.id]
+
+
+@pytest.mark.asyncio
+async def test_restart_recovery_marks_improve_loop_through_registered_controller(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """The registered improve controller marks a prior-process loop interrupted once."""
+  import os
+
+  from src.features.improve.improve_command import (
+      ImproveState,
+      _active_loop_path,
+      load_loop_state,
+      save_loop_state,
+  )
+  from src.features.improve.sequence_controller import ImproveSequenceController
+  from src.runtime.hooks.sequence_controllers import sequence_controllers
+  from src.runtime.task_recovery import reconcile_task_tree
+
+  cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  state = ImproveState(
+      loop_id=1,
+      goal="improve the thing",
+      status="running",
+      work_branch="improve/restart",
+      base_branch="main",
+      repo_path=str(tmp_path),
+      created_at="2026-10-07T00:00:00+00:00",
+      server_pid=os.getpid() + 1,
+  )
+  await save_loop_state(manager.id, state, cfg)
+  active_lock = _active_loop_path(manager.id, cfg)
+  active_lock.write_text("1\n")
+
+  improve_controller = next(c for c in sequence_controllers() if isinstance(c, ImproveSequenceController))
+  reconcile = improve_controller.reconcile_interrupted
+  controller_calls: list[tuple[object, object]] = []
+
+  async def record_controller_call(cfg_arg, tree_arg) -> None:
+    controller_calls.append((cfg_arg, tree_arg))
+    await reconcile(cfg_arg, tree_arg)
+
+  monkeypatch.setattr(improve_controller, "reconcile_interrupted", record_controller_call)
+  await reconcile_task_tree(cfg, tree)
+
+  recovered = await load_loop_state(manager.id, state.loop_id, cfg)
+  assert recovered is not None and recovered.status == "interrupted"
+  assert not active_lock.exists()
+  notices = [e for e in tree.events.load_events(manager.id) if e.get("type") == improve_sequence.IMPROVE_FAILED]
+  assert len(notices) == 1
+  assert notices[0]["goal"] == state.goal
+  assert controller_calls == [(cfg, tree)]
+
+
+@pytest.mark.asyncio
+async def test_improve_controller_preserves_base_lookups_and_skips_redrive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  """Improve loop paths do not bind, own, list, or replay sequence sessions."""
+  from datetime import UTC, datetime
+  from types import SimpleNamespace
+  from unittest.mock import AsyncMock
+
+  from src.features.improve.improve_command import ImproveState, save_loop_state
+  from src.features.improve.improve_sequence import loop_owner_ref
+  from src.features.improve.sequence_controller import ImproveSequenceController
+  from src.infra.models import SequenceRef
+  from src.runtime.hooks.sequence_controllers import (
+      binding_for,
+      controller_for,
+      sequence_controllers,
+      sequence_listing_fields,
+  )
+  from src.runtime.task_recovery import _replay_sequence_firing
+
+  cfg, _session_mgr, tree = build_env(tmp_path, monkeypatch)
+  monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
+  manager = await create_task(
+      tree, parent=None, request_id="root", profile="manager", task=TaskSpec(goal="pm"), name="PM")
+  state = ImproveState(
+      loop_id=1,
+      goal="improve the thing",
+      status="running",
+      work_branch="improve/lookups",
+      base_branch="main",
+      repo_path=str(tmp_path),
+      created_at="2026-10-07T00:00:00+00:00",
+      server_pid=0,
+  )
+  await save_loop_state(manager.id, state, cfg)
+
+  controllers = sequence_controllers()
+  improve_controller = next(c for c in controllers if isinstance(c, ImproveSequenceController))
+  base_controllers = tuple(c for c in controllers if c is not improve_controller)
+  owner_ref = loop_owner_ref(manager.id, state.loop_id, cfg)
+  assert improve_controller.owner_prefix == "improve:"
+  assert controller_for(owner_ref) is None
+
+  base_binding = next((binding for c in base_controllers if (binding := c.binding(manager.id)) is not None), None)
+  assert binding_for(manager.id) is base_binding
+  base_ownership = any(c.owns_session(manager) for c in base_controllers)
+  assert improve_controller.owns_session(manager) is False
+  assert any(c.owns_session(manager) for c in controllers) is base_ownership
+
+  now_utc = datetime.now(UTC)
+  base_listing = {manager.id: {}}
+  for controller in base_controllers:
+    for session_id, fields in controller.listing_fields((manager.id,), now_utc).items():
+      base_listing.setdefault(session_id, {}).update(fields)
+  assert improve_controller.listing_fields((manager.id,), now_utc) == {}
+  assert sequence_listing_fields((manager.id,), now_utc) == base_listing
+
+  redrive_mocks = []
+  for controller in controllers:
+    mock = AsyncMock()
+    monkeypatch.setattr(controller, "redrive", mock)
+    redrive_mocks.append(mock)
+  run = SimpleNamespace(sequence_ref=SequenceRef(kind="improve", owner_ref=owner_ref, position=1))
+  await _replay_sequence_firing(manager.id, tree, run, cfg)
+  assert all(mock.await_count == 0 for mock in redrive_mocks)

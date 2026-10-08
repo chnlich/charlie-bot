@@ -5,6 +5,8 @@ a step re-enters in a fresh interpreter after ``uv sync``.
 """
 
 import subprocess
+import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -77,12 +79,16 @@ def recorded_commands(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
 def test_the_voice_step_syncs_then_re_enters_only_on_enable_step_when_a_gpu_is_present(
     monkeypatch: pytest.MonkeyPatch, recorded_commands: list[list[str]]) -> None:
   monkeypatch.setattr(voice_setup.shutil, "which", lambda name: "/usr/bin/nvidia-smi")
+  runner = types.SimpleNamespace(__spec__=types.SimpleNamespace(name="sentinel.runner"))
+  monkeypatch.setitem(sys.modules, "__main__", runner)
 
   voice_setup.setup_step(CharlieBotConfig(), dry_run=False)
 
   assert recorded_commands[0] == ["uv", "sync", "--group", "gpu-voice"]
-  assert recorded_commands[1][:4] == ["uv", "run", "--no-sync", "python"]
-  assert recorded_commands[1][-2:] == ["--step", "src.features.voice.voice_setup:enable_step"]
+  assert recorded_commands[1] == [
+      "uv", "run", "--no-sync", "python", "-m", "sentinel.runner", "--step",
+      "src.features.voice.voice_setup:enable_step"
+  ]
   assert len(recorded_commands) == 2
 
 

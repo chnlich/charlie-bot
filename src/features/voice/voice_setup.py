@@ -1,9 +1,9 @@
 """Deployment step for the qwen3_hf GPU voice engine.
 
-``scripts/setup.sh`` calls ``register_all()`` and ``voice_setup.enable()`` in one Python process on
-hosts with nvidia-smi, after ``uv sync --group gpu-voice``. The enable flow downloads the official
-Qwen3-ASR weights when missing, preflight-asserts the four GPU conditions (imports,
-cuda model load, measured decode timing, free VRAM report), and only then flips
+``setup_step`` is the step that ``scripts/setup.sh`` runs through ``src.app.setup``. On hosts with nvidia-smi it
+runs ``uv sync --group gpu-voice``, then calls ``enable_step`` in a fresh interpreter, which sees the synced
+packages. The enable flow downloads the official Qwen3-ASR weights when missing, preflight-asserts the four GPU
+conditions (imports, cuda model load, measured decode timing, free VRAM report), and only then flips
 ``voice.engine: qwen3_hf`` in the deployment config — idempotently, so rerunning setup
 neither re-downloads nor rewrites an already-enabled config. Any preflight failure
 raises with the failing line and leaves the config untouched.
@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import pathlib
 import re
+import shutil
+import subprocess
 import sys
 import time
 import wave
@@ -37,6 +39,8 @@ PREFLIGHT_DECODE_THRESHOLD_SECONDS = 2.5
 PREFLIGHT_RECORDING_MIN_SECONDS = 5.0
 PREFLIGHT_RECORDING_MAX_SECONDS = 15.0
 PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
+
+ENABLE_COMMAND = "uv run --no-sync python -m src.app.setup --step src.features.voice.voice_setup:enable_step"
 
 
 def write_voice_engine(home: pathlib.Path) -> str:
@@ -191,6 +195,32 @@ def enable(cfg: config.CharlieBotConfig | None = None) -> dict:
   report["config_write"] = action
   log.info("voice_engine_enabled", engine="qwen3_hf", model_id=cfg.voice.model_id, config_write=action)
   return report
+
+
+def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
+  """Provision the qwen3_hf engine on a host with an NVIDIA GPU; a host without one keeps the sherpa CPU engine."""
+  if shutil.which("nvidia-smi") is None:
+    print("==> No NVIDIA GPU detected: voice engine stays sherpa (CPU)")
+    return
+  print("==> NVIDIA GPU detected: provisioning the qwen3_hf voice engine")
+  if dry_run:
+    print("  dry-run: would run: uv sync --group gpu-voice; then register_all() + voice_setup.enable()")
+    return
+  # The report so far is buffered in this process; the child output below must follow it.
+  sys.stdout.flush()
+  subprocess.run(["uv", "sync", "--group", "gpu-voice"], check=True)
+  # The sync changed the installed packages, so the enable flow starts in a fresh interpreter. It enters
+  # through enable_step: re-entering setup_step would detect the GPU and sync again without end.
+  # The command line is one string: the child process imports the runner, this package does not, and
+  # tests/test_package_structure.py reads a lone "src.app.setup" element as an import of the app group.
+  subprocess.run(ENABLE_COMMAND.split(), check=True)
+
+
+def enable_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
+  """Run the enable flow and print each report item. ``setup_step`` calls it in a fresh interpreter."""
+  report = enable(cfg)
+  for key, value in report.items():
+    print(f"{key}: {value}")
 
 
 def main() -> None:

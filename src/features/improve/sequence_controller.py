@@ -14,6 +14,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
+from src.features.improve import improve_sequence
 from src.runtime.hooks.sequence_controllers import SequenceController
 from src.runtime.task_errors import TaskInvalidError
 
@@ -41,8 +42,6 @@ class ImproveSequenceController(SequenceController):
     pins the shared worktree facts. A Run whose sequence_ref is not this
     controller's kind is a registration bug and fails loudly.
     """
-    from src.features.improve import improve_sequence
-
     seq = run.sequence_ref
     if seq is None or seq.kind != self.sequence_kind:
       raise TaskInvalidError(
@@ -64,8 +63,6 @@ class ImproveSequenceController(SequenceController):
     return False
 
   async def reconcile_interrupted(self, cfg: CharlieBotConfig, tree: TaskTreeManager) -> None:
-    from src.features.improve import improve_sequence
-
     await improve_sequence.reconcile_interrupted_sequences(cfg, tree)
 
   def binding(self, session_id: str) -> SequenceBinding | None:

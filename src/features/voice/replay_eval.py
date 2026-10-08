@@ -35,9 +35,6 @@ from pathlib import Path
 
 import numpy as np
 
-# The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
 from src.features.voice import transcriber
 from src.features.voice.transcription import registry
 from src.features.voice.transcription.base import VOICE_CHUNK_SAMPLES, TranscriptionBackend
@@ -45,6 +42,9 @@ from src.features.voice.transcription.local import LocalTranscriptionBackend
 from src.features.voice.turn_contribution import VOICE_INPUT_MODE
 from src.infra.config import CharlieBotConfig, load_config
 from src.infra.models import utc_now_iso
+
+# The file sits at src/features/voice/, so parents[3] is the checkout root; moving it breaks the depth.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 # A voice recording pairs with the first voice-flagged user message sent within

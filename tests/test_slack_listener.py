@@ -242,7 +242,7 @@ async def test_trigger_master_forwards_input_id_to_the_task_wake(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
-  cfg, session_blocks, _ = _rig(tmp_path, monkeypatch)
+  _, session_blocks, _ = _rig(tmp_path, monkeypatch)
   meta = await create_root_session(session_blocks, CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:

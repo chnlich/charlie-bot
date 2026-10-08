@@ -12,7 +12,6 @@ import pytest
 from src.features.slack import slack_listener
 from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
-from src.infra import event_types as ET
 from src.infra import metadata_slots, models
 from src.runtime import triggers
 from src.runtime.session_store import SessionStore

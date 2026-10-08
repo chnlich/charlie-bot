@@ -533,7 +533,7 @@ def _backdate_cc_anchor(session_blocks: SessionBlocks, session_id: str, *, start
   session_blocks.store.metadata_cache.pop(session_id)  # the next read re-parses the file
 
 
-def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> pathlib.Path:
+def _write_old_thread(cfg: CharlieBotConfig, session_id: str, thread_id: str) -> Path:
   """One retained worker-thread directory from before the weekly recycle cutoff."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / thread_id
   thread_dir.mkdir(parents=True, exist_ok=True)

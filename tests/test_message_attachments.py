@@ -36,7 +36,6 @@ async def test_upload_file_strips_directory_components(tmp_path: pathlib.Path) -
 
 @pytest.mark.asyncio
 async def test_send_message_admits_structured_files_to_the_task_tree(tmp_path: pathlib.Path) -> None:
-  cfg = conftest.make_home_config(tmp_path)
   meta = models.SessionMetadata(profile="manager", name="Test Session")
   task_mgr = mock.MagicMock()
   task_mgr.dispatch.admit_input = mock.AsyncMock(return_value={"id": "event-1"})

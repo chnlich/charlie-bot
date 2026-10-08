@@ -11,7 +11,6 @@ import pytest
 from conftest import OPERATOR, build_env, create_task
 
 from src.infra import event_types as ET
-from src.infra import models
 from src.infra.models import RunRecord
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 

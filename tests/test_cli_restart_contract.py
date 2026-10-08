@@ -20,7 +20,6 @@ import threading
 import conftest
 import pytest
 
-from src.features.improve import cli as improve_module
 from src.infra import config
 from src.runtime import control_events
 from src.runtime.cli import common

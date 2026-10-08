@@ -40,7 +40,7 @@ from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, SessionMetadata
-from src.runtime import master_cc_queue, master_cc_run, master_cc_state, message_aggregator, session_events, streaming
+from src.runtime import master_cc_run, master_cc_state, message_aggregator, session_events, streaming
 from src.runtime.agent_process.base import make_result_event
 from src.runtime.hooks import turn_contributions
 from src.runtime.task_prompts import build_segments

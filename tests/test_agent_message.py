@@ -15,7 +15,6 @@ import pytest
 
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime.api import internal
 from src.runtime.cli import session
 
 # ---------------------------------------------------------------------------

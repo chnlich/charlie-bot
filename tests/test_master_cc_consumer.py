@@ -8,7 +8,7 @@ from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from conftest import (
@@ -36,7 +36,7 @@ from conftest import (
 from src.features.latex import latex
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionCallbacks, SessionMetadata
-from src.runtime import master_cc_queue, master_cc_run, master_cc_state, streaming, thinking_state
+from src.runtime import master_cc_run, master_cc_state, streaming, thinking_state
 from src.runtime.agent_process.base import make_result_event
 
 

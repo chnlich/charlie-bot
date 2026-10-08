@@ -88,7 +88,7 @@ async def _authorize_spawn_request(
   nothing).
   A node inherits authorization from its nearest real-user ancestor.
   """
-  meta = require_found(await store.get_session(req.session_id))
+  require_found(await store.get_session(req.session_id))
 
   if not (isinstance(req, DelegateRequest) and is_verify_exempt(req.task_type)):
     try:

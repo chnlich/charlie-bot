@@ -253,12 +253,18 @@ def sessions_dir_of(home: pathlib.Path) -> pathlib.Path:
   return home / "sessions"
 
 
-def scan_home(home: pathlib.Path, *, log_session_ids: frozenset[str] = frozenset()) -> list[SessionScan]:
+def scan_home(
+    home: pathlib.Path,
+    *,
+    log_session_ids: frozenset[str] = frozenset(),
+    read_all_logs: bool = False,
+) -> list[SessionScan]:
   """Every session directory of the home, in id order.
 
   A session directory holds a ``metadata.json``. An unpublished create's
   staging directory (``.task-*.tmp``) is never a session. The log is parsed
-  for each v1 session and each id in *log_session_ids*.
+  for each v1 session, each id in *log_session_ids*, or every session when
+  *read_all_logs* is true.
   """
   scans: list[SessionScan] = []
   for entry in sorted(sessions_dir_of(home).iterdir()):
@@ -266,8 +272,8 @@ def scan_home(home: pathlib.Path, *, log_session_ids: frozenset[str] = frozenset
       continue
     if not (entry / "metadata.json").exists():
       continue
-    scan = scan_session(entry, with_log=False)
-    if scan.meta is not None and (scan.is_v1 or entry.name in log_session_ids):
+    scan = scan_session(entry, with_log=read_all_logs)
+    if scan.meta is not None and not read_all_logs and (scan.is_v1 or entry.name in log_session_ids):
       scan = scan_session(entry, with_log=True)
     scans.append(scan)
   return scans
@@ -500,7 +506,7 @@ def format_census(label: str, census: Census) -> str:
 
 
 def cmd_dry_run(home: pathlib.Path) -> int:
-  scans = scan_home(home)
+  scans = scan_home(home, read_all_logs=True)
   print(format_census("sessions", census_of(scans)))
   v1 = [s for s in scans if s.is_v1 and s.error is None]
   print(f"would convert {len(v1)} session(s):")
@@ -546,6 +552,8 @@ def plan_receipt(home: pathlib.Path, sha: str, previous: dict | None, v1: list[S
         "was_archived": scan.is_archived,
         "appended_event_ids": appended_event_ids(scan.session_id, scan.is_archived),
         "log_existed": chat_events.chat_events_path(scan.directory).exists(),
+        "old_schema_version": scan.meta.get("schema_version", 1),
+        "old_profile": scan.meta.get("profile"),
         "old_values": {
             k: scan.meta[k] for k in CONVERTED_KEYS if k in scan.meta
         },
@@ -571,13 +579,13 @@ def plan_receipt(home: pathlib.Path, sha: str, previous: dict | None, v1: list[S
 
 
 def cmd_apply(home: pathlib.Path) -> int:
-  sha = source_sha()  # the preflight: git answers before anything is written
   try:
     fence = home_writer_fence.acquire_home_writer_fence(home, purpose="v1 session conversion apply")
   except (home_writer_fence.HomeWriterActiveError, home_writer_fence.FencePathRefusalError) as e:
     print(f"apply refused: {e}", file=sys.stderr)
     return 1
   with fence:
+    sha = source_sha()  # the receipt pins this checkout before the first session write
     scans = scan_home(home)
     if print_scan_errors(scans):
       print("apply refused: fix the sessions above, then run apply again", file=sys.stderr)

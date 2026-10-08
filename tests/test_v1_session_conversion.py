@@ -161,6 +161,10 @@ def test_apply_converts_each_v1_session_and_keeps_the_rest(home: Path, tmp_path:
   receipt = conversion.load_receipt(home)
   assert receipt["status"] == conversion.RECEIPT_COMPLETE
   assert receipt["counts"] == {"total_sessions": 4, "archived_sessions": 1, "v1_before": 3, "v1_after": 0}
+  entries = {entry["session_id"]: entry for entry in receipt["converted"]}
+  assert (entries[ACTIVE_ID]["old_schema_version"], entries[ACTIVE_ID]["old_profile"]) == (1, None)
+  assert (entries[ARCHIVED_ID]["old_schema_version"], entries[ARCHIVED_ID]["old_profile"]) == (1, None)
+  assert (entries[NO_LOG_ID]["old_schema_version"], entries[NO_LOG_ID]["old_profile"]) == (1, None)
 
 
 def test_second_apply_changes_nothing(home: Path) -> None:
@@ -183,21 +187,20 @@ def test_interrupted_apply_converges_to_the_clean_result(
         (target / relative).write_bytes((source / relative).read_bytes())
   assert _run("apply", clean_home) == 0
 
-  write_metadata = conversion.write_converted_metadata
-  calls: list[str] = []
+  append_event = conversion.append_event
 
-  def fail_on_the_second_session(scan: conversion.SessionScan, entry: dict) -> None:
-    calls.append(scan.session_id)
-    if len(calls) == 2:
-      raise RuntimeError("simulated crash after the appends")
-    write_metadata(scan, entry)
+  def fail_after_archived_import(session_dir: Path, event: dict) -> None:
+    append_event(session_dir, event)
+    if session_dir.name == ARCHIVED_ID and event["id"] == conversion.import_event_id(ARCHIVED_ID):
+      raise RuntimeError("simulated crash after task_imported")
 
-  monkeypatch.setattr(conversion, "write_converted_metadata", fail_on_the_second_session)
-  with pytest.raises(RuntimeError, match="simulated crash"):
+  monkeypatch.setattr(conversion, "append_event", fail_after_archived_import)
+  with pytest.raises(RuntimeError, match="after task_imported"):
     _run("apply", home)
   monkeypatch.undo()
   assert conversion.load_receipt(home)["status"] == conversion.RECEIPT_IN_PROGRESS
-  assert json.loads(_metadata_text(home, ARCHIVED_ID)).get("profile") is None  # the crashed session is still v1
+  assert json.loads(_metadata_text(home, ARCHIVED_ID)).get("profile") is None
+  assert _log_ids(home, ARCHIVED_ID) == ["b-1", "b-2", conversion.import_event_id(ARCHIVED_ID)]
 
   assert _run("apply", home) == 0
 
@@ -252,10 +255,16 @@ def test_rollback_keeps_events_written_after_the_conversion(home: Path) -> None:
   assert _log_ids(home, ACTIVE_ID) == ["a-1", "a-2", "a-3", "a-later"]
 
 
-def test_apply_and_rollback_refuse_while_another_process_holds_the_fence(home: Path) -> None:
+def test_apply_and_rollback_refuse_while_another_process_holds_the_fence(
+    home: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
   before = _state(home)
-  with home_writer_fence.acquire_home_writer_fence(home, purpose="test holder"):
-    assert _run("apply", home) == 1
+  with monkeypatch.context() as patcher:
+    patcher.setattr(conversion, "source_sha", lambda: pytest.fail("apply looked up git before fencing the home"))
+    with home_writer_fence.acquire_home_writer_fence(home, purpose="test holder"):
+      assert _run("apply", home) == 1
+  refusal = capsys.readouterr().err
+  assert "home writer fence held by pid" in refusal
+  assert "purpose 'test holder'" in refusal
   assert _state(home) == before
   assert not conversion.receipt_path(home).exists()
   assert _run("apply", home) == 0
@@ -277,13 +286,21 @@ def test_apply_refuses_a_home_with_an_unparseable_session_and_writes_nothing(hom
   assert _state(home) == before
 
 
-def test_dry_run_writes_nothing(home: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("corrupt_manager_log", [False, True])
+def test_dry_run_writes_nothing(
+    home: Path, capsys: pytest.CaptureFixture[str], corrupt_manager_log: bool) -> None:
+  if corrupt_manager_log:
+    manager_log = home / "sessions" / ROOT_ID / "data" / "chat_events.jsonl"
+    with manager_log.open("a", encoding="utf-8") as stream:
+      stream.write('{"id":"torn","type":"user"')
   before = _tree_hash(home)
 
-  assert _run("dry-run", home) == 0
+  assert _run("dry-run", home) == (1 if corrupt_manager_log else 0)
 
   assert _tree_hash(home) == before
   assert not (home / home_writer_fence.STATE_DIR_NAME).exists()
   report = capsys.readouterr().out
   assert all(session_id in report for session_id in V1_IDS)
-  assert ROOT_ID not in report
+  assert (ROOT_ID in report) is corrupt_manager_log
+  if corrupt_manager_log:
+    assert "not valid JSON" in report

@@ -161,12 +161,15 @@ async def index(
         include_pending_trigger_status=True,
     )
     # The first-paint list shares the All endpoint's membership: sequence-subtree
-    # rows and the chat-thread subtree ride no listing, so a firing leaf neither
+    # rows and every sidebar view's subtree ride no listing, so a firing leaf neither
     # flattens into a top-level sidebar row, a Slack/Discord thread session
     # never paints into Workspace, and neither becomes the auto-redirect target.
     sequence_subtree = await session_mgr.sequence_subtree_roots()
-    chat_threads = await session_mgr.chat_thread_subtree_roots()
-    sessions = [s for s in sessions if s.id not in sequence_subtree and s.id not in chat_threads]
+    views = await session_mgr.view_subtree_roots()
+    sessions = [
+        session for session in sessions
+        if session.id not in sequence_subtree and not any(session.id in view for view in views.values())
+    ]
   except Exception:
     log.exception("list_sessions_failed")
     sessions = []

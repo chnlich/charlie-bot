@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable
 
-from src.features.chat_threads.thread_sessions import is_thread_session
 from src.infra.models import SessionMetadata
+from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 
 
 def subtree_roots(
@@ -24,9 +24,8 @@ def subtree_roots(
 
   - the sequence rule (``sequence_subtree_roots``): the root is owned by a
     registered sequence controller, and the root itself is not part of its subtree;
-  - the chat-thread rule (``chat_thread_subtree_roots``): the root is a
-    session carrying a chat-thread origin,
-    and the root itself IS a member.
+  - the view rule (``view_subtree_roots``): the root is a session a sidebar
+    contribution names as the root of a view, and the root itself IS a member.
 
   Projected legacy worker-thread rows carry ``task_parent_id`` = their parent
   session, so the same walk classifies them. The sidebar lists share this one
@@ -81,15 +80,28 @@ def sequence_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
   )
 
 
-def chat_thread_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, str]:
-  """Map every chat-thread row's id to the id of the thread session above it.
+def view_subtree_roots(metas: Iterable[SessionMetadata]) -> dict[str, dict[str, str]]:
+  """Map each sidebar view's key to its subtree rows: row id to the id of the view's root above it.
 
-  The chat-thread rule over :func:`subtree_roots`: a row belongs to one chat
-  thread's subtree when its parent chain reaches a thread session
-  (:func:`src.features.chat_threads.thread_sessions.is_thread_session`) and that thread session
-  itself is a member of its subtree (the sidebar's Threads view lists it).
+  The view rule over :func:`subtree_roots`: a row is a view root when a sidebar
+  contribution answers a view key for it (``SidebarContribution.view_member``),
+  and a row belongs to that view's subtree when its parent chain reaches one of
+  the view's roots. The root itself is a member of its subtree (the sidebar
+  lists the view's roots with the rows below them). A view no row roots has no
+  entry.
   """
-  return subtree_roots(metas, is_thread_session, include_root=True)
+  metas = list(metas)
+  contributions = sidebar_contributions()
+  root_ids: dict[str, set[str]] = {}
+  for meta in metas:
+    for contribution in contributions:
+      key = contribution.view_member(meta)
+      if key is not None:
+        root_ids.setdefault(key, set()).add(meta.id)
+  return {
+      key: subtree_roots(metas, lambda meta, ids=ids: meta.id in ids, include_root=True)
+      for key, ids in root_ids.items()
+  }
 
 
 class ScheduledSessionBusyError(RuntimeError):

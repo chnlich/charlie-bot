@@ -1077,9 +1077,13 @@ def make_router_client(
   return TestClient(app)
 
 
-def include_registered_routers(app: FastAPI, prefix: str) -> None:
-  """Include the routers that packages registered under *prefix*, the way server.py includes them."""
-  for module, router_prefix, tags, attr in wiring.routers():
+def include_registered_routers(app: FastAPI, prefix: str, *, before_runtime: bool = False) -> None:
+  """Include the routers that packages registered under *prefix*, the way server.py includes them.
+
+  *before_runtime* picks the routers registered to answer ahead of the runtime's own: a rig that
+  mounts a runtime router includes those first.
+  """
+  for module, router_prefix, tags, attr in wiring.routers(before_runtime=before_runtime):
     if router_prefix == prefix:
       app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
 
@@ -1121,6 +1125,7 @@ def make_sessions_listing_client(
   """TestClient mounting the sessions router (the sidebar listing and chat-threads endpoints)
   with cfg and the session/task/thread manager overrides those routes resolve."""
   app = FastAPI()
+  include_registered_routers(app, "/api/sessions", before_runtime=True)
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr

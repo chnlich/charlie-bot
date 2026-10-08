@@ -20,12 +20,10 @@ from src.infra import event_types as ET
 
 if TYPE_CHECKING:
   import numpy as np
-from src.features.artifacts import plan_paths
-from src.features.artifacts.plans import AWAITING_APPROVAL_STATE, read_plans_tolerant
 from src.infra import metadata_slots
 from src.infra.config import CharlieBotConfig
 from src.infra.gc_control import gc_off
-from src.infra.json_utils import atomic_write_stream, atomic_write_text, load_json_meta, write_json_atomically
+from src.infra.json_utils import atomic_write_stream, atomic_write_text, load_json_meta
 from src.infra.locks import lock_for
 from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
@@ -47,10 +45,11 @@ from src.runtime import init_worker_recovery, sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
 from src.runtime.hooks import backend_types, turn_contributions
+from src.runtime.hooks.sidebar_contributions import sidebar_contributions
 from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
-from src.runtime.scheduled_sessions import chat_thread_subtree_roots, sequence_subtree_roots
+from src.runtime.scheduled_sessions import sequence_subtree_roots, view_subtree_roots
 from src.runtime.session_usage import SessionUsageResolver
 from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.runtime.thinking_state import busy_since, run_backend
@@ -478,24 +477,6 @@ def pending_trigger_state_sync(
   return pending_count, next_trigger_at
 
 
-def has_pending_plan_approval_sync(plans_path: Path, session_id: str) -> bool:
-  """True if any lineage in the plans.json at *plans_path* is 'awaiting approval'.
-
-  Delegates to the tolerant read in src.features.artifacts.plans (single authority for
-  catch-and-derive). Any error entry is logged via ``plan_registry_read_failed``
-  and contributes no pending approval. The probe must never raise — a corrupt
-  single-session file cannot 5xx the sidebar poll for all sessions.
-  """
-  result = read_plans_tolerant(plans_path, session_id)
-  for error in result["errors"]:
-    log.warning(
-        "plan_registry_read_failed",
-        session_id=error.get("session_id"),
-        error=error.get("error"),
-    )
-  return any(plan.get("state") == AWAITING_APPROVAL_STATE for plan in result["plans"])
-
-
 # Search scans take the failed-read path for every active session whose live
 # chat file cannot be read (a fresh session's data/ stays empty until its
 # first event), and each scan reports the same failure again — one line per
@@ -664,19 +645,19 @@ class _WalkedProbeInputs(NamedTuple):
 class SidebarProbeSpec(NamedTuple):
   """One session's probe inputs: the legacy probe paths plus the task-tree shape.
 
-  ``session_dir``/``is_task_node`` extend the walk with the files the task-tree
+  ``session_dir`` is where the sidebar contributions' watched files and flags
+  live; with ``is_task_node`` it extends the walk with the files the task-tree
   activity derivation reads (a node's metadata, its fact history, its Run
   records); ``recheck_liveness`` marks a node whose stored verdict is
   ``running`` — the self-heal sweep must re-judge its recorded process
   identity even when no covered file moved, because a process death writes
-  nothing. A caller may still hand a plain 4-tuple (the legacy shape); the
-  defaults keep it a legacy session.
+  nothing. A 4-tuple may supply ``session_id``, ``threads_dir``, ``triggers_dir`` and
+  ``session_dir``; the defaults leave task-tree probing off.
   """
   session_id: str
   threads_dir: Path
   triggers_dir: Path
-  plans_path: Path
-  session_dir: Path | None = None
+  session_dir: Path
   is_task_node: bool = False
   recheck_liveness: bool = False
 
@@ -716,18 +697,19 @@ def probe_sidebar_state_sync(
   session, one session at a time, so probing N sessions costs one thread-pool
   task instead of 3*N. Returns
   ``{session_id: {"thread_running", "pending_trigger_count", "next_trigger_at",
-  "has_pending_plan_approval"}}``.
+  "has_pending_plan_approval"}}``; the last comes from the sidebar contributions'
+  ``row_flags``.
 
   *walked* maps session id to the stat pairs a probe-input walk already took
   for that session; the thread and trigger cores consume them instead of
   re-taking the same scandir+stat phase.
   """
   results: dict[str, dict] = {}
+  contributions = sidebar_contributions()
   for spec in specs:
     if not isinstance(spec, SidebarProbeSpec):
       spec = SidebarProbeSpec(*spec)
-    session_id, threads_dir, triggers_dir, plans_path = (
-        spec.session_id, spec.threads_dir, spec.triggers_dir, spec.plans_path)
+    session_id, threads_dir, triggers_dir = spec.session_id, spec.threads_dir, spec.triggers_dir
     inputs = walked.get(session_id) if walked is not None else None
     running = has_running_tasks_sync(threads_dir, walked=inputs.thread_metas if inputs else None)
     pending_count, next_trigger_at = pending_trigger_state_sync(
@@ -735,21 +717,24 @@ def probe_sidebar_state_sync(
         walked=inputs.trigger_files if inputs else None,
         dir_sig=inputs.trigger_dir_sig if inputs else None,
     )
-    results[session_id] = {
+    entry = {
         sidebar_state.THREAD_RUNNING: running,
         sidebar_state.PENDING_TRIGGER_COUNT: pending_count,
         sidebar_state.NEXT_TRIGGER_AT: next_trigger_at,
-        sidebar_state.HAS_PENDING_PLAN_APPROVAL: has_pending_plan_approval_sync(plans_path, session_id),
+        sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
     }
+    for contribution in contributions:
+      entry.update(contribution.row_flags(spec.session_dir, session_id))
+    results[session_id] = entry
   return results
 
 
 def _sidebar_probe_walk(
     threads_dir: Path,
     triggers_dir: Path,
-    plans_path: Path,
-    session_dir: Path | None,
+    session_dir: Path,
     is_task_node: bool,
+    watched_files: tuple[str, ...],
 ) -> tuple[tuple, _WalkedProbeInputs]:
   """Stat-only identity of every byte the sidebar probe reads, plus the walk's stat pairs.
 
@@ -764,7 +749,10 @@ def _sidebar_probe_walk(
   by the rollover element: the earliest ``mtime + window`` over scanned metas,
   or ``float('inf')`` when nothing was scanned). The stat pass mirrors the
   probe cores' own scandir+stat phase, so a signature sweep costs the cheap
-  half of a probe and skips every content read and parse. String paths instead
+  half of a probe and skips every content read and parse. The sidebar
+  contributions' *watched_files* (paths relative to *session_dir*) ride the
+  signature as one ``(mtime_ns, size)`` entry each, so a contribution's flags
+  re-derive exactly when a file it reads changed. String paths instead
   of Path objects: the sweep runs per poll over every selected session, and
   pathlib's parse/alloc overhead would dominate the raw stat syscalls —
   os.stat on joined strs measures ~2x faster over the active-session corpus.
@@ -790,19 +778,16 @@ def _sidebar_probe_walk(
     trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
     trigger_pairs = _iter_trigger_stats(triggers_str, dir_st)
     trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
-  try:
-    plans_st = os.stat(os.fspath(plans_path))
-    plans_sig: tuple | None = (plans_st.st_mtime_ns, plans_st.st_size)
-  except OSError:
-    plans_sig = None
+  session_dir_str = os.fspath(session_dir)
+  watched_sig = tuple(stat_signature(session_dir_str + "/" + rel) for rel in watched_files)
   rollover = min(rollovers) if rollovers else float("inf")
   # A task-tree node's derivation reads its fact history and Run records; the
   # signature covers those files too, so an unchanged signature can never hide
   # a changed state (and a fresh-signature poll skips their reads).
   task_sig: tuple = ()
-  if is_task_node and session_dir is not None:
-    task_sig = _task_tree_probe_signature(os.fspath(session_dir))
-  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), plans_sig, rollover, task_sig)
+  if is_task_node:
+    task_sig = _task_tree_probe_signature(session_dir_str)
+  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), watched_sig, rollover, task_sig)
   return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs, trigger_dir_sig)
 
 
@@ -843,11 +828,13 @@ def selective_probe_sidebar_state(
   walked_inputs: dict[str, _WalkedProbeInputs] = {}
   to_probe: list[SidebarProbeSpec] = []
   now_ts = time.time()
+  watched_files = tuple(
+      dict.fromkeys(rel for contribution in sidebar_contributions() for rel in contribution.watched_files))
   for spec in specs:
     if not isinstance(spec, SidebarProbeSpec):
       spec = SidebarProbeSpec(*spec)
     sig, inputs = _sidebar_probe_walk(
-        spec.threads_dir, spec.triggers_dir, spec.plans_path, spec.session_dir, spec.is_task_node)
+        spec.threads_dir, spec.triggers_dir, spec.session_dir, spec.is_task_node, watched_files)
     sigs[spec.session_id] = sig
     walked_inputs[spec.session_id] = inputs
     if deep or spec.recheck_liveness or not _sidebar_signature_fresh(spec.session_id, sig, now_ts):
@@ -1083,13 +1070,13 @@ class SessionManager:
     # The stored list holds the cache's own meta objects: every consumer copies or
     # stamps on the way out and mutates neither the list nor its rows.
     self._listings_memo: dict[SessionStatus | None, tuple[int, float, tuple[int, int], list[SessionMetadata]]] = {}
-    # The derived cron-subtree map, memoized on the metas list identity the
+    # The derived sequence-subtree map, memoized on the metas list identity the
     # listings memo already bounds: a listings hit serves the same list object
     # until a write bumps the revision, a create/delete moves the root
     # signature, or the sweep re-walks, so the map re-derives exactly when its
     # inputs can have moved and never wider.
     self._sequence_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
-    self._chat_thread_subtree_memo: tuple[list[SessionMetadata], dict[str, str]] | None = None
+    self._view_subtree_memo: tuple[list[SessionMetadata], dict[str, dict[str, str]]] | None = None
     self._chat_events = ChatEventStore(self._session_dir, self._metadata_path, self._metadata_cache)
     self._session_usage = SessionUsageResolver(
         cfg,
@@ -1396,21 +1383,21 @@ class SessionManager:
     self._sequence_subtree_memo = (metas, roots)
     return roots
 
-  async def chat_thread_subtree_roots(self) -> dict[str, str]:
-    """The chat-thread subtree membership map over every session's stored metadata.
+  async def view_subtree_roots(self) -> dict[str, dict[str, str]]:
+    """Each sidebar view's subtree membership map over every session's stored metadata.
 
-    See :func:`src.runtime.scheduled_sessions.chat_thread_subtree_roots` for the
-    rule. The map reads the shared cached metas — chain and platform-origin
+    See :func:`src.runtime.scheduled_sessions.view_subtree_roots` for the
+    rule. The map reads the shared cached metas — chain and view-root
     marks only, statuses never matter — so the sidebar lists classify their
     rows with no second read and no copy, memoized on unchanged metas exactly
     like :meth:`sequence_subtree_roots` beside which it lives.
     """
     metas = await self._load_session_metas()
-    cached = self._chat_thread_subtree_memo
+    cached = self._view_subtree_memo
     if cached is not None and cached[0] is metas:
       return cached[1]
-    roots = chat_thread_subtree_roots(metas)
-    self._chat_thread_subtree_memo = (metas, roots)
+    roots = view_subtree_roots(metas)
+    self._view_subtree_memo = (metas, roots)
     return roots
 
   async def list_archived_page(
@@ -1816,78 +1803,18 @@ class SessionManager:
     await self.save_metadata(meta)
     if self.tree_index_invalidator is not None:
       self.tree_index_invalidator()
-    await self._copy_plans_to_child(parent_id, session_dir)
-    # The child plans.json is written by _copy_plans_sync (not PlanRegistryManager._save),
-    # and a poll racing between save_metadata and this copy could have snapshotted
-    # the child without plans; re-mark so the copied registry is always probed.
+    await asyncio.to_thread(self._copy_on_fork_sync, self._session_dir(parent_id), session_dir)
+    # A contribution's copy lands after save_metadata, and a poll racing between the two
+    # could have snapshotted the child without the copied files; re-mark so they are always probed.
     sidebar_state.mark_sidebar_dirty(meta.id)
     await self.broadcast_task_tree_changed(meta.id, ET.TASK_CREATED)
     return _stamp_thinking_since(meta)
 
-  async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
-    """Copy parent plans.json and every referenced artifact file into the child.
-
-    The child registry rewrites each ``versions[].file`` to a POSIX path
-    relative to the child session directory. All other registry fields carry
-    over unchanged. A missing or outside-parent artifact logs a warning and
-    does not abort the fork. No plans.json in the parent means nothing to copy.
-    """
-    parent_dir = self._session_dir(parent_id).resolve()
-    parent_plans_path = parent_dir / "plans.json"
-    if not parent_plans_path.exists():
-      return
-    await asyncio.to_thread(self._copy_plans_sync, parent_plans_path, parent_dir, child_session_dir.resolve())
-
   @staticmethod
-  def _copy_plans_sync(parent_plans_path: Path, parent_dir: Path, child_dir: Path) -> None:
-    raw = parent_plans_path.read_text(encoding="utf-8")
-    data = json.loads(raw)
-    # Every in-parent relative path must be reserved before any outside-parent
-    # fallback is chosen, so a fallback can never alias an artifact a later
-    # version copies.
-    resolved: list[tuple[dict, dict, Path, Path | None]] = []
-    reserved_relative_paths = {"plans.json"}
-    for plan in data.get("plans", []):
-      for ver in plan.get("versions", []):
-        file_rel = ver.get("file")
-        if not file_rel:
-          continue
-        candidate, normalized_rel = plan_paths.resolve_plan_file(parent_dir, file_rel)
-        resolved.append((plan, ver, candidate, normalized_rel))
-        if normalized_rel is not None:
-          reserved_relative_paths.add(normalized_rel.as_posix())
-
-    for plan, ver, candidate, resolved_rel in resolved:
-      normalized_rel = resolved_rel
-      inside_parent = normalized_rel is not None
-      if normalized_rel is None:
-        fallback_rel = plan_paths.fallback_relative_path(parent_dir, candidate)
-        normalized_rel = fallback_rel
-        suffix_number = 1
-        while (normalized_rel.as_posix() in reserved_relative_paths or (child_dir / normalized_rel).exists()):
-          normalized_rel = fallback_rel.with_name(f"{fallback_rel.name}.outside-{suffix_number}")
-          suffix_number += 1
-        reserved_relative_paths.add(normalized_rel.as_posix())
-        log.warning(
-            "plan_artifact_outside_parent_on_fork",
-            file=str(candidate),
-            relative_file=normalized_rel.as_posix(),
-            plan=plan.get("id"),
-            v=ver.get("v"),
-        )
-      src = parent_dir / normalized_rel
-      dst = child_dir / normalized_rel
-      ver["file"] = normalized_rel.as_posix()
-      if not inside_parent:
-        continue
-      if not src.exists():
-        log.warning("plan_artifact_missing_on_fork", file=str(src), plan=plan.get("id"), v=ver.get("v"))
-        continue
-      dst.parent.mkdir(parents=True, exist_ok=True)
-      shutil.copy2(src, dst)
-    child_plans_path = child_dir / "plans.json"
-    child_plans_path.parent.mkdir(parents=True, exist_ok=True)
-    write_json_atomically(child_plans_path, data, indent=2)
+  def _copy_on_fork_sync(parent_dir: Path, child_dir: Path) -> None:
+    """Let every sidebar contribution copy its files from the parent's session directory into the child's."""
+    for contribution in sidebar_contributions():
+      contribution.copy_on_fork(parent_dir, child_dir)
 
   def _write_history_file_sync(self, path: Path, parent_id: str, end: int, tail_lines: str) -> None:
     """Write the parent's raw event lines for ``[0, end)`` plus *tail_lines*
@@ -2677,15 +2604,14 @@ class SessionManager:
     return cached
 
   def _drop_session_runtime_state(self, session_id: str) -> None:
-    """Drop a session's live runtime state: chat-event cache, aggregator, projection, recap memo."""
+    """Drop a session's live runtime state: chat-event cache, aggregator, projection, and each contribution's state."""
     self._chat_events.clear_cache(session_id)
     self._aggregators.pop(session_id, None)
     self._aggregator_init_locks.pop(session_id, None)
     self._aggregator_epoch[session_id] = self._aggregator_epoch.get(session_id, 0) + 1
     self._projection_cache.drop(session_id)
-    from src.features.recap import recap  # lazy: recap imports SessionManager from this module
-
-    recap.drop_extract_memo(session_id)
+    for contribution in sidebar_contributions():
+      contribution.drop_runtime_state(session_id)
 
   async def resolve_session_usage(
       self,
@@ -3009,8 +2935,7 @@ class SessionManager:
     is_task_node = meta.profile is not None
     return SidebarProbeSpec(
         meta.id, self._threads_dir(meta.id),
-        self._session_dir(meta.id) / "triggers",
-        self._session_dir(meta.id) / "plans.json", self._session_dir(meta.id), is_task_node, recheck_liveness)
+        self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), is_task_node, recheck_liveness)
 
   async def resolve_sidebar_state(
       self,

@@ -592,7 +592,6 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     run whose execute task is in flight, a run a previous round already
     follows, or a manager-turn follow queued in the master queue; replayed
     delivery starts no second review process."""
-  from src.runtime import task_recovery
   monkeypatch.setattr(task_execution_module, "RUN_END_LANDING_RETRY_INTERVAL_SECONDS", 0.05)
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
@@ -645,7 +644,7 @@ async def test_retry_round_skips_runs_this_process_already_drives(
 
     driven = lambda run: adapter._drives_run(worker.id, run)  # noqa: E731
     counters = {"nodes": 0, "resumed": 0, "drained": 0, "followups": 0}
-    await task_recovery._reconcile_node(worker.id, tree, adapter, counters, cfg, is_driven=driven)
+    await task_execution_module._reconcile_node(worker.id, tree, adapter, counters, cfg, is_driven=driven)
     # No second follower, no second review process: the skipped runs stay
     # non-terminal and the builds queue is untouched.
     assert builds == []
@@ -658,7 +657,7 @@ async def test_retry_round_skips_runs_this_process_already_drives(
 
     # The manager turn's round skips the queued follow too: still exactly
     # one resume call (the test's own), and the pair stays registered.
-    await task_recovery._reconcile_node(
+    await task_execution_module._reconcile_node(
         manager.id,
         tree,
         adapter, {
@@ -683,7 +682,7 @@ async def test_retry_round_skips_runs_this_process_already_drives(
     # Without the driver the retry follows the worker run itself: the
     # registry pair was the only thing holding the round back.
     adapter._launch_inflight.discard((worker.id, "run-inflight"))
-    await task_recovery._reconcile_node(
+    await task_execution_module._reconcile_node(
         worker.id, tree, adapter, {
             "nodes": 0,
             "resumed": 0,

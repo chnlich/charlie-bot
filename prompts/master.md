@@ -31,6 +31,8 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres in prompts/manager_workflows.md).
 
+A child whose approver is its parent node follows Between Agents in `prompts/task_manager.md` instead.
+
 When the user gives explicit directions, choose exactly one action:
 
 1. If the directions are incorrect, explain what is wrong and why.

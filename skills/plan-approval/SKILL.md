@@ -18,6 +18,8 @@ user-invocable: false
   and does not wait for another `take off`; it follows its delegated task contract.
 - A delegated agent still stops and reports a blocker, contract conflict, or required
   scope expansion.
+- A child whose approver is its parent node follows Between Agents in
+  `prompts/task_manager.md` instead.
 
 ## The principle
 
@@ -66,6 +68,8 @@ An understanding page precedes the plan when the master must first align the rea
   it as a header meta chip on the understanding page and on the plan that follows.
 - Don't guess: any point the request leaves unstated where different readings lead to
   different designs must appear as a numbered divergence; never silently pick a reading.
+- Map each outcome that the request names to a deliverable or a divergence.
+  State the share of the problem that the deliverable covers.
 - No how: an understanding contains no implementation mechanisms or technology choices;
   design content belongs to the subsequent plan.
 - Facts before design: when the fix follows from why something happened, settle the

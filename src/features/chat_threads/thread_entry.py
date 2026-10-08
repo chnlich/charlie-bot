@@ -350,7 +350,7 @@ def lost_summons(platform: ThreadPlatform, events: list[dict], *, owned: set[str
   A summon (or a nudge: it carries the same summon block) is lost when no
   master_done names it (any id of a merged round's list counts as answered),
   this process does not already own it (queued or running), the session's
-  master_run record does not name it among its whole input list (alive but not
+  Run record does not name it among its whole input list (alive but not
   followable), and no earlier backfill marked it. The marker is the
   ``<name>_backfill`` payload, never a synthetic master_done: that event is
   the cut point replay uses to decide which user messages are still unanswered.
@@ -552,16 +552,8 @@ async def post_reply(
   from src.runtime import master_cc_state
 
   events = await asyncio.to_thread(session_mgr.load_chat_events_sync, session_id)
-  # Binding identity: the in-process running round first (authoritative, no
-  # metadata-cache race), the disk record as fallback for the restart gap where
-  # an orphaned master posts before the re-attach item reaches the consumer.
-  # Either way the round answers a list of inputs; the newest thread-bearing one
-  # of the list is the summon this reply answers.
+  # The in-process work item owns the input batch answered by this reply.
   input_event_ids = master_cc_state.running_user_event_ids(session_id)
-  if not input_event_ids:
-    fresh = await session_mgr.read_metadata_fresh(session_id)
-    if fresh is not None and fresh.master_run is not None:
-      input_event_ids = fresh.master_run.user_event_ids
   bound = newest_thread_input(platform, events, input_event_ids)
   answers = summon_of(bound[1], bound[0]) if bound is not None else None
   fields = metadata_slots.fields_of(meta, platform.name)
@@ -716,7 +708,16 @@ async def audit_round(
     nudge[platform.name]["nudge_of"] = summon_id
     await session_mgr.persist_and_broadcast(session_id, nudge)
     create_logged_task(
-        trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=nudge["id"]),
+        trigger_master(
+            session_id,
+            content,
+            session_mgr,
+            input_id=nudge["id"],
+            event_type=ET.AGENT_MESSAGE,
+            actor="agent",
+            from_session=session_id,
+            from_session_name=platform.display_name,
+        ),
         name=f"{platform.name}-nudge-{session_id}")
     logger.info(
         f"{platform.name}_reply_nudge",
@@ -780,7 +781,7 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
   """Boot pass over every thread-bound session; returns how many notices and nudges it produced.
 
   First the summons lost while queued: the startup replay covers ``ET.USER``
-  only (src/runtime/init_master_recovery.py), so a summon injection sitting in the
+  only during startup reconciliation, so a summon injection sitting in the
   queue when the process died is picked up by nothing else and gets the
   lost-summon notice. Then the round-end audit over every finished round, which
   closes the crash windows between a done and its nudge, and between a nudge
@@ -797,11 +798,12 @@ async def backfill_lost_summons(adapter: ThreadAdapter, cfg: CharlieBotConfig, s
     if getattr(metadata_slots.fields_of(meta, platform.name), platform.origin_field) is None:
       continue
     events = await asyncio.to_thread(session_mgr.load_chat_events_sync, meta.id)
+    from src.runtime import master_cc_state
     lost = lost_summons(
         platform,
         events,
         owned=master_cc_queue.queued_user_event_ids(meta.id),
-        running=set(meta.master_run.user_event_ids) if meta.master_run else set())
+        running=set(master_cc_state.running_user_event_ids(meta.id)))
     for ev in lost:
       # Persist the marker before posting: a crash in between costs one notice,
       # while posting first would re-post it on every boot until the marker landed.
@@ -1037,7 +1039,16 @@ async def accept_summon(
   logger.info(f"{platform.name}_mention_round_started", **fields, session=session_id, user_event_id=round_event_id)
 
   create_logged_task(
-      trigger_master(session_id, content, cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id=round_event_id),
+      trigger_master(
+          session_id,
+          content,
+          session_mgr,
+          input_id=round_event_id,
+          event_type=ET.AGENT_MESSAGE,
+          actor="agent",
+          from_session=session_id,
+          from_session_name=platform.display_name,
+      ),
       name=f"{platform.name}-round-{session_id}")
   create_logged_task(adapter.add_ack(block), name=f"{platform.name}-ack-{session_id}")
   return session_id

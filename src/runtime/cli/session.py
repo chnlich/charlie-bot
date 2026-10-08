@@ -149,7 +149,7 @@ def _cmd_create(args: argparse.Namespace) -> None:
   if args.backend is not None:
     payload["backend"] = args.backend
   if args.parent is not None or args.profile is not None or args.task_file is not None:
-    if args.parent is None or args.profile is None:
+    if args.parent is None or not args.profile:
       exit_usage_error("v2 task create requires both --parent and --profile")
     if args.task_file is not None:
       payload["task"] = json.loads(read_required_text_file("--task-file", args.task_file))

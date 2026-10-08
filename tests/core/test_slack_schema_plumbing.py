@@ -32,7 +32,7 @@ async def _run_one_round(user_event_id: str | None) -> dict:
   callbacks = conftest.mock_session_callbacks()
   item = conftest.make_work_item(
       mock.MagicMock(),
-      models.SessionMetadata(id=session_id, name="t"),
+      models.SessionMetadata(profile="manager", id=session_id, name="t"),
       None,
       user_content="hi",
       callbacks=callbacks,

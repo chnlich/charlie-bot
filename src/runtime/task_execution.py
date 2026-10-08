@@ -1,6 +1,6 @@
 """The task-tree execution adapter: binds v2 Runs to the real backend processes.
 
-This module is the execution-glue owner of the session task tree. It holds the
+This module is the execution-glue owner of the task tree. It holds the
 one :class:`TaskExecutionAdapter` the application installs as the
 :class:`~src.runtime.session_dispatch.TaskInputDispatcher` executor, plus the
 common launch/resume interfaces the later controller stages (improve, cron,
@@ -18,10 +18,8 @@ Ownership boundaries it never crosses:
   work and review — and lands their outcomes through those owners.
 - The one short control write lock is held only across durable reservation
   and identity writes. Backend, git, network and model work run outside it.
-- A v2 Run is the sole new execution record: no second
-  ``SessionMetadata.master_run`` and no second writable ``ThreadMetadata``
-  file is ever written for a v2 launch. Legacy v1 sessions keep their
-  existing paths untouched.
+- A Run is the sole execution record: no second writable ``ThreadMetadata``
+  file is written for a launch.
 
 Serialization evidence: concurrent dispatch calls reserve the consumer under
 the control lock — a fresh consumer binds the exact pending batch through
@@ -184,7 +182,7 @@ def compose_input_prompt(events: list[dict]) -> tuple[str, list[dict]]:
 
 
 def resolve_launch_overlay(option: BackendOption) -> tuple[str | None, bool]:
-  """The three-state overlay judgment a v2 launch shares with the v1 wake path.
+  """The three-state overlay judgment used by a task launch.
 
     Returns (overlay_name_or_None, declared). None + declared=False means
     undeclared (alert); "none" is normalized to (None, True) — explicitly no
@@ -774,7 +772,7 @@ class TaskExecutionAdapter:
         reader already look), the terminal ``run_finished`` fact carries
         outcome ``failed``, and the failed run then walks the same after-run
         path a failed process takes — the worker's failure report to its
-        parent (task-tree or legacy) and the node's pending-input dispatch.
+        parent and the node's pending-input dispatch.
         Withheld and refused launch verdicts never reach this handler: they
         keep their no-terminal-fact semantics. The exception itself still
         propagates to the launch task's logging owner with its traceback.
@@ -991,7 +989,7 @@ class TaskExecutionAdapter:
 
         The committed bytes are the bytes the adapters launch — never a second
         build. A declared-but-unreadable or undeclared overlay emits the unified
-        fenceless-run alert exactly like the v1 wake path.
+        fenceless-run alert through the shared run alert path.
         """
     snapshot, overlay_error, declared = await assemble_coherent_snapshot(self._cfg, self._tree, meta, run.kind, option)
     path = self._tree.runs.run_dir(meta.id, run.id) / task_prompts.SNAPSHOT_FILENAME
@@ -1071,11 +1069,9 @@ class TaskExecutionAdapter:
     if not content:
       raise TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
 
-    # The dispatched wake of a task-bound node takes over the cron
-    # session's duties (weekly recycle, firing-report prefix) here — the
-    # legacy trigger_master wake never reaches a task-tree node. The
-    # recycle may clear the node's anchor in place, so the
-    # fresh-conversation judgment below reads the post-recycle state.
+    # The dispatched wake carries the cron session's duties (weekly recycle,
+    # firing-report prefix) here. The recycle may clear the node's anchor in
+    # place, so the fresh-conversation judgment below reads the post-recycle state.
     from src.runtime.master_trigger import apply_sequence_wake_duties
     sequence_prefix = await apply_sequence_wake_duties(self._sessions, meta, batch_events)
     if sequence_prefix:
@@ -1131,14 +1127,10 @@ class TaskExecutionAdapter:
         meta,
         prompt,
         self._sessions.callbacks(),
-        # Not a legacy input delivery: the Run's item carries a task_run
-        # binding and never takes part in a batch.
-        input_event_type=None,
-        skip_user_event=True,
+        user_event_ids=list(run.input_event_ids),
         auto_trigger=any(e.get("type") == ET.SCHEDULED_TRIGGER for e in batch_events),
         backend_option=option,
         uploaded_files=uploaded_files or None,
-        expect_fresh_session=fresh_native,
         task_instructions=snapshot.instructions_text,
         task_run=TaskRunBinding(
             session_id=session_id, run_id=run_id, transport_dir=str(transport_dir), fresh_native_context=fresh_native),
@@ -1225,8 +1217,7 @@ class TaskExecutionAdapter:
           session_meta=meta,
       )
       # Session-level notices (a pool login that needs re-login, a relay compaction) reach
-      # the session chat through the successor chain, exactly as the
-      # legacy worker path delivers them.
+      # the session chat through the successor chain.
       worker.on_session_event = functools.partial(self._sessions.deliver_to_successor, session_id)
       exit_code = await worker.run()
     except backend_lifecycle.LaunchRefused as exc:
@@ -2061,8 +2052,7 @@ class TaskExecutionAdapter:
     if summary is None:
       summary = await self._worker_failure_summary(session_id, run)
     # The delivery entry owns the wake: a freshly created report wakes the
-    # parent's next serialized turn (dispatcher for a task-tree parent, the
-    # legacy master wake for a legacy parent); a replayed one wakes nobody.
+    # parent's next serialized turn; a replayed one wakes nobody.
     await self._tree.dispatch.deliver_child_report(
         session_id,
         source_event=source,

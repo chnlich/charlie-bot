@@ -9,15 +9,6 @@
   "cc_session_id": "22222222-2222-2222-2222-222222222222",
   "cc_session_started_at": null,
   "claude_account": "main",
-  "master_run": {
-    "pid": 5,
-    "pid_start": "9",
-    "started_at": "2026-10-08T02:38:10.124239Z",
-    "raw_log": "/x/raw.ndjson",
-    "user_event_ids": [
-      "u1"
-    ]
-  },
   "backend": "opus",
   "scheduled_task": null,
   "last_scheduled_run": null,

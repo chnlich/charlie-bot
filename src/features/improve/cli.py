@@ -101,16 +101,15 @@ def main() -> None:
     payload["plan"] = plan
 
   def _readback() -> dict | None:
-    # Sent-but-lost: the loop's live goal file (plus its sequence's worker
-    # child for a v2 manager, or an iteration-1 thread for v1) proves the
-    # launch landed. Returns the endpoint's response shape so steering output
+    # Sent-but-lost: the loop's live goal file and its sequence's worker
+    # child prove the launch landed. Returns the endpoint's response shape so steering output
     # stays identical.
     # The improve-sequence and config stacks ride the one readback that needs
     # them: a deferral here keeps --help and parser errors off their import
     # chains (the src.runtime.cli.config deferral shape).
     from src.features.improve import improve_sequence
     from src.infra import config, models
-    from src.runtime import threads
+    from src.runtime.runs import RUN_METADATA_NAME
 
     cfg = config.get_config()
     loops_dir = cfg.sessions_dir / session_id / "loops"
@@ -141,24 +140,16 @@ def main() -> None:
     # presence (and only the matching parent's) proves the v2 admission.
     try:
       meta = models.SessionMetadata.model_validate_json(
-          (cfg.sessions_dir / session_id / threads.METADATA_NAME).read_text(encoding="utf-8"))
+          (cfg.sessions_dir / session_id / RUN_METADATA_NAME).read_text(encoding="utf-8"))
     except (OSError, ValueError):
       meta = None
-    if meta is not None and meta.profile is not None:
-      child = common.find_local_task_child(
-          session_id, description=goal, task_type=None, request_id=improve_sequence.improve_child_request_id(loop_id))
-      if child is None:
-        return None
-      response["child_session_id"] = child["session_id"]
-      return response
-    thread = common.find_local_thread(
-        session_id,
-        description=f"Goal: {goal}",
-        task_type="implement",
-        description_match="contains",
-    )
-    if thread is None:
+    if meta is None:
       return None
+    child = common.find_local_task_child(
+        session_id, description=goal, task_type=None, request_id=improve_sequence.improve_child_request_id(loop_id))
+    if child is None:
+      return None
+    response["child_session_id"] = child["session_id"]
     return response
 
   result = common.post_internal_api("/api/internal/improve", payload, readback=_readback)

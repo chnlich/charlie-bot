@@ -9,6 +9,7 @@ import os
 import shutil
 import stat
 import time
+import uuid
 from collections.abc import Awaitable, Callable
 from datetime import datetime
 from pathlib import Path
@@ -28,32 +29,30 @@ from src.infra.locks import lock_for
 from src.infra.log_once import LazyStructlogLogger, WarnOnceRegistry
 from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
 from src.infra.models import (
-    TERMINAL_THREAD_STATUSES,
     CreateSessionRequest,
     EventRef,
-    MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
     SessionStatus,
     parse_utc_datetime,
     utc_now,
     utc_now_iso,
+    validate_session_metadata,
 )
 from src.infra.process import cleanup_session_cgroup
 from src.infra.tasks import create_logged_task
-from src.runtime import init_worker_recovery, sidebar_state
+from src.runtime import sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
 from src.runtime.control_events import ACTOR_USER, build_task_created_event
 from src.runtime.hooks import backend_types, turn_contributions
 from src.runtime.hooks.sidebar_contributions import sidebar_contributions
-from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
+from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME
 from src.runtime.scheduled_sessions import sequence_subtree_roots, view_subtree_roots
 from src.runtime.session_usage import SessionUsageResolver
 from src.runtime.streaming import SIDEBAR_CHANNEL, session_channel, streaming_manager
 from src.runtime.thinking_state import busy_since, run_backend
-from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME
 
 # Raw event types whose render content is produced by the per-session
 # MessageAggregator as `message`/`stream` deltas. We persist these events but
@@ -72,7 +71,7 @@ log = LazyStructlogLogger()
 FORK_BOOTSTRAP_OPENER = "This session continues a prior conversation."
 ELONE_BOOTSTRAP_OPENER = "You're taking over because the user wasn't satisfied with the previous session."
 HISTORY_LOCATION_NOTE = "Earlier turns' history remains readable in this session's chat log, data/chat_events.jsonl in the working directory."
-# The clone-style instruction the v1/v2 context-reset notes append after the
+# The clone-style instruction context-reset notes append after the
 # history note: the fresh native conversation must read the chat log first and
 # open its reply with where things stand, instead of silently losing every
 # convention the earlier turns set.
@@ -85,7 +84,7 @@ CONTEXT_RESET_INSTRUCTION = (
 def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> str:
   """The reset note's reason when the backend change itself forces the fresh conversation.
 
-  The v1 (master-cc) and v2 (task-tree) turn-start rules share this one home,
+  The master CC and task-tree turn-start rules share this one home,
   so their notes cannot drift apart.
   """
   return (f"this session switched from backend {native_backend} to {option_id}, "
@@ -95,12 +94,11 @@ def backend_switch_reset_reason(native_backend: str | None, option_id: str) -> s
 def context_reset_note(reason: str, task_goal: str | None = None) -> str:
   """The whole bracketed note that opens a fresh native conversation's prompt.
 
-  The one assembly site for the v1 (master-cc) and v2 (task-tree) turn-start
-  notes, so their wording cannot drift apart: the reason names why the previous
+  The one assembly site for task-tree turn-start notes: the reason names why the previous
   conversation was left, the history note says where that history stays
   readable, and the instruction tells the new model to read the log and open
   with where things stand before responding. The task goal names what the
-  fresh context is working on (v2 carries the task's goal; v1 has none).
+  fresh context is working on.
   """
   task_part = "" if task_goal is None else f" The task is: {task_goal}."
   return (f"[Context reset: {reason}.{task_part} {HISTORY_LOCATION_NOTE} "
@@ -211,7 +209,6 @@ _TRANSIENT_METADATA_FIELDS = {
     "schedule_allow_failure",
     "thinking_since",
     "run_backend",
-    "worker_thread",
 }
 
 
@@ -254,10 +251,8 @@ def _sidebar_entry(
   set lives here. ``has_pending_trigger`` derives from the count.
 
   *task_activity* is the task-tree derivation's ``(has_running_tasks,
-  work_state)`` pair for a task-tree node: it owns the row's
-  ``has_running_tasks`` outright (the legacy threads/busy derivation never
-  applies to a task-tree node) and adds the ``work_state`` key. None keeps a
-  legacy row byte-identical to today.
+  work_state)`` pair. It owns the row's activity verdict and supplies its
+  work state when the tree owner is available.
   """
   entry: dict = {}
   if include_running_status:
@@ -327,26 +322,7 @@ def _listing_row_copy(meta: SessionMetadata, update: dict[str, Any]) -> SessionM
 # ---------------------------------------------------------------------------
 
 
-def has_running_tasks_sync(threads_dir: Path, walked: list | None = None) -> bool:
-  """True if any thread under *threads_dir* is marked 'running'.
-
-  The 30-day-window scan (``iter_recent_thread_metas``): only threads whose
-  metadata mtime is within the window are read+parsed; older thread dirs cost
-  a scandir+stat with zero content reads, and unchanged in-window files cost
-  one stat too (parsed-JSON memo in the scan, re-parsed only when the file's
-  (mtime_ns, size) signature moves). *walked* supplies the scan's stat pairs
-  from a walk the caller already took instead of a second one.
-  """
-  for _thread_dir, _meta_path, meta in init_worker_recovery.iter_recent_thread_metas(threads_dir, utc_now(),
-                                                                                     "thread_meta_read_failed",
-                                                                                     walked=walked):
-    if meta.get("status") == "running":
-      return True
-  return False
-
-
-# Parsed trigger files keyed by path, mirroring the thread-metadata memo in
-# init_worker_recovery: the sidebar deep probe re-enters this scan on every poll
+# Parsed trigger files keyed by path: the sidebar deep probe re-enters this scan on every poll
 # that follows any write to the session, and re-reading every trigger file
 # dominated the probe (~3.6 ms per probe on the 101-file worst corpus); a repeat
 # scan pays one scandir + stat per file and reads only files whose signature
@@ -625,40 +601,26 @@ def _scan_content_for_hit(path: Path, session_id: str, query_lower: str, start: 
 
 
 class _WalkedProbeInputs(NamedTuple):
-  """The stat pairs one probe-input walk took, for the probe cores to reuse.
+  """The trigger files and directory signature captured during one probe walk."""
 
-  ``trigger_files`` is None when the triggers dir itself is missing; the
-  trigger core then falls back to its self-walked path and answers its empty
-  state. ``trigger_dir_sig`` is that directory's (mtime_ns, size) taken at the
-  walk's instant — the trigger scan's verdict keys on it, so a write landing
-  between the walk and the scan keys the older signature and can never be
-  served for the newer state. The pairs describe the walk's instant, and the
-  caller stores the probe result with that same walk's signature, so entry and
-  signature always describe one state.
-  """
-
-  thread_metas: list[tuple[str, str, os.stat_result]]
   trigger_files: list[tuple[str, os.stat_result]] | None
   trigger_dir_sig: tuple[int, int] | None
 
 
 class SidebarProbeSpec(NamedTuple):
-  """One session's probe inputs: the legacy probe paths plus the task-tree shape.
+  """One task node's trigger, contribution, and task-run activity probe inputs.
 
   ``session_dir`` is where the sidebar contributions' watched files and flags
-  live; with ``is_task_node`` it extends the walk with the files the task-tree
+  live; the walk extends the trigger scan with the files the task-tree
   activity derivation reads (a node's metadata, its fact history, its Run
   records); ``recheck_liveness`` marks a node whose stored verdict is
   ``running`` — the self-heal sweep must re-judge its recorded process
   identity even when no covered file moved, because a process death writes
-  nothing. A 4-tuple may supply ``session_id``, ``threads_dir``, ``triggers_dir`` and
-  ``session_dir``; the defaults leave task-tree probing off.
+  nothing.
   """
   session_id: str
-  threads_dir: Path
   triggers_dir: Path
   session_dir: Path
-  is_task_node: bool = False
   recheck_liveness: bool = False
 
 
@@ -693,83 +655,62 @@ def probe_sidebar_state_sync(
 ) -> dict[str, dict]:
   """Probe every spec serially.
 
-  The deep-probe core of a sidebar re-probe: all three probe groups per
-  session, one session at a time, so probing N sessions costs one thread-pool
-  task instead of 3*N. Returns
-  ``{session_id: {"thread_running", "pending_trigger_count", "next_trigger_at",
+  The deep-probe core of a sidebar re-probe: all probe groups per session, one
+  session at a time, so probing N sessions costs one thread-pool task instead
+  of 3*N. Returns
+  ``{session_id: {"pending_trigger_count", "next_trigger_at",
   "has_pending_plan_approval"}}``; the last comes from the sidebar contributions'
   ``row_flags``.
 
   *walked* maps session id to the stat pairs a probe-input walk already took
-  for that session; the thread and trigger cores consume them instead of
-  re-taking the same scandir+stat phase.
+  for that session; the trigger core consumes them instead of re-taking the
+  same scandir+stat phase.
   """
   results: dict[str, dict] = {}
   contributions = sidebar_contributions()
   for spec in specs:
-    if not isinstance(spec, SidebarProbeSpec):
-      spec = SidebarProbeSpec(*spec)
-    session_id, threads_dir, triggers_dir = spec.session_id, spec.threads_dir, spec.triggers_dir
-    inputs = walked.get(session_id) if walked is not None else None
-    running = has_running_tasks_sync(threads_dir, walked=inputs.thread_metas if inputs else None)
+    inputs = walked.get(spec.session_id) if walked is not None else None
     pending_count, next_trigger_at = pending_trigger_state_sync(
-        triggers_dir,
+        spec.triggers_dir,
         walked=inputs.trigger_files if inputs else None,
         dir_sig=inputs.trigger_dir_sig if inputs else None,
     )
     entry = {
-        sidebar_state.THREAD_RUNNING: running,
         sidebar_state.PENDING_TRIGGER_COUNT: pending_count,
         sidebar_state.NEXT_TRIGGER_AT: next_trigger_at,
         sidebar_state.HAS_PENDING_PLAN_APPROVAL: False,
     }
     for contribution in contributions:
-      entry.update(contribution.row_flags(spec.session_dir, session_id))
-    results[session_id] = entry
+      entry.update(contribution.row_flags(spec.session_dir, spec.session_id))
+    results[spec.session_id] = entry
   return results
 
 
-def _sidebar_probe_walk(
-    threads_dir: Path,
-    triggers_dir: Path,
-    session_dir: Path,
-    is_task_node: bool,
-    watched_files: tuple[str, ...],
-) -> tuple[tuple, _WalkedProbeInputs]:
+def _sidebar_probe_walk(spec: SidebarProbeSpec, watched_files: tuple[str, ...]) -> tuple[tuple, _WalkedProbeInputs]:
   """Stat-only identity of every byte the sidebar probe reads, plus the walk's stat pairs.
 
-  A deep probe's result can change only three ways, and the signature pins all
-  three: a probed file's content changes (caught by ``(st_mtime_ns, st_size)``
-  for both atomic-rename and in-place writers), a probed file or thread dir
-  appears or disappears among the readable entries (caught by the sorted name
-  sets — a thread dir whose metadata.json cannot be statted contributes
-  nothing until the file lands, and its arrival then moves the set), or the
-  30-day ``RUNNING_SCAN_WINDOW`` rolls past a metadata's mtime and drops it
-  from ``has_running_tasks_sync``'s read set without any file changing (caught
-  by the rollover element: the earliest ``mtime + window`` over scanned metas,
-  or ``float('inf')`` when nothing was scanned). The stat pass mirrors the
-  probe cores' own scandir+stat phase, so a signature sweep costs the cheap
-  half of a probe and skips every content read and parse. The sidebar
-  contributions' *watched_files* (paths relative to *session_dir*) ride the
-  signature as one ``(mtime_ns, size)`` entry each, so a contribution's flags
-  re-derive exactly when a file it reads changed. String paths instead
-  of Path objects: the sweep runs per poll over every selected session, and
-  pathlib's parse/alloc overhead would dominate the raw stat syscalls —
-  os.stat on joined strs measures ~2x faster over the active-session corpus.
+  A deep probe's result can change only two ways, and the signature pins both:
+  a probed file's content changes (caught by ``(st_mtime_ns, st_size)`` for
+  both atomic-rename and in-place writers), or a probed file appears or
+  disappears among the readable entries (caught by the sorted name sets — a
+  trigger file whose stat fails contributes nothing until the file lands, and
+  its arrival then moves the set). The stat pass mirrors the probe cores' own
+  scandir+stat phase, so a signature sweep costs the cheap half of a probe and
+  skips every content read and parse. The sidebar contributions'
+  *watched_files* (paths relative to *session_dir*) ride the signature as one
+  ``(mtime_ns, size)`` entry each, so a contribution's flags re-derive exactly
+  when a file it reads changed. String paths instead of Path objects: the
+  sweep runs per poll over every selected session, and pathlib's parse/alloc
+  overhead would dominate the raw stat syscalls — os.stat on joined strs
+  measures ~2x faster over the active-session corpus.
 
   The walked pairs ride along for the deep probe (:func:`probe_sidebar_state_sync`
   with *walked*).
   """
-  thread_sig = []
-  rollovers = []
-  thread_pairs = walk_thread_meta_stats(threads_dir, "thread_meta_read_failed")
-  for thread_dir, _meta_path, st in thread_pairs:
-    thread_sig.append((os.path.basename(thread_dir), st.st_mtime_ns, st.st_size))
-    rollovers.append(st.st_mtime + init_worker_recovery.RUNNING_SCAN_WINDOW.total_seconds())
   trigger_sig = []
   trigger_pairs: list[tuple[str, os.stat_result]] | None = None
   trigger_dir_sig: tuple[int, int] | None = None
-  triggers_str = os.fspath(triggers_dir)
+  triggers_str = os.fspath(spec.triggers_dir)
   try:
     dir_st = os.stat(triggers_str)
   except OSError:
@@ -778,23 +719,19 @@ def _sidebar_probe_walk(
     trigger_dir_sig = (dir_st.st_mtime_ns, dir_st.st_size)
     trigger_pairs = _iter_trigger_stats(triggers_str, dir_st)
     trigger_sig = [(os.path.basename(path), st.st_mtime_ns, st.st_size) for path, st in trigger_pairs]
-  session_dir_str = os.fspath(session_dir)
+  session_dir_str = os.fspath(spec.session_dir)
   watched_sig = tuple(stat_signature(session_dir_str + "/" + rel) for rel in watched_files)
-  rollover = min(rollovers) if rollovers else float("inf")
-  # A task-tree node's derivation reads its fact history and Run records; the
+  # The task-tree derivation reads its fact history and Run records; the
   # signature covers those files too, so an unchanged signature can never hide
   # a changed state (and a fresh-signature poll skips their reads).
-  task_sig: tuple = ()
-  if is_task_node:
-    task_sig = _task_tree_probe_signature(session_dir_str)
-  signature = (tuple(sorted(thread_sig)), tuple(sorted(trigger_sig)), watched_sig, rollover, task_sig)
-  return signature, _WalkedProbeInputs(thread_pairs, trigger_pairs, trigger_dir_sig)
+  task_sig = _task_tree_probe_signature(session_dir_str)
+  signature = (tuple(sorted(trigger_sig)), watched_sig, task_sig)
+  return signature, _WalkedProbeInputs(trigger_pairs, trigger_dir_sig)
 
 
-def _sidebar_signature_fresh(session_id: str, signature: tuple, now_ts: float) -> bool:
-  """True when the stored signature equals *signature* and its scan-window rollover is still ahead."""
-  stored = sidebar_state.probe_signature(session_id)
-  return stored == signature and now_ts < signature[3]
+def _sidebar_signature_fresh(session_id: str, signature: tuple) -> bool:
+  """True when the stored probe signature equals *signature*."""
+  return sidebar_state.probe_signature(session_id) == signature
 
 
 def _store_probe_results(probed: dict[str, dict], probe_sigs: dict[str, tuple]) -> None:
@@ -827,23 +764,19 @@ def selective_probe_sidebar_state(
   sigs: dict[str, tuple] = {}
   walked_inputs: dict[str, _WalkedProbeInputs] = {}
   to_probe: list[SidebarProbeSpec] = []
-  now_ts = time.time()
   watched_files = tuple(
       dict.fromkeys(rel for contribution in sidebar_contributions() for rel in contribution.watched_files))
   for spec in specs:
     if not isinstance(spec, SidebarProbeSpec):
       spec = SidebarProbeSpec(*spec)
-    sig, inputs = _sidebar_probe_walk(
-        spec.threads_dir, spec.triggers_dir, spec.session_dir, spec.is_task_node, watched_files)
+    sig, inputs = _sidebar_probe_walk(spec, watched_files)
     sigs[spec.session_id] = sig
     walked_inputs[spec.session_id] = inputs
-    if deep or spec.recheck_liveness or not _sidebar_signature_fresh(spec.session_id, sig, now_ts):
+    if deep or spec.recheck_liveness or not _sidebar_signature_fresh(spec.session_id, sig):
       to_probe.append(spec)
   entries = probe_sidebar_state_sync(to_probe, walked_inputs)
   if task_probe is not None:
     for spec in to_probe:
-      if not spec.is_task_node:
-        continue
       has_running, work_state = task_probe(spec.session_id)
       entries[spec.session_id][sidebar_state.TASK_TREE_ACTIVITY] = (has_running, work_state)
   return entries, sigs
@@ -1024,6 +957,7 @@ class SessionManager:
 
   def __init__(self, cfg: CharlieBotConfig) -> None:
     self._cfg = cfg
+    self.task_tree_manager = None
     # In-memory metadata cache: session_id -> (metadata, monotonic_timestamp, disk signature).
     # The signature is the (st_mtime_ns, st_size) of metadata.json taken BEFORE the read
     # that produced the entry (write-populated entries carry the write's own published
@@ -1119,26 +1053,24 @@ class SessionManager:
   # ---------------------------------------------------------------------------
 
   async def create_session(self, req: CreateSessionRequest, backend: str | None = None) -> SessionMetadata:
-    """Create a new session."""
-    name = req.name or await self._next_session_name()
-    overrides: dict[str, str] = {}
-    if req.session_id:
-      overrides["id"] = req.session_id
-    meta = SessionMetadata(name=name, backend=backend or self._cfg.backends.options[0].id, group=req.group, **overrides)
-    metadata_slots.set_registered(meta, req.model_extra or {})
+    """Create a root manager task through the task-tree owner."""
+    from src.runtime.run_token import CallerIdentity
+    from src.runtime.task_sessions import TaskTreeManager
 
-    self._create_session_dirs(self._session_dir(meta.id))
-
-    await self.save_metadata(meta)
-    # A new session is a tree-projection input (the rebuildable index scans
-    # the sessions root): drop it through the same hook as the unread flip,
-    # so a task operation naming the new session as its parent reads an index
-    # that already holds it.
-    if self.tree_index_invalidator is not None:
-      self.tree_index_invalidator()
-
-    log.info("session_created", session_id=meta.id, name=meta.name)
-    return _stamp_thinking_since(meta)
+    tree = self.task_tree_manager or TaskTreeManager(self._cfg, self)
+    request_id = f"session-create:{req.session_id or uuid.uuid4()}"
+    return await tree.create_task(
+        request_id=request_id,
+        task_parent_id=None,
+        profile="manager",
+        task=None,
+        name=req.name,
+        backend=backend,
+        group=req.group,
+        session_id=req.session_id,
+        slot_values=dict(req.model_extra or {}),
+        caller=CallerIdentity(kind="operator"),
+    )
 
   async def get_session(self, session_id: str) -> SessionMetadata | None:
     """Load session metadata, using in-memory cache when available."""
@@ -1153,7 +1085,7 @@ class SessionManager:
       raw = await self._read_metadata_raw(session_id)
       if raw is None:
         return None
-      meta = SessionMetadata.model_validate_json(raw)
+      meta = validate_session_metadata(raw, str(self._metadata_path(session_id)))
     # The migrate branch's save_metadata re-populates the cache, so the manual
     # populate below covers disk loads only; re-stamping a hit's timestamp
     # would wrongly extend its TTL.
@@ -1190,7 +1122,7 @@ class SessionManager:
     raw = await self._read_metadata_raw(session_id)
     if raw is None:
       return None
-    return SessionMetadata.model_validate_json(raw)
+    return validate_session_metadata(raw, str(self._metadata_path(session_id)))
 
   async def _read_metadata_raw(self, session_id: str) -> str | None:
     """Return the raw metadata.json text, or None when the file is missing or blank.
@@ -1428,8 +1360,7 @@ class SessionManager:
     limit = max(1, min(500, limit))
     metas = await self._with_derived_archive(
         await self._load_session_metas(status=SessionStatus.ARCHIVED), SessionStatus.ARCHIVED)
-    # Sequence-subtree rows stay out of the Archived list — projected legacy
-    # worker-thread rows under owned sessions included; the owned sessions
+    # Sequence-subtree rows stay out of the Archived list; the owned sessions
     # themselves keep their rows. The exclusion runs before the group
     # aggregates and the keyset slice, so both describe the rows the page can
     # actually return.
@@ -1871,10 +1802,7 @@ class SessionManager:
 
   @staticmethod
   def _create_session_dirs(session_dir: Path) -> None:
-    # Every session-creation path (create_session, _spawn_with_history) lays
-    # down the identical skeleton; the single helper is what keeps them agreeing.
-    for subdir in ("data", THREADS_DIR_NAME):
-      (session_dir / subdir).mkdir(parents=True, exist_ok=True)
+    (session_dir / "data").mkdir(parents=True, exist_ok=True)
 
   @staticmethod
   def _log_spawn(event: str, meta: SessionMetadata, parent_id: str, event_index: int | None) -> None:
@@ -1948,8 +1876,8 @@ class SessionManager:
   async def archive_session(self, session_id: str) -> SessionMetadata | None:
     """Mark a session as archived (does not delete files).
 
-    The stored status is a tree-projection input (a legacy archived parent
-    archives its task subtree through the read-time inheritance), so the write
+    The stored status is a tree-projection input: an archived parent archives
+    its task subtree through the read-time inheritance, so the write
     drops the rebuildable index through the same hook the unread flip uses:
     without it, a listing within _TREE_INDEX_TTL_SECONDS would compute the
     children's inherited state from the parent's pre-archive status.
@@ -1997,19 +1925,10 @@ class SessionManager:
     return meta
 
   async def recycle_history_before(self, session_id: str, cutoff_utc: datetime) -> dict:
-    """GC old threads and archive old chat events for a session.
-
-    Threads whose status is completed/failed/cancelled and whose ``completed_at``
-    is earlier than ``cutoff_utc`` are removed. Chat events with timestamp
-    earlier than ``cutoff_utc`` are moved out of the live ``chat_events.jsonl``
-    into a weekly archive file under ``data/archives/``. Best-effort per-thread
-    and per-event-line: a single bad file is logged and skipped, not raised.
-    """
-    threads_deleted = await asyncio.to_thread(self._gc_old_threads_sync, session_id, cutoff_utc)
+    """Move old chat events out of the live log into weekly archive files."""
     archive_result = await asyncio.to_thread(self._chat_events.archive_old_chat_events_sync, session_id, cutoff_utc)
     events_archived = archive_result["events_archived"]
     archive_file = archive_result["archive_file"]
-
     if events_archived:
       async with self._lock_for(session_id):
         fresh = await self.get_session(session_id)
@@ -2017,44 +1936,7 @@ class SessionManager:
           fresh.archive_offset += events_archived
           await self.save_metadata(fresh, lock_held=True)
       self._drop_session_runtime_state(session_id)
-
-    log.info(
-        "scheduled_session_recycle_done",
-        session_id=session_id,
-        threads_deleted=threads_deleted,
-        events_archived=events_archived,
-        archive_file=archive_file,
-    )
-    return {
-        "threads_deleted": threads_deleted,
-        "events_archived": events_archived,
-        "archive_file": archive_file,
-    }
-
-  def _gc_old_threads_sync(self, session_id: str, cutoff_utc: datetime) -> int:
-    """Remove thread dirs whose status is terminal and completed_at < cutoff."""
-    threads_dir = self._threads_dir(session_id)
-    if not threads_dir.exists():
-      return 0
-    deleted = 0
-    for thread_dir in threads_dir.iterdir():
-      try:
-        if not thread_dir.is_dir():
-          continue
-        meta = load_json_meta(thread_dir / METADATA_NAME, "thread_meta_read_failed_during_recycle")
-        if meta is None:
-          continue
-        if meta.get("status") not in TERMINAL_THREAD_STATUSES:
-          continue
-        completed_at = self._parse_optional_utc(
-            meta.get("completed_at"), "thread_completed_at_parse_failed", thread=str(thread_dir))
-        if completed_at is None or completed_at >= cutoff_utc:
-          continue
-        shutil.rmtree(thread_dir)
-        deleted += 1
-      except Exception:
-        log.exception("thread_gc_failed", thread=str(thread_dir))
-    return deleted
+    return {"events_archived": events_archived, "archive_file": archive_file}
 
   async def star_session(self, session_id: str) -> SessionMetadata | None:
     """Star a session."""
@@ -2243,22 +2125,6 @@ class SessionManager:
 
     return context_tokens, await asyncio.to_thread(newest_request)
 
-  async def has_completed_round(self, session_id: str) -> bool:
-    """True when the session's own segment of the log holds a master_done event.
-
-    A clone/elone child's log opens with the parent's copied lines, so only a
-    ``master_done`` after the newest ``clone_start`` marker is this session's
-    completed round; a log without a marker counts any ``master_done``, as
-    before. Reads through the existing ``load_chat_events_sync`` cache; adds no
-    new persistent state.
-    """
-    for ev in reversed(self.load_chat_events_sync(session_id)):
-      if ev.get("type") == ET.CLONE_START:
-        return False
-      if ev.get("type") == ET.MASTER_DONE:
-        return True
-    return False
-
   async def _save_field_fresh(self, session_id: str, field: str, value: Any) -> None:
     """Set one metadata field on a fresh disk read, under the per-session lock.
 
@@ -2272,10 +2138,6 @@ class SessionManager:
         return
       setattr(fresh, field, value)
       await self.save_metadata(fresh, lock_held=True)
-
-  async def persist_master_run(self, session_id: str, record: MasterRunRecord | None) -> None:
-    """Set or clear the session's in-flight master-turn record."""
-    await self._save_field_fresh(session_id, "master_run", record)
 
   async def update_thinking_state(self, session_id: str, updated_at: datetime) -> None:
     """Persist updated_at without clobbering unrelated fields."""
@@ -2303,7 +2165,7 @@ class SessionManager:
       try:
         sig = stat_signature(meta_path)  # before the read, the cache revalidation key
         raw = meta_path.read_text(encoding="utf-8")
-        meta = SessionMetadata.model_validate_json(raw)
+        meta = validate_session_metadata(raw, str(meta_path))
         self._metadata_cache[d.name] = (meta, now, sig)
         if meta.status == SessionStatus.ACTIVE:
           results.append(_stamp_thinking_since(meta.model_copy()))
@@ -2509,24 +2371,15 @@ class SessionManager:
     aggregator.emit_stream_deltas = True
     return aggregator
 
-  async def name_after_round(self, session_id: str) -> None:
-    """Run post-round session naming for *session_id* through the autonamer."""
-    # Imported here: autonamer imports SessionManager at module level.
-    from src.runtime.autonamer import name_after_round
-    await name_after_round(self._cfg, session_id, self)
-
   def callbacks(self) -> SessionCallbacks:
     """Return a bundle of session-related callbacks for run_message()."""
     return SessionCallbacks(
         persist_and_broadcast=self.persist_and_broadcast,
-        update_thinking_state=self.update_thinking_state,
         mark_unread=self.mark_unread,
         persist_cc_session_id=self.persist_cc_session_id,
-        has_completed_round=self.has_completed_round,
-        persist_master_run=self.persist_master_run,
         persist_account_label=self.persist_account_label,
         context_state=self.context_state,
-        after_round=self.name_after_round,
+        task_tree_activity=self.task_tree_activity,
     )
 
   def load_chat_events_sync(self, session_id: str) -> list[dict]:
@@ -2700,12 +2553,7 @@ class SessionManager:
 
   @staticmethod
   def _parse_optional_utc(raw: Any, log_event: str, **log_ctx: Any) -> datetime | None:
-    """Parse a stored timestamp tolerantly: absent or unparseable becomes None.
-
-    Both scans that route through here (``_gc_old_threads_sync`` and
-    ``pending_trigger_state_sync``) treat a bad timestamp as skip-and-continue,
-    never as a hard failure, so one corrupt file must not abort the scan.
-    """
+    """Parse a stored timestamp tolerantly for trigger and plan state scans."""
     if not raw:
       return None
     try:
@@ -2855,7 +2703,7 @@ class SessionManager:
             empty_ids.add(session_id)
             continue
           try:
-            parsed_by_id[session_id] = SessionMetadata.model_validate_json(raw)
+            parsed_by_id[session_id] = validate_session_metadata(raw, str(self._metadata_path(session_id)))
             parsed_sigs[session_id] = sig
           except Exception as exc:
             load_failures[session_id] = exc
@@ -2911,18 +2759,6 @@ class SessionManager:
     log.info(log_event, session_id=session_id, **log_fields)
     return meta
 
-  async def _has_running_tasks(self, session_id: str) -> bool:
-    """Check if a session has any thread currently marked 'running'.
-
-    A running thread's metadata.json is recent by definition (written at start,
-    never rewritten while it runs), so only threads whose metadata mtime is within
-    RUNNING_SCAN_WINDOW are read+parsed; older thread dirs are dropped after a cheap
-    scandir+stat with zero content reads, and a session whose only threads are old
-    returns False without reading any metadata. Runs its filesystem work in a thread
-    to keep the event loop responsive (called per-session by the sidebar/status polls).
-    """
-    return await asyncio.to_thread(has_running_tasks_sync, self._threads_dir(session_id))
-
   def _probe_spec(self, meta: SessionMetadata, *, recheck_liveness: bool = False) -> SidebarProbeSpec:
     """The probe-input spec :func:`selective_probe_sidebar_state` consumes.
 
@@ -2932,10 +2768,8 @@ class SessionManager:
     nothing. The poll path leaves it False — a clean node's poll pays no
     /proc read.
     """
-    is_task_node = meta.profile is not None
     return SidebarProbeSpec(
-        meta.id, self._threads_dir(meta.id),
-        self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), is_task_node, recheck_liveness)
+        meta.id, self._session_dir(meta.id) / "triggers", self._session_dir(meta.id), recheck_liveness)
 
   async def resolve_sidebar_state(
       self,
@@ -3067,7 +2901,7 @@ class SessionManager:
           include_running_status,
           include_pending_trigger_status,
           include_pending_plan_approval,
-          running=bool(busy_since(meta.id)) or bool(probed[sidebar_state.THREAD_RUNNING]),
+          running=bool(busy_since(meta.id)),
           trigger_count=probed[sidebar_state.PENDING_TRIGGER_COUNT],
           next_trigger_at=probed[sidebar_state.NEXT_TRIGGER_AT],
           plan_approval=bool(probed[sidebar_state.HAS_PENDING_PLAN_APPROVAL]),
@@ -3284,7 +3118,7 @@ class SessionManager:
       # A concurrent publish after this one replaces the inode; the next
       # expiry's stat then evicts and re-reads — the same bound the
       # signature-less entry paid on every expiry.
-      self._metadata_cache[meta.id] = (SessionMetadata.model_validate_json(serialized), time.monotonic(), sig)
+      self._metadata_cache[meta.id] = (validate_session_metadata(serialized, str(self._metadata_path(meta.id))), time.monotonic(), sig)
       # The single funnel for every session-metadata write (35+ call sites, plus
       # the save funnel): status transitions (archive/unarchive)
       # land here, so the sidebar snapshot must re-probe this session.
@@ -3293,10 +3127,6 @@ class SessionManager:
 
   def _session_dir(self, session_id: str) -> Path:
     return self._cfg.sessions_dir / session_id
-
-  def _threads_dir(self, session_id: str) -> Path:
-    """Return the absolute path to a session's threads dir."""
-    return self._session_dir(session_id) / THREADS_DIR_NAME
 
   def _metadata_path(self, session_id: str) -> Path:
     return self._session_dir(session_id) / METADATA_NAME

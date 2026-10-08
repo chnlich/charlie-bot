@@ -23,7 +23,6 @@ import datetime
 from collections.abc import Callable
 
 from src.infra import event_types, log_once, memo, models
-from src.runtime import sessions
 
 log = log_once.LazyStructlogLogger()
 
@@ -181,29 +180,11 @@ def _authorization_window_open(
   return has_takeoff or pre_takeoff_active
 
 
-def _delegation_blocked(*, task_id: str | None) -> DelegationBlockedError:
+def _delegation_blocked(*, task_id: str) -> DelegationBlockedError:
   """The shared no-authorization verdict; the task gate names the session it judged."""
-  scope = "" if task_id is None else f" of task {task_id}"
   return DelegationBlockedError(
       'Delegation blocked: no active authorization. A valid "pre take off" within 12 hours or '
-      f'"take off" in the latest real user message{scope} is required before delegating.')
-
-
-def check_takeoff_gate(
-    session_id: str,
-    session_mgr: sessions.SessionManager,
-    now: datetime.datetime | None = None,
-) -> None:
-  """Verify an active pre-takeoff or ordinary takeoff authorization window."""
-  effective_now = _effective_utc_now(now)
-
-  events = session_mgr.load_chat_events_sync(session_id)
-  latest_user_has_takeoff, latest_pre_takeoff_at, _ = _settled_user_answers(events, session_id)
-
-  if _authorization_window_open(latest_user_has_takeoff, latest_pre_takeoff_at, effective_now):
-    return
-
-  raise _delegation_blocked(task_id=None)
+      f'"take off" in the latest real user message of task {task_id} is required before delegating.')
 
 
 _TASK_ANCESTOR_HOP_LIMIT = 1000
@@ -225,7 +206,7 @@ def check_takeoff_gate_for_task(
   that holds a real user message. Every ancestor on the way must be an open
   task, and the calling node itself must be a manager. Agent messages, cron
   inputs, and child reports never mint or revoke a user authorization window;
-  only real user messages (the same judgment the legacy gate rides) count.
+  only real user messages count.
 
   Returns the session id whose gate authorized; raises
   :class:`DelegationBlockedError` otherwise. ``task_meta_of`` returns

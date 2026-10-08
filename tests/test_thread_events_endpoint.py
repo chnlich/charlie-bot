@@ -2,15 +2,14 @@
 
 import json
 import pathlib
+from unittest.mock import AsyncMock
 
 import conftest
 import fastapi
 import pytest
 from fastapi import testclient
 
-from src.infra import models
-from src.runtime import sessions, threads
-from src.runtime.api import deps
+from src.infra.models import CreateSessionRequest, RunRecord
 from src.runtime.api import threads as threads_api
 
 EVENTS = [
@@ -37,25 +36,27 @@ EVENTS = [
 ]
 
 
-async def _client_with_log(tmp_path: pathlib.Path) -> tuple[testclient.TestClient, str, pathlib.Path]:
-  cfg = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(cfg)
-  thread_mgr = threads.ThreadManager(cfg)
-  session = await session_mgr.create_session(models.CreateSessionRequest(name="Events"))
-  meta = await conftest.seed_thread(thread_mgr, session, "events")
-  path = await thread_mgr.get_events_log_path(session.id, meta.id)
+async def _client_with_log(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> tuple[testclient.TestClient, str, pathlib.Path]:
+  cfg, session_mgr, tree = conftest.build_env(tmp_path)
+  session = await session_mgr.create_session(CreateSessionRequest(name="Events"))
+  run_id = "run-events"
+  await tree.runs.register_run(RunRecord(id=run_id, session_id=session.id, kind="work"))
+  path = tree.runs.run_dir(session.id, run_id) / "events.jsonl"
   path.parent.mkdir(parents=True, exist_ok=True)
   path.write_text("".join(json.dumps(e) + "\n" for e in EVENTS), encoding="utf-8")
   app = fastapi.FastAPI()
   app.include_router(threads_api.router, prefix="/api/threads")
-  app.dependency_overrides[deps.get_thread_manager] = lambda: thread_mgr
-  url = f"/api/threads/{session.id}/threads/{meta.id}/events"
+  monkeypatch.setattr(threads_api, "get_task_manager", AsyncMock(return_value=tree))
+  monkeypatch.setattr(threads_api, "get_run_store", AsyncMock(return_value=tree.runs))
+  url = f"/api/threads/{session.id}/threads/{run_id}/events"
   return testclient.TestClient(app), url, path
 
 
 @pytest.mark.asyncio
-async def test_after_envelope_slice_reset_and_rejection(tmp_path: pathlib.Path) -> None:
-  client, url, _path = await _client_with_log(tmp_path)
+async def test_after_envelope_slice_reset_and_rejection(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  client, url, _path = await _client_with_log(tmp_path, monkeypatch)
   full = client.get(url).json()
   assert isinstance(full, list)  # no-after keeps the plain-list shape
   assert [e["type"] for e in full] == ["assistant", "ping", "complete"]
@@ -71,8 +72,9 @@ async def test_after_envelope_slice_reset_and_rejection(tmp_path: pathlib.Path) 
 
 
 @pytest.mark.asyncio
-async def test_full_fetch_serves_stored_render_and_renders_after_append(tmp_path: pathlib.Path) -> None:
-  client, url, _path = await _client_with_log(tmp_path)
+async def test_full_fetch_serves_stored_render_and_renders_after_append(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  client, url, _path = await _client_with_log(tmp_path, monkeypatch)
   first = client.get(url)
   second = client.get(url)
   # The unchanged-log re-open rides the stored render: byte-identical body.

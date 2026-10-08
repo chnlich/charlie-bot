@@ -39,7 +39,6 @@ async def test_input_admitted_during_a_failed_review_gets_the_next_dispatch(
   test_task_execution.install_backends(
       monkeypatch, [test_task_execution.SpawningScriptedBackend([test_task_execution.result_event("taken off")])],
       conftest.BUILD_BACKEND_PATCH_TARGET)
-  conftest.patch_instructions_content(monkeypatch)
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   await test_task_execution.wait_for_terminal_run(tree, manager.id, decision["run_id"])

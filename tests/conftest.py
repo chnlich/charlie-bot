@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -26,6 +27,8 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
+
+_REAL_ASYNCIO_SLEEP = asyncio.sleep
 
 if TYPE_CHECKING:
   # Annotation-only: the fake-VAD seam's feed sizes; the runtimes import numpy locally.
@@ -243,14 +246,13 @@ from src.backends.opencode.opencode import OpenCodeBackend  # noqa: E402
 from src.runtime.worker import Worker  # noqa: E402
 from src.features.cron import loader as cron_loader  # noqa: E402
 from src.features.cron.api import router as cron_router  # noqa: E402
-from src.runtime.api.deps import get_session_manager, get_task_manager, get_thread_manager  # noqa: E402
+from src.runtime.api.deps import get_session_manager, get_task_manager  # noqa: E402
 from src.runtime.api.internal import router as internal_router  # noqa: E402
 from src.app.pages import router as pages_router  # noqa: E402
 from src.runtime.api.sessions import router as sessions_router  # noqa: E402
 from src.infra import event_types as ET  # noqa: E402
 from src.runtime import runs  # noqa: E402
 from src.runtime import thinking_state  # noqa: E402
-from src.runtime import init_worker_recovery as worker_recovery_module  # noqa: E402
 from src.infra import backend_models, models  # noqa: E402
 from src.backends.claude_code.claude_config import ClaudeAccount  # noqa: E402
 from src.runtime import streaming  # noqa: E402
@@ -265,8 +267,6 @@ from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
-from src.runtime import spawner  # noqa: E402
-from src.runtime.threads import ThreadManager  # noqa: E402
 from src.runtime.triggers import TriggerManager  # noqa: E402
 
 from src.features.artifacts import headless_render  # noqa: E402
@@ -310,16 +310,14 @@ def _stub_headless_renderer(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def mocked_callback_fields(**overrides: Any) -> dict[str, Any]:
-  """The four SessionCallbacks fields a test bundle mocks identically; overrides replace a default.
+  """The SessionCallbacks fields shared by test bundles; overrides replace a default.
 
   ``persist_cc_session_id`` resolves to the id it was handed, the read-back-after-persist shape
   the consumer relies on; the consumer's producing-backend keyword rides through and is ignored.
   """
   fields: dict[str, Any] = {
-      "update_thinking_state": AsyncMock(),
       "mark_unread": AsyncMock(),
       "persist_cc_session_id": AsyncMock(side_effect=lambda sid, ccid, native_backend=None: ccid),
-      "has_completed_round": AsyncMock(return_value=False),
   }
   fields.update(overrides)
   return fields
@@ -330,7 +328,6 @@ def mock_session_callbacks() -> models.SessionCallbacks:
   return models.SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
       **mocked_callback_fields(),
-      persist_master_run=AsyncMock(),
       persist_account_label=AsyncMock(side_effect=lambda sid, label: label),
       context_state=AsyncMock(return_value=(None, None)),
   )
@@ -342,10 +339,9 @@ def manager_backed_callbacks(mgr: SessionManager) -> models.SessionCallbacks:
   return models.SessionCallbacks(
       persist_and_broadcast=AsyncMock(),
       **mocked_callback_fields(
-          persist_cc_session_id=mgr.persist_cc_session_id,
-          has_completed_round=mgr.has_completed_round,
+      persist_cc_session_id=mgr.persist_cc_session_id,
+      task_tree_activity=mgr.task_tree_activity,
       ),
-      persist_master_run=mgr.persist_master_run,
       persist_account_label=mgr.persist_account_label,
       context_state=AsyncMock(return_value=(None, None)),
   )
@@ -361,10 +357,10 @@ def make_work_item(
     is_voice: bool = False,
     user_event_id: str | None = None,
 ) -> master_cc_state._WorkItem:
-  """_WorkItem with the field values the run-path tests share: non-voice round, mocked callbacks,
-  no extra flags, live-loop future. callbacks=None installs mock_session_callbacks();
-  the keyword fields carry the values the cancel/voice/consumer sites vary, and a test needing any
-  other field (expect_fresh_session, resume_record) builds its own."""
+  """Task manager Run item with the field values shared by backend tests."""
+  run_id = str(uuid.uuid4())
+  transport_dir = _test_transport_dir(cfg, session_meta.id, run_id)
+  transport_dir.mkdir(parents=True, exist_ok=True)
   return master_cc_state._WorkItem(
       cfg=cfg,
       session_meta=session_meta,
@@ -375,7 +371,60 @@ def make_work_item(
       backend_option=backend_option,
       extra_claude_flags=None,
       future=asyncio.get_running_loop().create_future(),
+      task_run=master_cc_state.TaskRunBinding(
+          session_id=session_meta.id, run_id=run_id, transport_dir=str(transport_dir)),
       user_event_ids=[user_event_id] if user_event_id else [],
+      task_instructions="instructions",
+      on_task_spawn=_noop_task_spawn,
+      on_task_finish=_noop_task_finish,
+  )
+
+
+def _test_transport_dir(cfg: CharlieBotConfig, session_id: str, run_id: str) -> Path:
+  sessions_dir = getattr(cfg, "sessions_dir", None)
+  root = sessions_dir if isinstance(sessions_dir, Path) else Path(tempfile.gettempdir()) / "charliebot-test-runs"
+  return root / session_id / "data" / "runs" / run_id
+
+
+async def _noop_task_spawn(_pid: int, _pid_start: str | None) -> None:
+  return
+
+
+async def _noop_task_finish(_cc_session_id: str | None, _exit_code: int, _finish_extras: dict) -> None:
+  return
+
+
+async def run_task_manager_message(
+    cfg: CharlieBotConfig,
+    session_meta: models.SessionMetadata,
+    user_content: str,
+    callbacks: models.SessionCallbacks,
+    *,
+    user_event_ids: list[str] | None = None,
+    auto_trigger: bool = False,
+    backend_option: models.BackendOption | None = None,
+    uploaded_files: list[dict] | None = None,
+    is_voice: bool = False,
+) -> str | None:
+  """Queue one task manager Run for consumer tests without launching its TaskTree owner."""
+  run_id = str(uuid.uuid4())
+  transport_dir = _test_transport_dir(cfg, session_meta.id, run_id)
+  transport_dir.mkdir(parents=True, exist_ok=True)
+  return await master_cc_queue.run_message(
+      cfg,
+      session_meta,
+      user_content,
+      callbacks,
+      user_event_ids=list(user_event_ids or []),
+      task_instructions="instructions",
+      task_run=master_cc_state.TaskRunBinding(
+          session_id=session_meta.id, run_id=run_id, transport_dir=str(transport_dir)),
+      on_task_spawn=_noop_task_spawn,
+      on_task_finish=_noop_task_finish,
+      auto_trigger=auto_trigger,
+      backend_option=backend_option,
+      uploaded_files=uploaded_files,
+      is_voice=is_voice,
   )
 
 
@@ -399,10 +448,7 @@ async def _run_seeded_consumer(
     fake_run_cc: ConsumerRound,
     manager_patch: Any,
 ) -> None:
-  """Run _session_consumer over a seeded queue with _run_cc replaced by *fake_run_cc* and
-  broadcasts silenced; *manager_patch* is the context manager silencing the dequeue refresh's
-  running-tasks probe. The session's queue and consumer registry entries are dropped on exit;
-  the consumer run is bounded at 5s."""
+  """Run _session_consumer with fake run execution, a supplied metadata read, and silent broadcasts."""
   master_cc_state._session_queues.pop(session_id, None)
   master_cc_state._session_queues[session_id] = asyncio.Queue()
   for item in work_items:
@@ -424,11 +470,9 @@ async def run_session_consumer(
     work_items: list[master_cc_state._WorkItem],
     fake_run_cc: ConsumerRound,
 ) -> None:
-  """Run _session_consumer over a seeded queue with a fake CC: _run_cc is replaced by fake_run_cc,
-  broadcasts are silenced, and the SessionManager double reports no running tasks. The session's
-  queue and consumer registry entries are dropped on exit; the consumer run is bounded at 5s."""
+  """Run _session_consumer with fake run execution, a missing metadata read, and silent broadcasts."""
   workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  workers_mock.read_metadata_fresh = AsyncMock(return_value=None)
   await _run_seeded_consumer(
       session_id,
       work_items,
@@ -481,10 +525,9 @@ def patch_resume_seams(
 ) -> AsyncMock:
   """Install the three seams every re-attach round needs, and return the broadcast stub.
 
-  The re-attach path (enqueue_master_resume) otherwise reads the SessionManager,
-  broadcasts deltas, and builds a fresh event translator: the SessionManager
-  double answers _has_running_tasks=False, and the broadcast stub silences the
-  streaming-manager singleton (the same attribute BROADCAST_PATCH_TARGET names).
+  The re-attach path (enqueue_master_resume) reads fresh metadata, broadcasts
+  deltas, and builds a fresh event translator. The session manager double
+  returns no metadata; the broadcast stub silences the streaming manager.
   resume_cc=None keeps the real _resume_cc over the test's raw log and installs
   the identity _build_fresh_translate instead; a callable replaces _resume_cc.
   """
@@ -495,7 +538,7 @@ def patch_resume_seams(
   broadcast = AsyncMock()
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast)
   workers_mock = MagicMock()
-  workers_mock._has_running_tasks = AsyncMock(return_value=False)
+  workers_mock.read_metadata_fresh = AsyncMock(return_value=None)
   monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
   return broadcast
 
@@ -515,7 +558,20 @@ async def run_resume_round(
   brackets the round, so a failing test cannot leak queue or consumer state.
   """
   async with fresh_master_state(meta.id):
-    future = await master_cc_queue.enqueue_master_resume(cfg, meta, record, callbacks, is_alive=is_alive)
+    run_id = str(uuid.uuid4())
+    transport_dir = _test_transport_dir(cfg, meta.id, run_id)
+    transport_dir.mkdir(parents=True, exist_ok=True)
+    future = await master_cc_queue.enqueue_master_resume(
+        cfg,
+        meta,
+        record,
+        callbacks,
+        is_alive=is_alive,
+        task_run=master_cc_state.TaskRunBinding(
+            session_id=meta.id, run_id=run_id, transport_dir=str(transport_dir)),
+        on_task_spawn=_noop_task_spawn,
+        on_task_finish=_noop_task_finish,
+    )
     await asyncio.wait_for(future, timeout=5)
     await drain_session_consumer(meta.id, timeout=5)
 
@@ -789,8 +845,7 @@ def make_json_response(payload: dict[str, Any], status_code: int = 200) -> Magic
 
 
 def archive_cutoff_events() -> tuple[datetime, list[dict]]:
-  """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff; the 5/3
-  split is what recycle tests assert on (events_archived == 5, archive_offset == 5, live f0..f2)."""
+  """(cutoff, events) where five `e{i}` events predate and three `f{i}` events follow the cutoff."""
   base = datetime(2026, 5, 10, 0, 0, 0, tzinfo=UTC)
   cutoff = base + timedelta(days=3)
   events = [
@@ -810,12 +865,26 @@ def archive_cutoff_events() -> tuple[datetime, list[dict]]:
   return cutoff, events
 
 
+def backdate_task_created_event(mgr: SessionManager, session_id: str, timestamp: datetime) -> None:
+  """Place a task fixture's creation fact before the archived event corpus."""
+  from src.infra import event_types as ET
+
+  path = mgr.get_chat_events_path(session_id)
+  events = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+  created = next(event for event in events if event.get("type") == ET.TASK_CREATED)
+  created["timestamp"] = timestamp.isoformat()
+  path.write_text("".join(json.dumps(event) + "\n" for event in events), encoding="utf-8")
+  mgr._chat_events.clear_cache(session_id)
+
+
 async def recycle_archive_cutoff_events(mgr: SessionManager, session_id: str) -> tuple[datetime, Path]:
-  """Seed archive_cutoff_events()'s corpus on the session's live file and recycle at the cutoff;
-  returns (cutoff, live path). The 5 e-events end up in the weekly archive and the 3 f-events stay
-  live (archive_offset == 5). A test that asserts on recycle's return value, or that must read
-  between seed and recycle, keeps the explicit calls instead."""
+  """Seed the task-created fixture and archive_cutoff_events()'s corpus in timestamp order.
+
+  Returns (cutoff, live path). The task creation fact and five e-events end up
+  in the weekly archive; the three f-events stay live.
+  """
   cutoff, events = archive_cutoff_events()
+  backdate_task_created_event(mgr, session_id, cutoff - timedelta(days=1))
   live_path = mgr.get_chat_events_path(session_id)
   append_events(live_path, events)
   await mgr.recycle_history_before(session_id, cutoff)
@@ -1020,8 +1089,7 @@ def delegate_payload(session_id: str, repo: Path, *, task_type: str = "quick-edi
 
 def build_master_cc_cfg(tmp_path: Path) -> CharlieBotConfig:
   """CharlieBotConfig rooted at tmp_path/".charliebot" with one fake codex backend registered: the
-  shape the master-cc round tests drive run_message, replay_user_message, _run_cc, and
-  _session_consumer against."""
+  shape task-tree manager-turn tests drive through the queue and backend runner."""
   return CharlieBotConfig(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [backend_option(id="fake", label="Fake", type="codex", model="fake-model")]},
@@ -1094,12 +1162,14 @@ def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> 
   return make_router_client(cfg, session_mgr, sessions_router, "/api/sessions")
 
 
-def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
+def make_internal_router_client(cfg: Any, session_mgr: Any, task_mgr: Any | None = None) -> TestClient:
   """make_router_client over the internal router, mounted at /api/internal, plus the feature routers
   registered under that prefix; the internal routes take cfg through the on-loop dependency
   (same instance the sync key serves), so the override keys in make_router_client cover them.
   cfg may be a MagicMock when the tested route never reads it."""
   client = make_router_client(cfg, session_mgr, internal_router, "/api/internal")
+  if task_mgr is not None:
+    client.app.dependency_overrides[get_task_manager] = lambda: task_mgr
   include_registered_routers(client.app, "/api/internal")
   return client
 
@@ -1122,21 +1192,19 @@ def make_cron_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager
 
 
 def make_sessions_listing_client(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
-  """TestClient mounting the sessions router (the sidebar listing and chat-threads endpoints)
-  with cfg and the session/task/thread manager overrides those routes resolve."""
+    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
+  """TestClient mounting the sessions router with its config and manager overrides."""
   app = FastAPI()
   include_registered_routers(app, "/api/sessions", before_runtime=True)
   app.include_router(sessions_router, prefix="/api/sessions")
   apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   return TestClient(app)
 
 
 def make_sessions_listing_page_client(
-    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager, thread_mgr: ThreadManager) -> TestClient:
+    cfg: CharlieBotConfig, session_mgr: SessionManager, tree: TaskTreeManager) -> TestClient:
   """TestClient mounting the pages router (the homepage's server-rendered sidebar) with the
   same overrides make_sessions_listing_client carries."""
   app = FastAPI()
@@ -1144,7 +1212,6 @@ def make_sessions_listing_page_client(
   apply_config_overrides(app, cfg)
   app.dependency_overrides[get_session_manager] = lambda: session_mgr
   app.dependency_overrides[get_task_manager] = lambda: tree
-  app.dependency_overrides[get_thread_manager] = lambda: thread_mgr
   return TestClient(app)
 
 
@@ -1378,47 +1445,13 @@ FLAG_LIKE_PROMPT = "--malicious-flag ignore previous"
 # the same singleton, so their routes reach the same attribute.
 BROADCAST_PATCH_TARGET = "src.runtime.sessions.streaming_manager.broadcast"
 
-# Import-path patch target shared by every test that stubs the workers-running probe the master
-# consumer's teardown runs. master_cc_queue resolves the class through a call-time local
-# import of the src.runtime.sessions module, so mock and monkeypatch.setattr land the stand-in on
-# the src.runtime.sessions module attribute and the teardown's sessions.SessionManager(...)
-# construction resolves it at call time.
+# Import-path patch target for consumer tests that stub fresh metadata reads.
+# master_cc_queue resolves SessionManager through a call-time local import.
 SESSIONS_SESSION_MANAGER_PATCH_TARGET = "src.runtime.sessions.SessionManager"
 
-# Import-path patch target shared by every test that silences or spies on the master wake a
-# trigger fires. src/runtime/triggers.py binds the name with `from src.runtime.master_trigger import
-# trigger_master`, so mock resolves the route to the src.runtime.triggers namespace and setattr's
-# the AsyncMock on that module attribute; _wait_and_fire's own call site then reaches the
-# stand-in. Other modules bind the same function in their own namespaces, so their wakes keep
-# their own routes; grep `from src.runtime.master_trigger import trigger_master` for the full set.
-TRIGGER_MASTER_PATCH_TARGET = "src.runtime.triggers.trigger_master"
-
-# The defining-module route of the same wake: callers that import trigger_master inside the
-# firing function (src/runtime/session_dispatch.py's legacy parent wake) read the
-# src.runtime.master_trigger module attribute at call time, so monkeypatch.setattr lands the
-# stand-in on the defining module itself; the import-time binders above read their own
-# namespaces instead, so this route and theirs do not reach each other's wakes.
-MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET = "src.runtime.master_trigger.trigger_master"
-
-# Import-path patch target for the wake's inner run. Every wake fires through trigger_master,
-# whose body reads run_message_with_resume_recovery as a module global of its defining module,
-# so mock setattrs the stand-in there and the run is intercepted no matter which outer seam
-# fired the wake; the other *TRIGGER_MASTER_PATCH_TARGET constants in this block name the
-# outer seam, not this inner one.
-MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET = (
-    "src.runtime.master_trigger.run_message_with_resume_recovery")
-
-# The resume-free sibling of the inner run above: trigger_master's resume path reads run_message
-# as the same defining module's global, so the stand-in lands on the same module attribute and
-# the note above's interception argument carries over.
-MASTER_TRIGGER_RUN_MESSAGE_PATCH_TARGET = "src.runtime.master_trigger.run_message"
-
-# Import-path patch target for the config re-read a firing trigger passes to the master wake.
-# src/runtime/triggers.py binds the name at import scope (`from src.infra.config import get_config`),
-# so mock setattrs the stand-in on the src.runtime.triggers module attribute and _wait_and_fire's
-# wake path reads it at call time. Sibling modules binding get_config in their own namespaces
-# keep their own routes.
-TRIGGERS_GET_CONFIG_PATCH_TARGET = "src.runtime.triggers.get_config"
+# The trigger watcher tests stop at the task-tree admission seam. The tree
+# delivery itself is covered by tests/test_trigger_succession.py.
+TRIGGER_TASK_DELIVERY_PATCH_TARGET = "src.runtime.triggers.TriggerManager._fire_task_tree"
 
 # Import-path patch target for the subprocess spawn the trigger watchers probe through.
 # src/runtime/triggers.py binds the library with module-scope `import asyncio`, and its
@@ -2039,24 +2072,6 @@ def write_plan_artifact(cfg: CharlieBotConfig, session_id: str, name: str, conte
   return f"artifacts/{name}"
 
 
-async def seed_thread(
-    thread_mgr: ThreadManager,
-    session_meta: models.SessionMetadata,
-    description: str,
-    **overrides: Any,
-) -> models.ThreadMetadata:
-  """Seed one legacy thread record through the manager's durable save funnel.
-
-  Tests seed the read-only records the views scan directly: a default
-  ThreadMetadata plus its thread dir, persisted via save_metadata (the same
-  funnel updates ride). Overrides land on the model.
-  """
-  meta = models.ThreadMetadata(session_id=session_meta.id, description=description, **overrides)
-  (thread_mgr.thread_dir(session_meta.id, meta.id) / "data").mkdir(parents=True, exist_ok=True)
-  await thread_mgr.save_metadata(meta)
-  return meta
-
-
 def write_thread_meta(cfg: CharlieBotConfig, session_id: str, meta: dict) -> Path:
   """Write meta as the session's threads/<meta["id"]>/metadata.json and return the file path."""
   thread_dir = cfg.sessions_dir / session_id / "threads" / meta["id"]
@@ -2116,15 +2131,13 @@ def make_scheduler_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManag
 
 async def make_plan_setup(
     tmp_path: Path,
-) -> tuple[CharlieBotConfig, SessionManager, ThreadManager, PlanRegistryManager, models.SessionMetadata]:
-  """Real manager trio plus one created session under a plan-shaped config, for plan tests that talk to the
-  registry or the plan endpoints."""
+) -> tuple[CharlieBotConfig, SessionManager, PlanRegistryManager, models.SessionMetadata]:
+  """Session and plan managers plus one created task for plan endpoint tests."""
   cfg = build_plan_cfg(tmp_path)
   session_mgr = SessionManager(cfg)
-  thread_mgr = ThreadManager(cfg)
   plan_mgr = PlanRegistryManager(cfg, session_mgr)
   meta = await session_mgr.create_session(models.CreateSessionRequest(name="Test"), backend=OPUS_BACKEND_ID)
-  return cfg, session_mgr, thread_mgr, plan_mgr, meta
+  return cfg, session_mgr, plan_mgr, meta
 
 
 async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, str]:
@@ -2137,8 +2150,8 @@ async def make_trigger_setup(tmp_path: Path) -> tuple[CharlieBotConfig, SessionM
 
 
 async def no_sleep(_seconds: float) -> None:
-  """asyncio.sleep stand-in for watch-loop tests: returns immediately so poll iterations skip wall-clock waits."""
-  return
+  """Watch-loop sleep stand-in that skips time while yielding to other tasks."""
+  await _REAL_ASYNCIO_SLEEP(0)
 
 
 @pytest.fixture
@@ -2377,22 +2390,14 @@ def profile_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Pa
   reset_config_caches()
 
 
-async def make_legacy_cron_session(
+async def make_cron_session(
     session_mgr: SessionManager,
     task_name: str,
     backend: str = OPUS_BACKEND_ID,
 ) -> models.SessionMetadata:
-  """One legacy cron session (profile None, ``scheduled_task`` stamped), for the
-  read-path and migration tests.
-
-  No creation path mints these any more (the scheduler's auto-bind binds tasks
-  to task-tree nodes), so the stamp is written directly through the metadata
-  owner's own persistence.
-  """
-  meta = models.SessionMetadata(name=f"Scheduled: {task_name}", scheduled_task=task_name, backend=backend)
-  session_mgr._create_session_dirs(session_mgr._session_dir(meta.id))
-  await session_mgr.save_metadata(meta)
-  return meta
+  """Create a scheduled manager task with a cron-owned metadata stamp."""
+  return await session_mgr.create_session(
+      models.CreateSessionRequest(name=f"Scheduled: {task_name}", scheduled_task=task_name), backend=backend)
 
 
 def cron_d_dir(home: Path) -> Path:
@@ -2542,7 +2547,7 @@ class FakeSessionManager:
     self.persist_and_broadcast = AsyncMock()
 
   async def get_session(self, session_id: str) -> models.SessionMetadata:
-    return models.SessionMetadata(id=session_id, name="Test")
+    return models.SessionMetadata(profile="manager", id=session_id, name="Test")
 
   def load_chat_events_sync(self, session_id: str) -> list[dict[str, Any]]:
     return self.events
@@ -2752,71 +2757,6 @@ class FakeBackend(TerminateFlagBackend):
     yield backend_base.make_result_event()
 
 
-class CapturingBackend(TerminateFlagBackend):
-  """AgentBackend double that records each run() call instead of yielding events.
-
-  Callers install it through a patched build_backend on the master-cc round path and assert on
-  `calls`: one dict per run() carrying the prompt and the uploaded_files the round passed.
-  """
-
-  exit_code = 0
-  stderr_text = ""
-
-  def __init__(self) -> None:
-    self.calls: list[dict] = []
-
-  async def run(self,
-                prompt: str,
-                cwd: str,
-                env: dict,
-                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    self.calls.append({"prompt": prompt, "uploaded_files": uploaded_files})
-    if False:
-      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
-
-
-def _instructions_content_stub(
-    session_meta: models.SessionMetadata, cfg: CharlieBotConfig, prompt_overlay: str | None) -> str:
-  return "instructions"
-
-
-def patch_instructions_content(monkeypatch: pytest.MonkeyPatch) -> None:
-  """Patch the master-cc instructions builder to return the fixed string "instructions"."""
-  monkeypatch.setattr(master_cc_run, "_build_instructions_content", _instructions_content_stub)
-
-
-async def run_captured_round(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    session_id: str,
-    name: str,
-    backend: CapturingBackend,
-    drive: Callable[[CharlieBotConfig, models.SessionMetadata, models.SessionCallbacks], Awaitable[None]],
-) -> models.SessionCallbacks:
-  """Drive one master-cc round through `drive` with the backend captured: build_backend returns
-  `backend`, the instructions builder is stubbed, broadcasts are silenced, and the SessionManager
-  double reports no running tasks. Drains the consumer before returning, so the round's
-  persist/broadcast work is observable on the returned callbacks; master-cc state resets on
-  entry and exit.
-  """
-  cfg = build_master_cc_cfg(tmp_path)
-  meta = models.SessionMetadata(id=session_id, name=name, backend="fake")
-  callbacks = mock_session_callbacks()
-  async with fresh_master_state(meta.id):
-    monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **kw: backend)
-    patch_instructions_content(monkeypatch)
-    workers_mock = MagicMock()
-    workers_mock._has_running_tasks = AsyncMock(return_value=False)
-    with (
-        patch.object(streaming.streaming_manager, "broadcast", new=AsyncMock()),
-        patch(SESSIONS_SESSION_MANAGER_PATCH_TARGET, return_value=workers_mock),
-    ):
-      await drive(cfg, meta, callbacks)
-      await drain_session_consumer(meta.id, timeout=5)
-  return callbacks
-
-
 def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncMock:
   """Mock ``asyncio.create_subprocess_exec`` answering each sacct probe's scripted stdout.
 
@@ -2846,9 +2786,9 @@ def make_sacct_mock(scripted: dict[tuple[str | None, int], list[str]]) -> AsyncM
 def patch_trigger_fire(
     subprocess_mock: AsyncMock, sacct_available: bool | None,
     sleep_mock: Callable[[float], Awaitable[None]] | None) -> Iterator[AsyncMock]:
-  """Patch the externals a trigger-watch fire run reads; yields the trigger_master mock.
+  """Patch the watcher externals and task-tree delivery seam.
 
-  broadcast and trigger_master are always patched. sacct_available=None leaves
+  Broadcast and delivery are always patched. sacct_available=None leaves
   _SACCT_AVAILABLE untouched, for probes that never read it (remote PID);
   sleep_mock=None keeps real sleeps, for runs that assert on elapsed time.
   """
@@ -2859,29 +2799,29 @@ def patch_trigger_fire(
   if sleep_mock is not None:
     patches.append(patch("src.runtime.triggers.asyncio.sleep", new=sleep_mock))
   patches.append(patch(BROADCAST_PATCH_TARGET, new=AsyncMock()))
-  master_patch = patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock())
+  delivery_patch = patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=AsyncMock())
   with contextlib.ExitStack() as stack:
     for p in patches:
       stack.enter_context(p)
-    yield stack.enter_context(master_patch)
+    yield stack.enter_context(delivery_patch)
 
 
 @contextlib.contextmanager
 def patch_trigger_mocks() -> Iterator[AsyncMock]:
-  """Patch the two module seams a firing trigger reads: streaming broadcast and trigger_master.
+  """Patch the watcher seams: streaming broadcast and task-tree delivery.
 
-  Yields the trigger_master mock. Rigs that must run the real watch internals (real pids,
+  Yields the delivery mock. Rigs that must run the real watch internals (real pids,
   real sleeps) use this instead of patch_trigger_fire, whose subprocess stub would hide them.
   """
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_master,
+      patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=AsyncMock()) as mock_delivery,
   ):
-    yield mock_master
+    yield mock_delivery
 
 
 async def assert_trigger_fired(
-    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_master: AsyncMock, *, reason: str) -> str:
+    trigger_mgr: TriggerManager, session_id: str, trigger_id: str, mock_delivery: AsyncMock, *, reason: str) -> str:
   """Asserts the trigger persisted FIRED with the given reason and the standard fired prefix;
   returns the fired message so the caller can assert its site-specific suffix (pids, slurm states).
 
@@ -2890,7 +2830,7 @@ async def assert_trigger_fired(
   stored = await trigger_mgr._load_trigger(session_id, trigger_id)
   assert stored.status == models.TriggerStatus.FIRED
   assert stored.fire_reason == reason
-  msg = mock_master.await_args.args[1]
+  msg = mock_delivery.await_args.args[1]
   assert f"[Scheduled trigger fired | {reason}]" in msg
   return msg
 
@@ -2940,38 +2880,6 @@ def make_read_at_os_replace(read_at_swap: list[str], target: Path) -> Callable[[
     return REAL_OS_REPLACE(src, dst)
 
   return read_then_replace
-
-
-def build_worker_prompt(
-    description: str,
-    cfg: CharlieBotConfig,
-    *,
-    task_type: models.TaskType = models.TaskType.IMPLEMENT,
-    loop_dir: str | None = None,
-    iteration_number: int | None = None,
-    is_continuation: bool = False,
-    keep_worktree: bool = False,
-) -> str:
-  """spawner.spawner_prompt._build_worker_prompt with the arguments the prompt-content tests
-  share: /tmp/repo
-  as the repo, charliebot/task-xyz branched off main, a one-field SessionMetadata, no
-  start_point. The keyword fields are the knobs the prompt tests vary; a test needing any
-  other field (repo_path, branch_name, wt_path, session_meta, start_point) builds its own."""
-  return spawner.spawner_prompt._build_worker_prompt(
-      description=description,
-      repo_path=Path("/tmp/repo"),
-      base_branch="main",
-      branch_name="charliebot/task-xyz",
-      wt_path="/tmp/worktrees/charliebot-task-xyz",
-      session_meta=models.SessionMetadata(id="session-id", name="test"),
-      cfg=cfg,
-      task_type=task_type,
-      loop_dir=loop_dir,
-      iteration_number=iteration_number,
-      is_continuation=is_continuation,
-      keep_worktree=keep_worktree,
-      start_point=None,
-  )
 
 
 async def _noop() -> None:
@@ -3102,19 +3010,6 @@ async def _settle_parent(
       (r.id, tree.runs.terminal_outcome(pm_events, r.id), r.pid) for r in tree.runs.list_run_records_sync(manager.id)
   ]
   pytest.fail(f"the parent's report turns never settled: pending={pending} runs={runs_dbg}")
-
-
-def spy_on_load_json_meta(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-  """Record every path init_worker_recovery.iter_recent_thread_metas actually reads+parses."""
-  read_paths: list[Path] = []
-  real_load = worker_recovery_module.load_json_meta
-
-  def spy(path: Path, log_event: str, **kwargs: Any) -> Any:
-    read_paths.append(Path(path))
-    return real_load(path, log_event, **kwargs)
-
-  monkeypatch.setattr(worker_recovery_module, "load_json_meta", spy)
-  return read_paths
 
 
 class NotificationSpy:

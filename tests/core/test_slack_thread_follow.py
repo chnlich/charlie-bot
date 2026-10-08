@@ -263,17 +263,14 @@ async def test_armed_follow_trigger_rehydrates_and_fires_after_restart(tmp_path:
   await trigger_mgr._save_trigger(armed)
   boot_mgr = triggers.TriggerManager(cfg, session_mgr)
   with (
-      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()) as mock_trigger_master,
-      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
+      mock.patch(conftest.TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()) as mock_delivery,
   ):
     await boot_mgr.recover_pending()
     tasks = list(boot_mgr._tasks.values())
     assert len(tasks) == 1
     await asyncio.gather(*tasks)
 
-  mock_trigger_master.assert_called_once()
+  mock_delivery.assert_awaited_once()
   stored = await trigger_mgr._load_trigger(meta.id, armed.id)
   assert stored.status == models.TriggerStatus.FIRED
-  wakes = [ev for ev in session_mgr.load_chat_events_sync(meta.id) if ev.get("type") == ET.SCHEDULED_TRIGGER]
-  assert len(wakes) == 1
   conftest.shut_down_trigger_tasks(boot_mgr)

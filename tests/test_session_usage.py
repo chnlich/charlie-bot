@@ -48,7 +48,7 @@ def _write_session(session_mgr: SessionManager, meta: SessionMetadata, events: l
 def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tuple[SessionManager, SessionMetadata]:
   """SessionManager over a fresh _build_cfg config plus one session's metadata: the pair a resolve test starts from."""
   session_mgr = SessionManager(_build_cfg(tmp_path))
-  meta = SessionMetadata(id=session_id, name=name, backend=backend)
+  meta = SessionMetadata(profile="manager", id=session_id, name=name, backend=backend)
   return session_mgr, meta
 
 
@@ -295,6 +295,6 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
 
   _assert_no_context_tier(usage)
 
-  empty_meta = SessionMetadata(id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
+  empty_meta = SessionMetadata(profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, empty_meta, [])
   assert await session_mgr.resolve_session_usage(empty_meta.id, empty_meta) is None

@@ -662,7 +662,7 @@ def _merge_memory_budget() -> int | None:
 
   cgroup v2 only: ``/proc/self/cgroup``'s single ``0::`` line names the group
   and ``memory.max``/``memory.current`` sit under the cgroup root. Any miss —
-  v1 hosts, a sandbox without the v2 files, macOS — prices nothing and the
+  older hosts, a sandbox without the current files, macOS — prices nothing and the
   caller submits every member at once (the unbounded shape).
   """
   try:

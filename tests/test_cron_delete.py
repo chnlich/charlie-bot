@@ -20,7 +20,7 @@ async def test_delete_unlinks_the_yaml_and_leaves_the_bound_node_untouched(
   conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
   conftest.write_nightly_task(temp_home)
   node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
-  cron_session = await conftest.make_legacy_cron_session(session_mgr, "nightly")
+  cron_session = await conftest.make_cron_session(session_mgr, "nightly")
 
   with conftest.make_cron_sessions_client(cfg, session_mgr, tree) as client:
     response = client.delete("/api/cron/tasks/nightly")

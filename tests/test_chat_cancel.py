@@ -8,12 +8,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    CHAT_CANCEL_MASTER_PATCH_TARGET,
     OPERATOR,
     backend_option,
     make_work_item,
     mock_session_callbacks,
-    patch_instructions_content,
 )
 from fastapi import HTTPException
 
@@ -47,24 +45,10 @@ async def _run_cc_with_backend(
     return backend
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, fake_build_backend)
-  patch_instructions_content(monkeypatch)
 
   item = make_work_item(cfg, session_meta, cfg.backends.options[0], user_content=user_content, callbacks=callbacks)
   result = await master_cc_run._run_cc(item)
   return callbacks, result
-
-
-@pytest.mark.asyncio
-async def test_cancel_master_agent_success() -> None:
-  session_mgr = AsyncMock()
-  meta = models.SessionMetadata(id="session-ok", name="Legacy")
-
-  with patch(CHAT_CANCEL_MASTER_PATCH_TARGET, new=AsyncMock(return_value=True)) as mock_cancel:
-    result = await cancel_master_agent("session-ok", meta=meta, session_mgr=session_mgr)
-
-  assert result == {"ok": True}
-  mock_cancel.assert_awaited_once_with("session-ok", meta=meta, session_mgr=session_mgr)
-  session_mgr.persist_and_broadcast.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +84,7 @@ async def test_chat_cancel_on_task_node_stops_the_launched_run(tmp_path: Path) -
 
   meta = await session_mgr.get_session(node.id)
   assert meta is not None and meta.profile == "manager"
-  result = await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
+  result = await cancel_master_agent(node.id, _meta=meta, session_mgr=session_mgr, task_mgr=tree)
 
   assert result == {"ok": True}
   events = tree.events.load_events(node.id)
@@ -131,7 +115,7 @@ async def test_chat_cancel_identity_conflict_maps_to_409(tmp_path: Path) -> None
     await tree.runs.record_launch(node.id, run.id, pid=live.pid, pid_start="not-this-boot")
     meta = await session_mgr.get_session(node.id)
     with pytest.raises(HTTPException) as exc_info:
-      await cancel_master_agent(node.id, meta=meta, session_mgr=session_mgr)
+      await cancel_master_agent(node.id, _meta=meta, session_mgr=session_mgr, task_mgr=tree)
     assert exc_info.value.status_code == 409
   finally:
     if live.poll() is None:
@@ -172,7 +156,7 @@ async def _run_cc_with_scripted_events(
       tmp_path,
       monkeypatch,
       backend=_ScriptedBackend(events),
-      session_meta=models.SessionMetadata(id="session-salvage", name="Salvage", backend="fake"),
+      session_meta=models.SessionMetadata(profile="manager", id="session-salvage", name="Salvage", backend="fake"),
       user_content="hi",
   )
   return callbacks

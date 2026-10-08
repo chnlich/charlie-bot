@@ -84,22 +84,6 @@ def test_load_store_rejects_invalid_entry(
   assert expected_fragment in str(exc_info.value)
 
 
-# --- assemble_master ----------------------------------------------------------
-
-
-def test_assemble_master_resident_full_and_others_index(tmp_path: pathlib.Path) -> None:
-  conftest.write_memory_topics(tmp_path)
-  conftest.write_memory_entry(tmp_path, "profile", "dark-mode", title="Dark Mode", body="User prefers dark UI.\n")
-  conftest.write_memory_entry(tmp_path, "charliebot", "cli-flags", title="CLI Flags", body="Details.\n")
-  block = memory.assemble_master(tmp_path)
-  assert block is not None
-  # v2 resident full body: the '# {title}' heading is synthesized.
-  assert "# Dark Mode\n\nUser prefers dark UI." in block
-  assert "charliebot/cli-flags · CLI Flags" in block  # non-resident index line
-  assert "Details." not in block  # non-resident body NOT injected
-  assert memory.INDEX_HEADER in block
-
-
 # --- ensure_store: the store creates its own scaffold -------------------------
 
 _SCAFFOLD_NAMES = (".git", "topics", ".gitignore", "entries", "staging")
@@ -139,22 +123,6 @@ def test_lint_reports_a_missing_topics_file_without_creating_the_scaffold(tmp_pa
   mem.mkdir()
   assert any("topics" in v for v in memory.lint(mem))
   assert not (mem / "topics").exists() and not (mem / ".git").exists()
-
-
-# --- assemble_worker ----------------------------------------------------------
-
-
-def test_assemble_worker_repo_topic_match(tmp_path: pathlib.Path) -> None:
-  conftest.write_memory_topics(tmp_path)
-  conftest.write_memory_entry(tmp_path, "charliebot", "cli-flags", audience="worker", title="CLI Flags", body="FBODY\n")
-  conftest.write_memory_entry(tmp_path, "profile", "pref", audience="worker", title="Pref", body="PBODY\n")
-  block = memory.assemble_worker(tmp_path, "charliebot")
-  assert block is not None
-  assert "# CLI Flags\n\nFBODY" in block  # full body for matching topic, heading synthesized
-  assert "profile/pref · Pref" in block  # non-matching as index line
-  assert "PBODY" not in block  # non-matching body not injected
-  assert "charliebot memory query --topic" in block  # usage line present
-  assert block.count(memory.INDEX_HEADER) == 1
 
 
 # --- CLI add creates exactly one staging file, never touches entries/ -------

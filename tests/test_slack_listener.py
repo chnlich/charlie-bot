@@ -141,7 +141,7 @@ async def test_allowed_user_creates_session_and_persists_agent_message(
   assert agent_messages[0]["content"].endswith(f"{_SLACK_SCOPE}\n{_RED_LINE}\n{_REPLY_FORMAT}")
 
   trigger.assert_awaited_once()
-  assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
+  assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
   assert expected_url in trigger.await_args.args[1]
 
 
@@ -235,19 +235,19 @@ async def test_unhandled_event_drops_with_no_side_effects(
 
 
 @pytest.mark.asyncio
-async def test_trigger_master_forwards_user_event_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_trigger_master_forwards_input_id_to_the_task_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
   cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
 
-  with patch.object(master_trigger, "run_message", new=AsyncMock(return_value=None)) as run_mock:
-    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr, ET.AGENT_MESSAGE, user_event_id="evt-1")
-    await master_trigger.trigger_master(meta.id, "s", cfg, session_mgr, ET.CHILD_REPORT)
+  with patch.object(master_trigger, "_wake_task_node", new=AsyncMock()) as wake_mock:
+    await master_trigger.trigger_master(meta.id, "s", session_mgr, event_type=ET.AGENT_MESSAGE, input_id="evt-1")
+    await master_trigger.trigger_master(meta.id, "s", session_mgr, event_type=ET.CHILD_REPORT)
 
-  assert run_mock.call_count == 2
-  assert run_mock.await_args_list[0].kwargs["user_event_id"] == "evt-1"
-  assert run_mock.await_args_list[1].kwargs["user_event_id"] is None
+  assert wake_mock.await_count == 2
+  assert wake_mock.await_args_list[0].kwargs["input_id"] == "evt-1"
+  assert wake_mock.await_args_list[1].kwargs["input_id"] is None
 
 
 # --- Socket Mode close wait ---------------------------------------------------

@@ -29,7 +29,7 @@ async def test_session_default_returns_configured_backend() -> None:
       [
           conftest.backend_option(id="claude-opus-4.7", label="Opus", type="cc-claude", model="claude-opus-4-7"),
       ])
-  session = models.SessionMetadata(name="s", backend="claude-opus-4.7")
+  session = models.SessionMetadata(profile="manager", name="s", backend="claude-opus-4.7")
   mgr = _mock_session_mgr(session)
 
   backend, model = await spawner.spawner_backends.resolve_requested_subagent_backend_model(
@@ -83,7 +83,7 @@ async def test_unresolvable_backend_resolution_raises(
   with a second option configured), an empty backends.options, an explicit --backend typo,
   and a selected option whose type needs a model it does not declare."""
   cfg = _build_cfg(options)
-  session = models.SessionMetadata(name="s", backend=session_backend)
+  session = models.SessionMetadata(profile="manager", name="s", backend=session_backend)
   mgr = _mock_session_mgr(session)
 
   with pytest.raises(ValueError, match=match):

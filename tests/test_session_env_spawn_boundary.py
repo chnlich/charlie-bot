@@ -19,7 +19,7 @@ import os
 from pathlib import Path
 
 import pytest
-from conftest import backend_option, make_work_item, patch_instructions_content
+from conftest import backend_option, make_work_item
 
 from src.backends.claude_code.claude_code import ClaudeCodeBackend, claude_supervisor_env
 from src.infra import config as core_config
@@ -88,9 +88,8 @@ async def test_master_child_environment_carries_its_own_session_id(
   (cfg.sessions_dir / "live-session").mkdir(parents=True)
   # A server started from inside another session's shell hands down a stale id.
   monkeypatch.setenv(SESSION_ID_ENV_VAR, "stale-session")
-  patch_instructions_content(monkeypatch)
 
-  item = make_work_item(cfg, models.SessionMetadata(id="live-session", name="Live"), cfg.backends.options[0])
+  item = make_work_item(cfg, models.SessionMetadata(profile="manager", id="live-session", name="Live"), cfg.backends.options[0])
   await master_cc.master_cc_run._run_cc(item)
 
   assert _read_env_dump(dump)[SESSION_ID_ENV_VAR] == "live-session"

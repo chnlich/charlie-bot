@@ -44,7 +44,7 @@ def test_discord_bot_token_comes_from_credentials() -> None:
 
 
 def test_session_metadata_discord_fields_round_trip_through_json() -> None:
-  meta = models.SessionMetadata(
+  meta = models.SessionMetadata(profile="manager",
       name="t",
       discord_origin=DiscordOrigin(guild_id=_GUILD, parent_channel_id=_PARENT, thread_id=_THREAD),
       discord_watermark_id=_WATERMARK)
@@ -55,7 +55,7 @@ def test_session_metadata_discord_fields_round_trip_through_json() -> None:
 
 
 def test_session_metadata_without_discord_fields_parses() -> None:
-  meta = models.SessionMetadata.model_validate_json(models.SessionMetadata(name="t").model_dump_json())
+  meta = models.SessionMetadata.model_validate_json(models.SessionMetadata(profile="manager", name="t").model_dump_json())
   fields = metadata_slots.fields_of(meta, "discord")
   assert fields.discord_origin is None
   assert fields.discord_watermark_id is None

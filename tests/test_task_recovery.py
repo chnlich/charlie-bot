@@ -19,21 +19,17 @@ from pathlib import Path
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET,
     OPERATOR,
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _settle_parent,
     fresh_master_state,
     init_repo_with_origin,
-    patch_instructions_content,
     patch_resume_seams,
 )
 
 import src.runtime.task_execution as task_execution_module
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, RunRecord, TaskSpec, TaskType
-from tests.test_parent_wake import drain_legacy_wakes
-from tests.test_task_completion import wake_probe
 from tests.test_task_execution import (
     SpawningScriptedBackend,
     _adapter_with_silent_broadcast,
@@ -56,7 +52,6 @@ async def _takeoff_manager(tmp_path, monkeypatch):
   """One manager with its take-off turn already consumed (scripted backend)."""
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  patch_instructions_content(monkeypatch)
   install_backends(monkeypatch, [SpawningScriptedBackend([result_event("taken off")])], BUILD_BACKEND_PATCH_TARGET)
   manager = await tree.create_task(
       request_id="root",
@@ -96,7 +91,6 @@ async def test_restart_before_launch_requeues_through_the_same_launch_checks(
   cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("recovered work")])
   builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
-  patch_instructions_content(monkeypatch)
   admitted = await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the task.", actor="user")
   # Simulate the crash window: the reservation exists (batch claimed) but the
   # launch never happened — no pid, no terminal fact.
@@ -125,7 +119,6 @@ async def test_restart_after_launch_reattaches_live_process(tmp_path: Path, monk
   gate = asyncio.Event()
   backend = SpawningScriptedBackend([result_event("late result")], gate=gate.wait)
   builds = install_worker_launch_and_resume_backends(monkeypatch, [backend])
-  patch_instructions_content(monkeypatch)
   run_id = "run-live"
   await tree.runs.register_run(
       RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -160,7 +153,6 @@ async def test_stop_request_wins_over_launch_and_recovery(tmp_path: Path, monkey
   cfg, _session_mgr, tree, _manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   builds = install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("x")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   run_id = "run-stopped"
   await tree.runs.register_run(
       RunRecord(id=run_id, session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -195,7 +187,6 @@ async def test_recovery_never_rereviews_a_successfully_reviewed_work_run(
       caller=OPERATOR)
   install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   run_id = "run-reviewed"
   await tree.runs.register_run(
       RunRecord(
@@ -276,7 +267,6 @@ async def _reviewed_implement_task(tmp_path, monkeypatch):
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
   # The delivered report's parent turn: one fresh scripted double per build.
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
-  patch_instructions_content(monkeypatch)
   work_run_id = "run-work"
   await tree.runs.register_run(
       RunRecord(
@@ -391,7 +381,6 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
       caller=OPERATOR)
   install_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("review ok")])], WORKER_BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   run_id = "run-work"
   await tree.runs.register_run(
       RunRecord(
@@ -433,34 +422,30 @@ async def test_recovery_after_a_failed_review_picks_the_next_preference_backend(
 
 
 @pytest.mark.asyncio
-async def test_reconcile_replays_an_already_delivered_blocked_report_without_waking(
+async def test_reconcile_replays_an_already_delivered_blocked_report_without_duplication(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The startup pass never wakes a parent for an already delivered report.
 
-    The production wake-replay: an implement child whose landing check keeps
+    The delivery-replay path: an implement child whose landing check keeps
     failing (a rebase rewrote the base) re-derives the same stable blocked
     report id on every restart, and the pass replays every terminal review
-    run. The first delivery woke the legacy parent once; the reconcile of the
-    same state — two successful review runs, the report already in the
-    parent's log — must append nothing and wake nobody.
+    run. The reconcile of the same state — two successful review runs, the
+    report already in the manager's log — must append nothing.
     """
   from src.runtime.task_recovery import reconcile_task_tree
 
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   repo, _origin = init_repo_with_origin(tmp_path)
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend="fake")
+  manager = await session_mgr.create_session(CreateSessionRequest(name="Manager"), backend="fake")
   worker = await tree.create_task(
       request_id="w",
-      task_parent_id=legacy.id,
+      task_parent_id=manager.id,
       profile="worker",
       task=TaskSpec(goal="add a marker", repo_path=str(repo), base_branch="main", task_type=TaskType.IMPLEMENT),
       name="W",
       backend=None,
       caller="operator")
-  trigger, calls, fired = wake_probe()
-  monkeypatch.setattr(MASTER_TRIGGER_TRIGGER_MASTER_PATCH_TARGET, trigger)
-  patch_instructions_content(monkeypatch)
 
   # The reviewer never pushes, so the landing check fails on every pass.
   install_backends(
@@ -477,19 +462,16 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
 
   deadline = asyncio.get_event_loop().time() + 15
   while asyncio.get_event_loop().time() < deadline:
-    reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
+    reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
     if reports:
       break
     await asyncio.sleep(0.05)
   else:
-    pytest.fail("the review chain never reported to the legacy parent")
-  await asyncio.wait_for(fired.wait(), timeout=5)
-  assert len(calls) == 1
+    pytest.fail("the review chain never reported to the manager")
   assert [r["outcome"] for r in reports] == ["blocked"]
   assert tree.task_state(worker.id) == "open"
 
-  # The shape that woke the production parent twice per restart: a second
-  # successful review run of the same work run replays alongside the first.
+  # A second successful review run of the same work run replays alongside the first.
   work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
   await tree.runs.register_run(
       RunRecord(
@@ -505,11 +487,8 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_wak
   await tree.runs.record_finish(worker.id, "review-replay-2", "success")
 
   counters = await reconcile_task_tree(cfg, tree)
-  await drain_legacy_wakes()
-
   assert counters["followups"] == 3  # the work run plus both review runs replayed
-  assert len(calls) == 1
-  reports = [e for e in tree.events.load_events(legacy.id) if e.get("type") == ET.CHILD_REPORT]
+  reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
 
 
@@ -529,7 +508,6 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 
@@ -562,7 +540,6 @@ async def test_retry_and_boot_reconcile_repair_half_written_end_metadata(
   # metadata and a past-stamped raw log.
   cfg2, session_mgr2, tree2, _manager2, worker2 = await _manager_and_worker(tmp_path, monkeypatch)
   tree2.dispatch.executor = _adapter_with_silent_broadcast(cfg2, session_mgr2, tree2, monkeypatch)
-  patch_instructions_content(monkeypatch)
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("staged work")])])
   boot_run_id = "run-half-written"
   await tree2.runs.register_run(
@@ -590,7 +567,6 @@ async def test_boot_node_out_of_space_hands_node_to_retry(tmp_path: Path, monkey
   cfg, session_mgr, tree, manager, worker = await _manager_and_worker(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
   await tree.runs.register_run(
       RunRecord(id="run-failed", session_id=worker.id, kind="work", backend="fake", model="fake-model"))
@@ -622,7 +598,6 @@ async def test_retry_round_skips_runs_this_process_already_drives(
       tmp_path, monkeypatch, task_type=TaskType.IMPLEMENT)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   builds = install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("late")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
 

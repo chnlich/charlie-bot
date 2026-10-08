@@ -15,7 +15,7 @@ from src.runtime.api import chat
 @pytest.mark.asyncio
 async def test_upload_file_strips_directory_components(tmp_path: pathlib.Path) -> None:
   cfg = conftest.make_home_config(tmp_path)
-  meta = models.SessionMetadata(name="Upload Session")
+  meta = models.SessionMetadata(profile="manager", name="Upload Session")
   outside_path = cfg.sessions_dir / "evil.txt"
   outside_path.parent.mkdir(parents=True)
   outside_path.write_text("do not overwrite", encoding="utf-8")
@@ -35,10 +35,12 @@ async def test_upload_file_strips_directory_components(tmp_path: pathlib.Path) -
 
 
 @pytest.mark.asyncio
-async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path: pathlib.Path) -> None:
+async def test_send_message_admits_structured_files_to_the_task_tree(tmp_path: pathlib.Path) -> None:
   cfg = conftest.make_home_config(tmp_path)
-  meta = models.SessionMetadata(name="Test Session")
-  session_mgr = mock.AsyncMock()
+  meta = models.SessionMetadata(profile="manager", name="Test Session")
+  task_mgr = mock.MagicMock()
+  task_mgr.dispatch.admit_input = mock.AsyncMock(return_value={"id": "event-1"})
+  task_mgr.dispatch.dispatch_pending = mock.AsyncMock(return_value={"launch": True})
   req = models.SendMessageRequest(
       content="Summarize this",
       uploaded_files=[
@@ -46,26 +48,23 @@ async def test_send_message_passes_structured_files_to_run_and_finalize(tmp_path
       ],
   )
 
-  with (
-      mock.patch(conftest.CHAT_RUN_AND_FINALIZE_PATCH_TARGET, new=mock.AsyncMock()) as mock_run,
-      mock.patch(conftest.CHAT_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=conftest.close_create_logged_task),
-  ):
-    response = await chat.send_message(
-        meta.id,
-        req,
-        meta=meta,
-        session_mgr=session_mgr,
-        cfg=cfg,
-    )
+  response = await chat.send_message(
+      meta.id,
+      req,
+      _meta=meta,
+      task_mgr=task_mgr,
+      caller=conftest.OPERATOR,
+  )
 
   assert response.status_code == 202
-  assert mock_run.call_count == 1
-  assert mock_run.call_args.args[2] == "Summarize this\n\n[Attached files]\n- /tmp/notes.txt"
-  assert mock_run.call_args.kwargs["display_content"] == "Summarize this"
-  assert mock_run.call_args.kwargs["uploaded_files"] == [
+  task_mgr.dispatch.admit_input.assert_awaited_once()
+  assert task_mgr.dispatch.admit_input.await_args.args == (meta.id,)
+  assert task_mgr.dispatch.admit_input.await_args.kwargs["content"] == "Summarize this"
+  assert task_mgr.dispatch.admit_input.await_args.kwargs["uploaded_files"] == [
       {
           "filename": "notes.txt",
           "path": "/tmp/notes.txt",
           "size": 12
       },
   ]
+  task_mgr.dispatch.dispatch_pending.assert_awaited_once_with(meta.id)

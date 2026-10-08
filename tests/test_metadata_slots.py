@@ -136,7 +136,7 @@ def test_concurrent_first_calls_resolve_each_registration_once(monkeypatch: pyte
 
 @pytest.mark.usefixtures("probe_slots")
 def test_fields_of_and_set_fields_validate_types() -> None:
-  meta = models.SessionMetadata(name="s")
+  meta = models.SessionMetadata(profile="manager", name="s")
   assert metadata_slots.fields_of(meta, "probe") == ProbeSessionFields()
 
   metadata_slots.set_fields(meta, "probe", probe_note="hello", probe_count=3)
@@ -149,7 +149,8 @@ def test_fields_of_and_set_fields_validate_types() -> None:
   assert metadata_slots.fields_of(meta, "probe").probe_count == 3, "a refused write changes nothing"
 
   # A stored value of the wrong type still loads; reading it through the owner's view is what fails.
-  loaded = models.SessionMetadata.model_validate_json('{"name": "s", "probe_count": "many"}')
+  loaded = models.SessionMetadata.model_validate_json(
+      '{"name": "s", "profile": "manager", "probe_count": "many"}')
   with pytest.raises(ValidationError):
     metadata_slots.fields_of(loaded, "probe")
 
@@ -160,7 +161,7 @@ def test_fields_of_and_set_fields_validate_types() -> None:
 
 @pytest.mark.usefixtures("probe_slots")
 def test_an_unregistered_key_survives_load_and_save() -> None:
-  raw = {"id": "a", "name": "n", "left_by_a_deleted_package": {"nested": [1, 2]}}
+  raw = {"id": "a", "name": "n", "profile": "manager", "left_by_a_deleted_package": {"nested": [1, 2]}}
   meta = models.SessionMetadata.model_validate_json(json.dumps(raw))
   thread = models.ThreadMetadata.model_validate_json(
       json.dumps({
@@ -175,7 +176,7 @@ def test_an_unregistered_key_survives_load_and_save() -> None:
 
 @pytest.mark.usefixtures("probe_slots")
 def test_registered_keys_save_after_their_declared_neighbour_with_defaults_filled() -> None:
-  meta = models.SessionMetadata(name="s")
+  meta = models.SessionMetadata(profile="manager", name="s")
   metadata_slots.set_fields(meta, "probe", probe_note="hello")
   meta.stray = "kept"  # a key no owner registers goes last
   keys = list(json.loads(meta.model_dump_json()))
@@ -185,17 +186,12 @@ def test_registered_keys_save_after_their_declared_neighbour_with_defaults_fille
   assert json.loads(meta.model_dump_json())["probe_count"] == 0
 
 
-@pytest.mark.parametrize(
-    ("name", "model"), [
-        ("session_metadata_v2_manager.json", models.SessionMetadata),
-        ("thread_metadata_worker.json", models.ThreadMetadata),
-    ])
-def test_files_the_base_writer_produced_save_byte_identically(name: str, model: type[BaseModel]) -> None:
-  """The Claude keys sit where the declared fields sat: a manager with its account label and a worker thread
-  with its session id, written before the keys moved to a registry, load and save to the same bytes."""
-  written = (DATA / name).read_text()
+def test_task_node_metadata_saves_byte_identically() -> None:
+  """The manager's Claude account label stays in its registered slot when written back."""
+  written = (DATA / "session_metadata_v2_manager.json").read_text()
 
-  saved = model.model_validate_json(written).model_dump_json(indent=2, exclude=sessions._TRANSIENT_METADATA_FIELDS)
+  saved = models.SessionMetadata.model_validate_json(written).model_dump_json(
+      indent=2, exclude=sessions._TRANSIENT_METADATA_FIELDS)
 
   assert saved == written
 

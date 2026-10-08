@@ -23,9 +23,7 @@ from its own durable facts:
 
 Scans, identity checks, writes and cleanup stay inside this instance's
 configured sessions directory and its owned records: another instance's data
-and its processes are untouched. The v1 (thread/master_run) recovery keeps
-serving unmigrated v1 sessions and never writes ThreadMetadata or master_run
-for a v2 node.
+and its processes are untouched.
 """
 
 from __future__ import annotations
@@ -34,7 +32,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from src.infra import config, log_once, models
-from src.runtime import runs, thinking_state, threads
+from src.runtime import runs, thinking_state
 
 if TYPE_CHECKING:
   from src.runtime import task_execution, task_sessions
@@ -68,20 +66,13 @@ async def reconcile_task_tree(
   for session_dir in sorted(cfg.sessions_dir.iterdir()):
     if not session_dir.is_dir():
       continue
-    meta_path = session_dir / threads.METADATA_NAME
+    meta_path = session_dir / runs.METADATA_NAME
     if not meta_path.is_file():
       continue
-    try:
-      from src.infra import json_utils
-      raw = json_utils.load_json_meta(meta_path, "task_recovery_meta_unreadable")
-    except Exception:
-      log.exception("task_recovery_meta_read_failed", session=session_dir.name)
-      continue
-    if raw is None:
-      continue
-    if not raw.get("profile"):
-      continue  # a v1 session: the legacy recovery owns it during the branch
     session_id = session_dir.name
+    meta = await tree.load_meta(session_id)
+    if meta is None:
+      continue
     counters["nodes"] += 1
     try:
       await _reconcile_node(session_id, tree, adapter, counters, cfg)

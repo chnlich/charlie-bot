@@ -496,24 +496,6 @@ async def _remove_local_worktree_artifacts(wt_path: Path, thread_id: str) -> Non
     log.info("worktree_local_artifact_removed", thread_id=thread_id, path=str(artifact_path))
 
 
-async def _strip_local_worktree_artifacts_best_effort(wt_path: Path, thread_id: str) -> None:
-  """Best-effort removal of regenerable artifacts before quarantine.
-
-  Unlike _remove_local_worktree_artifacts, this never raises: artifacts that can't be
-  removed (e.g. root-owned files) are logged and left in place for the move to carry.
-  Errors are surfaced via log.warning, never swallowed silently.
-  """
-  for artifact_path in _iter_local_worktree_artifacts(wt_path):
-    if artifact_path.is_symlink():
-      log.warning("quarantine_artifact_symlink_skipped", thread_id=thread_id, path=str(artifact_path))
-      continue
-    try:
-      await asyncio.to_thread(shutil.rmtree, artifact_path)
-      log.info("worktree_local_artifact_removed", thread_id=thread_id, path=str(artifact_path))
-    except OSError as e:
-      log.warning("quarantine_artifact_remove_failed", thread_id=thread_id, path=str(artifact_path), error=str(e))
-
-
 async def _remove_worktree_residue(
     wt_path: Path,
     thread_id: str,
@@ -629,48 +611,6 @@ async def git_worktree_remove_reporting(
     return f"{label} cleanup failed for {wt}: git worktree remove reported failure"
   await git_worktree_prune(repo_path, owner_id)
   return None
-
-
-async def git_quarantine_worktree(
-    repo_path: str,
-    wt_path: Path,
-    thread_id: str,
-    *,
-    allowed_parent: Path,
-    expected_residue_name: str,
-    trash_dir: Path,
-) -> Path:
-  """Quarantine a stale worktree by moving it into trash_dir, then prune git's refs.
-
-  Unlike git_worktree_remove (rm-based, which fails on root-owned files), this is
-  move-based: it best-effort strips regenerable caches, then renames the remaining
-  directory into trash_dir on the same filesystem. The rename only needs write
-  permission on the parent dirs, so it succeeds even when the worktree still holds
-  root-owned files, and it keeps the inode so files held open by another process are
-  unaffected -- this permission/runtime robustness is the whole point of quarantine.
-  All non-cache contents (code, diff, logs, outputs) are preserved. Returns the final
-  trash path.
-  """
-  _assert_safe_worktree_cleanup_target(
-      repo_path,
-      wt_path,
-      allowed_parent=allowed_parent,
-      expected_residue_name=expected_residue_name,
-  )
-  await _strip_local_worktree_artifacts_best_effort(wt_path, thread_id)
-
-  await asyncio.to_thread(trash_dir.mkdir, parents=True, exist_ok=True)
-  dest = trash_dir / wt_path.name
-  if os.path.lexists(dest):
-    # Collision with a previously quarantined worktree of the same branch name.
-    dest = trash_dir / f"{wt_path.name}-{thread_id}"
-    if os.path.lexists(dest):
-      raise RuntimeError(f"refusing to quarantine over existing trash entry: {dest}")
-
-  await asyncio.to_thread(shutil.move, str(wt_path), str(dest))
-  await git_worktree_prune(repo_path, thread_id)
-  log.info("worktree_quarantined", thread_id=thread_id, src=str(wt_path), dest=str(dest))
-  return dest
 
 
 async def git_worktree_prune(repo_path: str, thread_id: str) -> None:

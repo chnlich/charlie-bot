@@ -28,7 +28,6 @@ from conftest import (
     install_scripted_backends,
     make_transcript,
     make_work_item,
-    patch_instructions_content,
     rate_limit_event,
     write_pool_credentials,
 )
@@ -55,7 +54,7 @@ def _variant_option(backend_type: str):
 
 def _turn_context(
     cfg: CharlieBotConfig, option, held_native_id: str | None, tmp_path: Path) -> backend_lifecycle.LaunchContext:
-  meta = SessionMetadata(id="s1", name="t", backend=option.id, cc_session_id=held_native_id)
+  meta = SessionMetadata(profile="manager", id="s1", name="t", backend=option.id, cc_session_id=held_native_id)
   return master_cc_run._turn_launch_context(make_work_item(cfg, meta, option), option, str(tmp_path), held_native_id)
 
 
@@ -208,7 +207,7 @@ async def test_non_claude_task_build_receives_no_claude_account(
       "do the thing",
       CharlieBotConfig(charliebot_home=tmp_path / "home"),
       backend_option=option,
-      session_meta=SessionMetadata(id="s1", name="S", backend=option.id),
+      session_meta=SessionMetadata(profile="manager", id="s1", name="S", backend=option.id),
   )
 
   assert await worker.run() == 0
@@ -289,10 +288,9 @@ async def test_turn_refusal_writes_an_error_event_carrying_quota_exhausted(
     fragment: str) -> None:
   cfg, backends = scenario(tmp_path, monkeypatch)
   make_transcript(tmp_path / "claude-main", CC_ID)
-  meta = SessionMetadata(
+  meta = SessionMetadata(profile="manager",
       id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=CC_ID if held_id else None, claude_account="main")
   install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   item = make_work_item(cfg, meta, cfg.get_backend_option(POOLED_FABLE_ID))
 
   _cc, exit_code, error_msg, _extras = await master_cc_run._run_cc(item)

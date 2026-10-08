@@ -24,7 +24,6 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     create_task,
     init_repo_with_origin,
-    patch_instructions_content,
     run_git,
     stub_credentials,
 )
@@ -286,7 +285,6 @@ async def test_worker_and_review_runs_put_the_guard_first_on_path(
   worker = await create_task(tree, parent=manager.id, request_id="w", profile="worker", task=_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", []))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off and implement the marker file.", actor="user")

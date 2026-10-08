@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import conftest
 from conftest import (
     PUBLISH_BASE_URL,
     SLACK_LISTENER_BOT_CLIENT_PATCH_TARGET,
@@ -27,7 +28,7 @@ from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_l
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
-from src.infra.models import CreateSessionRequest, MasterRunRecord, SessionMetadata, utc_now
+from src.infra.models import CreateSessionRequest, SessionMetadata
 from src.runtime import master_cc_state
 from src.runtime.agent_process.base import make_text_event
 from src.runtime.message_aggregator import MessageAggregator
@@ -94,16 +95,6 @@ async def _append(session_mgr: SessionManager, sid: str, event: dict) -> dict:
   return event
 
 
-async def _run_record(session_mgr: SessionManager, sid: str, user_event_id: str | None, tmp_path: Path) -> None:
-  """Record a running round whose input is *user_event_id* (what post_reply binds a reply to)."""
-  await session_mgr.persist_master_run(
-      sid,
-      MasterRunRecord(
-          started_at=utc_now(),
-          raw_log=str(tmp_path / "raw.jsonl"),
-          user_event_ids=[user_event_id] if user_event_id else []))
-
-
 def _summon(content: str = _SUMMON_CONTENT) -> dict:
   return {
       "type": ET.AGENT_MESSAGE,
@@ -165,6 +156,17 @@ def _notices(events: list[dict]) -> list[dict]:
   return [ev for ev in events if "slack_notice" in ev]
 
 
+@contextlib.contextmanager
+def _running_round(
+    cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str, user_event_id: str | None) -> Iterator[None]:
+  """Expose one task manager work item as the currently running round."""
+  master_cc_state._current_items[sid] = _running_item(cfg, session_mgr, sid, user_event_id)
+  try:
+    yield
+  finally:
+    master_cc_state._current_items.pop(sid, None)
+
+
 # ---------------------------------------------------------------------------
 # Reply: post_reply
 # ---------------------------------------------------------------------------
@@ -176,10 +178,9 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
   client.reactions[_THREAD] = {"eyes"}  # lit at the summon
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon())
-  await _run_record(session_mgr, sid, summon["id"], tmp_path)
 
   ack_tasks: list[asyncio.Task] = []
-  with _listener_seam(client, tasks=ack_tasks):
+  with _running_round(cfg, session_mgr, sid, summon["id"]), _listener_seam(client, tasks=ack_tasks):
     result = await post_reply(sid, "the answer", cfg, session_mgr)
     await asyncio.gather(*ack_tasks)
 
@@ -220,9 +221,9 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
   client.reactions[_THREAD] = {"eyes"}
   sid = await _slack_session(session_mgr)
   summon = await _append(session_mgr, sid, _summon())
-  await _run_record(session_mgr, sid, summon["id"], tmp_path)
 
   with (
+      _running_round(cfg, session_mgr, sid, summon["id"]),
       _listener_seam(client),
       patch(_RETRY_DELAYS_PATCH_TARGET, (0.0, 0.0)),
       capture_logs() as logs,
@@ -342,7 +343,7 @@ async def test_summon_round_without_a_reply_wakes_the_master_once_with_a_nudge(t
   assert "charliebot slack reply --file" in nudge["content"]
   trigger.assert_awaited_once()
   assert trigger.await_args.args[:2] == (sid, nudge["content"])
-  assert trigger.await_args.kwargs["user_event_id"] == nudge["id"]
+  assert trigger.await_args.kwargs["input_id"] == nudge["id"]
   assert [t.get_name() for t in tasks] == [f"slack-nudge-{sid}"]
   assert not client.posts
   assert client.reactions[_THREAD] == {"eyes"}  # the question is still open
@@ -420,17 +421,13 @@ def _running_item(
     cfg: CharlieBotConfig, session_mgr: SessionManager, sid: str,
     user_event_id: str | None) -> master_cc_state._WorkItem:
   """A work item as the consumer parks it in ``master_cc_state._current_items`` while a round runs."""
-  return master_cc_state._WorkItem(
-      cfg=cfg,
-      session_meta=SessionMetadata(id=sid, name="slack session"),
+  return conftest.make_work_item(
+      cfg,
+      SessionMetadata(id=sid, name="slack session", profile="manager"),
+      None,
       user_content="summon prompt",
       callbacks=session_mgr.callbacks(),
-      is_voice=False,
-      auto_trigger=False,
-      backend_option=None,
-      extra_claude_flags=None,
-      future=asyncio.get_running_loop().create_future(),
-      user_event_ids=[user_event_id] if user_event_id else [])
+      user_event_id=user_event_id)
 
 
 @pytest.mark.asyncio

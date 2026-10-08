@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
 import pathlib
-from unittest import mock
 
 import conftest
 import pytest
@@ -13,7 +11,7 @@ from src.backends.claude_code import claude_lifecycle
 from src.infra import config as core_config
 from src.infra import event_types as ET
 from src.infra import models
-from src.runtime import master_cc, sessions, spawner, triggers
+from src.runtime import master_cc, spawner
 
 
 def _write_transcript(config_dir: pathlib.Path, cc_session_id: str) -> None:
@@ -66,39 +64,6 @@ def test_get_config_refreshes_in_place_keeping_identity(
   assert holder.server.port == 2222
 
 
-# ------------------------------------------------------------- trigger wake-up
-
-
-@pytest.mark.asyncio
-async def test_trigger_wake_uses_current_config_not_construction_snapshot(tmp_path: pathlib.Path) -> None:
-  """A backend added after the manager was constructed must reach trigger_master."""
-  stale = conftest.make_home_config(tmp_path)
-  session_mgr = sessions.SessionManager(stale)
-  session = await session_mgr.create_session(models.CreateSessionRequest(name="Trigger"))
-  trigger_mgr = triggers.TriggerManager(stale, session_mgr)
-  trigger = models.PendingTrigger(
-      id="trigger-1",
-      session_id=session.id,
-      fire_at=datetime.datetime.now(datetime.UTC),
-      message="wake",
-  )
-  await trigger_mgr._save_trigger(trigger)
-
-  current = core_config.CharlieBotConfig(
-      charliebot_home=tmp_path / "charliebot-home",
-      backends={"options": [conftest.backend_option(id="added-later", label="New", type="cc-claude", model="m")]},
-  )
-  with (
-      conftest.patch_trigger_mocks() as mock_master,
-      mock.patch(conftest.TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=current),
-  ):
-    await trigger_mgr._wait_and_fire(trigger)
-
-  passed_cfg = mock_master.call_args.args[2]
-  assert passed_cfg is current
-  assert passed_cfg.get_backend_option("added-later") is not None
-
-
 # --------------------------------------------------------- no silent fallback
 
 # Rows are the two ways a session backend fails to resolve: a pin naming no
@@ -126,10 +91,9 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend=session_backend)
+  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="S", backend=session_backend)
   spawned: list[object] = []
   monkeypatch.setattr(conftest.BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: spawned.append(1) or conftest.FakeBackend())
-  conftest.patch_instructions_content(monkeypatch)
 
   item = conftest.make_work_item(cfg, session_meta, None)
   cc_session_id, exit_code, error_msg, extras = await master_cc.master_cc_run._run_cc(item)
@@ -146,7 +110,7 @@ async def test_run_cc_refuses_to_substitute_an_unresolvable_session_backend(
 def test_spawner_refuses_to_substitute_an_unknown_pinned_backend() -> None:
   cfg = core_config.CharlieBotConfig(
       backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]})
-  session_meta = models.SessionMetadata(id="s", name="S", backend="deleted-id")
+  session_meta = models.SessionMetadata(profile="manager", id="s", name="S", backend="deleted-id")
   with pytest.raises(ValueError, match="refusing to substitute"):
     spawner.spawner_backends._resolve_session_default_backend_model(cfg, session_meta)
 
@@ -198,11 +162,10 @@ async def test_run_cc_resume_gate_by_transcript_location(
       charliebot_home=tmp_path / ".charliebot",
       backends={"options": [conftest.backend_option(id="cc", label="CC", type="cc-claude", model="claude-fable-5")]},
   )
-  session_meta = models.SessionMetadata(id="session-id", name="S", backend="cc", cc_session_id="conv-1")
+  session_meta = models.SessionMetadata(profile="manager", id="session-id", name="S", backend="cc", cc_session_id="conv-1")
   captures: dict[str, object] = {}
   monkeypatch.setattr(
       conftest.BUILD_BACKEND_PATCH_TARGET, lambda option, cfg, **k: captures.update(kwargs=k) or conftest.FakeBackend())
-  conftest.patch_instructions_content(monkeypatch)
 
   item = conftest.make_work_item(cfg, session_meta, cfg.backends.options[0])
   _cc, exit_code, error_msg, _extras = await master_cc.master_cc_run._run_cc(item)

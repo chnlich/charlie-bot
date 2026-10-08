@@ -30,7 +30,7 @@ def mark_busy(session_id: str, since: datetime.datetime | None = None) -> tuple[
 
   *since*, when an aware datetime, becomes the interval start instead of
   ``datetime.now(UTC)``. Its only supplier is a re-attached turn's
-  persisted ``master_run.started_at`` (startup reconcile); ``None`` keeps the
+  persisted Run ``started_at`` (startup reconcile); ``None`` keeps the
   default now() start for every freshly-queued turn.
   """
   existing = _busy_since.get(session_id)

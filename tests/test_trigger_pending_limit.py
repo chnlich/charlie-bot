@@ -21,7 +21,7 @@ from conftest import (
     BROADCAST_PATCH_TARGET,
     CLI_COMMON_GET_CONFIG_PATCH_TARGET,
     CLI_COMMON_TRANSPORT_POST_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
+    TRIGGER_TASK_DELIVERY_PATCH_TARGET,
     fake_cli_cfg,
     make_home_config,
     make_json_response,
@@ -167,7 +167,7 @@ async def test_slack_follow_rearm_succeeds_on_a_full_session(tmp_path: Path) -> 
 
   with (
       patch(BROADCAST_PATCH_TARGET, new=MagicMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=MagicMock()),
+      patch(TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=MagicMock()),
   ):
     adapter = SlackThreadAdapter()
     trigger = await arm_follow_trigger(

@@ -1,7 +1,7 @@
 """The archive unification: archived is the single end state of a task node.
 
-One rule per shape (a task node is archived exactly when its task state is not
-open; a session without a profile keeps the stored-status archive), the
+One rule for task nodes (a task node is archived exactly when its task state is not
+open), the
 pending-input boundary living in the fold alone (a close clears the candidates
 and closes the boundary; a reopen opens a fresh one), the cascade archive (one
 archived close fact per open node, no parent report, archived_with naming the
@@ -23,18 +23,9 @@ import pytest
 from conftest import OPERATOR, build_env, create_task
 
 from src.infra import event_types as ET
-from src.infra.models import CreateSessionRequest, RunRecord, SessionStatus
+from src.infra.models import RunRecord
 from src.runtime.run_token import CallerIdentity, RunTokenClaims
-from src.runtime.sessions import SessionManager
 from src.runtime.task_sessions import TaskArchivedError, TaskConflictError, TaskTreeManager
-
-OPUS_BACKEND_ID = "claude-opus-test"
-OPUS_BACKEND_OPTION = {
-    "id": OPUS_BACKEND_ID,
-    "label": "CC · Opus test",
-    "type": "cc-claude",
-    "model": "claude-opus-test-1",
-}
 
 
 class ScriptedExecutor:
@@ -352,27 +343,3 @@ async def test_child_report_into_an_archived_parent_is_history_and_wakes_nobody(
   assert (mid.id, "late-result") in tree.facts_of(mid.id).delivered_reports
   assert tree.dispatch.pending_inputs(mid.id) == []
   assert executor.batches == []
-
-
-# ---------------------------------------------------------------------------
-# The stored-status path for sessions without a profile
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_legacy_session_keeps_its_archive_and_unarchive_behavior(tmp_path: Path) -> None:
-  _cfg, session_mgr, _tree = build_env(tmp_path)
-  legacy = await session_mgr.create_session(CreateSessionRequest(name="Legacy"), backend=OPUS_BACKEND_ID)
-
-  assert legacy.profile is None
-  archived = await session_mgr.archive_session(legacy.id)
-  assert archived is not None and archived.status == SessionStatus.ARCHIVED
-  restored = await session_mgr.unarchive_session(legacy.id)
-  assert restored is not None and restored.status == SessionStatus.ACTIVE
-
-  # An empty legacy session still takes the permanent-delete path.
-  empty = await session_mgr.create_session(CreateSessionRequest(name="Empty"), backend=OPUS_BACKEND_ID)
-  assert session_mgr.get_chat_event_count_sync(empty.id, empty) == 0
-  await session_mgr.delete_session_permanently(empty.id)
-  assert await session_mgr.get_session(empty.id) is None
-  assert SessionManager is not None  # the real manager drove every step

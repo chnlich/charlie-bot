@@ -62,29 +62,29 @@ async def test_three_manager_depths_share_one_profile_and_workers_are_leaves(tmp
 
 
 @pytest.mark.asyncio
-async def test_history_copying_never_becomes_a_task_parent(tmp_path: pathlib.Path) -> None:
+async def test_history_references_do_not_become_task_parent_edges(tmp_path: pathlib.Path) -> None:
   cfg, session_mgr, mgr = conftest.build_env(tmp_path)
-  legacy = await session_mgr.create_session(
-      models.CreateSessionRequest(name="legacy"), backend=conftest.OPUS_BACKEND_ID)
-  legacy.parent_session_id = "some-old-session"
-  legacy.origin_ref = models.EventRef(session_id="some-old-session", event_id=None)
-  await session_mgr.save_metadata(legacy)
+  parent = await session_mgr.create_session(
+      models.CreateSessionRequest(name="Parent history copy"), backend=conftest.OPUS_BACKEND_ID)
+  parent.parent_session_id = "some-old-session"
+  parent.origin_ref = models.EventRef(session_id="some-old-session", event_id=None)
+  await session_mgr.save_metadata(parent)
 
   index = await mgr._get_index()
-  assert legacy.id not in index.children.get(None, [])  # not a task-tree node yet
-  # A legacy session parents task work in place: the create writes nothing to
-  # it (its metadata.json is byte-identical) and the child hangs under it.
-  meta_path = cfg.sessions_dir / legacy.id / "metadata.json"
+  assert parent.id in index.children.get(None, [])
+  # The child create writes nothing to its parent (metadata.json stays byte-
+  # identical), and the task-parent relation is the only tree edge.
+  meta_path = cfg.sessions_dir / parent.id / "metadata.json"
   before = meta_path.read_bytes()
-  child = await conftest.create_task(mgr, parent=legacy.id, request_id="child-of-legacy")
+  child = await conftest.create_task(mgr, parent=parent.id, request_id="child-of-parent")
   assert meta_path.read_bytes() == before
-  fresh = await session_mgr.get_session(legacy.id)
+  fresh = await session_mgr.get_session(parent.id)
   assert fresh is not None and fresh.task_parent_id is None
-  assert fresh.profile is None and fresh.schema_version == 1
-  assert child.task_parent_id == legacy.id
+  assert fresh.profile == "manager" and fresh.schema_version == 2
+  assert child.task_parent_id == parent.id
   index = await mgr._get_index()
-  assert legacy.id not in index.children.get(None, [])
-  assert child.id in mgr._children_of(index, legacy.id)
+  assert parent.id in index.children.get(None, [])
+  assert child.id in mgr._children_of(index, parent.id)
 
 
 # ---------------------------------------------------------------------------

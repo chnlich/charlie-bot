@@ -7,8 +7,8 @@ re-judged at a Run's launch. A sub-task manager under an authorized project
 delegates through the real /api/internal/delegate route without carrying its
 own take-off; a local user instruction shadows the ancestor; agent, cron, and
 report texts never mint authorization; verify stays exempt (read-only) on the
-route; v1 semantics are untouched. Every scenario here runs the actual HTTP
-route against a synthetic instance with a scripted backend.
+route. Every scenario here runs the actual HTTP route against a synthetic task
+tree with a scripted backend.
 """
 
 from __future__ import annotations
@@ -29,7 +29,6 @@ async def make_tree(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch):
   """One synthetic instance: root manager + child manager under it, plus the
     API client and the scripted executor, with no user input anywhere yet."""
   cfg, session_mgr, tree = test_task_execution.build_env(tmp_path, monkeypatch)
-  conftest.patch_instructions_content(monkeypatch)
   conftest.stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = test_task_execution._adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)

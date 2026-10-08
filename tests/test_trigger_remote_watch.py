@@ -53,7 +53,7 @@ async def test_remote_create_alive_persists(tmp_path: pathlib.Path) -> None:
 
   with (
       mock.patch(conftest.TRIGGERS_ASYNCIO_CREATE_SUBPROCESS_EXEC_PATCH_TARGET, new=_mk_subprocess_mock(scripted)),
-      mock.patch(conftest.TRIGGER_MASTER_PATCH_TARGET, new=mock.AsyncMock()),
+      mock.patch(conftest.TRIGGER_TASK_DELIVERY_PATCH_TARGET, new=mock.AsyncMock()),
       mock.patch.object(triggers.TriggerManager, "_start_task", lambda self, t: None),
   ):
     trigger = await trigger_mgr.create_trigger(

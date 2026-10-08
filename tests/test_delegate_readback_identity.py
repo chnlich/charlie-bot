@@ -91,10 +91,10 @@ async def test_readback_returns_none_without_the_bound_child(
       caller="operator")
   assert common.find_local_task_child(
       manager.id, description=description, task_type="quick-edit", request_id="delegate-missing") is None
-  # A v1 session (no task-tree child possible) reads back None as well.
-  legacy = await session_mgr.create_session(models.CreateSessionRequest(name="Old"))
+  # A manager root with no matching child also reads back None.
+  root = await session_mgr.create_session(models.CreateSessionRequest(name="Root"))
   assert common.find_local_task_child(
-      legacy.id, description="whatever", task_type="quick-edit", request_id="delegate-x") is None
+      root.id, description="whatever", task_type="quick-edit", request_id="delegate-x") is None
 
 
 @pytest.mark.asyncio

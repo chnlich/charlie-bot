@@ -8,7 +8,7 @@ import tarfile
 from isal import igzip
 
 from src.infra import config, log_once
-from src.runtime import threads
+from src.runtime import runs
 
 log = log_once.LazyStructlogLogger()
 
@@ -53,7 +53,7 @@ def _should_exclude(arcname: str) -> bool:
     if part in ('.git', '.claude', config.CREDENTIALS_FILENAME, '__pycache__') or part.endswith('.pyc'):
       return True
   # Exclude sessions/*/threads and everything under it
-  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == threads.THREADS_DIR_NAME
+  return len(parts) >= 3 and parts[0] == 'sessions' and parts[2] == runs.THREADS_DIR_NAME
 
 
 def _parse_backup_date(name: str) -> datetime.datetime | None:

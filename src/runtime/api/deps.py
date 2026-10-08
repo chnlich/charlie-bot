@@ -13,11 +13,10 @@ Depends forms.
 import fastapi
 
 from src.infra import config, constants, models
-from src.runtime import run_token, runs, sessions, task_sessions, threads, triggers
+from src.runtime import run_token, runs, sessions, task_sessions, triggers
 
 # Module-level singletons (created once per process)
 _session_manager: sessions.SessionManager | None = None
-_thread_manager: threads.ThreadManager | None = None
 _trigger_manager: triggers.TriggerManager | None = None
 _task_manager: task_sessions.TaskTreeManager | None = None
 
@@ -66,17 +65,6 @@ def set_task_manager(mgr: task_sessions.TaskTreeManager | None) -> None:
   """Replace the task-tree owner singleton (tests); None restores lazy construction."""
   global _task_manager
   _task_manager = mgr
-
-
-def thread_manager() -> threads.ThreadManager:
-  global _thread_manager
-  if _thread_manager is None:
-    _thread_manager = threads.ThreadManager(config.get_config())
-  return _thread_manager
-
-
-async def get_thread_manager() -> threads.ThreadManager:
-  return thread_manager()
 
 
 def trigger_manager() -> triggers.TriggerManager:

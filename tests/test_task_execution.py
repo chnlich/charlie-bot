@@ -35,7 +35,6 @@ from conftest import (
     init_repo_with_origin,
     install_scripted_backends,
     make_transcript,
-    patch_instructions_content,
     pool_cfg,
     rate_limit_event,
     run_git,
@@ -309,7 +308,6 @@ async def test_manager_turn_persists_run_identity_and_acknowledges_batch(
   cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
   builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="Take off. Reply with the phrase.", actor="user")
@@ -399,7 +397,6 @@ async def _launch_manager_turn(cfg, session_mgr, tree, monkeypatch, manager, con
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   pm_builds = []
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn", pm_builds))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   # The work-run launch re-judges the nearest-user authorization gate; the
   # manager carries the real user takeoff message the delegation rode in on.
@@ -426,7 +423,6 @@ async def test_first_message_on_empty_goal_task_dispatches_a_manager_turn(
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   backend = SpawningScriptedBackend([result_event("SMOKE reply")])
   install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   admitted = await tree.dispatch.admit_input(
       manager.id, event_type=ET.USER, content="First message on a brand-new task.", actor="user")
@@ -449,7 +445,6 @@ async def test_concurrent_dispatch_starts_one_process(tmp_path: Path, monkeypatc
   _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
   backend = SpawningScriptedBackend([result_event("one")])
   builds = install_backends(monkeypatch, [backend], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First message.", actor="user")
   # Two dispatch calls race the same pending batch: the reservation serializes
@@ -496,7 +491,6 @@ async def test_input_admitted_during_active_run_dispatches_after_its_finish(
   first = _SpawnFirstBackend([result_event("first")], gate=gate_release.wait)
   second = _SpawnFirstBackend([result_event("second")])
   install_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off. First.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -666,10 +660,11 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
   # Three distinct operations, three builds: the replays did not spawn a
   # second process for their operation.
   assert len(builds) == 3
-  captured_env = builds[0]["backend"].env or {}
-  assert captured_env.get(SESSION_ID_ENV_VAR) == child_id
-  assert captured_env.get(RUN_TOKEN_ENV)
-  assert captured_env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home)
+  captured_envs = [build["backend"].env or {} for build in builds]
+  assert {env.get(SESSION_ID_ENV_VAR) for env in captured_envs} == {
+      child_id, first_named.json()["session_id"], sibling.json()["session_id"]}
+  assert all(env.get(RUN_TOKEN_ENV) for env in captured_envs)
+  assert all(env.get("CHARLIEBOT_HOME") == str(cfg.charliebot_home) for env in captured_envs)
   worker_run = await tree.runs.get_run(child_id, run_id)
   assert worker_run is not None and worker_run.kind == "work"
   assert worker_run.backend == "fake"
@@ -687,7 +682,6 @@ async def test_delegate_creates_one_child_and_replays_are_stable(
 async def test_manager_retry_reruns_its_own_batch_and_stopped_retry_never_launches(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-  patch_instructions_content(monkeypatch)
 
   # A manager round claims its batch and fails. The failed round counts as
   # handled whatever its outcome: its batch never reappears as pending, and
@@ -1137,7 +1131,6 @@ async def test_repo_less_implement_review_failure_takes_the_failure_report(
       tree, parent=manager.id, request_id="w", profile="worker", task=_task_spec(tree, task_spec))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off and fix it.", actor="user")
 
@@ -1883,7 +1876,6 @@ async def test_backend_resolution_failure_lands_the_manager_runs_durable_failure
     post-admission act, and its failure lands the Run's durable failed fact
     with the error as evidence — never a queued run stranded without a fact."""
   _cfg, _session_mgr, tree, manager = await _wired_root_manager(tmp_path, monkeypatch)
-  patch_instructions_content(monkeypatch)
 
   def explode(cfg, backend: str | None, model: str | None):
     raise ValueError(f"backend {backend!r} is not configured")
@@ -2141,7 +2133,6 @@ async def test_manager_turn_relay_registers_the_second_process_through_the_launc
       exit_code=0)
   second = ScriptedRelayBackend([result_event("reply after relay")], exit_code=0)
   builds = install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   # record_launch is the registration seam: snapshot each launch's (pid,
   # pid_start, started_at) so the second launch's overwrite — and started_at's
@@ -2207,7 +2198,6 @@ async def test_stop_in_the_relay_gap_refuses_the_second_process_and_interrupts_t
       ], exit_code=1)
   second = ScriptedRelayBackend([result_event("must never land")], exit_code=0)
   install_scripted_backends(monkeypatch, [first, second], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
 
   # The stop rides the relay seam: prepare_relay runs after the first process's
   # stream ended (its rejected reading is the relay reason) and before the
@@ -2453,7 +2443,6 @@ async def test_worker_run_finished_enospc_retries_and_lands_without_restart(
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   worker_builds = install_worker_launch_and_resume_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
@@ -2492,7 +2481,6 @@ async def test_manager_turn_master_done_enospc_retries_through_master_queue(
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("turn reply"))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="Take off.", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
@@ -2530,7 +2518,6 @@ async def test_parent_report_enospc_retry_delivers_report_once(tmp_path: Path, m
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
   fault_hits = inject_chat_append_fault(monkeypatch, event_type=ET.CHILD_REPORT, session_ids={manager.id})
@@ -2563,7 +2550,6 @@ async def test_drain_ended_at_is_raw_log_last_write_live_exit_keeps_write_time(
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   install_worker_launch_and_resume_backends(monkeypatch, [SpawningScriptedBackend([result_event("drained work")])])
 
   # Drain: a launched run whose process died unseen, raw log stamped an hour ago.
@@ -2602,7 +2588,6 @@ async def test_disk_headroom_precheck_withholds_worker_run_but_not_manager_turn(
   cfg.server.min_free_disk_gib = 10**9  # no filesystem holds this much
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   worker_builds = install_worker_launch_and_resume_backends(
       monkeypatch, [SpawningScriptedBackend([result_event("work done")])])
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("report consumed"))
@@ -2655,7 +2640,6 @@ async def test_non_space_end_failure_lands_immediately_and_starts_no_retry(
   cfg, session_mgr, tree, manager, worker = await _manager_with_worker_child(tmp_path, monkeypatch)
   adapter = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
   tree.dispatch.executor = adapter
-  patch_instructions_content(monkeypatch)
   install_worker_launch_and_resume_backends(
       monkeypatch,
       [SpawningScriptedBackend([result_event("work done")]),

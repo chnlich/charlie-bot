@@ -709,6 +709,6 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
   assert summon_event["fakechat"] == _SUMMON_BLOCK
   mock_trigger.assert_awaited_once()
   assert mock_trigger.await_args.args[0] == "s1"
-  assert mock_trigger.await_args.kwargs["user_event_id"] == summon_event["id"]
+  assert mock_trigger.await_args.kwargs["input_id"] == summon_event["id"]
   assert adapter.acks == [_SUMMON_BLOCK]
   assert sorted(task.get_name() for task in tasks) == ["fakechat-ack-s1", "fakechat-round-s1"]

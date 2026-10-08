@@ -5,7 +5,7 @@ own id is the input's stable identity — so a crash after the durable admission
 but before the FIRED stamp replays into the SAME input instead of duplicating
 the task input or its process. Closed nodes keep late history without
 restoring; established aliases resolve without changing task ownership; and
-the legacy route keeps serving v1 sessions unchanged.
+the node's close fact remains the dormancy authority.
 """
 
 from __future__ import annotations
@@ -18,11 +18,8 @@ import pytest
 from conftest import (
     BROADCAST_PATCH_TARGET,
     BUILD_BACKEND_PATCH_TARGET,
-    TRIGGER_MASTER_PATCH_TARGET,
-    TRIGGERS_GET_CONFIG_PATCH_TARGET,
     backend_option,
     bind_deps_managers,
-    patch_instructions_content,
 )
 
 from src.infra import event_types as ET
@@ -59,7 +56,6 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
   cfg, session_mgr, tree = build_env(tmp_path, monkeypatch)
   bind_deps_managers(monkeypatch, tree, session_mgr)
   builds = install_backends(monkeypatch, [SpawningScriptedBackend([result_event("awake")])], BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   manager = await tree.create_task(
       request_id="pm",
       task_parent_id=None,
@@ -74,8 +70,6 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
 
   with (
       patch(BROADCAST_PATCH_TARGET, new=AsyncMock()),
-      patch(TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger_master,
-      patch(TRIGGERS_GET_CONFIG_PATCH_TARGET, return_value=cfg),
   ):
     await trigger_mgr._wait_and_fire(trigger)
 
@@ -92,5 +86,3 @@ async def test_trigger_admits_one_durable_input_to_task_tree_node(
   turn_id = tree.runs.list_run_records_sync(manager.id)[0].id
   await wait_for_terminal_run(tree, manager.id, turn_id)
   assert len(builds) == 1
-  # The legacy wake path never runs for a v2 node (no double admission).
-  mock_trigger_master.assert_not_awaited()

@@ -15,7 +15,6 @@ from conftest import (
     install_scripted_backends,
     make_transcript,
     make_work_item,
-    patch_instructions_content,
     rate_limit_event,
     user_tool_result_event,
     write_pool_credentials,
@@ -38,12 +37,11 @@ def _install_backends(monkeypatch: pytest.MonkeyPatch, backends: list[ScriptedRe
   # every call, so the patch lands there; the instructions builder is stubbed
   # with it because _run_cc builds instructions before the first backend build.
   builds = install_scripted_backends(monkeypatch, backends, BUILD_BACKEND_PATCH_TARGET)
-  patch_instructions_content(monkeypatch)
   return builds
 
 
 def _session_on(label: str | None, cc_session_id: str | None = UUID) -> SessionMetadata:
-  return SessionMetadata(id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
+  return SessionMetadata(profile="manager", id="s1", name="t", backend=POOLED_FABLE_ID, cc_session_id=cc_session_id, claude_account=label)
 
 
 def _events_of(callbacks: SessionCallbacks, event_type: str) -> list[dict]:

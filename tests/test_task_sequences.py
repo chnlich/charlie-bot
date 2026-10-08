@@ -21,7 +21,6 @@ from conftest import (
     WORKER_BUILD_BACKEND_PATCH_TARGET,
     _async_wait_for,
     create_task,
-    patch_instructions_content,
     rate_limit_event,
     stub_credentials,
 )
@@ -63,7 +62,6 @@ async def _admit_takeoff(tree: TaskTreeManager, manager: SessionMetadata) -> Non
 async def _start_loop(
     cfg, session_mgr, tree, manager, repo: Path, monkeypatch, payload_overrides=None, wait_effect=None):
   """POST the improve loop against the v2 manager and wait for the controller's child."""
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
@@ -171,7 +169,6 @@ async def test_live_goal_change_affects_next_iteration(
   second = SpawningScriptedBackend([result_event("two")])
   queue = [first, second]
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: queue.pop(0))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
@@ -538,7 +535,6 @@ async def test_iteration_report_header_carries_the_judgment(
       SpawningScriptedBackend([result_event("iter two words")], post_events=write_iter_two_report),
   ]
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)
@@ -595,7 +591,6 @@ async def test_failed_iteration_still_delivers_its_report_and_continues(
       SpawningScriptedBackend([result_event("recovered words")]),
   ]
   monkeypatch.setattr(WORKER_BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backends.pop(0))
-  patch_instructions_content(monkeypatch)
   stub_credentials({"charliebot": {"access_key": "op-secret"}})
   monkeypatch.setenv("CHARLIEBOT_HOME", str(cfg.charliebot_home))
   tree.dispatch.executor = _adapter_with_silent_broadcast(cfg, session_mgr, tree, monkeypatch)

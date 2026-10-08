@@ -307,42 +307,6 @@ async def test_stopped_queued_run_is_never_launched_and_releases_its_batch(tmp_p
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_legacy_trigger_wake_is_refused_at_v2_nodes(tmp_path: Path) -> None:
-  """A scheduled/iteration wake aimed at a v2 node is explicitly unavailable (next stage):
-  nothing is written through the legacy user-event path and nothing dispatches."""
-  cfg, session_mgr, tree = build_env(tmp_path)
-  manager = await create_task(tree, parent=None, request_id="root", name="Root")
-
-  executor = ScriptedExecutor(tree)
-  tree.dispatch.executor = executor
-  from src.runtime.master_trigger import trigger_master
-  await trigger_master(manager.id, "a worker result landed", cfg, session_mgr, ET.CHILD_REPORT)
-
-  events = tree.events.load_events(manager.id)
-  assert [e for e in events if e["type"] == ET.USER] == []
-  assert executor.batches == []
-  assert tree.runs.list_run_records_sync(manager.id) == []
-
-  # A v1 session keeps the legacy wake path intact during the staged conversion.
-  from src.infra.models import CreateSessionRequest
-  v1 = await session_mgr.create_session(CreateSessionRequest(name="legacy"))
-  called: list[bool] = []
-
-  async def _fake_run_message(*args, **kwargs):
-    called.append(True)
-    return "cc-1"
-
-  import src.runtime.master_trigger as master_trigger_module
-  original = master_trigger_module.run_message
-  master_trigger_module.run_message = _fake_run_message
-  try:
-    await trigger_master(v1.id, "a worker result landed", cfg, session_mgr, ET.CHILD_REPORT)
-  finally:
-    master_trigger_module.run_message = original
-  assert called == [True]
-
-
 # ---------------------------------------------------------------------------
 # Permanent delete: every reference category, one locked operation
 # ---------------------------------------------------------------------------

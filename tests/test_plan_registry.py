@@ -27,7 +27,7 @@ async def _present_first_plan(plan_mgr: PlanRegistryManager, cfg: CharlieBotConf
 
 @pytest.mark.asyncio
 async def test_present_returns_awaiting_approval(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
 
   result = await plan_mgr.present(meta.id, file=file_rel, title="P1")
@@ -38,7 +38,7 @@ async def test_present_returns_awaiting_approval(tmp_path: Path) -> None:
 @pytest.mark.parametrize("first_absolute", [False, True])
 @pytest.mark.parametrize("amend", [False, True], ids=["present", "amend"])
 async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_absolute: bool, amend: bool) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html")
   file_abs = str((cfg.sessions_dir / meta.id / file_rel).resolve())
   first_file = file_abs if first_absolute else file_rel
@@ -54,7 +54,7 @@ async def test_registry_rejects_cross_format_duplicate(tmp_path: Path, first_abs
 
 @pytest.mark.asyncio
 async def test_approve_returns_approved(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.approve(meta.id)
@@ -69,7 +69,7 @@ async def test_approve_returns_approved(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("note", [None, "", "   "])
 async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
   f2 = _write_artifact(cfg, meta.id, "plan_02.html")
 
@@ -79,7 +79,7 @@ async def test_amend_requires_non_empty_note(tmp_path: Path, note: str | None) -
 
 @pytest.mark.asyncio
 async def test_close_superseded_and_abandoned(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
 
   result = await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
@@ -93,7 +93,7 @@ async def test_close_superseded_and_abandoned(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   await _present_first_plan(plan_mgr, cfg, meta.id)
   await plan_mgr.close(meta.id, plan_id=1, close_as="superseded")
 
@@ -108,7 +108,7 @@ async def test_closing_already_closed_rejected(tmp_path: Path) -> None:
 
 @pytest.mark.asyncio
 async def test_plans_json_shape_matches_schema(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   f1 = _write_artifact(cfg, meta.id, "plan_01.html")
   await plan_mgr.present(meta.id, file=f1, title="P1", base={"repo": "r", "branch": "b", "sha": "s"})
 
@@ -157,7 +157,7 @@ def _goal_doc(goal_text: str) -> str:
 
 @pytest.mark.asyncio
 async def test_present_rejects_goal_over_budget_with_measured_value(tmp_path: Path) -> None:
-  cfg, _session_mgr, _thread_mgr, plan_mgr, meta = await _setup(tmp_path)
+  cfg, _session_mgr, plan_mgr, meta = await _setup(tmp_path)
   file_rel = _write_artifact(cfg, meta.id, "plan_01.html", content=_goal_doc("x" * 241))
   with pytest.raises(ValueError, match=r"241 weighted chars \(budget 240\)"):
     await plan_mgr.present(meta.id, file=file_rel, title="P1")

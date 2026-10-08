@@ -5,7 +5,7 @@ import pathlib
 
 from src.infra import config, log_once, models, ndjson
 from src.infra import event_types as ET
-from src.runtime import chat_events, message_aggregator, threads
+from src.runtime import chat_events, message_aggregator
 
 log = log_once.LazyStructlogLogger()
 
@@ -222,7 +222,7 @@ async def extract_review_context(
     session_id: str,
     thread_id: str,
     sessions_dir: pathlib.Path,
-    worker_log_path: pathlib.Path | None = None,
+    worker_log_path: pathlib.Path,
 ) -> tuple[str | None, str | None]:
   """Extract user request and worker summary from JSONL logs for review context.
 
@@ -247,8 +247,7 @@ async def extract_review_context(
     log.warning("review_context_user_request_unavailable", session=session_id, thread=thread_id)
 
   try:
-    worker_log = worker_log_path or threads.thread_events_log_path(session_dir, thread_id)
-    chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log)
+    chosen = await asyncio.to_thread(_worker_summary_from_events_log, worker_log_path)
     if chosen:
       worker_summary = chosen
       has_worker_summary = True

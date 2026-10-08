@@ -183,18 +183,6 @@ KILL_ESCALATION_GRACE_SECONDS = 5.0  # seconds between SIGTERM and the SIGKILL d
 KILL_ESCALATION_POLL_SECONDS = 0.2  # seconds between liveness probes during the grace
 
 # ---------------------------------------------------------------------------
-# Master-run identity barrier (boot)
-# ---------------------------------------------------------------------------
-
-# How long the lifespan startup waits on reconcile_master_identity before
-# falling through to the doors that can create a new turn; the pass itself is
-# shielded and keeps running, re-awaited by the crash-recovery task. What the
-# barrier bounds: an active-session metadata scan (~11 ms measured) plus
-# roughly 10 ms per in-flight master_run record. The bound exists so a stalled
-# mount degrades to a raw log line instead of holding boot forever.
-MASTER_IDENTITY_BARRIER_TIMEOUT = 5.0  # seconds
-
-# ---------------------------------------------------------------------------
 # WebSocket client close wait
 # ---------------------------------------------------------------------------
 

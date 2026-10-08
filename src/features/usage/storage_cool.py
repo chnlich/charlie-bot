@@ -47,6 +47,7 @@ from src.infra.json_utils import load_json_meta
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionStatus, parse_utc_datetime
 from src.runtime.hooks import usage_sources
+from src.runtime.run_identity import SESSION_METADATA_NAME as METADATA_NAME
 from src.runtime.runs import (
     CURSOR_NAME,
     DATA_DIR_NAME,
@@ -55,8 +56,8 @@ from src.runtime.runs import (
     RUN_METADATA_NAME,
     RUNS_DIR_NAME,
     STDERR_LOG_NAME,
+    THREADS_DIR_NAME,
 )
-from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME
 
 log = LazyStructlogLogger()
 

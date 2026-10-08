@@ -1,33 +1,21 @@
-"""Thread management API routes."""
+"""Compatibility routes for task Runs addressed through their old thread ids."""
 
 import asyncio
-import contextlib
 import hashlib
-import json
-import os
 import threading
 from collections.abc import Iterable
-from dataclasses import dataclass
-from datetime import UTC, datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 
 from src.infra import event_types as ET
-from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.memo import BoundedMemo, StatSignatureMemo
-from src.infra.models import RunRecord, ThreadMetadata, WorkerEvent
+from src.infra.memo import BoundedMemo
+from src.infra.models import RunRecord, WorkerEvent
 from src.infra.ndjson import PARSE_SKIP_LOG_EVENT, iter_ndjson_events
 from src.infra.responses import FastJsonResponse, fast_json_bytes, gzip_body_response
-from src.runtime.api.deps import (
-    get_config_on_loop,
-    get_run_store,
-    get_task_manager,
-    get_thread_manager,
-    require_caller,
-    task_manager,
-)
+from src.runtime.api.deps import get_run_store, get_task_manager, require_caller
 from src.runtime.hooks import backend_types
 from src.runtime.message_aggregator import (
     TOOL_PREVIEW_CHARS,
@@ -37,101 +25,27 @@ from src.runtime.message_aggregator import (
 )
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import (
-    DATA_DIR_NAME,
     RUN_EVENTS_NAME,
-    RUN_METADATA_NAME,
-    RUNS_DIR_NAME,
     RunIdentityConflictError,
     RunNotFoundError,
+    read_host_boot_time,
     stop_requested_in_events,
     terminal_outcome_in_events,
 )
-from src.runtime.sidebar_state import RevisionSweepGate, session_revision, take_marked_paths
-from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME, ThreadManager, iter_thread_meta_stats
 
 log = LazyStructlogLogger()
-
 router = APIRouter()
-
-# Cap on the description prefix shipped in every thread row: a row never
-# carries task-spec-length description text (~KB each), so the list and view
-# bodies stay bounded on delegation-heavy sessions. A truncated row carries
-# ``description_full_len``, the length behind the prefix.
-_LIST_DESCRIPTION_CAP = 100
-
-# One wire sentence for every thread-missing 404, whatever the endpoint raised it.
 _THREAD_NOT_FOUND_DETAIL = "Thread not found"
-
-# Parsed-meta memo behind the thread-detail endpoint. The endpoint reads the
-# meta without mutating it, so the memoized instance is shared read-only
-# (mutating callers go through ThreadManager.get_thread, which re-reads). Every
-# writer publishes metadata.json through the atomic tmp rename, so a content
-# change always moves (mtime_ns, size). Stat-before-read is StatSignatureMemo's
-# contract.
-_DETAIL_META_MEMO_LIMIT = 32
-_detail_meta_memo: StatSignatureMemo[str, ThreadMetadata] = StatSignatureMemo(_DETAIL_META_MEMO_LIMIT)
+_LIST_DESCRIPTION_CAP = 100
+_RUN_LIST_GZIP_MEMO: BoundedMemo[bytes, bytes] = BoundedMemo(8)
+_RUN_DETAIL_GZIP_MEMO: BoundedMemo[bytes, bytes] = BoundedMemo(8)
+_RUN_EVENTS_GZIP_MEMO: BoundedMemo[bytes, bytes] = BoundedMemo(8)
 
 
-async def _detail_thread_meta(thread_mgr: ThreadManager, session_id: str, thread_id: str) -> ThreadMetadata | None:
-  path = thread_mgr.thread_dir(session_id, thread_id) / METADATA_NAME
-  key = str(path)
-  try:
-    st = os.stat(path)
-  except OSError:
-    _detail_meta_memo.drop(key)
-    return None
-  meta = _detail_meta_memo.fresh(key, st)
-  if meta is not None:
-    return meta
-  meta = await thread_mgr.get_thread(session_id, thread_id)
-  if meta is None:
-    return None
-  _detail_meta_memo.record(key, st, meta)
-  return meta
-
-
-@dataclass(frozen=True)
-class _BackendDispatch:
-  type: str
-
-
-def _backend_dispatch(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> _BackendDispatch | None:
-  if not thread.backend:
-    return None
-  if cfg is not None:
-    option = cfg.get_backend_option(thread.backend)
-    if option is not None:
-      return _BackendDispatch(type=option.type)
-  return _BackendDispatch(type=thread.backend)
-
-
-def build_attach_command(thread: ThreadMetadata, cfg: CharlieBotConfig | None) -> str | None:
-  """The shell command that attaches a terminal to the thread's conversation, from its backend's lifecycle."""
-  dispatch = _backend_dispatch(thread, cfg)
-  if dispatch is None or dispatch.type not in backend_types.registered_types():
-    return None
-  return backend_types.lifecycle_for_type(dispatch.type).attach_command(thread)
-
-
-async def _attach_available(thread: ThreadMetadata, cfg: CharlieBotConfig) -> bool:
-  return build_attach_command(thread, cfg) is not None and bool(thread.worktree_path) and os.path.isdir(
-      thread.worktree_path)
-
-
-def _epoch_ms(dt: datetime) -> int:
-  """The UTC timestamp as epoch milliseconds, the wire form of the list row timestamps."""
-  return int(dt.timestamp() * 1000)
-
-
-def _v2_run_status(run: RunRecord, events: list[dict], host_boot: datetime) -> str:
-  """The legacy status string one Run's facts map to (the compat row's contract).
-
-  Terminal facts win; a queued run is idle (cancelled once a durable stop
-  request stands); a launched run is running while its process identity is
-  live and failed once the process is gone without a terminal fact (the
-  recovery stage owns the final resolve).
-  """
+def _run_status(run: RunRecord, events: list[dict], host_boot: datetime) -> str:
+  """The status string the retained thread-id client expects for a task Run."""
   from src.runtime.runs import is_run_alive
+
   outcome = terminal_outcome_in_events(events, run.id)
   if outcome == "success":
     return "completed"
@@ -142,433 +56,34 @@ def _v2_run_status(run: RunRecord, events: list[dict], host_boot: datetime) -> s
   return "running" if is_run_alive(run.pid, run.pid_start, run.started_at, host_boot) else "failed"
 
 
-def _v2_run_list_item(
+def _run_list_item(
     run: RunRecord,
     events: list[dict],
     host_boot: datetime,
     *,
     created_at: datetime,
     description: str,
-    branch_name: str | None,
-    worktree_path: str | None,
-    pid: int | None,
 ) -> dict:
-  """One ephemeral compatibility row for a v2 Run (no ThreadMetadata is written).
-
-  The row carries the actual run identity — its own id, backend/model, pid and
-  derived status — so a legacy consumer listing, reading or stopping threads
-  addresses the same Run the v2 routes serve.
-  """
+  """Render one ephemeral compatibility row from the Run record and facts."""
   item = {
       "type": "thread",
       "id": run.id,
       "description": description[:_LIST_DESCRIPTION_CAP],
-      "status": _v2_run_status(run, events, host_boot),
-      "created_at": _epoch_ms(created_at),
-      "completed_at": _epoch_ms(run.ended_at) if run.ended_at else None,
+      "status": _run_status(run, events, host_boot),
+      "created_at": int(created_at.timestamp() * 1000),
+      "completed_at": int(run.ended_at.timestamp() * 1000) if run.ended_at else None,
       "backend": run.backend,
       "session_id": run.session_id,
   }
   if len(description) > _LIST_DESCRIPTION_CAP:
     item["description_full_len"] = len(description)
-  if pid is not None:
-    item["pid"] = pid
-  if branch_name:
-    item["branch_name"] = branch_name
-  if worktree_path:
-    item["worktree_path"] = worktree_path
+  if run.pid is not None:
+    item["pid"] = run.pid
+  if run.branch_name:
+    item["branch_name"] = run.branch_name
+  if run.worktree_path:
+    item["worktree_path"] = run.worktree_path
   return item
-
-
-def _thread_list_item(t: ThreadMetadata) -> dict:
-  """One thread row of the list body and the view-row payloads.
-
-  The description ships as a prefix, never task-spec-length text (~KB each);
-  a truncated row carries ``description_full_len``, the length behind the
-  prefix. Timestamps (created/started/completed) ship as epoch milliseconds
-  — the int form halves their wire bytes on a body that scales with the
-  session's thread count.
-  """
-  description = t.description or ""
-  item = {
-      "type": "thread",
-      "id": t.id,
-      "description": description[:_LIST_DESCRIPTION_CAP],
-      "status": t.status.value,
-      "created_at": _epoch_ms(t.created_at),
-      "started_at": _epoch_ms(t.started_at) if t.started_at else None,
-      "completed_at": _epoch_ms(t.completed_at) if t.completed_at else None,
-      "backend": t.backend,
-  }
-  if len(description) > _LIST_DESCRIPTION_CAP:
-    item["description_full_len"] = len(description)
-  return item
-
-
-# Whole-body memo for the session list route: body bytes per session keyed on
-# the union file signature. Every row field derives from thread metadata.json
-# files, and every writer rewrites them atomically (a rename always moves
-# mtime_ns), so an unchanged signature proves the built body is still current.
-# Single slot per session with an LRU cap: one slot holds the worst body (its
-# bytes scale with the session's thread count), and deeper caps buy nothing
-# because a session's requests reuse its one slot.
-_LIST_BODY_MEMO_LIMIT = 8
-_list_body_memo: BoundedMemo[str, tuple[tuple[tuple[str, int, int], ...], bytes,
-                                        str]] = BoundedMemo(_LIST_BODY_MEMO_LIMIT)
-
-# The list poll's gzip form rides the body-keyed memo: the rendered body bytes
-# are their own invalidation ground (a memo hit proves byte equality because
-# the dict key IS the body), so one off-loop level-1 deflate per distinct body
-# replaces the middleware's per-request pass; Content-Encoding set upstream
-# makes the middleware skip (the M72 mechanism). The key shares the lifetime
-# rule the body memo's signature proves, so the same LRU cap fits.
-_LIST_GZIP_MEMO_LIMIT = 8
-_list_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_LIST_GZIP_MEMO_LIMIT)
-
-# The events full fetch's gzip form, keyed on the body bytes themselves. One
-# slot per distinct projection: a log append moves the body, so the cap bounds
-# the memo at the worst body's bytes, and a repeat open of an unchanged log
-# serves the stored bytes instead of the middleware's per-request deflate.
-_EVENTS_GZIP_MEMO_LIMIT = 8
-_events_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_EVENTS_GZIP_MEMO_LIMIT)
-
-# The thread-detail poll's gzip form rides the same body-keyed memo: the full
-# row's 50 KB body re-deflates inside the middleware on every served request
-# although the rendered bytes are their own invalidation ground. One off-loop
-# level-1 deflate per distinct body replaces it; Content-Encoding set upstream
-# makes the middleware skip (the M72 mechanism).
-_DETAIL_GZIP_MEMO_LIMIT = 8
-_detail_gzip_memo: BoundedMemo[bytes, bytes] = BoundedMemo(_DETAIL_GZIP_MEMO_LIMIT)
-
-# Polls between signature walks, per session. Every writer of a row-source
-# file (thread metadata via _save_metadata) marks through mark_sidebar_dirty,
-# so an unchanged session_revision proves the
-# stored signature still describes the files and the memo serves without the
-# per-file stat walk. The sweep walk every Nth poll bounds a mark its writer
-# path forgot to the same ~30 s window the sidebar's populate sweep accepts.
-_LIST_PROOF_SWEEP_EVERY = 10
-_sig_gate = RevisionSweepGate(_LIST_PROOF_SWEEP_EVERY)
-
-
-def _row_source_stats(
-    threads_dir: str,
-    runs_dir: str | None,
-) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]]]:
-  """One scandir+stat walk of the row-source directories, split by directory.
-
-  The list body's freshness signature and its thread rows read the same files,
-  so a rebuild walks once and feeds both; two walks would stat every
-  metadata.json twice per rebuild. A directory that cannot be scanned
-  contributes an empty half, the same "no rows" verdict the signature's
-  OSError swallow gives it. The second source is the task tree's Run metadata
-  files: the v2 compatibility rows ride the same proof, so a Run's metadata
-  write (atomic rename, mtime moves) refreshes its row inside the same sweep
-  window the unmarked thread write heals in. Trigger records are not row
-  sources — the pending-triggers tray reads them through its own endpoint
-  (src/runtime/api/sessions.py get_pending_triggers) —
-  so a trigger write neither joins the signature nor rebuilds this body.
-  """
-  thread_pairs: list[tuple[str, os.stat_result]] = []
-  with contextlib.suppress(OSError):
-    thread_pairs.extend(iter_thread_meta_stats(threads_dir))
-  run_pairs: list[tuple[str, os.stat_result]] = []
-  if runs_dir:
-    try:
-      for entry in os.scandir(runs_dir):
-        if not entry.is_dir():
-          continue
-        meta_path = os.path.join(entry.path, RUN_METADATA_NAME)
-        try:
-          run_pairs.append((meta_path, os.stat(meta_path)))
-        except OSError:
-          continue
-    except OSError:
-      pass
-  return thread_pairs, run_pairs
-
-
-def _signature_from_stats(
-    thread_pairs: list[tuple[str, os.stat_result]],
-    run_pairs: list[tuple[str, os.stat_result]],
-) -> tuple[tuple[str, int, int], ...]:
-  """(path, mtime_ns, size) of every row-source file, in the memo's sorted-key order."""
-  sig = [(path, st.st_mtime_ns, st.st_size) for path, st in thread_pairs]
-  sig.extend((path, st.st_mtime_ns, st.st_size) for path, st in run_pairs)
-  sig.sort()
-  return tuple(sig)
-
-
-# Built list rows per session: metadata.json path -> (mtime_ns, size, row, fragment).
-# _thread_list_item is a pure function of the parsed metadata and the parse
-# memo keys the same (mtime_ns, size) identity every atomic rename moves, so
-# an unchanged stat proves the stored row current and a marked rebuild rebuilds
-# only the moved files' rows. Rows are shared read-only into the body payload,
-# and the fragment is the row's rendered JSON: the list body assembles from
-# fragments (the M72 files-listing row-memo shape) because a changed poll would
-# otherwise re-dump every unmoved row — 0.60 ms of stdlib dumps per rebuild on
-# the 339-row worst corpus against 0.01 ms of join.
-# Both per-session row memos share one cap because they share one key space and
-# one working set: the projected-leaf fan-out (project_worker_threads) walks one
-# row proof per legacy row of every sidebar list response and every search hit,
-# so one request can touch more distinct sessions than any single-session
-# consumer ever did. The cap must hold that working set — a smaller one evicts a
-# session between two requests of the same fan-out, every request re-walks and
-# re-parses its thread files, and the rebuilt row dicts fail the identity checks
-# the projected-row memo (src/runtime/api/sessions.py) and the search route's whole-body
-# memo stand on, so no repeat ever serves its cache.
-_PROJECTION_SESSION_MEMO_LIMIT = 1024
-_THREAD_ROW_MEMO_LIMIT = _PROJECTION_SESSION_MEMO_LIMIT
-_thread_row_memo: BoundedMemo[str, dict[str, tuple[int, int, dict, bytes]]] = BoundedMemo(_THREAD_ROW_MEMO_LIMIT)
-
-# The one home of the list body's JSON options. The encoder's per-element text
-# is context-free, so a row's standalone rendering is byte-identical to its
-# rendering inside the whole-body array dump (the _EventBatcher property in
-# trace_merge).
-_ROW_DUMPS_OPTS = {"ensure_ascii": False, "allow_nan": False, "separators": (",", ":")}
-
-
-def _row_fragment(row: dict) -> bytes:
-  """Render one row's JSON fragment with the list body's options."""
-  return json.dumps(row, **_ROW_DUMPS_OPTS).encode("utf-8")
-
-
-async def _v2_run_list_items(
-    session_id: str,
-    run_pairs: list[tuple[str, os.stat_result]],
-) -> list[tuple[dict, bytes]]:
-  """Compatibility (row, fragment) pairs for the session's v2 Runs, from the walked metadata files.
-
-  A session without task-tree runs (every v1 session) scans zero directories
-  and costs nothing beyond the empty scandir. Rows derive from the Run record
-  plus the fact history — no ThreadMetadata file is read or written; the row
-  memo keys the run metadata files the same (mtime_ns, size) identity the
-  signature proves, and the fragment rides the memo entry beside the row the
-  same way _thread_list_items stores its pairs.
-  """
-  if not run_pairs:
-    return []
-  tree = task_manager()
-  meta = await tree.load_meta(session_id)
-  description = (meta.task.goal if meta is not None and meta.task is not None else "") or ""
-  events = tree.runs.load_events_sync(session_id)
-
-  refreshed: dict[str, tuple[int, int, dict, bytes]] = {}
-  hit = _thread_row_memo.get(session_id)
-  items: list[tuple[dict, bytes]] = []
-  for meta_path, st in run_pairs:
-    run_id = Path(meta_path).parent.name
-    cached = hit.get(meta_path) if hit is not None else None
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-      items.append((cached[2], cached[3]))
-      refreshed[meta_path] = cached
-      continue
-    run = await asyncio.to_thread(tree.runs.read_run_sync, session_id, run_id)
-    if run is None:
-      continue
-    created_at = run.started_at or datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
-    item = _v2_run_list_item(
-        run,
-        events,
-        datetime.now(UTC),
-        created_at=created_at,
-        description=description,
-        branch_name=run.branch_name,
-        worktree_path=run.worktree_path,
-        pid=run.pid,
-    )
-    fragment = _row_fragment(item)
-    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item, fragment)
-    items.append((item, fragment))
-  _thread_row_memo.store(session_id, refreshed)
-  return items
-
-
-def _thread_list_items(
-    session_id: str, thread_pairs: list[tuple[str, os.stat_result]],
-    metas: list[ThreadMetadata | None]) -> list[tuple[dict, bytes]]:
-  """List (row, fragment) pairs for the walked pairs, served from the row memo where the file stands.
-
-  *metas* aligns position-for-position with *thread_pairs*; a ``None`` entry is
-  the parse-miss verdict for a file that vanished between the walk and its
-  read, so it gets no row — exactly as if the walk's stat had failed.
-  """
-  refreshed: dict[str, tuple[int, int, dict, bytes]] = {}
-  items = []
-  for (meta_path, st), meta in zip(thread_pairs, metas, strict=True):
-    if meta is None:
-      continue
-    hit = _thread_row_memo.get(session_id)
-    cached = hit.get(meta_path) if hit is not None else None
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-      item, fragment = cached[2], cached[3]
-    else:
-      item = _thread_list_item(meta)
-      fragment = _row_fragment(item)
-    refreshed[meta_path] = (st.st_mtime_ns, st.st_size, item, fragment)
-    items.append((item, fragment))
-  _thread_row_memo.store(session_id, refreshed)
-  return items
-
-
-def _list_body(rows: list[tuple[dict, bytes]]) -> bytes:
-  """The list body from (row, fragment) pairs: the created_at sort, then the fragment join.
-
-  The body is the fragments joined inside array brackets, not a whole-array
-  dumps — a changed poll would otherwise re-encode every unmoved row (the
-  encoder's per-element text is context-free, so the join is byte-identical).
-  """
-  combined = list(rows)
-  combined.sort(key=lambda pair: pair[0]["created_at"], reverse=True)
-  return b"[" + b",".join(fragment for _item, fragment in combined) + b"]"
-
-
-async def _marked_rebuild(
-    session_id: str,
-    session_dir: Path,
-    hit: tuple[tuple[tuple[str, int, int], ...], bytes, str],
-    marked: list[str],
-) -> tuple[tuple[tuple[str, int, int], ...], bytes, str] | None:
-  """Prove the stored list body against exactly the marked row-source files.
-
-  The writers mark the file they just published through their atomic rename,
-  so stat-ing the marked paths and leaving every other signature entry standing
-  proves the body the way a full walk would, at one stat per mark. Returns the
-  new (sig, body, etag), or None when the marked shape cannot prove
-  incrementally — the row memo evicted this session, or a marked path is not a
-  thread metadata file — and the caller falls back to the full walk.
-  """
-  rows = _thread_row_memo.get(session_id)
-  if rows is None:
-    return None
-  threads_prefix = str(session_dir / THREADS_DIR_NAME) + "/"
-  sig_entries = {path: (mtime, size) for path, mtime, size in hit[0]}
-  refreshed: dict[str, tuple[int, int, dict, bytes]] = dict(rows)
-  moved = False
-  for path in marked:
-    try:
-      st = os.stat(path)
-    except OSError:
-      sig_entries.pop(path, None)
-      refreshed.pop(path, None)
-      moved = True
-      continue
-    cached = rows.get(path)
-    if cached is not None and cached[0] == st.st_mtime_ns and cached[1] == st.st_size:
-      continue  # a repeat mark whose file already stands in the proof: nothing moved
-    if not path.startswith(threads_prefix):
-      return None
-    try:
-      with open(path, encoding="utf-8") as f:
-        meta = ThreadMetadata.model_validate_json(f.read())
-    except OSError:
-      # Stat saw the file, so the read failure means it vanished between stat
-      # and read: the no-row verdict the full walk gives, entry and row gone.
-      sig_entries.pop(path, None)
-      refreshed.pop(path, None)
-      moved = True
-      continue
-    item = _thread_list_item(meta)
-    refreshed[path] = (st.st_mtime_ns, st.st_size, item, _row_fragment(item))
-    sig_entries[path] = (st.st_mtime_ns, st.st_size)
-    moved = True
-  sig = tuple(sorted((path, mtime, size) for path, (mtime, size) in sig_entries.items()))
-  _thread_row_memo.store(session_id, refreshed)
-  if not moved:
-    # Every marked file already stands in the proof (a repeat mark): the
-    # stored body is current, serve it instead of rebuilding the same bytes.
-    return hit
-  body = _list_body([(entry[2], entry[3]) for entry in refreshed.values()])
-  etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
-  return sig, body, etag_value
-
-
-async def _list_response(request: Request, body: bytes, etag_value: str, etag: str | None) -> Response:
-  """The list body's answer: a bodyless 204 when the poll repeats the rendered tag."""
-  if etag == etag_value:
-    return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
-  return await gzip_body_response(request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _list_gzip_memo)
-
-
-# The session view's threads array rides the same row proof as the list body:
-# sorted rows per session gated on the write revision (every row-source
-# writer marks through mark_sidebar_dirty). The view itself writes nothing
-# (the read mark rides the client's post-render POST /read),
-# so repeat views serve rows with zero stats; a writer mark or the sweep walk
-# rebuilds from the walked pairs, the row memo serving the unmoved files'
-# rows.
-_VIEW_ROWS_MEMO_LIMIT = _PROJECTION_SESSION_MEMO_LIMIT
-_VIEW_ROWS_SWEEP_EVERY = 10
-_view_rows_memo: BoundedMemo[str, list[dict]] = BoundedMemo(_VIEW_ROWS_MEMO_LIMIT)
-_view_rows_gate = RevisionSweepGate(_VIEW_ROWS_SWEEP_EVERY)
-# One in-flight detached sweep per session: the countdown's insurance walk off
-# the calling poll's wall (the sidebar sweep's single-flight shape).
-_view_rows_sweeps: dict[str, asyncio.Task] = {}
-
-
-async def _rebuild_view_rows(session_id: str, session_dir: Path, thread_mgr: ThreadManager,
-                             revision: int) -> list[dict]:
-  """One full row-source walk, stored as the session's row proof at *revision*."""
-
-  def walk_and_parse(
-  ) -> tuple[list[tuple[str, os.stat_result]], list[tuple[str, os.stat_result]], list[ThreadMetadata | None]]:
-    threads_dir = str(session_dir / THREADS_DIR_NAME)
-    thread_pairs, run_pairs = _row_source_stats(threads_dir, str(session_dir / DATA_DIR_NAME / RUNS_DIR_NAME))
-    return thread_pairs, run_pairs, thread_mgr.list_threads_from_stats(thread_pairs, threads_dir)
-
-  thread_pairs, run_pairs, metas = await asyncio.to_thread(walk_and_parse)
-  rows = [row for row, _fragment in _thread_list_items(session_id, thread_pairs, metas)]
-  rows.extend(row for row, _fragment in await _v2_run_list_items(session_id, run_pairs))
-  rows.sort(key=lambda row: row["created_at"], reverse=True)
-  _view_rows_memo.store(session_id, rows)
-  _view_rows_gate.mark_proven(session_id, revision)
-  return rows
-
-
-async def _detached_view_rows_sweep(
-    session_id: str, cfg: CharlieBotConfig, thread_mgr: ThreadManager, revision: int) -> None:
-  """The countdown's insurance walk off the calling poll's wall.
-
-  A failure is logged and retried by the next sweep-due poll; the served rows
-  stay the revision-gated stored proof until a walk lands. A mark landing
-  mid-walk leaves the proof at the older revision, so the next poll rebuilds
-  synchronously and the write is never served stale.
-  """
-  try:
-    await _rebuild_view_rows(session_id, cfg.sessions_dir / session_id, thread_mgr, revision)
-  except Exception:
-    log.error("view_rows_sweep_failed", session=session_id, exc_info=True)
-
-
-async def view_thread_rows(
-    session_id: str,
-    cfg: CharlieBotConfig,
-    thread_mgr: ThreadManager,
-) -> list[dict]:
-  """Thread rows for the sidebar leaf projection and the search route, proven
-  current like the list body.
-
-  Serves the stored rows while the session's write revision stands; a mark
-  rebuilds synchronously, and the countdown's insurance sweep runs detached
-  (its fresh proof landing for the polls that follow). Rows are shared
-  read-only with the list route's row memo and sorted newest-first, the
-  list_threads order.
-  """
-  hit = _view_rows_memo.get(session_id)
-  rev = session_revision(session_id)
-  if hit is not None and _view_rows_gate.serve_hit(session_id, rev):
-    return hit
-  if hit is not None and _view_rows_gate.sweep_due(session_id, rev):
-    # The stored rows stand at the live revision, so the countdown's walk is
-    # insurance against an unmarked write, not an answer to a seen one: it
-    # runs detached (single-flight) and its proof lands for the polls that
-    # follow, the semantics the sidebar sweep's poll answers under. A mark's
-    # revision bump fails sweep_due, keeping a seen write's rebuild synchronous.
-    task = _view_rows_sweeps.get(session_id)
-    if task is None or task.done():
-      task = asyncio.create_task(_detached_view_rows_sweep(session_id, cfg, thread_mgr, rev))
-      _view_rows_sweeps[session_id] = task
-    return hit
-  return await _rebuild_view_rows(session_id, cfg.sessions_dir / session_id, thread_mgr, rev)
 
 
 @router.get("/{session_id}/list")
@@ -576,141 +91,64 @@ async def list_threads(
     request: Request,
     session_id: str,
     etag: str | None = Query(default=None),
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
 ) -> Response:
-  """Return the session's worker-thread summaries, sorted by created_at descending.
-
-  The body carries a strong ETag (sha1 of the body bytes). A poll repeating the
-  ETag it rendered via ``?etag=`` is answered 204 with no body. The conditional
-  rides a query param rather than If-None-Match because the browser's HTTP
-  cache fulfils a revalidation itself and fetch never surfaces the 304; the
-  no-store on every answer keeps each poll a real request.
-  """
-  session_dir = cfg.sessions_dir / session_id
-  hit = _list_body_memo.get(session_id)
-  rev = session_revision(session_id)
-  # Drained every request so marks never pile up; a mark that landed between
-  # the revision read above and this take left the revision bumped, so the next
-  # poll full-walks (marked_since_proof with no paths) and catches its write.
-  marked = take_marked_paths(session_id)
-  thread_pairs: list[tuple[str, os.stat_result]] | None = None
-  if hit is not None and _sig_gate.serve_hit(session_id, rev):
-    sig = hit[0]
-  else:
-    marked_body = None
-    if hit is not None and marked and _sig_gate.marked_since_proof(session_id, rev):
-      marked_body = await _marked_rebuild(session_id, session_dir, hit, marked)
-    if marked_body is not None:
-      sig, body, etag_value = marked_body
-      _list_body_memo.store(session_id, (sig, body, etag_value))
-      # The incremental proof covered only the marked files: reset_sweep=False
-      # advances the countdown, so the full walk still arrives on schedule and
-      # an unmarked row-source write heals inside the same ~30 s window.
-      _sig_gate.mark_proven(session_id, rev, reset_sweep=False)
-      return await _list_response(request, body, etag_value, etag)
-    thread_pairs, run_pairs = await asyncio.to_thread(
-        _row_source_stats, str(session_dir / THREADS_DIR_NAME), str(session_dir / DATA_DIR_NAME / RUNS_DIR_NAME))
-    sig = _signature_from_stats(thread_pairs, run_pairs)
-    if hit is not None and hit[0] == sig:
-      _sig_gate.mark_proven(session_id, rev)
-    else:
-      _sig_gate.drop(session_id)
-  if hit is not None and hit[0] == sig:
-    return await _list_response(request, hit[1], hit[2], etag)
-
-  # The rebuild's rows parse from the same walked pairs the signature keys, so
-  # the memo's proof and the rows behind the body describe one instant. The
-  # gate-hit path always serves above, so a rebuild implies the walk ran.
-  assert thread_pairs is not None
-  metas = await asyncio.to_thread(thread_mgr.list_threads_from_stats, thread_pairs, str(session_dir / THREADS_DIR_NAME))
-  thread_items = _thread_list_items(session_id, thread_pairs, metas)
-  thread_items.extend(await _v2_run_list_items(session_id, run_pairs))
-
-  # The marked rebuild's body rides this same _list_body build.
-  body = _list_body(thread_items)
+  """List task Runs in the compatibility row shape, newest first."""
+  tree = await get_task_manager()
+  meta = await tree.load_meta(session_id)
+  description = (meta.task.goal if meta is not None and meta.task is not None else "") or ""
+  events = tree.runs.load_events_sync(session_id)
+  host_boot = await asyncio.to_thread(read_host_boot_time)
+  rows = []
+  for run in await asyncio.to_thread(tree.runs.list_run_records_sync, session_id):
+    created_at = run.started_at or run.ended_at or datetime.now(UTC)
+    rows.append(_run_list_item(run, events, host_boot, created_at=created_at, description=description))
+  rows.sort(key=lambda row: row["created_at"], reverse=True)
+  body = fast_json_bytes(rows)
   etag_value = '"' + hashlib.sha1(body).hexdigest() + '"'
-  _list_body_memo.store(session_id, (sig, body, etag_value))
-  _sig_gate.mark_proven(session_id, rev)
-  return await _list_response(request, body, etag_value, etag)
+  if etag == etag_value:
+    return Response(status_code=204, headers={"ETag": etag_value, "Cache-Control": "no-store"})
+  return await gzip_body_response(
+      request, body, {"ETag": etag_value, "Cache-Control": "no-store"}, _RUN_LIST_GZIP_MEMO)
 
 
-@router.get("/{session_id}/threads/{thread_id}")
-async def get_thread(
-    session_id: str,
-    thread_id: str,
-    request: Request,
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
-    cfg: CharlieBotConfig = Depends(get_config_on_loop),
-    attach: bool = Query(default=False),
-) -> Response:
-  """Return a thread's metadata plus the derived attach pair.
-
-  With ``attach`` the response is only ``{"attach_command", "attach_available"}``.
-  Without it the response is the full row minus ``context`` (the task-spec
-  body; this endpoint never ships it).
-  """
-  v2_run = await _resolve_v2_run(session_id, thread_id)
-  if v2_run is not None:
-    # The alias resolves to the same Run the v2 routes serve: the detail row
-    # shows its actual running/finished identity, and no second thread write
-    # exists behind it.
-    run = await asyncio.to_thread(task_manager().runs.read_run_sync, v2_run[0], v2_run[1])
-    if run is None:
-      raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
-    if attach:
-      return FastJsonResponse({"attach_command": None, "attach_available": False})
-    tree_meta = await task_manager().load_meta(v2_run[0])
-    description = (tree_meta.task.goal if tree_meta is not None and tree_meta.task is not None else "") or ""
-    events = task_manager().runs.load_events_sync(v2_run[0])
-    row = _v2_run_list_item(
-        run,
-        events,
-        datetime.now(UTC),
-        created_at=run.started_at or datetime.now(UTC),
-        description=description,
-        branch_name=run.branch_name,
-        worktree_path=run.worktree_path,
-        pid=run.pid,
-    )
-    row["session_id"] = v2_run[0]
-    row["description_full"] = description
-    return FastJsonResponse(row)
-  meta = await _detail_thread_meta(thread_mgr, session_id, thread_id)
-  if not meta:
-    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
-  attach_command = build_attach_command(meta, cfg)
-  attach_available = await _attach_available(meta, cfg)
-  if attach:
-    return FastJsonResponse({
-        "attach_command": attach_command,
-        "attach_available": attach_available,
-    })
-  payload = meta.model_dump(mode="json")
-  del payload["context"]
-  payload["attach_command"] = attach_command
-  payload["attach_available"] = attach_available
-  return await gzip_body_response(request, fast_json_bytes(payload), {}, _detail_gzip_memo)
-
-
-async def _resolve_v2_run(owner_session_id: str, thread_id: str) -> tuple[str, str] | None:
-  """Resolve a legacy thread address to its owning v2 (session, run), if any.
-
-  Both alias entries — the child-session entry and the delegating-parent
-  entry the delegate path registers — resolve to the same Run.
-  """
-  target = task_manager().aliases.resolve_thread(owner_session_id, thread_id)
+async def _resolve_run(owner_session_id: str, thread_id: str) -> tuple[str, str] | None:
+  """Resolve a retained thread address to its owning task Run."""
+  tree = await get_task_manager()
+  target = tree.aliases.resolve_thread(owner_session_id, thread_id)
   if not target:
     return None
   session_id, run_id = target["session_id"], target["run_id"]
-  run = await asyncio.to_thread(task_manager().runs.read_run_sync, session_id, run_id)
+  run = await asyncio.to_thread(tree.runs.read_run_sync, session_id, run_id)
   return (session_id, run_id) if run is not None else None
 
 
-# Reads from read_thread_worker_events, per events-log path. Calls re-read the
-# same append-only log, so parsed results are retained and a call parses only
-# the bytes appended since the last one. A file that shrank (truncate/rewrite)
-# restarts its entry.
+@router.get("/{session_id}/threads/{thread_id}")
+async def get_thread(session_id: str, thread_id: str, request: Request) -> Response:
+  """Return the Run record behind a retained thread-id alias."""
+  target = await _resolve_run(session_id, thread_id)
+  if target is None:
+    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
+  tree = await get_task_manager()
+  run = await asyncio.to_thread(tree.runs.read_run_sync, target[0], target[1])
+  if run is None:
+    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
+  meta = await tree.load_meta(target[0])
+  description = (meta.task.goal if meta is not None and meta.task is not None else "") or ""
+  events = tree.runs.load_events_sync(target[0])
+  row = _run_list_item(
+      run,
+      events,
+      await asyncio.to_thread(read_host_boot_time),
+      created_at=run.started_at or run.ended_at or datetime.now(UTC),
+      description=description,
+  )
+  row["session_id"] = target[0]
+  row["description_full"] = description
+  return await gzip_body_response(request, fast_json_bytes(row), {}, _RUN_DETAIL_GZIP_MEMO)
+
+
+# Incremental event projection for a Run's transport log. The endpoint's path
+# keeps its old thread-id spelling so clients can address a delegated Run.
 _THREAD_EVENTS_CACHE_CAP = 32
 
 
@@ -721,28 +159,15 @@ class _ThreadEventsCacheEntry:
     self.events: list[WorkerEvent] = []
     self.offset = 0
     self.tool_id_to_name: dict[str, str] = {}
-    # The full fetch's rendered body, valid only while offset still equals the
-    # log's size: the projection is append-only, so any append (the only
-    # writer, inside read_thread_worker_events) drops it and the next full
-    # fetch re-renders.
     self.full_body: bytes | None = None
 
 
 _thread_events_cache: BoundedMemo[str, _ThreadEventsCacheEntry] = BoundedMemo(_THREAD_EVENTS_CACHE_CAP)
-# Serializes the entry's incremental read (stat, tail bytes, append) so two
-# polls of one log cannot interleave offset bookkeeping; the cache map's own
-# LRU and eviction live in BoundedMemo.
 _thread_events_lock = threading.Lock()
 
 
 def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
-  """Project a worker's events.jsonl into the events endpoint's full WorkerEvent list.
-
-  The caller gets the complete projected history on every call; an unchanged
-  log costs one stat, and between polls only newly appended complete lines are
-  parsed. A trailing partial line (writer mid-append) is left for the next
-  call, so nothing the writer has not committed reaches the projection.
-  """
+  """Project a Run's worker events log, parsing only newly appended complete lines."""
   key = str(events_path)
   with _thread_events_lock:
     if not events_path.exists():
@@ -768,20 +193,7 @@ def read_thread_worker_events(events_path: Path) -> list[WorkerEvent]:
 
 
 def _thread_events_snapshot(events_path: Path) -> tuple[list[WorkerEvent], _ThreadEventsCacheEntry, int] | None:
-  """Return the unchanged-log projection plus its store token, or None.
-
-  An unchanged-log hit needs one stat to prove the memo current, and the
-  executor round-trip around it measures ~95 us against a ~12 us hit. Returns None — the caller re-runs
-  ``read_thread_worker_events`` on a thread — for a cold memo, a grown or
-  shrunk log, or a lock held by a concurrent reader's incremental read: the
-  holder may be mid-file-read, so this path never waits on the lock.
-
-  The token is the entry object itself plus the offset the rows were read at;
-  ``store_thread_events_full_body`` accepts a body only when both still hold,
-  so a render started before a concurrent append cannot land on the newer
-  projection (the offset alone cannot see that move once the append is
-  consumed, and the entry alone cannot see the append within one entry).
-  """
+  """Return an unchanged-log projection plus its cache token, or None."""
   key = str(events_path)
   if not _thread_events_lock.acquire(blocking=False):
     return None
@@ -801,20 +213,11 @@ def _thread_events_snapshot(events_path: Path) -> tuple[list[WorkerEvent], _Thre
 
 
 def read_thread_worker_events_memo_hit(events_path: Path) -> list[WorkerEvent] | None:
-  """Serve the unchanged-log steady state on the caller's thread; None otherwise."""
   snap = _thread_events_snapshot(events_path)
   return None if snap is None else snap[0]
 
 
 def stored_thread_events_full_body(events_path: Path) -> bytes | None:
-  """Return the entry's rendered full-fetch body when the log is provably unchanged.
-
-  Same proof as ``read_thread_worker_events_memo_hit`` — one stat against the
-  cached offset — returning the stored body instead of the rows; None when the
-  body is missing (never rendered, or dropped by an append) or the proof fails,
-  so the caller falls back to the row path. Never waits on the lock, for the
-  same mid-file-read reason the memo hit does not.
-  """
   key = str(events_path)
   if not _thread_events_lock.acquire(blocking=False):
     return None
@@ -835,13 +238,6 @@ def stored_thread_events_full_body(events_path: Path) -> bytes | None:
 
 def store_thread_events_full_body(
     events_path: Path, body: bytes, entry_token: _ThreadEventsCacheEntry, offset_token: int) -> None:
-  """Attach a freshly rendered full-fetch body to the entry, if the projection still matches it.
-
-  The render runs outside the lock over a row copy, so a concurrent poller may
-  consume an append between snapshot and store; a body whose token no longer
-  holds — the entry replaced, or its offset past the snapshot's — is dropped,
-  and the next full fetch re-renders.
-  """
   key = str(events_path)
   with _thread_events_lock:
     entry = _thread_events_cache.get(key)
@@ -859,43 +255,29 @@ def _append_worker_events(
     raw_events: Iterable[dict], events: list[WorkerEvent], tool_id_to_name: dict[str, str]) -> None:
   for data in raw_events:
     event_timestamp = data.get("timestamp") or datetime.now(UTC)
-    event_type = data.get('type', '')
-    # The run-start adoption signal is the log's session-id record (the token
-    # tally's codex reconciliation reads it from the raw line), never a
-    # projected row: the typed gate sits before the WorkerEvent construction a
-    # type-less line cannot pass.
+    event_type = data.get("type", "")
     if event_type == ET.SESSION_ATTACHED:
       continue
-    if event_type == ET.ASSISTANT and isinstance(data.get('message'), dict):
-      text = extract_text_from_message(data['message'])
+    if event_type == ET.ASSISTANT and isinstance(data.get("message"), dict):
+      text = extract_text_from_message(data["message"])
       if text:
         events.append(WorkerEvent(type=ET.ASSISTANT, content=text, timestamp=event_timestamp))
-      for block in data['message'].get('content', []):
-        if isinstance(block, dict) and block.get('type') == 'tool_use':
-          tool_id_to_name[block['id']] = block['name']
+      for block in data["message"].get("content", []):
+        if isinstance(block, dict) and block.get("type") == "tool_use":
+          tool_id_to_name[block["id"]] = block["name"]
           events.append(
               WorkerEvent(
                   type=ET.TOOL_USE,
-                  tool_name=block['name'],
-                  # The row's input rides the same preview bound the chat
-                  # wire's renderer reads (toolInputSummary); the persisted
-                  # events log keeps the full input.
-                  input=tool_preview({
-                      "name": block["name"],
-                      "input": block.get('input', {})
-                  })["input"],
+                  tool_name=block["name"],
+                  input=tool_preview({"name": block["name"], "input": block.get("input", {})})["input"],
                   timestamp=event_timestamp,
               ))
-    elif event_type == ET.USER and isinstance(data.get('message'), dict):
-      for block in data['message'].get('content', []):
-        if block.get('type') == 'tool_result':
-          tool_use_id = block.get('tool_use_id', '')
-          name = tool_id_to_name.get(tool_use_id, '')
+    elif event_type == ET.USER and isinstance(data.get("message"), dict):
+      for block in data["message"].get("content", []):
+        if block.get("type") == "tool_result":
+          tool_use_id = block.get("tool_use_id", "")
+          name = tool_id_to_name.get(tool_use_id, "")
           result_text = extract_tool_result_text(block)
-          # The projected row rides every full fetch, and the client renders an
-          # output's first TOOL_PREVIEW_CHARS characters inline (the chat wire's
-          # bound), so the row carries exactly that preview and its marker — the
-          # persisted events log keeps the full text.
           truncated = len(result_text) > TOOL_PREVIEW_CHARS
           events.append(
               WorkerEvent(
@@ -909,11 +291,8 @@ def _append_worker_events(
       try:
         row = WorkerEvent(**{k: v for k, v in data.items() if k in WorkerEvent.model_fields})
       except Exception as e:
-        log.debug('event_parse_failed', error=str(e))
-        row = WorkerEvent(type='raw', content=str(data))
-      # A top-level tool_result line carries its output in content; the same
-      # TOOL_PREVIEW_CHARS wire bound as the message-nested branch above bounds
-      # the projected row.
+        log.debug("event_parse_failed", error=str(e))
+        row = WorkerEvent(type="raw", content=str(data))
       if row.type == ET.TOOL_RESULT and row.content is not None and len(row.content) > TOOL_PREVIEW_CHARS:
         row.content = row.content[:TOOL_PREVIEW_CHARS]
         row.output_truncated = True
@@ -925,60 +304,36 @@ async def get_thread_events(
     request: Request,
     session_id: str,
     thread_id: str,
-    thread_mgr: ThreadManager = Depends(get_thread_manager),
     after: int | None = Query(default=None, ge=0),
 ) -> Response:
-  """Return historical Worker events from the on-disk events.jsonl log.
-
-  Without ``after`` the response is the full projected list. With ``after``
-  (the caller's already-rendered raw count) it is an envelope
-  ``{"events", "total", "reset"}`` carrying only the events past that count;
-  ``reset`` marks the count as ahead of the projection (log replaced), so the
-  caller rebuilds from the envelope's full payload. The projection is append-only
-  (_append_worker_events never rewrites an emitted row), so a count inside
-  it is a sound prefix cut.
-  """
-  v2_run = await _resolve_v2_run(session_id, thread_id)
-  if v2_run is not None:
-    # The worker Run's own events log: the same projection the v2 route
-    # serves, reached through the registered alias.
-    events_path = task_manager().runs.run_dir(v2_run[0], v2_run[1]) / RUN_EVENTS_NAME
-  else:
-    events_path = await thread_mgr.get_events_log_path(session_id, thread_id)
-  # The full fetch serves the stored render when the log is provably unchanged
-  # (offset == size, the re-open poll's steady state); the render itself skips
-  # the per-request model_dump pass whose cost grows with the projected count.
+  """Return events for a Run addressed through its retained thread-id alias."""
+  target = await _resolve_run(session_id, thread_id)
+  if target is None:
+    raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)
+  run_store = await get_run_store()
+  events_path = run_store.run_dir(target[0], target[1]) / RUN_EVENTS_NAME
   if after is None:
     body = stored_thread_events_full_body(events_path)
     if body is None:
-      # Both shapes ride pre-dumped rows through FastJsonResponse: a Response
-      # skips response_model validation, whose jsonable_encoder pass is ~6x
-      # model_dump on mapped returns.
       snap = _thread_events_snapshot(events_path)
       if snap is not None:
         events, entry_token, offset_token = snap
         body = fast_json_bytes([e.model_dump(mode="json") for e in events])
         store_thread_events_full_body(events_path, body, entry_token, offset_token)
       else:
-        # A cold or grown log renders here but stores nothing: its rows carry
-        # no token a post-hoc read could prove, and the next full fetch
-        # snapshots and stores once.
         events = await asyncio.to_thread(read_thread_worker_events, events_path)
         body = fast_json_bytes([e.model_dump(mode="json") for e in events])
-    return await gzip_body_response(request, body, {}, _events_gzip_memo)
-  # The unchanged-log poll is one stat + a lookup; only a miss pays the
-  # executor round-trip the incremental read needs.
+    return await gzip_body_response(request, body, {}, _RUN_EVENTS_GZIP_MEMO)
   events = read_thread_worker_events_memo_hit(events_path)
   if events is None:
     events = await asyncio.to_thread(read_thread_worker_events, events_path)
   reset = after > len(events)
   start = 0 if reset else after
-  return FastJsonResponse(
-      {
-          "events": [e.model_dump(mode="json") for e in events[start:]],
-          "total": len(events),
-          "reset": reset
-      })
+  return FastJsonResponse({
+      "events": [e.model_dump(mode="json") for e in events[start:]],
+      "total": len(events),
+      "reset": reset,
+  })
 
 
 @router.post("/{session_id}/threads/{thread_id}/cancel")
@@ -989,15 +344,7 @@ async def cancel_thread(
     task_mgr=Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
 ) -> dict:
-  """Cancel one thread by resolving it to the Run it aliases.
-
-  A thread id survives as a read-only record and as a v2 alias (new-run
-  compatibility alias, or an imported old id). The alias routes to the Run
-  owner's stop implementation: the same durable request, identity check,
-  terminal fact and agent own-run scope as the v2 cancel route — and no
-  legacy ThreadMetadata status copy is ever written. A thread id that
-  resolves to no Run is a 404.
-  """
+  """Stop the task Run addressed through its retained thread-id alias."""
   alias = task_mgr.aliases.resolve_thread(session_id, thread_id)
   if alias is None:
     raise HTTPException(status_code=404, detail=_THREAD_NOT_FOUND_DETAIL)

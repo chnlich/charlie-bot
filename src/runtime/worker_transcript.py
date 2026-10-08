@@ -10,10 +10,7 @@ evidence links. Nothing here writes to disk; every event is derived.
 
 The projection is memoized behind a stat-only signature (run metadata and
 events files plus the node's chat facts), so a repeat read of an unchanged
-transcript costs one scandir and a few stats. Legacy worker threads (a
-pre-task-tree delegation living in the parent session's ``threads/`` directory)
-project through :func:`load_thread_transcript` — same event shape, addressed by
-the parent session id plus the thread id (URL ``/?session=<parent>&thread=<id>``).
+transcript costs one scandir and a few stats.
 
 Event ordinals are positions in the synthesized list, so the bootstrap tail,
 the ``/events`` pagination pages, and the transcript poll all speak one cursor
@@ -30,24 +27,20 @@ from pathlib import Path
 
 from src.infra import event_types as ET
 from src.infra.memo import BoundedMemo, stat_signature
-from src.infra.models import RunRecord, ThreadMetadata, utc_now_iso
+from src.infra.models import RunRecord, utc_now_iso
 from src.runtime.message_projection import MessageProjection
 from src.runtime.runs import RUN_EVENTS_NAME, RUN_METADATA_NAME
 from src.runtime.task_prompts import LAUNCH_TEXT_FILENAME
-from src.runtime.threads import METADATA_NAME, THREADS_DIR_NAME, thread_events_log_path
 
-# The projection memos: session (or session+thread) -> entry. Bounded like the
-# other read-path memos; one open worker page holds one entry.
+# One entry per open worker page, bounded like the other read-path memos.
 _WORKER_PROJECTION_MEMO_LIMIT = 32
-_THREAD_PROJECTION_MEMO_LIMIT = 32
 
 _worker_memo: BoundedMemo[str, TranscriptEntry] = BoundedMemo(_WORKER_PROJECTION_MEMO_LIMIT)
-_thread_memo: BoundedMemo[str, TranscriptEntry] = BoundedMemo(_THREAD_PROJECTION_MEMO_LIMIT)
 
 # Run events whose only role is process bookkeeping, never a chat row: the
 # native-session adoption signal opens a run interval for the stable-prefix
 # scanner, which a worker transcript never closes, so it is filtered before
-# the fold — the same skip the legacy thread events endpoint applies.
+# the fold.
 _TRANSCRIPT_SKIP_TYPES = frozenset({ET.SESSION_ATTACHED})
 
 # The states a stop control can act on: a live process, or a queued
@@ -93,13 +86,10 @@ def _run_header_event(
     launch_prompt_ref: str,
     withheld: str | None = None,
 ) -> dict:
-  """The one header line that opens a transcript segment: a Run's, or a legacy thread's.
+  """The one header line that opens a Run transcript segment.
 
-  Both producers build the event here because one fold consumes both:
-  message_aggregator's ``ET.RUN_HEADER`` case renders either the same way. The
-  header carries one real time, from the projected record's own facts and
-  never a clock read: the start while it ran, the terminal fact's time (a
-  Run's ended_at, a thread's completed_at) when it never started, else no
+  The header carries one real time, from the projected record's own facts and
+  never a clock read: the start while it ran, the terminal fact's time when it never started, else no
   time. A page-load or projection-build time would show a dead record a
   future-lying bubble (and once fed a negative duration).
 
@@ -107,8 +97,7 @@ def _run_header_event(
   sidebar, the stop control, the dot color); ``launch_failed`` only renames
   the content word (message_aggregator) for a Run that failed before its agent
   process started — no started_at, no launch prompt ever written. The two refs
-  feed the header's link row (gray placeholders when empty); a legacy thread
-  passes both empty. ``withheld`` is a withheld Run's reason (the durable
+  feed the header's link row (gray placeholders when empty). ``withheld`` is a withheld Run's reason (the durable
   run_launch_withheld fact's own words); the content word renders it as
   "withheld · <reason>".
   """
@@ -304,99 +293,3 @@ def load_worker_transcript(tree, session_id: str) -> TranscriptEntry:
   entry = build_worker_transcript_sync(tree, session_id)
   _worker_memo.store(session_id, entry)
   return entry
-
-
-# ---------------------------------------------------------------------------
-# Legacy worker thread: threads/<thread_id>/data/events.jsonl
-# ---------------------------------------------------------------------------
-
-
-def _thread_dir(session_dir: Path, thread_id: str) -> Path:
-  return session_dir / THREADS_DIR_NAME / thread_id
-
-
-def thread_signature_sync(session_dir: Path, thread_id: str) -> tuple:
-  """Stat-only identity of one legacy thread's metadata and events files."""
-  return (
-      stat_signature(_thread_dir(session_dir, thread_id) / METADATA_NAME),
-      stat_signature(thread_events_log_path(session_dir, thread_id)))
-
-
-def _thread_state(meta: ThreadMetadata) -> str:
-  """The thread's display state: its recorded status, liveness-checked while running."""
-  if meta.status != "running":
-    return str(meta.status)
-  from src.runtime.runs import is_run_alive, read_host_boot_time
-  alive = (
-      meta.pid is not None and meta.pid_start is not None and meta.started_at is not None and
-      is_run_alive(meta.pid, meta.pid_start, meta.started_at, read_host_boot_time()))
-  return "running" if alive else "attention"
-
-
-def build_thread_transcript_sync(
-    meta: ThreadMetadata,
-    events_path: Path,
-    session_dir: Path,
-    label: str,
-) -> TranscriptEntry:
-  """Build one legacy thread's transcript: one header line, then its events."""
-  state = _thread_state(meta)
-  thread_events = _read_events(events_path)
-  error, error_index = _header_error(state, thread_events)
-  if error_index is not None:
-    # The same once-only error read the Run headers follow: the header carries
-    # the text in full, so the event's own chat line leaves the projection.
-    thread_events = thread_events[:error_index] + thread_events[error_index + 1:]
-  transcript: list[dict] = [
-      _run_header_event(
-          run_id=meta.id,
-          kind="thread",
-          backend=meta.backend,
-          backend_label=label,
-          state=state,
-          error=error,
-          started_at=meta.started_at,
-          terminal_at=meta.completed_at,
-          # Legacy threads kept no per-thread task file: both refs stay empty
-          # and the header's link row renders its gray placeholders.
-          task_spec_ref="",
-          launch_prompt_ref="",
-      )
-  ]
-  transcript.extend(thread_events)
-  signature = thread_signature_sync(session_dir, meta.id)
-  return TranscriptEntry(
-      revision=_revision(signature, {"thread": state}, state),
-      events=transcript,
-      projection=MessageProjection(list(transcript)),
-      active_run_id=meta.id if state == "running" else None,
-      task_state="open",
-      states={"thread": state})
-
-
-def load_thread_transcript(
-    cfg,
-    session_dir: Path,
-    meta: ThreadMetadata,
-    events_path: Path,
-) -> TranscriptEntry:
-  """The memoized legacy-thread transcript, addressed by (parent session, thread).
-
-  The caller resolved the thread metadata (the async ThreadManager read) and
-  passes its config and paths in; the fold and file reads stay in the caller's
-  executor thread.
-  """
-  memo_key = f"{meta.session_id}:{meta.id}"
-  state = _thread_state(meta)
-  signature = thread_signature_sync(session_dir, meta.id)
-  cached = _thread_memo.get(memo_key)
-  if cached is not None and cached.revision == _revision(signature, {"thread": state}, state):
-    return cached
-  entry = build_thread_transcript_sync(meta, events_path, session_dir, _backend_label(cfg, meta.backend))
-  _thread_memo.store(memo_key, entry)
-  return entry
-
-
-def thread_thinking_since(meta: ThreadMetadata) -> datetime | None:
-  """The thread view's running-timer anchor: the thread's start while it runs."""
-  return meta.started_at if _thread_state(meta) == "running" else None

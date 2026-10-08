@@ -17,6 +17,7 @@ from pydantic import (
     model_serializer,
     model_validator,
 )
+from pydantic import ValidationError
 
 from src.infra import metadata_slots
 from src.infra.deferred import deferred_import_loader
@@ -123,9 +124,8 @@ class LastRunStatus(StrEnum):
 # Task-tree record types (schema_version=2)
 # ---------------------------------------------------------------------------
 
-# The only execution roles a v2 task carries; every manager depth shares one
-# role and a worker is always a leaf. None on a legacy (v1) session, which is
-# not a task-tree node.
+# The execution roles a task carries; every manager depth shares one role and
+# a worker is always a leaf.
 TaskProfile = Literal["manager", "worker"]
 
 # What one Run actually executed. review is the same worker node's review pass;
@@ -345,12 +345,6 @@ class MasterRunRecord(BaseModel):
     return data
 
 
-class WorkerThreadRef(BaseModel):
-  """The origin of one projected legacy worker-thread row (sidebar list only)."""
-  session_id: str
-  thread_id: str
-
-
 class SessionMetadata(BaseModel):
   # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the
   # declared fields and are written back unchanged.
@@ -361,9 +355,8 @@ class SessionMetadata(BaseModel):
   status: SessionStatus = SessionStatus.ACTIVE
   has_unread: bool = False
   has_running_tasks: bool = False
-  # The task-tree derivation's work verdict for a task-tree row (idle |
-  # running | waiting). Transient and response-only — never
-  # persisted (excluded by _TRANSIENT_METADATA_FIELDS); None on a legacy row.
+  # The task-tree derivation's work verdict (idle | running | waiting).
+  # Transient and response-only — never persisted.
   work_state: WorkState | None = None
   has_pending_trigger: bool = False
   pending_trigger_count: int = 0
@@ -379,18 +372,12 @@ class SessionMetadata(BaseModel):
   # run_backend and fall back to backend. Never persisted (excluded by
   # _TRANSIENT_METADATA_FIELDS).
   run_backend: str | None = None
-  # Marks a projected legacy worker-thread row (a sidebar list response row
-  # built from one threads/<id>/metadata.json of a legacy session). Response
-  # only: never persisted (excluded by _TRANSIENT_METADATA_FIELDS).
-  worker_thread: WorkerThreadRef | None = None
   created_at: UtcDatetime = Field(default_factory=utc_now)
   # The sidebar sort key: records the user's last action on the row; server bookkeeping writes keep it.
   updated_at: UtcDatetime = Field(default_factory=utc_now)
   cc_session_id: str | None = None
   cc_session_started_at: UtcDatetime | None = None
-  # In-flight master turn identity for restart reconcile; None when idle.
-  master_run: MasterRunRecord | None = None
-  backend: str = ""  # empty default; create_session always provides the real value
+  backend: str = ""
   # Transient fields, populated by API layer for scheduled sessions only
   schedule_cron: str | None = None
   schedule_enabled: bool | None = None
@@ -406,15 +393,13 @@ class SessionMetadata(BaseModel):
   # a single succession. Ordinary fork/archive/delete leave it None.
   successor_session_id: str | None = None
   # ------------------------------------------------------------------
-  # Task-tree fields (schema_version=2). All default to their v1 absence so
-  # existing metadata.json files keep parsing; a v2 task sets profile=manager
-  # or worker and schema_version=2 at creation.
+  # Every session is a task-tree node.
   # ------------------------------------------------------------------
-  schema_version: int = 1
+  schema_version: Literal[2] = 2
   # Parent task (decomposition edge). Null on an independent root. History
   # copying (parent_session_id/origin_ref) never becomes a task parent.
   task_parent_id: str | None = None
-  profile: TaskProfile | None = None
+  profile: TaskProfile
   task: TaskSpec | None = None
   # The create operation's source event (provenance and retry dedup).
   created_by_event: EventRef | None = None
@@ -432,10 +417,10 @@ class SessionMetadata(BaseModel):
   # never rewritten.
   native_prompt_hash: str | None = None
   # The backend that produced the current cc_session_id conversation. Every
-  # round's anchor persist records it beside the id; a v1 turn resumes the id
-  # only when that backend shares the current backend's continuation domain
-  # (src/backends/claude_code/claude_accounts.py), and a v2 manager turn additionally requires
-  # the prompt hash and model to match the launch's own snapshot.
+  # round's anchor persist records it beside the id. A manager turn resumes the
+  # id only when that backend shares the current backend's continuation domain
+  # (src/backends/claude_code/claude_accounts.py) and the prompt hash and model
+  # match the launch's own snapshot.
   native_backend: str | None = None
   native_model: str | None = None
 
@@ -452,6 +437,24 @@ class SessionMetadata(BaseModel):
   @model_serializer(mode="wrap")
   def _serialize_with_slots(self, handler: SerializerFunctionWrapHandler, info: SerializationInfo) -> dict[str, Any]:
     return metadata_slots.arrange(metadata_slots.ON_SESSION, type(self).model_fields, handler(self), info)
+
+
+def validate_session_metadata(data: Any, path: str | None = None) -> SessionMetadata:
+  """Validate persisted session metadata and identify files needing conversion."""
+  if isinstance(data, (str, bytes, bytearray)):
+    import json
+    data = json.loads(data)
+  if isinstance(data, dict) and (data.get("profile") is None or data.get("schema_version", 2) != 2):
+    location = f"{path}: " if path else ""
+    raise ValueError(
+        f"{location}session metadata requires a schema_version 2 profile; "
+        "run scripts/v1_session_conversion.py")
+  try:
+    return SessionMetadata.model_validate(data)
+  except ValidationError as exc:
+    if path is None:
+      raise
+    raise ValueError(f"{path}: invalid session metadata: {exc}") from exc
 
 
 # ---------------------------------------------------------------------------
@@ -729,16 +732,12 @@ class SessionMessageRequest(BaseModel):
 class SessionCallbacks:
   """Bundle of SessionManager hooks passed to run_message as a single unit."""
   persist_and_broadcast: Callable[[str, dict], Awaitable[None]]
-  update_thinking_state: Callable[..., Awaitable[None]]
   mark_unread: Callable[[str], Awaitable[None]]
   # Returns the cc_session_id read back from disk after persisting. The live
   # implementation also accepts native_backend=<producing backend id> and
   # records it beside the id in the same anchor write (None leaves the field
   # untouched).
   persist_cc_session_id: Callable[..., Awaitable[str | None]]
-  has_completed_round: Callable[[str], Awaitable[bool]]
-  # Sets (or clears, on None) the session's in-flight master-turn record.
-  persist_master_run: Callable[[str, MasterRunRecord | None], Awaitable[None]]
   # Persists the pool account holding the session's transcript and returns the
   # label read back from disk. Optional so callback bundles built before the
   # account pool existed (tests) stay valid; the live bundle always sets it.
@@ -746,5 +745,5 @@ class SessionCallbacks:
   # (context_tokens, last_request_at) for the account pool's cold-cache rule;
   # None when the caller wired no pool (tests).
   context_state: Callable[[str, SessionMetadata], Awaitable[tuple[int | None, datetime | None]]] | None = None
-  # Runs after each finished round (e.g. session naming); optional so test-built bundles stay valid.
-  after_round: Callable[[str], Awaitable[None]] | None = None
+  # The task-tree owner supplies its shared activity verdict for sidebar updates.
+  task_tree_activity: Callable[[str], tuple[bool, str]] | None = None

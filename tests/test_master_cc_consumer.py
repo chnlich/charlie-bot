@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,7 +13,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from conftest import (
     BUILD_BACKEND_PATCH_TARGET,
-    SESSIONS_SESSION_MANAGER_PATCH_TARGET,
     ConsumerRound,
     TerminateFlagBackend,
     _run_seeded_consumer,
@@ -24,8 +24,8 @@ from conftest import (
     manager_backed_callbacks,
     mock_session_callbacks,
     mocked_callback_fields,
-    patch_instructions_content,
     patch_resume_seams,
+    run_task_manager_message,
     run_resume_round,
     run_session_consumer,
 )
@@ -39,7 +39,7 @@ from src.runtime.sessions import SessionManager
 
 
 def _make_meta(session_id: str) -> SessionMetadata:
-  return SessionMetadata(id=session_id, name="t", backend="fake", cc_session_id=None)
+  return SessionMetadata(profile="manager", id=session_id, name="t", backend="fake", cc_session_id=None)
 
 
 async def run_consumer_over_real_disk(
@@ -54,7 +54,7 @@ async def run_consumer_over_real_disk(
       session_id,
       work_items,
       fake_run_cc,
-      patch.object(SessionManager, "_has_running_tasks", AsyncMock(return_value=False)),
+      nullcontext(),
   )
 
 
@@ -100,7 +100,7 @@ async def test_consumer_relays_cc_session_id_across_metadata_instances() -> None
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("inject_at", ["run_cc", "master_done_persist", "worker_probe", "idle_broadcast"])
+@pytest.mark.parametrize("inject_at", ["run_cc", "master_done_persist", "idle_broadcast"])
 async def test_busy_invariant_holds_under_adversarial_enqueue(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -108,8 +108,8 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 ) -> None:
   """T1: an enqueue landing at any await in the consumer's tail keeps the invariant.
 
-  Parametrised over every await in the tail (the MASTER_DONE persist, the
-  worker probe, the idle broadcast) and over _run_cc itself. At each injection
+  Parametrised over every await in the tail (the MASTER_DONE persist and the
+  idle broadcast) and over _run_cc itself. At each injection
   point one extra work item is enqueued through the real run_message; every
   entry into _run_cc must observe busy_since non-None, and after the consumer
   ends busy_since must be None.
@@ -129,13 +129,11 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       return
     injected = True
     injected_task = asyncio.create_task(
-        master_cc_queue.run_message(
+        run_task_manager_message(
             cfg,
-            SessionMetadata(id=session_id, name="t"),
+            SessionMetadata(id=session_id, name="t", profile="manager"),
             "extra",
             callbacks,
-            ET.USER,
-            skip_user_event=True,
         ))
 
   async def fake_run_cc(item: master_cc_state._WorkItem) -> tuple:
@@ -157,28 +155,18 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
       await _inject_once()
       await asyncio.sleep(0)
 
-  async def probe_hook(sid: str) -> bool:
-    if inject_at == "worker_probe":
-      await _inject_once()
-      await asyncio.sleep(0)
-    return False
-
-  workers_mock = MagicMock()
-  workers_mock._has_running_tasks = probe_hook
   callbacks = SessionCallbacks(
       persist_and_broadcast=persist_hook,
       **mocked_callback_fields(),
-      persist_master_run=AsyncMock(),
   )
 
   monkeypatch.setattr(master_cc_run, "_run_cc", fake_run_cc)
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", broadcast_hook)
-  monkeypatch.setattr(SESSIONS_SESSION_MANAGER_PATCH_TARGET, lambda *a, **k: workers_mock)
 
   async with fresh_master_state(session_id):
     task1 = asyncio.create_task(
-        master_cc_queue.run_message(
-            cfg, SessionMetadata(id=session_id, name="t"), "first", callbacks, ET.USER, skip_user_event=True))
+        run_task_manager_message(
+            cfg, SessionMetadata(id=session_id, name="t", profile="manager"), "first", callbacks))
     assert await asyncio.wait_for(task1, timeout=5) == "cc-1"
 
     # For injections fired during the consumer's teardown awaits, the work item
@@ -201,23 +189,8 @@ async def test_busy_invariant_holds_under_adversarial_enqueue(
 
 
 # ---------------------------------------------------------------------------
-# Resume anchor single-owner persistence + pre-flight (regression tests)
+# Resume anchor single-owner persistence
 # ---------------------------------------------------------------------------
-
-
-class _NoopBackend(TerminateFlagBackend):
-  """Minimal backend double: yields no events, exits cleanly."""
-
-  exit_code = 0
-  stderr_text = ""
-
-  async def run(self,
-                prompt: str,
-                cwd: str,
-                env: dict,
-                uploaded_files: list[dict] | None = None) -> AsyncIterator[dict]:
-    if False:
-      yield {}  # keeps run() an async generator; the consumer's async-for would TypeError on a coroutine
 
 
 @pytest.mark.asyncio
@@ -236,8 +209,7 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session.id):
-    result = await master_cc_queue.run_message(
-        cfg, session, "hi", session_mgr.callbacks(), ET.USER, skip_user_event=True)
+    result = await run_task_manager_message(cfg, session, "hi", session_mgr.callbacks())
     assert result == backend_returned_id
     await drain_session_consumer(session.id, timeout=5)
 
@@ -249,37 +221,6 @@ async def test_consumer_persists_cc_session_id_to_disk(tmp_path: Path, monkeypat
 
 
 @pytest.mark.asyncio
-async def test_pre_flight_fires_anchor_missing_when_round_done_and_anchor_empty(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-  """Pre-flight: a resume-capable backend with an empty anchor but a completed
-  round emits resume_context_dropped with reason='anchor_missing'."""
-  cfg = build_master_cc_cfg(tmp_path)
-  session_mgr = SessionManager(cfg)
-  session = await session_mgr.create_session(CreateSessionRequest(name="pre-flight"))
-  # Seed a completed round so has_completed_round returns True; anchor stays empty.
-  await session_mgr.save_chat_event(session.id, {"type": ET.MASTER_DONE, "exit_code": 0})
-  session_mgr._chat_events.clear_cache(session.id)
-
-  meta = await session_mgr.get_session(session.id)
-  assert meta is not None
-  assert meta.cc_session_id is None
-
-  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: _NoopBackend())
-  patch_instructions_content(monkeypatch)
-  monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
-
-  item = make_work_item(
-      cfg, meta, cfg.backends.options[0], user_content="next round", callbacks=session_mgr.callbacks())
-  await master_cc_run._run_cc(item)
-
-  events = session_mgr.load_chat_events_sync(session.id)
-  dropped = [e for e in events if e.get("type") == ET.RESUME_CONTEXT_DROPPED]
-  assert len(dropped) == 1
-  assert dropped[0]["reason"] == "anchor_missing"
-
-
 # ---------------------------------------------------------------------------
 # Zero-output guard: a settled run with all-zero usage and no output fails loudly
 # ---------------------------------------------------------------------------
@@ -325,12 +266,11 @@ async def _run_stream_consumer(
   backend = _EventsBackend(events, exit_code=exit_code, stderr_text=stderr_text)
 
   monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, lambda *a, **k: backend)
-  patch_instructions_content(monkeypatch)
   monkeypatch.setattr(latex, "get_tex_path", lambda: tmp_path / "missing.tex")
   monkeypatch.setattr(streaming.streaming_manager, "broadcast", AsyncMock())
 
   async with fresh_master_state(session_id):
-    await master_cc_queue.run_message(cfg, meta, "hi", cb, ET.USER, skip_user_event=True)
+    await run_task_manager_message(cfg, meta, "hi", cb)
     await drain_session_consumer(session_id, timeout=5)
   return cb
 
@@ -391,7 +331,7 @@ async def test_consumer_keeps_the_durable_anchor_when_a_turn_returns_no_session_
   session = await mgr.create_session(CreateSessionRequest(name="anchor-preserved"))
   await mgr.persist_cc_session_id(session.id, "kept-anchor")
 
-  snapshot = SessionMetadata(id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)
+  snapshot = SessionMetadata(profile="manager", id=session.id, name="anchor-preserved", backend=cfg.backends.options[0].id)
   snapshot.cc_session_id = "kept-anchor"
   item = make_work_item(cfg, snapshot, cfg.backends.options[0], callbacks=manager_backed_callbacks(mgr))
 

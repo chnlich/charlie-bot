@@ -37,7 +37,7 @@ async def ncu_viewer(
 ) -> Response:
   """Render the Nsight Compute (.ncu-rep) report viewer page.
 
-  `file` is a repeatable list of absolute paths. v1 renders the first report;
+  `file` is a repeatable list of absolute paths. Single-report clients render the first report;
   additional paths are accepted but only noted, not diffed.
   """
   if not file:

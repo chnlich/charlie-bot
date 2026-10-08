@@ -232,7 +232,7 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, mon
   assert f"Reply command: `{_REPLY_COMMAND} --file <path>`" in agent_messages[0]["content"]
 
   trigger.assert_awaited_once()
-  assert trigger.await_args.kwargs["user_event_id"] == agent_messages[0]["id"]
+  assert trigger.await_args.kwargs["input_id"] == agent_messages[0]["id"]
   assert link in trigger.await_args.args[1]
 
 
@@ -595,6 +595,7 @@ async def test_deliver_done_skips_a_session_without_discord_origin(tmp_path: Pat
   cfg = CharlieBotConfig(charliebot_home=tmp_path / "home", backends=fake_backends())
   session_mgr = SessionManager(cfg)
   meta = await session_mgr.create_session(CreateSessionRequest(name="plain"))
+  events_before = session_mgr.load_chat_events_sync(meta.id)
 
   assert await deliver_done(meta.id, {"type": ET.MASTER_DONE, "input_event_id": "e1"}, cfg, session_mgr) is False
-  assert session_mgr.load_chat_events_sync(meta.id) == []
+  assert session_mgr.load_chat_events_sync(meta.id) == events_before

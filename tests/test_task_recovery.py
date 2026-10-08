@@ -457,6 +457,12 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
               [result_event("implemented")], pre_run=partial(implement_marker_commit, tree, worker.id)),
           SpawningScriptedBackend([result_event("review ok")])
       ], WORKER_BUILD_BACKEND_PATCH_TARGET)
+  # The blocked report below wakes the manager. Script that turn too: left
+  # unstubbed it builds a real codex, whose failure timing decides whether
+  # the turn is terminal when the startup pass runs (instant crash on CI,
+  # a 20s+ 401-retry flail on a checkout with credentials), and that race
+  # alone flips the followup count the pass reports.
+  monkeypatch.setattr(BUILD_BACKEND_PATCH_TARGET, make_pm_build("manager turn"))
 
   await tree.dispatch.admit_input(worker.id, event_type=ET.USER, content="Start the work.", actor="user")
   decision = await tree.dispatch.dispatch_pending(worker.id)
@@ -474,6 +480,21 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   assert [r["outcome"] for r in reports] == ["blocked"]
   assert tree.task_state(worker.id) == "open"
 
+  # The blocked report wakes the manager, and its turn runs in flight beside
+  # the steps below. The startup pass below runs boot-style — no is_driven
+  # filter, its premise being that nothing in this process is in flight — so
+  # a manager_turn that has already landed its terminal fact adds its
+  # owner-close recheck to the followup count on a loaded runner while a fast
+  # checkout still sees it unlanded. Settle the turn first so the pass reads
+  # the same terminal-run set everywhere; replaying it is idempotent (its
+  # request-id replay dedups).
+  await poll_until(
+      lambda: any(r.kind == "manager_turn" for r in tree.runs.list_run_records_sync(manager.id)),
+      timeout=15.0,
+      what="the blocked report's manager turn")
+  turn = next(r for r in tree.runs.list_run_records_sync(manager.id) if r.kind == "manager_turn")
+  await wait_for_terminal_run(tree, manager.id, turn.id)
+
   # A second successful review run of the same work run replays alongside the first.
   work_run = next(r for r in tree.runs.list_run_records_sync(worker.id) if r.kind == "work")
   await tree.runs.register_run(
@@ -490,7 +511,9 @@ async def test_reconcile_replays_an_already_delivered_blocked_report_without_dup
   await tree.runs.record_finish(worker.id, "review-replay-2", "success")
 
   counters = await reconcile_task_tree(cfg, tree)
-  assert counters["followups"] == 3  # the work run plus both review runs replayed
+  # The work run plus both review runs replayed, plus the settled manager
+  # turn's owner-close recheck.
+  assert counters["followups"] == 4
   reports = [e for e in tree.events.load_events(manager.id) if e.get("type") == ET.CHILD_REPORT]
   assert len(reports) == 1
 

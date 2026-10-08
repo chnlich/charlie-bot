@@ -25,7 +25,7 @@ async def test_batch_output_matches_sequential_get_session_for_mixed_fixture(tmp
   mgr = conftest.make_session_blocks(tmp_path)
   active = models.SessionMetadata(profile="manager", name="active")
   archived = models.SessionMetadata(profile="manager", name="archived", status=models.SessionStatus.ARCHIVED)
-  rated = models.SessionMetadata(profile="manager", name="rated", round_ratings={"9": "thumbs_up"})
+  rated = models.SessionMetadata(profile="manager", name="rated", round_ratings={"9f8e7d6c-5b4a-3c2d-1e0f-9a8b7c6d5e4f": "thumbs_up"})
   corrupt = models.SessionMetadata(profile="manager", name="corrupt")
   _write_metadata(mgr, active)
   _write_metadata(mgr, archived)

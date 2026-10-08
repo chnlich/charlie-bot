@@ -416,11 +416,11 @@ Known-alive symbols:
   `voice.default_backend` typo against the transcription registry's ids at startup.
 - `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only by string outside `tests/`:
   the `register()` of the voice package passes `"src.features.voice.voice_setup"` to
-  `wiring.register_setup_step`, and `setup_step` starts `enable_step` with
-  `python -m src.app.setup --step src.features.voice.voice_setup:enable_step`. No file outside `tests/`
-  imports the module (`tests/test_setup_runner.py` does), so a reference scan that excludes tests reads it as
-  an unreferenced module. `enable_step` has no whole-repo match outside its definition, that command string
-  and that test.
+  `wiring.register_setup_step`, and `setup_step` re-enters the runner that called it with
+  `python -m <that runner's module> --step src.features.voice.voice_setup:enable_step`, building the step
+  argument as `f"{__name__}:enable_step"`. No file outside `tests/` imports the module
+  (`tests/test_setup_runner.py` does), so a reference scan that excludes tests reads it as an unreferenced
+  module. `enable_step` has no whole-repo match outside `voice_setup.py` and that test.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
   `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /

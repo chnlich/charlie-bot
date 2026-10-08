@@ -1,6 +1,6 @@
 """Deployment step for the qwen3_hf GPU voice engine.
 
-``setup_step`` is the step that ``scripts/setup.sh`` runs through ``src.app.setup``. On hosts with nvidia-smi it
+``setup_step`` is the step that ``scripts/setup.sh`` runs through the app setup runner. On hosts with nvidia-smi it
 runs ``uv sync --group gpu-voice``, then calls ``enable_step`` in a fresh interpreter, which sees the synced
 packages. The enable flow downloads the official Qwen3-ASR weights when missing, preflight-asserts the four GPU
 conditions (imports, cuda model load, measured decode timing, free VRAM report), and only then flips
@@ -39,8 +39,6 @@ PREFLIGHT_DECODE_THRESHOLD_SECONDS = 2.5
 PREFLIGHT_RECORDING_MIN_SECONDS = 5.0
 PREFLIGHT_RECORDING_MAX_SECONDS = 15.0
 PREFLIGHT_RECORDING_TARGET_SECONDS = 10.0
-
-ENABLE_COMMAND = "uv run --no-sync python -m src.app.setup --step src.features.voice.voice_setup:enable_step"
 
 
 def write_voice_engine(home: pathlib.Path) -> str:
@@ -209,11 +207,15 @@ def setup_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:
   # The report so far is buffered in this process; the child output below must follow it.
   sys.stdout.flush()
   subprocess.run(["uv", "sync", "--group", "gpu-voice"], check=True)
-  # The sync changed the installed packages, so the enable flow starts in a fresh interpreter. It enters
-  # through enable_step: re-entering setup_step would detect the GPU and sync again without end.
-  # The command line is one string: the child process imports the runner, this package does not, and
-  # tests/test_package_structure.py reads a lone "src.app.setup" element as an import of the app group.
-  subprocess.run(ENABLE_COMMAND.split(), check=True)
+  # The sync changed the installed packages, so the enable flow starts in a fresh interpreter. The step
+  # re-enters whatever runner called it, through enable_step: re-entering setup_step would detect the GPU
+  # and sync again without end.
+  subprocess.run(
+      [
+          "uv", "run", "--no-sync", "python", "-m", sys.modules["__main__"].__spec__.name, "--step",
+          f"{__name__}:enable_step"
+      ],
+      check=True)
 
 
 def enable_step(cfg: config.CharlieBotConfig, *, dry_run: bool) -> None:

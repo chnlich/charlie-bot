@@ -14,8 +14,10 @@ runtime and infra. The backends in ``BACKEND_VARIANTS`` may also import backends
 
 An import counts where it stands: module level, function body, ``if TYPE_CHECKING`` block, relative form. A string
 whose whole value is a dotted ``src.`` module path counts as an import of the longest existing module: lazy
-loaders, the CLI command table and patch targets name modules this way. A module path built at runtime hides its
-target from this check, so building one fails it.
+loaders, the CLI command table and patch targets name modules this way. A longer string counts one import per
+``src.`` module path embedded in it, the pieces of an f-string included. A docstring — the first statement of a
+module, class or function, when that statement is a bare string — counts no reference. A module path built at
+runtime hides its target from this check, so building one fails it.
 
 structure_exceptions.txt records the reverse imports that predate the groups: one row per
 ``importer file -> imported file`` pair.
@@ -35,6 +37,7 @@ CHAT_CHANNELS = frozenset({"slack", "discord"})
 CONTAINER_MARKERS = frozenset({"src/__init__.py", "src/backends/__init__.py", "src/features/__init__.py"})
 EXCEPTIONS_PATH = Path(__file__).with_name("structure_exceptions.txt")
 MODULE_PATH = re.compile(r"src(\.[A-Za-z_]\w*)+")
+EMBEDDED = re.compile(r"(?<![\w.])src(?:\.[A-Za-z_]\w*)+")
 DEPEND_ON_THE_RUNTIME = (
     "Depend on the runtime's public interface: the imported package registers its "
     "implementation with the runtime, and the importer looks it up there.")
@@ -117,14 +120,16 @@ def absolute_module(node: ast.ImportFrom, package: str) -> str:
 
 
 def named_modules(node: ast.AST, package: str, index: dict[str, str]) -> list[str]:
-  """The dotted names one node imports: an import statement, or a string that is a whole module path."""
+  """The dotted names one node imports: an import statement, or the ``src.`` module paths a string names."""
   if isinstance(node, ast.Import):
     return [alias.name for alias in node.names]
   if isinstance(node, ast.ImportFrom):
     module = absolute_module(node, package)
     return [f"{module}.{alias.name}" if f"{module}.{alias.name}" in index else module for alias in node.names]
-  if isinstance(node, ast.Constant) and isinstance(node.value, str) and MODULE_PATH.fullmatch(node.value):
-    return [node.value]
+  if isinstance(node, ast.Constant) and isinstance(node.value, str):
+    if MODULE_PATH.fullmatch(node.value):
+      return [node.value]
+    return [match.group(0) for match in EMBEDDED.finditer(node.value)]
   return []
 
 
@@ -144,6 +149,17 @@ def builds_module_path(node: ast.AST) -> bool:
   return isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add) and is_module_prefix(node.left)
 
 
+def docstring_nodes(tree: ast.Module) -> set[int]:
+  """The ids of the docstring constants: the first statement of a module, class or function, a bare string."""
+  ids = set()
+  for node in ast.walk(tree):
+    if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and node.body:
+      first = node.body[0]
+      if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant) and isinstance(first.value.value, str)):
+        ids.add(id(first.value))
+  return ids
+
+
 def scan(root: Path) -> Structure:
   index = module_index(root)
   structure = Structure([], [], [])
@@ -152,7 +168,11 @@ def scan(root: Path) -> Structure:
       structure.ungrouped.append(rel)
     package = ".".join(Path(rel).with_suffix("").parts[:-1])
     found = set()
-    for node in ast.walk(ast.parse((root / rel).read_text(encoding="utf-8"), filename=rel)):
+    tree = ast.parse((root / rel).read_text(encoding="utf-8"), filename=rel)
+    docstrings = docstring_nodes(tree)
+    for node in ast.walk(tree):
+      if id(node) in docstrings:
+        continue
       for name in named_modules(node, package, index):
         target = resolve(name, index)
         if target is not None and target != rel:
@@ -186,7 +206,9 @@ def recorded_pairs() -> set[tuple[str, str]]:
 
 
 # The synthetic tree of the scan test: runtime/core.py names one module of features/alpha once per line below, in
-# every import form and as a whole string, then builds two module paths and writes one prose f-string.
+# every import form, as a whole string, and embedded in a command string and a prose f-string, then builds two
+# module paths (the "src.features." prefixes still name the features marker). The docstring of `documented` names
+# the module too, and counts nothing.
 EMPTY_MODULES = (
     "server.py", "src/__init__.py", "src/runtime/__init__.py", "src/features/__init__.py",
     "src/features/alpha/__init__.py", "src/features/alpha/impl.py")
@@ -203,9 +225,15 @@ FORMS_SOURCE = textwrap.dedent(
       import src.features.alpha.impl as local_impl
       from ..features.alpha import impl as relative_impl
       lazy = "src.features.alpha.impl"
-      joined = "src.features." + name
+      command = "uv run --no-sync python -m src.features.alpha.impl run"
       prose = f"src.features.alpha.impl {name} drifted"
+      joined = "src.features." + name
       return f"src.features.{name}"
+
+
+    def documented():
+      \"""Delegates to src.features.alpha.impl for the real work.\"""
+      return 1
     """)
 
 
@@ -260,8 +288,8 @@ def test_the_scan_counts_every_form_of_import(tmp_path: Path) -> None:
   found = scan(tmp_path)
 
   assert found.ungrouped == []
-  assert {(r.importer, r.line, r.target) for r in found.references} == {
-      ("src/runtime/core.py", line, "src/features/alpha/impl.py") for line in (3, 5, 9, 10, 11)
-  }
-  assert [built.line for built in found.built_paths] == [12, 14]
+  assert {(r.importer, r.line, r.target) for r in found.references} == (
+      {("src/runtime/core.py", line, "src/features/alpha/impl.py") for line in (3, 5, 9, 10, 11, 12, 13)} |
+      {("src/runtime/core.py", line, "src/features/__init__.py") for line in (14, 15)})
+  assert [built.line for built in found.built_paths] == [14, 15]
   assert {(r.importer, r.target) for r in violations(found)} == {("src/runtime/core.py", "src/features/alpha/impl.py")}

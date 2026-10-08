@@ -228,6 +228,10 @@ def test_count_v1_sessions_reads_the_profile_key_of_published_sessions_only(tmp_
   with pytest.raises(ValueError, match="torn"):
     v1_sessions.count_v1_sessions(sessions_dir)
 
+  (sessions_dir / "torn" / "metadata.json").write_text("[]", encoding="utf-8")
+  with pytest.raises(ValueError, match="torn"):
+    v1_sessions.count_v1_sessions(sessions_dir)
+
 
 def test_register_all_twice_registers_once() -> None:
   routers_before, commands_before = wiring.routers(), wiring.commands()

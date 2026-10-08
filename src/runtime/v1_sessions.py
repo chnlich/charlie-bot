@@ -22,8 +22,8 @@ def count_v1_sessions(sessions_dir: Path) -> int:
   The scan lists *sessions_dir* once and reads only the ``profile`` key of each file, with no
   model validation. An unpublished create's staging directory (``.task-*.tmp``) is never a
   session, and a session directory without a ``metadata.json`` is not one yet. A fresh home
-  has no *sessions_dir* and no sessions. A file that is not valid JSON raises ValueError
-  naming the path.
+  has no *sessions_dir* and no sessions. A file that is not valid JSON, or is JSON but not
+  an object, raises ValueError naming the path.
   """
   if not sessions_dir.is_dir():
     return 0
@@ -41,6 +41,8 @@ def count_v1_sessions(sessions_dir: Path) -> int:
         meta = json.loads(raw)
       except ValueError as e:
         raise ValueError(f"{path} is not valid JSON: {e}") from e
+      if not isinstance(meta, dict):
+        raise ValueError(f"{path} is not a JSON object")
       if meta.get("profile") is None:
         count += 1
   return count

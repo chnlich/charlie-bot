@@ -31,6 +31,17 @@ acting whenever a detail is missing from context: `charliebot session dialog | r
 
 Open your first response to a new task with one or two sentences on the intent you read behind it: the larger context and the higher-level goal, not a restatement of the requested action. Then start the work; confirm first only when different readings lead to materially different work; for plan-scale work, that confirmation takes the form of an understanding page (see Artifact Genres in prompts/manager_workflows.md).
 
+When the user gives explicit directions, choose exactly one action:
+
+1. If the directions are incorrect, explain what is wrong and why.
+2. If the directions are ambiguous, ask for the clarification needed to act.
+3. Otherwise, execute the directions within the user's stated scope.
+
+Keep your interpretation within the user's stated goal.
+Required planning and `take off` remain prerequisites within execution under `skills/plan-approval/SKILL.md`.
+Keep progress updates and completion reports tied to the requested work.
+If execution is blocked, report the blocker and the next step needed to continue.
+
 ## Status Block
 
 The user returns to each session after a gap.

@@ -13,6 +13,7 @@ from conftest import (
     ROOT,
     FakeSlackClient,
     WsServerNeverAnswersClose,
+    bind_deps_managers,
     build_slack_cfg,
     mention_seam,
 )
@@ -27,6 +28,7 @@ from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest
 from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 
 _TS = "1700000000.000100"
 
@@ -73,15 +75,22 @@ def _sid(event: dict) -> str:
   return summon_session_id(event["team"], event["channel"], _thread_ts(event))
 
 
-def _rig(tmp_path: Path) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
-  """Summon rig: cfg and session manager rooted at tmp_path, plus the recording fake client."""
+def _rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[CharlieBotConfig, SessionManager, FakeSlackClient]:
+  """Summon rig: cfg and session manager rooted at tmp_path, plus the recording fake client.
+
+  The summon creates its manager root through the deps task-tree singleton, so the rig binds a tree over the
+  same session manager.
+  """
   cfg = build_slack_cfg(tmp_path)
-  return cfg, SessionManager(cfg), FakeSlackClient()
+  session_mgr = SessionManager(cfg)
+  bind_deps_managers(monkeypatch, TaskTreeManager(cfg, session_mgr), session_mgr)
+  return cfg, session_mgr, FakeSlackClient()
 
 
 @pytest.mark.asyncio
-async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
+async def test_allowed_user_creates_session_and_persists_agent_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
@@ -135,8 +144,8 @@ async def test_allowed_user_creates_session_and_persists_agent_message(tmp_path:
 
 
 @pytest.mark.asyncio
-async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
+async def test_summon_prompt_carries_the_platform_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
@@ -160,9 +169,10 @@ async def test_summon_prompt_carries_the_platform_line(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(tmp_path: Path) -> None:
+async def test_summon_prompt_keeps_the_slack_scope_sentences_verbatim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """Slack's citation-boundary and summoner-PII sentences survive verbatim in the scope-doc slot."""
-  cfg, session_mgr, client = _rig(tmp_path)
+  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
   tasks = _spawn_round_tasks()
 
@@ -187,8 +197,8 @@ def test_follow_wake_message_names_thread_reply_docs_and_reply_command() -> None
 
 
 @pytest.mark.asyncio
-async def test_same_thread_twice_reuses_the_session(tmp_path: Path) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
+async def test_same_thread_twice_reuses_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
   event = _make_event()
 
   with mention_seam():
@@ -209,8 +219,9 @@ _DROP_ROWS = [
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("event_overrides",), _DROP_ROWS)
-async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_overrides: dict) -> None:
-  cfg, session_mgr, client = _rig(tmp_path)
+async def test_unhandled_event_drops_with_no_side_effects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, event_overrides: dict) -> None:
+  cfg, session_mgr, client = _rig(tmp_path, monkeypatch)
   event = _make_event(**event_overrides)
 
   with mention_seam():
@@ -222,10 +233,10 @@ async def test_unhandled_event_drops_with_no_side_effects(tmp_path: Path, event_
 
 
 @pytest.mark.asyncio
-async def test_trigger_master_forwards_user_event_id(tmp_path: Path) -> None:
+async def test_trigger_master_forwards_user_event_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   from src.runtime import master_trigger
 
-  cfg, session_mgr, _ = _rig(tmp_path)
+  cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
   meta = await session_mgr.create_session(CreateSessionRequest(name="t"))
 
   with patch.object(master_trigger, "run_message", new=AsyncMock(return_value=None)) as run_mock:
@@ -256,7 +267,7 @@ async def _run_listener_against(
   pointed at it; the caller stops the stand-in when the listener task is done."""
   from src.features.slack import slack_listener
 
-  cfg, session_mgr, _ = _rig(tmp_path)
+  cfg, session_mgr, _ = _rig(tmp_path, monkeypatch)
   url = await stand_in.start()
 
   async def open_stand_in(self: object) -> str:

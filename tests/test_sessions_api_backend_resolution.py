@@ -2,14 +2,13 @@
 
 import json
 import pathlib
-from collections.abc import Awaitable
 from typing import Any
 
 import conftest
 import pytest
 
 from src.infra import config, models
-from src.runtime import sessions
+from src.runtime import sessions, task_sessions
 
 
 async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = conftest.OPUS_BACKEND_ID) -> str:
@@ -26,46 +25,48 @@ async def _seed_parent(session_mgr: sessions.SessionManager, *, backend: str = c
   return parent.id
 
 
-def _capture_bootstrap(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
-  calls: list[dict[str, Any]] = []
-
-  def fake_run_and_finalize(
-      cfg: config.CharlieBotConfig, meta: models.SessionMetadata, content: str, session_mgr: sessions.SessionManager,
-      **kwargs: object) -> Awaitable[None]:
-    calls.append({"meta": meta, "content": content, "kwargs": kwargs})
-
-    async def noop() -> None:
-      return None
-
-    return noop()
-
-  monkeypatch.setattr(conftest.CHAT_RUN_AND_FINALIZE_PATCH_TARGET, fake_run_and_finalize)
-  monkeypatch.setattr("src.infra.tasks.create_logged_task", conftest.close_create_logged_task)
-  return calls
-
-
-_RouteEnv = tuple[config.CharlieBotConfig, sessions.SessionManager, list[dict[str, Any]]]
+_RouteEnv = tuple[config.CharlieBotConfig, sessions.SessionManager, list[tuple[str, list[str]]]]
 
 
 @pytest.fixture
 def two_backend_env(tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> _RouteEnv:
-  """(cfg, session_mgr, calls) with the chat bootstrap stubbed: cfg registers the two backends, calls
-  captures run_and_finalize invocations, and logged tasks are closed."""
-  calls = _capture_bootstrap(monkeypatch)
+  """(cfg, session_mgr, launches): cfg registers the two backends, the deps singletons are a task tree
+  over that session manager, and launches records (session id, input contents) per dispatched run."""
   cfg = conftest.build_two_backend_cfg(tmp_path)
-  return cfg, sessions.SessionManager(cfg), calls
+  session_mgr = sessions.SessionManager(cfg)
+  tree = task_sessions.TaskTreeManager(cfg, session_mgr)
+  conftest.bind_deps_managers(monkeypatch, tree, session_mgr)
+  launches: list[tuple[str, list[str]]] = []
+
+  async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
+    launches.append((session_id, [e["content"] for e in pending]))
+    return "run-1"
+
+  tree.dispatch.executor = executor
+  return cfg, session_mgr, launches
 
 
 @pytest.mark.asyncio
-async def test_fork_route_inherits_parent_backend_when_backend_omitted(two_backend_env: _RouteEnv) -> None:
-  cfg, session_mgr, _ = two_backend_env
+@pytest.mark.parametrize(
+    ("route", "payload", "opener"), [
+        ("fork", {}, sessions.FORK_BOOTSTRAP_OPENER),
+        ("elone", {
+            "event_index": 1
+        }, sessions.ELONE_BOOTSTRAP_OPENER),
+    ])
+async def test_fork_and_elone_routes_inherit_parent_backend_and_dispatch_their_bootstrap(
+    two_backend_env: _RouteEnv, route: str, payload: dict[str, Any], opener: str) -> None:
+  cfg, session_mgr, launches = two_backend_env
   parent_id = await _seed_parent(session_mgr, backend=conftest.OPUS_BACKEND_ID)
 
   with conftest.make_sessions_client(cfg, session_mgr) as client:
-    response = client.post(f"/api/sessions/{parent_id}/fork")
+    response = client.post(f"/api/sessions/{parent_id}/{route}", json=payload)
 
   assert response.status_code == 200
   assert response.json()["backend"] == conftest.OPUS_BACKEND_ID
+  # The child is a manager root: its bootstrap prompt is its first admitted input, launched as a run.
+  [(launched_id, [prompt])] = launches
+  assert launched_id == response.json()["id"] and prompt.startswith(opener)
 
 
 # ------------------------------------------------ validate-or-raise: unresolvable backend

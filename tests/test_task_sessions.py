@@ -10,7 +10,7 @@ import conftest
 import pytest
 
 from src.infra import models
-from src.runtime import task_sessions
+from src.runtime import run_token, task_sessions
 
 
 def write_session_alias(
@@ -116,6 +116,59 @@ async def test_permanent_delete_blockers(tmp_path: pathlib.Path) -> None:
   assert any("alias" in b for b in blockers)
   mgr.aliases.path.unlink()
   assert await mgr.deletion_blockers(leaf.id) == []
+
+
+@pytest.mark.asyncio
+async def test_only_the_operator_and_the_server_may_name_a_new_task_id(tmp_path: pathlib.Path) -> None:
+  _, session_mgr, mgr = conftest.build_env(tmp_path)
+  root = await conftest.create_task(mgr, parent=None, request_id="root", name="Root")
+  agent = run_token.CallerIdentity(
+      kind="agent", claims=run_token.RunTokenClaims(session_id=root.id, run_id="run-1", agent="manager"))
+  create = dict(task_parent_id=root.id, profile="manager", task=None, name="child", backend=None)
+
+  # The agent's own-child create stays legal; naming its id is the scope refusal.
+  with pytest.raises(task_sessions.TaskForbiddenError, match=task_sessions.AGENT_CREATE_SCOPE_REFUSAL):
+    await mgr.create_task(request_id="by-agent", session_id="agent-picked-id", caller=agent, **create)
+  assert await session_mgr.get_session("agent-picked-id") is None
+  assert (await mgr.create_task(request_id="by-agent", caller=agent, **create)).id != "agent-picked-id"
+
+  origin = models.SlackOrigin(team_id="T", channel_id="C", thread_ts="1.1")
+  by_server = await mgr.create_task(
+      request_id="by-server",
+      session_id="server-picked-id",
+      slack_origin=origin,
+      caller="system",
+      **{
+          **create, "task_parent_id": None
+      })
+  by_operator = await mgr.create_task(
+      request_id="by-operator", session_id="operator-picked-id", caller=conftest.OPERATOR, **create)
+  assert (by_server.id, by_operator.id) == ("server-picked-id", "operator-picked-id")
+  # The origin rides the same publish as the metadata: no read sees the node without it.
+  assert (await session_mgr.get_session("server-picked-id")).slack_origin == origin
+  # A replay under the explicit id returns the original node instead of a second one.
+  replay = await mgr.create_task(
+      request_id="by-server", session_id="server-picked-id", caller="system", **{
+          **create, "task_parent_id": None
+      })
+  assert replay.created_by_event == by_server.created_by_event
+
+
+@pytest.mark.asyncio
+async def test_fork_child_of_an_archived_v2_parent_starts_open_with_no_inherited_inputs(tmp_path: pathlib.Path) -> None:
+  """The fork copies the parent's control facts into the child's log; the clone_start marker keeps
+  them the parent's, so the child's own task_created starts its lifecycle."""
+  _, session_mgr, mgr = conftest.build_env(tmp_path)
+  parent = await conftest.create_task(mgr, parent=None, request_id="parent", name="Parent")
+  await mgr.dispatch.admit_input(parent.id, event_type="user", content="old input", actor="user")
+  await mgr.archive_subtree(parent.id, caller=conftest.OPERATOR)
+  assert mgr.task_state(parent.id) == "archived"
+
+  child = await session_mgr.fork_session(parent.id)
+
+  facts = mgr.facts_of(child.id)
+  assert (mgr.task_state(child.id), facts.input_candidates, facts.close_events) == ("open", [], [])
+  assert child.task_parent_id is None and child.parent_session_id == parent.id
 
 
 # ---------------------------------------------------------------------------

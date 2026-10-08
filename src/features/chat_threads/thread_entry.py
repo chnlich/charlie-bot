@@ -42,7 +42,6 @@ from src.infra.config import HOUSE_TIMEZONE, CharlieBotConfig
 from src.infra.constants import FILE_SERVER_MOUNTS
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import (
-    CreateSessionRequest,
     PendingTrigger,
     SessionMetadata,
     SessionStatus,
@@ -50,6 +49,7 @@ from src.infra.models import (
     utc_now,
 )
 from src.infra.tasks import create_logged_task
+from src.runtime.api import deps
 from src.runtime.api.deps import SESSION_NOT_FOUND_DETAIL
 from src.runtime.api.message_utils import build_agent_message_event, master_done_input_event_ids
 from src.runtime.master_trigger import trigger_master
@@ -986,9 +986,9 @@ async def accept_summon(
   everything this path reads: the deterministic *session_id*, the *label*
   naming both the session and its group, the thread *origin*, the summon
   *block* (the platform's persisted marker payload), the summon prompt
-  *content*, and the mentioning *user*. The session is created — named
-  ``<label> <local time>``, born with *origin* under the platform's origin
-  field —, unarchived, or reused; the mention round consumes its own id and
+  *content*, and the mentioning *user*. The session is created — a manager
+  root named ``<label> <local time>``, born with *origin* under the platform's
+  origin field —, unarchived, or reused; the mention round consumes its own id and
   any armed follow trigger is cancelled; the session is grouped under *label*;
   the summon event is persisted under the platform's key; the round and the
   ack eye fire as logged tasks. Returns the session id.
@@ -999,8 +999,17 @@ async def accept_summon(
   session_meta = await session_mgr.get_session(session_id)
   if session_meta is None:
     session_name = f"{label} {_local_time()}"
-    await session_mgr.create_session(
-        CreateSessionRequest(session_id=session_id, name=session_name, **{platform.origin_field: origin}))
+    await deps.task_manager().create_task(
+        request_id=f"{platform.name}-summon-{session_id}",
+        task_parent_id=None,
+        profile="manager",
+        task=None,
+        name=session_name,
+        backend=None,
+        group=None,
+        session_id=session_id,
+        caller="system",
+        **{platform.origin_field: origin})
     logger.info(f"{platform.name}_mention_session_created", **fields, session=session_id)
   elif session_meta.status == SessionStatus.ARCHIVED:
     await session_mgr.unarchive_session(session_id)

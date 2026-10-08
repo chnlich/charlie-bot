@@ -352,6 +352,26 @@ class FakeTriggers:
     return record
 
 
+class FakeTree:
+  """The task-tree surface the summon create touches: create_task records its keyword arguments
+  (the origin under the platform's field name among them) and resolves the doubled session."""
+
+  def __init__(self, sessions: FakeSessions) -> None:
+    self._sessions = sessions
+
+  async def create_task(self, **kwargs) -> None:
+    self._sessions.created.append(SimpleNamespace(**kwargs))
+    self._sessions.meta = SimpleNamespace(
+        id=kwargs["session_id"],
+        name=kwargs["name"],
+        group=kwargs["group"],
+        status=SessionStatus.ACTIVE,
+        updated_at="2026-01-01T00:00:00Z",
+        fakechat_origin=kwargs.get("fakechat_origin"),
+        fakechat_watermark_id=None,
+    )
+
+
 class FakeSessions:
   """The session-manager surface the round side and the summon side touch, over
   one in-memory metadata; persisted events land in ``persisted`` for the
@@ -388,18 +408,6 @@ class FakeSessions:
     if self.meta is None or (status is not None and self.meta.status != status):
       return [], {}
     return [self.meta], {}
-
-  async def create_session(self, request) -> None:
-    self.created.append(request)
-    self.meta = SimpleNamespace(
-        id=request.session_id,
-        name=request.name,
-        group=getattr(request, "group", None),
-        status=SessionStatus.ACTIVE,
-        updated_at="2026-01-01T00:00:00Z",
-        fakechat_origin=getattr(request, "fakechat_origin", None),
-        fakechat_watermark_id=None,
-    )
 
   async def set_group(self, session_id: str, group: str | None) -> None:
     self.groups.append((session_id, group))
@@ -557,10 +565,9 @@ async def _run_accept_summon(sessions: FakeSessions, adapter: FakeAdapter,
   with (
       patch(THREAD_ENTRY_TRIGGER_MASTER_PATCH_TARGET, new=AsyncMock()) as mock_trigger,
       patch(THREAD_ENTRY_CREATE_LOGGED_TASK_PATCH_TARGET, side_effect=make_task_spawner(tasks)),
-      # The model drops unknown fields again (extra="allow" is gone), so the
-      # stand-in records the keyword arguments the shared core passes and the
-      # assert reads the platform's origin field off them by name.
-      patch("src.features.chat_threads.thread_entry.CreateSessionRequest", lambda **kw: SimpleNamespace(**kw)),
+      # The stand-in tree records the keyword arguments the shared core passes
+      # and the assert reads the platform's origin field off them by name.
+      patch("src.features.chat_threads.thread_entry.deps.task_manager", return_value=FakeTree(sessions)),
   ):
     sid = await accept_summon(
         adapter,
@@ -664,7 +671,10 @@ async def test_accept_summon_creates_the_session_and_spawns_the_round_and_ack() 
   assert sid == "s1"
   request = sessions.created[0]
   assert request.name.startswith("Fakechat #c1 ")
-  # The origin rides the request under the platform's origin field name.
+  # The summon opens a manager root bound to the deterministic session id, written by the
+  # server itself, and the origin rides the create under the platform's origin field name.
+  assert (request.session_id, request.profile, request.task_parent_id, request.task) == ("s1", "manager", None, None)
+  assert request.caller == "system"
   assert request.fakechat_origin == {"channel_id": "c1", "thread_ts": "t1"}
   assert sessions.groups == [("s1", "Fakechat #c1")]
   summon_event = sessions.persisted[0]

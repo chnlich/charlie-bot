@@ -59,12 +59,12 @@ from src.infra.models import (
 )
 from src.infra.ndjson import append_ndjson
 from src.infra.tasks import create_logged_task
+from src.runtime import control_sink
 from src.runtime.chat_events import chat_events_path
 from src.runtime.control_events import (
     ACTOR_AGENT,
     ACTOR_SYSTEM,
     ACTOR_USER,
-    ControlEventSink,
     build_control_event,
     build_task_created_event,
     sha256_hex,
@@ -393,7 +393,7 @@ class TaskTreeManager:
     self._sessions = session_mgr
     session_mgr.task_tree_manager = self
     self.control_lock = asyncio.Lock()
-    self.events = ControlEventSink(session_mgr)
+    self.events = control_sink.ControlEventSink(session_mgr)
     self.runs = RunStore(cfg.sessions_dir, self.control_lock, self.events)
     # The run owner's terminal/stop/identity reads see the full fact history
     # (archived segments included), so a rotated acknowledgement never un-dones

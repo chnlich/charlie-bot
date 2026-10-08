@@ -42,7 +42,7 @@ from src.infra.models import RunRecord, ensure_utc, utc_now
 from src.infra.ndjson import HeadProvableFilter, parse_ndjson_events, parse_ndjson_file, parse_ndjson_line
 from src.infra.timeouts import NO_OUTPUT_REPORT_THRESHOLD
 from src.runtime.chat_events import chat_events_path
-from src.runtime.control_events import ACTOR_SYSTEM, ControlEventSink, build_control_event, sha256_hex, stable_run_id
+from src.runtime.control_events import ACTOR_SYSTEM, RunEventSink, build_control_event, sha256_hex, stable_run_id
 from src.runtime.hooks import backend_types
 from src.runtime.run_token import b64url_decode, b64url_encode
 from src.runtime.sidebar_state import mark_sidebar_dirty
@@ -671,7 +671,7 @@ class RunStore:
       self,
       sessions_dir: Path,
       control_lock: asyncio.Lock | None,
-      events: ControlEventSink | None,
+      events: RunEventSink | None,
   ) -> None:
     """*sessions_dir* is the store's path root; *events* None wires a read-only
     store (the CLI's run-token identity resolution): the reads fall back to the

@@ -327,7 +327,8 @@ class BackendsConfig(BaseModel):
   # every stored reference stays valid. The usage tally classifies a retired id
   # (off config, still in old records) by its prefix. An option bound to an
   # account pool may end its id with `-<pool name>`. require_backends refuses a
-  # startup whose preference or cron tasks name an id missing from `options`.
+  # startup whose preference names an id missing from `options`; cron's startup
+  # check does the same for cron tasks.
 
   # Ordered preference list of BackendOption ids, consumed by two selectors:
   #   - checking-role (reviewer, verify default): first entry that DIFFERS from the
@@ -827,18 +828,17 @@ def load_config() -> CharlieBotConfig:
         "; declare the key(s) on CharlieBotConfig, register a config section for them, or remove them") from e
 
 
-def require_backends(cfg: CharlieBotConfig, cron_tasks: list[ScheduledTaskConfig]) -> None:
-  """Raise ValueError when ``backends.options`` or a reference into it is broken.
+def require_backends(cfg: CharlieBotConfig) -> None:
+  """Raise ValueError when ``backends.options`` or ``backends.preference`` is broken.
 
-  The server calls this once at startup, with the cron tasks as the loader reads
-  them (:func:`get_scheduled_tasks`), because every session and cron run
-  resolves a backend id against this list; a broken catalog is a deployment
-  error worth stopping on. Refused: an empty list, an option id listed twice,
-  and a ``backends.preference`` entry, cron task ``backend`` or cron step
-  ``backend`` naming no option id (a task or step without a backend stays
-  valid). One error lists every violation, each line naming the file, the
-  entry and the id. ``load_config`` stays permissive for CLIs that never
-  resolve a backend.
+  The server calls this once at start, because every session and cron run
+  resolves a backend id against ``backends.options``; a broken catalog is a
+  deployment error worth stopping on. Refused: an empty list, an option id
+  listed twice, and a ``backends.preference`` entry naming no option id. One
+  error lists every violation, each line naming the file, the entry and the id.
+  The cron references into the catalog are cron's startup check
+  (``src/features/cron/backend_refs.py``). ``load_config`` stays permissive for
+  CLIs that never resolve a backend.
   """
   if not cfg.backends.options:
     raise ValueError(
@@ -853,12 +853,6 @@ def require_backends(cfg: CharlieBotConfig, cron_tasks: list[ScheduledTaskConfig
   for index, backend_id in enumerate(cfg.backends.preference):
     if backend_id not in ids:
       problems.append(f"{cfg.config_file}: backends.preference[{index}] names unknown backend '{backend_id}'")
-  for task in cron_tasks:
-    task_file = cfg.config_d_dir / "cron.d" / f"{task.name}.yaml"
-    refs = [("backend", task.backend)] + [(f"steps '{step.name}' backend", step.backend) for step in task.steps or []]
-    for entry, backend_id in refs:
-      if backend_id and backend_id not in ids:
-        problems.append(f"{task_file}: {entry} names unknown backend '{backend_id}'")
   if problems:
     raise ValueError(
         "backend references must name a backends.options id (id rule: BackendsConfig in "

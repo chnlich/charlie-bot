@@ -15,9 +15,11 @@ from pathlib import Path
 
 import conftest
 import pytest
+import uvicorn
 
 import server
 from src.app import registrations
+from src.infra.config import CharlieBotConfig
 from src.runtime import templating
 from src.runtime.hooks import page_render, wiring
 
@@ -53,11 +55,14 @@ def test_a_second_registration_of_one_name_raises() -> None:
   service = next(name for name, _ in wiring.service_starts("ready"))
   commands_before = wiring.commands()
   views_before = wiring.file_views()
+  checks_before = wiring.startup_checks()
 
   with pytest.raises(ValueError, match=command):
     wiring.register_command(command, "src.features.memory.cli")
   with pytest.raises(ValueError, match="serve_artifact_path"):
     wiring.register_file_view("src.features.artifacts.artifact_view", attr="serve_artifact_path")
+  with pytest.raises(ValueError, match="check_backend_refs"):
+    wiring.register_startup_check("src.features.cron.backend_refs", attr="check_backend_refs")
   with pytest.raises(ValueError, match=service):
     wiring.register_service(service, "src.features.cron.service")
   with pytest.raises(ValueError, match="phase"):
@@ -65,7 +70,49 @@ def test_a_second_registration_of_one_name_raises() -> None:
 
   assert wiring.commands() == commands_before
   assert wiring.file_views() == views_before
+  assert wiring.startup_checks() == checks_before
   assert "not_registered" not in [name for name, _ in wiring.service_stops()]
+
+
+def _run_server_main(
+    monkeypatch: pytest.MonkeyPatch, cfg: CharlieBotConfig, events: list[str], check_error: ValueError | None) -> None:
+  """Run server.main() against *cfg* with one recording startup check and a recording uvicorn.run;
+  *events* receives their calls in run order."""
+
+  def recording_check(_cfg: CharlieBotConfig) -> None:
+    events.append("startup_check")
+    if check_error is not None:
+      raise check_error
+
+  monkeypatch.setattr(server, "apply_agent_environment", lambda: None)
+  monkeypatch.setattr(server, "get_config", lambda: cfg)
+  monkeypatch.setattr(server.wiring, "startup_checks", lambda: [recording_check])
+  monkeypatch.setattr(uvicorn, "run", lambda *_args, **_kwargs: events.append("uvicorn.run"))
+  server.main()
+
+
+def test_server_main_stops_on_an_empty_backend_catalog_before_any_startup_check(
+    monkeypatch: pytest.MonkeyPatch) -> None:
+  events: list[str] = []
+
+  with pytest.raises(ValueError, match=r"backends\.options"):
+    _run_server_main(monkeypatch, CharlieBotConfig(), events, None)
+
+  assert events == []
+
+
+def test_server_main_serves_only_after_every_startup_check_passes(monkeypatch: pytest.MonkeyPatch) -> None:
+  option = conftest.backend_option(id="claude-opus", label="Opus", type="cc-claude", model="m")
+  cfg = CharlieBotConfig(backends={"options": [option]})
+  passed: list[str] = []
+  stopped: list[str] = []
+
+  _run_server_main(monkeypatch, cfg, passed, None)
+  with pytest.raises(ValueError, match="stop the start"):
+    _run_server_main(monkeypatch, cfg, stopped, ValueError("stop the start"))
+
+  assert passed == ["startup_check", "uvicorn.run"]
+  assert stopped == ["startup_check"]
 
 
 def test_register_all_twice_registers_once() -> None:

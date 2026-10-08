@@ -76,10 +76,12 @@ Known-alive symbols:
 - `register` (the `__init__.py` of each package listed in `src/app/registrations.py`), `start_service`
   and `stop_service` (each module named in a `wiring.register_service` call), `ws_router` and
   `mounted_router` (the router attributes named in a `wiring.register_router` call), and
-  `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call) — reached by
-  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`
-  and the router loop in `server.py` import the module from its path string and read the attribute by name. The names
-  have zero whole-repo matches outside their definitions, so vulture flags them as unused.
+  `serve_artifact_path` (the view attribute named in a `wiring.register_file_view` call), and
+  `check_backend_refs` (the attribute named in a `wiring.register_startup_check` call) — reached by
+  string: `register_all()`, `wiring.service_starts()`, `wiring.service_stops()`, `wiring.file_views()`,
+  `wiring.startup_checks()` and the router loop in `server.py` import the module from its path string and read the
+  attribute by name. The names have zero whole-repo matches outside their definitions, so vulture flags them as
+  unused.
 - `check_sources_and_mode` — pydantic `@model_validator` method on `ScheduledTaskConfig`
   in `src/infra/config.py`, registered with pydantic at class-definition time and invoked during
   model validation (it enforces the prompt-source and mode rules). The method name has

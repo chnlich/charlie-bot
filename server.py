@@ -38,7 +38,7 @@ with gc_off(collect=False):
   from src.features.usage import ext_usage
   from src.infra import responses, timeouts
   from src.infra.buildinfo import init_build_info
-  from src.infra.config import CharlieBotConfig, get_config, get_scheduled_tasks, require_backends
+  from src.infra.config import CharlieBotConfig, get_config, require_backends
   from src.infra.constants import PERFETTO_MERGED_PATH, REPO_ROOT
   from src.infra.http import close_http_client
   from src.infra.log_once import LazyStructlogLogger, ensure_lean_renderer, log_http_request_line
@@ -677,7 +677,9 @@ def main() -> None:
   # Every agent process copies this environment.
   apply_agent_environment()
   cfg = get_config()
-  require_backends(cfg, get_scheduled_tasks())
+  require_backends(cfg)
+  for startup_check in wiring.startup_checks():
+    startup_check(cfg)
   uvicorn.run(
       "server:app",
       host=cfg.server.host,

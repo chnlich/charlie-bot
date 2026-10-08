@@ -8,8 +8,10 @@ import pytest
 import yaml
 from conftest import ROOT, backend_option
 
+from src.app import registrations
 from src.infra import config as config_module
-from src.infra.config import CHARLIEBOT_HOME_ENV, CharlieBotConfig, ScheduledTaskConfig, StepConfig, require_backends
+from src.infra.config import CHARLIEBOT_HOME_ENV, CharlieBotConfig, require_backends
+from src.runtime.hooks import wiring
 from src.runtime.init_seed import init_charliebot_home
 
 
@@ -117,7 +119,7 @@ def test_init_charliebot_home_seeds_config_and_credentials(tmp_path: Path, monke
 def test_require_backends_rejects_empty_list() -> None:
   """An empty backends.options raises ValueError naming the key and the example file."""
   with pytest.raises(ValueError) as exc_info:
-    require_backends(CharlieBotConfig(), [])
+    require_backends(CharlieBotConfig())
   message = str(exc_info.value)
   assert "backends.options" in message
   assert "config.example.yaml" in message
@@ -213,20 +215,9 @@ def _family_backends(tmp_path: Path, preference: list[str], *ids: str) -> Charli
   return CharlieBotConfig(charliebot_home=tmp_path, backends={"preference": preference, "options": options})
 
 
-def test_require_backends_accepts_known_references_and_backendless_cron(tmp_path: Path) -> None:
-  """Preference entries, cron task backends and step backends that name option ids pass, and a
-  cron task or step without a backend stays valid."""
+def test_require_backends_accepts_known_preference_entries(tmp_path: Path) -> None:
   cfg = _family_backends(tmp_path, ["claude-sonnet", "claude-opus"], "claude-opus", "claude-sonnet")
-  tasks = [
-      ScheduledTaskConfig(name="pinned", cron="0 * * * *", prompt="p", backend="claude-opus"),
-      ScheduledTaskConfig(name="unpinned", cron="0 * * * *", prompt="p"),
-      ScheduledTaskConfig(
-          name="chain",
-          cron="0 * * * *",
-          steps=[StepConfig(name="a", prompt="p", backend="claude-sonnet"),
-                 StepConfig(name="b", prompt="p")]),
-  ]
-  assert require_backends(cfg, tasks) is None
+  assert require_backends(cfg) is None
 
 
 def test_require_backends_rejects_unknown_preference_entry(tmp_path: Path) -> None:
@@ -234,27 +225,87 @@ def test_require_backends_rejects_unknown_preference_entry(tmp_path: Path) -> No
   and the id."""
   cfg = _family_backends(tmp_path, ["claude-opus", "codex-gpt-5.6-luna"], "claude-opus")
   with pytest.raises(ValueError) as exc_info:
-    require_backends(cfg, [])
+    require_backends(cfg)
   message = str(exc_info.value)
   assert f"{tmp_path / 'config.yaml'}: backends.preference[1] names unknown backend 'codex-gpt-5.6-luna'" in message
   assert "claude-opus'" not in message
 
 
-def test_require_backends_rejects_unknown_cron_task_backend(tmp_path: Path) -> None:
-  """A cron task or step backend naming no option id stops startup; each error line names the
-  task's cron.d file, the entry and the id."""
-  cfg = _family_backends(tmp_path, [], "claude-opus")
-  tasks = [
-      ScheduledTaskConfig(name="nightly", cron="0 * * * *", prompt="p", backend="charlie-code-kimi-k3"),
-      ScheduledTaskConfig(
-          name="chain", cron="0 * * * *", steps=[StepConfig(name="build", prompt="p", backend="claude-opus-5")]),
-  ]
+def _home_with_cron_tasks(home: Path, cron_tasks: dict[str, dict]) -> CharlieBotConfig:
+  """Write a config.yaml whose only backend option is claude-opus plus one cron.d file per task
+  in *cron_tasks*, point CHARLIEBOT_HOME at it (the profile_home fixture), and load the config.
+
+  Each task, or each step of a chained task, gets the one prompt file the loader requires;
+  the assert fails the test when a task file is rejected, which would pass the checks vacuously.
+  """
+  option = {"id": "claude-opus", "label": "claude-opus", "type": "cc-claude", "model": "m"}
+  (home / "config.yaml").write_text(yaml.safe_dump({"backends": {"options": [option]}}), encoding="utf-8")
+  prompt_file = home / "prompt.md"
+  prompt_file.write_text("run\n", encoding="utf-8")
+  cron_d = home / "config.d" / "cron.d"
+  cron_d.mkdir(parents=True)
+  for name, body in cron_tasks.items():
+    task = {"cron": "0 * * * *", **body}
+    if "steps" in task:
+      task["steps"] = [{"prompt_file": str(prompt_file), **step} for step in task["steps"]]
+    else:
+      task["prompt_file"] = str(prompt_file)
+    (cron_d / f"{name}.yaml").write_text(yaml.safe_dump(task), encoding="utf-8")
+  cfg = config_module.load_config()
+  assert {task.name for task in config_module.get_scheduled_tasks()} == set(cron_tasks)
+  return cfg
+
+
+def _run_startup_checks(cfg: CharlieBotConfig) -> None:
+  registrations.register_all()
+  for check in wiring.startup_checks():
+    check(cfg)
+
+
+def test_cron_backend_references_that_name_option_ids_pass_the_startup_checks(profile_home: Path) -> None:
+  """A cron task or step backend naming an option id passes, and a task or step without a
+  backend stays valid."""
+  cfg = _home_with_cron_tasks(
+      profile_home, {
+          "pinned": {
+              "backend": "claude-opus"
+          },
+          "unpinned": {},
+          "chain": {
+              "steps": [{
+                  "name": "a",
+                  "backend": "claude-opus"
+              }, {
+                  "name": "b"
+              }]
+          },
+      })
+  require_backends(cfg)
+  _run_startup_checks(cfg)
+
+
+@pytest.mark.parametrize(
+    ("body", "line"), [
+        ({
+            "backend": "charlie-code-kimi-k3"
+        }, "backend names unknown backend 'charlie-code-kimi-k3'"),
+        (
+            {
+                "steps": [{
+                    "name": "build",
+                    "backend": "claude-opus-5"
+                }]
+            }, "steps 'build' backend names unknown backend 'claude-opus-5'"),
+    ])
+def test_cron_backend_naming_no_option_id_stops_the_startup_checks_not_the_load(
+    profile_home: Path, body: dict, line: str) -> None:
+  """load_config and require_backends accept the cron task, and the registered startup checks
+  stop the start; the error line names the task's cron.d file, the entry and the id."""
+  cfg = _home_with_cron_tasks(profile_home, {"nightly": body})
+  require_backends(cfg)
   with pytest.raises(ValueError) as exc_info:
-    require_backends(cfg, tasks)
-  message = str(exc_info.value)
-  cron_d = tmp_path / "config.d" / "cron.d"
-  assert f"{cron_d / 'nightly.yaml'}: backend names unknown backend 'charlie-code-kimi-k3'" in message
-  assert f"{cron_d / 'chain.yaml'}: steps 'build' backend names unknown backend 'claude-opus-5'" in message
+    _run_startup_checks(cfg)
+  assert f"{profile_home / 'config.d' / 'cron.d' / 'nightly.yaml'}: {line}" in str(exc_info.value)
 
 
 def test_require_backends_rejects_duplicate_option_id(tmp_path: Path) -> None:
@@ -262,5 +313,5 @@ def test_require_backends_rejects_duplicate_option_id(tmp_path: Path) -> None:
   the id."""
   cfg = _family_backends(tmp_path, [], "claude-opus", "claude-sonnet", "claude-opus")
   with pytest.raises(ValueError) as exc_info:
-    require_backends(cfg, [])
+    require_backends(cfg)
   assert f"{tmp_path / 'config.yaml'}: backends.options[2] repeats id 'claude-opus'" in str(exc_info.value)

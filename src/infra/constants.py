@@ -53,27 +53,6 @@ MAX_TRIGGER_MESSAGE_CHARS = 200
 # the CLI parser's --min-idle-days default and --help text share one number.
 MIN_IDLE_DAYS = 14
 
-# Plan-registry verb vocabularies: the CLI's argparse choices (src.features.artifacts.plan_cli) and the
-# registry verbs' validation (src.features.artifacts.plans) share one tuple per vocabulary, so the
-# plan chain imports no pydantic to parse args. The request models' Literal types
-# (src.infra.models PlanAmendTrigger / PlanCloseMode) are the type home; the import
-# contract pins tuple == get_args(Literal). The named close-mode spellings are the
-# home for the values plans derives and compares against (src.features.artifacts.plans _derive_state,
-# _DERIVED_STATE_STR): a closed plan's derived state IS its close mode's spelling.
-PLAN_AMEND_TRIGGERS = ("auto_amend", "feedback")
-PLAN_CLOSE_SUPERSEDED = "superseded"
-PLAN_CLOSE_ABANDONED = "abandoned"
-PLAN_CLOSE_COMPLETED = "completed"
-PLAN_CLOSE_MODES = (PLAN_CLOSE_SUPERSEDED, PLAN_CLOSE_ABANDONED, PLAN_CLOSE_COMPLETED)
-
-# Artifact genre vocabulary: the artifact CLI's argparse choices (src.features.artifacts.cli) and
-# the assertion registry (src.features.artifacts.artifact_check _ASSERTION_SETS) share one tuple, so
-# the artifact chain parses args without loading the assertion machinery (the M102 wrap
-# wall). The registry is the home of what a genre means: adding a genre means registering
-# its assertion set there AND naming it here; artifact_check's import-time equality check
-# makes a missed step fail loud.
-ARTIFACT_GENRES = ("plan", "understanding", "sitrep", "debug", "explain")
-
 # File-server URL prefix: server.py mounts the one files router under it. The prefix names
 # what has to follow it — the absolute filesystem path with its leading `/` removed — so a
 # path that dropped its leading segments reads as wrong where it is written. The legacy /files
@@ -85,14 +64,11 @@ ARTIFACT_GENRES = ("plan", "understanding", "sitrep", "debug", "explain")
 # mirrors the single element.
 FILE_SERVER_MOUNTS = ("/absolute_filepath",)
 
-# Viewer route paths: the trace and ncu packages declare each route with its spelling. The auth
-# whitelist (src.runtime.api.auth) does not admit them — they read local trace/report files, so
-# they sit behind the access key like the file server. The merged path is additionally the
+# The merged-trace route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
+# reads local trace files, so it sits behind the access key like the file server. It is also the
 # special case server.py's gzip middleware skips (the body is already-compressed
-# trace bytes) and the URL the trace package builds for merged traces.
-PERFETTO_VIEWER_PATH = "/perfetto"
+# trace bytes) and the URL built for merged traces.
 PERFETTO_MERGED_PATH = "/perfetto/merged"
-NCU_VIEWER_PATH = "/ncu"
 AUTH_STATUS_PATH = "/api/auth/status"
 
 # Usage-source vocabulary: the ledger's source values. Each backend package's register() names

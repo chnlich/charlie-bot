@@ -25,7 +25,6 @@ from conftest import (
 from src.features.artifacts import artifact_check, artifact_shared
 from src.features.artifacts.artifact_check import run_assertions
 from src.features.artifacts.cli import main as artifact_main
-from src.infra import timeouts
 from src.infra.config import CharlieBotConfig
 
 
@@ -176,7 +175,7 @@ def test_cli_probe_runs_after_assertions_pass_and_prints_backend_and_answers(
   assert '"where are we?"' in prompt
   assert "(7) Read as an engineer who knows the domain" in prompt
   assert "<trigger message verbatim>" not in prompt
-  assert backends["beta"].calls[0]["timeout"] == timeouts.ARTIFACT_PROBE_TIMEOUT == 300.0
+  assert backends["beta"].calls[0]["timeout"] == artifact_check.ARTIFACT_PROBE_TIMEOUT == 300.0
 
 
 def test_cli_unknown_genre_is_usage_error() -> None:

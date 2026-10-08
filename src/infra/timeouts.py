@@ -36,21 +36,6 @@ SUBPROCESS_GIT_VERSION_TIMEOUT = 5  # seconds — synchronous; only blocks serve
 SUBPROCESS_GIT_IDENTITY_TIMEOUT = 30  # seconds
 
 # ---------------------------------------------------------------------------
-# LaTeX compilation
-# ---------------------------------------------------------------------------
-
-# Full LaTeX build via `make pdf`; may run pdflatex + bibtex multiple times.
-LATEX_COMPILE_TIMEOUT = 60  # seconds
-
-# ---------------------------------------------------------------------------
-# Nsight Compute report parsing
-# ---------------------------------------------------------------------------
-
-# Fallback `ncu --import <file> --csv --page details` when the ncu_report
-# Python module is unavailable; large reports can take a while to re-import.
-SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
-
-# ---------------------------------------------------------------------------
 # Light one-shot backend calls (autonamer session naming, recap divider summary)
 # ---------------------------------------------------------------------------
 
@@ -58,21 +43,6 @@ SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
 # the autonamer's {name, group} ask and the recap's divider-summary ask ride the
 # same 30 s budget.
 LIGHT_ONESHOT_TIMEOUT = 30.0  # seconds
-
-# One one_shot_text call for the explain (btw-style) divider explanation. The
-# agent-run shape may spend model round-trips reading the session history from
-# its read-only copy, so the budget sits an order of magnitude above the light
-# one-shot's; a hit marks the divider's entry failed and the UI can retry.
-EXPLAIN_ONESHOT_TIMEOUT = 600.0  # seconds
-
-# ---------------------------------------------------------------------------
-# Artifact cold-read probe
-# ---------------------------------------------------------------------------
-
-# One-shot model pass over an entire artifact page (sitrep / debug / explain
-# cold-read gate); the page text alone dwarfs a naming prompt, so the 30 s
-# light one-shot budget does not apply.
-ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
 
 # ---------------------------------------------------------------------------
 # Artifact wrap (KaTeX vendoring)
@@ -159,16 +129,6 @@ SESSION_WS_CURSOR_TIMEOUT = 5.0  # seconds
 WS_KEEPALIVE_TIMEOUT = 30.0  # seconds
 
 # ---------------------------------------------------------------------------
-# code-server
-# ---------------------------------------------------------------------------
-
-# Socket connect probe deciding whether an existing code-server already answers.
-CODE_SERVER_CONNECT_TIMEOUT = 0.2  # seconds
-
-# Wait for the spawned code-server to accept connections before giving up.
-CODE_SERVER_START_TIMEOUT = 5.0  # seconds
-
-# ---------------------------------------------------------------------------
 # PTY bridge (tmux websocket)
 # ---------------------------------------------------------------------------
 
@@ -181,7 +141,7 @@ PTY_WS_RECV_TIMEOUT = 30.0  # seconds
 # ---------------------------------------------------------------------------
 
 # Per-probe ssh subprocess timeouts (locked, no flag). SSH_CONNECT_TIMEOUT is shared
-# with the CLI remote-launch wrapper's ssh invocation (src/features/remote_launch/cli.py).
+# with the ssh invocation of the CLI wrapper that launches a command on a remote host.
 SSH_CONNECT_TIMEOUT = 10  # seconds — ssh -o ConnectTimeout
 SSH_OVERALL_TIMEOUT = 60.0  # seconds — asyncio.wait_for timeout wrapping the subprocess
 
@@ -257,14 +217,6 @@ WS_CLIENT_CLOSE_TIMEOUT = 1.0  # seconds
 # How long live HTTP handlers and WebSockets get to wind down after the
 # shutdown signal before uvicorn exits the process anyway.
 SERVER_GRACEFUL_SHUTDOWN_TIMEOUT = 5  # seconds
-
-# ---------------------------------------------------------------------------
-# Session-tree preview probes
-# ---------------------------------------------------------------------------
-
-# The `charlie-code --help` probe that validates the launcher's --session-dir
-# support; the preview refuses to run when the launcher cannot be executed.
-PREVIEW_LAUNCHER_PROBE_TIMEOUT = 30  # seconds
 
 # ---------------------------------------------------------------------------
 # SQLite lock waits

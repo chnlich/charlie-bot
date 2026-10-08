@@ -59,6 +59,12 @@ if TYPE_CHECKING:
 
 log = LazyStructlogLogger()
 
+IMPROVE_ITERATION_COMPLETED = "improve_iteration_completed"
+IMPROVE_COMPLETED = "improve_completed"
+IMPROVE_FAILED = "improve_failed"
+# IMPROVE_STOPPED names the outcome where a stop request ended the loop.
+IMPROVE_STOPPED = "improve_stopped"
+
 
 def loop_owner_ref(session_id: str, loop_id: int, cfg: CharlieBotConfig) -> str:
   """The sequence owner_ref of one improve loop: the loop directory, exactly
@@ -246,7 +252,7 @@ async def run_improve_sequence(
       log.error("improve_sequence_worktree_failed", session=session_id, loop_id=loop_id, error=str(e))
       await tree.sessions.deliver_to_successor(
           session_id, {
-              "type": ET.IMPROVE_FAILED,
+              "type": IMPROVE_FAILED,
               "goal": goal,
               "error": improve_command.WORKTREE_CREATE_ERROR_PREFIX + str(e)
           })
@@ -358,8 +364,8 @@ async def run_improve_sequence(
     await improve_command.clear_active_loop_lock(session_id, cfg)
 
     payload = improve_command._build_summary_payload(
-        ET.IMPROVE_COMPLETED if outcome_label == "completed" else
-        ET.IMPROVE_STOPPED if outcome_label == "cancelled" else ET.IMPROVE_FAILED, goal, previous_summaries)
+        IMPROVE_COMPLETED if outcome_label == "completed" else
+        IMPROVE_STOPPED if outcome_label == "cancelled" else IMPROVE_FAILED, goal, previous_summaries)
     if blocked is not None:
       payload['blocked_iteration'] = blocked[0]
       payload['reason'] = blocked[1]
@@ -384,7 +390,7 @@ async def run_improve_sequence(
     try:
       await tree.sessions.deliver_to_successor(
           session_id, {
-              "type": ET.IMPROVE_FAILED,
+              "type": IMPROVE_FAILED,
               "goal": goal,
               "error": improve_command.LOOP_FAILURE_ERROR_PREFIX + str(exc),
               "iterations_completed": completed_iterations,
@@ -428,7 +434,7 @@ async def _settle_withheld_iteration(
       iteration=iteration,
       run_id=run_id,
       reason=reason)
-  payload = improve_command._build_summary_payload(ET.IMPROVE_FAILED, goal, previous_summaries)
+  payload = improve_command._build_summary_payload(IMPROVE_FAILED, goal, previous_summaries)
   payload["blocked_iteration"] = iteration
   payload["reason"] = reason
   payload["withheld_run_id"] = run_id
@@ -530,7 +536,7 @@ async def _broadcast_iteration_progress(
   report_path = loop_dir / f'iter_{iteration:04d}.md'
   await tree.sessions.deliver_to_successor(
       session_id, {
-          "type": ET.IMPROVE_ITERATION_COMPLETED,
+          "type": IMPROVE_ITERATION_COMPLETED,
           "iteration": iteration,
           "total_iterations": iterations,
           "status": status,
@@ -684,7 +690,7 @@ async def reconcile_interrupted_sequences(
         await tree.sessions.deliver_to_successor(
             session_id, {
                 "type":
-                    ET.IMPROVE_FAILED,
+                    IMPROVE_FAILED,
                 "goal":
                     state.goal,
                 "error":

@@ -28,9 +28,13 @@ import sys
 import types
 from typing import Any
 
-from src.infra import log_once, timeouts
+from src.infra import log_once
 
 log = log_once.LazyStructlogLogger()
+
+# Fallback `ncu --import <file> --csv --page details` when the ncu_report
+# Python module is unavailable; large reports can take a while to re-import.
+SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT = 120  # seconds
 
 
 class NcuParseError(Exception):
@@ -572,8 +576,7 @@ def _run_ncu_csv_import(abspath: str) -> subprocess.CompletedProcess[str]:
   NcuParseError, and each caller translates the failures its own way.
   """
   cmd = ["ncu", "--import", abspath, "--csv", "--page", "details"]
-  return subprocess.run(
-      cmd, capture_output=True, text=True, check=False, timeout=timeouts.SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
+  return subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=SUBPROCESS_NCU_CSV_IMPORT_TIMEOUT)
 
 
 def _sections_from_csv(abspath: str) -> dict[int, list[dict]] | None:

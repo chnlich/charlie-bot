@@ -35,7 +35,7 @@ QUOTA_EXHAUSTED = "quota_exhausted"
 # input_event_ids names the chat events the round answers, in arrival order:
 # the Slack round audit re-reads it, and the
 # slack_notice and slack_backfill payloads carry the singular input_event_id
-# name for the one summon each is about (src/features/slack/slack_listener.py).
+# name for the one summon each is about.
 # MASTER_DONE events written before input batching carry the singular
 # input_event_id instead; every reader of either shape goes through
 # master_done_input_event_ids (src/runtime/api/message_utils.py).
@@ -56,9 +56,9 @@ COMPLETE = "complete"
 # -- Scheduler / handler ----------------------------------------------------
 HANDLER_RESULT = "handler_result"
 # The handler_result event's ``status`` field: the renderer turns ``ok`` into a
-# ✓ system line and anything else into ✗. Persisted wire values; the producer
-# (src/features/cron/scheduler.py) and the renderer (src/runtime/message_aggregator.py)
-# share this one spelling, so a one-site edit cannot fork the pair.
+# ✓ system line and anything else into ✗. Persisted wire values; the producer and
+# the renderer (src/runtime/message_aggregator.py) share this one spelling, so a
+# one-site edit cannot fork the pair.
 HANDLER_STATUS_OK = "ok"
 HANDLER_STATUS_ERROR = "error"
 SCHEDULED_TRIGGER = "scheduled_trigger"
@@ -82,9 +82,8 @@ AGENT_MESSAGE = "agent_message"
 # -- Slack -------------------------------------------------------------------
 # A reply the master posted to its session's Slack thread through
 # ``charliebot slack reply``; the same-named ``slack_reply`` payload names the
-# summon it answers, which the round-end audit reads
-# (src/features/slack/slack_listener.py). Both uses share this one constant, as with
-# CONTEXT_READING below.
+# summon it answers, which the round-end audit reads. Both uses share this one
+# constant, as with CONTEXT_READING below.
 SLACK_REPLY = "slack_reply"
 
 # -- Discord -----------------------------------------------------------------
@@ -149,11 +148,6 @@ CONTEXT_COMPACT_AT = "context_compact_at"
 # -- Clone / fork ------------------------------------------------------------
 CLONE_START = "clone_start"
 
-# -- Improve loop ------------------------------------------------------------
-IMPROVE_ITERATION_COMPLETED = "improve_iteration_completed"
-IMPROVE_COMPLETED = "improve_completed"
-IMPROVE_FAILED = "improve_failed"
-
 # -- Sidebar / UI ------------------------------------------------------------
 RUNNING_CHANGED = "running_changed"
 UNREAD_CHANGED = "unread_changed"
@@ -204,11 +198,8 @@ TASK_INPUT_ACKNOWLEDGED = "task_input_acknowledged"
 # -- LaTeX -------------------------------------------------------------------
 TEX_EDIT_PROPOSED = "tex_edit_proposed"
 
-# -- Improve loop / scheduled-task runs ---------------------------------------
-# IMPROVE_STOPPED names the improve_sequence outcome where a stop request ended
-# the loop (src/features/improve/improve_sequence.py). TASK_TRIGGERED is the manual
-# scheduled-task run endpoint's response type (src/features/cron/api.py).
-IMPROVE_STOPPED = "improve_stopped"
+# -- Scheduled-task runs ------------------------------------------------------
+# TASK_TRIGGERED is the manual scheduled-task run endpoint's response type.
 TASK_TRIGGERED = "task_triggered"
 
 # -- Backend-specific --------------------------------------------------------
@@ -219,7 +210,7 @@ FILE_WRITE = "file_write"
 # detection chain consumes the same type on read-back. The event carries the
 # status object under the ``rate_limit_info`` payload key — a persisted wire
 # value every reader (src/backends/claude_code/claude_relay.py,
-# src/runtime/worker.py, src/features/improve/improve_command.py) shares
+# src/runtime/worker.py, the quota check of a loop controller) shares
 # through this constant.
 RATE_LIMIT_EVENT = "rate_limit_event"
 RATE_LIMIT_INFO = "rate_limit_info"

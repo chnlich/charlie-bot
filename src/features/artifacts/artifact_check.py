@@ -2,7 +2,7 @@
 
 An artifact genre (plan, understanding, sitrep, debug, explain) maps to an assertion set
 here and nowhere else: adding a genre means registering its assertion set in this module,
-naming it in ``src.infra.constants.ARTIFACT_GENRES`` (the vocabulary the artifact CLI parses;
+naming it in ``src.features.artifacts.constants.ARTIFACT_GENRES`` (the vocabulary the artifact CLI parses;
 the import-time equality check below fails a missed step), and giving it a template mapping
 in ``src.features.artifacts.artifact_shared.GENRE_TEMPLATES`` (set-equality with the registry is pinned by
 test_artifact_check, so a missed entry fails there, not as a KeyError when style-verbatim
@@ -37,7 +37,8 @@ from html import parser
 from typing import TYPE_CHECKING
 
 from src.features.artifacts import artifact_shared, plan_diff
-from src.infra import constants, timeouts
+from src.features.artifacts.constants import ARTIFACT_GENRES
+from src.infra import constants
 
 if TYPE_CHECKING:
   from src.infra import config
@@ -712,13 +713,13 @@ _ASSERTION_SETS: dict[str, tuple[str, ...]] = {
         (BYTE_INTEGRITY, STYLE_VERBATIM, RENDER_PATH, SECTIONS_NUMBERED, EXPLAIN_TRIAD, FORK_OPEN_SHAPE, ORDINAL_NAMED),
 }
 
-# The CLI parses GENRES from src.infra.constants (the artifact chain must not load this
+# The CLI parses GENRES from src.features.artifacts.constants (the artifact chain must not load this
 # module to build its parser), so the registry and the parsed vocabulary must state the
 # same genres; a registration that skips the constants tuple fails here, at import.
-GENRES: tuple[str, ...] = constants.ARTIFACT_GENRES
+GENRES: tuple[str, ...] = ARTIFACT_GENRES
 if GENRES != tuple(_ASSERTION_SETS):
   raise ValueError(
-      f"src.infra.constants.ARTIFACT_GENRES {GENRES} drifted from _ASSERTION_SETS "
+      f"src.features.artifacts.constants.ARTIFACT_GENRES {GENRES} drifted from _ASSERTION_SETS "
       f"{tuple(_ASSERTION_SETS)}; name every registered genre in both")
 
 
@@ -744,6 +745,11 @@ def run_assertions(genre: str, artifact: pathlib.Path, cfg: config.CharlieBotCon
 # ---------------------------------------------------------------------------
 
 _PROBE_SYSTEM_PROMPT = "You are a careful cold reader. Answer every question from the page alone."
+
+# One-shot model pass over an entire artifact page (sitrep / debug / explain
+# cold-read gate); the page text alone dwarfs a naming prompt, so the 30 s
+# light one-shot budget does not apply.
+ARTIFACT_PROBE_TIMEOUT = 300.0  # seconds
 
 # The single canonical copy of the cold-read seven-question prompt. skills/file-server/SKILL.md's
 # Cold-Read Gate section points at this module instead of restating the text.
@@ -800,8 +806,8 @@ def run_probe(cfg: config.CharlieBotConfig, artifact: pathlib.Path, trigger: str
       # No cgroup_session_id: the artifact probe runs from the CLI with no
       # CharlieBot session home, so it cannot enter any session's cgroup.
       answer = asyncio.run(
-          backend_types.build_backend(option, cfg).one_shot_text(
-              prompt, _PROBE_SYSTEM_PROMPT, timeout=timeouts.ARTIFACT_PROBE_TIMEOUT))
+          backend_types.build_backend(option,
+                                      cfg).one_shot_text(prompt, _PROBE_SYSTEM_PROMPT, timeout=ARTIFACT_PROBE_TIMEOUT))
       return ProbeResult(attempts=attempts, backend_id=option.id, answer=answer)
     except Exception as e:
       attempts.append((option.id, str(e)))

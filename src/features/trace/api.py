@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 
 from src.features.trace import direct_pass_child, trace_merge_child
 from src.infra.config import get_config
-from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH, PERFETTO_VIEWER_PATH
+from src.infra.constants import FILE_SERVER_MOUNTS, PERFETTO_MERGED_PATH
 from src.infra.log_once import LazyStructlogLogger
 from src.runtime import templating
 from src.runtime.hooks import wiring
@@ -31,6 +31,10 @@ from src.runtime.hooks import wiring
 log = LazyStructlogLogger()
 
 router = APIRouter()
+
+# The viewer route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
+# reads local trace files, so it sits behind the access key like the file server.
+PERFETTO_VIEWER_PATH = "/perfetto"
 
 _PERFETTO_MERGE_CACHE_LIMIT = 24
 

@@ -7,10 +7,14 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from starlette.responses import Response
 
-from src.infra.constants import FILE_SERVER_MOUNTS, NCU_VIEWER_PATH
+from src.infra.constants import FILE_SERVER_MOUNTS
 from src.runtime import templating
 
 router = APIRouter()
+
+# The viewer route path. The auth whitelist (src.runtime.api.auth) does not admit it — it
+# reads local report files, so it sits behind the access key like the file server.
+NCU_VIEWER_PATH = "/ncu"
 
 
 def _ncu_error_page(request: Request, message: str, status_code: int) -> HTMLResponse:

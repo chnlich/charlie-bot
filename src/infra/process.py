@@ -252,7 +252,7 @@ def classify_cgroup_exit(
     return (
         f"session 内存上限触发（上限 {memory_max_mb} MB），重任务请走集群三入口："
         "gpuq＝集群任务队列提交，ssh gate＝用 ssh 在远端跑把关测试，"
-        "remote-launch＝charliebot 的远端启动命令")
+        "远端启动＝charliebot 在远端启动长任务的命令")
   if after[1] > before[1]:
     return "进程被宿主机全局 OOM 终止（session 内存上限未触发）"
   return None

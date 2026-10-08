@@ -28,9 +28,8 @@ with gc_off(collect=False):
   from fastapi import FastAPI, WebSocket, WebSocketDisconnect
   from fastapi.staticfiles import StaticFiles
   from isal.igzip import IGzipFile
-  from starlette.datastructures import Headers, QueryParams
+  from starlette.datastructures import Headers
   from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
-  from starlette.responses import Response
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
   from src.app import pages, registrations
@@ -571,28 +570,8 @@ with gc_off(collect=False):
 
 _static_dir = REPO_ROOT / "web" / "static"
 
-# Every template-referenced asset URL carries ?v=<static_asset_version>: the
-# runtime git version plus the served tree's content digest, refreshed per page
-# render, so the token tracks the bytes the URL serves — a working-tree edit
-# between restarts changes the token on the next render. A response that named
-# its version therefore names its content, and the immutable header lets the
-# browser skip the per-asset revalidation round trip on every later page load;
-# a request without a version parameter keeps default caching because its URL
-# can outlive its content.
-_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
-
-
-class _VersionedStaticFiles(StaticFiles):
-
-  async def get_response(self, path: str, scope: Scope) -> Response:
-    response = await super().get_response(path, scope)
-    if response.status_code == 200 and QueryParams(scope.get("query_string", b"")).get("v"):
-      response.headers["cache-control"] = _IMMUTABLE_CACHE_CONTROL
-    return response
-
-
 if _static_dir.exists():
-  app.mount("/static", _VersionedStaticFiles(directory=str(_static_dir)), name="static")
+  app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 # ---------------------------------------------------------------------------
 # Entry point

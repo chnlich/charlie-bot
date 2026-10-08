@@ -33,13 +33,10 @@ point that reads or writes the live store (:func:`load_store`, ``memory add``, t
 :func:`lint` reports the tree as it finds it and never calls it.
 """
 
-import os
 import pathlib
 import re
 import subprocess
 from collections.abc import Callable
-
-from src.infra import memo
 
 _TOPICS_FILENAME = "topics"
 _ENTRIES_DIRNAME = "entries"
@@ -54,13 +51,6 @@ DEFAULT_MEMORY_TOPICS = (
     "charliebot\n")
 
 DEFAULT_MEMORY_GITIGNORE = "staging/\n"
-
-# Bound on _store_memo in memory dirs, not entries: a host serves one memory
-# dir in steady state (tests hold several), so a small cap bounds memoized
-# Store payloads. An entry holds the stat-only signature alongside the Store.
-_STORE_MEMO_LIMIT = 8
-_store_memo: memo.BoundedMemo[pathlib.Path, tuple[tuple[tuple[str, int, int], ...],
-                                                  Store]] = memo.BoundedMemo(_STORE_MEMO_LIMIT)
 
 # Header line: ``field: value`` where field is lower_snake. Value charset is
 # validated per field below (slug-charset for most, free text for ``title``).
@@ -366,45 +356,6 @@ def _iter_entry_files(memory_dir: pathlib.Path) -> list[pathlib.Path]:
   return files
 
 
-def _store_signature(memory_dir: pathlib.Path) -> tuple[tuple[str, int, int], ...] | None:
-  """Stat-only signature of every byte :func:`load_store` parses.
-
-  One (relative path, mtime_ns, size) triple per parsed file — the topics
-  vocabulary plus every entries/<topic>/*.md — so any rewrite, append, new
-  entry, or deletion changes the signature. Returns None when a file cannot
-  be stat'ed (missing topics file, a race with a writer): that call must not
-  memoize, and the load itself surfaces or tolerates the missing file exactly
-  as the uncached path does.
-
-  Walked with os.scandir and string joins: pathlib.Path.glob/pathlib.Path.relative_to would
-  rebuild a pathlib.Path per entry, and that allocation cost dominates the stats the
-  signature exists to pay (the _load_session_metas preamble's lesson).
-  """
-  sig: list[tuple[str, int, int]] = []
-  try:
-    st = os.stat(os.path.join(memory_dir, _TOPICS_FILENAME))
-  except OSError:
-    return None
-  sig.append((_TOPICS_FILENAME, st.st_mtime_ns, st.st_size))
-  try:
-    topic_names = sorted(e.name for e in os.scandir(os.path.join(memory_dir, _ENTRIES_DIRNAME)) if e.is_dir())
-  except OSError:
-    topic_names = []  # a missing entries/ loads as the valid empty store
-  for topic in topic_names:
-    topic_path = os.path.join(memory_dir, _ENTRIES_DIRNAME, topic)
-    try:
-      md_names = sorted(e.name for e in os.scandir(topic_path) if e.name.endswith(".md"))
-    except OSError:
-      return None
-    for name in md_names:
-      try:
-        st = os.stat(os.path.join(topic_path, name))
-      except OSError:
-        return None
-      sig.append((f"{topic}/{name}", st.st_mtime_ns, st.st_size))
-  return tuple(sig)
-
-
 def _seed_if_missing(path: pathlib.Path, content: str) -> None:
   """Write content to path only if the file does not already exist."""
   if not path.exists():
@@ -440,36 +391,8 @@ def load_store(memory_dir: pathlib.Path) -> Store:
   :class:`MemoryFormatError`. Validation stays dual-read: legacy
   ``created``/``source``/``both``/body-title entries still load (only lint is
   v2-strict).
-
-  Repeat loads of an unchanged store are served from a process-wide memo
-  keyed on :func:`_store_signature`'s (path, mtime_ns, size) read of every
-  parsed file: the master run's per-message instruction build and the worker
-  spawn path re-enter here many times a minute under the same bytes, and
-  entry writes go through file rewrites that bump the signature. Only
-  successful loads memoize; a malformed store keeps raising on every call.
-  The memoized Store is shared with callers, whose contract is read-only.
-  A rewrite to a malformed store drops the stale hit, so the failure never
-  lingers as an entry the next call could confuse with the current bytes.
   """
   ensure_store(memory_dir)
-  sig = _store_signature(memory_dir)
-  if sig is not None:
-    hit = _store_memo.get(memory_dir)
-    if hit is not None and hit[0] == sig:
-      return hit[1]
-  try:
-    store = _load_store_uncached(memory_dir)
-  except BaseException:
-    if sig is not None:
-      _store_memo.drop(memory_dir)
-    raise
-  if sig is not None:
-    _store_memo.store(memory_dir, (sig, store))
-  return store
-
-
-def _load_store_uncached(memory_dir: pathlib.Path) -> Store:
-  """Parse the store from disk; the work :func:`load_store` memoizes."""
   topics = _load_topics(memory_dir)
   entries: list[Entry] = []
   for md_file in _iter_entry_files(memory_dir):

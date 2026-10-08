@@ -259,7 +259,7 @@ from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR  # noqa: E402
 from src.infra.home import CREDENTIALS_FILE  # noqa: E402
 from src.features.artifacts.plans import PlanRegistryManager  # noqa: E402
 from src.features.cron.scheduler import Scheduler  # noqa: E402
-from src.runtime.hooks import scheduled_handlers  # noqa: E402
+from src.runtime.hooks import scheduled_handlers, wiring  # noqa: E402
 from src.runtime.sessions import SessionManager  # noqa: E402
 from src.runtime.run_token import CallerIdentity, RunTokenClaims, sign_run_token  # noqa: E402
 from src.runtime.task_sessions import TaskTreeManager  # noqa: E402
@@ -1078,17 +1078,26 @@ def make_router_client(
   return TestClient(app)
 
 
+def include_registered_routers(app: FastAPI, prefix: str) -> None:
+  """Include the routers that packages registered under *prefix*, the way server.py includes them."""
+  for module, router_prefix, tags, attr in wiring.routers():
+    if router_prefix == prefix:
+      app.include_router(getattr(importlib.import_module(module), attr), prefix=router_prefix, tags=list(tags))
+
+
 def make_sessions_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:
   """make_router_client over the sessions router, mounted at /api/sessions."""
   return make_router_client(cfg, session_mgr, sessions_router, "/api/sessions")
 
 
 def make_internal_router_client(cfg: Any, session_mgr: Any) -> TestClient:
-  """make_router_client over the internal router, mounted at /api/internal; the internal routes
-  take cfg through the on-loop dependency (same instance the sync key serves), so the override
-  keys in make_router_client cover them. cfg may be a MagicMock when the tested route never
-  reads it."""
-  return make_router_client(cfg, session_mgr, internal_router, "/api/internal")
+  """make_router_client over the internal router, mounted at /api/internal, plus the feature routers
+  registered under that prefix; the internal routes take cfg through the on-loop dependency
+  (same instance the sync key serves), so the override keys in make_router_client cover them.
+  cfg may be a MagicMock when the tested route never reads it."""
+  client = make_router_client(cfg, session_mgr, internal_router, "/api/internal")
+  include_registered_routers(client.app, "/api/internal")
+  return client
 
 
 def make_cron_client(cfg: CharlieBotConfig, session_mgr: SessionManager) -> TestClient:

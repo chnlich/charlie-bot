@@ -209,6 +209,7 @@ def make_pm_build(text: str, pm_builds: list | None = None):
 
 
 def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
+  from src.features.improve import api as improve_api
   from src.infra import config
   from src.runtime.api import internal as internal_api
   from src.runtime.api import sessions as sessions_api
@@ -219,6 +220,7 @@ def make_api_client(cfg, session_mgr, task_mgr) -> TestClient:
   app.include_router(sessions_api.router, prefix="/api/sessions")
   app.include_router(threads_api.router, prefix="/api/threads")
   app.include_router(internal_api.router, prefix="/api/internal")
+  app.include_router(improve_api.router, prefix="/api/internal")
   app.dependency_overrides[config.get_config] = lambda: cfg
   app.dependency_overrides[get_config_on_loop] = lambda: cfg
   app.dependency_overrides[get_session_manager] = lambda: session_mgr

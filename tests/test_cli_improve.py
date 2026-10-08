@@ -5,6 +5,7 @@ from unittest import mock
 import conftest
 import pytest
 
+from src.features.improve import api as improve_api
 from src.features.improve import cli as improve
 from src.features.improve import improve_command
 from src.features.improve import stop_cli as improve_stop
@@ -14,7 +15,7 @@ from src.runtime.cli import common
 _INTERNAL_GET_CONFIG_PATCH_TARGET = "src.runtime.api.internal.get_config"
 _INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET = "src.runtime.api.internal.check_takeoff_gate"
 _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET = "src.runtime.spawner_backends.resolve_requested_subagent_backend_model"
-_INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET = "src.runtime.api.internal.reserve_loop_state"
+_IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET = "src.features.improve.api.reserve_loop_state"
 
 
 def _improve_argv(session_id: str | None, repo: str, goal_file: pathlib.Path, *extra: str) -> list[str]:
@@ -101,15 +102,13 @@ async def test_improve_endpoint_returns_404_for_missing_session() -> None:
   """POST /api/internal/improve returns 404 when session doesn't exist."""
   import fastapi
 
-  from src.runtime.api import internal
-
   req = models.ImproveRequest(session_id="missing", repo_path="/tmp/repo", base_branch="main", iterations=1, goal="fix")
 
   session_mgr = mock.AsyncMock()
   session_mgr.get_session.return_value = None
 
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.start_improve_loop(req, session_mgr=session_mgr)
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr)
   assert exc_info.value.status_code == 404
 
 
@@ -117,8 +116,6 @@ async def test_improve_endpoint_returns_404_for_missing_session() -> None:
 async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
   """POST /api/internal/improve returns 400 when backend resolution fails."""
   import fastapi
-
-  from src.runtime.api import internal
 
   req = models.ImproveRequest(session_id="s1", repo_path="/tmp/repo", base_branch="main", backend="missing", goal="fix")
 
@@ -134,7 +131,7 @@ async def test_improve_endpoint_returns_400_for_invalid_backend() -> None:
            _RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET,
            side_effect=fake_resolve_requested_subagent_backend_model), \
        pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
 
   assert exc_info.value.status_code == 400
   assert exc_info.value.detail == "requested backend 'missing' is not in backends.options"
@@ -146,7 +143,6 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
   import fastapi
 
   from src.features.improve import improve_command
-  from src.runtime.api import internal
 
   req = models.ImproveRequest(
       session_id="s1",
@@ -164,10 +160,10 @@ async def test_improve_endpoint_returns_409_for_running_loop() -> None:
        mock.patch(_INTERNAL_CHECK_TAKEOFF_GATE_PATCH_TARGET, return_value=None), \
        mock.patch(_RESOLVE_SUBAGENT_BACKEND_MODEL_PATCH_TARGET, return_value=("codex-o3", "o3")), \
        mock.patch(
-           _INTERNAL_RESERVE_LOOP_STATE_PATCH_TARGET,
+           _IMPROVE_API_RESERVE_LOOP_STATE_PATCH_TARGET,
            side_effect=improve_command.ImproveLoopAlreadyRunningError(7)), \
        pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
+    await improve_api.start_improve_loop(req, session_mgr=session_mgr, task_mgr=mock.AsyncMock())
 
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "Loop 7 is already running for this session. Use charliebot improve-stop first."
@@ -213,8 +209,6 @@ def test_improve_stop_cli_exits_1_without_a_running_loop(
 @pytest.mark.asyncio
 async def test_improve_stop_endpoint_marks_loop_stopped(tmp_path: pathlib.Path) -> None:
   """POST /api/internal/improve/stop stops the running loop; the session takes a new loop."""
-  from src.runtime.api import internal
-
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -224,7 +218,7 @@ async def test_improve_stop_endpoint_marks_loop_stopped(tmp_path: pathlib.Path) 
   session_mgr.get_session.return_value = mock.MagicMock()
 
   req = models.ImproveStopRequest(session_id="s1")
-  resp = await internal.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
+  resp = await improve_api.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
   assert resp == {"status": "stopped", "session_id": "s1"}
 
   saved = await improve_command.load_loop_state("s1", state.loop_id, cfg)
@@ -236,8 +230,6 @@ async def test_improve_stop_endpoint_409_without_running_loop(tmp_path: pathlib.
   """A session with no running loop answers 409 instead of pretending to stop."""
   import fastapi
 
-  from src.runtime.api import internal
-
   cfg = mock.MagicMock()
   cfg.sessions_dir = tmp_path / "sessions"
   cfg.sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -246,7 +238,7 @@ async def test_improve_stop_endpoint_409_without_running_loop(tmp_path: pathlib.
 
   req = models.ImproveStopRequest(session_id="s1")
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
+    await improve_api.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
   assert exc_info.value.status_code == 409
   assert exc_info.value.detail == "No active improve loop in this session"
 
@@ -256,15 +248,13 @@ async def test_improve_stop_endpoint_404_for_missing_session(tmp_path: pathlib.P
   """A missing session answers 404 like the other session-scoped internal routes."""
   import fastapi
 
-  from src.runtime.api import internal
-
   cfg = mock.MagicMock()
   session_mgr = mock.AsyncMock()
   session_mgr.get_session.return_value = None
 
   req = models.ImproveStopRequest(session_id="missing")
   with pytest.raises(fastapi.HTTPException) as exc_info:
-    await internal.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
+    await improve_api.stop_improve(req, cfg=cfg, session_mgr=session_mgr)
   assert exc_info.value.status_code == 404
 
 

@@ -871,8 +871,8 @@ class AgentBackend(ABC):
     backend was built with cgroup_session_id=None). The nice raise puts the
     turn's whole process tree (agent CLI plus the tool subprocesses it
     spawns) background relative to this server's interactive paths — the
-    voice decode and the HTTP handlers the user waits on; nice is
-    contention-only arbitration, so an uncontended box schedules identically.
+    request handlers the user waits on; nice is contention-only arbitration,
+    so an uncontended box schedules identically.
     """
     self._active_session_cgroup = self._prepare_session_cgroup()
     cgroup_preexec = make_session_cgroup_preexec(

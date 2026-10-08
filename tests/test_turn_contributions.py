@@ -30,9 +30,12 @@ from conftest import (
     patch_instructions_content,
 )
 
+from src.features.discord.event_types import DISCORD_REPLY
 from src.features.discord.metadata import DiscordOrigin
 from src.features.latex import latex
+from src.features.latex.event_types import TEX_EDIT_PROPOSED
 from src.features.latex.turn_contribution import LatexTurnContribution
+from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
 from src.infra.models import CreateSessionRequest, SessionMetadata
@@ -322,8 +325,8 @@ def test_server_turn_paths_work_when_a_package_is_not_registered(
 
 @pytest.mark.parametrize(
     "event_type, content, rendered", [
-        (ET.SLACK_REPLY, "hello slack", "Posted to Slack: hello slack"),
-        (ET.DISCORD_REPLY, "hello discord", "Posted to Discord: hello discord"),
+        (SLACK_REPLY, "hello slack", "Posted to Slack: hello slack"),
+        (DISCORD_REPLY, "hello discord", "Posted to Discord: hello discord"),
     ])
 def test_reply_events_render_as_system_rows(event_type: str, content: str, rendered: str) -> None:
   event = {"type": event_type, "content": content, "id": "e1", "timestamp": "2026-01-01T00:00:00Z"}
@@ -437,7 +440,7 @@ async def test_a_changed_tex_file_is_proposed_after_master_done_and_reverted(
   mgr, session_id, _ = await run_turn(tmp_path, monkeypatch, edits_tex(tex_file, "edited by the agent"))
 
   types = [event["type"] for event in mgr.load_chat_events_sync(session_id)]
-  assert types == [ET.MASTER_DONE, ET.TEX_EDIT_PROPOSED]
+  assert types == [ET.MASTER_DONE, TEX_EDIT_PROPOSED]
   assert tex_file.read_text(encoding="utf-8") == "original"
   assert latex.get_pending_proposal() == {"old": "original", "new": "edited by the agent"}
 

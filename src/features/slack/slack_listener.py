@@ -57,7 +57,7 @@ from src.features.chat_threads.thread_entry import (
     follow_wake_label,
     summon_prompt_tail,
 )
-from src.infra import event_types as ET
+from src.features.slack.event_types import SLACK_REPLY
 from src.infra import timeouts
 from src.infra.config import CharlieBotConfig, get_credentials
 from src.infra.http import get_http_client
@@ -98,7 +98,7 @@ _FOLLOW_TRIGGER_PREFIX = "slack-thread-follow"
 SLACK = ThreadPlatform(
     name="slack",
     display_name="Slack",
-    reply_event_type=ET.SLACK_REPLY,
+    reply_event_type=SLACK_REPLY,
     reply_command=_REPLY_COMMAND,
     max_post_chars=_MAX_POST_CHARS,
     scope_doc="slack_reply_scope.md",

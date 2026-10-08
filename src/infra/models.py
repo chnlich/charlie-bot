@@ -331,7 +331,7 @@ class MasterRunRecord(BaseModel):
   raw_log: str  # absolute path to this turn's raw NDJSON transport file
   # Chat events this turn answers, in arrival order: one event on every
   # single-input turn, the whole batch on a merged one. The whole list is the
-  # restart-replay exclusion set and the Slack reply binding's fallback.
+  # restart-replay exclusion set and the chat-thread reply binding's fallback.
   user_event_ids: list[str] = Field(default_factory=list)
 
   @model_validator(mode="before")

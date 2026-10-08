@@ -36,7 +36,7 @@ A platform describes itself to the core with one `ThreadPlatform` value and one 
 |-------|---------|-------|---------|
 | `name` | Summon event-block key and prefix of every persisted marker; the derived keys spell themselves from it | `slack` | `discord` |
 | `display_name` | Human-facing platform name in prompts, notices, and logs | `Slack` | `Discord` |
-| `reply_event_type` | Wire type of the persisted reply event | `ET.SLACK_REPLY` (`slack_reply`) | `ET.DISCORD_REPLY` (`discord_reply`) |
+| `reply_event_type` | Wire type of the persisted reply event | `SLACK_REPLY` (`slack_reply`) | `DISCORD_REPLY` (`discord_reply`) |
 | `reply_command` | The reply command the prompt contract states and the round-end audit enforces | `charliebot slack reply` | `charliebot discord reply` |
 | `max_post_chars` | Per-message limit `chunk_text` splits at | `40000` | `2000` |
 | `scope_doc` | The platform's scope doc under prompts/ (what personal information may enter its threads): read fresh into every summon prompt, named by every follow wake | `slack_reply_scope.md` | `discord_reply_scope.md` |
@@ -79,7 +79,7 @@ The adapter is not the whole platform module. Each platform also owns:
 - **The server start and stop.** Each platform's `service.py` (`src/features/slack/service.py`, `src/features/discord/service.py`) defines the `start_service`/`stop_service` pair: the listener task plus the boot-backfill task, started when the platform's credentials and allowed users are set and cancelled on shutdown. The lifespan runs every registered service through the wiring registry (`src/runtime/hooks/wiring.py`; `src/app/registrations.py` lists the packages).
 - **The round-end hook.** `SessionManager.persist_and_broadcast` in `src/runtime/sessions.py` runs each registered turn contribution's `after_turn` as its own logged task on every `master_done` event; each platform's `turn_contribution.py` (`src/features/slack/turn_contribution.py`, `src/features/discord/turn_contribution.py`) calls its `deliver_done` there.
 - **The CLI and the internal endpoints.** Slack: `src/features/slack/cli.py` (`charliebot slack reply`, `charliebot slack ack`) over `POST /api/internal/slack/reply` and `POST /api/internal/slack/ack`; Discord: `src/features/discord/cli.py` (`charliebot discord reply`, `charliebot discord read`, `charliebot discord check`) over the matching endpoints in `src/runtime/api/internal.py`.
-- **The reply event type and its session-view row.** The constants `ET.SLACK_REPLY` and `ET.DISCORD_REPLY` live in `src/infra/event_types.py`; each platform's turn contribution returns its renderer from `event_renderers`, and `src/runtime/message_aggregator.py` merges them into its render table ("Posted to Slack: ..." / "Posted to Discord: ...").
+- **The reply event type and its session-view row.** `SLACK_REPLY` lives in `src/features/slack/event_types.py` and `DISCORD_REPLY` in `src/features/discord/event_types.py`; each platform's turn contribution returns its renderer from `event_renderers`, and `src/runtime/message_aggregator.py` merges them into its render table ("Posted to Slack: ..." / "Posted to Discord: ...").
 
 ---
 
@@ -97,7 +97,7 @@ A new platform repeats the shape Slack and Discord already fill. Work down this 
 8. Register the service in the package's `__init__.py` (`wiring.register_service`) and write its `service.py`: the listener task plus the boot-backfill task, behind the platform's credentials and allowed users.
 9. Hook the round end: a turn contribution whose `after_turn` awaits `deliver_done`, registered in the package's `register()` (`turn_contributions.register_turn_contribution`).
 10. Add the CLI verbs and the internal endpoints for reply and ack (or the platform's read equivalent, as Discord's `read` is).
-11. Add the reply event type constant in `src/infra/event_types.py` and return its session-view renderer from the same contribution's `event_renderers`.
+11. Add the reply event type constant in the package's own `event_types.py` and return its session-view renderer from the same contribution's `event_renderers`.
 12. Add the tests. The shared core is already covered platform-neutrally by the synthetic platform in `tests/core/test_thread_entry.py` ("fakechat", an integer id sort that is not the string sort); the platform's own tests mirror `tests/core/test_discord_listener.py`.
 
 ---

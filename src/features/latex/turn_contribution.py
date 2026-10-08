@@ -6,7 +6,7 @@ import asyncio
 from typing import TYPE_CHECKING
 
 from src.features.latex import latex
-from src.infra import event_types as ET
+from src.features.latex.event_types import TEX_EDIT_PROPOSED
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import SessionMetadata
@@ -36,8 +36,8 @@ class LatexTurnContribution(turn_contributions.TurnContribution):
       return
     proposal = await asyncio.to_thread(latex.check_tex_changed)
     if proposal:
-      await sessions.persist_and_broadcast(meta.id, {"type": ET.TEX_EDIT_PROPOSED})
-      log.info(ET.TEX_EDIT_PROPOSED, session=meta.id)
+      await sessions.persist_and_broadcast(meta.id, {"type": TEX_EDIT_PROPOSED})
+      log.info(TEX_EDIT_PROPOSED, session=meta.id)
     else:
       latex.clear_snapshot()
 

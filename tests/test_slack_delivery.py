@@ -22,6 +22,7 @@ from conftest import (
 from structlog.testing import capture_logs
 
 from src.features.chat_threads.thread_entry import _NO_REPLY_NOTICE, lost_summons
+from src.features.slack.event_types import SLACK_REPLY
 from src.features.slack.slack_listener import SLACK, SlackReplyError, backfill_lost_summons, deliver_done, post_reply
 from src.features.slack.metadata import SlackOrigin
 from src.infra import event_types as ET
@@ -192,7 +193,7 @@ async def test_reply_in_a_summon_round_posts_persists_and_clears_the_eye(tmp_pat
       "answers": summon["id"],
   }
   assert client.posts == [{"channel": _CHANNEL, "text": "the answer", "thread_ts": _THREAD}]
-  replies = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  replies = _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
   assert len(replies) == 1
   assert replies[0]["content"] == "the answer"
   assert replies[0]["slack_reply"] == {"answers": summon["id"], "chars": 10, "chunks": 1}
@@ -209,7 +210,7 @@ async def test_blank_reply_is_refused_422_before_any_post(tmp_path: Path, text: 
     await post_reply(sid, text, cfg, session_mgr)
   assert excinfo.value.status == 422
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -232,7 +233,7 @@ async def test_slack_rejecting_the_post_is_502_and_persists_nothing(tmp_path: Pa
   assert excinfo.value.status == 502
   assert "nothing was persisted" in excinfo.value.detail
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
   assert client.reactions[_THREAD] == {"eyes"}
   assert any(ev["event"] == "slack_post_gave_up" for ev in logs)
   assert not any(ev["event"] == "slack_reply_posted" for ev in logs)
@@ -270,7 +271,7 @@ async def test_reply_refuses_as_a_whole_when_it_still_links_the_file_server(tmp_
   assert link in excinfo.value.detail
   assert "charliebot publish /home/u/artifacts/page.html" in excinfo.value.detail
   assert not client.posts
-  assert not _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)
+  assert not _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)
 
 
 @pytest.mark.asyncio
@@ -297,7 +298,7 @@ def test_slack_reply_event_projects_as_a_system_message() -> None:
   deltas = list(
       agg.feed(
           {
-              "type": ET.SLACK_REPLY,
+              "type": SLACK_REPLY,
               "content": "hi there",
               "slack_reply": {
                   "answers": None,
@@ -453,7 +454,7 @@ async def test_batch_holding_two_summons_binds_the_reply_to_the_newer_one(tmp_pa
     master_cc_state._current_items.pop(sid, None)
 
   assert result["answers"] == newer["id"]
-  reply_event = _of_type(session_mgr.load_chat_events_sync(sid), ET.SLACK_REPLY)[0]
+  reply_event = _of_type(session_mgr.load_chat_events_sync(sid), SLACK_REPLY)[0]
   assert reply_event["slack_reply"]["answers"] == newer["id"]
 
   # Both summons count as answered: one MASTER_DONE carries the whole list.

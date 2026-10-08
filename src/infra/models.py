@@ -331,16 +331,6 @@ class MasterRunRecord(BaseModel):
   # single-input turn, the whole batch on a merged one.
   user_event_ids: list[str] = Field(default_factory=list)
 
-  @model_validator(mode="before")
-  @classmethod
-  def _load_legacy_single_event_id(cls, data: Any) -> Any:
-    """Load a pre-batching record's single ``user_event_id`` as a one-element list."""
-    if isinstance(data, dict) and "user_event_ids" not in data:
-      legacy = data.get("user_event_id")
-      if legacy:
-        return {**data, "user_event_ids": [legacy]}
-    return data
-
 
 class SessionMetadata(BaseModel):
   # Keys a package registers (src/infra/metadata_slots.py) and keys no package registers live beside the

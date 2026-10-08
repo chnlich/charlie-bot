@@ -414,10 +414,10 @@ Known-alive symbols:
   string at the first config parse or first use. The names have no whole-repo matches outside their
   definitions, so vulture flags them as unused. `check_default_backend` rejects a
   `voice.default_backend` typo against the transcription registry's ids at startup.
-- `voice_setup` (the module `src/features/voice/voice_setup.py`) — reached by string:
-  `scripts/setup.sh` runs `python -m src.features.voice.voice_setup enable` on GPU hosts, so the module
-  has no import-site reference anywhere in Python; a reference scan restricted to `.py`/`.js`
-  sources reads it as an unreferenced module.
+- `voice_setup` (the module `src/features/voice/voice_setup.py`) — imported only from a shell heredoc:
+  on GPU hosts, `scripts/setup.sh` runs `from src.features.voice import voice_setup` and
+  `voice_setup.enable()` inside a Python heredoc. No `.py` or `.js` file references the module, so a
+  reference scan restricted to those sources reads it as an unreferenced module.
 - `_theme`, `_decolor` (attributes set by the no-color arm of `CliHelpFormatter._set_color`,
   `src/infra/help_formatter.py`) — read by stdlib argparse 3.14's own formatting methods
   (`_Section.format_help`, `_format_usage`, `_format_action` read `self._theme` /

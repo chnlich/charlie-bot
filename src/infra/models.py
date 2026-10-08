@@ -14,10 +14,10 @@ from pydantic import (
     Field,
     SerializationInfo,
     SerializerFunctionWrapHandler,
+    ValidationError,
     model_serializer,
     model_validator,
 )
-from pydantic import ValidationError
 
 from src.infra import metadata_slots
 from src.infra.deferred import deferred_import_loader
@@ -129,8 +129,8 @@ class LastRunStatus(StrEnum):
 TaskProfile = Literal["manager", "worker"]
 
 # What one Run actually executed. review is the same worker node's review pass;
-# iteration is one round of an improve loop; scheduled_step is one cron-chain
-# step.
+# iteration and scheduled_step are the Runs a sequence controller launched: one
+# round of its sequence, one step of its chain.
 RunKind = Literal["manager_turn", "work", "review", "iteration", "scheduled_step"]
 
 # Derived task lifecycle, rebuilt from task_closed/task_reopened facts - never
@@ -170,10 +170,10 @@ class EventRef(BaseModel):
 
 
 class SequenceRef(BaseModel):
-  # Execution-sequence association: an improve loop or a cron-steps chain.
+  # Execution-sequence association: a Run that a sequence controller launched.
   model_config = ConfigDict(extra="forbid")
 
-  kind: Literal["improve", "cron_steps"]
+  kind: str  # the owning controller's declared sequence kind
   owner_ref: str
   position: int
 

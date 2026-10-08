@@ -605,7 +605,7 @@ def _append_ndjson_sync(path: pathlib.Path, line: str) -> None:
 
 async def append_ndjson(path: pathlib.Path, data: dict) -> None:
   """Async-append a single JSON line to an NDJSON file."""
-  import asyncio  # deferred: the CLI's run-token resolution reads this module sync-only
+  import asyncio  # deferred: charliebot improve --help
 
   path.parent.mkdir(parents=True, exist_ok=True)
   # ensure_ascii=False keeps non-ASCII text verbatim, so grep/rg can match the

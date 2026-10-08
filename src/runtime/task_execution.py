@@ -3,8 +3,8 @@
 This module is the execution-glue owner of the task tree. It holds the
 one :class:`TaskExecutionAdapter` the application installs as the
 :class:`~src.runtime.session_dispatch.TaskInputDispatcher` executor, plus the
-common launch/resume interfaces the later controller stages (improve, cron,
-delayed triggers) and startup recovery consume.
+common launch/resume interfaces the sequence controllers, the delayed
+triggers, and startup recovery consume.
 
 Ownership boundaries it never crosses:
 
@@ -79,7 +79,7 @@ from src.runtime.control_events import (
     stable_withheld_event_id,
 )
 from src.runtime.hooks import backend_lifecycle, backend_types, turn_contributions
-from src.runtime.hooks.sequence_controllers import binding_for, controller_for
+from src.runtime.hooks.sequence_controllers import binding_for, controller_for_sequence
 from src.runtime.master_cc_state import TaskRunBinding
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import (
@@ -93,7 +93,6 @@ from src.runtime.runs import (
 from src.runtime.session_anchors import backend_switch_reset_reason, context_reset_note
 from src.runtime.session_dispatch import child_report_text
 from src.runtime.spawner_backends import _resolve_session_default_backend_model, resolve_backend_option
-from src.runtime.spawner_prompt import load_worker_prompt_sections
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,
     REVIEW_REF_PREFIX,
@@ -485,13 +484,13 @@ class TaskExecutionAdapter:
   def launch(self, session_id: str, run_id: str, *, prompt: str | None = None) -> None:
     """Schedule one registered Run's execution (the common launch seam).
 
-        The delegate path, the review chain, and the later controller stages
-        (improve, cron, triggers) all enter here; the dispatcher's executor
-        seam lands on the same code through :meth:`__call__`. ``prompt`` is the
-        sequence controllers' explicit launch text (an improve iteration's
-        composed description, a cron step's prompt): the Run's own input batch
-        stays what its registration bound, and the override is persisted onto
-        the Run as the launch-text evidence before any process starts.
+        The delegate path, the review chain, and the sequence controllers all
+        enter here; the dispatcher's executor seam lands on the same code
+        through :meth:`__call__`. ``prompt`` is the controllers' explicit
+        launch text (an iteration's composed description, a scheduled step's
+        prompt): the Run's own input batch stays what its registration bound,
+        and the override is persisted onto the Run as the launch-text evidence
+        before any process starts.
         """
     key = (session_id, run_id)
     if key in self._launch_inflight:
@@ -654,9 +653,10 @@ class TaskExecutionAdapter:
         Rechecks run under the control lock immediately before the launch:
         role (the kind/profile pairing), open ancestry and any durable stop
         request. There is no authorization re-judgment here — the takeoff
-        gate is a request-entry check (delegation, improve, agent messages to
-        worker nodes), so review Runs, manual retries, startup recovery and
-        cron fires are never withheld by later conversation. The backend
+        gate is a request-entry check (delegation, the sequence commands,
+        agent messages to worker nodes), so review Runs, manual retries,
+        startup recovery and scheduled fires are never withheld by later
+        conversation. The backend
         resolution afterwards is explicit — a missing or invalid backend fails
         visibly, never silently substituted. ``launch_prompt`` is the sequence
         controllers' explicit launch text; see :meth:`launch`.
@@ -1116,8 +1116,8 @@ class TaskExecutionAdapter:
     if not content:
       raise TaskInvalidError(f"run {run_id} claimed no consumable input; nothing to execute")
 
-    # The dispatched wake carries the cron session's duties (weekly recycle,
-    # firing-report prefix) here. The recycle may clear the node's anchor in
+    # The dispatched wake carries the scheduled session's duties (weekly
+    # recycle, firing-report prefix) here. The recycle may clear the node's anchor in
     # place, so the fresh-conversation judgment below reads the post-recycle state.
     sequence_prefix = await apply_sequence_wake_duties(meta, batch_events)
     if sequence_prefix:
@@ -1221,12 +1221,20 @@ class TaskExecutionAdapter:
       # The review reuses the work Run's exact repo, branch and worktree.
       review_worktree = work_run.worktree_path
       context = await self._build_review_context(session_id, work_run)
-    elif run.kind == "iteration":
-      context = await self._build_iteration_context(meta, run, launch_prompt)
+    elif run.sequence_ref is not None:
+      # The owning controller composes a sequence Run's context: an iteration
+      # returns its rendered bindings + loop position; a controller whose
+      # answer is None (the scheduled step) keeps the runtime's step rendering
+      # over the controller's verbatim launch prompt.
+      controller = controller_for_sequence(run.sequence_ref)
+      if controller is None:
+        raise TaskInvalidError(
+            f"sequence run {run_id} carries owner_ref {run.sequence_ref.owner_ref!r} "
+            "and no registered controller owns its kind")
+      context = await controller.launch_context(meta, run, launch_prompt or "", self._cfg)
+      if context is None:
+        context = await self._build_step_context(meta, run, launch_prompt, task_type)
     elif launch_prompt is not None:
-      # The sequence controllers' explicit launch text: a cron step's prompt
-      # rides verbatim. The controller owns the composition; the adapter
-      # renders it as the task/input context of the assembled instructions.
       context = await self._build_step_context(meta, run, launch_prompt, task_type)
     else:
       context = await self._build_work_context(meta, run, task_type)
@@ -1277,7 +1285,7 @@ class TaskExecutionAdapter:
           error=error,
           quota_exhausted=exc.quota_exhausted)
       # The run's own events log carries the evidence: the failure-summary
-      # reader and the improve quota classification read this event.
+      # reader and the sequence quota classification read this event.
       await self._record_launch_error_event(session_id, run_id, error, quota_exhausted=exc.quota_exhausted)
     except QuotaExhaustedError as exc:
       if worker is not None:
@@ -1413,12 +1421,6 @@ class TaskExecutionAdapter:
       raise TaskInvalidError(f"run {run.id} has no task spec and no input; nothing to execute")
     return description
 
-  def _binding_intro(self, run: RunRecord) -> str:
-    """The workflow bindings' intro line: a retry continuing the worktree says so."""
-    if run.retry_of_run_id is not None and run.worktree_path is not None:
-      return load_worker_prompt_sections(self._cfg)["intro_continuation"].strip()
-    return load_worker_prompt_sections(self._cfg)["intro_new"].strip()
-
   async def _build_work_context(self, meta: SessionMetadata, run: RunRecord, task_type: TaskType) -> str:
     """The work Run's task/input context from the maintained template sections.
 
@@ -1449,7 +1451,7 @@ class TaskExecutionAdapter:
         task_prompts.render_worktree_bindings(
             self._cfg,
             task_type=task_type,
-            intro_line=self._binding_intro(run),
+            intro_line=task_prompts.binding_intro(self._cfg, run),
             branch_name=branch_name,
             base_branch_origin=origin,
             wt_path=worktree_path,
@@ -1457,40 +1459,6 @@ class TaskExecutionAdapter:
     parts.append(task_prompts.render_task_body(self._cfg, description))
     if task is not None and task.keep_worktree:
       parts.append(task_prompts.render_worktree_persistence(self._cfg))
-    return "\n\n".join(part for part in parts if part)
-
-  async def _build_iteration_context(self, meta: SessionMetadata, run: RunRecord, description: str) -> str:
-    """One improve iteration's context: shared-worktree bindings + the loop position.
-
-        The controller composes the description (live goal, optional plan,
-        previous summaries) and passes it as the launch text; the sequence_ref
-        pins the shared worktree facts — an iteration Run without them is a
-        controller bug and fails loudly instead of creating a worktree of its
-        own. The report contract renders from the maintained iteration section
-        with the actual loop directory and position.
-        """
-    seq = run.sequence_ref
-    if seq is None or seq.kind != "improve":
-      raise TaskInvalidError(
-          f"iteration run {run.id} carries no improve sequence_ref; the controller "
-          "that registered it is broken")
-    if not (run.repo_path and run.base_branch and run.branch_name and run.worktree_path):
-      raise TaskInvalidError(
-          f"iteration run {run.id} is missing its pinned shared-worktree provenance "
-          "(repo/base/branch/worktree); refusing to create a divergent worktree")
-    parts = [task_prompts.render_session_info(self._cfg, meta.name)]
-    parts.append(
-        task_prompts.render_worktree_bindings(
-            self._cfg,
-            task_type=TaskType.IMPLEMENT,
-            intro_line=self._binding_intro(run),
-            branch_name=run.branch_name,
-            base_branch_origin=f"`{run.base_branch}`",
-            wt_path=run.worktree_path,
-            repo_path=run.repo_path))
-    parts.append(task_prompts.render_task_body(self._cfg, description))
-    parts.append(
-        task_prompts.render_iteration_reports(self._cfg, loop_dir=seq.owner_ref, iteration_number=seq.position))
     return "\n\n".join(part for part in parts if part)
 
   async def _build_step_context(
@@ -1511,7 +1479,7 @@ class TaskExecutionAdapter:
           task_prompts.render_worktree_bindings(
               self._cfg,
               task_type=task_type,
-              intro_line=self._binding_intro(run),
+              intro_line=task_prompts.binding_intro(self._cfg, run),
               branch_name=run.branch_name,
               base_branch_origin=f"`{run.base_branch}`",
               wt_path=run.worktree_path,
@@ -1822,22 +1790,24 @@ class TaskExecutionAdapter:
         A work Run finishing is not delivery: an implement task's review and
         target-branch landing must complete first, and a failed or blocked
         outcome reports the parent with durable stable evidence while the task
-        and its worktree stay available for the explicit retry. Sequence Runs
-        (iteration, scheduled_step) have no delivery chain of their own: their
-        sequence controller owns progression and the one final report, so this
-        method only re-enters the node's own dispatcher for inputs the Run left
-        pending.
+        and its worktree stay available for the explicit retry. A Run that a
+        sequence controller launched has no delivery chain of its own: its
+        controller owns progression and the one final report, so this method
+        only asks it and re-enters the node's own dispatcher for inputs the
+        Run left pending.
         """
     session_id = meta.id
     try:
-      if run.kind == "scheduled_step":
-        # The firing's owning module re-drives the frontier from this
-        # durable finish: the next permitted step launches, or the ONE
-        # boundary report re-delivers — without waiting for the next
-        # tick or restart, and idempotent against a live controller.
-        await self._redrive_firing(session_id, run)
-        return
-      if run.kind == "iteration":
+      if run.sequence_ref is not None:
+        controller = controller_for_sequence(run.sequence_ref)
+        if controller is None:
+          log.warning(
+              "sequence_run_without_controller",
+              session_id=session_id,
+              run_id=run.id,
+              owner_ref=run.sequence_ref.owner_ref)
+          return
+        await controller.after_run(session_id, run, self._tree, self._cfg)
         return
       if run.kind == "review":
         await self._after_review_run(meta, run, durable_outcome)
@@ -1858,16 +1828,6 @@ class TaskExecutionAdapter:
       # chain left pending. The review path reaches it too, so the
       # inputs admitted during a review Run dispatch here as well.
       await self._tree.dispatch.dispatch_pending(session_id)
-
-  async def _redrive_firing(self, session_id: str, run: RunRecord) -> None:
-    """Re-drive the sequence referenced by the leaf's durable Run facts."""
-
-    sequence = run.sequence_ref
-    if sequence is None:
-      return
-    controller = controller_for(sequence.owner_ref)
-    if controller is not None:
-      await controller.redrive(session_id, self._tree, self._cfg)
 
   async def _after_review_run(self, meta: SessionMetadata, run: RunRecord, durable_outcome: str) -> None:
     session_id = meta.id
@@ -2246,21 +2206,6 @@ async def _reconcile_node(
   await tree.dispatch.dispatch_pending(session_id)
 
 
-async def _replay_sequence_firing(
-    session_id: str,
-    tree: TaskTreeManager,
-    run: object,
-    cfg: CharlieBotConfig,
-) -> None:
-  """Re-drive one firing through the controller named by its owner reference."""
-  sequence = run.sequence_ref
-  if sequence is None:
-    return
-  controller = controller_for(sequence.owner_ref)
-  if controller is not None:
-    await controller.redrive(session_id, tree, cfg)
-
-
 async def _replay_followups(
     session_id: str,
     tree: TaskTreeManager,
@@ -2290,18 +2235,25 @@ async def _replay_followups(
       if adapter is None:
         raise RuntimeError("task execution adapter is not installed; cannot repair a half-written end record")
       await adapter.repair_end_metadata(session_id, run, outcome)
-    if run.kind == "iteration":
-      continue  # the improve loop is never resumed (the restart boundary)
-    if run.kind == "scheduled_step":
-      # The cron firing's chain advances from durable facts only — for a
-      # terminal step the next position launches or the ONE boundary
-      # report re-delivers; for a registered-but-unlaunched frontier step
-      # (a controller that settled withheld or died before its launch)
-      # the same redrive replays that admitted step. Both idempotent by
-      # stable ids; a live process is followed, never relaunched.
-      if outcome is not None or run.pid is None:
+    if run.sequence_ref is not None:
+      controller = controller_for_sequence(run.sequence_ref)
+      if controller is None:
+        # The owning package is gone: a launched Run was already followed or
+        # drained above, and a registered-but-unlaunched one would sit queued
+        # forever (the dispatcher never launches a sequence Run), so it lands
+        # an interrupted finish through the run store's normal entry. A
+        # terminal Run only logs; a later pass finds the fact and logs again.
+        if outcome is None and run.pid is None:
+          await tree.runs.record_finish(session_id, run.id, "interrupted")
+        if outcome is not None or run.pid is None:
+          log.warning(
+              "sequence_run_without_controller",
+              session_id=session_id,
+              run_id=run.id,
+              owner_ref=run.sequence_ref.owner_ref)
+        continue
+      if await controller.recover_run(session_id, run, outcome, tree, cfg):
         counters["followups"] += 1
-        await _replay_sequence_firing(session_id, tree, run, cfg)
       continue
     if outcome is None:
       continue

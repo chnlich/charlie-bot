@@ -49,9 +49,12 @@ from src.infra import event_types as ET
 from src.infra import git
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec
+from src.infra.models import RunRecord, SequenceRef, SessionMetadata, TaskSpec, TaskType
+from src.runtime import task_prompts
 from src.runtime.control_events import stable_run_id
 from src.runtime.runs import RUN_EVENTS_NAME
+from src.runtime.spawner_prompt import load_marker_sections, substitute_tokens
+from src.runtime.task_errors import TaskInvalidError
 
 if TYPE_CHECKING:
   from src.runtime.task_sessions import TaskTreeManager
@@ -112,6 +115,60 @@ async def create_improve_child(
       backend=None,
       caller="operator",
   )
+
+
+def iteration_report_tokens(loop_dir: str, iteration_number: int) -> dict[str, str]:
+  """The iteration_reports section's token map: loop dir plus the plain and zero-padded number.
+
+  One home for render_iteration_reports, so the padding contract is one definition.
+  """
+  return {
+      "{{loop_dir}}": loop_dir,
+      "{{iteration_number_padded}}": f"{iteration_number:04d}",
+      "{{iteration_number}}": str(iteration_number),
+  }
+
+
+def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
+  """The iteration report contract, rendered from the maintained worker-prompt section."""
+  sections = load_marker_sections(
+      cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",), extraction="worker-prompt")
+  return substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
+
+
+def iteration_context(
+    cfg: CharlieBotConfig,
+    meta: SessionMetadata,
+    run: RunRecord,
+    seq: SequenceRef,
+    description: str,
+) -> str:
+  """One improve iteration's context: shared-worktree bindings + the loop position.
+
+  The controller composes the description (live goal, optional plan, previous
+  summaries) and passes it as the launch text; the sequence_ref pins the
+  shared worktree facts — an iteration Run without them is a controller bug
+  and fails loudly instead of creating a worktree of its own. The report
+  contract renders from the maintained iteration section with the actual loop
+  directory and position.
+  """
+  if not (run.repo_path and run.base_branch and run.branch_name and run.worktree_path):
+    raise TaskInvalidError(
+        f"iteration run {run.id} is missing its pinned shared-worktree provenance "
+        "(repo/base/branch/worktree); refusing to create a divergent worktree")
+  parts = [task_prompts.render_session_info(cfg, meta.name)]
+  parts.append(
+      task_prompts.render_worktree_bindings(
+          cfg,
+          task_type=TaskType.IMPLEMENT,
+          intro_line=task_prompts.binding_intro(cfg, run),
+          branch_name=run.branch_name,
+          base_branch_origin=f"`{run.base_branch}`",
+          wt_path=run.worktree_path,
+          repo_path=run.repo_path))
+  parts.append(task_prompts.render_task_body(cfg, description))
+  parts.append(render_iteration_reports(cfg, loop_dir=seq.owner_ref, iteration_number=seq.position))
+  return "\n\n".join(part for part in parts if part)
 
 
 def _compose_iteration_description(goal: str, plan: str | None, previous_summaries: list[str]) -> str:

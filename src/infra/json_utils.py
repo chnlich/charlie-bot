@@ -13,8 +13,8 @@ from typing import TYPE_CHECKING, BinaryIO, TypeVar
 from src.infra.log_once import LazyStructlogLogger
 
 # future-annotations keep the hint unevaluated; the pydantic import rides the one
-# call that needs it, so the claude-sub launch chain (M108) imports this module
-# without the model stack. asyncio does the same: its interpreter+concurrent-
+# call that needs it, so the worker launch chain imports this module without the
+# model stack. asyncio does the same: its interpreter+concurrent-
 # futures cost is the launch chain's single largest import slice, and this
 # module's one async writer is the only reader.
 if TYPE_CHECKING:

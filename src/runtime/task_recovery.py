@@ -1,11 +1,11 @@
 """The startup owner's v2 reconciliation pass: one store, one pass, no races.
 
 This is the recovery the execution-adapter stage owes: at server start, BEFORE
-any new chat input, cron fire, or delayed trigger can start a competing
+any new chat input, scheduled fire, or delayed trigger can start a competing
 process, every task-tree node owned by THIS configured instance is reconciled
 from its own durable facts:
 
-1. Interrupted sequence controllers are marked honestly (an improve loop whose
+1. Interrupted sequence controllers are marked honestly (a loop whose
    controller died with the old process is never resumed — the existing
    boundary — but its state file, active lock and chat stream say so).
 2. Every non-terminal Run converges: a durable stop request wins first; a
@@ -55,7 +55,7 @@ async def reconcile_task_tree(
     return counters
 
   # The sequence controllers' honest verdicts come first: a recovered
-  # "interrupted" improve state must not race the Run reconciliation below.
+  # "interrupted" sequence state must not race the Run reconciliation below.
   for controller in sequence_controllers():
     await controller.reconcile_interrupted(cfg, tree)
 

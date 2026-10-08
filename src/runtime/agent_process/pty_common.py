@@ -147,9 +147,9 @@ class PtyAttachment:
   def spawn(self) -> None:
     """Fork a PTY child that execs `tmux attach` for this session."""
     # pty drags tty+termios into every pty_common importer's import; only this
-    # server-side attachment forks one, so the import rides the call (the M108
-    # launch floor in docs/perf_baseline.md@5175adf09 prices pty_common on every
-    # claude-sub worker launch).
+    # server-side attachment forks one, so the import rides the call (the
+    # launch floor in docs/perf_baseline.md@5175adf09 prices pty_common on
+    # every worker launch).
     import pty
 
     tmux = _tmux_binary()

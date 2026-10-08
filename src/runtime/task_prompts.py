@@ -1,10 +1,9 @@
 """The one v2 task-context assembly owner: managed instruction blocks, snapshots, hashes.
 
-Every v2 Run kind (manager turn, work, review, verify, improve iteration, cron
-scheduled step) draws its managed instructions from
-this module, and so does the preview API — one assembly path, never a
-preview-only selector. Every task Run uses this module's assembly and never
-injects a second prompt path.
+Every v2 Run kind (manager turn, work, review, verify, sequence iteration,
+scheduled step) draws its managed instructions from this module, and so does
+the preview API — one assembly path, never a preview-only selector. Every task
+Run uses this module's assembly and never injects a second prompt path.
 
 Ordered managed instruction blocks (the contract the snapshot pins):
 
@@ -60,15 +59,15 @@ from pathlib import Path
 
 from src.infra.config import CharlieBotConfig
 from src.infra.log_once import LazyStructlogLogger
-from src.infra.models import SessionMetadata, TaskSpec, TaskType
+from src.infra.models import RunRecord, SessionMetadata, TaskSpec, TaskType
 from src.runtime.control_events import sha256_hex
 from src.runtime.hooks import turn_contributions
 from src.runtime.review import review_git_venue, review_log_pointer, review_numbered_steps, review_rules_text
 from src.runtime.spawner_prompt import (
     WORKFLOW_PROMPT_SECTION,
-    _substitute_tokens,
-    iteration_report_tokens,
     load_marker_sections,
+    load_worker_prompt_sections,
+    substitute_tokens,
     verify_contract_tokens,
     workflow_rule_section_ids,
     worktree_binding_tokens,
@@ -283,8 +282,8 @@ def _manager_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata) -> list
   Every manager depth selects the same rule set: the shared base, the full
   shared manager rules (prompts/master.md followed by the workflow rules file —
   one division of work for both manager kinds; master.md carries the core
-  rules, prompts/manager_workflows.md the page/delegation/improve-loop/design
-  rules), and the task-tree manager template. A turn contribution may name
+  rules, prompts/manager_workflows.md the page/delegation/loop/design rules),
+  and the task-tree manager template. A turn contribution may name
   another workflow rules file for a session (a thread session gets the short
   brief that points at manager_workflows.md). Project/feature differences live
   in the Task record and inherited rules.
@@ -337,7 +336,7 @@ def _worker_kind_rule_segments(cfg: CharlieBotConfig, meta: SessionMetadata, kin
             text=review_rules_text(), sources=(PromptSource(SCOPE_BASE, "src/runtime/review.py:review_rules_text"),)))
   elif task_type == TaskType.VERIFY:
     contract = _sections_text(cfg, "verify.md", ("preamble", "scope"))
-    contract = _substitute_tokens(contract, verify_contract_tokens(cfg))
+    contract = substitute_tokens(contract, verify_contract_tokens(cfg))
     segments.append(RuleSegment(text=contract, sources=(PromptSource(SCOPE_BASE, "prompts/verify.md"),)))
   else:
     worker = _sections_text(cfg, "worker.md", ("role",))
@@ -472,6 +471,13 @@ def render_session_info(cfg: CharlieBotConfig, session_name: str) -> str:
   return sections["session_info"].replace("{{session_name}}", session_name)
 
 
+def binding_intro(cfg: CharlieBotConfig, run: RunRecord) -> str:
+  """The workflow bindings' intro line: a retry continuing the worktree says so."""
+  if run.retry_of_run_id is not None and run.worktree_path is not None:
+    return load_worker_prompt_sections(cfg)["intro_continuation"].strip()
+  return load_worker_prompt_sections(cfg)["intro_new"].strip()
+
+
 def render_worktree_bindings(
     cfg: CharlieBotConfig,
     *,
@@ -487,7 +493,7 @@ def render_worktree_bindings(
   section = WORKFLOW_PROMPT_SECTION[task_type][0]
   sections = load_marker_sections(
       cfg.charlie_bot_repo / "prompts" / "worker.md", (section,), extraction="worker-prompt")
-  return _substitute_tokens(
+  return substitute_tokens(
       sections[section],
       worktree_binding_tokens(
           intro_line=intro_line,
@@ -499,13 +505,7 @@ def render_worktree_bindings(
 
 def render_task_body(cfg: CharlieBotConfig, description: str) -> str:
   sections = load_marker_sections(cfg.charlie_bot_repo / "prompts" / "worker.md", ("task",), extraction="worker-prompt")
-  return _substitute_tokens(sections["task"], {"{{description}}": description})
-
-
-def render_iteration_reports(cfg: CharlieBotConfig, *, loop_dir: str, iteration_number: int) -> str:
-  sections = load_marker_sections(
-      cfg.charlie_bot_repo / "prompts" / "worker.md", ("iteration_reports",), extraction="worker-prompt")
-  return _substitute_tokens(sections["iteration_reports"], iteration_report_tokens(loop_dir, iteration_number))
+  return substitute_tokens(sections["task"], {"{{description}}": description})
 
 
 def render_worktree_persistence(cfg: CharlieBotConfig) -> str:

@@ -1,7 +1,8 @@
 """The PEP 562 ``__getattr__`` body shared by the deferred-import loaders.
 
-Deferred imports (requests, croniter, build_backend) bind through a
-per-consumer loader; the consumer's ``__getattr__`` is what fires that loader
+Deferred third-party imports (requests, build_backend, and the scheduler's
+time-schedule parser) bind through a per-consumer loader; the consumer's
+``__getattr__`` is what fires that loader
 on a module-attribute read, so a test's patch target (e.g.
 ``src.runtime.api.chat.cancel_master``) resolves without importing the real symbol
 at module import. The match-or-AttributeError rule lives here, once; the

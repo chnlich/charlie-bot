@@ -1,10 +1,10 @@
-"""Scheduled-handler registry: packages register cron handlers by name and the loop action.
+"""Scheduled-handler registry: packages register scheduled-task handlers by name and the loop action.
 
 Each registration holds a module path and an attribute name. The scheduler imports the
 module when a task fires, so a handler's stack loads only when it runs.
 
-The loop action also registers the pydantic model of a cron task's ``loop:`` section, so the
-cron package validates that section without importing the package that owns it.
+The loop action also registers the pydantic model of a scheduled task's ``loop:`` section, so
+the package that owns the section validates it without importing the owning package.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ _loop_model: str | None = None  # "module:Class" of the loop section's model
 
 
 def register_handler(name: str, module: str, *, attr: str) -> None:
-  """A cron.d task with `handler: <name>` awaits getattr(import_module(module), attr)().
+  """A registered task with `handler: <name>` awaits getattr(import_module(module), attr)().
 
   The coroutine returns the fire's summary string. A second registration of one name raises ValueError.
   """
@@ -29,7 +29,7 @@ def register_handler(name: str, module: str, *, attr: str) -> None:
 
 
 def register_loop_action(module: str, *, attr: str, model: str) -> None:
-  """A cron.d task with a `loop:` section awaits getattr(import_module(module), attr)(name=, repo=, loop=) on each fire.
+  """A registered task with a `loop:` section awaits getattr(import_module(module), attr)(name=, repo=, loop=) on each fire.
 
   `model` is a "module:Class" string: the pydantic model of the task's `loop:` section. `loop` is an
   instance of it. The coroutine returns (action, prompt). action is a short label for the log; prompt

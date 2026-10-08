@@ -1,4 +1,4 @@
-"""Durable task-tree control facts: stable ids, event headers, and the write sink.
+"""Durable task-tree control facts: stable ids, event headers, and the run owner's sink protocol.
 
 Task-tree control events (``src/infra/event_types.py``'s task/run constants) are
 facts, appended to a session's ``chat_events.jsonl`` before the action they
@@ -8,24 +8,15 @@ describe takes effect. This module homes the pieces every control owner shares:
   replayed request returns the original product instead of a duplicate);
 - the common event header (``id``/``type``/``timestamp``/``actor``/
   ``source_session_id``) every control event carries;
-- :class:`ControlEventSink`, the seam the task-tree owner
-  (:mod:`src.runtime.task_sessions`) and the run owner (:mod:`src.runtime.runs`)
-  write durable facts through. Input delivery (``session_dispatch.py``) and
-  completion checks (``task_completion.py``) join this seam in their own
-  delivery stages; until then the sink persists without queueing.
+- :class:`RunEventSink`, the three sink calls the run owner (:mod:`src.runtime.runs`) makes;
+  :class:`~src.runtime.control_sink.ControlEventSink` implements them.
 """
 
 import hashlib
 import uuid
-from typing import TYPE_CHECKING
+from typing import Protocol
 
 from src.infra import event_types as ET
-from src.infra import log_once
-
-log = log_once.LazyStructlogLogger()
-
-if TYPE_CHECKING:
-  from src.runtime import sessions
 
 # Deterministic namespace for the tree's stable ids: uuid5 keeps (parent,
 # request_id) -> one node id and (session, request_id) -> one run id across
@@ -163,33 +154,17 @@ def build_task_created_event(
   )
 
 
-class ControlEventSink:
-  """The durable write seam for control facts.
-
-  Every control event reaches ``chat_events.jsonl`` through one ``append``
-  call, under the caller's hold of the tree control write lock. The default
-  sink persists through the SessionManager's single append funnel; the input
-  delivery stage (``session_dispatch.py``) extends the seam with queue-aware
-  persistence without changing the owners' call sites.
-  """
-
-  def __init__(self, session_mgr: sessions.SessionManager) -> None:
-    self._session_mgr = session_mgr
+class RunEventSink(Protocol):
+  """The sink calls the run owner makes: append a fact, notify a tree change, read the facts."""
 
   async def append(self, session_id: str, event: dict) -> None:
-    await self._session_mgr.save_chat_event(session_id, event)
-    # The durable fact is written; notify connected UIs best-effort. A
-    # notification failure never fails the operation (the fact is already on
-    # disk and catch-up reconciles the client), it is only logged.
-    await self.notify_tree_changed(session_id, event.get("type"))
+    """Persist one control event, then notify connected UIs best-effort."""
+    ...
 
   async def notify_tree_changed(self, session_id: str, event_type: str | None) -> None:
     """Best-effort sidebar notification for one changed node's durable facts."""
-    try:
-      await self._session_mgr.broadcast_task_tree_changed(session_id, event_type)
-    except Exception:
-      log.exception("task_tree_changed_broadcast_failed", session_id=session_id, event_type=event_type)
+    ...
 
   def load_events(self, session_id: str) -> list[dict]:
-    """The session's parsed chat events (the durable fact stream control events ride)."""
-    return self._session_mgr.load_chat_events_sync(session_id)
+    """The session's parsed chat events."""
+    ...

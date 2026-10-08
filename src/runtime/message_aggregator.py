@@ -22,8 +22,8 @@ from collections.abc import Callable, Iterator
 
 from src.infra import event_types as ET
 from src.runtime import message_events
-from src.runtime.model_family import model_family
 from src.runtime.hooks import turn_contributions
+from src.runtime.model_family import model_family
 
 # The Claude account pool's operator notice type, spelled where the chat renders it: the runtime imports no
 # backend module, and src/backends/claude_code/claude_relay.py holds the emitting constant.

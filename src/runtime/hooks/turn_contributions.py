@@ -51,7 +51,7 @@ class TurnContribution:
 
   async def before_turn(self, meta: SessionMetadata, cfg: CharlieBotConfig) -> None:
     """Runs when a turn's input is queued, before the user event is appended."""
-    return None
+    return
 
   async def after_turn(
       self, meta: SessionMetadata, done_event: dict, *, cfg: CharlieBotConfig, sessions: SessionManager) -> None:
@@ -59,7 +59,7 @@ class TurnContribution:
 
     ``sessions`` appends further events to the session.
     """
-    return None
+    return
 
   def context_window(self, meta: SessionMetadata) -> int | None:
     """The context window in tokens for this session, or None to keep the backend option's own.

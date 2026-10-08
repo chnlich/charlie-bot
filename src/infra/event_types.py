@@ -204,7 +204,6 @@ TASK_TRIGGERED = "task_triggered"
 
 # -- Backend-specific --------------------------------------------------------
 THINKING = "thinking"
-FILE_WRITE = "file_write"
 # Claude Code emits this raw-stream event when the subscription/API answers
 # with a rate-limit status; workers persist it verbatim, so the quota-
 # detection chain consumes the same type on read-back. The event carries the

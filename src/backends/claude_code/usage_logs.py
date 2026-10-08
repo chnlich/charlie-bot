@@ -15,7 +15,8 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.infra import config, constants, home, ndjson
+from src.backends.claude_code import USAGE_SOURCE
+from src.infra import config, home, ndjson
 from src.infra import event_types as ET
 from src.runtime.hooks import usage_sources
 
@@ -70,7 +71,7 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
         usage_sources.UsageRecord(
             record_id=f"claude:{key}",
             kind=usage_sources.RecordKind.NATIVE,
-            source=constants.USAGE_SOURCE_CLAUDE_CODE,
+            source=USAGE_SOURCE,
             model=model,
             account=account,
             ts=line.get("timestamp") or "",
@@ -80,3 +81,10 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
             output=output,
             sessions=(path.stem,)))
   return f"{st.st_mtime_ns}:{st.st_size}", records
+
+
+def quota_accounts() -> list[usage_sources.QuotaAccount]:
+  """The Claude logins on the quota panel; the quota module loads on the first call."""
+  from src.backends.claude_code import usage_quota
+
+  return usage_quota.quota_accounts()

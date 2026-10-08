@@ -1,5 +1,8 @@
 """The codex backend package."""
 
+# The ledger's source value and the usage page's card title for the Codex CLI's own logs.
+USAGE_SOURCE = "Codex"
+
 
 def register() -> None:
   """Register the codex backend type and the Codex usage source with the runtime."""
@@ -20,5 +23,5 @@ def register() -> None:
   backend_lifecycle.register_usage_resolver("codex", "src.backends.codex.codex_usage:CodexUsageResolver")
   usage_sources.register_source(
       usage_sources.UsageSource(
-          name="Codex", id_prefixes=("codex-",), run_logs_only=False, module="src.backends.codex.usage_logs"))
-  usage_sources.attribute_backend_type("codex", "Codex")
+          name=USAGE_SOURCE, id_prefixes=("codex-",), run_logs_only=False, module="src.backends.codex.usage_logs"))
+  usage_sources.attribute_backend_type("codex", USAGE_SOURCE)

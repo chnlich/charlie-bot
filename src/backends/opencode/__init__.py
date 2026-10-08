@@ -1,5 +1,8 @@
 """The opencode backend package."""
 
+# The ledger's source value and the usage page's card title for opencode's own database.
+USAGE_SOURCE = "opencode"
+
 
 def register() -> None:
   """Register the opencode backend type, its usage source and its reading limits."""
@@ -19,6 +22,7 @@ def register() -> None:
   )
   usage_sources.register_source(
       usage_sources.UsageSource(
-          name="opencode", id_prefixes=("opencode-",), run_logs_only=False, module="src.backends.opencode.usage_logs"))
-  usage_sources.attribute_backend_type("opencode", "opencode")
+          name=USAGE_SOURCE, id_prefixes=("opencode-",), run_logs_only=False,
+          module="src.backends.opencode.usage_logs"))
+  usage_sources.attribute_backend_type("opencode", USAGE_SOURCE)
   backend_lifecycle.register_reading_limits("snapshot", "src.backends.opencode.opencode_limits:snapshot_reading_limits")

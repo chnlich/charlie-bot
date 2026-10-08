@@ -17,9 +17,10 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from src.infra import constants, log_once
+from src.features.usage import CHARLIE_BOT_SOURCE
+from src.infra import log_once, tasks
 from src.runtime import templating
-from src.runtime.hooks import usage_sources
+from src.runtime.hooks import usage_sources, wiring
 
 if TYPE_CHECKING:
   from src.features.usage import usage_ledger
@@ -47,6 +48,28 @@ def preload_usage_tally_stack() -> None:
     if source.module is not None:
       usage_sources.implementation(source)
   log.info("usage_tally_stack_preloaded", duration_ms=round((time.monotonic() - started) * 1000))
+
+
+_warmup_task: asyncio.Task | None = None
+
+
+async def start_service(ctx: wiring.ServiceContext) -> None:
+  """Preload the tally stack on a worker thread; the server does not wait for it.
+
+  The stack loads at startup, not on the request path: a request-time first-import reads
+  whatever files a mid-flight deploy left under a server whose in-memory modules are the
+  started code, and the mixed-version import 500s the usage page and the ledger cron handler
+  until restart. Same thread pattern as the speech service: the server import floor stays.
+  """
+  global _warmup_task
+  _warmup_task = tasks.create_logged_task(asyncio.to_thread(preload_usage_tally_stack), name="usage-tally-warmup")
+
+
+async def stop_service() -> None:
+  """Cancel the preload and wait for it; returns at once when start_service never ran."""
+  global _warmup_task
+  task, _warmup_task = _warmup_task, None
+  await tasks.cancel_and_wait(task)
 
 
 def _read_ledger() -> tuple[list[usage_ledger.LedgerRow], dict[str, str], dt.datetime | None, float, dict[str, object]]:
@@ -108,7 +131,7 @@ def _account_source(
   own logs counts as is, while every other backend's counted records are fallbacks behind
   their CLI's own log — the mark the account's sub-row carries.
   """
-  if row.source != constants.USAGE_SOURCE_CHARLIE_BOT:
+  if row.source != CHARLIE_BOT_SOURCE:
     return row.source, False
   # The tally rides the page like the ledger read does (see _read_ledger): imported here so
   # the module stays off the server's import floor.
@@ -242,7 +265,7 @@ def _token_usage_context(
     bucket = sums[card.name]
     # The ledger's charlie-bot rows are all usage native to CharlieBot's logs, so a
     # run_logs_only source's native start is the charlie-bot span the ledger keeps.
-    ledger_src = constants.USAGE_SOURCE_CHARLIE_BOT if card.run_logs_only else card.name
+    ledger_src = CHARLIE_BOT_SOURCE if card.run_logs_only else card.name
     per_src[card.name] = {
         "total": bucket["total"],
         "t_comp": _compact(bucket["total"]),

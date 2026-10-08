@@ -2,13 +2,9 @@
 # Rows only leave this table.
 #
 # One row per pair: importer file -> imported file. Paths are repo-relative and the rows are sorted.
-src/features/session_tree_preview/session_tree_preview.py -> src/features/usage/ext_usage.py
 src/features/storage/storage_cool.py -> src/backends/codex/codex_usage.py
 src/features/storage/storage_cool.py -> src/features/usage/token_tally.py
 src/features/storage/storage_cool.py -> src/features/usage/usage_ledger.py
-src/features/usage/ext_usage.py -> src/backends/claude_code/claude_accounts.py
-src/features/usage/ext_usage.py -> src/backends/codex/codex_pricing.py
-src/features/usage/ext_usage.py -> src/backends/codex/codex_usage.py
 src/runtime/master_cc_run.py -> src/features/memory/memory.py
 src/runtime/scheduled_sessions.py -> src/features/chat_threads/thread_sessions.py
 src/runtime/sessions.py -> src/features/artifacts/plan_paths.py

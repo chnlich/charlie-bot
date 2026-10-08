@@ -46,6 +46,14 @@ from src.backends.claude_code.options import CcClaudeBackend
 from src.infra.home import CREDENTIALS_FILE
 from src.infra.log_once import LazyStructlogLogger
 from src.infra.models import BackendOption
+from src.runtime.hooks.usage_sources import (
+    PANEL_FETCHED_AT,
+    PANEL_RESETS_AT,
+    PANEL_SCOPE_LABEL,
+    PANEL_UTILIZATION,
+    PANEL_WINDOW_MINUTES,
+    PANEL_WINDOWS,
+)
 from src.runtime.model_family import model_family
 
 # future-annotations keep every cfg: CharlieBotConfig hint unevaluated, so the config
@@ -88,21 +96,6 @@ _RESET_BONUS_MIN_HEADROOM = 0.10
 # Scores closer than this are a near-tie, broken by least-recent event activity.
 _SCORE_TIE = 0.02
 
-# Keys of the usage-panel payload and of one window entry in it: src/features/usage/ext_usage.py
-# builds the payload from the providers' usage APIs, this module folds it into the
-# account readings, and web/static/js/ext_usage.js renders it — one home per key so
-# the producer, this consumer, and the browser cannot drift apart silently. A
-# window's ``utilization`` is a percentage as reported; ``resets_at`` is an ISO-8601
-# UTC string (empty when upstream reported none); ``scope_label`` names a
-# model-scoped window and is absent on plan-wide ones.
-PANEL_WINDOWS = "windows"
-PANEL_FETCHED_AT = "fetched_at"
-PANEL_PROVIDER = "provider"
-PANEL_WINDOW_MINUTES = "window_minutes"
-PANEL_UTILIZATION = "utilization"
-PANEL_RESETS_AT = "resets_at"
-PANEL_SCOPE_LABEL = "scope_label"
-
 
 @dataclass(frozen=True)
 class RateLimitReading:
@@ -122,7 +115,7 @@ class RateLimitReading:
 # worker event loops of any run on that account.
 _event_readings: dict[str, RateLimitReading] = {}
 # Newest usage-panel reading per account label, keyed by the model family the
-# scoped windows were folded for ("" = plan-wide only), written by the ext_usage poller.
+# scoped windows were folded for ("" = plan-wide only), written by the Claude quota account.
 _panel_readings: dict[str, dict[str, Any]] = {}
 # Time of the last authentication failure per account label.
 _auth_failures: dict[str, datetime] = {}

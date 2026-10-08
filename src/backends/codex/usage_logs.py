@@ -18,8 +18,8 @@ import os
 import pathlib
 from collections.abc import Iterator
 
-from src.backends.codex import codex_usage
-from src.infra import constants, ndjson
+from src.backends.codex import USAGE_SOURCE, codex_usage
+from src.infra import ndjson
 from src.runtime.hooks import usage_sources
 
 _MARKERS = tuple(
@@ -110,7 +110,7 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
     records[record_id] = usage_sources.UsageRecord(
         record_id=record_id,
         kind=usage_sources.RecordKind.NATIVE,
-        source=constants.USAGE_SOURCE_CODEX,
+        source=USAGE_SOURCE,
         model=model or "unknown",
         account=account,
         ts=line.get("timestamp") or "",
@@ -120,3 +120,10 @@ def read(path: pathlib.Path, account: str, previous: str | None) -> tuple[str, l
         output=output,
         sessions=(session,))
   return f"{st.st_mtime_ns}:{st.st_size}", list(records.values())
+
+
+def quota_accounts() -> list[usage_sources.QuotaAccount]:
+  """Codex's account on the quota panel; the quota module loads on the first call."""
+  from src.backends.codex import usage_quota
+
+  return usage_quota.quota_accounts()

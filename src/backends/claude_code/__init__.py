@@ -23,6 +23,10 @@ class ClaudeThreadFields(BaseModel):
   claude_session_id: str | None = None
 
 
+# The ledger's source value and the usage page's card title for the Claude Code CLI's own logs.
+USAGE_SOURCE = "Claude Code"
+
+
 def register() -> None:
   """Register the cc-claude backend type, the Claude Code usage source, the accounts section,
   its metadata keys and its credential variables with the runtime."""
@@ -49,11 +53,11 @@ def register() -> None:
   backend_lifecycle.register_reading_limits("claude", "src.backends.claude_code.claude_code:claude_reading_limits")
   usage_sources.register_source(
       usage_sources.UsageSource(
-          name="Claude Code",
+          name=USAGE_SOURCE,
           id_prefixes=("claude-",),
           run_logs_only=False,
           module="src.backends.claude_code.usage_logs"))
-  usage_sources.attribute_backend_type("cc-claude", "Claude Code")
+  usage_sources.attribute_backend_type("cc-claude", USAGE_SOURCE)
   config_registry.register_config_section(
       "accounts",
       "src.backends.claude_code.claude_config:AccountsConfig",

@@ -163,4 +163,4 @@ def test_file_change_translation(
               },
       })
 
-  assert translated == [{"type": ET.FILE_WRITE, "path": str(tmp_path / rel_path)} for rel_path in expected_paths]
+  assert translated == [{"type": codex.FILE_WRITE, "path": str(tmp_path / rel_path)} for rel_path in expected_paths]

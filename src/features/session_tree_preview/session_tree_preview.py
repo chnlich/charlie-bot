@@ -944,12 +944,10 @@ def make_preview_lifespan(setup: PreviewSetup) -> Callable[[Any], AsyncIterator[
           flush=True)
       yield
     finally:
-      from src.features.usage import ext_usage
       from src.infra.http import close_http_client
       from src.runtime.hooks import wiring
       from src.runtime.streaming import streaming_manager
 
-      await ext_usage.stop_poller()
       await close_http_client()
       await streaming_manager.close_all()
       for _, stop_service in wiring.service_stops():

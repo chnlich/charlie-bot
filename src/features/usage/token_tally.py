@@ -62,8 +62,8 @@ from collections.abc import Iterator
 
 import orjson
 
-from src.features.usage import usage_ledger
-from src.infra import config, constants, home, ndjson
+from src.features.usage import CHARLIE_BOT_SOURCE, usage_ledger
+from src.infra import config, home, ndjson
 from src.infra import event_types as ET
 from src.runtime import runs
 from src.runtime.hooks import usage_sources
@@ -355,7 +355,7 @@ def _thread_records(path: str, registry: dict, live: _LiveSessions) -> list[usag
         usage_sources.UsageRecord(
             record_id=f"thread:{parts[-5]}/{parts[-3]}/{i}",
             kind=usage_sources.RecordKind.NATIVE if native else usage_sources.RecordKind.FALLBACK,
-            source=constants.USAGE_SOURCE_CHARLIE_BOT,
+            source=CHARLIE_BOT_SOURCE,
             model=model,
             account=backend,
             ts=result.get("timestamp") or "",
@@ -397,7 +397,7 @@ def _master_records(path: str, registry: dict) -> list[usage_sources.UsageRecord
       usage_sources.UsageRecord(
           record_id=f"master:{parts[-5]}/{parts[-2]}",
           kind=usage_sources.RecordKind.NATIVE,
-          source=constants.USAGE_SOURCE_CHARLIE_BOT,
+          source=CHARLIE_BOT_SOURCE,
           model=_bare_model(model),
           account=opt.id if opt is not None else _CLC_MASTER_ACCOUNT,
           ts=parts[-2],  # the master_runs/<started_at> directory name
@@ -544,7 +544,7 @@ def _run_record(
   return usage_sources.UsageRecord(
       record_id=f"run:{run_id}",
       kind=kind,
-      source=constants.USAGE_SOURCE_CHARLIE_BOT,
+      source=CHARLIE_BOT_SOURCE,
       model=_thread_row_model({
           "backend": backend,
           "model": meta.get("model")
@@ -637,7 +637,7 @@ def capture_usage(ledger: usage_ledger.UsageLedger, *, host: str, sessions_dir: 
     for source in usage_sources.sources():
       if source.module is not None:
         written[source.name] = _capture_source(ledger, host, source, captured)
-    written[constants.USAGE_SOURCE_CHARLIE_BOT] = (
+    written[CHARLIE_BOT_SOURCE] = (
         capture_charliebot(ledger, host, sessions_dir, captured) + capture_runs(ledger, host, sessions_dir, captured))
     ledger.mark_capture_finished(host)
   return written

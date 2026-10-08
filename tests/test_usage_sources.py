@@ -8,6 +8,9 @@ implementation module is tests/test_backend_hooks.py's check.
 
 from __future__ import annotations
 
+import sys
+import types
+
 import pytest
 
 from src.features.usage import token_tally
@@ -83,6 +86,45 @@ def test_a_source_without_a_module_has_no_implementation() -> None:
   usage_sources.register_source(source)
   with pytest.raises(ValueError, match="alpha"):
     usage_sources.implementation(source)
+
+
+class _Account(usage_sources.QuotaAccount):
+  """A quota account that only names itself."""
+
+  def __init__(self, provider: str, label: str) -> None:
+    self.provider = provider
+    self.label = label
+    self.last_error = "no data"
+
+  async def fetch(self) -> dict | None:
+    return None
+
+
+@pytest.mark.usefixtures("empty_registry")
+def test_quota_accounts_come_from_the_registered_sources_in_registration_order(monkeypatch: pytest.MonkeyPatch) -> None:
+  """Each source's implementation module lists its own accounts; a source whose module defines no
+  ``quota_accounts`` or has no module adds none."""
+
+  def implementation(name: str, *labels: str) -> str:
+    module = types.ModuleType(name)
+    if labels:
+      module.quota_accounts = lambda: [_Account(name, label) for label in labels]
+    monkeypatch.setitem(sys.modules, name, module)
+    return name
+
+  usage_sources.register_source(_source("zeta", module=implementation("fake_zeta", "z1", "z2")))
+  usage_sources.register_source(_source("logs-only", module=implementation("fake_logs_only")))
+  usage_sources.register_source(_source("clc", run_logs_only=True))
+  usage_sources.register_source(_source("alpha", module=implementation("fake_alpha", "a1")))
+
+  assert [(a.provider, a.label) for a in usage_sources.quota_accounts()] == [
+      ("fake_zeta", "z1"), ("fake_zeta", "z2"), ("fake_alpha", "a1")
+  ]
+
+
+def test_the_panel_lists_claude_accounts_before_codex() -> None:
+  names = [source.name for source in usage_sources.sources()]
+  assert names.index("Claude Code") < names.index("Codex")
 
 
 def test_the_backend_packages_register_their_sources() -> None:

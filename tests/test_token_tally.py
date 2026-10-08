@@ -23,16 +23,16 @@ from src.backends.codex import usage_logs as codex_logs
 from src.features.usage import token_tally as tt
 from src.features.usage.usage_ledger import UsageLedger
 from src.infra import config, home, ndjson
-from src.infra.constants import (
-    USAGE_SOURCE_CHARLIE_BOT,
-    USAGE_SOURCE_CHARLIE_CODE,
-    USAGE_SOURCE_CLAUDE_CODE,
-    USAGE_SOURCE_CODEX,
-    USAGE_SOURCE_OPENCODE,
-)
 from src.runtime.hooks import usage_sources
 
 NAME = "claude-model"
+
+# The source values the ledger stores; a change here is a ledger migration.
+SOURCE_CHARLIE_BOT = "charlie-bot"
+SOURCE_CHARLIE_CODE = "CLC"
+SOURCE_CLAUDE_CODE = "Claude Code"
+SOURCE_CODEX = "Codex"
+SOURCE_OPENCODE = "opencode"
 
 
 @pytest.fixture(autouse=True)
@@ -265,18 +265,18 @@ def test_backend_page_source_attributes_by_type_prefix_and_master_account() -> N
       # A registered id whose type disagrees with its prefix: the type wins.
       "claude-mislabeled": _Option("claude-mislabeled", "codex", "openai/gpt-5"),
   }
-  assert tt.backend_page_source("charlie-code-glm", registry) == USAGE_SOURCE_CHARLIE_CODE
-  assert tt.backend_page_source("codex-gpt", registry) == USAGE_SOURCE_CODEX
-  assert tt.backend_page_source("claude-opus", registry) == USAGE_SOURCE_CLAUDE_CODE
-  assert tt.backend_page_source("kimi-k3", registry) == USAGE_SOURCE_CLAUDE_CODE
-  assert tt.backend_page_source("glm-air", registry) == USAGE_SOURCE_CLAUDE_CODE
-  assert tt.backend_page_source("oc-qwen", registry) == USAGE_SOURCE_OPENCODE
-  assert tt.backend_page_source("claude-mislabeled", registry) == USAGE_SOURCE_CODEX
-  assert tt.backend_page_source("charlie-code-retired", {}) == USAGE_SOURCE_CHARLIE_CODE
-  assert tt.backend_page_source("codex-retired", {}) == USAGE_SOURCE_CODEX
-  assert tt.backend_page_source("claude-retired", {}) == USAGE_SOURCE_CLAUDE_CODE
-  assert tt.backend_page_source("opencode-retired", {}) == USAGE_SOURCE_OPENCODE
-  assert tt.backend_page_source("clc-master", {}) == USAGE_SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("charlie-code-glm", registry) == SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("codex-gpt", registry) == SOURCE_CODEX
+  assert tt.backend_page_source("claude-opus", registry) == SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("kimi-k3", registry) == SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("glm-air", registry) == SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("oc-qwen", registry) == SOURCE_OPENCODE
+  assert tt.backend_page_source("claude-mislabeled", registry) == SOURCE_CODEX
+  assert tt.backend_page_source("charlie-code-retired", {}) == SOURCE_CHARLIE_CODE
+  assert tt.backend_page_source("codex-retired", {}) == SOURCE_CODEX
+  assert tt.backend_page_source("claude-retired", {}) == SOURCE_CLAUDE_CODE
+  assert tt.backend_page_source("opencode-retired", {}) == SOURCE_OPENCODE
+  assert tt.backend_page_source("clc-master", {}) == SOURCE_CHARLIE_CODE
   with pytest.raises(ValueError, match="ag-1"):
     tt.backend_page_source("ag-1", {"ag-1": _Option("ag-1", "antigravity", "model")})
   with pytest.raises(ValueError, match="gem-1"):
@@ -489,7 +489,7 @@ def _codex_rows(ledger: UsageLedger) -> list:
   """Every Codex-source usage row, ordered by record id: the ground the assertions read."""
   return ledger._conn.execute(
       "SELECT record_id, model, ts, in_fresh, cache_read, output FROM usage WHERE source = ? ORDER BY record_id",
-      (USAGE_SOURCE_CODEX,)).fetchall()
+      (SOURCE_CODEX,)).fetchall()
 
 
 def test_forked_rollout_counts_the_copied_events_once(tmp_path: Path) -> None:
@@ -952,7 +952,7 @@ def test_charliebot_capture_reparses_a_file_the_bare_signature_recorded(
     stale = usage_sources.UsageRecord(
         record_id="thread:s1/t1/0",
         kind=usage_sources.RecordKind.NATIVE,
-        source=USAGE_SOURCE_CHARLIE_BOT,
+        source=SOURCE_CHARLIE_BOT,
         model="GLM-5.3-Flash",
         account="charlie-code-glm-flash",
         ts="2026-09-11T20:00:00+00:00",

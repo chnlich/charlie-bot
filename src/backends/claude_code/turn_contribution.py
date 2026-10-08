@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from src.backends.claude_code.event_types import (
-    CLAUDE_ACCOUNT_LOGIN_REQUIRED as _CLAUDE_ACCOUNT_LOGIN_REQUIRED,
-)
+from src.backends.claude_code.event_types import CLAUDE_ACCOUNT_LOGIN_REQUIRED as _CLAUDE_ACCOUNT_LOGIN_REQUIRED
 from src.runtime.hooks import turn_contributions
 
 

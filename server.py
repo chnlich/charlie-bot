@@ -28,7 +28,7 @@ with gc_off(collect=False):
   from fastapi import FastAPI, WebSocket, WebSocketDisconnect
   from fastapi.staticfiles import StaticFiles
   from isal.igzip import IGzipFile
-  from starlette.datastructures import Headers, MutableHeaders, QueryParams
+  from starlette.datastructures import Headers, QueryParams
   from starlette.middleware.gzip import GZipMiddleware, GZipResponder, IdentityResponder
   from starlette.responses import Response
   from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -67,10 +67,6 @@ registrations.register_all()
 _CATCHUP_SLICE_EVENTS = 400
 _CATCHUP_RENDER_SLICE = 4
 
-# A whole-body deflate below this size costs less inline than one executor
-# round-trip (~104 µs measured on this host); above it the thread hop wins.
-_OFFLOOP_GZIP_MIN_BODY = 8192
-
 # Content types whose format is already entropy-coded: transport gzip spends
 # serve CPU per view to shrink the wire by at most a few percent (or to grow
 # it), so these answers ride identity. text/event-stream stays excluded —
@@ -102,16 +98,8 @@ _TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES = (
 )
 
 
-class _OffLoopWholeBodyGZipResponder(GZipResponder):
-  """Whole-body responses deflate in a worker thread; streaming chunks stay inline.
-
-  Starlette's GZipResponder runs the whole-body deflate inside the send path, so a
-  large JSON page freezes the event loop for the whole compression (17 ms measured
-  on the 559 KB events page). Every JSON route ships its body as one message, so
-  one to_thread hop takes that deflate off the loop; a streaming body keeps the
-  inline per-chunk path, whose chunks are small and whose gzip file state must
-  not cross threads between writes.
-  """
+class _IsalGZipResponder(GZipResponder):
+  """A GZipResponder that deflates through ISA-L and skips the media types of the skip list."""
 
   def __init__(self, app: ASGIApp, minimum_size: int, compresslevel: int) -> None:
     # IdentityResponder.__init__ binds the chain without the zlib file the
@@ -151,19 +139,6 @@ class _OffLoopWholeBodyGZipResponder(GZipResponder):
       content_type = Headers(raw=self.initial_message["headers"]).get("content-type", "")
       self.content_type_is_excluded = content_type.startswith(_TRANSPORT_GZIP_SKIP_MEDIA_PREFIXES)
       return
-    if (message["type"] == "http.response.body" and not self.started and not self.content_encoding_set and
-        not self.content_type_is_excluded and not message.get("more_body", False) and
-        len(message.get("body", b"")) >= _OFFLOOP_GZIP_MIN_BODY):
-      body = await asyncio.to_thread(self.apply_compression, message["body"], more_body=False)
-      headers = MutableHeaders(raw=self.initial_message["headers"])
-      headers.add_vary_header("Accept-Encoding")
-      if body != message["body"]:
-        headers["Content-Encoding"] = self.content_encoding
-        headers["Content-Length"] = str(len(body))
-        message["body"] = body
-      await self.send(self.initial_message)
-      await self.send(message)
-      return
     await super().send_with_compression(message)
 
 
@@ -175,7 +150,7 @@ class _CharlieBotGZipMiddleware(GZipMiddleware):
       await self.app(scope, receive, send)
       return
     if scope["type"] == "http" and "gzip" in Headers(scope=scope).get("Accept-Encoding", ""):
-      responder = _OffLoopWholeBodyGZipResponder(self.app, self.minimum_size, compresslevel=self.compresslevel)
+      responder = _IsalGZipResponder(self.app, self.minimum_size, compresslevel=self.compresslevel)
       await responder(scope, receive, send)
       return
     await super().__call__(scope, receive, send)

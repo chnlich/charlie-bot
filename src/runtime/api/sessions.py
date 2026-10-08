@@ -16,6 +16,7 @@ from starlette.responses import Response
 from src.backends.claude_code import claude_accounts
 from src.features.artifacts.plans import PlanRegistryManager
 from src.features.cron.api import next_run_iso
+from src.infra import event_types as ET
 from src.infra.compression import gzip_level1
 from src.infra.config import CharlieBotConfig, get_config, scheduled_tasks_snapshot
 from src.infra.constants import BackendType
@@ -90,6 +91,7 @@ from src.runtime.message_aggregator import tool_preview
 from src.runtime.run_token import CallerIdentity
 from src.runtime.runs import RunIdentityConflictError, RunNotFoundError, run_not_found_in_task_text
 from src.runtime.scheduled_sessions import cron_subtree_roots
+from src.runtime.session_dispatch import agent_provenance, input_event_type_for_caller
 from src.runtime.sessions import ELONE_BOOTSTRAP_OPENER, FORK_BOOTSTRAP_OPENER, HISTORY_LOCATION_NOTE, SessionManager
 from src.runtime.spawner_backends import EMPTY_BACKENDS_OPTIONS_REFUSAL
 from src.runtime.takeoff_gate import DelegationBlockedError
@@ -618,7 +620,6 @@ async def list_chat_threads(
 @router.post("/", response_model=SessionMetadata)
 async def create_session(
     req: CreateSessionRequest,
-    session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
     task_mgr: TaskTreeManager = Depends(get_task_manager),
     caller: CallerIdentity = Depends(require_caller),
@@ -650,7 +651,20 @@ async def create_session(
     raise HTTPException(status_code=403, detail=AGENT_CREATE_SCOPE_REFUSAL)
   backend = _resolve_requested_backend(req.backend, cfg, fallback_backend=_default_backend_id(cfg))
   log.info("creating_session", backend=backend, name=req.name)
-  return await session_mgr.create_session(req, backend=backend)
+  # The legacy create shape (the sidebar's new-session action) now opens a
+  # manager root; each press is its own request, so it binds its own node.
+  return await task_mgr.create_task(
+      request_id=f"operator-create-{uuid.uuid4()}",
+      task_parent_id=None,
+      profile="manager",
+      task=None,
+      name=req.name,
+      backend=backend,
+      group=req.group,
+      session_id=req.session_id,
+      slack_origin=req.slack_origin,
+      discord_origin=req.discord_origin,
+      caller=caller)
 
 
 class ArchivedGroupCount(BaseModel):
@@ -1478,25 +1492,32 @@ async def get_session_explain_status(
   return FastJsonResponse(await explain.explain_status(session_mgr, session_id))
 
 
-def _start_successor_run(
-    cfg: CharlieBotConfig,
-    session_mgr: SessionManager,
+async def _start_successor_run(
+    task_mgr: TaskTreeManager,
+    caller: CallerIdentity,
     meta: SessionMetadata,
     prompt_head: str,
     directive: str,
 ) -> None:
-  """Start a fork/elone successor's run on a bootstrap prompt built around the session's own chat log.
+  """Admit a fork/elone successor's bootstrap prompt as its first input and dispatch the run.
 
-  *prompt_head* carries the opener plus whatever successor-specific context precedes the
-  history note; *directive* tells the successor what to do with the copied history. The
-  parts join into one single-spaced paragraph — the child's persisted first user message.
+  The prompt is built around the session's own chat log: *prompt_head* carries the opener plus
+  whatever successor-specific context precedes the history note; *directive* tells the successor
+  what to do with the copied history. The parts join into one single-spaced paragraph — the
+  child's first input, admitted the way the message route admits a caller's input.
   """
   bootstrap_prompt = f"{prompt_head}{HISTORY_LOCATION_NOTE} {directive}"
-  # Call-time import is the test-patching contract: tests patch src.runtime.api.chat.run_and_finalize
-  # on the module attribute, and this import is what routes the call to the patched binding.
-  from src.infra.tasks import create_logged_task
-  from src.runtime.api.chat import run_and_finalize
-  create_logged_task(run_and_finalize(cfg, meta, bootstrap_prompt, session_mgr, skip_user_event=False))
+  event_type = input_event_type_for_caller(caller)
+  from_session, from_session_name = agent_provenance(caller) if event_type != ET.USER else (None, None)
+  await task_mgr.dispatch.admit_input(
+      meta.id,
+      event_type=event_type,
+      content=bootstrap_prompt,
+      actor="user" if event_type == ET.USER else "agent",
+      from_session=from_session,
+      from_session_name=from_session_name,
+  )
+  await task_mgr.dispatch.dispatch_pending(meta.id)
 
 
 @router.post('/{session_id}/fork', response_model=SessionMetadata)
@@ -1506,6 +1527,8 @@ async def fork_session(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> SessionMetadata:
   """Clone a session. Optional body supports event_index and backend override."""
   backend = _resolve_requested_backend(
@@ -1524,9 +1547,9 @@ async def fork_session(
   except ValueError as e:
     raise bad_request(e) from e
 
-  _start_successor_run(
-      cfg,
-      session_mgr,
+  await _start_successor_run(
+      task_mgr,
+      caller,
       meta,
       prompt_head=f"{FORK_BOOTSTRAP_OPENER} ",
       directive="Get oriented from that log, summarize where things stand, and wait for the user's next instruction.")
@@ -1541,6 +1564,8 @@ async def elone_session(
     parent: SessionMetadata = Depends(require_session),
     session_mgr: SessionManager = Depends(get_session_manager),
     cfg: CharlieBotConfig = Depends(get_config_on_loop),
+    task_mgr: TaskTreeManager = Depends(get_task_manager),
+    caller: CallerIdentity = Depends(require_caller),
 ) -> SessionMetadata:
   """Create an Elon-e session: fresh start with a bootstrap prompt that reads the parent."""
   backend = _resolve_requested_backend(body.backend, cfg, fallback_backend=parent.backend)
@@ -1551,9 +1576,9 @@ async def elone_session(
   except ValueError as e:
     raise bad_request(e) from e
 
-  _start_successor_run(
-      cfg,
-      session_mgr,
+  await _start_successor_run(
+      task_mgr,
+      caller,
       meta,
       prompt_head=(
           f"{ELONE_BOOTSTRAP_OPENER} "

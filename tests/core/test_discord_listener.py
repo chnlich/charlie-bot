@@ -13,6 +13,7 @@ from conftest import (
     DISCORD_LISTENER_BOT_CLIENT_PATCH_TARGET,
     PUBLISH_BASE_URL,
     ROOT,
+    bind_deps_managers,
     fake_backends,
     mention_seam,
     shut_down_trigger_tasks,
@@ -35,6 +36,7 @@ from src.infra import event_types as ET
 from src.infra.config import CharlieBotConfig
 from src.infra.models import CreateSessionRequest, DiscordOrigin, SessionMetadata, SessionStatus, TriggerStatus
 from src.runtime.sessions import SessionManager
+from src.runtime.task_sessions import TaskTreeManager
 from src.runtime.triggers import TriggerManager
 
 _GUILD = "900000000000000001"
@@ -129,6 +131,20 @@ def _rig(
   return cfg, session_mgr, TriggerManager(cfg, session_mgr), FakeDiscordClient(channels=channels, thread=thread)
 
 
+def _summon_rig(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    channels: dict[str, dict] | None = None,
+    thread: list[dict] | None = None,
+) -> tuple[CharlieBotConfig, SessionManager, TriggerManager, FakeDiscordClient]:
+  """_rig for a summon that creates its session: the summon opens its manager root through the deps
+  task-tree singleton, so this binds a tree over the rig's session manager."""
+  cfg, session_mgr, trigger_mgr, client = _rig(tmp_path, channels=channels, thread=thread)
+  bind_deps_managers(monkeypatch, TaskTreeManager(cfg, session_mgr), session_mgr)
+  return cfg, session_mgr, trigger_mgr, client
+
+
 def _message(**overrides: object) -> dict:
   """Build an allowed mention message in the parent channel, merging in per-test overrides."""
   base: dict = {
@@ -160,9 +176,9 @@ async def _drain(tasks: list[asyncio.Task]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {
+async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, trigger_mgr, client = _summon_rig(
+      tmp_path, monkeypatch, channels={_PARENT: {
           "id": _PARENT,
           "type": 0,
           "name": "general"
@@ -217,10 +233,11 @@ async def test_text_channel_summon_starts_thread_and_session(tmp_path: Path) -> 
 
 
 @pytest.mark.asyncio
-async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_citation_boundary(tmp_path: Path) -> None:
+async def test_summon_prompt_carries_the_discord_scope_doc_and_not_the_slack_citation_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
   """The tail's scope slot holds the Discord scope doc verbatim; the Slack scope's citation boundary is not appended."""
-  cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {
+  cfg, session_mgr, trigger_mgr, client = _summon_rig(
+      tmp_path, monkeypatch, channels={_PARENT: {
           "id": _PARENT,
           "type": 0,
           "name": "general"
@@ -251,9 +268,11 @@ def test_follow_wake_names_the_discord_scope_doc_and_the_shared_docs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(
+async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, trigger_mgr, client = _summon_rig(
       tmp_path,
+      monkeypatch,
       channels={
           _THREAD: {
               "id": _THREAD,
@@ -295,9 +314,9 @@ async def test_thread_summon_binds_the_thread_and_labels_from_the_parent(tmp_pat
 
 
 @pytest.mark.asyncio
-async def test_second_summon_reuses_and_unarchives(tmp_path: Path) -> None:
-  cfg, session_mgr, trigger_mgr, client = _rig(
-      tmp_path, channels={_PARENT: {
+async def test_second_summon_reuses_and_unarchives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, session_mgr, trigger_mgr, client = _summon_rig(
+      tmp_path, monkeypatch, channels={_PARENT: {
           "id": _PARENT,
           "type": 0,
           "name": "general"

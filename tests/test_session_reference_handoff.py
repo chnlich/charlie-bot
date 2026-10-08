@@ -22,9 +22,9 @@ def _parent_side_files(cfg: config.CharlieBotConfig) -> list[pathlib.Path]:
   return sorted(cfg.sessions_dir.glob("*/data/parent_*.jsonl"))
 
 
-def _assert_child_log_is_parent_prefix_plus_marker(
+def _assert_child_log_is_parent_prefix_marker_and_creation(
     mgr: sessions.SessionManager, parent_id: str, child_id: str, end: int) -> list[dict]:
-  """The child log holds the parent's events [0, end) then exactly one clone_start marker.
+  """The child log holds the parent's events [0, end), one clone_start marker, then the task_created fact.
 
   The parent side drops any in-memory event_index stamp (persist_and_broadcast
   injects one onto cache-served dicts; the persisted lines never carried it).
@@ -36,10 +36,12 @@ def _assert_child_log_is_parent_prefix_plus_marker(
       } for event in mgr.load_chat_events_range(parent_id, 0, end)[0]
   ]
   assert child_events[:end] == parent_prefix
-  assert len(child_events) == end + 1
+  assert len(child_events) == end + 2
   marker = child_events[end]
   assert marker["type"] == ET.CLONE_START
   assert marker["parent_session_id"] == parent_id
+  assert child_events[end + 1]["type"] == ET.TASK_CREATED
+  assert child_events[end + 1]["source_session_id"] == child_id
   return child_events
 
 
@@ -53,7 +55,7 @@ async def test_fork_session_copies_parent_prefix_and_clone_marker_into_child_log
 
   child = await mgr.fork_session(parent, event_index=1)
 
-  child_events = _assert_child_log_is_parent_prefix_plus_marker(mgr, parent, child.id, end=2)
+  child_events = _assert_child_log_is_parent_prefix_marker_and_creation(mgr, parent, child.id, end=2)
   assert [event["content"] for event in child_events[:2]] == ["e0", "e1"]
 
 
@@ -93,7 +95,7 @@ async def test_fork_copies_non_ascii_lines_verbatim_and_undecodable_bytes_raise(
   child_raw = mgr.get_chat_events_path(child.id).read_bytes()
   assert child_raw.startswith(expected_prefix)
   marker_lines = child_raw[len(expected_prefix):].decode("utf-8").splitlines()
-  assert json.loads(marker_lines[0])["type"] == ET.CLONE_START
+  assert [json.loads(line)["type"] for line in marker_lines] == [ET.CLONE_START, ET.TASK_CREATED]
 
   # Undecodable bytes raise at fork time, and the failed fork writes no child
   # chat log.

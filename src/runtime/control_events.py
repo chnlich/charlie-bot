@@ -19,6 +19,7 @@ import hashlib
 import uuid
 from typing import TYPE_CHECKING
 
+from src.infra import event_types as ET
 from src.infra import log_once
 
 log = log_once.LazyStructlogLogger()
@@ -137,6 +138,29 @@ def build_control_event(
   }
   event.update(payload)
   return event
+
+
+def build_task_created_event(
+    *,
+    actor: str,
+    task_id: str,
+    request_id: str,
+    task_parent_id: str | None,
+    task_spec_hash: str | None,
+) -> dict:
+  """The creation fact of one task node: the one shape every birth path writes.
+
+  ``TaskTreeManager`` publishes it with the node's metadata, and a fork/elone
+  child carries it at the tail of its born history stream.
+  """
+  return build_control_event(
+      ET.TASK_CREATED,
+      actor=actor,
+      source_session_id=task_id,
+      request_id=request_id,
+      task_parent_id=task_parent_id,
+      task_spec_hash=task_spec_hash,
+  )
 
 
 class ControlEventSink:

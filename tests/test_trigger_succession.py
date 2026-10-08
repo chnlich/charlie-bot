@@ -12,24 +12,53 @@ import pytest
 from src.infra import config, models
 from src.infra import event_types as ET
 from src.runtime import master_trigger, sessions, triggers
+from src.runtime.api.message_utils import build_agent_message_event
+
+
+def _record_launches(tree) -> list[tuple[str, list[str]]]:
+  """Install an executor that records (session id, pending input contents) per launch."""
+  launches: list[tuple[str, list[str]]] = []
+
+  async def executor(session_id: str, pending: list[dict], launch_run_id: str | None = None) -> str:
+    launches.append((session_id, [e["content"] for e in pending]))
+    return "run-1"
+
+  tree.dispatch.executor = executor
+  return launches
 
 
 @pytest.mark.asyncio
-async def test_trigger_master_runs_successor_when_requested_session_eloned(tmp_path: pathlib.Path) -> None:
-  cfg = config.CharlieBotConfig(charliebot_home=tmp_path / "home")
-  mgr = sessions.SessionManager(cfg)
+async def test_trigger_master_relays_into_the_successor_when_requested_session_eloned(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, mgr, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_managers(monkeypatch, tree, mgr)
+  launches = _record_launches(tree)
   parent_id = await conftest.make_parent(mgr)
   child_id = (await mgr.elone_session(parent_id, event_index=0)).id
 
-  with mock.patch(
-      conftest.MASTER_TRIGGER_RUN_MESSAGE_WITH_RESUME_RECOVERY_PATCH_TARGET,
-      new=mock.AsyncMock(),
-  ) as mock_run:
-    await master_trigger.trigger_master(parent_id, "summary", cfg, mgr, ET.CHILD_REPORT)
+  await master_trigger.trigger_master(parent_id, "summary", cfg, mgr, ET.CHILD_REPORT)
 
-  mock_run.assert_awaited_once()
-  session_meta = mock_run.await_args.args[1]
-  assert session_meta.id == child_id
+  # The wake's input sat in the predecessor's log; the successor's own log now holds it.
+  assert launches == [(child_id, ["summary"])]
+  [relayed] = tree.dispatch.pending_inputs(child_id)
+  assert (relayed["type"], relayed["from_session"], relayed["actor"]) == (ET.AGENT_MESSAGE, parent_id, "system")
+
+
+@pytest.mark.asyncio
+async def test_trigger_master_dispatches_the_input_a_task_node_already_holds(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch) -> None:
+  cfg, mgr, tree = conftest.build_env(tmp_path)
+  conftest.bind_deps_managers(monkeypatch, tree, mgr)
+  launches = _record_launches(tree)
+  root = await conftest.create_task(tree, parent=None, request_id="root", name="Root")
+  persisted = build_agent_message_event("summon prompt", from_session=root.id, from_session_name="Slack")
+  await mgr.persist_and_broadcast(root.id, persisted)
+
+  await master_trigger.trigger_master(
+      root.id, "summon prompt", cfg, mgr, ET.AGENT_MESSAGE, user_event_id=persisted["id"])
+
+  assert launches == [(root.id, ["summon prompt"])]  # one input: the wake adds no second copy
+  assert [e["id"] for e in tree.dispatch.pending_inputs(root.id)] == [persisted["id"]]
 
 
 @pytest.mark.asyncio

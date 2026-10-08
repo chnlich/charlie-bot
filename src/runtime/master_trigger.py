@@ -172,6 +172,36 @@ async def run_message_with_resume_recovery(
     return new_cc_session_id
 
 
+async def _wake_task_node(
+    session_mgr: SessionManager, node: SessionMetadata, *, requested_id: str, summary: str) -> None:
+  """Wake a task-tree node: dispatch its pending durable inputs into a Run.
+
+  Every legacy wake persists its input into the requested session's log before
+  it calls ``trigger_master``, and a task node reads its inputs from its own
+  log. A wake that stayed on the requested node therefore finds its input
+  pending already. A wake the succession chain redirected to another node left
+  its input in the predecessor's log, so the successor receives it as an agent
+  message from the predecessor.
+  """
+  # Lazy: the API layer owns the singleton, and this module stays on the light import floor.
+  from src.runtime.api.deps import task_manager
+  from src.runtime.control_events import ACTOR_SYSTEM
+
+  dispatch = task_manager().dispatch
+  if node.id != requested_id:
+    predecessor = await session_mgr.get_session(requested_id)
+    assert predecessor is not None  # the chain was resolved from it moments ago
+    await dispatch.admit_input(
+        node.id,
+        event_type=ET.AGENT_MESSAGE,
+        content=summary,
+        actor=ACTOR_SYSTEM,
+        from_session=predecessor.id,
+        from_session_name=predecessor.name,
+    )
+  await dispatch.dispatch_pending(node.id)
+
+
 async def trigger_master(
     session_id: str,
     summary: str,
@@ -243,16 +273,9 @@ async def trigger_master(
       return
 
     # A v2 task-tree node is never woken through the legacy writer: its inputs
-    # are durable dispatcher admissions and its turns are Runs. The scheduled/
-    # iteration controller conversion is the next bounded stage; until then a
-    # wake aimed at a v2 node is explicitly unavailable, and nothing is
-    # written through the legacy user-event path.
+    # are durable dispatcher admissions and its turns are Runs.
     if session_meta.profile is not None:
-      log.warning(
-          "task_tree_wake_not_yet_supported",
-          session=resolved.id,
-          profile=str(session_meta.profile),
-      )
+      await _wake_task_node(session_mgr, session_meta, requested_id=session_id, summary=summary)
       return
 
     # The scheduled-task duties (weekly recycle, firing-report prefix) live in

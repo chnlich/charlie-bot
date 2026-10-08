@@ -31,6 +31,7 @@ from src.infra.memo import BoundedMemo, StatSignatureMemo, stat_signature
 from src.infra.models import (
     TERMINAL_THREAD_STATUSES,
     CreateSessionRequest,
+    EventRef,
     MasterRunRecord,
     SessionCallbacks,
     SessionMetadata,
@@ -43,6 +44,7 @@ from src.infra.process import cleanup_session_cgroup
 from src.infra.tasks import create_logged_task
 from src.runtime import init_worker_recovery, sidebar_state
 from src.runtime.chat_events import ARCHIVE_FILE_GLOB, ChatEventStore, chat_event_archives_dir
+from src.runtime.control_events import ACTOR_USER, build_task_created_event
 from src.runtime.init_worker_recovery import walk_thread_meta_stats
 from src.runtime.message_aggregator import MessageAggregator
 from src.runtime.message_projection import MessageProjection
@@ -1759,13 +1761,15 @@ class SessionManager:
       backend: str | None,
       name_prefix: str,
   ) -> SessionMetadata:
-    """Create a child session whose chat log opens with the parent's raw event lines.
+    """Create a child manager root whose chat log opens with the parent's raw event lines.
 
     The child's ``data/chat_events.jsonl`` first holds the parent's raw event
     lines for ``[0, end)`` (``end`` is ``event_index + 1`` at a cut point, else
-    the parent's event count), then the ``clone_start`` marker; the child
-    appends its own events after it. One history per session, in the file the
-    model reads in place — the same log the parent grepped.
+    the parent's event count), then the ``clone_start`` marker, then the
+    child's ``task_created`` fact; the child appends its own events after it.
+    One history per session, in the file the model reads in place — the same
+    log the parent grepped. The parent is a history source only: the child
+    carries no ``task_parent_id``.
     """
     parent = await self.get_session(parent_id)
     if not parent:
@@ -1781,10 +1785,20 @@ class SessionManager:
 
     meta = SessionMetadata(
         name=f"{name_prefix}{parent.name}",
+        schema_version=2,
+        profile="manager",
         parent_session_id=parent_id,
         backend=backend or parent.backend,
         group=parent.group,
     )
+    created_event = build_task_created_event(
+        actor=ACTOR_USER,
+        task_id=meta.id,
+        request_id=f"history-copy-{meta.id}",
+        task_parent_id=None,
+        task_spec_hash=None,
+    )
+    meta.created_by_event = EventRef(session_id=meta.id, event_id=str(created_event["id"]))
     session_dir = self._session_dir(meta.id)
     self._create_session_dirs(session_dir)
 
@@ -1795,20 +1809,22 @@ class SessionManager:
         "parent_session_name": parent.name,
         "timestamp": utc_now_iso(),
     }
-    # The child log is born whole — prefix plus marker — through one atomic
-    # stream. A marker append after the copy would fdatasync the entire corpus
+    # The child log is born whole — prefix, marker, creation fact — through one
+    # atomic stream. An append after the copy would fdatasync the entire corpus
     # inside the fork (measured 10.4 s against the 0.4 s copy on the 1 GB
-    # heaviest live corpus), so the born history and its marker share the copied
+    # heaviest live corpus), so the born history and its tail share the copied
     # bytes' writeback class; the child's own appends keep the durable funnel.
-    await asyncio.to_thread(
-        self._write_history_file_sync, events_path, parent_id, end,
-        json.dumps(clone_event, ensure_ascii=False) + "\n")
+    tail_lines = "".join(json.dumps(event, ensure_ascii=False) + "\n" for event in (clone_event, created_event))
+    await asyncio.to_thread(self._write_history_file_sync, events_path, parent_id, end, tail_lines)
     await self.save_metadata(meta)
+    if self.tree_index_invalidator is not None:
+      self.tree_index_invalidator()
     await self._copy_plans_to_child(parent_id, session_dir)
     # The child plans.json is written by _copy_plans_sync (not PlanRegistryManager._save),
     # and a poll racing between save_metadata and this copy could have snapshotted
     # the child without plans; re-mark so the copied registry is always probed.
     sidebar_state.mark_sidebar_dirty(meta.id)
+    await self.broadcast_task_tree_changed(meta.id, ET.TASK_CREATED)
     return _stamp_thinking_since(meta)
 
   async def _copy_plans_to_child(self, parent_id: str, child_session_dir: Path) -> None:
@@ -1876,9 +1892,9 @@ class SessionManager:
     child_plans_path.parent.mkdir(parents=True, exist_ok=True)
     write_json_atomically(child_plans_path, data, indent=2)
 
-  def _write_history_file_sync(self, path: Path, parent_id: str, end: int, clone_marker_line: str) -> None:
-    """Write the parent's raw event lines for ``[0, end)`` plus the clone-start
-    marker line into ``path``.
+  def _write_history_file_sync(self, path: Path, parent_id: str, end: int, tail_lines: str) -> None:
+    """Write the parent's raw event lines for ``[0, end)`` plus *tail_lines*
+    (the clone-start marker and the child's creation fact) into ``path``.
 
     Streams the non-blank lines among the first ``archive_take`` raw archive
     lines (``data/archives/`` in the chronological filename glob) followed by
@@ -1925,7 +1941,7 @@ class SessionManager:
       if live != live_take:
         raise ValueError(f"loaded {live} live parent events for requested range [0, {live_take})")
 
-      out.write(clone_marker_line.encode("utf-8"))
+      out.write(tail_lines.encode("utf-8"))
 
     atomic_write_stream(path, _write)
 

@@ -46,11 +46,13 @@ from src.infra.event_types import is_real_user_message
 from src.infra.json_utils import atomic_write_text, load_model_meta
 from src.infra.models import (
     AncestorRef,
+    DiscordOrigin,
     EventRef,
     PatchSessionTaskRequest,
     SessionMetadata,
     SessionRow,
     SessionStatus,
+    SlackOrigin,
     TaskSpec,
     WorkState,
     ensure_utc,
@@ -65,6 +67,7 @@ from src.runtime.control_events import (
     ACTOR_USER,
     ControlEventSink,
     build_control_event,
+    build_task_created_event,
     sha256_hex,
     stable_close_event_id,
     stable_task_id,
@@ -210,7 +213,20 @@ def _fold_task_events(facts: _TaskFacts, events: list[dict], index_offset: int) 
       facts.events_by_id[event_id] = event
     etype = event.get("type")
     absolute = index_offset + position
-    if etype == ET.TASK_CREATED:
+    if etype == ET.CLONE_START:
+      # A fork/elone child's log opens with the parent's copied lines. Whatever
+      # lifecycle, boundary, close or pending-input fact they carry belongs to
+      # the parent; the child's own task_created after this marker starts its
+      # lifecycle.
+      facts.task_state = "open"
+      facts.boundary_index = None
+      facts.boundary_open = True
+      facts.input_candidates = []
+      facts.imported_pending_ids = frozenset()
+      facts.close_events = []
+      facts.close_requests = []
+      facts.delivered_reports = set()
+    elif etype == ET.TASK_CREATED:
       if facts.boundary_index is None:
         facts.boundary_index = absolute
         # Fresh tasks admit post-creation inputs only: anything folded before
@@ -1081,19 +1097,27 @@ class TaskTreeManager:
       name: str | None,
       backend: str | None,
       group: str | None = None,
+      session_id: str | None = None,
+      slack_origin: SlackOrigin | None = None,
+      discord_origin: DiscordOrigin | None = None,
       caller: object,
   ) -> SessionMetadata:
     """Create one task node; a replayed request returns the original product.
 
-    The node id is (parent, request_id)-stable. Metadata plus the task_created
-    fact are written into a temp directory and published with one rename, so a
-    crash leaves either no node or a complete one.
+    The node id is (parent, request_id)-stable unless *session_id* names it:
+    the summon and the operator's create bind a node to an id that exists
+    before the node does, and only the operator and the server may name one.
+    The origin fields ride the same atomic publish as the metadata. Metadata
+    plus the task_created fact are written into a temp directory and published
+    with one rename, so a crash leaves either no node or a complete one.
     """
     if not request_id:
       raise TaskInvalidError(TASK_CREATE_REQUEST_ID_REQUIRED)
     if profile not in ("manager", "worker"):
       raise TaskInvalidError("profile must be 'manager' or 'worker'")
-    task_id = stable_task_id(task_parent_id, request_id)
+    if session_id is not None and _create_actor_for(caller) == ACTOR_AGENT:
+      raise TaskForbiddenError(AGENT_CREATE_SCOPE_REFUSAL)
+    task_id = session_id or stable_task_id(task_parent_id, request_id)
     async with self.control_lock:
       existing = await self.load_meta(task_id)
       if existing is not None:
@@ -1139,6 +1163,8 @@ class TaskTreeManager:
           name=name,
           backend=backend,
           group=group,
+          slack_origin=slack_origin,
+          discord_origin=discord_origin,
           parent_meta=parent_meta,
           actor=_create_actor_for(caller),
       )
@@ -1220,6 +1246,8 @@ class TaskTreeManager:
       name: str | None,
       backend: str | None,
       group: str | None,
+      slack_origin: SlackOrigin | None,
+      discord_origin: DiscordOrigin | None,
       parent_meta: SessionMetadata | None,
       actor: str,
   ) -> SessionMetadata:
@@ -1236,6 +1264,8 @@ class TaskTreeManager:
         task_parent_id=task_parent_id,
         backend=backend or (parent_meta.backend if parent_meta else "") or self._cfg.backends.options[0].id,
         group=group,
+        slack_origin=slack_origin,
+        discord_origin=discord_origin,
     )
     try:
       (temp_dir / DATA_DIR_NAME).mkdir(parents=True)
@@ -1243,10 +1273,9 @@ class TaskTreeManager:
       # The creation fact is written into the temp node itself, so metadata and
       # the event log publish together with the one rename; post-publication
       # facts go through the sink.
-      created_event = build_control_event(
-          ET.TASK_CREATED,
+      created_event = build_task_created_event(
           actor=actor,
-          source_session_id=task_id,
+          task_id=task_id,
           request_id=request_id,
           task_parent_id=task_parent_id,
           task_spec_hash=canonical_task_spec_hash(task),

@@ -18,8 +18,8 @@ def _corrections(logs: list[dict]) -> list[dict]:
 
 
 async def _seed_anchors(mgr: sessions.SessionManager, session_id: str, *, cc: str, label: str) -> None:
-  await mgr.persist_cc_session_id(session_id, cc)
-  await mgr.persist_account_label(session_id, label)
+  await mgr.anchors.persist_cc_session_id(session_id, cc)
+  await mgr.anchors.persist_account_label(session_id, label)
 
 
 @pytest.mark.asyncio
@@ -52,17 +52,17 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   mgr = conftest.build_session_manager(cfg)
   session = await conftest.create_root_session(mgr, models.CreateSessionRequest(name="channels"))
 
-  read_back = await mgr.persist_cc_session_id(session.id, "cc-2")
+  read_back = await mgr.anchors.persist_cc_session_id(session.id, "cc-2")
   assert read_back == "cc-2"
   disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.cc_session_id == "cc-2" and disk.cc_session_started_at is not None
 
-  await mgr.persist_account_label(session.id, "pool-c")
+  await mgr.anchors.persist_account_label(session.id, "pool-c")
   disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.claude_account == "pool-c" and disk.cc_session_id == "cc-2"
 
   # The switch endpoint's backfill funnel records the producing backend.
-  read_back = await mgr.persist_native_backend(session.id, "codex-o3")
+  read_back = await mgr.anchors.persist_native_backend(session.id, "codex-o3")
   assert read_back == "codex-o3"
   disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.native_backend == "codex-o3"
@@ -84,7 +84,7 @@ async def test_authorized_channels_still_change_the_anchors(tmp_path: pathlib.Pa
   disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.native_backend == "opus"
 
-  await mgr.clear_cc_session_anchor(session.id)
+  await mgr.anchors.clear_cc_session_anchor(session.id)
   disk = await mgr.store.read_metadata_fresh(session.id)
   assert disk.cc_session_id is None and disk.cc_session_started_at is None
   assert disk.claude_account == "pool-c", "the clear channel clears the resume anchor, not the label"

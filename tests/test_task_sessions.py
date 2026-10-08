@@ -163,7 +163,7 @@ async def test_scheduled_fire_bookkeeping_keeps_the_sidebar_sort_key(tmp_path: p
   _, session_mgr, tree = conftest.build_env(tmp_path)
   node = await conftest.create_scheduled_node(tree, name="nightly", backend=conftest.OPUS_BACKEND_ID)
   fired_at = datetime.datetime(2026, 1, 2, 3, 4, 5, tzinfo=datetime.UTC)
-  await session_mgr.update_thinking_state(node.id, fired_at)
+  await session_mgr.anchors.update_thinking_state(node.id, fired_at)
 
   # The five call shapes src/features/cron/scheduler.py fires with, and the metadata
   # fields each must land (the scheduler's cron argument writes

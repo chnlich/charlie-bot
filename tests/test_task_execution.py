@@ -52,8 +52,8 @@ from src.infra import event_types as ET
 from src.infra.constants import RUN_TOKEN_ENV, SESSION_ID_ENV_VAR
 from src.infra.models import BackendOption, PatchSessionTaskRequest, RunRecord, TaskSpec
 from src.runtime.runs import RAW_LOG_NAME
+from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION
 from src.runtime.session_fork import HISTORY_LOCATION_NOTE
-from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION
 from src.runtime.task_sessions import TaskTreeManager
 
 # The internal-API auth headers carrying the access key stub_credentials seeds: tests
@@ -1440,7 +1440,7 @@ async def test_manager_native_continuation_gates_on_instruction_hash(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
   # The conversation anchor changes only through its authorized channel: a
   # whole-object save's anchor reconciliation would correct it back to disk.
-  await session_mgr.persist_cc_session_id(manager.id, anchor_id)
+  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor_id)
 
   # Turn 2 (input-only change): same instructions ⇒ the conversation continues
   # (no reset notice, anchor untouched).
@@ -1496,12 +1496,12 @@ async def test_backend_identity_change_starts_a_fresh_native_context(
   await tree.record_native_anchor(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
   # The conversation anchor changes only through its authorized channel.
-  await session_mgr.persist_cc_session_id(manager.id, anchor)
+  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor)
   # The anchor's recorded identity no longer matches (a backend switch
   # happened): the next turn cannot claim continuity over it. The identity
   # changes only through its authorized anchor channel — native_backend is an
   # anchor field now, so a whole-object save would be corrected back to disk.
-  await session_mgr.persist_native_backend(manager.id, "some-other-backend")
+  await session_mgr.anchors.persist_native_backend(manager.id, "some-other-backend")
   await tree.dispatch.admit_input(manager.id, event_type=ET.USER, content="two", actor="user")
   decision = await tree.dispatch.dispatch_pending(manager.id)
   assert decision.get("launch") is True
@@ -1543,7 +1543,7 @@ async def test_switch_away_and_back_before_next_turn_continues_native_conversati
   anchor = "native-anchor-mis-click"
   await tree.record_native_anchor(
       manager.id, prompt_hash=snapshot1["prompt_hash"], backend="fake", model="fake-model", reset_anchor=False)
-  await session_mgr.persist_cc_session_id(manager.id, anchor)
+  await session_mgr.anchors.persist_cc_session_id(manager.id, anchor)
 
   # The mis-click: switch away and back before the next message goes out.
   await session_mgr.lifecycle.switch_backend(manager.id, "fake-2")

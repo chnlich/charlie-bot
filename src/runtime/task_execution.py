@@ -64,8 +64,9 @@ from src.runtime.hooks import backend_lifecycle, backend_types
 from src.runtime.hooks.sequence_controllers import binding_for, controller_for
 from src.runtime.run_token import RunTokenClaims, sign_run_token
 from src.runtime.runs import RUN_EVENTS_NAME, RunNotFoundError, run_not_found_in_task_text, scan_result_exit
+from src.runtime.session_anchors import backend_switch_reset_reason, context_reset_note
 from src.runtime.session_dispatch import child_report_text
-from src.runtime.sessions import SessionManager, backend_switch_reset_reason, context_reset_note, session_manager
+from src.runtime.sessions import SessionManager, session_manager
 from src.runtime.spawner_backends import resolve_backend_option
 from src.runtime.task_completion import (
     LANDING_REF_PREFIX,

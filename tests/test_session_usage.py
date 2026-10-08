@@ -55,7 +55,7 @@ def _session_rig(tmp_path: Path, session_id: str, name: str, backend: str) -> tu
 
 async def _resolved_usage(session_mgr: SessionManager, meta: SessionMetadata) -> dict:
   """The common resolve rig: default-kwargs resolve asserting a mapping came back."""
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+  usage = await session_mgr.anchors.resolve_session_usage(meta.id, meta)
   assert usage is not None
   return usage
 
@@ -292,11 +292,11 @@ async def test_empty_slot_keeps_context_unknown(tmp_path: Path) -> None:
           }}, input_tokens=999_999),
       ])
 
-  usage = await session_mgr.resolve_session_usage(meta.id, meta)
+  usage = await session_mgr.anchors.resolve_session_usage(meta.id, meta)
 
   _assert_no_context_tier(usage)
 
   empty_meta = SessionMetadata(
       profile="manager", id="session-emptyslot-none", name="Empty Slot None", backend=OPUS_BACKEND_ID)
   _write_session(session_mgr, empty_meta, [])
-  assert await session_mgr.resolve_session_usage(empty_meta.id, empty_meta) is None
+  assert await session_mgr.anchors.resolve_session_usage(empty_meta.id, empty_meta) is None

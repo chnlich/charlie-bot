@@ -663,8 +663,8 @@ async def test_a_messaged_node_lists_ahead_of_a_fired_scheduled_node(tmp_path: P
   s_meta = await session_mgr.store.get_session(s.id)
   assert s_meta is not None
   base = s_meta.updated_at
-  await session_mgr.update_thinking_state(x.id, base - timedelta(hours=2))
-  await session_mgr.update_thinking_state(s.id, base - timedelta(hours=1))
+  await session_mgr.anchors.update_thinking_state(x.id, base - timedelta(hours=2))
+  await session_mgr.anchors.update_thinking_state(s.id, base - timedelta(hours=1))
 
   await tree.update_slot_fields(
       s.id, "cron", last_scheduled_run=base.isoformat(), last_run_status=LastRunStatus.SKIPPED)

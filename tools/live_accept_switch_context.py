@@ -78,7 +78,7 @@ from typing import NoReturn  # noqa: E402
 from src.app import registrations  # noqa: E402
 from src.infra import event_types as ET  # noqa: E402
 from src.infra.identity_env import inherited_identity_env_vars  # noqa: E402
-from src.runtime.sessions import CONTEXT_RESET_INSTRUCTION  # noqa: E402
+from src.runtime.session_anchors import CONTEXT_RESET_INSTRUCTION  # noqa: E402
 from tools.browser_harness_session_tree import (  # noqa: E402
     mint_access_key,
     pick_free_port,

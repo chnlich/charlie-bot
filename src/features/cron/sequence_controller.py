@@ -94,7 +94,7 @@ class CronBinding:
         # would silently do nothing behind its suppressed next-round alarm.
         # The in-memory copy mirrors the cleared anchor for the caller's
         # fresh-conversation judgment below.
-        await sessions.clear_cc_session_anchor(meta.id)
+        await sessions.anchors.clear_cc_session_anchor(meta.id)
         meta.cc_session_id = None
         meta.cc_session_started_at = None
         try:

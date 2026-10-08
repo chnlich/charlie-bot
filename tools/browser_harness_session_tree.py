@@ -292,6 +292,7 @@ async def seed_scenario(home: Path) -> dict:
   from src.infra.config import get_config
   from src.infra.models import PatchSessionTaskRequest, RunRecord, TaskSpec, ThreadMetadata
   from src.runtime.run_token import CallerIdentity
+  from src.runtime.session_anchors import SessionAnchors
   from src.runtime.session_events import SessionEvents
   from src.runtime.session_fork import SessionFork
   from src.runtime.session_lifecycle import SessionLifecycle
@@ -310,7 +311,7 @@ async def seed_scenario(home: Path) -> dict:
   lifecycle = SessionLifecycle(cfg, store, events)
   session_mgr = SessionManager(
       cfg, store, events, sidebar, SessionListing(cfg, store, sidebar), SessionSearch(cfg, store, events, sidebar),
-      lifecycle, SessionFork(cfg, store, events))
+      lifecycle, SessionFork(cfg, store, events), SessionAnchors(cfg, store, events))
   tree = TaskTreeManager(cfg, session_mgr)
   OP = CallerIdentity(kind="operator")
 

@@ -93,6 +93,7 @@ from src.infra.models import utc_now, utc_now_iso
 from src.infra.yaml_utils import load_yaml, save_yaml
 from src.runtime import (
     init_seed,
+    session_anchors,
     session_events,
     session_fork,
     session_lifecycle,
@@ -796,6 +797,7 @@ def assert_no_bound_singletons() -> None:
           ("_search", session_search._search),
           ("_lifecycle", session_lifecycle._lifecycle),
           ("_fork", session_fork._fork),
+          ("_anchors", session_anchors._anchors),
           ("_session_manager", sessions._session_manager),
           ("_trigger_manager", triggers._trigger_manager),
           ("_task_manager", task_execution._task_manager),
